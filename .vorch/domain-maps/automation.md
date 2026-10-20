@@ -27,10 +27,8 @@ An objective the user sets for one Session with `/goal`. While it is active, the
 
 ## Conventions
 
-Mechanics -> `automation/cron.md`; jobs bound to calendar events -> `automation/event-jobs.md`.
-
 - `CronService` owns schedule parsing, formatting and projection in the application timezone (`server.timezone`, injected by Runtime); accessors must not duplicate interval/croniter/timezone logic.
-- A fire is a normal Run through `TriggerService`: Cron `RunKind.CRON`, Bootstrap internal `RunKind.SYSTEM`, both admitted with activity disabled and within four global Run slots per service. A Cron job's `delivery` (user decision 2026-10-20) sends each answer to vBot, to a chat of its Agent's Channels (`ChatDelivery` protocol, bound by Runtime), or nowhere; `[SILENT]` delivers nothing (`automation/cron.md` -> Delivery).
+- A fire is a normal Run through `TriggerService`: Cron `RunKind.CRON`, Bootstrap internal `RunKind.SYSTEM`, both admitted with activity disabled and within four global Run slots per service. A Cron job's `delivery` (user decision 2026-10-20) sends each answer to vBot, to a chat of its Agent's Channels (`ChatDelivery`), or nowhere; `[SILENT]` delivers nothing (`automation/cron.md` -> Delivery). A job's `watch` (same decision) runs it only when a checked command's or URL's output changed.
 - **Catch-up** (user decision 2026-10-08): a fire that came due while vBot did not run the job (server off, computer asleep, a stalled scheduler) starts once, late, for the most recent missed due time; earlier missed due times are counted, never replayed. The late Run gets a `context_note`, read as a System Reminder, so it can adapt or decline; no limit bounds how late it starts.
 - **Event jobs** (user decision 2026-10-08, replacing the Calendar actions): a Cron job of schedule type `event` binds to every occurrence of one calendar event through an event time such as `start - 30m`, runs once per occurrence while that occurrence's window is open, never completes, and is deleted with its event.
 - At-most-once beats duplicate execution across restarts: Cron never replays a once fire that a crash left uncertain (`automation/cron.md` -> Once claims, failures and edits).
@@ -64,6 +62,7 @@ Mechanics -> `automation/cron.md`; jobs bound to calendar events -> `automation/
 Read these only when your task matches - not by default.
 
 - Cron or Bootstrap jobs: modules, validation, schedules and DST, execution health and the failure stop, answer delivery and failure alerts, catch-up, once claims, edit and fire ordering, target errors, logging -> `automation/cron.md`
+- Cron jobs with a `watch`: the check before each Run and its runner, baselines, the change note, check failures -> `automation/cron-watch.md`
 - Cron jobs bound to calendar events: event times, owed occurrences and their windows, the event context note, event-change checks, deletion with the event -> `automation/event-jobs.md`
 - Background completion delivery: `submit_completion`/`cancel_completion`, request-boundary joins, follow-up Runs, delivery claims, Extension-owned notices, close -> `automation/completion-delivery.md`
 - Reflection reviews: briefs, Tool gating, review orchestration, cadence counters, `/reflect`, attribution -> `automation/reflection.md`

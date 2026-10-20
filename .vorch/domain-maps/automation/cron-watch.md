@@ -1,0 +1,56 @@
+# Watching Cron Jobs
+
+Read when changing Cron jobs with a `watch`: the field and its runtime fields, what a due time of a watching job does, the first check, the baseline file, the change note, check failures and their alerts, and the check runner `core/tools/watch_checks.py`. Delivery, the failure stop, catch-up and edit ordering shared with every Cron job are in `cron.md`; the `cron` Tool side in `../tools/cron.md`.
+
+User decision 2026-10-20 (`.vorch/plans/cron-proactive-automation.md`, decision 6; after Hermes' hash-and-diff gate and OpenClaw's condition watchers, `.vorch/plans/feature-ideas-openclaw-hermes.md` item 1): a repeating job can check a command or a URL before each Run, without a Model, and starts the Run only when the output changed. vBot has no script gate of its own: the job always runs its prompt.
+
+## The watch field
+
+- `watch` is `{"command": <text>}` or `{"url": <text>}` (`CronWatch`, `_cron_jobs.py`): optional, written only when set, a restart field of `jobs.json` (additive to Generation 1). Only `cron` and `interval` schedules take it (`WATCH_SCHEDULE_TYPES`); `once` and `event` refuse it ("watch applies only to a repeating schedule ..."), and so must every later schedule type. A command has at most 4,000 characters, a URL is an absolute http(s) URL without whitespace of at most 2,048; surrounding whitespace is dropped.
+- Optional job fields kept with it: `last_checked_at` (the latest check, failed ones included), `last_changed_at` (when a changed output became the baseline after its Run succeeded) and `last_check_error` (why the latest check failed, truncated like `last_error`). They are no Run outcome: a check never touches `last_outcome`, `last_error`, `last_attempt_at` or `last_result`. A saved watch change clears all three and sets `covered_until` to now.
+- Setting a watch needs the process to run checks: Runtime wires `WatchCheckRunner` with `CronService.set_watch_checks` (`core/runtime/_bootstrap.py`); without it create and update refuse with "watch is unavailable: this vBot process runs no watch checks", and a stored watch fails its checks ("vBot cannot run watch checks in this process").
+- RPC `cron.create`/`cron.update` take `watch` (`{"command": ...}`, `{"url": ...}`, null for none; other keys are refused), and every cron RPC job carries `watch` (null when unset), `last_checked_at`, `last_changed_at` and `last_check_error` (`server/rpc/automation_methods.py`). The CLI has no watch flag: `cron create` sets none, `cron update` keeps it, `cron show` prints the fields (`../cli/agent-commands.md`). WebUI: `../webui/source-map.md` (Scheduled Runs).
+
+## A due time of a watching job
+
+`_cron_scheduler._run_recurring_job` hands each due time of a job with a watch to `CronWatcher.fire` (`_cron_watcher.py`) instead of `CronExecution._trigger_job_run`:
+
+1. The check runs in one of four check slots (`MAX_CONCURRENT_CRON_RUNS`, apart from the Run slots) under a per-job lock, so checks of one job never overlap. A job that is gone, inactive, no longer watching or has a restart pending is not checked, and an output whose watch an edit replaced meanwhile is dropped.
+2. `_cron_watch.compare` (on the `cron-watch` pool) normalizes the output (LF line endings, trailing whitespace of each line, leading and trailing blank lines; at most 200,000 characters are watched), hashes it with SHA-256 and diffs it from the baseline.
+3. No baseline for this watch: the output becomes the baseline and no Run starts. Unchanged: no Run starts. Both record `last_checked_at`; a successful check after a failed one also clears `last_check_error` and resets `consecutive_failures` (the check works again).
+4. Changed: `_trigger_job_run(job, change=...)` starts the Run with the change note. Only a successful Run makes the new output the baseline (`_commit`, which also sets `last_changed_at`); a change whose Run failed or could not start is found again at the next check. Edits wait for that commit as they wait for the Run (`_executing_jobs`).
+
+- **Catch-up:** `covered_until` counts `last_checked_at`, so a check that started no Run covers its due time. A late due time of a watching job checks once, like any missed fire; a Run it starts gets the change note and no late notice, because the change, not the due time, is why it runs.
+- **First check:** setting a watch on an active job of a started service (create, or an update that changes the watch) removes any old baseline and checks at once in the background (`start_first_check`), so the baseline exists and the caller learns whether the check works. A failed first check records `last_check_error` but counts toward no streak and sends no alert. `CronService.await_first_check(job_id)` waits at most 90 s (`FIRST_CHECK_WAIT_SECONDS`) and returns whether no first check is pending; the wait never stops the check. A job that becomes active later, or whose service was not started, records its baseline at its first due time.
+- Deleting a job removes its baseline file.
+
+## Baseline file
+
+`cron/watch-state/<sha256 of job id>.json`: `job_id`, `watch`, `hash`, `output` (normalized, at most 200,000 characters), `checked_at`, `changed_at` (null until a change's Run succeeded). Disposable runtime state outside the JSON document contract (`../json-documents.md`): no `format_version`, never converted, no data-snapshot member, written atomically on the `cron` `OrderedWorker` like claims. A missing file, an unreadable or inconsistent one (WARNING; job id or hash do not match) or one recorded for another watch counts as none: the next check records a new baseline and starts no Run. A failed write logs ERROR; after a Run, the next check then finds the change again.
+
+## Change note
+
+`_cron_context.run_context` builds the context note for every fire path (the late notice `LateFire` and `ON_TIME_SECONDS` live there too). The change note (`_cron_watch.change_note`) follows any event or late part and precedes the delivery note: one sentence names what changed (the check command's output or the page at the watched URL) and the local time of the baseline's check, then a JSON record `{"command"|"url", "diff", "current"}`, escaped like the previous-answer record (`cron.md` -> Delivery). The diff is unified with two context lines and no file headers, cut at 4,000 characters; the current output is cut at 8,000; each cut ends at a nearby line break and is named in the note. Wording and reasons: `../tools/cron.md` -> Agent-facing text. The INFO `Cron job fired` line of such a Run ends in `watched_output_changed=true`.
+
+## Check failures
+
+- A `WatchCheckError` (its message names what failed, without a final period) or an unexpected error ("The check could not run: ...", logged ERROR with traceback) fails the check: `last_checked_at` and `last_check_error` are recorded, and `consecutive_failures` counts it like a failed Run, with the same five-failure stop (`cron.md` -> Execution health). WARNING `Cron watch check failed (job=... failures=... first=...)`.
+- Alerts follow the Run failure alerts (`cron.md` -> Delivery) with `check=True`: the alert's error is `last_check_error`, the stop text says `failures in a row`, and the second-failure text says the job keeps checking on schedule. A `chat` job gets them; an `app` job has no failed Run to mark, so its failed checks show only under Schedules; `none` sends nothing.
+
+## Check runner (`core/tools/watch_checks.py`)
+
+`WatchCheckRunner(agents=, projects=, data_root=)` implements `_cron_watch.WatchChecks` (`run_command`, `fetch_url`); every failure raises `WatchCheckError`. Its texts reach the Agent through `last_check_error` (`../tools/cron.md`).
+
+- **Command:** the shell Tool's host shell (`core.tools.shell.host_shell_start`: PowerShell 7 with the shell bootstrap on Windows, bash elsewhere; `../tools/shell.md`), launched on pipes with `launch_pipe_process` (never a warm shell) and contained in its process tree, in the Project's directory for a Project Agent and the Agent's Workspace otherwise. Its environment is `unattended_command_environment()`: layers 1-4 of the shell's environment, without Run identity, Session scratch, variables or credentials. Output is stdout and stderr together, decoded as UTF-8, at most 64 KB (`COMMAND_OUTPUT_MAX_BYTES`; the rest is read and dropped). A non-zero exit (the error names the last output line), a PowerShell not-run code, a timeout after 60 s, a missing shell, Agent, Project or working directory fail the check; processes the command leaves running end with it.
+- **URL:** a GET through the shared TLS context with redirects, within 30 s; at most 1 MB of the body is read and a longer body is cut, not refused. An HTML page is reduced to the main text of web_fetch's `extract_views` (`../tools/web_fetch.md`), other text is decoded as web_fetch decodes it; a status outside 2xx, content that is not text, and network errors fail the check. Any address is allowed, local services included: the check runs what the user's Agent set up, as its shell commands do.
+- Shell starts (the Windows environment block), process kills, Project reads and page extraction run on the `watch-checks` pool.
+
+## Coverage
+
+`tests/core/automation/test_cron_watch.py` (through `CronService` with `FakeChecks` from `cron_test_support.py`: runs only on change, normalization, escaping and diff, baseline kept after a failed Run, check failures, streak reset and alerts, first check and re-prime on a watch change, unreadable baseline, a late due time, refused schedules), `test_cron_validation.py` (stored watch shapes), `tests/core/tools/test_watch_checks.py` (fake launches and HTTP transport), the Tool tests (`../tools/cron.md`), `tests/server/rpc/test_automation_methods.py`, and WebUI `cronView.test.js`, `CronView.test.js`.
+
+## Open points
+
+- A webhook schedule type (phase 3 of the plan) must refuse `watch`; `WATCH_SCHEDULE_TYPES` lists only `cron` and `interval`, so it does unless it is added there.
+- Failed checks of an `app` job notify no one.
+- A command whose output stays empty never changes, so its job never runs.
