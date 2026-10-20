@@ -64,7 +64,13 @@ function latestUserText(messages) {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (message?.role === "user") {
-      return contentText(message.content);
+      // The current input and its System Reminders are separate user entries.
+      // Keep their whole block, also when a Tool continuation follows it.
+      let start = index;
+      while (start > 0 && messages[start - 1]?.role === "user") {
+        start -= 1;
+      }
+      return messagesText(messages.slice(start, index + 1));
     }
   }
   return "";
