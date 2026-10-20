@@ -264,15 +264,18 @@ class AgentSecrets:
             secret = self._records.get(secret_id)
         return None if secret is None or secret.expired(self._clock()) else secret
 
-    def usable(self, agent_id: str, session_id: str) -> list[AgentSecret]:
+    def usable(
+        self, agent_id: str, session_id: str, *, passed_only: bool = False
+    ) -> list[AgentSecret]:
         """The Secrets this Agent may use in this Session, one per name.
 
         A Secret bound to or passed into the Session wins over one granted to
-        the Agent under the same name.
+        the Agent under the same name. A Sub-Agent Session (``passed_only``)
+        has only the Secrets bound to or passed into it.
         """
         chosen: dict[str, AgentSecret] = {}
         for secret in self.all():
-            if not secret.granted_to(agent_id, session_id):
+            if not secret.granted_to(agent_id, session_id, passed_only=passed_only):
                 continue
             current = chosen.get(secret.name)
             if current is None or _session_bound(secret, session_id) > _session_bound(
@@ -281,8 +284,11 @@ class AgentSecrets:
                 chosen[secret.name] = secret
         return [chosen[name] for name in sorted(chosen)]
 
-    def lookup(self, agent_id: str, session_id: str, name: str) -> AgentSecret | None:
-        return next((item for item in self.usable(agent_id, session_id) if item.name == name), None)
+    def lookup(
+        self, agent_id: str, session_id: str, name: str, *, passed_only: bool = False
+    ) -> AgentSecret | None:
+        usable = self.usable(agent_id, session_id, passed_only=passed_only)
+        return next((item for item in usable if item.name == name), None)
 
     def describe(self, secret: AgentSecret) -> dict[str, Any]:
         """What an Agent or the WebUI may know about a Secret: never a concealed value."""
@@ -359,6 +365,8 @@ class AgentSecrets:
             session_id=session_id if lifetime in ("session", "once") else None,
             expires_at=expires_at,
             agents=tuple(dict.fromkeys(agents)) if lifetime in ("permanent", "until") else (),
+            # The Session it was given in keeps it, a Sub-Agent Session too.
+            sessions=(session_id,) if session_id and lifetime in ("permanent", "until") else (),
             sinks=DEFAULT_SINKS[kind] if sinks is None else check_sinks(sinks),
             source=source,
             created_at=now,
@@ -451,7 +459,9 @@ class AgentSecrets:
         self._notify(SecretChange("deleted", secret, actor))
         return secret
 
-    def passable(self, agent_id: str, session_id: str, names: Sequence[str]) -> list[AgentSecret]:
+    def passable(
+        self, agent_id: str, session_id: str, names: Sequence[str], *, passed_only: bool = False
+    ) -> list[AgentSecret]:
         """The caller's Secrets ``names`` stand for; :class:`SecretUseError` names the others."""
         granted: list[AgentSecret] = []
         missing = []
@@ -461,7 +471,7 @@ class AgentSecrets:
             except SecretRecordError:
                 missing.append(str(raw))
                 continue
-            secret = self.lookup(agent_id, session_id, name)
+            secret = self.lookup(agent_id, session_id, name, passed_only=passed_only)
             if secret is None:
                 missing.append(name)
             elif secret not in granted:
@@ -471,15 +481,21 @@ class AgentSecrets:
                 "unknown_secret",
                 f"You cannot pass {', '.join(missing)}: "
                 f"{'it is' if len(missing) == 1 else 'they are'} not among your Secrets. "
-                f"Your Secrets: {self._names_text(agent_id, session_id)}.",
+                f"Your Secrets: {self._names_text(agent_id, session_id, passed_only)}.",
             )
         return granted
 
     def pass_to_session(
-        self, agent_id: str, session_id: str, names: Sequence[str], child_session_id: str
+        self,
+        agent_id: str,
+        session_id: str,
+        names: Sequence[str],
+        child_session_id: str,
+        *,
+        passed_only: bool = False,
     ) -> list[AgentSecret]:
         """Grant named Secrets the caller can use to a Sub-Agent's Session (blocking)."""
-        granted = self.passable(agent_id, session_id, names)
+        granted = self.passable(agent_id, session_id, names, passed_only=passed_only)
         changed: list[AgentSecret] = []
         with self._lock:
             for secret in granted:
@@ -547,12 +563,18 @@ class AgentSecrets:
     # -- use -------------------------------------------------------------------
 
     def resolve(
-        self, agent_id: str, session_id: str, reference: Reference, sink: SinkClass
+        self,
+        agent_id: str,
+        session_id: str,
+        reference: Reference,
+        sink: SinkClass,
+        *,
+        passed_only: bool = False,
     ) -> tuple[str, SecretUse]:
         """The value a reference stands for in this sink (blocking for source-bound Secrets)."""
-        secret = self.lookup(agent_id, session_id, reference.name)
+        secret = self.lookup(agent_id, session_id, reference.name, passed_only=passed_only)
         if secret is None:
-            raise self._unknown(agent_id, session_id, reference)
+            raise self._unknown(agent_id, session_id, reference, passed_only)
         target = secret.field_named(reference.field) if reference.field else secret.default_field()
         if target is None:
             available = ", ".join(secret.reference(item.name) for item in secret.fields)
@@ -594,7 +616,13 @@ class AgentSecrets:
         return value
 
     def substitute(
-        self, agent_id: str, session_id: str, value: Any, sink: SinkClass
+        self,
+        agent_id: str,
+        session_id: str,
+        value: Any,
+        sink: SinkClass,
+        *,
+        passed_only: bool = False,
     ) -> tuple[Any, list[SecretUse]]:
         """``value`` (JSON-like) with references replaced; raises :class:`SecretUseError`."""
         uses: list[SecretUse] = []
@@ -611,7 +639,9 @@ class AgentSecrets:
             for reference in references:
                 key = (reference.name, reference.field)
                 if key not in resolved_values:
-                    resolved_values[key] = self.resolve(agent_id, session_id, reference, sink)
+                    resolved_values[key] = self.resolve(
+                        agent_id, session_id, reference, sink, passed_only=passed_only
+                    )
                 resolved, use = resolved_values[key]
                 parts.append(text[position : reference.start])
                 parts.append(resolved)
@@ -623,16 +653,18 @@ class AgentSecrets:
 
         return map_strings(value, replace_text), uses
 
-    def environment_names(self, agent_id: str, session_id: str) -> frozenset[str]:
+    def environment_names(
+        self, agent_id: str, session_id: str, *, passed_only: bool = False
+    ) -> frozenset[str]:
         """Every name ``env_keys`` accepts for this Agent: Secret names and field variables."""
         names: set[str] = set()
-        for secret in self.usable(agent_id, session_id):
+        for secret in self.usable(agent_id, session_id, passed_only=passed_only):
             names.add(secret.name)
             names.update(secret.environment_names().values())
         return frozenset(names)
 
     def environment(
-        self, agent_id: str, session_id: str, name: str
+        self, agent_id: str, session_id: str, name: str, *, passed_only: bool = False
     ) -> tuple[dict[str, str], list[SecretUse]] | None:
         """Shell variables for a name in ``env_keys``; ``None`` if no Secret has it.
 
@@ -640,7 +672,7 @@ class AgentSecrets:
         field's variable name (``GITHUB_PASSWORD``) gives only that field.
         """
         wanted = name.upper()
-        for secret in self.usable(agent_id, session_id):
+        for secret in self.usable(agent_id, session_id, passed_only=passed_only):
             variables = secret.environment_names()
             if secret.name == wanted:
                 fields = list(secret.fields)
@@ -741,9 +773,17 @@ class AgentSecrets:
         self.remember_value(value, secret.reference(target.name))
         return value
 
-    def _unknown(self, agent_id: str, session_id: str, reference: Reference) -> SecretUseError:
+    def _unknown(
+        self, agent_id: str, session_id: str, reference: Reference, passed_only: bool
+    ) -> SecretUseError:
         exists = any(item.name == reference.name for item in self.all())
-        names = self._names_text(agent_id, session_id)
+        names = self._names_text(agent_id, session_id, passed_only)
+        if exists and passed_only:
+            return SecretUseError(
+                "not_granted",
+                f"{reference.name} was not passed to you. Your Secrets: {names}. "
+                "If you need it, say so in your report; your Parent Agent can pass it.",
+            )
         if exists:
             return SecretUseError(
                 "not_granted",
@@ -763,8 +803,9 @@ class AgentSecrets:
             "Use the secrets Tool to request one from the user.",
         )
 
-    def _names_text(self, agent_id: str, session_id: str) -> str:
-        names = [item.name for item in self.usable(agent_id, session_id)]
+    def _names_text(self, agent_id: str, session_id: str, passed_only: bool) -> str:
+        usable = self.usable(agent_id, session_id, passed_only=passed_only)
+        names = [item.name for item in usable]
         return ", ".join(names) if names else "none"
 
     def _require(self, secret_id: str) -> AgentSecret:

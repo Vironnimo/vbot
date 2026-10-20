@@ -414,7 +414,12 @@ class SubAgentCoordinator:
                     "secret_unavailable", "Nothing was started. Secrets are not available here."
                 )
             try:
-                self._secrets.passable(context.agent_id, context.session_id, passed)
+                self._secrets.passable(
+                    context.agent_id,
+                    context.session_id,
+                    passed,
+                    passed_only=context.subagent_session,
+                )
             except SecretUseError as unavailable:
                 return tool_failure("secret_unavailable", f"Nothing was started. {unavailable}")
         if arguments.get("background") is False:
@@ -605,6 +610,7 @@ class SubAgentCoordinator:
             context.session_id,
             names,
             session.address.session_id,
+            passed_only=context.subagent_session,
         )
         lines = "\n".join(secret_line(secret) for secret in granted)
         await session.add_note_async(SUBAGENT_SECRETS_NOTE_TEMPLATE.format(secrets=lines))

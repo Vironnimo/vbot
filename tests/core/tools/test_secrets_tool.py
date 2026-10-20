@@ -6,6 +6,7 @@ import asyncio
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -182,10 +183,18 @@ async def test_the_prompt_block_lists_only_the_agents_own_secrets_without_values
         session_id="s1",
     )
 
-    rendered = definition.render(SimpleNamespace(agent=SimpleNamespace(id="main")))
-    empty = definition.render(SimpleNamespace(agent=SimpleNamespace(id="helper")))
+    def render(agent_id: str, *, subagent_session: bool = False) -> Any:
+        context = SimpleNamespace(
+            agent=SimpleNamespace(id=agent_id), subagent_session=subagent_session
+        )
+        return definition.render(context)
+
+    rendered = render("main")
+    empty = render("helper")
 
     assert [key for key, _ in rendered.catalog.entries] == ["GITHUB"]
     assert "username julian" in rendered.text and "{{secret:GITHUB.password}}" in rendered.text
     assert PASSWORD not in rendered.text
     assert empty == ""
+    # A Sub-Agent Session of the same Agent has only the Secrets passed to it.
+    assert render("main", subagent_session=True) == ""

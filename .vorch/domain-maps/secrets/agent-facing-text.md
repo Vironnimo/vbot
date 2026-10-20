@@ -26,7 +26,7 @@ The texts were written with the design of 2026-10-21 and have not yet been check
 
 | Text | Reason |
 |---|---|
-| Block, shown only while the Agent has Secrets granted to it: `## Secrets` + `You can use these Secrets without seeing their values.` | A Secret the Agent does not know of is never used; the block is empty (dropped) when there is none, so Agents without Secrets pay nothing. User approval of the wording is pending (vbot-agent-text). |
+| Block, shown only while the Agent has Secrets granted to it and never in a Sub-Agent Session: `## Secrets` + `You can use these Secrets without seeing their values.` | A Secret the Agent does not know of is never used; the block is empty (dropped) when there is none, so Agents without Secrets pay nothing. A Sub-Agent Session uses only passed Secrets (user decision 2026-10-21), which its start note lists; the Agent's list there would name Secrets it cannot use. User approval of the wording is pending (vbot-agent-text). |
 | `Write a reference such as {{secret:NAME.field}} where the value belongs, in the places listed for each Secret; vBot inserts the value there.` | The reference form and the rule that it works only in the listed places (sinks); elsewhere it stays literal text (F2, F3). |
 | `Tool output shows values as their references.` | Without it an Agent that sees `{{secret:X}}` in command output thinks the substitution failed and retries (F4). |
 | Line: `- NAME (kind[, this session \| one use, this session \| until <time>]): <description>.` | Kind and lifetime tell the Agent which fields exist and how long it can rely on the Secret. |
@@ -61,6 +61,7 @@ Every refusal starts with `<tool> was not run:` like the other dispatch refusals
 |---|---|
 | `No Secret named <NAME>. Your Secrets: <names>. Use the secrets Tool to request one from the user.` | A misspelled reference gets the valid names; a missing one gets the way to obtain it (F5). |
 | `<NAME> is not granted to you. Your Secrets: ... Ask the user to grant it in Settings -> Secrets if you need it.` | User decision: grants per Agent. Names the real state instead of "unknown", so the Agent does not request a duplicate. |
+| In a Sub-Agent Session: `<NAME> was not passed to you. Your Secrets: ... If you need it, say so in your report; your Parent Agent can pass it.` | User decision 2026-10-21: Sub-Agents use only passed Secrets. A Sub-Agent would otherwise ask the user for a grant that does not help it, or request a duplicate; only the Parent can pass, at the next start. |
 | `<NAME> is a vBot credential, not a Secret you can use here.` | Provider keys and other data-directory credentials share the name space of environment variables; Agents guessed them as Secret names. |
 | `<NAME> has no field <field>; use <references>.` | Lists the valid references (F5). |
 | `<NAME> may not be used in <place> (allowed: ...). Tell the user if this use is needed; they can allow it in Settings -> Secrets.` | The user restricts sinks; the Agent must not work around the restriction, only report it. |

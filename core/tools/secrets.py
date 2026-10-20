@@ -204,6 +204,9 @@ def _render_prompt_block(context: Any, secrets: AgentSecrets) -> Any:
     """The Agent's own Secrets as a catalog; Session Secrets reach it as notes instead."""
     from core.prompts import BlockCatalog, RenderedBlock
 
+    # A Sub-Agent Session has only the Secrets passed to it; its Tool results list them.
+    if context.subagent_session:
+        return ""
     agent_id = context.agent.id
     own = [
         secret
@@ -327,7 +330,9 @@ def _with_note(result: JsonObject, unknown: list[str]) -> JsonObject:
 
 
 def _list_text(secrets: AgentSecrets, context: ToolContext) -> str:
-    usable = secrets.usable(context.agent_id, context.session_id)
+    usable = secrets.usable(
+        context.agent_id, context.session_id, passed_only=context.subagent_session
+    )
     if not usable:
         return "You have no Secrets. Use action request to ask the user for one."
     lines = ["Your Secrets:"]
@@ -395,7 +400,9 @@ async def _request(
     if isinstance(lifetime, dict):
         return lifetime
     description = str(arguments.get("description") or "").strip()
-    existing = secrets.lookup(context.agent_id, context.session_id, name)
+    existing = secrets.lookup(
+        context.agent_id, context.session_id, name, passed_only=context.subagent_session
+    )
     if existing is not None and existing.source is not None:
         return tool_failure(
             "secret_from_source",
@@ -433,6 +440,7 @@ async def _request(
         kind=kind,
         description=description,
         lifetime=lifetime,
+        passed_only=context.subagent_session,
     )
     if outcome.status == "stored" and outcome.secret is not None:
         verb = "replaced the value of" if outcome.replaced else "stored"
@@ -478,7 +486,12 @@ async def _generate(
         )
     symbols = arguments.get("symbols")
     symbols = DEFAULT_PASSWORD_SYMBOLS if symbols is None else str(symbols)
-    if secrets.lookup(context.agent_id, context.session_id, name) is not None:
+    if (
+        secrets.lookup(
+            context.agent_id, context.session_id, name, passed_only=context.subagent_session
+        )
+        is not None
+    ):
         return tool_failure(
             "secret_exists",
             f"Nothing was generated. {name} already exists, and a new password would lose the "
@@ -496,6 +509,7 @@ async def _generate(
             kind="login",
             values=values,
             actor=f"agent:{context.agent_id}",
+            session_id=context.session_id,
             agents=[context.agent_id],
             description=str(arguments.get("description") or "").strip(),
         )

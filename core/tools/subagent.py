@@ -125,7 +125,7 @@ SUBAGENT_TOOL_PARAMETERS: JsonObject = {
             "items": {"type": "string"},
             "description": (
                 'For run, names of your Secrets to pass, such as ["GITHUB"]. A Sub-Agent has '
-                "only its own Agent's Secrets and those you pass."
+                "only the Secrets you pass."
             ),
         },
     },

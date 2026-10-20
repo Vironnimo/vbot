@@ -142,6 +142,9 @@ class ToolContext:
     # Kind of the Run that dispatched this call, or ``None`` outside Runs (direct
     # callers). ``core.runs.is_unattended_run_kind`` tells background Runs apart.
     run_kind: RunKind | None = None
+    # The Session is linked to a Parent Agent (a Sub-Agent Session): it uses only
+    # the Secrets bound to or passed into it, none granted to its Agent.
+    subagent_session: bool = False
     # The admitted Run's reply destination, unaffected by another chat using the
     # same Session. Runtime-only; never supplied by Model arguments.
     reply_surface: ReplySurface | None = None
@@ -600,6 +603,8 @@ class ToolExecutionConfig:
     skill_agent_id: str | None = None
     # Kind of the owning Run; see ``ToolContext.run_kind``.
     run_kind: RunKind | None = None
+    # See ``ToolContext.subagent_session``.
+    subagent_session: bool = False
     reply_surface: ReplySurface | None = None
     allowed_tools: Sequence[str] | None = None
     emit_hook: ToolEmitHook | None = None

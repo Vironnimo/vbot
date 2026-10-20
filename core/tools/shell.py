@@ -201,7 +201,9 @@ class ShellTool:
             self._projects,
             terminal_available=names(TERMINAL_TOOL_NAME),
             secret_names=(
-                secrets.environment_names(context.agent_id, context.session_id)
+                secrets.environment_names(
+                    context.agent_id, context.session_id, passed_only=context.subagent_session
+                )
                 if secrets is not None
                 else frozenset()
             ),
@@ -233,17 +235,25 @@ class ShellTool:
         if secrets is None or not (call.secret_keys or call.secret_variables):
             return {}
 
+        passed_only = context.subagent_session
+
         def resolve() -> tuple[dict[str, str], list[SecretUse]]:
             variables: dict[str, str] = {}
             uses: list[SecretUse] = []
             for name in call.secret_keys:
-                found = secrets.environment(context.agent_id, context.session_id, name)
+                found = secrets.environment(
+                    context.agent_id, context.session_id, name, passed_only=passed_only
+                )
                 if found is not None:
                     variables.update(found[0])
                     uses.extend(found[1])
             for name, reference in call.secret_variables:
                 variables[name], found_uses = secrets.substitute(
-                    context.agent_id, context.session_id, reference, "environment"
+                    context.agent_id,
+                    context.session_id,
+                    reference,
+                    "environment",
+                    passed_only=passed_only,
                 )
                 uses.extend(found_uses)
             return variables, uses

@@ -122,6 +122,7 @@ class SecretRequests:
         kind: SecretKind,
         description: str,
         lifetime: Lifetime,
+        passed_only: bool = False,
     ) -> SecretRequestOutcome:
         """Wait for the user's answer; ``expired`` after the timeout.
 
@@ -129,7 +130,7 @@ class SecretRequests:
         first, whose caller then gets ``declined``.
         """
         secret_name = normalize_secret_name(name)
-        existing = self._secrets.lookup(agent_id, session_id, secret_name)
+        existing = self._secrets.lookup(agent_id, session_id, secret_name, passed_only=passed_only)
         now = self._clock()
         pending = PendingSecretRequest(
             id=new_id("sreq", claim=lambda item: item not in self._pending),

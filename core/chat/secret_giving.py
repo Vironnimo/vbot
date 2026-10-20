@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from core.chat._run_state import is_subagent_session
 from core.secrets.agent_secrets import AgentSecret, Lifetime, SecretKind, normalize_secret_name
 from core.sessions import SessionAddress
 from core.utils.logging import get_logger
@@ -55,7 +56,12 @@ async def give_secret(
     if pending is not None:
         secret = await requests.answer(pending.id, values, lifetime=lifetime, expires_at=expires_at)
         return GivenSecret(secret, replaced=pending.replaces is not None, answered_request=True)
-    existing = secrets.lookup(address.agent_id, address.session_id, secret_name)
+    passed_only = sessions is not None and await asyncio.to_thread(
+        is_subagent_session, sessions, address
+    )
+    existing = secrets.lookup(
+        address.agent_id, address.session_id, secret_name, passed_only=passed_only
+    )
     if existing is not None and existing.source is None:
         secret = await asyncio.to_thread(secrets.update, existing.id, actor="user", values=values)
         given = GivenSecret(secret, replaced=True, answered_request=False)

@@ -221,11 +221,34 @@ def test_a_parent_passes_only_its_own_secrets_and_the_grant_ends_with_the_child(
     secrets.pass_to_session("main", "s1", ["GITHUB"], child_session_id="child")
     with pytest.raises(SecretUseError):
         secrets.pass_to_session("helper", "child", ["GITLAB"], child_session_id="grandchild")
+    # A Sub-Agent Session of the same Agent has none of the Agent's Secrets
+    # unless they were passed, and passes on only what it has.
+    with pytest.raises(SecretUseError) as refused:
+        secrets.pass_to_session(
+            "main", "other-child", ["GITHUB"], child_session_id="grandchild", passed_only=True
+        )
+    with pytest.raises(SecretUseError) as unpassed:
+        secrets.substitute(
+            "main", "other-child", "{{secret:GITHUB.password}}", "typing", passed_only=True
+        )
+    requested = secrets.create(
+        name="stripe",
+        kind="token",
+        values={"value": TOKEN},
+        actor="user",
+        session_id="other-child",
+        agents=["main"],
+    )
 
-    assert [item.name for item in secrets.usable("helper", "child")] == ["GITHUB"]
+    assert refused.value.code == "unknown_secret"
+    assert unpassed.value.code == "not_granted"
+    assert "not passed to you" in str(unpassed.value)
+    # A permanent Secret given in a Session stays usable there.
+    assert secrets.usable("main", "other-child", passed_only=True) == [requested]
+    assert [item.name for item in secrets.usable("helper", "child", passed_only=True)] == ["GITHUB"]
     secrets.remove_session("child")
     assert secrets.usable("helper", "child") == []
-    assert [item.name for item in secrets.usable("main", "s1")] == ["GITHUB"]
+    assert [item.name for item in secrets.usable("main", "s1")] == ["GITHUB", "STRIPE"]
 
 
 def test_environment_gives_every_field_for_a_name_or_one_field_for_its_variable(

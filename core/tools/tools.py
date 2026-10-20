@@ -806,7 +806,11 @@ class ToolRegistry:
             uses: list[SecretUse] = []
             for name, sink in sinks.items():
                 changed[name], found = secrets.substitute(
-                    context.agent_id, context.session_id, arguments[name], sink
+                    context.agent_id,
+                    context.session_id,
+                    arguments[name],
+                    sink,
+                    passed_only=context.subagent_session,
                 )
                 uses.extend(use for use in found if use not in uses)
             return changed, uses

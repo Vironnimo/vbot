@@ -163,13 +163,16 @@ class AgentSecret:
     def expired(self, now: datetime) -> bool:
         return self.expires_at is not None and now >= self.expires_at
 
-    def granted_to(self, agent_id: str, session_id: str) -> bool:
-        """Whether the Agent of ``session_id`` may use this Secret there."""
+    def granted_to(self, agent_id: str, session_id: str, *, passed_only: bool = False) -> bool:
+        """Whether the Agent of ``session_id`` may use this Secret there.
+
+        ``passed_only`` (a Sub-Agent Session) leaves out the grants to the Agent.
+        """
         if session_id in self.sessions:
             return True
         if self.lifetime in ("session", "once"):
             return self.session_id == session_id
-        return agent_id in self.agents
+        return not passed_only and agent_id in self.agents
 
 
 def normalize_secret_name(raw: str) -> str:
