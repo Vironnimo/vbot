@@ -18,10 +18,11 @@ from ._shell_hint_common import (
 )
 
 # A title in place of a command: one line of at least three plain words that
-# starts with a capitalized word, such as "Check shell files compile and behave".
-# Programs are rarely capitalized; a cmdlet's hyphen, a flag or a file's dot ends
-# the match.
-_PROSE = re.compile(r"[A-Z][a-z]*(?:[ \t]+[^\W_][\w'’-]*){2,}\.?")
+# starts with a capitalized word in any language, such as "Check shell files
+# compile and behave"; the first word can end in a hyphen, as German "Quell- und
+# ..." does. Programs are rarely capitalized; a cmdlet's hyphen, a flag or a
+# file's dot ends the match.
+_PROSE = re.compile(r"([^\W\d_]+)-?(?:[ \t]+[^\W_][\w'’-]*){2,}\.?")
 
 
 def _description_as_command(failure: _Failure, missing: str) -> str | None:
@@ -33,7 +34,11 @@ def _description_as_command(failure: _Failure, missing: str) -> str | None:
     a short command into description.
     """
     command = failure.command.strip()
-    if not _PROSE.fullmatch(command) or command.split(maxsplit=1)[0] != missing:
+    prose = _PROSE.fullmatch(command)
+    if prose is None or command.split(maxsplit=1)[0] != missing:
+        return None
+    first = prose[1]
+    if not first[0].isupper() or not (first[1:].islower() or len(first) == 1):
         return None
     return (
         f"command holds a description, not a command, so its first word `{missing}` was run "
@@ -218,6 +223,10 @@ def _hint_powershell_command_not_found(failure: _Failure) -> str | None:
             f"`{missing}` was not found. Did you mean `{spelling}`, "
             "which also appears as a command in your script?"
         )
+    if re.search(r"\s|\$\(", missing) or missing.startswith("\\"):
+        # Text PowerShell ran as a command, such as a string that lost its
+        # quotes: no program to install.
+        return None
     return (
         f"`{missing}` is not installed or not on PATH. Check with `Get-Command {missing}`; "
         "install it or run it by its absolute path instead of retrying the same command."

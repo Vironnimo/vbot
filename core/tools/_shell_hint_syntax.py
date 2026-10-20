@@ -250,6 +250,8 @@ def _closing_bracket(code: str, opening: int) -> int | None:
 
 
 _STRING_SHOWN_CHARS = 40
+# A statement that starts with \", as bash quotes a whole string it prints.
+_LEADING_ESCAPED_QUOTE = re.compile(r'(?:^|[;{(\n|]|&&)[ \t]*+\\"')
 
 
 def _hint_typographic_quote(command: str) -> str | None:
@@ -300,9 +302,23 @@ def _hint_escaped_quote(
     if not _common._POWERSHELL or '\\"' not in command:
         return None
     code = _powershell_code(command)
+    window = _scan_window(output)
+    missing = _POWERSHELL_NOT_RECOGNIZED.search(window)
+    if missing is not None and missing[1].startswith("\\"):
+        # A statement written as \"...\" is no string: PowerShell ran the
+        # backslash with the string after it as a command.
+        for leading in _LEADING_ESCAPED_QUOTE.finditer(code.flat):
+            if command.startswith(missing[1][1:21], leading.end()):
+                term = missing[1]
+                if len(term) > _STRING_SHOWN_CHARS:
+                    term = term[: _STRING_SHOWN_CHARS - 3] + "..."
+                return (
+                    'In PowerShell, \\" does not escape a quote: the statement that starts with '
+                    f'\\" ran as a command named `{term}`. To print the string, write it in plain '
+                    "double quotes, without the backslashes."
+                )
     if code.escaped_end is None:
         return None
-    window = _scan_window(output)
     if "ParserError" in window and _INPUT_REDIRECTION.search(window):
         # The leaked Python/regex text, rather than a separate input
         # redirection, contains < before the next quote or statement boundary.

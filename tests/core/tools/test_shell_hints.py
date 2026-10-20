@@ -412,6 +412,9 @@ def test_platform_specific_hints_follow_the_host_shell(
         ),
         # PowerShell's own class, also with a base class, and Import-Module.
         ("class Child : Base {\n}", "ParserError: Unable to find type [Base].", None),
+        # Text PowerShell ran as a command is no program to install.
+        ('& "my tool" --check', _NOT_RECOGNIZED.format(name="my tool"), None),
+        ("& $(Get-Tool)x", _NOT_RECOGNIZED.format(name="$(Get-Tool)x"), None),
         (
             "Import-Module Pester",
             "Import-Module: The specified module 'Pester' was not loaded.",
@@ -476,6 +479,12 @@ def test_bash_habits_in_powershell_name_the_powershell_form(
         (
             "Check shell files compile and behave",
             "Check",
+            "command holds a description, not a command",
+            _NOT_RECOGNIZED,
+        ),
+        (
+            "Quell- und Testdateien auflisten",
+            "Quell-",
             "command holds a description, not a command",
             _NOT_RECOGNIZED,
         ),
@@ -702,6 +711,14 @@ _ESCAPED_QUOTE = 'In PowerShell, \\" does not escape a quote'
 @pytest.mark.parametrize(
     ("command", "exit_code", "output", "failed", "named"),
     [
+        # A statement written as \"...\" ran as a command named after its text.
+        (
+            'if ($ok) { \\"ok: $($x -gt 0)\\" }',
+            1,
+            _NOT_RECOGNIZED.format(name="\\ok: $($x -gt 0)\\"),
+            (),
+            "`\\ok: $($x -gt 0)\\`",
+        ),
         # A quoted title's (English) ran as a command; it is not a missing install.
         (
             'python -c "add = {\\"publisher\\": \\"Wikipedia (English)\\"}"',
