@@ -15,6 +15,7 @@ from core.chat.commands import (
     parse_agent_argument,
     parse_handoff_argument,
 )
+from core.chat.content_blocks import MediaBlock, TextBlock
 from core.chat.status_report import STATUS_PLACEHOLDER
 from core.projects import AgentOverrides, AgentResolver, ModelConfigurationError, ProjectStore
 from core.runs import ChatRunManager, Run, RunCancelledError
@@ -119,6 +120,8 @@ def test_prepare_recognizes_the_command_catalog(message: str, expected: bool) ->
         ("/model reset", "model", "reset"),
         ("/compact keep the API design", "compact", "keep the API design"),
         ("/rename", "rename", None),
+        # Any whitespace ends the command name, a line break too.
+        ("/rename\nRelease planning", "rename", "Release planning"),
         ("/new", "new", None),
     ],
 )
@@ -662,6 +665,9 @@ class _RecordingNotes:
 
         return SimpleNamespace(add_note_async=add_note_async)
 
+    def metadata_value(self, address: SessionAddress, key: str) -> Any:
+        return None
+
 
 @pytest.mark.asyncio
 async def test_secret_stores_the_value_and_tells_the_agent_only_its_reference(
@@ -707,6 +713,16 @@ async def test_secret_stores_the_value_and_tells_the_agent_only_its_reference(
 
     prepared = dispatcher.prepare(f"/secret openai-key {value}")
     assert prepared is not None and prepared.secret_argument
+    # With an attachment /secret is still the command, so the value never
+    # reaches the Agent; other commands with attachments stay messages.
+    attachment = MediaBlock(
+        type="media", attachment_id="att_1", filename="shot.png", media_type="image/png"
+    )
+    with_attachment = dispatcher.prepare(
+        [TextBlock(type="text", text=f"/secret openai-key {value}"), attachment]
+    )
+    assert with_attachment is not None and with_attachment.argument == f"openai-key {value}"
+    assert dispatcher.prepare([TextBlock(type="text", text="/rename Plans"), attachment]) is None
     assert stored.feedback is not None and value not in stored.feedback.text
     assert "{{secret:OPENAI_KEY}}" in stored.feedback.text
     assert secrets.substitute("coder", "session-one", "{{secret:OPENAI_KEY}}", "files")[0] == value
