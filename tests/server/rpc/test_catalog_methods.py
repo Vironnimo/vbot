@@ -348,6 +348,7 @@ async def test_built_in_commands_are_always_present_with_their_input_and_output(
         ("new", "none", "action"),
         ("reflect", "optional", "action"),
         ("rename", "optional", "toast"),
+        ("secret", "optional", "toast"),
         ("status", "none", "transient"),
         ("stop", "optional", "toast"),
     ]

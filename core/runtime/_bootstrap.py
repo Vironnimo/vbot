@@ -96,6 +96,7 @@ from core.runtime.databases import RETIRED_CANONICAL_DATABASES
 from core.runtime.keep_awake import KeepAwakeController
 from core.secrets import settle_plaintext_credentials
 from core.secrets.agent_secrets import AgentSecrets
+from core.secrets.requests import SecretRequests
 from core.sessions import ChatSession, ChatSessionManager
 from core.sessions.titles import SessionTitleService
 from core.settings.paths import (
@@ -139,6 +140,7 @@ from core.tools.command_manager import CommandManager
 from core.tools.cron import register_cron_tool
 from core.tools.live import LIVE_TOOL_FAMILY, LiveToolHosts, register_live_tools
 from core.tools.load_tools import register_load_tools_tool
+from core.tools.secrets import register_secrets_tool
 from core.tools.status import register_status_tool
 from core.tools.subagent import register_subagent_tools
 from core.tools.tools import ToolPromptBlockRegistry, ToolRegistry
@@ -242,6 +244,9 @@ def bootstrap(runtime: Runtime) -> None:
         runtime._agent_secrets.reload()
         runtime._agent_secrets.sweep()
         runtime._agent_secrets.set_system_values(data_dir_credentials)
+        runtime._secret_requests = SecretRequests(
+            runtime._agent_secrets, clock=lambda: datetime.now(UTC)
+        )
         runtime._provider_credentials = ProviderCredentialResolver(
             runtime._providers,
             fallback_credentials=data_dir_credentials,
@@ -765,6 +770,8 @@ def bootstrap(runtime: Runtime) -> None:
             snapshot_barrier=runtime._snapshot_barrier,
             stop_all=lambda address: runtime.subagents.stop_tree(address),
             goals=runtime._goal_service,
+            secrets=runtime._agent_secrets,
+            secret_requests=runtime._secret_requests,
         )
         if runtime._extensions is not None:
             runtime._extensions.apply_commands(runtime._command_dispatcher)
@@ -816,7 +823,9 @@ def bootstrap(runtime: Runtime) -> None:
             scratch_areas=runtime._scratch_areas,
             secrets=runtime._agent_secrets,
         )
-        runtime._subagent_coordinator = SubAgentCoordinator(runtime, runtime._trigger_service)
+        runtime._subagent_coordinator = SubAgentCoordinator(
+            runtime, runtime._trigger_service, secrets=runtime._agent_secrets
+        )
         runtime._subagent_coordinator.install(runtime._chat_run_manager)
         register_subagent_tools(
             runtime._tools,
@@ -824,6 +833,12 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._tool_prompt_blocks,
         )
         register_update_goal_tool(runtime._tools, runtime._goal_service)
+        register_secrets_tool(
+            runtime._tools,
+            runtime._agent_secrets,
+            runtime._secret_requests,
+            runtime._tool_prompt_blocks,
+        )
         register_background_tasks_tool(
             runtime._tools,
             runtime._command_manager,

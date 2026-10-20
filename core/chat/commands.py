@@ -45,9 +45,13 @@ if TYPE_CHECKING:
     from core.models.models import ModelRegistry
     from core.projects import AgentResolver, ProjectStore, RuntimeAgent
     from core.providers.providers import ProviderRegistry
+    from core.secrets.agent_secrets import AgentSecrets
+    from core.secrets.requests import SecretRequests
     from core.sessions import ChatSessionManager
     from core.tools.command_manager import CommandManager
 else:
+    AgentSecrets = Any
+    SecretRequests = Any
     AgentResolver = Any
     AgentStore = Any
     AutomationReferences = Any
@@ -255,6 +259,16 @@ class CommandDispatcher:
             catalog_result="notice",
             execution_mode="serialized",
         ),
+        "secret": CommandSpec(
+            "secret",
+            "Give the agent a password or key it uses without seeing it.",
+            argument="optional",
+            catalog_result="notice",
+            # Immediate: the Run may be waiting in a secrets request this answers.
+            execution_mode="immediate",
+            new_session_mode="create_session",
+            group_conversations=False,
+        ),
         "status": CommandSpec(
             "status",
             "Show current session and runtime status.",
@@ -295,8 +309,10 @@ class CommandDispatcher:
         snapshot_barrier: SnapshotBarrier | None = None,
         stop_all: Callable[[SessionAddress], Awaitable[int]] | None = None,
         goals: GoalService | None = None,
+        secrets: AgentSecrets | None = None,
+        secret_requests: SecretRequests | None = None,
     ) -> None:
-        from core.chat import _command_builtin, _command_status
+        from core.chat import _command_builtin, _command_secret, _command_status
 
         self._chat_runs = chat_runs
         self._agent_resolver = agent_resolver
@@ -359,6 +375,12 @@ class CommandDispatcher:
                 reflection_service=reflection_service,
             ),
             "rename": partial(_command_builtin._execute_rename, sessions=sessions),
+            "secret": partial(
+                _command_secret.execute_secret,
+                secrets=secrets,
+                requests=secret_requests,
+                sessions=sessions,
+            ),
             "status": partial(
                 _command_status._execute_status,
                 agent_resolver=agent_resolver,

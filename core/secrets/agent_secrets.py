@@ -62,7 +62,7 @@ from core.utils.logging import get_logger
 
 __all__ = [
     "LIFETIMES",
-    "PASSWORD_CLASSES",
+    "DEFAULT_PASSWORD_SYMBOLS",
     "REFERENCE_PATTERN",
     "SECRET_KINDS",
     "SINK_CLASSES",
@@ -97,13 +97,8 @@ SecretUseFailure = Literal[
 ]
 ChangeKind = Literal["created", "changed", "deleted"]
 
-#: Characters of generated passwords by class.
-PASSWORD_CLASSES: Final[Mapping[str, str]] = {
-    "lower": string.ascii_lowercase,
-    "upper": string.ascii_uppercase,
-    "digits": string.digits,
-    "symbols": "!#$%&()*+,-./:;<=>?@[]^_{|}~",
-}
+#: Symbols a generated password contains unless the caller names others.
+DEFAULT_PASSWORD_SYMBOLS: Final = "!#$%&()*+,-./:;<=>?@[]^_{|}~"
 _MIN_PASSWORD = 8
 _MAX_PASSWORD = 128
 
@@ -189,6 +184,10 @@ class AgentSecrets:
             self._masker = None
             self._loaded = True
         self.sweep()
+
+    def now(self) -> datetime:
+        """The time lifetimes are measured against."""
+        return self._clock()
 
     def add_change_listener(self, listener: ChangeListener) -> None:
         self._listeners.append(listener)
@@ -436,10 +435,8 @@ class AgentSecrets:
         self._notify(SecretChange("deleted", secret, actor))
         return secret
 
-    def pass_to_session(
-        self, agent_id: str, session_id: str, names: Sequence[str], child_session_id: str
-    ) -> list[AgentSecret]:
-        """Grant named Secrets the caller can use to a Sub-Agent's Session (blocking)."""
+    def passable(self, agent_id: str, session_id: str, names: Sequence[str]) -> list[AgentSecret]:
+        """The caller's Secrets ``names`` stand for; :class:`SecretUseError` names the others."""
         granted: list[AgentSecret] = []
         missing = []
         for raw in names:
@@ -451,8 +448,8 @@ class AgentSecrets:
             secret = self.lookup(agent_id, session_id, name)
             if secret is None:
                 missing.append(name)
-                continue
-            granted.append(secret)
+            elif secret not in granted:
+                granted.append(secret)
         if missing:
             raise SecretUseError(
                 "unknown_secret",
@@ -460,6 +457,13 @@ class AgentSecrets:
                 f"{'it is' if len(missing) == 1 else 'they are'} not among your Secrets. "
                 f"Your Secrets: {self._names_text(agent_id, session_id)}.",
             )
+        return granted
+
+    def pass_to_session(
+        self, agent_id: str, session_id: str, names: Sequence[str], child_session_id: str
+    ) -> list[AgentSecret]:
+        """Grant named Secrets the caller can use to a Sub-Agent's Session (blocking)."""
+        granted = self.passable(agent_id, session_id, names)
         changed: list[AgentSecret] = []
         with self._lock:
             for secret in granted:
@@ -506,22 +510,22 @@ class AgentSecrets:
             self._notify(SecretChange("deleted", secret, "expiry"))
         return len(expired)
 
-    def generate_password(
-        self, length: int = 24, classes: Sequence[str] = ("lower", "upper", "digits", "symbols")
-    ) -> str:
+    def generate_password(self, length: int = 24, symbols: str = DEFAULT_PASSWORD_SYMBOLS) -> str:
+        """A random password of letters, digits and ``symbols``, with each group at least once."""
         if not _MIN_PASSWORD <= length <= _MAX_PASSWORD:
             raise SecretRecordError(
                 f"Generated passwords have {_MIN_PASSWORD} to {_MAX_PASSWORD} characters."
             )
-        chosen = [
-            PASSWORD_CLASSES[item] for item in dict.fromkeys(classes) if item in PASSWORD_CLASSES
-        ]
-        if not chosen:
-            raise SecretRecordError(f"Choose character classes from {', '.join(PASSWORD_CLASSES)}.")
-        alphabet = "".join(chosen)
+        chosen_symbols = "".join(
+            dict.fromkeys(char for char in symbols if char.isascii() and char.isprintable())
+        ).replace(" ", "")
+        groups = [string.ascii_lowercase, string.ascii_uppercase, string.digits]
+        if chosen_symbols:
+            groups.append(chosen_symbols)
+        alphabet = "".join(groups)
         while True:
             password = "".join(_random.choice(alphabet) for _ in range(length))
-            if all(any(char in group for char in password) for group in chosen):
+            if all(any(char in group for char in password) for group in groups):
                 return password
 
     # -- use -------------------------------------------------------------------
