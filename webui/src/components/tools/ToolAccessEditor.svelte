@@ -1,5 +1,6 @@
 <script>
   import Button from '../ui/Button.svelte';
+  import Dropdown from '../Dropdown.svelte';
   import ToolCatalogEditor from './ToolCatalogEditor.svelte';
   import FormField from '../ui/FormField.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
@@ -8,6 +9,7 @@
     TOOL_ACCESS_MODE_ALL,
     TOOL_ACCESS_MODE_NONE,
     activationSources,
+    effectiveToolLoading,
     groupToolCatalog,
     isFileEditTool,
     normalizeToolAccess,
@@ -23,7 +25,7 @@
     toolCatalogForEditor,
     toolIsAlwaysLoaded,
     toolIsConfigurable,
-    toolLoadingUsesDefaultSet,
+    toolLoadingInheritsList,
   } from '$lib/toolAccess.js';
   import { tick } from 'svelte';
   import { activeLocaleTag, t } from '$lib/i18n.js';
@@ -42,11 +44,15 @@
     showReset = false,
     resetLabel = '',
     // On-demand Tools: with `toolLoadingEditable` the editor shows the "Load
-    // Tools on demand" switch for `toolLoading` (`tool_loading`, null while
-    // off) and, while it is on, an "Always loaded" pin on every allowed Tool
-    // row. Editors that leave it out are unchanged.
+    // Tools on demand" choice for `toolLoading` (the Agent's own
+    // `tool_loading`, null while it sets nothing) and, while the Agent loads
+    // Tools on demand, an "Always loaded" pin on every allowed Tool row.
+    // `toolLoadingDefault` is what the Agent inherits for each part it does
+    // not set (`tool_loading_default`). Editors that leave it out are
+    // unchanged.
     toolLoadingEditable = false,
     toolLoading = null,
+    toolLoadingDefault = null,
     toolLoadingDisabled = false,
     onChange = noop,
     onToolLoadingChange = noop,
@@ -54,6 +60,7 @@
     onOpenExtensions = noop,
   } = $props();
 
+  const editorId = $props.id();
   let policy = $derived(normalizeToolAccess(value));
   let loading = $derived(normalizeToolLoading(toolLoading));
   // Without any Tool access the switch has no effect, so it is hidden; the
@@ -61,9 +68,35 @@
   let showToolLoading = $derived(
     toolLoadingEditable && policy.mode !== TOOL_ACCESS_MODE_NONE,
   );
-  let onDemand = $derived(showToolLoading && loading?.on_demand === true);
   let loadingLocked = $derived(disabled || toolLoadingDisabled);
   let completeCatalog = $derived(catalogWithStoredTools());
+  let inheritedLoading = $derived(
+    effectiveToolLoading(null, toolLoadingDefault, completeCatalog),
+  );
+  let onDemand = $derived(
+    showToolLoading &&
+      effectiveToolLoading(loading, toolLoadingDefault, completeCatalog)
+        .on_demand,
+  );
+  let onDemandChoice = $derived(
+    typeof loading?.on_demand === 'boolean'
+      ? loading.on_demand
+        ? 'on'
+        : 'off'
+      : 'default',
+  );
+  let onDemandOptions = $derived([
+    {
+      value: 'default',
+      label: t('toolAccess.onDemand.followDefault', {
+        state: inheritedLoading.on_demand
+          ? t('toolAccess.onDemand.stateOn')
+          : t('toolAccess.onDemand.stateOff'),
+      }),
+    },
+    { value: 'on', label: t('toolAccess.onDemand.on') },
+    { value: 'off', label: t('toolAccess.onDemand.off') },
+  ]);
   let catalogItems = $derived(
     groupToolCatalog(completeCatalog, ceiling)
       .flatMap((group) => group.members)
@@ -131,7 +164,12 @@
   }
 
   function alwaysLoaded(tool) {
-    return toolIsAlwaysLoaded(loading, tool, completeCatalog);
+    return toolIsAlwaysLoaded(
+      loading,
+      tool,
+      toolLoadingDefault,
+      completeCatalog,
+    );
   }
 
   let loadingCounts = $derived.by(() => {
@@ -142,7 +180,13 @@
 
   function toggleAlwaysLoaded(tool) {
     onToolLoadingChange(
-      setToolAlwaysLoaded(loading, tool, !alwaysLoaded(tool), completeCatalog),
+      setToolAlwaysLoaded(
+        loading,
+        tool,
+        !alwaysLoaded(tool),
+        toolLoadingDefault,
+        completeCatalog,
+      ),
     );
   }
 
@@ -157,12 +201,14 @@
 
   let editorRoot = $state();
 
-  // The reset button disappears once the default set applies again, so focus
-  // moves to the switch instead of dropping to the page.
+  // The reset button disappears once the inherited list applies again, so
+  // focus moves to the on-demand choice instead of dropping to the page.
   async function resetAlwaysLoaded() {
     onToolLoadingChange(resetAlwaysLoadedTools(loading));
     await tick();
-    editorRoot?.querySelector('[data-tool-loading-switch]')?.focus();
+    editorRoot
+      ?.querySelector(`#${CSS.escape(`${editorId}-on-demand`)}`)
+      ?.focus();
   }
 
   function toolNotes(tool) {
@@ -209,13 +255,19 @@
           <div class="s-row-desc">{t('toolAccess.onDemand.description')}</div>
         </div>
         <div class="s-row-control">
-          <Toggle
-            checked={onDemand}
+          <Dropdown
+            id={`${editorId}-on-demand`}
+            value={onDemandChoice}
+            options={onDemandOptions}
             disabled={loadingLocked}
             ariaLabel={t('toolAccess.onDemand.label')}
-            data-tool-loading-switch
-            onChange={(next) =>
-              onToolLoadingChange(setToolsOnDemand(loading, next))}
+            onValueChange={(choice) =>
+              onToolLoadingChange(
+                setToolsOnDemand(
+                  loading,
+                  choice === 'default' ? null : choice === 'on',
+                ),
+              )}
           />
         </div>
       </div>
@@ -228,10 +280,13 @@
                 alwaysLoaded: loadingCounts.alwaysLoaded,
                 onDemand: loadingCounts.onDemand,
               })}
+              {#if toolLoadingInheritsList(loading)}
+                {t('toolAccess.alwaysLoaded.followsDefault')}
+              {/if}
             </div>
           </div>
           <div class="s-row-control">
-            {#if !toolLoadingUsesDefaultSet(loading)}
+            {#if !toolLoadingInheritsList(loading)}
               <Button
                 variant="tertiary"
                 disabled={loadingLocked}

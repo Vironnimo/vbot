@@ -27,6 +27,7 @@
   import AgentEditor from './agents/AgentEditor.svelte';
   import SettingsDefaultsPanel from './settings/SettingsDefaultsPanel.svelte';
   import SettingsCompactionPanel from './settings/SettingsCompactionPanel.svelte';
+  import SettingsToolLoadingPanel from './settings/SettingsToolLoadingPanel.svelte';
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
@@ -37,6 +38,7 @@
   // The shared defaults place. Agent ids are letters, digits, hyphens and
   // underscores, so it never names an Agent.
   const DEFAULTS_PLACE = '~defaults';
+  const DEFAULTS_SECTIONS = ['tool_loading', 'compaction'];
   const autosaveContext = useAutosaveContext();
   const modelCatalogLoader = createModelCatalogLoader({
     listModels,
@@ -44,7 +46,8 @@
   });
   let {
     // The place is the shown Agent (`[agentId]`) or the shared defaults
-    // (`['~defaults']`, `['~defaults', 'compaction']` for that section); an
+    // (`['~defaults']`, `['~defaults', 'compaction']` or
+    // `['~defaults', 'tool_loading']` for that section); an
     // empty place shows the shared selected Agent.
     navigation = createStandaloneNavigation(),
     // Seeds the empty place; the place decides what the view shows.
@@ -88,7 +91,7 @@
     await tick();
     if (destroyed || requestId !== defaultsShowRequestId || !sharedDefaultsOpen)
       return;
-    if (panelId === 'compaction') jumpToDefaultsSection(panelId);
+    if (DEFAULTS_SECTIONS.includes(panelId)) jumpToDefaultsSection(panelId);
     else sharedContent?.scrollTo?.({ top: 0 });
   }
 
@@ -130,10 +133,10 @@
   }
 
   function navigateFromAgent(panelId) {
-    if (panelId === 'defaults' || panelId === 'compaction')
+    if (panelId === 'defaults' || DEFAULTS_SECTIONS.includes(panelId))
       return navigation.navigate([
         DEFAULTS_PLACE,
-        ...(panelId === 'compaction' ? [panelId] : []),
+        ...(DEFAULTS_SECTIONS.includes(panelId) ? [panelId] : []),
       ]);
     return onNavigateToSettingsPanel(panelId);
   }
@@ -746,6 +749,11 @@
               >
               <Button
                 variant="tertiary"
+                onClick={() => jumpToDefaultsSection('tool_loading')}
+                >{t('agents.shared.toolLoadingTitle')}</Button
+              >
+              <Button
+                variant="tertiary"
                 onClick={() => jumpToDefaultsSection('compaction')}
                 >{t('settings.compaction.title')}</Button
               >
@@ -780,6 +788,32 @@
                   onCommit={commitSharedSettings}
                   onError={sharedSettingsFailure}
                   {modelsRefreshToken}
+                />
+              </div>
+            </section>
+
+            <section
+              class="s-section"
+              data-settings-section="tool_loading"
+              aria-labelledby="agent-shared-tool-loading-title"
+            >
+              <header class="s-section__head">
+                <h3
+                  class="s-section__title"
+                  id="agent-shared-tool-loading-title"
+                >
+                  {t('agents.shared.toolLoadingTitle')}
+                </h3>
+              </header>
+              <p class="s-section__desc">
+                {t('agents.shared.toolLoadingDescription')}
+              </p>
+              <div class="s-section__body">
+                <SettingsToolLoadingPanel
+                  settings={sharedSettings}
+                  tools={availableTools}
+                  onCommit={commitSharedSettings}
+                  onError={sharedSettingsFailure}
                 />
               </div>
             </section>

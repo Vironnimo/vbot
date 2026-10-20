@@ -695,17 +695,18 @@ describe('ProjectsView Team', () => {
     );
   });
 
-  // Switched off without an Always loaded list, the override is cleared
-  // instead (controller test).
+  // The member follows the shared default until it chooses; choosing keeps an
+  // own Always loaded list.
   it.each([
-    [null, { on_demand: true }],
+    [null, 'on', { on_demand: true }],
     [
       { on_demand: true, always_loaded: ['read'] },
+      'off',
       { on_demand: false, always_loaded: ['read'] },
     ],
   ])(
-    'sets the On-demand Tools override %j from the member switch to %j',
-    async (stored, sent) => {
+    'sets the On-demand Tools override %j from the member choice %s to %j',
+    async (stored, choice, sent) => {
       serveProject(
         {},
         {
@@ -714,6 +715,7 @@ describe('ProjectsView Team', () => {
               agent_id: 'builder',
               display_name: 'Builder',
               overrides: stored ? { tool_loading: stored } : null,
+              tool_loading_default: { on_demand: false, always_loaded: [] },
             }),
           ],
         },
@@ -726,12 +728,25 @@ describe('ProjectsView Team', () => {
       await expandMember('builder');
 
       const loadingSwitch = () =>
-        memberDetail('builder')?.querySelector('[data-tool-loading-switch]');
+        memberDetail('builder')?.querySelector(
+          `button[aria-label="${t('toolAccess.onDemand.label')}"]`,
+        );
       await waitForCondition(loadingSwitch);
-      expect(loadingSwitch().getAttribute('aria-checked')).toBe(
-        String(Boolean(stored)),
+      expect(loadingSwitch().textContent.trim()).toBe(
+        stored
+          ? t('toolAccess.onDemand.on')
+          : t('toolAccess.onDemand.followDefault', {
+              state: t('toolAccess.onDemand.stateOff'),
+            }),
       );
       loadingSwitch().click();
+      flushSync();
+      [...document.querySelectorAll('.dropdown-primitive__option')]
+        .find(
+          (option) =>
+            option.textContent.trim() === t(`toolAccess.onDemand.${choice}`),
+        )
+        .click();
       flushSync();
       await wait(AUTO_SAVE_WAIT_MS);
       await waitForCondition(() => setOverrideMock.mock.calls.length === 1);

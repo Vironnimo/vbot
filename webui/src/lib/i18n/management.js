@@ -554,16 +554,23 @@ export default Object.freeze({
   'toolAccess.imageAlwaysAvailable': 'Available with vision',
   'toolAccess.readiness.unregistered': 'Not registered right now',
   'toolAccess.onDemand.label': 'Load Tools on demand',
+  'toolAccess.onDemand.followDefault': 'Default ({state})',
+  'toolAccess.onDemand.stateOn': 'on',
+  'toolAccess.onDemand.stateOff': 'off',
+  'toolAccess.onDemand.on': 'On',
+  'toolAccess.onDemand.off': 'Off',
   'toolAccess.onDemand.description':
     'Only Tools marked Always loaded are sent with every request. The Agent loads the others when it needs them, which saves context.',
   'toolAccess.onDemand.help':
-    'The Agent sees the other allowed Tools by name with a one-line summary and loads their full definitions with the load_tools Tool before it first calls one. Requests stay smaller, so more context is left for the conversation. What the Agent may use does not change.\n\nOpenAI Models can only call Tools sent with the request, so with them every Tool is sent and this setting has no effect. Some other Models handle loading less reliably. If the Agent misses Tools it should use, mark them Always loaded or turn this off.',
+    'The Agent sees the other allowed Tools by name with a one-line summary and loads their full definitions with the load_tools Tool before it first calls one. Requests stay smaller, so more context is left for the conversation. What the Agent may use does not change.\n\nOpenAI Models can only call Tools sent with the request, so with them every Tool is sent and this setting has no effect. Some other Models handle loading less reliably. If the Agent misses Tools it should use, mark them Always loaded or turn this off.\n\nDefault follows the setting and the Always loaded list in the Shared defaults for Agents until you choose otherwise here.',
   'toolAccess.alwaysLoaded.title': 'Always loaded',
   'toolAccess.alwaysLoaded.summary':
     '{alwaysLoaded} always loaded, {onDemand} on demand. Use the pin on a Tool to change it.',
+  'toolAccess.alwaysLoaded.followsDefault':
+    'The list follows the shared default.',
   'toolAccess.alwaysLoaded.reset': 'Reset to default',
   'toolAccess.alwaysLoaded.resetHint':
-    'Load the default set of Tools with every request again',
+    'Use the shared default list of always-loaded Tools again',
   'toolAccess.alwaysLoaded.toggle': 'Always load {name}',
   'toolAccess.alwaysLoaded.pinnedHint':
     'Always loaded: sent with every request. Select to load it on demand.',
@@ -1035,6 +1042,9 @@ export default Object.freeze({
     'Choose the common starting point. Individual Agents can override it.',
   'agents.shared.compactionDescription':
     'The inherited policy for keeping long conversations within the Model context.',
+  'agents.shared.toolLoadingTitle': 'On-demand Tools',
+  'agents.shared.toolLoadingDescription':
+    'Whether Agents load Tools on demand, and which Tools they always load. Agents and Project Agents can override either part.',
   'skills.title': 'Skills',
   'skills.loadError': 'Skills could not be loaded.',
   'skills.usageError': 'Skill usage could not be loaded.',

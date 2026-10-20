@@ -41,6 +41,8 @@ export {
   AGENT_DEFAULTS_THINKING_EFFORT_NO_DEFAULT,
   normalizeAgentDefaultsSettings,
   buildAgentDefaultsPayload,
+  normalizeToolLoadingDefaultSettings,
+  buildToolLoadingDefaultPayload,
   normalizeSessionTitleSettings,
   buildSessionTitleSettingsPayload,
   normalizeSubAgentSettings,

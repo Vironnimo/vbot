@@ -297,9 +297,9 @@ describe('normalizeAgentForm', () => {
     });
   });
 
-  // On-demand Tools: an edit sends the whole value and null turns them off;
-  // off without a list is the same as no value. A new Agent sends it only
-  // when it is set (the create payload above omits it).
+  // On-demand Tools: an edit sends the Agent's whole own value and null
+  // returns both parts to the shared default. A new Agent sends it only when
+  // it is set (the create payload above omits it).
   it.each([
     ['switched on', null, { on_demand: true }, { on_demand: true }],
     [
@@ -308,8 +308,13 @@ describe('normalizeAgentForm', () => {
       { on_demand: false, always_loaded: ['read'] },
       { on_demand: false, always_loaded: ['read'] },
     ],
-    ['switched off', { on_demand: true }, { on_demand: false }, null],
-    ['saved off', { on_demand: false }, null, undefined],
+    [
+      'switched off',
+      { on_demand: true },
+      { on_demand: false },
+      { on_demand: false },
+    ],
+    ['back to the default', { on_demand: false }, null, null],
   ])('sends On-demand Tools %s', (_label, saved, edited, sent) => {
     const initialValues = createAgentFormValues({
       id: 'coder',

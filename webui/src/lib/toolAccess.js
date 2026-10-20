@@ -369,13 +369,14 @@ export function toolIsConfigurable(tool) {
   );
 }
 
-// On-demand Tools: an Agent's `tool_loading` decides which allowed Tools are
-// sent with every request ("always loaded"); the Agent loads the others when
-// it needs them. It never changes Tool access. The value is
-// `{on_demand, always_loaded?}`: a missing `always_loaded` means the default
-// set, the catalog Tools marked `loaded_by_default`; an explicit list (also
-// `[]`) is the user's choice and keeps names the catalog does not know. Off
-// without a list is the same as no value and normalizes to null.
+// On-demand Tools: `tool_loading` decides which allowed Tools are sent with
+// every request ("always loaded"); the Agent loads the others when it needs
+// them. It never changes Tool access. An Agent's own value
+// `{on_demand?, always_loaded?}` sets either part or none: a part it leaves
+// out is inherited from the shared default, which the server reports
+// complete as `tool_loading_default`. An explicit list (also `[]`) is the
+// user's choice and keeps names the catalog does not know. A value that sets
+// nothing normalizes to null.
 
 // The file edit Tools are one unit: marking or unmarking one of them as
 // always loaded marks or unmarks all of them.
@@ -383,44 +384,74 @@ const FILE_EDIT_TOOLS = Object.freeze(['edit', 'write', 'apply_patch']);
 
 export function normalizeToolLoading(value) {
   if (!isPlainObject(value)) return null;
-  const onDemand = value.on_demand === true;
-  if (!Array.isArray(value.always_loaded)) {
-    return onDemand ? { on_demand: true } : null;
+  const normalized = {};
+  if (typeof value.on_demand === 'boolean') {
+    normalized.on_demand = value.on_demand;
   }
+  if (Array.isArray(value.always_loaded)) {
+    normalized.always_loaded = normalizeNames(value.always_loaded);
+  }
+  return Object.keys(normalized).length > 0 ? normalized : null;
+}
+
+// Both parts of `value` filled in: switched off, and the catalog Tools marked
+// `loaded_by_default` (the built-in set) where it names no list.
+export function completeToolLoading(value, catalog = []) {
+  const loading = normalizeToolLoading(value);
   return {
-    on_demand: onDemand,
-    always_loaded: normalizeNames(value.always_loaded),
+    on_demand: loading?.on_demand === true,
+    always_loaded: Array.isArray(loading?.always_loaded)
+      ? [...loading.always_loaded]
+      : builtInAlwaysLoadedNames(catalog),
   };
 }
 
-// Switching keeps an explicit list, so turning the switch back on restores
-// the user's choice.
-export function setToolsOnDemand(value, enabled) {
-  return normalizeToolLoading({
-    ...normalizeToolLoading(value),
-    on_demand: enabled === true,
-  });
+// What the Agent runs with: each part it sets itself, else the inherited one.
+export function effectiveToolLoading(value, inherited, catalog = []) {
+  const own = normalizeToolLoading(value);
+  const base = completeToolLoading(inherited, catalog);
+  return {
+    on_demand:
+      typeof own?.on_demand === 'boolean' ? own.on_demand : base.on_demand,
+    always_loaded: Array.isArray(own?.always_loaded)
+      ? [...own.always_loaded]
+      : base.always_loaded,
+  };
 }
 
-export function toolLoadingUsesDefaultSet(value) {
+// `choice` is true, false, or null to follow the default. Switching keeps an
+// explicit list, so the user's choice of Tools survives.
+export function setToolsOnDemand(value, choice) {
+  const own = { ...normalizeToolLoading(value) };
+  delete own.on_demand;
+  if (typeof choice === 'boolean') own.on_demand = choice;
+  return normalizeToolLoading(own);
+}
+
+export function toolLoadingInheritsList(value) {
   return !Array.isArray(normalizeToolLoading(value)?.always_loaded);
 }
 
 // Whether the Tool counts as always loaded; a file edit Tool counts when any
 // of the unit does.
-export function toolIsAlwaysLoaded(value, tool, catalog = []) {
+export function toolIsAlwaysLoaded(value, tool, inherited, catalog = []) {
   const names = new Set(
-    alwaysLoadedNames(normalizeToolLoading(value), catalog),
+    effectiveToolLoading(value, inherited, catalog).always_loaded,
   );
   return toolLoadingUnit(tool?.name).some((name) => names.has(name));
 }
 
 // Marks or unmarks the Tool (with its unit). The first change writes the
-// effective default set as the explicit list.
-export function setToolAlwaysLoaded(value, tool, enabled, catalog = []) {
-  const current = normalizeToolLoading(value) ?? { on_demand: false };
+// inherited list plus the change as the own list.
+export function setToolAlwaysLoaded(
+  value,
+  tool,
+  enabled,
+  inherited,
+  catalog = [],
+) {
   const unit = toolLoadingUnit(tool?.name);
-  let names = alwaysLoadedNames(current, catalog);
+  let names = effectiveToolLoading(value, inherited, catalog).always_loaded;
   if (enabled) {
     const known = new Set(
       (Array.isArray(catalog) ? catalog : []).map((entry) => entry?.name),
@@ -434,19 +465,19 @@ export function setToolAlwaysLoaded(value, tool, enabled, catalog = []) {
     names = names.filter((name) => !unit.includes(name));
   }
   return normalizeToolLoading({
-    on_demand: current.on_demand,
+    ...normalizeToolLoading(value),
     always_loaded: names,
   });
 }
 
+// Drops the own list, so the inherited one applies again.
 export function resetAlwaysLoadedTools(value) {
-  return normalizeToolLoading({
-    on_demand: normalizeToolLoading(value)?.on_demand === true,
-  });
+  const own = { ...normalizeToolLoading(value) };
+  delete own.always_loaded;
+  return normalizeToolLoading(own);
 }
 
-function alwaysLoadedNames(loading, catalog) {
-  if (Array.isArray(loading?.always_loaded)) return [...loading.always_loaded];
+function builtInAlwaysLoadedNames(catalog) {
   return normalizeNames(
     (Array.isArray(catalog) ? catalog : [])
       .filter((tool) => tool?.loaded_by_default === true)

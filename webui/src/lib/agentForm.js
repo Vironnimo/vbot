@@ -69,7 +69,7 @@ const AGENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 
 export function createAgentFormValues(agent = {}) {
   // The inheritable run fields (model/fallback_models/temperature/top_p/
-  // thinking_effort) bind to the agent's RAW own values (`agent.config`), so an
+  // thinking_effort/tool_loading) bind to the agent's RAW own values (`agent.config`), so an
   // empty/null raw value reads as the inherit state instead of the baked
   // top-level value. When no `config` block is present (create form, or an older
   // payload shape) the top-level values stand in, preserving prior behavior.
@@ -101,8 +101,9 @@ export function createAgentFormValues(agent = {}) {
       : null,
     // Librarian passes curate the Agent's own Skills unless switched off.
     librarian_enabled: agent.librarian_enabled !== false,
-    // On-demand Tools; null while off.
-    tool_loading: normalizeToolLoading(agent.tool_loading),
+    // The Agent's own On-demand Tools parts (raw, like the run fields); null
+    // while it inherits both.
+    tool_loading: normalizeToolLoading(raw.tool_loading),
   };
 }
 

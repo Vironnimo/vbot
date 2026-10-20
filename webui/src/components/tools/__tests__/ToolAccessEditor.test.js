@@ -413,27 +413,66 @@ describe('ToolAccessEditor', () => {
         .filter((pin) => pin.getAttribute('aria-pressed') === String(pressed))
         .map((pin) => pin.dataset.toolAlwaysLoaded);
     const loadingSwitch = () =>
-      document.querySelector('[data-tool-loading-switch]');
+      document.querySelector(
+        `button[aria-label="${t('toolAccess.onDemand.label')}"]`,
+      );
+    const chooseOnDemand = (label) => {
+      loadingSwitch().click();
+      flushSync();
+      const option = [
+        ...document.querySelectorAll('.dropdown-primitive__option'),
+      ].find((item) => item.textContent.trim() === label);
+      expect(option).toBeTruthy();
+      option.click();
+      flushSync();
+    };
+    const choiceLabel = () =>
+      loadingSwitch()
+        .querySelector('.dropdown-primitive__trigger-label')
+        .textContent.trim();
+    const defaultLabel = (on) =>
+      t('toolAccess.onDemand.followDefault', {
+        state: t(
+          on ? 'toolAccess.onDemand.stateOn' : 'toolAccess.onDemand.stateOff',
+        ),
+      });
 
+    it('offers the choice only to editors that enable it', async () => {
+      mountLoading({ toolLoadingEditable: false, toolLoading: null });
+      expect(loadingSwitch()).toBeNull();
+      expect(pins()).toEqual([]);
+    });
+
+    // Without its own choice the Agent follows the shared default; an own
+    // choice keeps an own list, and Default drops only the choice.
     it.each([
-      [false, null],
-      [true, { on_demand: true }],
+      [null, false, 'on', { on_demand: true }],
+      [null, true, 'off', { on_demand: false }],
+      [
+        { on_demand: true, always_loaded: ['read'] },
+        false,
+        'default',
+        { always_loaded: ['read'] },
+      ],
     ])(
-      'offers the switch only to editors that enable it (%s)',
-      (toolLoadingEditable, expected) => {
+      'chooses On-demand Tools from %j over a default switched on=%s (%s)',
+      (toolLoading, sharedOn, choice, expected) => {
         const onToolLoadingChange = vi.fn();
         mountLoading({
-          toolLoadingEditable,
-          toolLoading: null,
+          toolLoadingEditable: true,
+          toolLoading,
+          toolLoadingDefault: { on_demand: sharedOn, always_loaded: ['read'] },
           onToolLoadingChange,
         });
-        expect(pins()).toEqual([]);
-        if (!toolLoadingEditable) {
-          expect(loadingSwitch()).toBeNull();
-          return;
-        }
-        expect(loadingSwitch().getAttribute('aria-checked')).toBe('false');
-        loadingSwitch().click();
+        expect(choiceLabel()).toBe(
+          toolLoading ? t('toolAccess.onDemand.on') : defaultLabel(sharedOn),
+        );
+        expect(pins().length > 0).toBe(toolLoading?.on_demand ?? sharedOn);
+        chooseOnDemand(
+          choice === 'default'
+            ? defaultLabel(sharedOn)
+            : t(`toolAccess.onDemand.${choice}`),
+        );
         expect(onToolLoadingChange).toHaveBeenCalledWith(expected);
       },
     );
@@ -465,11 +504,15 @@ describe('ToolAccessEditor', () => {
       expect(onToolLoadingChange).not.toHaveBeenCalled();
     });
 
-    it('shows the default set and writes the explicit list on the first change', () => {
+    it('shows the inherited list and writes the whole list on the first change', () => {
       const onToolLoadingChange = vi.fn();
       mountLoading({
         toolLoadingEditable: true,
-        toolLoading: { on_demand: true },
+        toolLoading: null,
+        toolLoadingDefault: {
+          on_demand: true,
+          always_loaded: ['read', 'write'],
+        },
         onToolLoadingChange,
       });
 
@@ -484,10 +527,10 @@ describe('ToolAccessEditor', () => {
           .querySelector('[data-tool-loading-summary]')
           .textContent.trim(),
       ).toBe(
-        t('toolAccess.alwaysLoaded.summary', {
+        `${t('toolAccess.alwaysLoaded.summary', {
           alwaysLoaded: 2,
           onDemand: pinNames(false).length,
-        }),
+        })} ${t('toolAccess.alwaysLoaded.followsDefault')}`,
       );
       expect(
         [...document.querySelectorAll('button')].some(
@@ -500,12 +543,11 @@ describe('ToolAccessEditor', () => {
         .querySelector('[data-tool-always-loaded="session_search"]')
         .click();
       expect(onToolLoadingChange).toHaveBeenCalledWith({
-        on_demand: true,
         always_loaded: ['read', 'write', 'session_search'],
       });
     });
 
-    it('resets an explicit list and keeps it while switched off', () => {
+    it('resets an own list and keeps it while switched off', () => {
       const onToolLoadingChange = vi.fn();
       const toolLoading = { on_demand: true, always_loaded: ['memory'] };
       mountLoading({
@@ -517,7 +559,7 @@ describe('ToolAccessEditor', () => {
 
       buttonWithText(t('toolAccess.alwaysLoaded.reset')).click();
       expect(onToolLoadingChange).toHaveBeenLastCalledWith({ on_demand: true });
-      loadingSwitch().click();
+      chooseOnDemand(t('toolAccess.onDemand.off'));
       expect(onToolLoadingChange).toHaveBeenLastCalledWith({
         on_demand: false,
         always_loaded: ['memory'],

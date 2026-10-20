@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   changeToolAccessMode,
+  effectiveToolLoading,
   groupToolCatalog,
   normalizeToolAccess,
   normalizeToolLoading,
@@ -17,7 +18,7 @@ import {
   toolAccessPreferenceEnabled,
   toolAccessState,
   toolIsAlwaysLoaded,
-  toolLoadingUsesDefaultSet,
+  toolLoadingInheritsList,
 } from '../toolAccess.js';
 
 const catalog = [
@@ -418,16 +419,20 @@ describe('On-demand Tools', () => {
     { name: 'calendar' },
   ];
   const tool = (name) => ({ name });
-  const alwaysLoaded = (value) =>
+  const alwaysLoaded = (value, inherited = null) =>
     loadingCatalog
-      .filter((entry) => toolIsAlwaysLoaded(value, entry, loadingCatalog))
+      .filter((entry) =>
+        toolIsAlwaysLoaded(value, entry, inherited, loadingCatalog),
+      )
       .map((entry) => entry.name);
 
   it.each([
     [null, null],
     ['on', null],
-    [{ on_demand: false }, null],
-    [{ on_demand: true }, { on_demand: true }],
+    [{}, null],
+    [{ on_demand: 'yes' }, null],
+    [{ on_demand: false }, { on_demand: false }],
+    [{ always_loaded: [] }, { always_loaded: [] }],
     [
       { on_demand: false, always_loaded: [' read ', 'read', '', '*', 'mcp_x'] },
       { on_demand: false, always_loaded: ['read', 'mcp_x'] },
@@ -436,34 +441,54 @@ describe('On-demand Tools', () => {
     expect(normalizeToolLoading(value)).toEqual(expected);
   });
 
-  it('reads the catalog default set until the first change writes the list', () => {
+  it('inherits each part the Agent does not set', () => {
+    const shared = { on_demand: true, always_loaded: ['bash'] };
+    expect(effectiveToolLoading(null, null, loadingCatalog)).toEqual({
+      on_demand: false,
+      always_loaded: ['read', 'edit', 'write', 'bash'],
+    });
+    expect(effectiveToolLoading(null, shared, loadingCatalog)).toEqual(shared);
+    expect(
+      effectiveToolLoading({ on_demand: false }, shared, loadingCatalog),
+    ).toEqual({ on_demand: false, always_loaded: ['bash'] });
+    expect(
+      effectiveToolLoading({ always_loaded: [] }, shared, loadingCatalog),
+    ).toEqual({ on_demand: true, always_loaded: [] });
+  });
+
+  it('reads the inherited list until the first change writes the whole list', () => {
+    const shared = { on_demand: true, always_loaded: ['read', 'bash'] };
     const value = { on_demand: true };
-    expect(toolLoadingUsesDefaultSet(value)).toBe(true);
+    expect(toolLoadingInheritsList(value)).toBe(true);
     expect(alwaysLoaded(value)).toEqual(['read', 'edit', 'write', 'bash']);
+    expect(alwaysLoaded(value, shared)).toEqual(['read', 'bash']);
 
     const pinned = setToolAlwaysLoaded(
       value,
       tool('web_fetch'),
       true,
+      shared,
       loadingCatalog,
     );
     expect(pinned).toEqual({
       on_demand: true,
-      always_loaded: ['read', 'edit', 'write', 'bash', 'web_fetch'],
+      always_loaded: ['read', 'bash', 'web_fetch'],
     });
+    expect(toolLoadingInheritsList(pinned)).toBe(false);
     expect(
-      setToolAlwaysLoaded(value, tool('bash'), false, loadingCatalog),
-    ).toEqual({ on_demand: true, always_loaded: ['read', 'edit', 'write'] });
-    // An explicit empty list is a choice of its own, not the default set.
-    expect(alwaysLoaded({ on_demand: true, always_loaded: [] })).toEqual([]);
+      setToolAlwaysLoaded(null, tool('bash'), false, null, loadingCatalog),
+    ).toEqual({ always_loaded: ['read', 'edit', 'write'] });
+    // An explicit empty list is a choice of its own, not the inherited list.
+    expect(alwaysLoaded({ always_loaded: [] }, shared)).toEqual([]);
     expect(resetAlwaysLoadedTools(pinned)).toEqual({ on_demand: true });
+    expect(resetAlwaysLoadedTools({ always_loaded: ['read'] })).toBeNull();
   });
 
   it('marks and unmarks the file edit Tools the catalog lists as one unit', () => {
     const value = { on_demand: true, always_loaded: ['bash', 'mcp_x'] };
     // apply_patch is not in this catalog, so only the listed ones are added.
     expect(
-      setToolAlwaysLoaded(value, tool('edit'), true, loadingCatalog),
+      setToolAlwaysLoaded(value, tool('edit'), true, null, loadingCatalog),
     ).toEqual({
       on_demand: true,
       always_loaded: ['bash', 'mcp_x', 'edit', 'write'],
@@ -476,16 +501,17 @@ describe('On-demand Tools', () => {
     };
     expect(alwaysLoaded(partial)).toEqual(['edit', 'write']);
     expect(
-      setToolAlwaysLoaded(partial, tool('write'), false, loadingCatalog),
+      setToolAlwaysLoaded(partial, tool('write'), false, null, loadingCatalog),
     ).toEqual({ on_demand: true, always_loaded: ['mcp_x'] });
   });
 
-  it('keeps an explicit list while the switch is off', () => {
+  it('switches on, off or back to the default and keeps an own list', () => {
     const custom = { on_demand: true, always_loaded: ['read'] };
     const off = setToolsOnDemand(custom, false);
     expect(off).toEqual({ on_demand: false, always_loaded: ['read'] });
     expect(setToolsOnDemand(off, true)).toEqual(custom);
-    expect(setToolsOnDemand({ on_demand: true }, false)).toBeNull();
-    expect(setToolsOnDemand(null, true)).toEqual({ on_demand: true });
+    expect(setToolsOnDemand(off, null)).toEqual({ always_loaded: ['read'] });
+    expect(setToolsOnDemand({ on_demand: true }, null)).toBeNull();
+    expect(setToolsOnDemand(null, false)).toEqual({ on_demand: false });
   });
 });

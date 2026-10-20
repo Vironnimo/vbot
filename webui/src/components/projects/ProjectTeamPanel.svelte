@@ -628,6 +628,7 @@
                       showReset={memberFieldIsOverridden(member, 'tool_access')}
                       toolLoadingEditable
                       toolLoading={overrideDraft(member.agent_id).tool_loading}
+                      toolLoadingDefault={member.tool_loading_default ?? null}
                       toolLoadingDisabled={isOverrideBusy(
                         member.agent_id,
                         'tool_loading',

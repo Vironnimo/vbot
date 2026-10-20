@@ -1,3 +1,5 @@
+import { normalizeToolLoading } from '../toolAccess.js';
+import { isPlainObject } from '../values.js';
 import { textOrEmpty, positiveIntegerOrDefault } from './values.js';
 
 const SUBAGENT_SETTINGS_DEFAULTS = Object.freeze({
@@ -58,6 +60,27 @@ export function buildAgentDefaultsPayload(formValues) {
         thinking_effort: normalizeAgentDefaultsThinkingEffortForPayload(
           values.thinking_effort,
         ),
+      },
+    },
+  };
+}
+
+// The shared On-demand Tools default (`defaults.agent.tool_loading`) as the
+// form `{ tool_loading }`; it reads Settings or such a form.
+export function normalizeToolLoadingDefaultSettings(rawSettings) {
+  const source =
+    isPlainObject(rawSettings) && !('defaults' in rawSettings)
+      ? rawSettings
+      : rawSettings?.defaults?.agent;
+  return { tool_loading: normalizeToolLoading(source?.tool_loading) };
+}
+
+// A sparse `defaults.agent` update; null removes the shared default.
+export function buildToolLoadingDefaultPayload(formValues) {
+  return {
+    defaults: {
+      agent: {
+        tool_loading: normalizeToolLoading(formValues?.tool_loading),
       },
     },
   };

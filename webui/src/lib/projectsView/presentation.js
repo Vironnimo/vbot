@@ -646,11 +646,9 @@ function normalizeOverrides(overrides) {
   if (isPlainObject(overrides.tool_access)) {
     normalized.tool_access = normalizeToolAccess(overrides.tool_access);
   }
-  // An override that keeps the switch off still exists.
-  if (isPlainObject(overrides.tool_loading)) {
-    normalized.tool_loading = normalizeToolLoading(overrides.tool_loading) ?? {
-      on_demand: false,
-    };
+  const toolLoading = normalizeToolLoading(overrides.tool_loading);
+  if (toolLoading !== null) {
+    normalized.tool_loading = toolLoading;
   }
   return Object.keys(normalized).length > 0 ? normalized : null;
 }

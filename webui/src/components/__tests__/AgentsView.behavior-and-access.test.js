@@ -422,10 +422,20 @@ describe('AgentsView behavior and access', () => {
     });
   });
 
-  it('auto-saves an Always loaded change as the explicit On-demand Tools list', async () => {
+  // The Agent sets nothing itself and inherits the shared default; its first
+  // change writes the whole list as its own and leaves the switch inherited.
+  it('auto-saves an Always loaded change as the own whole list of the Agent', async () => {
+    const shared = { on_demand: true, always_loaded: ['bash'] };
     rpcMock.mockImplementation(
       createAgentsRpcMock({
-        agents: [{ ...baseAgent(), tool_loading: { on_demand: true } }],
+        agents: [
+          {
+            ...baseAgent(),
+            tool_loading: shared,
+            tool_loading_default: shared,
+            config: { tool_loading: null },
+          },
+        ],
         tools: [
           { name: 'bash', loaded_by_default: true },
           { name: 'subagent', loaded_by_default: false },
@@ -447,7 +457,7 @@ describe('AgentsView behavior and access', () => {
     expect(getAgentUpdateCalls()).toHaveLength(1);
     expect(getAgentUpdateCalls()[0][1]).toEqual({
       id: 'alpha',
-      tool_loading: { on_demand: true, always_loaded: ['bash', 'subagent'] },
+      tool_loading: { always_loaded: ['bash', 'subagent'] },
     });
   });
 
