@@ -246,6 +246,17 @@ async def test_message_parent_resumes_final_answer_delivery_in_a_user_run(tmp_pa
         notices = service.to(parent.address)
         assert sum("FOUND_CAUSE" in notice.body for notice in notices) == 1
         assert sum("FIXED_REPORT" in notice.body for notice in notices) == 1
+        # The message travels with its display record; a forwarded answer has none.
+        [record] = [notice.subagent_message for notice in notices if notice.subagent_message]
+        assert record.delivery_id.startswith("subagent-message")
+        assert record.to_dict() == {
+            "subagent_id": "sub_fix",
+            "title": "sub_fix",
+            "content": "FOUND_CAUSE",
+            "delivery_id": record.delivery_id,
+            "agent_id": "coder",
+            "session_id": child.id,
+        }
         assert sessions.metadata_value(child.address, "subagent_reply_target") == "parent"
         [answer] = [
             m for m in child.load() if m.role == "assistant" and m.content == "FIXED_REPORT"

@@ -58,6 +58,7 @@
   import Button from '../ui/Button.svelte';
   import TextArea from '../ui/TextArea.svelte';
   import ChatCompactionSeparator from './ChatCompactionSeparator.svelte';
+  import ChatSubAgentMessage from './ChatSubAgentMessage.svelte';
   import MarkdownContent from './MarkdownContent.svelte';
   import ChatReasoning from './ChatReasoning.svelte';
   import ToolDetails from './ToolDetails.svelte';
@@ -72,6 +73,8 @@
     onReasoningOpenChange = () => {},
     messageEditingDisabledReason = '',
     onEditMessage = async () => false,
+    onNavigateToSubAgent = () => {},
+    onSubAgentContextMenu = null,
   } = $props();
 
   let editing = $state(false);
@@ -482,6 +485,14 @@
 {:else if item.type === 'goal_event'}
   <div class="date-sep goal-sep">
     {goalEventLabel(item.message)}
+  </div>
+{:else if item.type === 'subagent_message'}
+  <div class="subagent-message-row">
+    <ChatSubAgentMessage
+      {item}
+      {onNavigateToSubAgent}
+      {onSubAgentContextMenu}
+    />
   </div>
 {:else if item.type === 'event'}
   {#if isToolEvent(item.event)}

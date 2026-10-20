@@ -444,6 +444,23 @@ CREATE TABLE note_goal_events (
   max_turns INTEGER
 ) STRICT;
 
+-- The message_parent messages a completion note delivers to a Parent Session,
+-- in delivery order. Chat History shows them as rows in place of the hidden
+-- note, whose text is what the Model reads. project_id is NULL for a Sub-Agent
+-- of an Identity Agent.
+CREATE TABLE note_subagent_messages (
+  entry_key INTEGER NOT NULL REFERENCES entries (entry_key) ON DELETE CASCADE,
+  ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+  subagent_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  delivery_id TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  project_id TEXT,
+  PRIMARY KEY (entry_key, ordinal)
+) STRICT, WITHOUT ROWID;
+
 CREATE TABLE checkpoint_entries (
   entry_key INTEGER PRIMARY KEY REFERENCES entries (entry_key) ON DELETE CASCADE,
   policy TEXT NOT NULL,

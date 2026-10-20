@@ -40,6 +40,7 @@ from core.chat._step_outcomes import (
 from core.chat._tool_results import ToolResultPersistence
 from core.chat._workers import _CHAT_TRANSFORM_WORKERS
 from core.chat.errors import ChatError
+from core.chat.events import _emit_display_records
 from core.chat.messages import (
     ChatMessage,
     JsonObject,
@@ -289,6 +290,7 @@ class AgenticProgression:
                         )
                         if completion_note is not None:
                             boundary_notes.append(completion_note)
+                            _emit_display_records(run, [completion_note])
                     except Exception:
                         _LOGGER.warning(
                             "Background completion injection failed for run %s",

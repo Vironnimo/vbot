@@ -21,9 +21,10 @@ from core.chat import (
     ReplySurface,
 )
 from core.chat.content_blocks import ContentBlock, FileBlock
+from core.chat.messages import SubAgentMessage
 from core.extensions import ExtensionRegistry
 from core.providers.errors import ProviderStreamingUnsupportedError
-from core.runs import MODEL_STEP_USAGE_EVENT
+from core.runs import MODEL_STEP_USAGE_EVENT, SUBAGENT_MESSAGE_RECORDED_EVENT
 from core.tools import JsonObject as ToolJsonObject
 from core.tools import ToolContext, ToolRegistry, tool_success
 from tests.core.chat.chat_loop_support import (
@@ -684,13 +685,26 @@ async def test_background_completion_joins_next_request_in_same_run(tmp_path: Pa
     )
     runtime.deliver_background_completions = trigger_service.deliver_background_completions
 
+    run_ids: list[str] = []
+    message = SubAgentMessage("sub_a", "Worker", "Found it", "d1", "coder", "child")
+
     def start_work(context: ToolContext, _arguments: ToolJsonObject) -> ToolJsonObject:
+        run_ids.append(context.run_id)
         deliveries.append(
             trigger_service.submit_completion(
                 SESSION,
                 notice_id="bash:completed",
                 origin_run_id=context.run_id,
                 body="### Bash process — completed\nBuild finished successfully.",
+            )
+        )
+        deliveries.append(
+            trigger_service.submit_completion(
+                SESSION,
+                notice_id="d1",
+                origin_run_id=context.run_id,
+                body="### Message from Sub-Agent sub_a — Worker",
+                subagent_message=message,
             )
         )
         return tool_success({"status": "running"})
@@ -714,6 +728,10 @@ async def test_background_completion_joins_next_request_in_same_run(tmp_path: Pa
     assert reminder.startswith("<system-reminder>\n")
     assert reminder.endswith("\n</system-reminder>")
     assert "Build finished successfully." in reminder
+    # Live clients learn about the Sub-Agent message where the Run read it.
+    events = await runtime.timelines.events(runtime.chat_run_manager.get(run_ids[0]))
+    [recorded] = [event for event in events if event.type == SUBAGENT_MESSAGE_RECORDED_EVENT]
+    assert recorded.payload["messages"] == [message.to_dict()]
 
 
 @pytest.mark.asyncio

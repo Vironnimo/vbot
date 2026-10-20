@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from core.chat import ChatLoop, ChatMessage, ReplySurface, reply_surface_from_note
-from core.chat.messages import REPLY_SURFACE_NOTE_PREFIX
+from core.chat.messages import REPLY_SURFACE_NOTE_PREFIX, SubAgentMessage
 from core.runs import (
     ActiveRunError,
     ChatRunManager,
@@ -73,6 +73,8 @@ class _CompletionNotice:
     # Set while a delivery builds and hands over a message carrying the
     # notice: it is being delivered and can no longer be withdrawn.
     claimed: bool = False
+    # Display record of a ``message_parent`` message; the delivering note carries it.
+    subagent_message: SubAgentMessage | None = None
 
     @property
     def read(self) -> bool:
@@ -135,6 +137,7 @@ class _CompletionDeliveryCoordinator:
         body: str,
         execution_owner: RunExecutionOwner | None = None,
         wake: bool = True,
+        subagent_message: SubAgentMessage | None = None,
     ) -> asyncio.Future[None]:
         """Submit one result and return a Future resolved after durable delivery."""
         if self._closed or (
@@ -166,6 +169,7 @@ class _CompletionDeliveryCoordinator:
             suppress_run=suppress_run,
             execution_owner=execution_owner,
             wake=wake,
+            subagent_message=subagent_message,
         )
         bucket.notices[notice_id] = notice
         if bucket.delivery_task is None or bucket.delivery_task.done():
@@ -220,7 +224,9 @@ class _CompletionDeliveryCoordinator:
         if not pending:
             return None
 
-        message = ChatMessage.note(_completion_message(pending))
+        message = ChatMessage.note(
+            _completion_message(pending), subagent_messages=_subagent_messages(pending)
+        )
         _claim(pending, True)
         try:
             # Request-boundary Notes are otherwise deferred. This append must
@@ -333,6 +339,7 @@ class _CompletionDeliveryCoordinator:
                             self._acknowledgement_callback(address, bucket, pending),
                         )
                     else:
+                        subagent_messages = _subagent_messages(pending)
                         run = await self._chat_loop.start_run(
                             address.agent_id,
                             message,
@@ -344,6 +351,13 @@ class _CompletionDeliveryCoordinator:
                                 address, bucket, pending
                             ),
                             run_kind=RunKind.SYSTEM,
+                            # An empty note never reaches the Model; it carries
+                            # the display record ahead of the input note.
+                            context_note=(
+                                ChatMessage.note("", subagent_messages=subagent_messages)
+                                if subagent_messages
+                                else None
+                            ),
                         )
                 except RunAdmissionBlockedError as error:
                     _claim(pending, False)
@@ -610,7 +624,11 @@ class _CompletionDeliveryCoordinator:
             if not pending:
                 return None
             _claim(pending, True)
-            append = asyncio.ensure_future(session.add_note_async(_completion_message(pending)))
+            append = asyncio.ensure_future(
+                session.add_note_async(
+                    _completion_message(pending), subagent_messages=_subagent_messages(pending)
+                )
+            )
             try:
                 await asyncio.shield(append)
             except asyncio.CancelledError:
@@ -783,6 +801,15 @@ def _join_run(notices: list[_CompletionNotice], run: Run) -> None:
         notice.boundary_run = run
         if notice.read_after is not None:
             notice.read_after = 0
+
+
+def _subagent_messages(notices: list[_CompletionNotice]) -> tuple[SubAgentMessage, ...]:
+    """The display records of the messages *notices* deliver for the first time."""
+    return tuple(
+        notice.subagent_message
+        for notice in notices
+        if notice.subagent_message is not None and notice.read_after is None
+    )
 
 
 def _completion_message(notices: list[_CompletionNotice]) -> str:

@@ -16,6 +16,7 @@ import pytest
 import core.automation._completion as automation_module
 from core.automation import TriggerService
 from core.chat import ChatMessage, ChatSession, ChatSessionError, ChatSessionManager, ReplySurface
+from core.chat.messages import SubAgentMessage
 from core.runs import (
     ChatRunManager,
     Run,
@@ -34,6 +35,7 @@ class _CompletionChatLoop:
         self._run_manager = run_manager
         self.messages: list[str] = []
         self.reply_surfaces: list[ReplySurface | None] = []
+        self.context_notes: list[ChatMessage | None] = []
         self.start_attempts = 0
 
     async def start_run(
@@ -47,6 +49,7 @@ class _CompletionChatLoop:
         project_id: str | None,
         input_persisted_hook: Callable[[], None],
         run_kind: RunKind,
+        context_note: ChatMessage | None = None,
     ) -> Run:
         assert internal is True
         assert run_kind is RunKind.SYSTEM
@@ -55,6 +58,7 @@ class _CompletionChatLoop:
         async def executor(_run: Run) -> str:
             self.messages.append(content)
             self.reply_surfaces.append(reply_surface)
+            self.context_notes.append(context_note)
             input_persisted_hook()
             return content
 
@@ -788,6 +792,53 @@ async def test_completion_delivery_joins_active_run_at_next_request_boundary(
         assert "finished during the active run" not in message
     else:
         assert loop.messages == []
+
+
+_SUBAGENT_MESSAGE = SubAgentMessage(
+    subagent_id="sub_worker",
+    title="Worker",
+    content="Found the cause",
+    delivery_id="subagent-message-one",
+    agent_id="coder",
+    session_id="child-session",
+)
+
+
+@pytest.mark.parametrize("path", ["follow_up_run", "request_boundary", "reminder"])
+async def test_a_subagent_message_record_rides_on_the_note_that_delivers_it(
+    tmp_path: Path, path: str
+) -> None:
+    manager = ChatRunManager()
+    service, loop, session = _completion_service(tmp_path, manager)
+    origin: Run | None = None
+    if path == "request_boundary":
+        origin, release = await _active_origin(manager)
+    elif path == "reminder":
+        loop.start_run = AsyncMock(side_effect=RuntimeError("provider unavailable"))  # type: ignore[method-assign]
+    delivery = service.submit_completion(
+        _ADDRESS,
+        notice_id="subagent-message-one",
+        origin_run_id=origin.id if origin is not None else "origin-run",
+        body="### Message from Sub-Agent sub_worker — Worker",
+        subagent_message=_SUBAGENT_MESSAGE,
+    )
+    if origin is not None:
+        note = await service.deliver_background_completions(origin, session)
+        assert note is not None
+        origin.iteration_count += 1  # The Model answered the request with the message.
+        release.set()
+    await asyncio.wait_for(delivery, timeout=1)
+
+    records = [message.subagent_messages for message in session.load()]
+    records = [record for record in records if record]
+    if path == "follow_up_run":
+        # The follow-up Run stores the record on its empty context note.
+        [context_note] = loop.context_notes
+        assert context_note is not None
+        assert context_note.content == ""
+        records.append(context_note.subagent_messages)
+    assert records == [(_SUBAGENT_MESSAGE,)]
+    await manager.aclose()
 
 
 async def test_cancelled_pending_notice_does_not_start_empty_follow_up(

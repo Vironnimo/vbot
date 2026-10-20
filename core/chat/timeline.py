@@ -24,8 +24,9 @@ def history_timeline(messages: Sequence[JsonObject]) -> list[JsonObject]:
     """Project complete Run segments from public Session History records."""
     items: list[JsonObject] = []
     run: RunTimeline | None = None
-    # Goal changes outside a Run that land between its records, such as a
-    # `/goal pause` while it works, follow that Run instead of splitting it.
+    # Goal changes and Sub-Agent messages outside a Run that land between its
+    # records, such as a `/goal pause` while it works, follow that Run instead
+    # of splitting it.
     held: list[JsonObject] = []
 
     def flush() -> None:
@@ -48,10 +49,10 @@ def history_timeline(messages: Sequence[JsonObject]) -> list[JsonObject]:
         run_id = message.get("history_run_id") or message.get("run_id")
         if not run_id and run is not None and role in {"assistant", "tool", "run_summary"}:
             run_id = run.run_id
-        if role == "goal_event" and not run_id:
+        if role in {"goal_event", "subagent_message"} and not run_id:
             row = {
-                "id": f"goal-{message['id']}",
-                "type": "goal_event",
+                "id": f"{'goal' if role == 'goal_event' else 'subagent-message'}-{message['id']}",
+                "type": role,
                 "timestamp": message.get("timestamp"),
                 "message": copy.deepcopy(message),
             }
@@ -132,6 +133,8 @@ def history_timeline(messages: Sequence[JsonObject]) -> list[JsonObject]:
             event.update(type="model_fallback_activated", payload=message)
         elif role == "goal_event":
             event.update(type="goal_event_recorded", payload=message)
+        elif role == "subagent_message":
+            event.update(type="subagent_message_recorded", payload=message)
         elif role == "compaction_checkpoint":
             event["type"] = "compaction_completed"
         elif role == "run_summary":

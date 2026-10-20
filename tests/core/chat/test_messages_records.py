@@ -23,6 +23,7 @@ from core.chat.messages import (
     ERROR_KIND_TOOL_ITERATIONS,
     GoalEvent,
     ModelFallback,
+    SubAgentMessage,
     ToolCallRejection,
     error_kind_llm_visible,
 )
@@ -456,6 +457,36 @@ _DISPLAY = {"version": 1, "primary": [{"kind": "path", "value": "src/app.py"}], 
             {"goal_event": {"event": "turn", "turn": 2, "max_turns": 30}},
         ),
         (
+            ChatMessage.note(
+                "Message for the Model",
+                subagent_messages=[
+                    SubAgentMessage("sub_a", "Worker", "Found it", "d1", "coder", "s1"),
+                    SubAgentMessage("sub_b", "Fixer", "Done", "d2", "fixer", "s2", "proj"),
+                ],
+            ),
+            {
+                "subagent_messages": [
+                    {
+                        "subagent_id": "sub_a",
+                        "title": "Worker",
+                        "content": "Found it",
+                        "delivery_id": "d1",
+                        "agent_id": "coder",
+                        "session_id": "s1",
+                    },
+                    {
+                        "subagent_id": "sub_b",
+                        "title": "Fixer",
+                        "content": "Done",
+                        "delivery_id": "d2",
+                        "agent_id": "fixer",
+                        "session_id": "s2",
+                        "project_id": "proj",
+                    },
+                ]
+            },
+        ),
+        (
             replace(
                 ChatMessage.note("Skill activated"),
                 skill_package=SkillPackageRef("agent", "debugging", "owner"),
@@ -473,6 +504,7 @@ _DISPLAY = {"version": 1, "primary": [{"kind": "path", "value": "src/app.py"}], 
         "tool",
         "model-fallback",
         "goal-event",
+        "subagent-messages",
         "skill-package",
     ],
 )

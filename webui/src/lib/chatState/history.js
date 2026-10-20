@@ -272,5 +272,6 @@ function isVisibleHistoryMessage(message) {
     'run_summary',
     'model_fallback',
     'goal_event',
+    'subagent_message',
   ].includes(message?.role);
 }
