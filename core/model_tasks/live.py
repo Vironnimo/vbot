@@ -518,6 +518,7 @@ class LiveVoiceService:
         usage_call_id = await accounting.start()
         wire: LiveWire | None = None
         status: Literal["failed", "cancelled"] = "failed"
+        failure: BaseException | None = None
         try:
             wire = await plan.wire.open(
                 self._runtime,
@@ -534,6 +535,7 @@ class LiveVoiceService:
             status = "cancelled"
             raise
         except ControlJoinError as exc:
+            failure = exc
             # The created call has a Provider call id; it never enters the log.
             _LOGGER.warning(
                 "Live call control join failed (target=%s error_type=%s)",
@@ -542,6 +544,7 @@ class LiveVoiceService:
             )
             raise LiveStartRejected("control_failed", str(exc)) from exc
         except VBotError as exc:
+            failure = exc
             code = _start_failure_code(exc)
             _LOGGER.warning(
                 "Live call creation failed (target=%s code=%s error_type=%s)",
@@ -551,12 +554,16 @@ class LiveVoiceService:
             )
             raise LiveStartRejected(code, str(exc)) from exc
         except KeyError as exc:
+            failure = exc
             raise LiveStartRejected(
                 "provider_unavailable", "Live voice Provider is unavailable"
             ) from exc
+        except BaseException as exc:
+            failure = exc
+            raise
         finally:
             if wire is None:
-                await accounting.finish(usage_call_id, status=status)
+                await accounting.finish(usage_call_id, status=status, failure=failure)
         return _OpenedWire(wire=wire, accounting=accounting, usage_call_id=usage_call_id)
 
     def _resolve_target(self) -> _CallPlan:

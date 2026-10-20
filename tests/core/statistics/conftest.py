@@ -16,6 +16,8 @@ from core.usage import UsageRecorder
 from core.utils.timestamps import format_canonical_timestamp
 from tests.core.statistics.statistics_test_support import (
     BASE,
+    LEDGER_CLOCKS,
+    LedgerClock,
     StatisticsFactory,
     _FakeAgents,
     _FakeProjects,
@@ -81,7 +83,9 @@ def ledger(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, manager: ChatSessionManager
 ) -> Iterator[UsageRecorder]:
     """A durable Usage ledger whose calls start at BASE unless a call says otherwise."""
-    recorder = UsageRecorder(tmp_path / "model-usage.db", session_source=manager)
+    clock = LedgerClock()
+    recorder = UsageRecorder(tmp_path / "model-usage.db", session_source=manager, clock=clock)
+    LEDGER_CLOCKS[recorder] = clock
     monkeypatch.setattr(
         "core.usage.usage.utc_now_timestamp", lambda: format_canonical_timestamp(BASE)
     )

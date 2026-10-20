@@ -17,6 +17,8 @@
     callCostTooltip,
     costPerMillionTokens,
     costTooltip,
+    failureClassLabel,
+    failureClassTooltip,
     firstTokenTooltip,
     formatCost,
     formatCostExact,
@@ -125,9 +127,15 @@
       label: t('statistics.usage.calls'),
       hint: t('statistics.usage.callsHint'),
       value: formatInteger(totals.calls, locale),
-      detail: t('statistics.usage.failedAttempts', {
-        count: formatInteger(totals.failed_calls, locale),
-      }),
+      detail:
+        totals.avg_duration_ms == null
+          ? t('statistics.usage.failedAttempts', {
+              count: formatInteger(totals.failed_calls, locale),
+            })
+          : t('statistics.usage.callsDetail', {
+              count: formatInteger(totals.failed_calls, locale),
+              duration: formatDurationMs(totals.avg_duration_ms),
+            }),
     },
   ]);
 
@@ -254,6 +262,12 @@
       label: t('statistics.col.status'),
       sortValue: (row) => modelCallStatusLabel(row.status),
       cell: callStatusCell,
+    },
+    {
+      id: 'duration_ms',
+      label: t('statistics.col.duration'),
+      align: 'end',
+      format: (row) => formatDurationMs(row.duration_ms),
     },
     {
       id: 'input_tokens',
@@ -419,6 +433,15 @@
         ? 'error'
         : 'neutral'}>{modelCallStatusLabel(row.status)}</Badge
   >
+  {#if row.status === 'failed'}
+    <span
+      class="stats-muted"
+      use:tooltip={failureClassTooltip(row.failure_class ?? 'unknown')}
+      >{failureClassLabel(row.failure_class ?? 'unknown')}{row.http_status
+        ? ` · ${row.http_status}`
+        : ''}</span
+    >
+  {/if}
 {/snippet}
 
 {#snippet callCostCell(row)}

@@ -48,19 +48,22 @@ Reports summarize stored Session activity. Request the section the question need
 
 For Model response speed and waiting time, use `vbot statistics usage`; its Model and Provider rows show rates by measurement basis and first-token median, p95, and average.
 
+For why Model requests fail, use `vbot statistics failures`: it counts failed requests by failure class (such as `rate_limit`, `auth`, `timeout`, `server`) with the average time to failure, HTTP statuses, Providers, and Models, and lists the hours with the most failures.
+
 ```bash
 vbot statistics overview [--since <iso>] [--until <iso>]
 vbot statistics usage    [--since <iso>] [--until <iso>]
 vbot statistics runs     [--since <iso>] [--until <iso>]
 vbot statistics compactions [--since <iso>] [--until <iso>]
 vbot statistics errors   [--since <iso>] [--until <iso>]
+vbot statistics failures [--since <iso>] [--until <iso>]
 vbot statistics tools    [--since <iso>] [--until <iso>]
 vbot statistics skills   [--since <iso>] [--until <iso>]
 ```
 
 - `--since`/`--until` take ISO-8601 UTC timestamps (e.g. `2026-06-01T00:00:00Z`); omit both for all time. The server rejects malformed or inverted windows.
 - Ranked Provider/Model/Run/error/Tool breakdowns show at most the top 20 rows; totals cover the selected window.
-- `overview` = totals and activity; `usage` = tokens per provider/model incl. cache figures; `runs` = durations and cancel/failure rates; `compactions` = checkpoints, reclaimed context, and per-Session breakdowns; `errors` = failures by kind/provider/model; `tools` = per-tool call counts and error rates.
+- `overview` = totals and activity; `usage` = tokens per provider/model incl. cache figures; `runs` = durations and cancel/failure rates; `compactions` = checkpoints, reclaimed context, and per-Session breakdowns; `errors` = Run errors by kind/provider/model; `failures` = failed Model requests by failure class; `tools` = per-tool call counts and error rates.
 - `skills` reports Skill usage for delete/improve decisions: it separates Skills whose recorded offers produced no conversion from Skills with no offer data, then per Skill shows origins, `offered` (Sessions whose catalog recorded it), `activated` (all Sessions that loaded it), `activated_after_offer`, `offer_conversion`, and last activation.
 
 Reading `skills` numbers:

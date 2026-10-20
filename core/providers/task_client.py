@@ -38,6 +38,7 @@ from core.providers.http import (
     wrap_network_error,
 )
 from core.providers.token_getter import OAuthRequestRecovery, StaticTokenGetter, TokenGetter
+from core.utils.errors import FailureClass
 from core.utils.http_status import parse_retry_after
 from core.utils.retry import retry_async
 from core.utils.workers import BoundedWorkerPool
@@ -188,6 +189,7 @@ class TaskRequestObserver(Protocol):
         usage: Mapping[str, Any] | None = None,
         result: Any = None,
         status: Literal["completed", "failed", "cancelled"] = "completed",
+        failure: BaseException | FailureClass | None = None,
     ) -> None: ...
 
     async def update_latest(self, usage: Mapping[str, Any] | None) -> None: ...
@@ -338,6 +340,7 @@ class ProviderTaskClient:
                 usage_observed = False
                 parsed: Any = None
                 status: Literal["completed", "failed", "cancelled"] = "completed"
+                failure: BaseException | None = None
                 try:
                     try:
                         response_context = (
@@ -421,12 +424,15 @@ class ProviderTaskClient:
                 except asyncio.CancelledError:
                     status = "cancelled"
                     raise
-                except BaseException:
+                except BaseException as exc:
                     status = "failed"
+                    failure = exc
                     raise
                 finally:
                     if observer is not None:
-                        await observer.finish(call_id, usage=usage, result=parsed, status=status)
+                        await observer.finish(
+                            call_id, usage=usage, result=parsed, status=status, failure=failure
+                        )
 
         return await auth_recovery.run(lambda: retry_async(_do_request))
 

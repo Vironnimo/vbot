@@ -30,13 +30,14 @@ it absent; public address or Run-id reuse never proves historical ownership.
 
 - `start(model, kind, ...scope)` durably allocates a `use_` id immediately before
   request dispatch. Model identity is `provider/model`; Connection is separate.
-- `finish(id, usage, status=...)` stores known canonical counters, their per-field
-  estimate provenance and a cost snapshot, returning Usage with `usage_call_id`.
-  Missing counters remain absent. Provider-reported cost takes precedence over
-  catalog valuation. Recording does not infer token quantities for media.
-  Besides counters, flags and cost it keeps only Chat's validated output
-  `speed` (`chat/usage.md` -> Output speed); other producer metadata such as
-  `context_usage` returns to the caller unpersisted.
+- `finish(id, usage, status=..., failure=...)` stores known canonical counters,
+  their per-field estimate provenance and a cost snapshot, returning Usage with
+  `usage_call_id`. Missing counters remain absent. Provider-reported cost takes
+  precedence over catalog valuation. Recording does not infer token quantities
+  for media. Besides counters, flags and cost it keeps only Chat's validated
+  output `speed` (`chat/usage.md` -> Output speed) and the request outcome
+  (Failures); other producer metadata such as `context_usage` returns to the
+  caller unpersisted.
 - `update(id, usage)` enriches the same call without changing its outcome.
   Cumulative Live Voice reports replace counters instead of adding repeated
   snapshots. Chat enriches its record with final estimates before appending the
@@ -128,6 +129,28 @@ be reconstructed. The import never fabricates them. Current request kinds cover
 Chat, Compaction, Session/group titles, Agent description drafts
 (`agent_description`), Extension sampling, all Task Model types and the
 delegated Live Voice backend; producer details remain in their maps.
+
+## Failures
+
+Every settled call records `duration_ms`, from `start` to its first settlement
+on the recorder's monotonic clock; a repeated settlement keeps it. Only a call
+this process started has one: calls interrupted by a restart, imported from
+Session history or recorded before 2026-10-20 keep it NULL. A `failed` call
+also records why: `failure_class` and `http_status`, NULL for every other
+outcome. Producers pass the exception that ended the attempt as `failure=`, or
+a class name where no exception exists (a Chat step that ended without a
+complete answer is `incomplete`; a Compaction time budget is `limit`).
+
+`classify_failure` (`_failures.py`) walks the exception's cause chain (up to 8
+errors): the first declared `VBotError.failure_class` wins, else the first HTTP
+status 400-599 maps it (401/403 `auth`, 408/504 `timeout`, 429 `rate_limit`,
+>= 500 `server`, other 4xx `rejected`), else a `TimeoutError` is `timeout`, a
+`ProviderError` without status `provider`, anything else `internal`. The status
+of the first error in the chain that carries one is kept either way. The
+vocabulary is `core.utils.errors.FailureClass`, stable within Generation 1:
+add a class rather than rename one, because stored rows and the Statistics
+cube keep the value. The error message is never stored: it can quote request
+content.
 
 The calibration rows are derived state: losing or restoring them only changes
 how quickly estimates correct themselves, and no call record refers to them.

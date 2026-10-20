@@ -304,18 +304,21 @@ async def test_compaction_request_reads_and_teaches_its_input_estimate_calibrati
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("outcomes", "statuses"),
+    ("outcomes", "statuses", "failures"),
     [
-        (["output_truncated"], ["failed"]),
-        (["cancelled"], ["cancelled"]),
-        (["rejected"], ["failed"]),
-        (["dropped", "stop"], ["failed", "completed"]),
-        (["dropped", "dropped"], ["failed", "failed"]),
+        (["output_truncated"], ["failed"], ["incomplete"]),
+        (["cancelled"], ["cancelled"], [None]),
+        (["rejected"], ["failed"], ["provider"]),
+        (["dropped", "stop"], ["failed", "completed"], ["network", None]),
+        (["dropped", "dropped"], ["failed", "failed"], ["network", "network"]),
     ],
     ids=["truncated", "cancelled", "fatal-provider-error", "dropped-once", "dropped-twice"],
 )
 async def test_compaction_attempts_retain_usage_and_retry_a_transient_failure_once(
-    monkeypatch: pytest.MonkeyPatch, outcomes: list[str], statuses: list[str]
+    monkeypatch: pytest.MonkeyPatch,
+    outcomes: list[str],
+    statuses: list[str],
+    failures: list[str | None],
 ) -> None:
     remaining = list(outcomes)
     waits: list[float] = []
@@ -369,6 +372,7 @@ async def test_compaction_attempts_retain_usage_and_retry_a_transient_failure_on
     assert remaining == []
     # Every attempt, failed or not, keeps its own Usage row.
     assert [call["status"] for call in recorder.calls] == statuses
+    assert [call["failure_class"] for call in recorder.calls] == failures
     assert all(
         call["usage"] == {"input_tokens": 75, "usage_call_id": call["id"]}
         for call in recorder.calls
@@ -529,6 +533,10 @@ async def test_compaction_deadline_covers_active_output_and_recovery(monkeypatch
     assert closed == attempts == (2 if phase == "retry" else 1)
     assert emitted >= 2 or phase in {"backoff", "suppressed-backoff"}
     assert [call["status"] for call in recorder.calls] == ["failed"] * attempts
+    # A dropped stream fails before the deadline; the deadline stops the rest.
+    dropped = ["network"] if phase in {"retry", "backoff", "suppressed-backoff"} else []
+    limited = [] if phase in {"backoff", "suppressed-backoff"} else ["limit"]
+    assert [call["failure_class"] for call in recorder.calls] == dropped + limited
     assert all(call["usage"]["input_tokens"] == 75 for call in recorder.calls)
 
 
@@ -586,4 +594,5 @@ async def test_compaction_summary_limit_rejects_without_retry_and_closes(
     assert attempts == closed == 1
     assert waits == []
     assert [call["status"] for call in recorder.calls] == [expected_status]
+    assert recorder.calls[0]["failure_class"] == (None if characters == 100_000 else "limit")
     assert recorder.calls[0]["usage"]["input_tokens"] == 75

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import builtins
 import json
+import weakref
 from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -29,6 +30,20 @@ from core.utils.timestamps import format_canonical_timestamp
 from tests.core.sessions.history_fixtures import seed_history
 
 BASE = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
+
+
+class LedgerClock:
+    """The monotonic clock of a test ledger: ``_call`` advances it by each duration."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+# The clock of each ``ledger`` fixture, so ``_call`` can time its requests.
+LEDGER_CLOCKS: weakref.WeakKeyDictionary[UsageRecorder, LedgerClock] = weakref.WeakKeyDictionary()
 
 # ``statistics(agent_ids=("main",), *, projects=None, index=None, **options)`` from
 # the ``statistics`` fixture: a service over the test's ``manager`` whose index is
@@ -183,8 +198,13 @@ async def _call(
     owner_name: str | None = None,
     status: str = "completed",
     at: datetime | None = None,
+    failure: Any = None,
+    duration_ms: int = 0,
 ) -> str:
-    """Record one finished ledger request, started at ``at`` (default: the ledger clock)."""
+    """Record one finished ledger request, started at ``at`` (default: the ledger clock).
+
+    The request lasts ``duration_ms`` on the ``ledger`` fixture's clock.
+    """
     started = (
         nullcontext()
         if at is None
@@ -203,7 +223,9 @@ async def _call(
             owner_name=owner_name,
             group_id=None if owner_name is None else "group",
         )
-    await ledger.finish(call, usage, status=status)
+    if clock := LEDGER_CLOCKS.get(ledger):
+        clock.now += duration_ms / 1000
+    await ledger.finish(call, usage, status=status, failure=failure)
     return call
 
 

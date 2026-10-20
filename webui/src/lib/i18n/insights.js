@@ -619,6 +619,40 @@ export default Object.freeze({
   'statistics.dimension.origin': 'Started by',
   'statistics.dimension.project': 'Project',
   'statistics.dimension.provider': 'Provider',
+  'statistics.failureClass.auth': 'Authentication failed',
+  'statistics.failureClass.incomplete': 'Incomplete response',
+  'statistics.failureClass.internal': 'Internal error',
+  'statistics.failureClass.limit': 'vBot limit reached',
+  'statistics.failureClass.network': 'Network error',
+  'statistics.failureClass.outcome_unknown': 'Outcome unknown',
+  'statistics.failureClass.provider': 'Provider error',
+  'statistics.failureClass.rate_limit': 'Rate limit',
+  'statistics.failureClass.refused': 'Content refused',
+  'statistics.failureClass.rejected': 'Request rejected',
+  'statistics.failureClass.server': 'Provider server error',
+  'statistics.failureClass.timeout': 'Timeout',
+  'statistics.failureClass.unknown': 'Not classified',
+  'statistics.failureClass.usage_limit': 'Usage limit reached',
+  'statistics.failureClassHint.incomplete':
+    'The response stream ended before the Model finished its answer.',
+  'statistics.failureClassHint.limit':
+    'vBot stopped the call at its own time or size limit, for example during Compaction.',
+  'statistics.failureClassHint.outcome_unknown':
+    'The connection broke after the request was sent, so vBot cannot tell whether the Provider processed it.',
+  'statistics.failureClassHint.provider':
+    'The Provider reported an error without an HTTP status, for example inside the response stream.',
+  'statistics.failureClassHint.unknown':
+    'Failed calls recorded before vBot captured why calls fail.',
+  'statistics.failureClassHint.usage_limit':
+    'The subscription or account quota is used up until its reset.',
+  'statistics.failures.avgDuration': 'Average time to failure',
+  'statistics.failures.byClass': 'Failed Model calls by reason',
+  'statistics.failures.classId': 'Recorded class',
+  'statistics.failures.durationHint':
+    'From sending the request until it failed or was stopped. Calls recorded before vBot measured this time are not included.',
+  'statistics.failures.httpStatuses': 'HTTP status',
+  'statistics.failures.reason': 'Reason',
+  'statistics.failures.reasons': 'Reasons',
   'statistics.errors.failedAttempts': 'Failed Model calls',
   'statistics.errors.failedAttemptsHint':
     'Model calls that ended in an error, including attempts a retry or fallback later replaced. They are counted apart from failed Runs.',
@@ -730,8 +764,9 @@ export default Object.freeze({
   'statistics.usage.breakdownBy': 'Break down by',
   'statistics.usage.breakdownOf': 'Cost and tokens by {dimension}',
   'statistics.usage.calls': 'Model calls',
+  'statistics.usage.callsDetail': '{count} failed · {duration} on average',
   'statistics.usage.callsHint':
-    'Every request vBot sent to a Model, including retries, Compaction, Task Models and background work.',
+    'Every request vBot sent to a Model, including retries, Compaction, Task Models and background work. The average runs from sending a request until it ended, over calls with a measured duration.',
   'statistics.usage.coverage': 'Pricing coverage',
   'statistics.usage.estimatedSpeedCalls': 'With estimated tokens',
   'statistics.usage.failedAttempts': '{count} failed',

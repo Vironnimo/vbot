@@ -425,6 +425,7 @@ async def test_empty_or_restarted_attempt_keeps_reported_usage_and_links_saved_s
 
     failed, completed = recorder.calls
     assert failed["status"] == "failed"
+    assert failed["failure_class"] == ("network" if restarted else "incomplete")
     assert failed["usage"] == {
         "input_tokens": 20,
         "output_tokens": 4,
@@ -487,6 +488,7 @@ async def test_fatal_request_without_counters_records_unknown_usage(tmp_path: Pa
 
     [call] = recorder.calls
     assert call["status"] == "failed"
+    assert call["failure_class"] == "provider"
     assert call["usage"] == {"usage_call_id": call["id"]}
 
 
@@ -497,10 +499,10 @@ async def test_cancel_during_usage_persistence_keeps_visible_answer(tmp_path: Pa
 
     class WaitingUsageRecorder(RecordingUsageRecorder):
         @override
-        async def finish(self, call_id, usage=None, *, status="completed"):
+        async def finish(self, call_id, usage=None, *, status="completed", failure=None):
             saving.set()
             await release.wait()
-            return await super().finish(call_id, usage, status=status)
+            return await super().finish(call_id, usage, status=status, failure=failure)
 
     runtime = _runtime(
         tmp_path, _adapter("Visible answer", {"input_tokens": 42, "output_tokens": 5})

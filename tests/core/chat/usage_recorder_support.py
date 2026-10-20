@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from core.usage._failures import classify_failure
+
 
 class RecordingUsageRecorder:
     def __init__(self) -> None:
@@ -28,9 +30,11 @@ class RecordingUsageRecorder:
         usage: Mapping[str, Any] | None = None,
         *,
         status: str = "completed",
+        failure: Any = None,
     ) -> dict[str, Any]:
         row = next(call for call in self.calls if call["id"] == call_id)
         row["status"] = status
+        row["failure_class"] = classify_failure(failure)[0] if status == "failed" else None
         return await self.update(call_id, usage or {})
 
     async def update(self, call_id: str, usage: Mapping[str, Any]) -> dict[str, Any]:

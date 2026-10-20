@@ -119,6 +119,18 @@ def failed_calls_sql(alias: str = "a") -> str:
     return f"CASE WHEN {alias}.status NOT IN ('completed', 'started') THEN {alias}.calls ELSE 0 END"
 
 
+def failure_key_sql(alias: str = "a") -> str:
+    """Why the failed attempts of ``agg_usage`` rows aliased ``alias`` did not complete.
+
+    A failure's class, ``unknown`` for a failure recorded without one, or the
+    status of a cancelled or interrupted attempt.
+    """
+    return (
+        f"CASE WHEN {alias}.status = 'failed' "
+        f"THEN COALESCE(NULLIF({alias}.failure_class, ''), 'unknown') ELSE {alias}.status END"
+    )
+
+
 def totals_sql(alias: str = "a") -> str:
     """Integer sums of every Totals measure over ``agg_usage`` rows aliased ``alias``."""
     return ", ".join(
@@ -181,6 +193,12 @@ class Totals:
             "retrospective_calls": self["retrospective_calls"],
             "uncached_cost_usd": usd(self["uncached_nusd"]) if estimated_calls else None,
             **self._speed_json(),
+            "duration_calls": self["duration_calls"],
+            "avg_duration_ms": (
+                round(self["duration_ms"] / self["duration_calls"])
+                if self["duration_calls"]
+                else None
+            ),
         }
 
     def _speed_json(self) -> JsonObject:

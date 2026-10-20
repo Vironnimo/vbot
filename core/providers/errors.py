@@ -24,6 +24,8 @@ class NetworkError(VBotError):
     another route can reach a different host.
     """
 
+    failure_class = "network"
+
     retryable: bool = True
 
 
@@ -32,6 +34,8 @@ class ProviderAuthError(ProviderError):
 
     Not retryable — the request will fail again until credentials change.
     """
+
+    failure_class = "auth"
 
     def __init__(self, message: str = "") -> None:
         super().__init__(message, retryable=False)
@@ -44,6 +48,8 @@ class ProviderRequestTooLargeError(ProviderError):
     limit (both sizes known), or when the Provider answers HTTP 413 (sizes
     unknown). Chat retires already delivered images and retries smaller.
     """
+
+    failure_class = "rejected"
 
     code = "provider_request_too_large"
 
@@ -75,6 +81,8 @@ class ProviderStreamingUnsupportedError(ProviderError):
     non-streaming request before any visible output has been emitted.
     """
 
+    failure_class = "rejected"
+
     def __init__(self, message: str = "") -> None:
         super().__init__(message, retryable=False)
 
@@ -84,6 +92,8 @@ class ProviderRateLimitError(ProviderError):
 
     Retryable — the server is throttling requests and will accept them later.
     """
+
+    failure_class = "rate_limit"
 
     def __init__(self, message: str = "") -> None:
         super().__init__(message, retryable=True)
@@ -98,6 +108,8 @@ class ProviderUsageLimitError(ProviderError):
     ``resets_at`` is the reported reset in UTC, ``None`` when none was reported.
     """
 
+    failure_class = "usage_limit"
+
     def __init__(self, message: str, *, resets_at: datetime | None = None) -> None:
         super().__init__(message, retryable=False)
         self.resets_at = resets_at
@@ -109,6 +121,8 @@ class ProviderTimeoutError(ProviderError):
     Retryable — transient network issues may resolve on retry.
     """
 
+    failure_class = "timeout"
+
     def __init__(self, message: str = "") -> None:
         super().__init__(message, retryable=True)
 
@@ -119,6 +133,8 @@ class ProviderOutcomeUnknownError(ProviderError):
     Retrying is unsafe because the provider may already have produced and
     billed the result even though vBot could not receive or parse it.
     """
+
+    failure_class = "outcome_unknown"
 
     code = "provider_outcome_unknown"
 
@@ -138,6 +154,8 @@ class ProviderContentRefusedError(ProviderError):
     The unchanged request is refused again, so it is never retried.
     ``reason`` is the provider's own explanation, when it gave one.
     """
+
+    failure_class = "refused"
 
     code = "generation_refused"
 

@@ -206,6 +206,32 @@ export function errorKindTooltip(kind) {
   };
 }
 
+/** Why failed Model calls failed: a recorded failure class, `unknown` for a
+ *  failed call recorded without one, or the call status for a cancelled or
+ *  interrupted call. */
+export function failureClassLabel(key) {
+  if (key === 'cancelled' || key === 'interrupted') {
+    return modelCallStatusLabel(key);
+  }
+  return tOr(`statistics.failureClass.${key}`, humanizeId(key));
+}
+
+/** A failure class's name and explanation with its stored id. */
+export function failureClassTooltip(key) {
+  const text = tOr(`statistics.failureClassHint.${key}`, '');
+  return {
+    title: failureClassLabel(key),
+    ...(text ? { text } : {}),
+    rows: [
+      {
+        label: t('statistics.failures.classId'),
+        value: String(key ?? ''),
+        mono: true,
+      },
+    ],
+  };
+}
+
 export function modelCallStatusLabel(status) {
   return MODEL_CALL_STATUSES.has(status)
     ? t(`statistics.requestStatus.${status}`)

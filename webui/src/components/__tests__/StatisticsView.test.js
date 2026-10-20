@@ -136,17 +136,29 @@ describe('StatisticsView', () => {
     });
     await waitForOverview();
 
+    // A failed call names why it failed: its failure class and HTTP status.
     const expectations = [
-      ['usage', ['usage'], 'Plan the release'],
+      [
+        'usage',
+        ['usage'],
+        'Plan the release',
+        `${t('statistics.failureClass.rate_limit')} · 429`,
+      ],
       ['runs', ['runs'], 'model-error-sentinel'],
       ['tools', ['tools', 'skills'], 'unused-skill-sentinel'],
-      ['diagnostics', ['diagnostics'], 'Runaway sentinel'],
+      [
+        'diagnostics',
+        ['diagnostics'],
+        'Runaway sentinel',
+        t('statistics.failureClass.server'),
+      ],
     ];
-    for (const [tab, sections, sentinel] of expectations) {
+    for (const [tab, sections, sentinel, failure] of expectations) {
       buttonNamed(`statistics.subview.${tab}`).click();
       await waitForCondition(() => panel().textContent.includes(sentinel));
       expect(navigation.place).toEqual([tab]);
       expect(reportCalls().at(-1).sections).toEqual(sections);
+      if (failure) expect(panel().textContent).toContain(failure);
     }
     // Diagnostics opens with every block collapsed.
     expect(panel().querySelectorAll('details').length).toBeGreaterThan(0);

@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 from core.chat.messages import usage_token_is_estimated
 from core.chat.streaming import StreamingAccumulator, iter_with_chunk_timeout
 from core.compaction._workers import COMPACTION_WORKERS
-from core.compaction.errors import CompactionError
+from core.compaction.errors import CompactionIncompleteError, CompactionLimitError
 from core.providers.adapter import TERMINAL_OUTCOME_STOP
 from core.utils.logging import get_logger
 from core.utils.retry import compute_retry_delay
@@ -71,7 +71,7 @@ async def _send_streaming_model_request(
             attempt = 0
             while True:
                 if _budget_exhausted(budget):
-                    raise CompactionError(_TIME_LIMIT_MESSAGE)
+                    raise CompactionLimitError(_TIME_LIMIT_MESSAGE)
                 attempt += 1
                 try:
                     response = await _stream_attempt(
@@ -92,7 +92,7 @@ async def _send_streaming_model_request(
                         group_id=group_id,
                     )
                     if _budget_exhausted(budget):
-                        raise CompactionError(_TIME_LIMIT_MESSAGE)
+                        raise CompactionLimitError(_TIME_LIMIT_MESSAGE)
                     return response
                 except Exception as error:
                     if attempt >= MODEL_REQUEST_ATTEMPTS or not getattr(error, "retryable", False):
@@ -115,7 +115,7 @@ async def _send_streaming_model_request(
     except TimeoutError as error:
         if not budget.expired():
             raise
-        raise CompactionError(_TIME_LIMIT_MESSAGE) from error
+        raise CompactionLimitError(_TIME_LIMIT_MESSAGE) from error
 
 
 async def _stream_attempt(
@@ -161,13 +161,13 @@ async def _stream_attempt(
             summary_characters = 0
             async for delta in iter_with_chunk_timeout(source):
                 if _budget_exhausted(budget):
-                    raise CompactionError(_TIME_LIMIT_MESSAGE)
+                    raise CompactionLimitError(_TIME_LIMIT_MESSAGE)
                 if delta.get("type") == "heartbeat":
                     continue
                 if delta.get("type") == "content_delta" and isinstance(delta.get("text"), str):
                     summary_characters += len(delta["text"])
                     if summary_characters > MAX_SUMMARY_CHARACTERS:
-                        raise CompactionError(
+                        raise CompactionLimitError(
                             f"Compaction exceeded its {MAX_SUMMARY_CHARACTERS:,}-character "
                             "summary limit. No checkpoint was saved."
                         )
@@ -193,14 +193,14 @@ async def _stream_attempt(
                     )
         if _budget_exhausted(budget):
             # A Provider can suppress cancellation while closing its stream.
-            raise CompactionError(_TIME_LIMIT_MESSAGE)
+            raise CompactionLimitError(_TIME_LIMIT_MESSAGE)
         if accumulator.finish_reason != TERMINAL_OUTCOME_STOP:
-            raise CompactionError(
+            raise CompactionIncompleteError(
                 "Summary stream did not complete successfully "
                 f"(outcome={accumulator.finish_reason or 'missing'})"
             )
         if accumulator.has_partial_tool_call:
-            raise CompactionError(
+            raise CompactionIncompleteError(
                 "Summary stream requested Tools instead of completing its summary"
             )
         response = accumulator.finalize_assistant_fields().to_response_dict()
@@ -214,6 +214,8 @@ async def _stream_attempt(
                     if isinstance(exc, asyncio.CancelledError) and not budget.expired()
                     else "failed"
                 ),
+                # The expired time budget cancels a request still in progress.
+                failure="limit" if budget.expired() else exc,
             )
             await _learn_input_estimate(usage_recorder, calibration, accumulator.usage)
         raise

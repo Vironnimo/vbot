@@ -98,6 +98,7 @@ class ProviderMusicClient(ProviderTaskClient):
             call_id = await observer.start() if observer is not None else ""
             response = None
             status: Literal["completed", "failed", "cancelled"] = "completed"
+            failure: BaseException | None = None
             try:
                 response = await client.send(request, stream=True)
                 if response.status_code >= 400:
@@ -109,12 +110,14 @@ class ProviderMusicClient(ProviderTaskClient):
                 yield response
             except httpx.TransportError as exc:
                 status = "failed"
-                raise wrap_network_error(exc) from exc
+                failure = wrap_network_error(exc)
+                raise failure from exc
             except asyncio.CancelledError:
                 status = "cancelled"
                 raise
-            except BaseException:
+            except BaseException as exc:
                 status = "failed"
+                failure = exc
                 raise
             finally:
                 try:
@@ -122,7 +125,7 @@ class ProviderMusicClient(ProviderTaskClient):
                         await response.aclose()
                 finally:
                     if observer is not None:
-                        await observer.finish(call_id, usage=usage, status=status)
+                        await observer.finish(call_id, usage=usage, status=status, failure=failure)
 
 
 def _music_payload(

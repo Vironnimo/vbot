@@ -376,6 +376,7 @@ class WireRequestRunner:
                     call_id,
                     normalized.get("usage") if normalized is not None else None,
                     status="cancelled" if isinstance(exc, asyncio.CancelledError) else "failed",
+                    failure=exc,
                 )
             raise
         if recorder is not None and call_id is not None:
@@ -383,6 +384,7 @@ class WireRequestRunner:
                 call_id,
                 step.message.usage,
                 status="failed" if step.message.interrupted else "completed",
+                failure="incomplete",
             )
             step = replace(step, message=replace(step.message, usage=usage))
         return step
@@ -457,6 +459,7 @@ class WireRequestRunner:
                     call_id,
                     accumulator.usage,
                     status="cancelled" if isinstance(exc, asyncio.CancelledError) else "failed",
+                    failure=exc,
                 )
             if stream_draft is not None and isinstance(exc, Exception):
                 # The attempt left no Assistant entry: a restart or fallback
@@ -474,7 +477,13 @@ class WireRequestRunner:
                 else "completed"
             )
             usage = await _finish_visible_boundary(
-                recorder.finish(call_id, step.message.usage, status=status),
+                recorder.finish(
+                    call_id,
+                    step.message.usage,
+                    status=status,
+                    # A stream break without an error left the step unfinished.
+                    failure=step.failure or step.recovery_error or "incomplete",
+                ),
                 run,
                 step.message.interrupted
                 # Started Tool Calls may already have effects; their turn

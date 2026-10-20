@@ -152,7 +152,7 @@ async def _request(
     except BaseException as exc:
         if recorder is not None and call_id is not None:
             status = "cancelled" if isinstance(exc, asyncio.CancelledError) else "failed"
-            await recorder.finish(call_id, reported or None, status=status)
+            await recorder.finish(call_id, reported or None, status=status, failure=exc)
         raise
     if recorder is not None and call_id is not None:
         normalized["usage"] = await recorder.finish(call_id, normalized.get("usage"))

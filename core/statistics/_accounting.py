@@ -42,7 +42,10 @@ CREATE TABLE stat_usage_records (
     timestamp TEXT NOT NULL,
     instant INTEGER NOT NULL,
     run_id TEXT,
-    status TEXT NOT NULL
+    status TEXT NOT NULL,
+    duration_ms INTEGER,
+    failure_class TEXT,
+    http_status INTEGER
 );
 CREATE INDEX stat_usage_records_run ON stat_usage_records(session_key, run_id);
 CREATE INDEX stat_usage_records_instant ON stat_usage_records(instant);
@@ -178,11 +181,14 @@ def _project_calls(
         sequence = int(
             connection.execute(
                 "INSERT INTO stat_usage_records "
-                "(session_key, call_id, timestamp, instant, run_id, status) "
-                "VALUES (?, ?, ?, ?, ?, ?) "
+                "(session_key, call_id, timestamp, instant, run_id, status, "
+                "duration_ms, failure_class, http_status) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(call_id) DO UPDATE SET "
                 "session_key = excluded.session_key, timestamp = excluded.timestamp, "
-                "instant = excluded.instant, run_id = excluded.run_id, status = excluded.status "
+                "instant = excluded.instant, run_id = excluded.run_id, status = excluded.status, "
+                "duration_ms = excluded.duration_ms, failure_class = excluded.failure_class, "
+                "http_status = excluded.http_status "
                 "RETURNING seq",
                 (
                     unit_key,
@@ -191,6 +197,9 @@ def _project_calls(
                     timestamp_instant(record.timestamp),
                     record.run_id,
                     record.status,
+                    record.duration_ms,
+                    record.failure_class,
+                    record.http_status,
                 ),
             ).fetchone()[0]
         )
