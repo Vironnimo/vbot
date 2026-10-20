@@ -11,7 +11,10 @@
   import { tooltip } from '$lib/tooltip.js';
   import OptionMarker from './OptionMarker.svelte';
 
+  // The panel's chrome around the scrolling options, for when it cannot be
+  // measured: the search header, and the footer action when there is one.
   const SEARCH_HEADER_HEIGHT = 44;
+  const FOOTER_ACTION_HEIGHT = 36;
   const noop = () => {};
   const componentId = $props.id();
 
@@ -71,6 +74,7 @@
   let rootElement = $state();
   let triggerElement = $state();
   let panelElement = $state();
+  let optionsElement = $state();
   let searchInputElement = $state();
   let isOpen = $state(false);
   // Seeded from the prop at creation (the dropdown is recreated per use); the
@@ -455,9 +459,20 @@
       return;
     }
 
+    // Everything but the options (search header, footer action, border)
+    // stays, so the options get only the room it leaves on screen.
+    const measuredChrome =
+      panelElement && optionsElement
+        ? panelElement.offsetHeight - optionsElement.offsetHeight
+        : 0;
+    const reservedHeight =
+      measuredChrome > 0
+        ? measuredChrome
+        : SEARCH_HEADER_HEIGHT + (footerActionLabel ? FOOTER_ACTION_HEIGHT : 0);
     const { placement, left, width, verticalRule, optionsMaxHeight } =
       computePanelPosition(triggerElement, {
-        reservedHeight: SEARCH_HEADER_HEIGHT,
+        reservedHeight,
+        contentHeight: optionsElement?.scrollHeight || null,
         minWidth: panelMinWidth,
         maxHeight: panelMaxHeight,
       });
@@ -718,6 +733,7 @@
       </div>
 
       <div
+        bind:this={optionsElement}
         class="s-dropdown-options searchable-dropdown__options"
         id={listboxId}
         role={collapsibleGroups ? 'tree' : 'listbox'}
