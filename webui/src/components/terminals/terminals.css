@@ -153,8 +153,8 @@
   padding: 0 8px;
 }
 
-/* Split button: the main part starts a shell, the chevron offers recent
-   setups, the start dialog and a new group. */
+/* Split button: the main part starts the default shell, the chevron opens
+   the launcher. */
 .terminals-view__start {
   display: inline-flex;
   align-items: stretch;
@@ -419,57 +419,344 @@
   background: var(--text-lo);
 }
 
-.modal.terminals-view__start-modal {
-  width: 520px;
-}
+/* Launcher (TerminalLauncher.svelte): a command palette portaled to <body>
+   on the floating-card surface. The command line heads it like a search
+   field; the recent setups, a quiet options row and the footer follow. It
+   stacks on the dialog layer, so its tooltips and menus float above it and
+   the folder browser it opens (portaled after it) covers it. */
+.terminal-launcher {
+  --field-surface: var(--surface);
+  --floating-shift-x: 0px;
+  --floating-shift-y: -3px;
 
-.modal.terminals-view__group-modal {
-  width: 440px;
-}
-
-.terminals-view__delete-intro {
-  margin: 0 0 12px;
-  color: var(--text-med);
+  position: fixed;
+  z-index: var(--z-modal);
+  display: flex;
+  max-width: calc(100vw - 16px);
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-lg);
+  color: var(--text-hi);
+  background: var(--surface-2);
+  box-shadow: var(--floating-elevation);
+  font-family: var(--font-ui);
   font-size: var(--fs-body-sm);
-  line-height: 1.5;
+  outline: none;
+  animation: floating-layer-enter 120ms ease-out;
 }
 
-.terminals-view__group-dropdown {
-  width: 100%;
+.terminal-launcher__command {
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  gap: 10px;
+  padding: 0 8px 0 9px;
 }
 
-.terminals-view__group-dropdown .dropdown-primitive__trigger {
-  width: 100%;
+.terminal-launcher__prompt,
+.terminal-launcher__chip-icon {
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.3;
+  color: var(--text-lo);
 }
 
-.terminals-view__start-form {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-md);
-  max-height: calc(100dvh - 180px);
-  overflow-y: auto;
-}
-
-.terminals-view__start-error {
-  grid-column: 1 / -1;
-}
-
-@media (max-width: 640px) {
-  .terminals-view__start-form {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-
-.terminals-view__history-dropdown {
-  width: 100%;
-}
-
-.terminals-view__history-dropdown .dropdown-primitive__trigger {
-  width: 100%;
-}
-
-.terminals-view__history-dropdown-list {
+.terminal-launcher__input {
+  min-width: 0;
+  height: 46px;
+  flex: 1;
+  padding: 0;
+  border: 0;
+  outline: none;
+  color: var(--text-hi);
+  background: transparent;
   font-family: var(--font-mono);
+  font-size: var(--fs-mono-body);
+}
+
+/* The placeholder names the default in words, not as code. */
+.terminal-launcher__input::placeholder {
+  color: var(--text-lo);
+  font-family: var(--font-ui);
+  font-size: var(--fs-body-md);
+}
+
+.terminal-launcher__error {
+  margin: -8px 0 0;
+  padding: 0 14px 10px 35px;
+  color: var(--red);
+  font-size: var(--fs-label-sm);
+  line-height: 1.4;
+}
+
+.terminal-launcher__setups {
+  padding: 4px;
+  border-top: 1px solid var(--border);
+}
+
+.terminal-launcher__section {
+  padding: 6px 8px 4px;
+  color: var(--text-lo);
+  font-size: var(--fs-label-sm);
+  font-weight: 500;
+}
+
+.terminal-launcher__list {
+  display: flex;
+  max-height: var(--terminal-launcher-list-max, 288px);
+  flex-direction: column;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.terminal-launcher__setup {
+  display: flex;
+  width: 100%;
+  min-height: 32px;
+  flex: none;
+  align-items: center;
+  gap: 16px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--r-md);
+  color: var(--text-med);
+  background: transparent;
+  font-family: var(--font-ui);
+  font-size: var(--fs-body-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.terminal-launcher__setup.active {
+  color: var(--text-hi);
+  background: var(--surface-3);
+}
+
+.terminal-launcher__setup-command {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-launcher__setup-command--code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-sm);
+}
+
+/* A long folder loses its start, so the folder itself stays readable. */
+.terminal-launcher__setup-folder {
+  min-width: 64px;
+  max-width: 55%;
+  flex: 0 1 auto;
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--text-lo);
+  direction: rtl;
+  font-size: var(--fs-label-sm);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-launcher__setup-folder--code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-xs);
+}
+
+.terminal-launcher__options {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px 2px;
+  border-top: 1px solid var(--border);
+}
+
+/* Quiet chips: the working directory and the view picker's trigger. */
+.terminal-launcher__chip,
+.terminal-launcher__view-picker .s-dropdown-trigger {
+  display: inline-flex;
+  width: auto;
+  min-width: 0;
+  max-width: 100%;
+  height: 28px;
+  min-height: 28px;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  padding: 0 9px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-md);
+  color: var(--text-hi);
+  background: transparent;
+  font-family: var(--font-ui);
+  font-size: var(--fs-label-sm);
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease;
+}
+
+.terminal-launcher__chip:hover,
+.terminal-launcher__view-picker .s-dropdown-trigger:hover:not(:disabled),
+.terminal-launcher__view-picker.open .s-dropdown-trigger {
+  border-color: var(--text-faint);
+  background: var(--surface-3);
+}
+
+.terminal-launcher__chip:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.terminal-launcher__chip--folder {
+  flex: 0 1 auto;
+  max-width: 45%;
+}
+
+.terminal-launcher__view-picker.s-dropdown {
+  width: auto;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+.terminal-launcher__chip-label {
+  flex: none;
+  color: var(--text-lo);
+}
+
+.terminal-launcher__chip-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-launcher__chip-value--code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-xs);
+}
+
+.terminal-launcher__path {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+/* The path field takes the chip's place at the chips' height. */
+.terminal-launcher__path .terminal-launcher__path-input {
+  height: 28px;
+  min-height: 28px;
+}
+
+.terminal-launcher__path .path-field__browse {
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+}
+
+.terminal-launcher__footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 8px 12px 12px;
+}
+
+.btn-tertiary.terminal-launcher__new-group {
+  min-height: 30px;
+  margin-left: -8px;
+  padding: 4px 8px;
+}
+
+.btn-primary.terminal-launcher__start {
+  min-height: 30px;
+  gap: 8px;
+  padding: 4px 6px 4px 14px;
+}
+
+.terminal-launcher__key {
+  padding: 0 5px;
+  border: 1px solid color-mix(in srgb, var(--on-accent) 30%, transparent);
+  border-radius: var(--r-sm);
+  color: color-mix(in srgb, var(--on-accent) 78%, transparent);
+  background: transparent;
+  font-family: var(--font-ui);
+  font-size: var(--fs-mono-xs);
+  font-weight: 500;
+  line-height: 18px;
+}
+
+/* On phones the launcher is a bottom sheet (Modal): the command line is an
+   ordinary field and the dialog body scrolls the setups. */
+.terminal-launcher-sheet .terminal-launcher-sheet__body {
+  gap: 12px;
+}
+
+.terminal-launcher-sheet .terminal-launcher__command {
+  min-height: 44px;
+  padding: 0 6px 0 12px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-md);
+  background: var(--field-surface);
+}
+
+.terminal-launcher-sheet .terminal-launcher__command:focus-within {
+  border-color: var(--accent);
+  box-shadow: var(--field-focus-ring);
+}
+
+.terminal-launcher-sheet .terminal-launcher__input {
+  height: 42px;
+  font-size: 16px;
+}
+
+.terminal-launcher-sheet .terminal-launcher__error {
+  margin: -6px 0 0;
+  padding: 0;
+}
+
+.terminal-launcher-sheet .terminal-launcher__setups,
+.terminal-launcher-sheet .terminal-launcher__options {
+  padding: 0;
+  border-top: 0;
+}
+
+.terminal-launcher-sheet .terminal-launcher__section {
+  padding: 0 0 6px;
+}
+
+/* The rows' highlight reaches past the text, which aligns with the body. */
+.terminal-launcher-sheet .terminal-launcher__list {
+  max-height: none;
+  margin: 0 -8px;
+}
+
+.terminal-launcher-sheet .terminal-launcher__setup {
+  min-height: 40px;
+}
+
+.terminal-launcher-sheet .terminal-launcher__options {
+  flex-wrap: wrap;
+}
+
+.terminal-launcher-sheet .terminal-launcher__chip,
+.terminal-launcher-sheet .terminal-launcher__view-picker .s-dropdown-trigger {
+  height: 36px;
+}
+
+.terminal-launcher-sheet .terminal-launcher__chip--folder {
+  max-width: 100%;
+}
+
+.terminal-launcher-sheet .terminal-launcher__key {
+  display: none;
 }
 
 @media (max-width: 640px) {
@@ -495,5 +782,9 @@
 @media (prefers-reduced-motion: reduce) {
   .terminals-view__tile-host .xterm-viewport {
     scroll-behavior: auto;
+  }
+
+  .terminal-launcher {
+    animation: none;
   }
 }

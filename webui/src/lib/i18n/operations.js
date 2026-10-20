@@ -375,9 +375,7 @@ export default Object.freeze({
   'terminals.newShort': 'Terminal',
   'terminals.startFailedTitle': 'The terminal could not start',
   'terminals.startTitle': 'New terminal',
-  'terminals.historyLabel': 'Recent setup',
-  'terminals.historyHelp':
-    'Reuse a recent command and working directory saved on this server.',
+  'terminals.historyLabel': 'Recent setups',
   'terminals.commandLabel': 'Command line',
   'terminals.commandHelp':
     'Program and arguments, for example: codex --profile "work space". Quote values containing spaces. Arguments are literal; pipes and shell expansions are not evaluated. Leave empty for the default shell.',
@@ -387,13 +385,11 @@ export default Object.freeze({
   'terminals.commandError.emptyArgument':
     'The command and its arguments cannot be empty quoted values.',
   'terminals.workdirLabel': 'Working directory',
-  'terminals.workdirHelp':
-    'Optional. Defaults to the server user’s home directory.',
-  'terminals.workdirPlaceholder': 'User home directory',
-  'terminals.start': 'Start terminal',
-  'terminals.startedTitle': 'Terminal started',
-  'terminals.startedMessage':
-    'The manual Terminal Session is live and ready for input.',
+  'terminals.workdirHelp': 'The home directory of the server’s user.',
+  'terminals.workdirPlaceholder': 'Home directory',
+  'terminals.workdirChip': 'Working directory: {path}',
+  'terminals.start': 'Start',
+  'terminals.enterKey': 'Enter',
   'terminals.liveTerminalLabel': 'Live terminal. Click to take control.',
   'terminals.historyTerminalLabel': 'Retained terminal history.',
   'terminals.scrollLatest': 'Jump to latest',
@@ -468,20 +464,19 @@ export default Object.freeze({
   'terminals.moveHome': 'Show where it started',
   'terminals.pinnedHint': 'Moved here; it started elsewhere.',
   'terminals.groupNameLabel': 'Group name',
-  'terminals.groupNameHelp':
-    'Shown in the bar. Terminals you start in the group or drag onto it show here.',
   'terminals.groupNamePlaceholder': 'e.g. Work',
   'terminals.groupNameRequired': 'Enter a group name.',
-  'terminals.deleteGroupCount':
-    '{count} terminals in this group return to where they started.',
   'terminals.createGroupTitle': 'New group',
+  'terminals.createGroupDescription':
+    'A view of your own in the bar: start terminals in it or drag them onto it.',
   'terminals.createGroup': 'Create group',
   'terminals.renameGroupTitle': 'Rename group',
   'terminals.renameGroup': 'Rename',
-  'terminals.deleteGroupTitle': 'Delete group',
+  'terminals.deleteGroupQuestion': 'Delete group “{name}”?',
   'terminals.deleteGroupWarning':
     'Deleting the group stops no terminal: each one shows again under the conversation that started it, or under your terminals.',
-  'terminals.deleteGroupEmptyConfirm': 'Delete group',
+  'terminals.deleteGroupConfirm': 'Delete group',
+  'terminals.groupDeletedTitle': 'Group deleted',
   'terminals.deleteGroupMessage':
     'The group was deleted; its terminals keep running.',
   'terminals.groupCreatedTitle': 'Group created',
@@ -493,6 +488,7 @@ export default Object.freeze({
   'terminals.groupEmptyDescription':
     'Start a terminal here, or drag one onto this group in the bar.',
   'terminals.startGroupLabel': 'Show in',
+  'terminals.startGroupChip': 'Show in: {view}',
   'terminals.startGroupHelp':
     'Where the terminal appears: one of your groups, a conversation, or your terminals.',
   'terminals.kind.manual': 'Not held by an Agent',
@@ -500,8 +496,8 @@ export default Object.freeze({
   'terminals.kind.user': 'My group',
   'terminals.count': '{count} terminals',
   'terminals.groupActions': 'Group actions',
-  'terminals.renameGroupAction': 'Rename group',
-  'terminals.deleteGroupAction': 'Delete group',
+  'terminals.renameGroupAction': 'Rename group…',
+  'terminals.deleteGroupAction': 'Delete group…',
   'cron.title': 'Schedules',
   'cron.noAgents': 'Create an agent before adding cron jobs.',
   'cron.loading': 'Loading cron jobs…',

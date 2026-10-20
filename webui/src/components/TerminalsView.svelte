@@ -1,10 +1,9 @@
 <script>
-  import TerminalDialogs from './terminals/TerminalDialogs.svelte';
+  import TerminalGroupDialogs from './terminals/TerminalGroupDialogs.svelte';
+  import TerminalLauncher from './terminals/TerminalLauncher.svelte';
   import TerminalTile from './terminals/TerminalTile.svelte';
   import {
     groupCanEdit,
-    launchHistoryLabel,
-    launchHistoryWorkdir,
     terminalError,
     terminalGroupDetails,
     terminalTitle,
@@ -58,9 +57,11 @@
   let maximizedTerminalId = $state('');
   const shell = useNavigation();
 
-  // The one open context menu of the view: a pill's, the start options,
-  // the history, the "more views" list, or a tile's.
+  // The one open context menu of the view: a pill's, the history, the
+  // "more views" list, or a tile's.
   let menu = $state(null);
+  // The open launcher: the element it opened from and how it aligns there.
+  let launcher = $state(null);
   let draggedTerminalId = $state('');
   let dragOverTerminalId = $state('');
   let dragOverGroupId = $state('');
@@ -385,17 +386,14 @@
     return viewState.groups.find((group) => group.group_id === groupId) ?? null;
   }
 
-  // One click starts a terminal in the shown view: the default shell, or a
-  // recent setup from the start menu. Its tile appearing is the feedback.
-  async function quickStart(entry = null) {
-    const params = {};
-    if (entry?.command) params.command = entry.command;
-    if (entry?.args?.length) params.args = [...entry.args];
-    if (entry?.workdir) params.workdir = entry.workdir;
+  // One click starts the default shell in the shown view. Its tile
+  // appearing is the feedback.
+  async function quickStart() {
     maximizedTerminalId = '';
-    const started = await controller.startManualTerminal(params, {
-      groupId: pinTargetOf(selectedGroup),
-    });
+    const started = await controller.startManualTerminal(
+      {},
+      { groupId: pinTargetOf(selectedGroup) },
+    );
     if (!started) {
       onToast({
         title: t('terminals.startFailedTitle'),
@@ -404,8 +402,20 @@
       });
       return;
     }
+    await showStarted(started.terminal_id);
+  }
+
+  async function showStarted(terminalId) {
+    maximizedTerminalId = '';
     await tick();
-    activateTerminal(started.terminal_id);
+    activateTerminal(terminalId);
+  }
+
+  // The launcher opens from the start button's chevron or the empty state;
+  // its opener closes it again.
+  function toggleLauncher(event, align) {
+    const opener = event.currentTarget;
+    launcher = launcher?.anchor === opener ? null : { anchor: opener, align };
   }
 
   function openSession(group) {
@@ -455,30 +465,6 @@
     const items = viewMenuItems(group);
     if (items.length === 0) return;
     openMenu(event, viewLabel(group), items);
-  }
-
-  function openStartMenu(event) {
-    openMenu(event, t('terminals.startOptions'), [
-      ...viewState.launchHistory.map((entry) => ({
-        id: `history:${entry.id}`,
-        label: launchHistoryLabel(entry),
-        hint: launchHistoryWorkdir(entry),
-        group: 'history',
-        onSelect: () => void quickStart(entry),
-      })),
-      {
-        id: 'customize',
-        label: t('terminals.customize'),
-        group: 'more',
-        onSelect: () => dialogs.openStartDialog(),
-      },
-      {
-        id: 'group',
-        label: t('terminals.newGroup'),
-        group: 'more',
-        onSelect: () => dialogs.openCreateGroupDialog(),
-      },
-    ]);
   }
 
   function openHistoryMenu(event) {
@@ -778,11 +764,12 @@
           variant="secondary"
           icon
           class="terminals-view__start-more"
-          aria-haspopup="menu"
+          aria-haspopup="dialog"
+          aria-expanded={launcher?.align === 'end'}
           ariaLabel={t('terminals.startOptions')}
-          tooltip={t('terminals.startOptions')}
+          tooltip={launcher ? '' : t('terminals.startOptions')}
           disabled={serverUnavailable}
-          onClick={openStartMenu}
+          onClick={(event) => toggleLauncher(event, 'end')}
         >
           <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
             <path d="m4 6 4 4 4-4" class="terminals-view__stroke" />
@@ -886,8 +873,10 @@
           </Button>
           <Button
             variant="secondary"
+            aria-haspopup="dialog"
+            aria-expanded={launcher?.align === 'center'}
             disabled={serverUnavailable}
-            onClick={() => dialogs.openStartDialog()}
+            onClick={(event) => toggleLauncher(event, 'center')}
           >
             {t('terminals.customize')}
           </Button>
@@ -899,15 +888,22 @@
 
 <ContextMenu {menu} onClose={() => (menu = null)} />
 
-<TerminalDialogs
+{#if launcher && !serverUnavailable}
+  <TerminalLauncher
+    anchor={launcher.anchor}
+    align={launcher.align}
+    {viewState}
+    {controller}
+    onClose={() => (launcher = null)}
+    onStarted={showStarted}
+    onNewGroup={() => dialogs.openCreateGroupDialog()}
+  />
+{/if}
+
+<TerminalGroupDialogs
   bind:this={dialogs}
   {viewState}
   {controller}
   {serverUnavailable}
   {onToast}
-  onStarted={async (id) => {
-    maximizedTerminalId = '';
-    await tick();
-    activateTerminal(id);
-  }}
 />
