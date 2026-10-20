@@ -172,6 +172,8 @@ def test_substitution_replaces_references_in_nested_values_and_reports_uses(
 def test_lifetimes_bound_where_and_how_long_a_secret_is_usable(tmp_path: Path) -> None:
     clock = Clock()
     secrets = _secrets(tmp_path, clock)
+    changes: list[str] = []
+    secrets.add_change_listener(lambda change: changes.append(change.kind))
     secrets.create(
         name="code",
         kind="token",
@@ -187,6 +189,7 @@ def test_lifetimes_bound_where_and_how_long_a_secret_is_usable(tmp_path: Path) -
         actor="user",
         lifetime="session",
         session_id="s1",
+        agents=["main"],
     )
     secrets.create(
         name="temp",
@@ -197,19 +200,47 @@ def test_lifetimes_bound_where_and_how_long_a_secret_is_usable(tmp_path: Path) -
         expires_at=clock.now + timedelta(hours=1),
     )
 
-    # A once Secret named twice in one call is used once, then it is gone.
+    # A call whose other arguments fail does not consume a once Secret;
+    # consume ends it when the call runs.
+    _, uses = secrets.substitute("main", "s1", "{{secret:CODE}}", "files", consume=False)
+    secrets.consume("main", "s1", uses)
+    with pytest.raises(SecretUseError):
+        secrets.substitute("main", "s1", "{{secret:CODE}}", "files")
+    secrets.create(
+        name="code",
+        kind="token",
+        values={"value": "otp-12345678"},
+        actor="user",
+        lifetime="once",
+        session_id="s1",
+    )
+    # A once Secret named twice in one call is used once, then it is gone,
+    # through the environment too.
     assert secrets.substitute("main", "s1", "{{secret:CODE}} {{secret:CODE}}", "files")[0] == (
         "otp-12345678 otp-12345678"
     )
     with pytest.raises(SecretUseError):
         secrets.substitute("main", "s1", "{{secret:CODE}}", "files")
-    # A Session Secret exists only in its Session.
+    secrets.create(
+        name="code",
+        kind="token",
+        values={"value": "otp-12345678"},
+        actor="user",
+        lifetime="once",
+        session_id="s1",
+    )
+    assert secrets.environment("main", "s1", "CODE") is not None
+    assert secrets.lookup("main", "s1", "CODE") is None
+    # A Session Secret exists only in its Session, and only for its Agent.
     assert [item.name for item in secrets.usable("main", "s2")] == ["TEMP"]
+    assert secrets.usable("other", "s1") == []
     clock.now += timedelta(hours=2)
     assert [item.name for item in secrets.usable("main", "s1")] == ["API"]
     assert secrets.sweep() == 1
+    changes.clear()
     secrets.remove_session("s1")
     assert [item.name for item in _secrets(tmp_path, clock).all()] == []
+    assert changes == ["deleted"]
 
 
 def test_a_parent_passes_only_its_own_secrets_and_the_grant_ends_with_the_child(
@@ -317,8 +348,9 @@ def test_masking_replaces_known_values_and_their_encodings_with_references(
     encoded = base64.b64encode(b"user:" + PASSWORD.encode()).decode()
     untouched = {"text": "nothing to see"}
 
-    assert masker.mask(f"pw {PASSWORD}, key {TOKEN}") == (
-        "pw {{secret:GITHUB.password}}, key {{secret:OPENAI_API_KEY}}"
+    # A visible field, such as the username, stays readable.
+    assert masker.mask(f"julian: pw {PASSWORD}, key {TOKEN}") == (
+        "julian: pw {{secret:GITHUB.password}}, key {{secret:OPENAI_API_KEY}}"
     )
     assert "{{secret:GITHUB.password}}" in masker.mask(json.dumps({"p": PASSWORD + '"'}))
     assert masker.mask(quote(PASSWORD + "/", safe="")) == "{{secret:GITHUB.password}}%2F"

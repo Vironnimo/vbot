@@ -811,8 +811,12 @@ class ToolRegistry:
                     arguments[name],
                     sink,
                     passed_only=context.subagent_session,
+                    consume=False,
                 )
                 uses.extend(use for use in found if use not in uses)
+            secrets.consume(
+                context.agent_id, context.session_id, uses, passed_only=context.subagent_session
+            )
             return changed, uses
 
         changed, uses = await run_tool_worker(substitute)

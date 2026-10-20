@@ -171,7 +171,8 @@ class AgentSecret:
         if session_id in self.sessions:
             return True
         if self.lifetime in ("session", "once"):
-            return self.session_id == session_id
+            # Records written before Session Secrets kept their Agent have none.
+            return self.session_id == session_id and (not self.agents or agent_id in self.agents)
         return not passed_only and agent_id in self.agents
 
 

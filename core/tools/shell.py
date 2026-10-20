@@ -242,7 +242,11 @@ class ShellTool:
             uses: list[SecretUse] = []
             for name in call.secret_keys:
                 found = secrets.environment(
-                    context.agent_id, context.session_id, name, passed_only=passed_only
+                    context.agent_id,
+                    context.session_id,
+                    name,
+                    passed_only=passed_only,
+                    consume=False,
                 )
                 if found is not None:
                     variables.update(found[0])
@@ -254,8 +258,10 @@ class ShellTool:
                     reference,
                     "environment",
                     passed_only=passed_only,
+                    consume=False,
                 )
                 uses.extend(found_uses)
+            secrets.consume(context.agent_id, context.session_id, uses, passed_only=passed_only)
             return variables, uses
 
         variables, uses = await asyncio.to_thread(resolve)

@@ -120,3 +120,4 @@ Read these only when your task matches - not by default.
 - Changing the `.env`/`oauth` conversion (import, retire, `settle_plaintext_credentials`), the Import record, or the plaintext and quarantined-store findings of `doctor` and the data-store status -> `secrets/plaintext-conversion.md`
 - Changing the `secrets.*` RPCs or their clients -> `secrets/credential-rpcs.md`
 - Changing Agent Secrets (records, grants, Sub-Agent pass-through, sinks, masking, Secret Sources, requests, `/secret`, Channel message removal, `agent_secrets.*` RPCs) -> `secrets/agent-secrets.md`
+- Changing the bundled KeePassXC or 1Password Secret Source -> `extensions/keepassxc.md`, `extensions/onepassword.md`

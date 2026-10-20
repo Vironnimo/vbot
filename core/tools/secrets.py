@@ -348,10 +348,16 @@ def _secret_lines(secrets: AgentSecrets, secret: AgentSecret) -> list[str]:
         status = secrets.source_status(secret.source.source)
         if status.state != "available":
             lines.append(
-                f"  It comes from {secret.source.source}, which is {status.state}: ask the user "
+                f"  It comes from {_source_label(secrets, secret.source.source)}, which is "
+                f"{status.state}: ask the user "
                 "to unlock it in Settings -> Secrets."
             )
     return lines
+
+
+def _source_label(secrets: AgentSecrets, name: str) -> str:
+    source = secrets.source(name)
+    return source.label if source is not None else name
 
 
 def _name(arguments: dict[str, Any], action: str) -> str | JsonObject:
@@ -406,7 +412,8 @@ async def _request(
     if existing is not None and existing.source is not None:
         return tool_failure(
             "secret_from_source",
-            f"Nothing was requested. {name} comes from {existing.source.source}; ask the user "
+            f"Nothing was requested. {name} comes from "
+            f"{_source_label(secrets, existing.source.source)}; ask the user "
             "in your reply to correct it there or to unlock it in Settings -> Secrets.",
         )
     surface = context.reply_surface

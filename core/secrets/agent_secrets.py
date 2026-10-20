@@ -364,7 +364,7 @@ class AgentSecrets:
             lifetime=lifetime,
             session_id=session_id if lifetime in ("session", "once") else None,
             expires_at=expires_at,
-            agents=tuple(dict.fromkeys(agents)) if lifetime in ("permanent", "until") else (),
+            agents=tuple(dict.fromkeys(agents)),
             # The Session it was given in keeps it, a Sub-Agent Session too.
             sessions=(session_id,) if session_id and lifetime in ("permanent", "until") else (),
             sinks=DEFAULT_SINKS[kind] if sinks is None else check_sinks(sinks),
@@ -517,16 +517,20 @@ class AgentSecrets:
                 for item in self._records.values()
                 if item.session_id == session_id or session_id in item.sessions
             ]
+            changes = []
             for secret in affected:
                 if secret.session_id == session_id and secret.lifetime in ("session", "once"):
                     self._remove(secret)
+                    changes.append(SecretChange("deleted", secret, "session removed"))
                 else:
-                    self._write(
-                        replace(
-                            secret,
-                            sessions=tuple(item for item in secret.sessions if item != session_id),
-                        )
+                    kept = replace(
+                        secret,
+                        sessions=tuple(item for item in secret.sessions if item != session_id),
                     )
+                    self._write(kept)
+                    changes.append(SecretChange("changed", kept, "session removed"))
+        for change in changes:
+            self._notify(change)
         if affected:
             _LOGGER.info("Agent Secrets of a removed Session withdrawn (count=%d)", len(affected))
 
@@ -570,8 +574,13 @@ class AgentSecrets:
         sink: SinkClass,
         *,
         passed_only: bool = False,
+        consume: bool = True,
     ) -> tuple[str, SecretUse]:
-        """The value a reference stands for in this sink (blocking for source-bound Secrets)."""
+        """The value a reference stands for in this sink (blocking for source-bound Secrets).
+
+        A ``once`` Secret is deleted here unless ``consume`` is false; then the
+        caller passes the uses to :meth:`consume` once its whole call can run.
+        """
         secret = self.lookup(agent_id, session_id, reference.name, passed_only=passed_only)
         if secret is None:
             raise self._unknown(agent_id, session_id, reference, passed_only)
@@ -591,12 +600,32 @@ class AgentSecrets:
             )
         value = self.field_value(secret, target)
         self._record_use(secret, target.name, sink, agent_id, session_id)
-        if secret.lifetime == "once":
-            with self._lock:
-                if secret.id in self._records:
-                    self._remove(secret)
-            self._notify(SecretChange("deleted", secret, "used once"))
+        if consume:
+            self._consume_once(secret)
         return value, SecretUse(secret.name, target.name, sink)
+
+    def consume(
+        self,
+        agent_id: str,
+        session_id: str,
+        uses: Iterable[SecretUse],
+        *,
+        passed_only: bool = False,
+    ) -> None:
+        """Delete the ``once`` Secrets among ``uses`` (blocking): their call runs now."""
+        for name in dict.fromkeys(use.name for use in uses):
+            secret = self.lookup(agent_id, session_id, name, passed_only=passed_only)
+            if secret is not None:
+                self._consume_once(secret)
+
+    def _consume_once(self, secret: AgentSecret) -> None:
+        if secret.lifetime != "once":
+            return
+        with self._lock:
+            if secret.id not in self._records:
+                return
+            self._remove(secret)
+        self._notify(SecretChange("deleted", secret, "used once"))
 
     def field_value(self, secret: AgentSecret, target: SecretField) -> str:
         """The value of one field: stored, from its source, or the current TOTP code."""
@@ -623,6 +652,7 @@ class AgentSecrets:
         sink: SinkClass,
         *,
         passed_only: bool = False,
+        consume: bool = True,
     ) -> tuple[Any, list[SecretUse]]:
         """``value`` (JSON-like) with references replaced; raises :class:`SecretUseError`."""
         uses: list[SecretUse] = []
@@ -640,7 +670,12 @@ class AgentSecrets:
                 key = (reference.name, reference.field)
                 if key not in resolved_values:
                     resolved_values[key] = self.resolve(
-                        agent_id, session_id, reference, sink, passed_only=passed_only
+                        agent_id,
+                        session_id,
+                        reference,
+                        sink,
+                        passed_only=passed_only,
+                        consume=consume,
                     )
                 resolved, use = resolved_values[key]
                 parts.append(text[position : reference.start])
@@ -664,7 +699,13 @@ class AgentSecrets:
         return frozenset(names)
 
     def environment(
-        self, agent_id: str, session_id: str, name: str, *, passed_only: bool = False
+        self,
+        agent_id: str,
+        session_id: str,
+        name: str,
+        *,
+        passed_only: bool = False,
+        consume: bool = True,
     ) -> tuple[dict[str, str], list[SecretUse]] | None:
         """Shell variables for a name in ``env_keys``; ``None`` if no Secret has it.
 
@@ -691,6 +732,8 @@ class AgentSecrets:
             uses = [SecretUse(secret.name, item.name, "environment") for item in fields]
             for item in fields:
                 self._record_use(secret, item.name, "environment", agent_id, session_id)
+            if consume:
+                self._consume_once(secret)
             return values, uses
         return None
 
@@ -722,7 +765,7 @@ class AgentSecrets:
                 known.update(self._runtime_values)
                 for secret in self._records.values():
                     for item in secret.fields:
-                        if item.value is not None:
+                        if item.value is not None and item.concealed:
                             known[item.value] = secret.reference(item.name)
                 self._masker = SecretMasker(known) if known else EMPTY_MASKER
             return self._masker

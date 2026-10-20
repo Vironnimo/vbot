@@ -79,19 +79,24 @@ async def give_secret(
             description=description,
         )
         given = GivenSecret(secret, replaced=False, answered_request=False)
-    await _tell_agent(sessions, address, given)
+    await _tell_agent(sessions, address, given, passed_only=passed_only)
     return given
 
 
 async def _tell_agent(
-    sessions: ChatSessionManager | None, address: SessionAddress, given: GivenSecret
+    sessions: ChatSessionManager | None,
+    address: SessionAddress,
+    given: GivenSecret,
+    *,
+    passed_only: bool,
 ) -> None:
     from core.tools.secrets import secret_line
 
     secret = given.secret
     if given.replaced:
         note = f"The user replaced the value of the Secret {secret.name}."
-    elif secret.session_id is not None:
+    # A Sub-Agent Session has no System Prompt block that would list it.
+    elif secret.session_id is not None or passed_only:
         note = (
             f"The user gave you a Secret for this session: {secret_line(secret)[2:]} "
             "Write its reference where the value belongs; vBot inserts the value there."
