@@ -428,6 +428,9 @@ def _session_list_visibility_sql(
         f"{_LIST_VISIBILITY_SUBAGENT_SESSION | _LIST_VISIBILITY_SUBAGENT_PARENT}) != 0)"
     )
     is_background = f"((s.list_visibility_mask & {_LIST_VISIBILITY_BACKGROUND}) != 0)"
+    # A background Run the user is told about (Agent activity, such as a Cron Run
+    # that delivers to vBot) makes its Session a conversation the user can open.
+    reported = "(s.latest_completion_run_key IS NOT NULL)"
     background_enabled = (
         f"((s.list_visibility_mask & {_LIST_VISIBILITY_CRON}) = 0 OR ? = 1) "
         f"AND ((s.list_visibility_mask & {_LIST_VISIBILITY_MEMORY_REFLECTION}) = 0 OR ? = 1) "
@@ -444,7 +447,7 @@ def _session_list_visibility_sql(
         "(? = 1 OR COALESCE(TRIM(s.platform), '') = '' "
         "OR COALESCE(TRIM(s.platform_conv_id), '') = '') AND "
         f"(({is_subagent} AND ? = 1) OR (NOT {is_subagent} AND "
-        f"(NOT {is_background} OR ({background_enabled}))))"
+        f"(NOT {is_background} OR ({background_enabled}) OR {reported})))"
     )
     params: list[Any] = [
         int(include_channels),

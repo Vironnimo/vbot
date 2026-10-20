@@ -64,22 +64,23 @@ class ToastSink(Protocol):
 def run_toast_kind(event_type: object, payload: dict[str, Any]) -> str | None:
     """Return the toast kind a terminal Run event deserves, if any.
 
-    Cron and Calendar Runs notify only on failure. Other background work
-    (Subagents, Channels, reflections, internal continuations) never notifies;
-    cancellation is always the user's own action.
+    Every Cron failure notifies; a Cron Run that completes notifies only when it
+    counts as Agent activity (its job delivers to vBot and it had something to
+    report). Other background work (Subagents, Channels, reflections, internal
+    continuations) never notifies; cancellation is always the user's own action.
     """
 
     outcome = _RUN_OUTCOMES.get(str(event_type))
     if outcome is None:
         return None
     run_kind = payload.get("run_kind")
-    if run_kind in _AUTOMATION_RUN_KINDS:
-        return None if outcome == "completed" else "automation_failed"
     # Protocol field of /ws Run events; present only when false.
-    if (
-        run_kind not in _FOREGROUND_RUN_KINDS
-        or payload.get("contributes_to_agent_activity") is False
-    ):
+    quiet = payload.get("contributes_to_agent_activity") is False
+    if run_kind in _AUTOMATION_RUN_KINDS:
+        if outcome != "completed":
+            return "automation_failed"
+        return None if quiet else "run_completed"
+    if run_kind not in _FOREGROUND_RUN_KINDS or quiet:
         return None
     return "run_completed" if outcome == "completed" else "run_failed"
 

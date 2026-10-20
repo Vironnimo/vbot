@@ -363,6 +363,7 @@ def test_session_list_filters_execution_categories_in_sql(manager) -> None:
         "skill": {"run_kinds": ["skill_reflection"]},
         "reflection": {"run_kinds": ["reflection"]},
         "cron": {"run_kinds": ["cron"]},
+        "reported-cron": {"run_kinds": ["cron"]},
         "mixed": {"run_kinds": ["cron", "memory_reflection"]},
         "channel-cron": {
             "run_kinds": ["cron"],
@@ -380,6 +381,8 @@ def test_session_list_filters_execution_categories_in_sql(manager) -> None:
             created_at=f"2026-08-01T00:{index:02d}:00+00:00",
         )
         _classify(manager, address, metadata)
+    # A background Run the user is told about lists its Session with the conversations.
+    settle_run(manager, _address("coder", "reported-cron"), "run-reported", run_kind="cron")
     # A Librarian pass of an earlier vBot ran in a Session of the Agent it curated.
     manager.create("coder", "librarian", run_kind=RunKind.LIBRARIAN)
     # Now it runs in a Session of the Librarian, labelled, titled and bound to the
@@ -401,11 +404,12 @@ def test_session_list_filters_execution_categories_in_sql(manager) -> None:
         }
 
     hidden = SessionListFilters(False, False, False, False)
-    assert listed(hidden) == {"ordinary", "channel-cron", "unknown-kind"}
+    assert listed(hidden) == {"ordinary", "channel-cron", "reported-cron", "unknown-kind"}
     assert listed(SessionListFilters(True, False, False, False)) == {
         "ordinary",
         "subagent",
         "channel-cron",
+        "reported-cron",
         "unknown-kind",
     }
     assert listed(SessionListFilters(False, True, False, False)) == {
@@ -413,6 +417,7 @@ def test_session_list_filters_execution_categories_in_sql(manager) -> None:
         "memory",
         "reflection",
         "channel-cron",
+        "reported-cron",
         "unknown-kind",
     }
     assert listed(SessionListFilters(False, False, True, False)) == {
@@ -420,6 +425,7 @@ def test_session_list_filters_execution_categories_in_sql(manager) -> None:
         "skill",
         "reflection",
         "channel-cron",
+        "reported-cron",
         "unknown-kind",
     }
     assert listed(SessionListFilters(False, True, False, True)) == {
@@ -429,6 +435,7 @@ def test_session_list_filters_execution_categories_in_sql(manager) -> None:
         "cron",
         "mixed",
         "channel-cron",
+        "reported-cron",
         "unknown-kind",
     }
     # Sessions with a Librarian or Live Run are never listed in another Agent's scope.

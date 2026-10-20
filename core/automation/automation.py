@@ -11,6 +11,7 @@ from core.chat.content_blocks import ContentBlock
 from core.runs import (
     ActiveRunError,
     ChatRunManager,
+    CompletionActivity,
     Run,
     RunCancelledError,
     RunExecutionOwner,
@@ -44,11 +45,14 @@ def _optional_run_kwargs(
     contributes_to_agent_activity: bool,
     run_kind: RunKind,
     context_note: str | None = None,
+    completion_activity: CompletionActivity | None = None,
 ) -> dict[str, Any]:
     """Project non-default Run options onto the ChatLoop call."""
     options: dict[str, Any] = {}
     if context_note is not None:
         options["context_note"] = context_note
+    if completion_activity is not None:
+        options["completion_activity"] = completion_activity
     if callback is not None:
         options["input_persisted_hook"] = callback
     if not contributes_to_agent_activity:
@@ -188,6 +192,7 @@ class TriggerService:
         run_kind: RunKind = RunKind.USER,
         contributes_to_agent_activity: bool = True,
         context_note: str | None = None,
+        completion_activity: CompletionActivity | None = None,
     ) -> Run:
         """Start a run immediately, or queue it until the target session is idle.
 
@@ -197,7 +202,9 @@ class TriggerService:
         ``max_tool_iterations`` narrows the Run's dispatched Tool-iteration limit
         (``ChatLoop.start_run``); ``None`` keeps the loop's limit.
         ``context_note`` is stored as a note right before the message, for
-        context the Model reads with it.
+        context the Model reads with it. ``completion_activity`` decides from
+        the finished Run's status and result whether it counts as Agent
+        activity, overriding ``contributes_to_agent_activity``.
         With no ``session_id``, ``working_project_id`` and ``actor`` select the
         new Session's working Project and creation attribution, as in Chat.
         """
@@ -205,6 +212,13 @@ class TriggerService:
             tool_restriction,
             tool_denial_resolver,
             max_tool_iterations,
+        )
+        run_kwargs = _optional_run_kwargs(
+            input_persisted_hook,
+            contributes_to_agent_activity,
+            run_kind,
+            context_note,
+            completion_activity,
         )
         if session_id is None:
             session_kwargs: dict[str, Any] = {}
@@ -222,12 +236,7 @@ class TriggerService:
                         project_id=project_id,
                         **session_kwargs,
                         **tool_kwargs,
-                        **_optional_run_kwargs(
-                            input_persisted_hook,
-                            contributes_to_agent_activity,
-                            run_kind,
-                            context_note,
-                        ),
+                        **run_kwargs,
                     )
                 return await self._chat_loop.start_run_in_new_session(
                     agent_id,
@@ -237,12 +246,7 @@ class TriggerService:
                     project_id=project_id,
                     **session_kwargs,
                     **tool_kwargs,
-                    **_optional_run_kwargs(
-                        input_persisted_hook,
-                        contributes_to_agent_activity,
-                        run_kind,
-                        context_note,
-                    ),
+                    **run_kwargs,
                 )
             finally:
                 self.release_waiting_work(waiting_work_admission)
@@ -258,12 +262,7 @@ class TriggerService:
                     reply_surface=reply_surface,
                     project_id=project_id,
                     **tool_kwargs,
-                    **_optional_run_kwargs(
-                        input_persisted_hook,
-                        contributes_to_agent_activity,
-                        run_kind,
-                        context_note,
-                    ),
+                    **run_kwargs,
                 )
             else:
                 run = await self._chat_loop.start_run(
@@ -274,12 +273,7 @@ class TriggerService:
                     reply_surface=reply_surface,
                     project_id=project_id,
                     **tool_kwargs,
-                    **_optional_run_kwargs(
-                        input_persisted_hook,
-                        contributes_to_agent_activity,
-                        run_kind,
-                        context_note,
-                    ),
+                    **run_kwargs,
                 )
         except ActiveRunError:
             try:
@@ -293,12 +287,7 @@ class TriggerService:
                             reply_surface=reply_surface,
                             project_id=project_id,
                             **tool_kwargs,
-                            **_optional_run_kwargs(
-                                input_persisted_hook,
-                                contributes_to_agent_activity,
-                                run_kind,
-                                context_note,
-                            ),
+                            **run_kwargs,
                         )
                     else:
                         queued_item = await self._chat_loop.queue_run(
@@ -310,12 +299,7 @@ class TriggerService:
                             project_id=project_id,
                             **tool_kwargs,
                             waiting_work_admission=waiting_work_admission,
-                            **_optional_run_kwargs(
-                                input_persisted_hook,
-                                contributes_to_agent_activity,
-                                run_kind,
-                                context_note,
-                            ),
+                            **run_kwargs,
                         )
                 else:
                     if waiting_work_admission is None:
@@ -327,12 +311,7 @@ class TriggerService:
                             reply_surface=reply_surface,
                             project_id=project_id,
                             **tool_kwargs,
-                            **_optional_run_kwargs(
-                                input_persisted_hook,
-                                contributes_to_agent_activity,
-                                run_kind,
-                                context_note,
-                            ),
+                            **run_kwargs,
                         )
                     else:
                         queued_item = await self._chat_loop.queue_run(
@@ -344,12 +323,7 @@ class TriggerService:
                             project_id=project_id,
                             **tool_kwargs,
                             waiting_work_admission=waiting_work_admission,
-                            **_optional_run_kwargs(
-                                input_persisted_hook,
-                                contributes_to_agent_activity,
-                                run_kind,
-                                context_note,
-                            ),
+                            **run_kwargs,
                         )
                 try:
                     return await queued_item.future
