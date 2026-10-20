@@ -16,6 +16,9 @@ import {
   CRON_SCHEDULE_TYPE_ONCE,
   CRON_STATUS_COMPLETED,
   CRON_STATUS_MISSED,
+  CRON_WATCH_COMMAND,
+  CRON_WATCH_NONE,
+  CRON_WATCH_URL,
   CRON_WEEKDAYS,
   cronScheduleFields,
   describeCronExpression,
@@ -70,6 +73,16 @@ export function deliverySummary(job) {
     chat: delivery.platform_target,
     channel: delivery.channel_id,
   });
+}
+
+// What a repeating job checks before each Run; running every time first as
+// the form's default.
+export function watchKindOptions() {
+  return [
+    { value: CRON_WATCH_NONE, label: t('cron.watchKind.none') },
+    { value: CRON_WATCH_COMMAND, label: t('cron.watchKind.command') },
+    { value: CRON_WATCH_URL, label: t('cron.watchKind.url') },
+  ];
 }
 
 export function intervalUnitOptions() {
@@ -380,10 +393,18 @@ export function sessionSummary(job) {
 
 export function lastResultSupport(job) {
   if (!job?.last_completed_at_display) {
-    return t('cron.detail.waitingForFirstRun');
+    return waitingText(job);
   }
 
   return job.last_completed_at_display;
+}
+
+// What a job without a Run waits for: its first due time, or for a watching
+// job the first change its check finds.
+function waitingText(job) {
+  return job?.watch
+    ? t('cron.detail.waitingForChange')
+    : t('cron.detail.waitingForFirstRun');
 }
 
 export function remainingRunsLabel(job) {
@@ -474,7 +495,8 @@ const OUTCOME_TONES = {
 // Details card beside a Schedule row: the name, the last error as lead text,
 // then what the status dot means, the readable cadence with its exact
 // expression, the next and last Run as absolute and relative moments in the
-// schedule timezone, where the Run goes and where its answer goes.
+// schedule timezone, what a watching job checks and its last check, where the
+// Run goes and where its answer goes.
 // `agentLabel` names the target.
 export function scheduleRowDetails(
   job,
@@ -519,8 +541,29 @@ export function scheduleRowDetails(
             ]
               .filter(Boolean)
               .join(' · ')
-          : t('cron.detail.waitingForFirstRun'),
+          : waitingText(job),
         tone: OUTCOME_TONES[job.last_outcome],
+      },
+      {
+        label: t('cron.card.watch'),
+        value: job.watch?.target ?? '',
+        mono: true,
+      },
+      {
+        label: t('cron.detail.lastCheck'),
+        value: job.watch
+          ? [
+              momentText(
+                job.last_checked_at_display,
+                job.last_checked_at,
+                nowMs,
+              ),
+              job.last_check_error ? t('cron.card.checkFailed') : '',
+            ]
+              .filter(Boolean)
+              .join(' · ')
+          : '',
+        tone: job.last_check_error ? 'danger' : undefined,
       },
       { label: t('cron.detail.target'), value: agentLabel(job.agent_id) },
       {

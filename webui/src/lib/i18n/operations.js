@@ -560,6 +560,11 @@ export default Object.freeze({
   'cron.detail.target': 'Target',
   'cron.detail.newSessionEachRun': 'New Session each Run',
   'cron.detail.waitingForFirstRun': 'Waiting for first execution',
+  'cron.detail.waitingForChange': 'Waiting for the check to find a change',
+  'cron.detail.lastCheck': 'Last check',
+  'cron.detail.lastChange': 'Last change',
+  'cron.card.watch': 'Checks',
+  'cron.card.checkFailed': 'failed',
   'cron.detail.executionDetails': 'Execution details',
   'cron.detail.technicalDetails': 'Technical details',
   'cron.detail.failures': 'Failures',
@@ -588,6 +593,21 @@ export default Object.freeze({
   'cron.deliveryKind.app': 'vBot, with a notification',
   'cron.deliveryKind.chat': 'A Channel chat',
   'cron.deliveryKind.none': 'Nowhere',
+  'cron.sections.watch': 'Change check',
+  'cron.sections.watchSubtitle':
+    'Check a command or a web page before each Run. The Run starts only when the output changed since the last check, and it gets the changes. A failed check counts as a failed Run.',
+  'cron.watchKind.none': 'Nothing, run every time',
+  'cron.watchKind.command': 'A command',
+  'cron.watchKind.url': 'A web page',
+  'cron.form.watch': 'Run only when this changes',
+  'cron.form.watchCommand': 'Command',
+  'cron.form.watchCommandPlaceholder': 'git log -1 --oneline',
+  'cron.form.watchCommandHelp':
+    "Runs in the Agents' shell (PowerShell on Windows, bash elsewhere), in the Project root for a Project Agent and in the Agent's Workspace otherwise. Its output is compared; a non-zero exit code or more than 60 seconds is a failed check.",
+  'cron.form.watchUrl': 'URL',
+  'cron.form.watchUrlPlaceholder': 'https://example.com/status',
+  'cron.form.watchUrlHelp':
+    'Fetched with GET; a web page is compared by its readable text. An error status, or no answer within 30 seconds, is a failed check.',
   'cron.outcome.success': 'Succeeded',
   'cron.outcome.silent': 'Nothing to report',
   'cron.outcome.failed': 'Failed',
@@ -689,6 +709,8 @@ export default Object.freeze({
   'cron.errors.delete': 'Cron job could not be deleted.',
   'cron.errors.toggle': 'Cron job status could not be updated.',
   'cron.errors.chatDelivery': 'A chat delivery needs a Channel and a chat ID.',
+  'cron.errors.watch':
+    'A change check needs a command, or a URL that starts with http:// or https://.',
   'cron.errors.missingRequired':
     'Agent, prompt, and a complete schedule are required: a time, at least one day for weekly schedules, a valid day, minute, or interval, and for an event job a time within 31 days of the event. The repeat limit must be a positive whole number.',
   'cron.messages.created': 'Cron job created.',

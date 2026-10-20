@@ -93,6 +93,58 @@ describe('cron form payloads and history projection', () => {
     ).toBe(null);
   });
 
+  it('round-trips a watch and sends none for a schedule that cannot watch', () => {
+    const job = {
+      id: 'job-watch',
+      agent_id: 'main',
+      name: 'Release check',
+      prompt: 'Summarize the new release.',
+      schedule_type: 'interval',
+      interval_seconds: 3600,
+      status: 'active',
+      watch: { url: 'https://example.com/releases' },
+      last_checked_at: '2026-07-18T16:00:00+00:00',
+      last_changed_at: '2026-07-18T15:00:00+00:00',
+      last_check_error: 'The watched URL answered HTTP 503',
+    };
+    const [listed] = visibleCronJobs([job], 'Europe/Berlin');
+    expect(listed.watch).toEqual({
+      kind: 'url',
+      target: 'https://example.com/releases',
+    });
+    expect(listed.last_checked_at_display).toContain('18:00');
+    expect(listed.last_changed_at_display).toContain('17:00');
+    expect(listed.last_check_error).toBe('The watched URL answered HTTP 503');
+    // The view normalizes listed jobs again.
+    expect(visibleCronJobs([listed])[0].watch).toEqual(listed.watch);
+
+    const form = createCronFormValues(job);
+    const saved = cronFormFingerprint(form);
+    expect(buildUpdateCronPayload(form).watch).toEqual(job.watch);
+    form.watch_kind = 'command';
+    form.watch_target = ' git log -1 --oneline ';
+    expect(cronFormFingerprint(form)).not.toBe(saved);
+    expect(buildUpdateCronPayload(form).watch).toEqual({
+      command: 'git log -1 --oneline',
+    });
+    form.watch_kind = 'none';
+    expect(buildUpdateCronPayload(form).watch).toBeNull();
+
+    // A new job watches nothing unless the form says so; a one-time job
+    // cannot watch, so its check is dropped.
+    const draft = createCronFormValues();
+    expect(draft.watch_kind).toBe('none');
+    draft.agent_id = 'main';
+    draft.prompt = 'Check';
+    expect(buildCreateCronPayload(draft)).not.toHaveProperty('watch');
+    draft.watch_kind = 'url';
+    draft.watch_target = 'https://example.com/releases';
+    expect(buildCreateCronPayload(draft).watch).toEqual(job.watch);
+    updateCronSchedule(draft, { frequency: 'once' });
+    expect(buildCreateCronPayload(draft)).not.toHaveProperty('watch');
+    expect(visibleCronJobs([{ ...job, watch: null }])[0].watch).toBe(null);
+  });
+
   it('round-trips interval cadence and the repeat limit through the edit form', () => {
     const job = {
       id: 'job-interval',

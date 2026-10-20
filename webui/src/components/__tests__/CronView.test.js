@@ -247,7 +247,7 @@ describe('CronView', () => {
     expect(document.querySelectorAll('.cron-summary-item')).toHaveLength(4);
     expect(
       document.querySelectorAll('.cron-detail-scroll .s-section'),
-    ).toHaveLength(4);
+    ).toHaveLength(5);
     expect(document.querySelector('.cron-technical-details')).toBeTruthy();
     // The Enabled switch states active or paused; no duplicate chip.
     expect(document.querySelector('.detail-btns .chip')).toBeNull();
@@ -257,7 +257,7 @@ describe('CronView', () => {
       document.querySelectorAll(
         '.cron-detail-scroll .s-group label.s-row-label',
       ).length,
-    ).toBe(8);
+    ).toBe(9);
   });
 
   it('shows the job named by the place and records job and new-job steps in it', async () => {
@@ -502,6 +502,7 @@ describe('CronView', () => {
       repeat: null,
       session_id: null,
       delivery: { kind: 'none' },
+      watch: null,
     });
   });
 
@@ -612,6 +613,8 @@ describe('CronView', () => {
     await waitForCondition(() => document.getElementById('cron-job-run-at'));
     const runAtInput = inputById('cron-job-run-at');
     expect(runAtInput.value.length).toBeGreaterThan(0);
+    // Only a repeating schedule can check before each Run.
+    expect(document.getElementById('cron-job-watch')).toBeNull();
 
     inputById('cron-job-prompt').value = 'Updated once prompt';
     inputById('cron-job-prompt').dispatchEvent(
@@ -631,6 +634,7 @@ describe('CronView', () => {
       repeat: 1,
       session_id: 'session-preserve',
       delivery: { kind: 'none' },
+      watch: null,
     });
   });
 
@@ -683,6 +687,7 @@ describe('CronView', () => {
       event_time: 'start - 45m',
       session_id: null,
       delivery: { kind: 'none' },
+      watch: null,
     });
   });
 
@@ -764,6 +769,102 @@ describe('CronView', () => {
           platform_target: '42',
         },
       }),
+    );
+  });
+
+  it('checks a web page before each Run and shows its last check and change', async () => {
+    listCronJobsMock.mockResolvedValue({
+      jobs: [
+        cronJob({
+          id: 'job-watch',
+          last_outcome: null,
+          last_completed_at: null,
+          last_run_id: null,
+          last_checked_at: '2026-05-14T10:00:00+00:00',
+          last_changed_at: '2026-05-14T09:00:00+00:00',
+          last_check_error: 'The watched URL answered HTTP 503',
+        }),
+      ],
+    });
+    mountView();
+    await waitForCondition(() => document.getElementById('cron-job-watch'));
+
+    // Without a watch, failed checks say nothing about the job.
+    expect(
+      document.querySelector('[data-testid="cron-check-error"]'),
+    ).toBeNull();
+    expect(document.getElementById('cron-job-watch-target')).toBeNull();
+
+    chooseOption('cron-job-watch', t('cron.watchKind.url'));
+    inputById('cron-job-watch-target').value = 'example.com/status';
+    inputById('cron-job-watch-target').dispatchEvent(
+      new Event('input', { bubbles: true }),
+    );
+    flushSync();
+    buttonByText(t('common.save')).click();
+    await waitForCondition(() =>
+      document.body.textContent.includes(t('cron.errors.watch')),
+    );
+    expect(updateCronJobMock).not.toHaveBeenCalled();
+
+    inputById('cron-job-watch-target').value = 'https://example.com/status';
+    inputById('cron-job-watch-target').dispatchEvent(
+      new Event('input', { bubbles: true }),
+    );
+    flushSync();
+    listCronJobsMock.mockResolvedValue({
+      jobs: [
+        cronJob({
+          id: 'job-watch',
+          last_outcome: null,
+          last_completed_at: null,
+          last_run_id: null,
+          watch: { url: 'https://example.com/status' },
+          last_checked_at: '2026-05-14T10:00:00+00:00',
+          last_changed_at: '2026-05-14T09:00:00+00:00',
+          last_check_error: 'The watched URL answered HTTP 503',
+        }),
+      ],
+    });
+    buttonByText(t('common.save')).click();
+    await waitForCondition(() => updateCronJobMock.mock.calls.length === 1);
+    expect(updateCronJobMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'job-watch',
+        watch: { url: 'https://example.com/status' },
+      }),
+    );
+
+    await waitForCondition(() => listCronJobsMock.mock.calls.length === 2);
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="cron-check-error"]'),
+    );
+    expect(
+      document.querySelector('[data-testid="cron-check-error"]').textContent,
+    ).toContain('The watched URL answered HTTP 503');
+    const details = document.querySelector('.cron-execution-grid').textContent;
+    expect(details).toContain(t('cron.detail.lastCheck'));
+    expect(details).toContain(t('cron.detail.lastChange'));
+    expect(document.querySelector('.cron-summary').textContent).toContain(
+      t('cron.detail.waitingForChange'),
+    );
+
+    // The row's details card names the check and how the last one went.
+    document.querySelector('[data-testid="cron-item-job-watch"]').focus();
+    flushSync();
+    const cardRows = Object.fromEntries(
+      [...document.getElementById('app-tooltip').querySelectorAll('dt')].map(
+        (term) => [term.textContent, term.nextElementSibling],
+      ),
+    );
+    expect(cardRows[t('cron.card.watch')].textContent).toBe(
+      'https://example.com/status',
+    );
+    expect(cardRows[t('cron.detail.lastCheck')].textContent).toContain(
+      t('cron.card.checkFailed'),
+    );
+    expect(cardRows[t('cron.detail.lastCheck')].classList).toContain(
+      'app-tooltip__value--danger',
     );
   });
 

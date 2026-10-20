@@ -9,7 +9,10 @@ import {
   CRON_SCHEDULE_TYPE_EVENT,
   CRON_SCHEDULE_TYPE_INTERVAL,
   CRON_SCHEDULE_TYPE_ONCE,
+  CRON_WATCH_COMMAND,
+  CRON_WATCH_URL,
   applyCronListResponse,
+  canWatch,
   eventTimeText,
   updateCronSchedule,
   buildCreateCronPayload,
@@ -289,7 +292,27 @@ export function createCronEditor(context) {
       formErrorMessage = t('cron.errors.chatDelivery');
       return false;
     }
+    if (!hasValidWatch()) {
+      formErrorMessage = t('cron.errors.watch');
+      return false;
+    }
 
+    return true;
+  }
+
+  // A check names its command, or a URL with its http(s) scheme; a schedule
+  // that cannot watch drops the check when it saves.
+  function hasValidWatch() {
+    if (!canWatch(formValues.schedule_type)) {
+      return true;
+    }
+    const target = (formValues.watch_target ?? '').trim();
+    if (formValues.watch_kind === CRON_WATCH_COMMAND) {
+      return target.length > 0;
+    }
+    if (formValues.watch_kind === CRON_WATCH_URL) {
+      return /^https?:\/\/\S+$/i.test(target);
+    }
     return true;
   }
 

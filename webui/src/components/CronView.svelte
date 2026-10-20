@@ -1,6 +1,7 @@
 <script>
   import CronTimingSettings from './cron/CronTimingSettings.svelte';
   import CronDeliverySettings from './cron/CronDeliverySettings.svelte';
+  import CronWatchSettings from './cron/CronWatchSettings.svelte';
   import {
     displayValue,
     headerStatusVisible,
@@ -33,6 +34,7 @@
     applyCronListResponse,
     buildCronAgentDropdownOptions,
     buildCronAgentOptions,
+    canWatch,
     createCronViewState,
     visibleCronJobs,
   } from '$lib/cronView.js';
@@ -685,6 +687,24 @@
                         {displayValue(editor.selectedJob.last_run_id)}
                       </dd>
                     </div>
+                    {#if editor.selectedJob.watch}
+                      <div>
+                        <dt>{t('cron.detail.lastCheck')}</dt>
+                        <dd>
+                          {displayValue(
+                            editor.selectedJob.last_checked_at_display,
+                          )}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>{t('cron.detail.lastChange')}</dt>
+                        <dd>
+                          {displayValue(
+                            editor.selectedJob.last_changed_at_display,
+                          )}
+                        </dd>
+                      </div>
+                    {/if}
                     <div>
                       <dt>{t('cron.detail.failures')}</dt>
                       <dd>{editor.selectedJob.consecutive_failures}</dd>
@@ -726,6 +746,16 @@
               {#if editor.selectedJob.last_error}
                 <Banner variant="error" role="status">
                   {editor.selectedJob.last_error}
+                </Banner>
+              {/if}
+              <!-- Cleared by the next successful check. -->
+              {#if editor.selectedJob.watch && editor.selectedJob.last_check_error}
+                <Banner
+                  variant="error"
+                  role="status"
+                  data-testid="cron-check-error"
+                >
+                  {editor.selectedJob.last_check_error}
                 </Banner>
               {/if}
             {/if}
@@ -809,6 +839,10 @@
               {editor}
               systemTimezone={viewState.systemTimezone}
             />
+
+            {#if canWatch(editor.formValues.schedule_type)}
+              <CronWatchSettings {editor} />
+            {/if}
 
             <section class="s-section" aria-labelledby="cron-section-session">
               <header class="s-section__head">

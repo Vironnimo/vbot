@@ -335,6 +335,13 @@ export const CRON_DELIVERY_NONE = 'none';
 export const CRON_DELIVERY_APP = 'app';
 export const CRON_DELIVERY_CHAT = 'chat';
 
+// What a repeating job checks before each Run: nothing, a command or a URL.
+// The Run starts only when the check's output changed.
+export const CRON_WATCH_NONE = 'none';
+export const CRON_WATCH_COMMAND = 'command';
+export const CRON_WATCH_URL = 'url';
+const WATCH_KINDS = [CRON_WATCH_COMMAND, CRON_WATCH_URL];
+
 export const CRON_STATUS_ACTIVE = 'active';
 const CRON_STATUS_PAUSED = 'paused';
 export const CRON_STATUS_COMPLETED = 'completed';
@@ -372,6 +379,7 @@ export function createCronFormValues(job = null, systemTimezone = 'UTC') {
       repeat: '',
       session_id: '',
       ...deliveryFormFields({ kind: CRON_DELIVERY_APP }),
+      ...watchFormFields(null),
       original_run_at: '',
       system_timezone: systemTimezone,
     };
@@ -406,6 +414,7 @@ export function createCronFormValues(job = null, systemTimezone = 'UTC') {
         : String(normalized.remaining_runs),
     session_id: normalized.session_id ?? '',
     ...deliveryFormFields(normalized.delivery),
+    ...watchFormFields(normalized.watch),
     original_run_at: normalized.run_at ?? '',
     system_timezone: systemTimezone,
   };
@@ -437,6 +446,36 @@ function cronDeliveryPayload(formValues) {
     payload.thread_id = threadId;
   }
   return payload;
+}
+
+function watchFormFields(watch) {
+  return {
+    watch_kind: watch?.kind ?? CRON_WATCH_NONE,
+    watch_target: watch?.target ?? '',
+  };
+}
+
+// Only cron and interval schedules repeat at times of their own, so only
+// they can check before each Run.
+export function canWatch(scheduleType) {
+  return (
+    scheduleType === CRON_SCHEDULE_TYPE_CRON ||
+    scheduleType === CRON_SCHEDULE_TYPE_INTERVAL
+  );
+}
+
+// The `watch` param of `cron.create` and `cron.update` the form describes:
+// `{command}` or `{url}`, or null for none and for a schedule that cannot
+// watch.
+function cronWatchPayload(formValues) {
+  const kind = formValues?.watch_kind;
+  if (
+    !WATCH_KINDS.includes(kind) ||
+    !canWatch(normalizeScheduleType(formValues?.schedule_type))
+  ) {
+    return null;
+  }
+  return { [kind]: requiredText(formValues?.watch_target) };
 }
 
 export function applyAgentListResponse(state, result) {
@@ -484,6 +523,7 @@ export function cronFormFingerprint(formValues) {
     repeat: repeatFingerprint(values.repeat),
     session_id: requiredText(values.session_id),
     delivery: cronDeliveryPayload(values),
+    watch: cronWatchPayload(values),
   });
 }
 
@@ -529,6 +569,10 @@ export function buildCreateCronPayload(formValues) {
     payload.session_id = sessionId;
   }
   payload.delivery = cronDeliveryPayload(formValues);
+  const watch = cronWatchPayload(formValues);
+  if (watch !== null) {
+    payload.watch = watch;
+  }
 
   return payload;
 }
@@ -544,6 +588,7 @@ export function buildUpdateCronPayload(formValues) {
     schedule_type: scheduleType,
     session_id: optionalText(formValues?.session_id),
     delivery: cronDeliveryPayload(formValues),
+    watch: cronWatchPayload(formValues),
   };
 
   if (scheduleType === CRON_SCHEDULE_TYPE_CRON) {
@@ -595,6 +640,8 @@ function normalizeCronJob(job, systemTimezone = 'UTC') {
   const lastAttemptAt = optionalText(job?.last_attempt_at);
   const lastCompletedAt = optionalText(job?.last_completed_at);
   const nextFireAt = optionalText(job?.next_fire_at);
+  const lastCheckedAt = optionalText(job?.last_checked_at);
+  const lastChangedAt = optionalText(job?.last_changed_at);
   return {
     id: asText(job?.id),
     // The form pre-fill and save round-trip key on the full outside address so a
@@ -619,6 +666,8 @@ function normalizeCronJob(job, systemTimezone = 'UTC') {
     remaining_runs: remainingRuns,
     session_id: optionalText(job?.session_id),
     delivery: normalizeDelivery(job?.delivery),
+    // What the job checks before each Run, or null.
+    watch: normalizeWatch(job?.watch),
     status: normalizeStatus(job?.status),
     last_fired_at: lastFiredAt,
     last_attempt_at: lastAttemptAt,
@@ -630,6 +679,11 @@ function normalizeCronJob(job, systemTimezone = 'UTC') {
     // The latest answer that was not silent, or null.
     last_result: normalizeLastResult(job?.last_result, systemTimezone),
     last_error: optionalText(job?.last_error),
+    // The latest check, the latest change whose Run succeeded, and why the
+    // latest check failed (null once a check succeeds again).
+    last_checked_at: lastCheckedAt,
+    last_changed_at: lastChangedAt,
+    last_check_error: optionalText(job?.last_check_error),
     consecutive_failures: Number.isInteger(job?.consecutive_failures)
       ? job.consecutive_failures
       : 0,
@@ -646,7 +700,25 @@ function normalizeCronJob(job, systemTimezone = 'UTC') {
     last_fired_at_display: formatTimestamp(lastFiredAt, systemTimezone),
     last_completed_at_display: formatTimestamp(lastCompletedAt, systemTimezone),
     next_fire_at_display: formatTimestamp(nextFireAt, systemTimezone),
+    last_checked_at_display: formatTimestamp(lastCheckedAt, systemTimezone),
+    last_changed_at_display: formatTimestamp(lastChangedAt, systemTimezone),
   };
+}
+
+// `{command}` or `{url}` as `{kind, target}`; anything else is no watch.
+// A normalized watch stays as it is, since listed jobs are normalized again.
+function normalizeWatch(watch) {
+  if (WATCH_KINDS.includes(watch?.kind)) {
+    const target = optionalText(watch.target);
+    return target === null ? null : { kind: watch.kind, target };
+  }
+  for (const kind of WATCH_KINDS) {
+    const target = optionalText(watch?.[kind]);
+    if (target !== null) {
+      return { kind, target };
+    }
+  }
+  return null;
 }
 
 function normalizeDelivery(delivery) {
