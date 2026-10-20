@@ -146,6 +146,8 @@ class FakeTransport:
         self.sent_buttons: list[list[list[InteractionButton]] | None] = []
         self.activity_targets: list[str] = []
         self.activity_thread_ids: list[str | None] = []
+        self.deleted: list[tuple[str, str]] = []
+        self.can_delete = True
         self._media_builder = media_builder
         self._quoted_builder = quoted_builder
 
@@ -183,6 +185,10 @@ class FakeTransport:
 
     def caption_text(self, raw_message: Any) -> str | None:
         return getattr(raw_message, "caption", None)
+
+    async def delete_message(self, platform_target: str, message_id: str) -> bool:
+        self.deleted.append((platform_target, message_id))
+        return self.can_delete
 
     @property
     def sent_texts(self) -> list[str]:

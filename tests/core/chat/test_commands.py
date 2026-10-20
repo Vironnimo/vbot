@@ -705,7 +705,8 @@ async def test_secret_stores_the_value_and_tells_the_agent_only_its_reference(
     outcome = await waiting
     usage = await _execute(dispatcher, "/secret")
 
-    assert stored.facts == {"delete_user_message": True}
+    prepared = dispatcher.prepare(f"/secret openai-key {value}")
+    assert prepared is not None and prepared.secret_argument
     assert stored.feedback is not None and value not in stored.feedback.text
     assert "{{secret:OPENAI_KEY}}" in stored.feedback.text
     assert secrets.substitute("coder", "session-one", "{{secret:OPENAI_KEY}}", "files")[0] == value

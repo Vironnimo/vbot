@@ -96,6 +96,16 @@ BUSY_REPLY_TRACKING_LIMIT = 512
 _NEW_SESSION_STARTED_REPLY = (
     "Started a new session. Your previous conversation has been saved and is still available."
 )
+_SECRET_LEFT_IN_CHAT_REPLY = (
+    "{platform} keeps your message with the value in this chat, and vBot cannot remove it "
+    "there: delete it yourself."
+)
+_SECRET_LEFT_IN_GROUP_REPLY = (
+    "Everyone in this chat can read the value you sent: delete the message and change the value."
+)
+_SECRET_REMOVED_FROM_GROUP_REPLY = (
+    "vBot removed your message; change the value if someone may have read it."
+)
 InteractionTriggerStatus = Literal[
     "enqueued",
     "denied",
@@ -235,7 +245,10 @@ class ChannelConversationEngine:
                 prepared_command, self._replies.reply_surface(conversation.kind)
             )
             if unavailable is not None:
-                await self._send_command_unavailability(reply_plan, unavailable)
+                reply_plan, removal = await self._remove_secret_message(
+                    prepared_command, conversation, reply_plan
+                )
+                await self._send_command_unavailability(reply_plan, unavailable, removal)
                 return True
             if prepared_command.execution_mode == "immediate":
                 route, reply_plan = await self._routing._prepare_inbound_route_async(conversation)
@@ -842,7 +855,10 @@ class ChannelConversationEngine:
     # -- Slash Commands --------------------------------------------------------------
 
     async def _send_command_unavailability(
-        self, reply_plan: ReplyPlanFacts, unavailable: CommandUnavailability
+        self,
+        reply_plan: ReplyPlanFacts,
+        unavailable: CommandUnavailability,
+        removal: str | None = None,
     ) -> None:
         if unavailable.conversation == "group":
             text = f"The {unavailable.command} command is not available in group chats."
@@ -851,7 +867,35 @@ class ChannelConversationEngine:
                 f"The {unavailable.command} command is not available through "
                 f"{self._replies.platform_display_name()}."
             )
+        if removal is not None:
+            text = f"{text} {removal}"
         await self._replies.send_ingress(reply_plan, text)
+
+    async def _remove_secret_message(
+        self,
+        prepared: PreparedCommand,
+        conversation: ConversationFacts,
+        reply_plan: ReplyPlanFacts,
+    ) -> tuple[ReplyPlanFacts, str | None]:
+        """Remove a message whose Command argument can hold a Secret value.
+
+        Returns the reply plan to answer with (no longer referencing a removed
+        message) and what to tell the user about the message, if anything.
+        """
+        if not prepared.secret_argument or not (prepared.argument or "").strip():
+            return reply_plan, None
+        removed = await self._replies.remove_inbound(
+            reply_plan.platform_target, conversation.message_id
+        )
+        if removed:
+            plan = replace(reply_plan, reply_to_message_id=None)
+            if conversation.kind == "group":
+                return plan, _SECRET_REMOVED_FROM_GROUP_REPLY
+            return plan, None
+        platform = self._replies.platform_display_name()
+        if conversation.kind == "group":
+            return reply_plan, _SECRET_LEFT_IN_GROUP_REPLY
+        return reply_plan, _SECRET_LEFT_IN_CHAT_REPLY.format(platform=platform)
 
     async def _execute_prepared_command(
         self,
@@ -869,6 +913,7 @@ class ChannelConversationEngine:
         for a connection and Command Runs relay in the background.
         """
         send = self._replies.send_ingress if from_ingress else self._replies.send
+        reply_plan, removal = await self._remove_secret_message(prepared, conversation, reply_plan)
         context = CommandExecutionContext(
             agent_id=route.agent_id,
             session_id=route.session_id,
@@ -882,6 +927,9 @@ class ChannelConversationEngine:
                     outcome = await self._command_dispatcher.execute(prepared, context)
             else:
                 outcome = await self._command_dispatcher.execute(prepared, context)
+            if removal is not None and outcome.feedback is not None:
+                feedback = replace(outcome.feedback, text=f"{outcome.feedback.text} {removal}")
+                outcome = replace(outcome, feedback=feedback)
             await self._project_command_outcome(
                 outcome,
                 conversation,
@@ -891,7 +939,9 @@ class ChannelConversationEngine:
             )
         except Exception as error:
             self._log_command_failure(prepared.name, route, reply_plan, error)
-            await send(reply_plan, _FAILED_REPLY)
+            await send(
+                reply_plan, _FAILED_REPLY if removal is None else f"{_FAILED_REPLY} {removal}"
+            )
 
     async def _project_command_outcome(
         self,

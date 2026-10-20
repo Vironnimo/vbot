@@ -6,7 +6,7 @@ starts no Run and leaves no message in the Session.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from core.chat._command_types import CommandExecutionContext, CommandFeedback, CommandOutcome
 from core.chat.secret_giving import give_secret
@@ -31,10 +31,8 @@ if TYPE_CHECKING:
 _SHORT_VALUE = 8
 
 
-def _notice(text: str, **facts: Any) -> CommandOutcome:
-    return CommandOutcome(
-        command="secret", feedback=CommandFeedback(kind="notice", text=text), facts=facts
-    )
+def _notice(text: str) -> CommandOutcome:
+    return CommandOutcome(command="secret", feedback=CommandFeedback(kind="notice", text=text))
 
 
 async def execute_secret(
@@ -54,11 +52,10 @@ async def execute_secret(
     if parsed.name is None or not parsed.value:
         form = "" if context.reply_surface.kind == "channel" else " /secret alone opens a form."
         return _notice(f"{SECRET_COMMAND_USAGE}{form}")
-    # From here on the message holds a value: every reply asks a Channel to remove it.
     try:
         name = normalize_secret_name(parsed.name)
     except SecretRecordError as error:
-        return _notice(str(error), delete_user_message=True)
+        return _notice(str(error))
     kind = parsed.kind or ("text" if "\n" in parsed.value else "token")
     values = (
         {"password": parsed.value, **({"username": parsed.username} if parsed.username else {})}
@@ -81,10 +78,8 @@ async def execute_secret(
             description=parsed.description,
         )
     except SecretRecordError as error:
-        return _notice(f"Nothing was stored. {error}", delete_user_message=True)
-    return _notice(
-        _feedback(given.secret, parsed.value, replaced=given.replaced), delete_user_message=True
-    )
+        return _notice(f"Nothing was stored. {error}")
+    return _notice(_feedback(given.secret, parsed.value, replaced=given.replaced))
 
 
 def _feedback(secret: AgentSecret, value: str, *, replaced: bool) -> str:

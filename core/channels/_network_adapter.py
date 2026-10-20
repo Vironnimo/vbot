@@ -190,6 +190,11 @@ class NetworkChannelAdapter(ChannelAdapter):
     def caption_text(self, raw_message: Any) -> str | None:
         return raw_message.get("text") or None
 
+    async def delete_message(self, platform_target: str, message_id: str) -> bool:
+        # Slack and Mattermost bots cannot delete a user's direct messages; the
+        # WhatsApp bridge offers no delete action.
+        return False
+
     async def build_quoted_message(self, raw_message: Any) -> QuotedMessageFacts | None:
         if raw_message.get("quoted"):
             return QuotedMessageFacts(user_id=None, user_display_name=None, content=None)

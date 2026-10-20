@@ -268,6 +268,7 @@ class CommandDispatcher:
             execution_mode="immediate",
             new_session_mode="create_session",
             group_conversations=False,
+            secret_argument=True,
         ),
         "status": CommandSpec(
             "status",
@@ -499,6 +500,7 @@ class CommandDispatcher:
             execution_mode=execution_mode,
             registration_id=registration_id,
             text=command_text.strip(),
+            secret_argument=spec.secret_argument,
         )
 
     def unavailability(

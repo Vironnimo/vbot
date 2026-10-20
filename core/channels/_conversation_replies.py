@@ -559,6 +559,23 @@ class ChannelReplies:
         except Exception as error:
             _log_failed_reply(reply_plan, error)
 
+    async def remove_inbound(self, platform_target: str, message_id: str | None) -> bool:
+        """Remove the user's message where the platform allows; never raises."""
+        transport = self._transport
+        if transport is None or self._stopped or message_id is None:
+            return False
+        try:
+            return await transport.delete_message(platform_target, message_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            _LOGGER.warning(
+                "Channel could not remove an inbound message (channel=%s): %s",
+                self._config.id,
+                type(error).__name__,
+            )
+            return False
+
     def require_transport(self) -> ConversationTransport:
         transport = self._transport
         if transport is None:
