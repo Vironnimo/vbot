@@ -264,7 +264,7 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
      this section), never under a repeated hint.
   7. `copy_match.match_copied_edit` places old lines copied with errors, unless
      the path is precise-only after an earlier failure or the new text is
-     already present (`copy_match` rule below).
+     already present as whole lines (`copy_match` rule below).
   8. Unchanged lines between `+` lines that the file holds nowhere are read as
      added lines missing their `+` (`_unmarked_additions`), as written: a
      space-prefixed line keeps that space as indentation, since the `+` was
@@ -376,8 +376,11 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   call. Separately named continuations of adjacent candidates mostly repeated
   shown lines (26 of 34 merged reports, Sessions, 2026-09).
   Diagnostics also note when the new
-  text already occurs (a change made earlier; not when `old_string` contains
-  `new_string`, as after a deletion). An `old_string` replacement whose change
+  text already occurs as whole lines (a change made earlier; not when
+  `old_string` contains `new_string`, as after a deletion, and not when other
+  text stands beside it on its first or last line, which the change would have
+  replaced: `x;"` stands in `x;")` whether or not `(x;")` became `x;"`;
+  `_edit_locations._new_text_line`, Swarm run 2026-10-20). An `old_string` replacement whose change
   the file already holds, by the evidence `tools/edit.md` -> Results names,
   changes nothing instead of failing (`_new_text_in_place`; an `apply_patch`
   step then reports `already contains this change`). An `old_string` of at
@@ -523,7 +526,8 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   decision 2026-09-25). `core/tools/copy_match.py` owns this for `apply_patch`
   hunks and `old_string` edits, `skill_manage` patches and Swarm Wiki edits; it
   runs only after every precise attempt and the already-applied check missed, and
-  not when the new text is already present. Where (location), from the number W
+  not when the new text is already present (for `apply_patch` and `edit`, as
+  whole lines). Where (location), from the number W
   of correctly copied words: below 3 the copy is exact up to spacing; from 3 it
   may misspell one word per 3 correct words, and a kept (context) line may lack
   or add words or signs, one per 2 correct words; from 12 it may also differ

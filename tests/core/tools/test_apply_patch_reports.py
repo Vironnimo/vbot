@@ -224,6 +224,27 @@ async def test_missing_old_string_shows_closest_text_and_existing_new_text(tmp_p
         tmp_path, {"file_path": "c.py", "old_string": "x = 1\ny = 2", "new_string": "y = 2"}
     )
     assert "already occurs" not in text(leftover)
+    # Swarm run 2026-10-20: new text that is only part of a line proves nothing either,
+    # since the edit would have replaced the rest of the line too.
+    (tmp_path / "d.ps1").write_bytes(b'log "total;")\n')
+    partial = await call(
+        tmp_path,
+        {"file_path": "d.ps1", "old_string": 'log ("total;")', "new_string": 'log "total;"'},
+    )
+    assert partial["error"]["code"] == "text_not_found"
+    assert "already occurs" not in text(partial)
+    # Nor does it keep an old_string copied with errors from being matched.
+    (tmp_path / "e.py").write_bytes(b"value = compute(a, b)  # total\n")
+    copied = await call(
+        tmp_path,
+        {
+            "file_path": "e.py",
+            "old_string": "value = compute(a,b)  # total",
+            "new_string": "value = compute(a, b)",
+        },
+    )
+    assert copied["ok"]
+    assert (tmp_path / "e.py").read_bytes() == b"value = compute(a, b)\n"
 
 
 @pytest.mark.parametrize(

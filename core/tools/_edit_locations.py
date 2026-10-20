@@ -98,6 +98,37 @@ def _poststate(
     return found
 
 
+def _covers_lines(content: str, new: str, start: int, end: int) -> bool:
+    """Whether ``new``, standing at ``content[start:end]``, covers whole lines.
+
+    Text beside it on its first or last line (trailing spaces aside) is text an
+    edit that wrote ``new`` there would have replaced, so part of a line does
+    not show that the edit was made: ``x;"`` stands in ``x;")`` whether or not
+    ``(x;")`` became ``x;"`` (Swarm run 2026-10-20). A ``new`` that starts or
+    ends with a line break covers its lines from or to that break.
+    """
+    if not (start == 0 or content[start - 1] in "\r\n" or new.startswith(("\n", "\r"))):
+        return False
+    if new.endswith(("\n", "\r")):
+        return True
+    after = _BREAK.search(content, end)
+    return not content[end : after.start() if after else len(content)].strip()
+
+
+def _new_text_line(content: str, new: str) -> int | None:
+    """Return the line where ``new`` first stands as whole lines, else ``None``.
+
+    Spacing and indentation must match, as for ``_poststate``.
+    """
+    found = replace_fuzzy(content, new, new, replace_all=True, typographic=True, whitespace=False)
+    if not isinstance(found, FuzzyReplacement):
+        return None
+    for start, end in found.before_spans:
+        if _covers_lines(content, new, start, end):
+            return len(_BREAK.findall(content, 0, start)) + 1
+    return None
+
+
 def _match(
     content: str,
     old: str,
