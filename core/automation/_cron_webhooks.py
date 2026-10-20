@@ -222,6 +222,10 @@ class CronWebhooks:
             if secret is not None:
                 _LOGGER.debug("Cron webhook request refused: wrong secret (job=%s)", job_id)
             return "refused"
+        if _is_github_ping(headers):
+            # GitHub's check that a new webhook reaches its URL starts no Run.
+            _LOGGER.debug("Cron webhook ping acknowledged (job=%s)", job_id)
+            return "accepted"
         async with self._lock(job_id):
             latest = self._owner._jobs.get(job_id)
             if latest is None or latest.schedule_type != "webhook" or latest.status != "active":
@@ -349,3 +353,8 @@ def _entry_name(job_id: str) -> str:
     if _ENTRY_NAME.fullmatch(job_id):
         return job_id
     return "sha256-" + hashlib.sha256(job_id.encode("utf-8")).hexdigest()
+
+
+def _is_github_ping(headers: list[tuple[str, str]]) -> bool:
+    """Whether the request is the ping GitHub sends when a webhook is created or tested."""
+    return any(name == "x-github-event" and value.strip() == "ping" for name, value in headers)

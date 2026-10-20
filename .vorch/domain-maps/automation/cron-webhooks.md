@@ -30,6 +30,7 @@ Read when changing Cron jobs of schedule type `webhook`: the route `POST /api/ho
 
 ## Waiting requests
 
+- GitHub's `ping` (header `X-GitHub-Event: ping`, sent when a webhook is created or tested) that proves the secret is answered 202 and neither stored nor run, so setting up a GitHub webhook starts no Run (`test_refused_requests_are_alike_whatever_is_wrong`).
 - An accepted request is stored before the 202, through the `cron` `OrderedWorker`, in `cron/webhook-events/<sha256 of job id>.json`: `{job_id, next_seq, last_received_at, dropped, requests: [{seq, received_at, headers, body?, cut?}]}`, written atomically. It is runtime state outside the JSON document contract (`../json-documents.md` -> Outside the contract): unreadable or invalid, it is logged WARNING and counts as empty, so its waiting requests are lost. The scheduler reads every webhook job's state when it starts.
 - Kept headers: `content-type`, `user-agent` and `x-` headers ending in an event, delivery or hook id suffix (`X-GitHub-Event`, `X-GitHub-Delivery`, `X-Gitlab-Event`...), never one whose name contains a credential word; the first value of each, at most 8 headers, values cut at 200 characters.
 - Body: JSON stays a JSON value; a form whose only field `payload` holds JSON (GitHub's form content type) becomes that JSON, another form an object of its fields; anything else is UTF-8 text. A body whose pretty-printed form exceeds 16,000 characters (`WEBHOOK_BODY_MAX_CHARS`) becomes that text, cut at a nearby line break and marked `cut`. An empty body is none.

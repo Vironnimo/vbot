@@ -185,6 +185,17 @@ async def test_refused_requests_are_alike_whatever_is_wrong(tmp_path: Path) -> N
         )
     assert len(_state(service, job_id)["requests"]) == 2
 
+    # GitHub's ping for a new webhook is acknowledged once it proves the secret, but starts no Run.
+    ping = _bearer(secret, **{"x-github-event": "ping"})
+    assert await service.receive_webhook(job_id, ping, body) == "accepted"
+    assert (
+        await service.receive_webhook(
+            job_id, _bearer("vbw_wrong", **{"x-github-event": "ping"}), body
+        )
+        == "refused"
+    )
+    assert len(_state(service, job_id)["requests"]) == 2
+
 
 @pytest.mark.asyncio
 async def test_requests_during_a_run_start_one_follow_up_run_dropping_the_oldest_beyond_the_cap(
