@@ -53,6 +53,9 @@ _PAGE_ID = re.compile(r"wpg_[A-Za-z0-9]+")
 _LINK_TARGET = re.compile(r"\[\[([^\[\]\n]+)\]\]|#wiki/([^\s)\]>\"'`]+)")
 _UNKNOWN_LINKS = 5
 _HEADING = re.compile(r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$", re.MULTILINE)
+# A level-one Markdown heading line, and written text that holds one.
+_LEVEL_ONE = re.compile(r" {0,3}#[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*")
+_WRITES_LEVEL_ONE = re.compile(r"^ {0,3}#[ \t]+\S", re.MULTILINE)
 _CLOSE_MATCH = 0.85
 
 
@@ -114,6 +117,13 @@ class WikiCall:
             self.notes.append(text.WIKI_OWN_REVISION.format(revision=data["revision"] - 1))
         if action in {"create", "update"} and changed:
             await self._note_unknown_links(_written(arguments), data["link"])
+        if (
+            action == "update"
+            and changed
+            and "title" not in arguments
+            and _WRITES_LEVEL_ONE.search(_written(arguments))
+        ):
+            await self._note_stale_title(data)
         if action == "list":
             rendered = _list(data, arguments)
             unfiltered = not {"query", "include_deleted", "cursor"} & arguments.keys()
@@ -153,6 +163,21 @@ class WikiCall:
                     links=spoken_list(unknown), link=link
                 )
             )
+
+    async def _note_stale_title(self, data: Json) -> None:
+        """Note a title that matched the page's first heading, which this change replaced."""
+
+        revision = data["revision"]
+        contents = await self.store.wiki_contents(
+            self.sid, data["page_id"], [revision - 1, revision]
+        )
+        before = _first_heading(contents.get(revision - 1, ""))
+        after = _first_heading(contents.get(revision, ""))
+        if before is None or after is None:
+            return
+        if _plain(before) == _plain(data["title"]) != _plain(after):
+            rename = {"action": "update", "page_id": wiki_ref(data["number"]), "title": after}
+            self.notes.append(text.WIKI_TITLE_STALE.format(title=data["title"], call=_call(rename)))
 
     def _prepare(self, arguments: Json) -> str:
         """Check the call in place and return its action."""
@@ -649,6 +674,18 @@ def _written(arguments: Json) -> str:
     parts = [arguments.get("content"), arguments.get("new_text")]
     parts.extend(item.get("new_text") for item in arguments.get("edits", ()))
     return "\n".join(part for part in parts if isinstance(part, str))
+
+
+def _first_heading(content: str) -> str | None:
+    """Return the text of the level-one heading that opens ``content``, if one does."""
+
+    first = next((line for line in content.splitlines() if line.strip()), "")
+    heading = _LEVEL_ONE.fullmatch(first)
+    return heading[1] if heading else None
+
+
+def _plain(title: str) -> str:
+    return " ".join(title.split()).casefold()
 
 
 def _check_edits(arguments: Json) -> None:

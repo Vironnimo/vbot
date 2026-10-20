@@ -372,6 +372,14 @@ to 5 such links and the page's own link as the form that works: Agents wrote
 The advisory ignores inline, fenced and indented code and escaped link markers,
 using the Wiki editor's existing code-span and fence recognition; a literal in
 inline code otherwise triggered a broken-link note (Swarm run 2026-10-14).
+An update without `title` whose written text holds a level-one heading compares the
+first non-blank lines of the revision before and the saved one
+(`WikiCall._note_stale_title`): when the page's title matched the old opening
+level-one heading (ignoring case and runs of whitespace) and the new one differs, a
+note says the title stayed and gives the rename call with the new heading. One
+whole-content update gave a page a new opening heading for a new purpose, while
+lists and links kept the old title through its last 3 revisions (Swarm run
+2026-10-20). A title that never matched its heading gets no note.
 Repairs that cannot change the effect run with a
 note: `read` without `page_id` lists pages, a pasted link or quoted ID yields its
 page reference, read-only calls resolve a page title or a unique close stored id
@@ -1409,6 +1417,7 @@ Failure modes F1-F6: `tools.md` -> Terms.
 | `swarm_wiki` passage edit `shown`: `The saved page around the change, {lines} of {total}:`, then the seam with `[{lines} as in your new_text]`, `[{lines} unchanged]`, `[{lines} not shown]` (followed by `more`) and, inside a long line, `[{count} characters not shown]` | Replaces `Saved page content at revision {revision}, from line {line}: characters {start} to {end} of {total}.` and its excerpt for passage edits: 25 passage edits of Swarm run 2026-10-20 returned 15,028 of their 20,708 excerpt characters as the Agent's own text (F6). The seam keeps what the Agent cannot know: where its text meets the page, including the 2 lines after it (Swarm run 2026-10-13), and lines the page holds other than sent. Each bracket names the lines it stands for, so the line numbers of the shown lines stay countable. |
 | `swarm_wiki` held passage edit: `Nothing changed: the page already holds this change, at line {line}.` | The result no longer shows an excerpt starting at that line; the line keeps the location, as the per-edit `edits` status already does (F4). |
 | `swarm_wiki` refusal: `Nothing changed. action "{field}" names a field, not an action; the other fields you sent fit action "{action}". Repeat the call with "action": "{action}" if you meant it.` (without such fields: `... Send action as one of list, read, create, update, delete, history, restore, and {field} as its own field.`) | One Agent sent a whole-content update as `"action": "content"`; the enum error listed the actions without saying which one the call fit, and the same response announced the change on the Board while it was not saved (F2, F5, Swarm run 2026-10-20, 1 call). `Nothing changed.` comes first so the Agent does not take the change as made; the implied action comes from the fields it sent, and `if you meant it` leaves the decision to the Agent, since a whole-content update replaces the page. |
+| `swarm_wiki` update note: `The page is still titled "{title}", like the first heading you replaced. To rename it after the new heading, use swarm_wiki {"action": "update", "page_id": ..., "title": ...}` | A title changes only with `title`: one whole-content update replaced the opening heading that matched the page's title, and the page kept the old title in lists and links through its last 3 revisions (F4, Swarm run 2026-10-20, 1 update). The note names the kept title and a ready rename call; it stays silent where the title never matched the heading, since such titles are chosen on purpose. |
 
 ## Repository Profiles
 

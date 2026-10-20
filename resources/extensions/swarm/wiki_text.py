@@ -203,6 +203,11 @@ WIKI_LINKS_UNKNOWN = {
     "many": "{links} name no page, so they link nowhere. Link a page by its ID, as this page's "
     "link does: {link}",
 }
+# An update without title replaced the first heading the page's title matched.
+WIKI_TITLE_STALE = (
+    'The page is still titled "{title}", like the first heading you replaced. To rename it '
+    "after the new heading, use {call}"
+)
 WIKI_OFFSET_FROM_END = "Read offset {value} as counting back from the end of the page."
 WIKI_SINCE_IGNORES = "{field} has no effect with since_revision and was ignored."
 WIKI_PAGE_FROM_TEXT = (

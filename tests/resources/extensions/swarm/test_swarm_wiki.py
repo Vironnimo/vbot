@@ -1127,6 +1127,43 @@ async def test_wiki_create_decides_about_a_page_id_and_a_missing_title(board):
 
 
 @pytest.mark.asyncio
+async def test_wiki_update_notes_a_title_its_replaced_first_heading_matched(board):
+    page_id = await create(board, "# Plan\n\nBody", title="Plan")
+    replaced = await invoke(
+        board,
+        {
+            "action": "update",
+            "page_id": page_id,
+            "content": "# Minutes\n\nBody",
+            "expected_revision": 1,
+        },
+    )
+    note = replaced["data"]["note"]
+    assert note == (
+        'The page is still titled "Plan", like the first heading you replaced. To rename it '
+        f'after the new heading, use swarm_wiki {{"action": "update", "page_id": "{page_id}", '
+        '"title": "Minutes"}'
+    )
+    renamed = await invoke(board, continuation(note))
+    assert (await stored(board, page_id))["title"] == "Minutes"
+    assert "note" not in renamed["data"]
+    # A passage edit of the heading gets the same note.
+    edited = await invoke(
+        board,
+        {"action": "update", "page_id": page_id, "old_text": "# Minutes", "new_text": "# Final"},
+    )
+    assert edited["data"]["note"].startswith('The page is still titled "Minutes"')
+    # A change that sets the title, or a heading the title did not match, needs no note.
+    spec = await create(board, "# Draft spec\nText", title="Spec")
+    for target, change in (
+        (page_id, {"old_text": "# Final", "new_text": "# Notes", "title": "Notes"}),
+        (spec, {"old_text": "# Draft spec", "new_text": "# Final spec"}),
+    ):
+        result = await invoke(board, {"action": "update", "page_id": target, **change})
+        assert result["ok"] and "note" not in result["data"], result
+
+
+@pytest.mark.asyncio
 async def test_wiki_action_naming_a_field_names_the_action_the_fields_fit(board):
     page_id = await create(board, "Body")
     replace = {"action": "Content", "page_id": page_id, "content": "New", "expected_revision": 1}
