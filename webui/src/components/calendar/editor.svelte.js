@@ -20,8 +20,9 @@ const FORM_PROBLEMS = {
   recurrence: () => t('calendar.errors.recurrence'),
 };
 
-// The event dialogs of the Calendar: the create and edit form, the details of
-// one occurrence and the delete confirmation. Editing a repeating event
+// The event dialogs of the Calendar: the create and edit form, the card with
+// one occurrence's details (anchored to the entry that opened it) and the
+// delete confirmation, which stacks over that card. Editing a repeating event
 // changes the whole series or, by choice, only the shown occurrence.
 export function createCalendarEventEditor(context) {
   const autosaveContext = useAutosaveContext();
@@ -60,6 +61,9 @@ export function createCalendarEventEditor(context) {
 
   let detailOccurrence = $state(null);
 
+  // The calendar entry the card opened from; null places it on its own.
+  let detailAnchor = $state.raw(null);
+
   let deleteTarget = $state(null);
 
   let deleteOccurrenceOnly = $state(false);
@@ -86,12 +90,15 @@ export function createCalendarEventEditor(context) {
     formOpen = true;
   }
 
-  function openDetail(occurrence) {
-    return autosaveContext.requestTransition(() => openDetailNow(occurrence));
+  function openDetail(occurrence, anchor = null) {
+    return autosaveContext.requestTransition(() =>
+      openDetailNow(occurrence, anchor),
+    );
   }
 
-  function openDetailNow(occurrence) {
+  function openDetailNow(occurrence, anchor = null) {
     detailOccurrence = occurrence;
+    detailAnchor = anchor;
     detailOpen = true;
   }
 
@@ -248,7 +255,6 @@ export function createCalendarEventEditor(context) {
   }
 
   function requestDeleteNow(occurrence) {
-    detailOpen = false;
     deleteOccurrenceOnly = false;
     deleteTarget = occurrence;
   }
@@ -259,6 +265,7 @@ export function createCalendarEventEditor(context) {
     if (!occurrence) {
       return;
     }
+    detailOpen = false;
     try {
       await context.controller.deleteEvent(
         occurrence.recurring && deleteOccurrenceOnly
@@ -314,6 +321,9 @@ export function createCalendarEventEditor(context) {
     },
     get detailOccurrence() {
       return detailOccurrence;
+    },
+    get detailAnchor() {
+      return detailAnchor;
     },
     get deleteTarget() {
       return deleteTarget;

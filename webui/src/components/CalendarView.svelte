@@ -36,7 +36,7 @@
   import { untrack } from 'svelte';
   import { createStandaloneNavigation } from '$lib/navigation.svelte.js';
   import { createCalendarEventEditor } from './calendar/editor.svelte.js';
-  import { parseRrule } from '$lib/calendarEventForm.js';
+  import { recurrenceSummary } from './calendar/presentation.js';
   import { eventTimeLabel } from './cron/presentation.js';
 
   let {
@@ -250,18 +250,11 @@
     return occurrenceHeading(entry.occurrence);
   }
 
-  const FREQUENCY_LABELS = {
-    daily: () => t('calendar.form.freqDaily'),
-    weekly: () => t('calendar.form.freqWeekly'),
-    monthly: () => t('calendar.form.freqMonthly'),
-    yearly: () => t('calendar.form.freqYearly'),
-  };
-
-  // How the event's series repeats, as the form names its frequency.
+  // How the event's series repeats, in words.
   function recurrenceText(occurrence) {
-    const event = eventById(viewState.events, occurrence.event_id);
-    const freq = parseRrule(event?.rrule, String(event?.start ?? '')).freq;
-    return FREQUENCY_LABELS[freq]?.() ?? t('calendar.detail.recurring');
+    return recurrenceSummary(
+      eventById(viewState.events, occurrence.event_id) ?? occurrence,
+    );
   }
 
   // The Agent jobs of the event an occurrence belongs to.
@@ -303,6 +296,9 @@
       };
     }
     const occurrence = entry.occurrence;
+    if (editor.detailOpen && editor.detailOccurrence?.id === occurrence.id) {
+      return null;
+    }
     const jobs = occurrenceJobs(occurrence);
     return {
       title: entry.title,
@@ -543,9 +539,10 @@
                   class="calendar-entry"
                   use:tooltip={() => entryDetails(entry)}
                   class:calendar-entry--allday={entry.all_day}
+                  data-occurrence-id={entry.occurrence.id}
                   onclick={(event) => {
                     event.stopPropagation();
-                    editor.openDetail(entry.occurrence);
+                    editor.openDetail(entry.occurrence, event.currentTarget);
                   }}
                 >
                   {#if !entry.all_day}
@@ -614,7 +611,9 @@
                   class="calendar-entry"
                   use:tooltip={() => entryDetails(entry)}
                   class:calendar-entry--allday={entry.all_day}
-                  onclick={() => editor.openDetail(entry.occurrence)}
+                  data-occurrence-id={entry.occurrence.id}
+                  onclick={(event) =>
+                    editor.openDetail(entry.occurrence, event.currentTarget)}
                 >
                   {#if !entry.all_day}
                     <span class="calendar-entry-time">
@@ -673,7 +672,9 @@
                 class="calendar-entry"
                 use:tooltip={() => entryDetails(entry)}
                 class:calendar-entry--allday={entry.all_day}
-                onclick={() => editor.openDetail(entry.occurrence)}
+                data-occurrence-id={entry.occurrence.id}
+                onclick={(event) =>
+                  editor.openDetail(entry.occurrence, event.currentTarget)}
               >
                 {#if !entry.all_day}
                   <span class="calendar-entry-time">
@@ -744,7 +745,12 @@
                         class="calendar-entry"
                         use:tooltip={() => entryDetails(entry)}
                         class:calendar-entry--allday={entry.all_day}
-                        onclick={() => editor.openDetail(entry.occurrence)}
+                        data-occurrence-id={entry.occurrence.id}
+                        onclick={(event) =>
+                          editor.openDetail(
+                            entry.occurrence,
+                            event.currentTarget,
+                          )}
                       >
                         {#if !entry.all_day}
                           <span class="calendar-entry-time">
@@ -781,7 +787,5 @@
   {serverUnavailable}
   {agentsRefreshToken}
   {onOpenSession}
-  {occurrenceHeading}
-  {recurrenceText}
   {occurrenceJobs}
 />

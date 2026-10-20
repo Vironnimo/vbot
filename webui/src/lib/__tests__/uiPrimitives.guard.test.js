@@ -255,6 +255,23 @@ const PRIMITIVE_CLASSES = [
     },
   },
   {
+    owner: 'DateField',
+    classes: {
+      [ANY_ELEMENT]: [
+        'date-field',
+        'date-field__panel',
+        'date-field__grid',
+        'date-field__day',
+      ],
+    },
+  },
+  {
+    owner: 'TimeField',
+    classes: {
+      [ANY_ELEMENT]: ['time-field', 'time-field__list', 'time-field__option'],
+    },
+  },
+  {
     owner: 'TextArea',
     classes: {
       textarea: [
@@ -506,6 +523,23 @@ describe('UI primitive guard', () => {
         continue;
       if (RAW_CHECKBOX.test(readFileSync(filePath, 'utf8'))) {
         violations.push(`${relativePath}: raw checkbox`);
+      }
+    }
+
+    expect(violations).toEqual([]);
+  });
+
+  it('bans native date and time inputs — use DateField or TimeField', () => {
+    // The browser's date and time controls ignore the app language and theme
+    // and differ per browser; DateField and TimeField replace them.
+    const NATIVE_DATE_TIME =
+      /\btype\s*=\s*["'](?:date|time|datetime-local|month|week)["']/g;
+    const violations = [];
+
+    for (const filePath of SVELTE_FILES) {
+      const source = readFileSync(filePath, 'utf8');
+      for (const match of source.matchAll(NATIVE_DATE_TIME)) {
+        violations.push(`${relative(SRC_DIR, filePath)}: ${match[0]}`);
       }
     }
 
