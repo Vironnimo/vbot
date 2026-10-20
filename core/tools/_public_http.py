@@ -17,6 +17,9 @@ import asyncio
 import ipaddress
 import re
 import socket
+from collections import Counter
+from collections.abc import AsyncIterator
+from contextlib import AbstractAsyncContextManager, asynccontextmanager, nullcontext
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 from urllib.parse import urljoin, urlparse
@@ -47,6 +50,10 @@ _TOTAL_TIMEOUT_SECONDS = 30.0
 _REQUEST_TIMEOUT = (_CONNECT_TIMEOUT_SECONDS, _TOTAL_TIMEOUT_SECONDS)
 _MAX_REDIRECTS = 10
 _REDIRECT_STATUS_CODES = frozenset({301, 302, 303, 307, 308})
+# Requests to one host at once. A burst of parallel fetches to one host made its
+# firewall block this machine for about 10 minutes (Swarm run 2026-10-20: about 40
+# within 10 s); browsers open at most 6 connections per host.
+HOST_CONCURRENCY = 4
 
 IpAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 
@@ -65,6 +72,37 @@ class PublicResponse:
     text: str
     url: str
     content: bytes = b""
+
+
+class HostSlots:
+    """Bound how many requests run at once against each host.
+
+    The owner shares one instance across all its fetches; web_fetch's handler,
+    registered once per Runtime, owns the one that bounds its Agents together.
+    ``fetch_public`` holds a slot for each request hop, retries and their backoff
+    included. A host's entry lives only while a request holds or awaits it, so the
+    map stays small and no semaphore outlives the event loop that used it.
+    """
+
+    def __init__(self, per_host: int = HOST_CONCURRENCY) -> None:
+        self._per_host = per_host
+        self._semaphores: dict[str, asyncio.Semaphore] = {}
+        self._users: Counter[str] = Counter()
+
+    @asynccontextmanager
+    async def hold(self, host: str) -> AsyncIterator[None]:
+        """Wait for a free slot of ``host`` and keep it for the block."""
+        semaphore = self._semaphores.get(host)
+        if semaphore is None:
+            semaphore = self._semaphores[host] = asyncio.Semaphore(self._per_host)
+        self._users[host] += 1
+        try:
+            async with semaphore:
+                yield
+        finally:
+            self._users[host] -= 1
+            if not self._users[host]:
+                del self._users[host], self._semaphores[host]
 
 
 class PublicFetchError(Exception):
@@ -498,6 +536,7 @@ async def _fetch_with_retry(
     resolve_map: dict[tuple[str, int], str],
     max_bytes: int = MAX_RESPONSE_BYTES,
     what: str = "page",
+    hosts: HostSlots | None = None,
 ) -> PublicResponse:
     """Fetch a URL, validating each redirect hop against SSRF rules.
 
@@ -562,7 +601,12 @@ async def _fetch_with_retry(
             for (host, host_port), ip in resolve_map.items()
         ]
 
-        result = await _request_with_retry(session, current_url, max_bytes)
+        # One slot per hop: a redirect to the same host never waits for itself.
+        slot: AbstractAsyncContextManager[None] = (
+            nullcontext() if hosts is None else hosts.hold(normalized_host)
+        )
+        async with slot:
+            result = await _request_with_retry(session, current_url, max_bytes)
         if result.status_code not in _REDIRECT_STATUS_CODES:
             return result
 
@@ -760,22 +804,25 @@ async def fetch_public(
     accept: str,
     max_bytes: int = MAX_RESPONSE_BYTES,
     what: str = "page",
+    hosts: HostSlots | None = None,
 ) -> PublicResponse:
     """GET a public address and return its successful response.
 
     ``what`` names the expected content in failure messages ("page", "image").
+    ``hosts`` bounds the requests running at once against each host, shared with
+    the caller's other fetches; ``None`` leaves them unbounded.
     Every failure, including an HTTP error status, raises ``PublicFetchError``.
     """
     from curl_cffi.requests.exceptions import RequestException
 
     try:
         async with _make_session(accept) as session:
-            result = await _fetch_with_retry(session, url, {}, max_bytes, what)
+            result = await _fetch_with_retry(session, url, {}, max_bytes, what, hosts)
         if result.status_code == 406:
             # The site serves none of the formats asked for; a browser's own
             # request is what sites answer most (a page refused text/markdown).
             async with _make_session(None) as session:
-                result = await _fetch_with_retry(session, url, {}, max_bytes, what)
+                result = await _fetch_with_retry(session, url, {}, max_bytes, what, hosts)
     except _RedirectTargetBlockedError as error:
         raise PublicFetchError("blocked_url", str(error)) from error
     except _RedirectTargetUnreachableError as error:
@@ -801,7 +848,9 @@ async def fetch_public(
 
 
 __all__ = [
+    "HOST_CONCURRENCY",
     "MAX_RESPONSE_BYTES",
+    "HostSlots",
     "PublicFetchError",
     "PublicResponse",
     "check_public_url",

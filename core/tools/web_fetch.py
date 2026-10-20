@@ -15,6 +15,7 @@ from core.attachments import AttachmentError, sniff_media_type
 from core.fetch_config import DEFAULT_WEB_FETCH_SETTINGS, WEB_FETCH_CREDENTIALS
 from core.storage.temp_files import TemporaryFileManager
 from core.tools._public_http import (
+    HostSlots,
     PublicFetchError,
     PublicResponse,
     check_public_url,
@@ -374,7 +375,7 @@ def _accept(output_mode: WebFetchOutput) -> str:
 
 
 async def _direct_fetch(
-    url: str, output_mode: WebFetchOutput, attachment_store: Any
+    url: str, output_mode: WebFetchOutput, attachment_store: Any, hosts: HostSlots
 ) -> tuple[JsonObject, bool]:
     """Return the result and whether an optional service may recover it.
 
@@ -382,7 +383,7 @@ async def _direct_fetch(
     address, but not by the local browser, which shares this machine's.
     """
     try:
-        result = await fetch_public(url, accept=_accept(output_mode))
+        result = await fetch_public(url, accept=_accept(output_mode), hosts=hosts)
     except PublicFetchError as error:
         return error.failure(), error.recoverable
     shaped = await run_tool_worker(_shape_success_for_mode, attachment_store, result, output_mode)
@@ -596,6 +597,9 @@ def make_web_fetch_handler(
     # page's owner) read last, the site a root-relative url belongs to. Kept in
     # memory: after a restart a path fails until a page is read again.
     last_pages: OrderedDict[tuple[str, str], str] = OrderedDict()
+    # One bound per host across all calls and Agents: the Runtime registers this
+    # handler once, so it is the process's bound without a module global.
+    hosts = HostSlots()
 
     def estimate_factor(context: ToolContext) -> float:
         if input_estimate_factor is None or not context.agent_model:
@@ -632,7 +636,7 @@ def make_web_fetch_handler(
         url: str, output: WebFetchOutput, settings: Mapping[str, Any]
     ) -> tuple[JsonObject, bool]:
         """Read directly; the local browser retries a bot check or JavaScript page."""
-        result, recoverable = await _direct_fetch(url, output, attachment_store)
+        result, recoverable = await _direct_fetch(url, output, attachment_store, hosts)
         if (
             result["ok"]
             or result["error"]["code"] not in _BROWSER_CODES

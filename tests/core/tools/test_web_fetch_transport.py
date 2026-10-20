@@ -3,11 +3,14 @@ failures, and the pinned browser-impersonating request."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
+from collections import Counter
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, Mock
+from urllib.parse import urlparse
 
 import curl_cffi.requests
 import pytest
@@ -32,7 +35,9 @@ from tests.core.tools.web_fetch_test_support import (
     assert_success_envelope,
     fetch,
     install_http_get,
+    make_context,
     make_result,
+    web_fetch_registry,
 )
 from tests.core.tools.web_fetch_test_support import retry_sleeps as retry_sleeps
 from tests.core.tools.web_fetch_test_support import stub_dns_resolution as stub_dns_resolution
@@ -557,6 +562,48 @@ async def test_redirect_hosts_use_the_same_canonical_url_and_dns_pin(
         ("https://xn--bcher-kva.example:8443/page", [first, second]),
         (f"https://[{IPV6_ADDRESS}]/page", [first, second]),
     ]
+
+
+@pytest.mark.asyncio
+async def test_calls_share_a_bounded_number_of_requests_per_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    active: Counter[str] = Counter()
+    peak: Counter[str] = Counter()
+    release = asyncio.Event()
+
+    async def get(session: Any, url: str, max_bytes: int) -> PublicResponse:
+        host = urlparse(url).hostname or ""
+        active[host] += 1
+        peak[host] = max(peak[host], active[host])
+        try:
+            if host == "example.com":
+                await release.wait()
+            return make_result(text="Page", headers={"Content-Type": "text/plain"}, url=url)
+        finally:
+            active[host] -= 1
+
+    async def settle() -> None:
+        for _ in range(200):
+            await asyncio.sleep(0)
+
+    monkeypatch.setattr(public_http, "_http_get", get)
+    tool, context = web_fetch_registry(), make_context(tmp_path)
+    pages = [f"https://example.com/{index}" for index in range(6)]
+    calls = asyncio.gather(
+        tool.dispatch(context, {"urls": pages[:3]}),
+        tool.dispatch(context, {"urls": pages[3:]}),
+        tool.dispatch(context, {"url": "https://other.example/"}),
+    )
+    await settle()
+
+    # Two calls hold the host's slots together; another host is not kept waiting.
+    assert active["example.com"] == public_http.HOST_CONCURRENCY
+    assert peak["other.example"] == 1 and active["other.example"] == 0
+    release.set()
+    results = await asyncio.wait_for(calls, timeout=5)
+    assert all(result["ok"] for result in results)
+    assert peak["example.com"] == public_http.HOST_CONCURRENCY
 
 
 @pytest.mark.asyncio
