@@ -1341,6 +1341,7 @@ def test_definition_states_the_host_shell_and_its_detached_start() -> None:
     ("culture", "named"),
     [
         (PowerShellCulture("de-DE", "3,14", "13.10.2026"), True),
+        (PowerShellCulture("en-GB", "3.14", "13/10/2026"), True),
         # The formats Models assume, and a culture vBot could not read, go unnamed.
         (PowerShellCulture("en-US", "3.14", "10/13/2026"), False),
         (PowerShellCulture("", "3.14", "10/13/2026"), False),
@@ -1357,6 +1358,8 @@ def test_the_definition_names_the_users_number_and_date_format(
     if culture is not None and named:
         for text in (culture.name, culture.number, culture.date):
             assert text in sentence
+        # Only a decimal comma needs the invariant way to write data.
+        assert ("InvariantCulture" in sentence) is (culture.number != "3.14")
     assert shell_definition._culture_sentence(powershell_culture()) in SHELL_TOOL_DESCRIPTION
 
 

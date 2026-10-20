@@ -47,10 +47,18 @@ def _culture_sentence(culture: PowerShellCulture | None) -> str:
     """Name the user's format for numbers and dates where it is not the one Models assume."""
     if culture is None or culture.name in ("", "en-US"):
         return ""
-    return (
+    sentence = (
         f" PowerShell prints and parses numbers and dates in the user's {culture.name} format, "
         f"such as {culture.number} and {culture.date}."
     )
+    if culture.number != "3.14":
+        # String expansion and casts use the invariant culture, these do not.
+        sentence += (
+            " Numbers from -f, -join, .ToString(), Export-Csv and file output use it too; for "
+            'data that programs read, use "$x" or [cultureinfo]::InvariantCulture, which give '
+            "3.14."
+        )
+    return sentence
 
 
 # The same for every Tool set: what happens to a long command, and the calls
