@@ -138,7 +138,8 @@
 }
 
 :is(.s-group, .s-group__rows) > .s-row > .s-row-control > .dropdown,
-:is(.s-group, .s-group__rows) > .s-row > .s-row-control > .searchable-dropdown {
+:is(.s-group, .s-group__rows) > .s-row > .s-row-control > .searchable-dropdown,
+:is(.s-group, .s-group__rows) > .s-row > .s-row-control > .path-field {
   width: 100%;
 }
 

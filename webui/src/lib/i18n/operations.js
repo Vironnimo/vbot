@@ -31,12 +31,14 @@ export default Object.freeze({
   'mcp.advanced': 'Advanced settings',
   'mcp.argument': 'Argument {number}',
   'mcp.arguments': 'Arguments',
+  'mcp.argumentsHelp': 'Passed to the program in this order.',
   'mcp.cancelTest': 'Cancel test',
   'mcp.changed':
     'This connection changed elsewhere. Close the editor and reopen it before saving.',
   'mcp.clearCredential': 'Clear credential',
   'mcp.connected': 'Connected',
   'mcp.connecting': 'Connecting',
+  'mcp.connectionSection': 'Connection',
   'mcp.connectionType': 'Connection type',
   'mcp.credentialCleared': 'Credential cleared.',
   'mcp.credentialEnvironment': 'Credentials for environment variables',
@@ -59,6 +61,7 @@ export default Object.freeze({
   'mcp.enabled': 'Enabled',
   'mcp.enabledFor': 'Enable {name}',
   'mcp.entryName': 'Name',
+  'mcp.entryField': '{field} {number}',
   'mcp.environment': 'Environment variables',
   'mcp.failed': 'Connection failed',
   'mcp.help':
@@ -73,6 +76,7 @@ export default Object.freeze({
     'Lowercase letters, numbers and underscores; start with a letter.',
   'mcp.oauth': 'Sign in with OAuth',
   'mcp.oauthClientId': 'OAuth client ID (optional)',
+  'mcp.oauthClientIdHelpAria': 'About the OAuth client ID',
   'mcp.oauthClientIdHelp':
     "Only for a server that does not let vBot register itself. Register vBot with the server's sign-in service using the redirect URL shown in this connection's details, then enter the client ID it issues.",
   'mcp.oauthClientSecret': 'Credential name for the client secret (optional)',
@@ -82,6 +86,7 @@ export default Object.freeze({
   'mcp.oauthScopesHelp':
     'Space-separated scopes vBot requests in addition to the ones the server asks for.',
   'mcp.program': 'Program',
+  'mcp.programSection': 'Local program',
   'mcp.programHelp':
     'Executable on the vBot host, for example uvx, npx or an absolute path.',
   'mcp.reauthorize': 'Sign in again',
@@ -93,10 +98,11 @@ export default Object.freeze({
   'mcp.removeBody':
     'Agents will lose access to this connection. The external application and installed software will remain.',
   'mcp.removeEntry': 'Remove {group} entry {number}',
-  'mcp.removeTitle': 'Remove {name}?',
+  'mcp.removeTitle': 'Remove connection “{name}”?',
   'mcp.roots': 'Share the work directory',
   'mcp.rootsHelp':
     'Tells the server the work directory of the Agent it currently serves (MCP roots), for example so it can find project files.',
+  'mcp.rootsHelpAria': 'About sharing the work directory',
   'mcp.rootsOff': 'Off',
   'mcp.rootsWorkspace': "The Agent's work directory",
   'mcp.sampling': 'Model requests from the server',
@@ -104,6 +110,7 @@ export default Object.freeze({
   'mcp.samplingAsk': 'Ask me each time',
   'mcp.samplingHelp':
     "Lets the server ask the Agent's Model for a reply while it serves that Agent (MCP sampling). Replies are limited in length and frequency and count toward the Agent's usage.",
+  'mcp.samplingHelpAria': 'About Model requests from the server',
   'mcp.samplingOff': 'Off',
   'mcp.save': 'Save connection',
   'mcp.saveCredential': 'Save credential',
@@ -115,6 +122,7 @@ export default Object.freeze({
   'mcp.secretValue': 'New secret value',
   'mcp.secretsHelp':
     'Use credential names here, not secret values. After saving, open Credentials to set their values.',
+  'mcp.serverSection': 'Server',
   'mcp.signedIn': 'Signed in',
   'mcp.signedOut': 'Not signed in',
   'mcp.sse': 'Server URL (legacy SSE)',

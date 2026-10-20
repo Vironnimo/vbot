@@ -81,11 +81,15 @@ function button(text) {
     (item) => item.textContent.trim() === text,
   );
 }
+// A field by its visible label, else by its accessible name (list entries
+// such as arguments carry only an aria-label).
 function field(label) {
   const node = [...document.querySelectorAll('label')].find(
     (item) => item.textContent.replace('*', '').trim() === label,
   );
-  return document.getElementById(node.htmlFor);
+  return node
+    ? document.getElementById(node.htmlFor)
+    : document.querySelector(`[aria-label="${label}"]`);
 }
 function input(label, value) {
   const control = field(label);
