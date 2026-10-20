@@ -14,6 +14,7 @@ from core.automation.cron import (
 )
 from core.calendar import CalendarService
 from core.channels import ChannelNotFoundError
+from core.runs import RunStatus
 
 
 def make_service(
@@ -37,6 +38,28 @@ def make_service(
     if calendar is not None:
         calendar.bind_event_jobs(service)
     return service, trigger_service
+
+
+def scripted_runs(trigger_service: SimpleNamespace, *outcomes: tuple[RunStatus, str]) -> list[bool]:
+    """Admit one Run per outcome; each reports the activity decision Runs make at finish."""
+    decisions: list[bool] = []
+    pending = list(outcomes)
+
+    async def trigger_run(*_args: Any, completion_activity: Any, **_kwargs: Any) -> Any:
+        status, answer = pending.pop(0)
+        number = len(outcomes) - len(pending)
+        result = SimpleNamespace(content=answer)
+
+        async def wait() -> Any:
+            decisions.append(completion_activity(status, result))
+            if status is not RunStatus.COMPLETED:
+                raise RuntimeError("model unavailable")
+            return result
+
+        return SimpleNamespace(id=f"run-{number}", session_id=f"ses-{number}", wait=wait)
+
+    trigger_service.trigger_run.side_effect = trigger_run
+    return decisions
 
 
 @dataclass
@@ -74,3 +97,25 @@ class FakeChats:
     ) -> bool:
         self.notes.append((channel_id, platform_target, note, thread_id, skip_session_id))
         return True
+
+
+@dataclass
+class FakeChecks:
+    """Watch checks that answer from a script: an output, or an error to raise."""
+
+    answers: list[str | Exception] = field(default_factory=list)
+    calls: list[tuple[str, ...]] = field(default_factory=list)
+
+    async def run_command(self, command: str, *, agent_id: str, project_id: str | None) -> str:
+        self.calls.append(("command", command, agent_id, project_id or ""))
+        return self._answer()
+
+    async def fetch_url(self, url: str) -> str:
+        self.calls.append(("url", url))
+        return self._answer()
+
+    def _answer(self) -> str:
+        answer = self.answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer

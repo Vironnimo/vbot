@@ -183,19 +183,23 @@ def outbound_note(job: CronJob, message: str) -> str:
     )
 
 
-def failure_alert(job: CronJob, *, was_failed: bool, failures_before: int) -> str | None:
+def failure_alert(
+    job: CronJob, *, was_failed: bool, failures_before: int, check: bool = False
+) -> str | None:
     """The fixed alert text for a failure just recorded on ``job``, or None.
 
     Alerts once per failure streak, at its second failure, and when the job stops.
+    A streak counts failed Runs and, for a watching job, failed checks alike;
+    ``check`` says the failure just recorded was a check's, whose error says so.
     """
-    error = job.last_error or "unknown"
+    error = (job.last_check_error if check else job.last_error) or "unknown"
     if job.status == "failed" and not was_failed:
         if job.consecutive_failures >= MAX_CONSECUTIVE_CRON_FAILURES and (
             job.schedule_type != "once"
         ):
             return (
-                f'Scheduled job "{job.name}" stopped after {job.consecutive_failures} failed '
-                f"runs in a row. Last error: {error}. Enable it again in vBot under Schedules "
+                f'Scheduled job "{job.name}" stopped after {job.consecutive_failures} failures '
+                f"in a row. Last error: {error}. Enable it again in vBot under Schedules "
                 "once the cause is fixed."
             )
         return f'Scheduled job "{job.name}" failed and will not run again. Last error: {error}.'
@@ -204,12 +208,13 @@ def failure_alert(job: CronJob, *, was_failed: bool, failures_before: int) -> st
         and job.consecutive_failures == _FAILING_ALERT_AT
         and failures_before < _FAILING_ALERT_AT
     ):
-        follow_up = (
-            "vBot tries it again."
-            if job.schedule_type == "once"
-            else "It keeps running on schedule and stops after "
-            f"{MAX_CONSECUTIVE_CRON_FAILURES} failures in a row."
-        )
+        if job.schedule_type == "once":
+            follow_up = "vBot tries it again."
+        else:
+            follow_up = (
+                f"It keeps {'checking' if job.watch is not None else 'running'} on schedule and "
+                f"stops after {MAX_CONSECUTIVE_CRON_FAILURES} failures in a row."
+            )
         return f'Scheduled job "{job.name}" failed twice in a row. Last error: {error}. {follow_up}'
     return None
 

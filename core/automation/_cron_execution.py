@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
+from core.automation import _cron_context as _context
 from core.automation import _cron_delivery as _delivery
 from core.automation import _cron_events as _events
 from core.automation import _cron_schedule as _schedule
@@ -31,6 +32,7 @@ from core.sessions import SessionNotFoundError
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    from core.automation._cron_watch import WatchChange
     from core.automation.cron import CronService
 
 
@@ -60,7 +62,13 @@ class CronExecution:
         *,
         owed: _schedule.OwedFire | None = None,
         event_due: _events.EventDue | None = None,
+        change: WatchChange | None = None,
     ) -> CronRunOutcome:
+        """Start the job's Run and record its outcome.
+
+        ``owed`` is the due time a late Run is told about; ``change`` is the
+        watched output change that started the Run, which replaces any late notice.
+        """
         admitted = False
         self._owner._executing_jobs.add(job.id)
         try:
@@ -95,9 +103,13 @@ class CronExecution:
                     return CronRunOutcome(succeeded=False, admitted=admitted)
                 # Capacity and claim persistence can delay even an on-time fire.
                 # Keep its due-time evidence until all pre-admission waits settle.
-                late = self._owner._scheduler._late_fire(owed) if owed is not None else None
+                late = (
+                    _context.late_fire(owed, self._owner._timezone)
+                    if owed is not None and change is None
+                    else None
+                )
                 _LOGGER.info(
-                    "Cron job fired (job=%s agent=%s session=%s%s%s)",
+                    "Cron job fired (job=%s agent=%s session=%s%s%s%s)",
                     latest.id,
                     latest.agent_id,
                     latest.session_id,
@@ -108,8 +120,11 @@ class CronExecution:
                         if late is not None
                         else ""
                     ),
+                    " watched_output_changed=true" if change is not None else "",
                 )
-                context = self._owner._scheduler._run_context(latest, late, event_due)
+                context = _context.run_context(
+                    latest, self._owner._timezone, late=late, event_due=event_due, change=change
+                )
                 run: Any | None = None
                 result: Any = None
                 firing_once_at = latest.run_at if latest.schedule_type == "once" else None
@@ -334,17 +349,20 @@ class CronExecution:
         await self._alert_failure(job_id, baseline)
         return saved
 
-    async def _alert_failure(self, job_id: str, baseline: FailureBaseline | None) -> None:
+    async def _alert_failure(
+        self, job_id: str, baseline: FailureBaseline | None, *, check: bool = False
+    ) -> None:
         """Send the fixed failure alert to a chat delivery once a failure is recorded.
 
-        It goes out at the second failure of a streak and when the job stops.
-        A job delivering to vBot reports a failed Run through that Run instead.
+        It goes out at the second failure of a streak and when the job stops;
+        ``check`` says the failure was a watch check's. A job delivering to vBot
+        reports a failed Run through that Run instead, and a failed check not at all.
         """
         job = self._owner._jobs.get(job_id)
         if job is None or baseline is None or _delivery.delivery_kind(job) != "chat":
             return
         text = _delivery.failure_alert(
-            job, was_failed=baseline.was_failed, failures_before=baseline.failures
+            job, was_failed=baseline.was_failed, failures_before=baseline.failures, check=check
         )
         if text is None:
             return

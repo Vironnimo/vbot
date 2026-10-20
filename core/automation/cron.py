@@ -47,10 +47,12 @@ from core.automation._cron_jobs import (
     CronTargetError,
     CronTargetProjectNotFoundError,
     CronTargetUnavailableError,
+    CronWatch,
     DeliveryKind,
     EventEdge,
     ParsedSchedule,
     ScheduleType,
+    WatchKind,
     _as_utc,
     _derive_cron_job_name,
     _load_cron_jobs_payload,
@@ -64,6 +66,8 @@ from core.automation._cron_jobs import (
 )
 from core.automation._cron_projection import CronProjection
 from core.automation._cron_scheduler import CronScheduler
+from core.automation._cron_watch import WatchCheckError, WatchChecks
+from core.automation._cron_watcher import FIRST_CHECK_WAIT_SECONDS, CronWatcher
 from core.calendar import BoundJob, CalendarProjection, CalendarStorageError
 from core.config_validation import JsonDiagnostic
 from core.json_documents import JsonDocumentWriteError, write_json_document
@@ -104,6 +108,7 @@ __all__ = [
     "CronTargetError",
     "CronTargetProjectNotFoundError",
     "CronTargetUnavailableError",
+    "CronWatch",
     "DeliveryKind",
     "EventCalendar",
     "LAST_RESULT_MAX_CHARS",
@@ -116,6 +121,9 @@ __all__ = [
     "ParsedSchedule",
     "ScheduleType",
     "TERMINAL_CRON_JOB_STATUSES",
+    "WatchCheckError",
+    "WatchChecks",
+    "WatchKind",
     "load_validated_cron_jobs_json",
     "validate_cron_jobs_data",
     "validate_cron_jobs_file",
@@ -158,6 +166,10 @@ class CronService:
     (schedule type ``event``). The calendar asks this service before an event
     change and after an event is deleted (``check_event_change`` and
     ``event_deleted``), and its change notifications wake the event jobs.
+
+    A job with a ``watch`` checks a command or URL at each due time and runs
+    only when the output changed (``_cron_watcher``); the Runtime wires the
+    checks in (``set_watch_checks``).
     """
 
     def __init__(
@@ -177,6 +189,8 @@ class CronService:
         self._calendar = calendar
         # Delivers Run answers and failure alerts to Channel chats once wired.
         self._chats: ChatDelivery | None = None
+        # Runs the checks of watching jobs once wired.
+        self._watch_checks: WatchChecks | None = None
         self._data_root = Path(data_root).expanduser()
         self._cron_dir = self._data_root / "cron"
         self._jobs_path = self._cron_dir / "jobs.json"
@@ -200,6 +214,7 @@ class CronService:
         self._scheduler: CronScheduler = CronScheduler(self)
         self._execution: CronExecution = CronExecution(self)
         self._event_binding: CronEventBinding = CronEventBinding(self)
+        self._watcher: CronWatcher = CronWatcher(self)
         if calendar is not None:
             calendar.add_changed_callback(self._event_binding._on_calendar_changed)
 
@@ -210,6 +225,14 @@ class CronService:
         delivery logs a warning instead of sending.
         """
         self._chats = chats
+
+    def set_watch_checks(self, checks: WatchChecks | None) -> None:
+        """Wire what runs the checks of watching jobs.
+
+        Without it, a job cannot be set to watch, and a stored watch fails its
+        checks.
+        """
+        self._watch_checks = checks
 
     def add_changed_callback(self, callback: Callable[[], None]) -> Callable[[], None]:
         """Subscribe to persisted Cron changes and return an unsubscribe function."""
@@ -239,6 +262,7 @@ class CronService:
         status: CronJobStatus = "active",
         project_id: str | None = None,
         delivery: CronDelivery | None = None,
+        watch: CronWatch | None = None,
         actor: str = _DEFAULT_ACTOR,
     ) -> CronJob:
         """Create and persist a new cron job.
@@ -247,7 +271,9 @@ class CronService:
         scopes the fired Session/Run to that project's anchor. An ``event`` job
         names an existing calendar event; occurrences due before it was created
         are not owed. ``delivery`` says where each Run's final answer goes; a
-        chat must belong to a Channel of the job's Identity Agent.
+        chat must belong to a Channel of the job's Identity Agent. ``watch``
+        makes a recurring job run only when the output of its check changed;
+        an active job checks it at once (:meth:`await_first_check`).
         """
         if schedule_type != "event" and (
             event_id is not None or event_edge is not None or event_offset_minutes is not None
@@ -281,8 +307,10 @@ class CronService:
                 created_at=_timing._utc_now_iso(),
                 project_id=project_id,
                 delivery=delivery,
+                watch=watch,
             )
             self._validate_job(job, validate_references=False)
+            self._check_watch_available(job)
             self._event_binding._check_event_binding(job)
             await self._validate_references_async(job, check_delivery=True)
             self._reject_past_once_run(job)
@@ -293,6 +321,8 @@ class CronService:
                 await self._save_edit(lambda: self._jobs.pop(job.id, None))
                 if self._started and job.status == "active":
                     self._scheduler._start_job_task(job)
+                    if job.watch is not None:
+                        self._watcher.start_first_check(job.id)
 
             await settle_before_cancelling(save())
 
@@ -544,7 +574,30 @@ class CronService:
                             self._scheduler._restart_job_task(candidate)
 
                 await settle_before_cancelling(self._save_edit(undo))
+                if "watch" in changed_fields:
+                    await self._renew_watch(candidate)
         return self._clone_job(job), self._clone_job(candidate), changed_fields
+
+    async def _renew_watch(self, job: CronJob) -> None:
+        """After a saved watch change: forget the baseline, and check a new watch at once.
+
+        The ordered writer removes the baseline before the first check can write one.
+        """
+        await self._watcher.remove_baseline(job.id)
+        if self._started and job.status == "active" and job.watch is not None:
+            self._watcher.start_first_check(job.id)
+
+    async def await_first_check(self, job_id: str) -> CronJob | None:
+        """Wait for the first check of a watch just set on the job; the job after it.
+
+        None when no first check is pending for the job, or it still runs after
+        a while; it then goes on and records its result on the job. The wait
+        never stops the check.
+        """
+        if not await self._watcher.wait_for_first_check(job_id, FIRST_CHECK_WAIT_SECONDS):
+            return None
+        job = self._jobs.get(job_id)
+        return None if job is None else self._clone_job(job)
 
     def _stage_update(
         self, job_id: str, fields: dict[str, Any], *, validate_references: bool = True
@@ -612,11 +665,19 @@ class CronService:
             candidate.consecutive_failures = 0
             if candidate.remaining_runs == 0:
                 candidate.remaining_runs = 1
+        watch_changed = "watch" in fields and candidate.watch != job.watch
+        if watch_changed:
+            # Checks of an earlier watch say nothing about this one.
+            candidate.last_checked_at = None
+            candidate.last_changed_at = None
+            candidate.last_check_error = None
         if candidate.status == "active" and (
             job.status != "active"
+            or watch_changed
             or any(getattr(job, name) != getattr(candidate, name) for name in _SCHEDULE_FIELDS)
         ):
-            # Fires due while the job was inactive or on its earlier schedule are not owed.
+            # Fires due while the job was inactive, on its earlier schedule or
+            # under its earlier watch are not owed.
             candidate.covered_until = _timing._utc_now_iso()
             candidate.event_progress = None
 
@@ -629,6 +690,8 @@ class CronService:
             return job, job, [], False
 
         self._validate_job(candidate, validate_references=validate_references)
+        if watch_changed:
+            self._check_watch_available(candidate)
         if (
             candidate.schedule_type == "once"
             and job.status not in TERMINAL_CRON_JOB_STATUSES
@@ -671,6 +734,9 @@ class CronService:
                 await _CRON_WRITER.call_async(
                     partial(_claims.remove, self._once_fire_claims_dir, job_id)
                 )
+                if removed.watch is not None:
+                    await self._watcher.remove_baseline(job_id)
+                self._watcher.forget(job_id)
 
             await settle_before_cancelling(save())
         _LOGGER.info("Cron job deleted (job=%s actor=%s)", job_id, actor)
@@ -908,6 +974,12 @@ class CronService:
             )
         ):
             raise CronJobValidationError(_missing_session_text(job))
+
+    def _check_watch_available(self, job: CronJob) -> None:
+        if job.watch is not None and self._watch_checks is None:
+            raise CronJobValidationError(
+                "watch is unavailable: this vBot process runs no watch checks"
+            )
 
     def _validate_capacity(self, candidate: CronJob, *, replacing_id: str | None = None) -> None:
         if candidate.status != "active":

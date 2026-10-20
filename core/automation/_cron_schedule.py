@@ -125,7 +125,10 @@ def owed_fire(timezone: ZoneInfo, now: datetime, job: CronJob) -> OwedFire | Non
 
 
 def covered_until(job: CronJob) -> datetime:
-    """The latest instant through which a recurring job owes no fire."""
+    """The latest instant through which a recurring job owes no fire.
+
+    A watching job's check covers its due time even when it starts no Run.
+    """
     instants = [
         _parse_utc_timestamp(value, field_name=field_name)
         for field_name, value in (
@@ -133,6 +136,7 @@ def covered_until(job: CronJob) -> datetime:
             ("covered_until", job.covered_until),
             ("last_attempt_at", job.last_attempt_at),
             ("last_completed_at", job.last_completed_at),
+            ("last_checked_at", job.last_checked_at),
         )
         if value is not None
     ]

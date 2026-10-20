@@ -45,7 +45,7 @@ def test_validate_cron_jobs_data_accepts_missing_defaulted_metadata() -> None:
     assert diagnostics == []
 
 
-def test_validate_cron_jobs_data_checks_delivery_and_last_answer() -> None:
+def test_validate_cron_jobs_data_checks_delivery_watch_and_last_answer() -> None:
     base = {
         "id": "job-1",
         "agent_id": "main",
@@ -62,6 +62,8 @@ def test_validate_cron_jobs_data_checks_delivery_and_last_answer() -> None:
                 {**base, "id": "job-2", "delivery": {"kind": "app", "sound": True}},
                 {**base, "id": "job-3", "last_result": {"text": "x" * 2001, "at": "now"}},
                 {**base, "id": "job-4", "last_run_silent": "yes"},
+                {**base, "id": "job-5", "watch": {"command": "ls", "url": "https://a.example"}},
+                {**base, "id": "job-6", "watch": {"url": "file:///etc/hosts"}},
             ],
         }
     )
@@ -75,6 +77,12 @@ def test_validate_cron_jobs_data_checks_delivery_and_last_answer() -> None:
             "last_result.text must be a non-empty string of at most 2000 characters",
         ),
         ("error", "$.jobs[3].last_run_silent", "must be a boolean"),
+        ("error", "$.jobs[4].watch", "watch must name exactly one of command or url"),
+        (
+            "error",
+            "$.jobs[5].watch",
+            "watch.url must be an absolute http or https URL of at most 2048 characters",
+        ),
     ]
 
 
