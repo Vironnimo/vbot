@@ -278,6 +278,8 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
         expected_revision: expectedRevision,
       }),
     listCronJobs: () => call('cron.list'),
+    getCronWebhookSecret: (id) => call('cron.webhook_secret', { id }),
+    rotateCronWebhookSecret: (id) => call('cron.rotate_webhook_secret', { id }),
     showProject: (projectId) => call('project.show', { project_id: projectId }),
     detectProject: (cwd) => call('project.detect', { cwd }),
     addProject: (params) => call('project.add', params),

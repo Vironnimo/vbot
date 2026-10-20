@@ -868,6 +868,87 @@ describe('CronView', () => {
     );
   });
 
+  it("shows a webhook job's URL and reveals and replaces its secret", async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-05-14T12:00:00Z'));
+    const hookJob = cronJob({
+      id: 'job-hook',
+      name: 'Triage issues',
+      schedule_type: 'webhook',
+      cron_expression: null,
+      next_fire_at: null,
+      last_outcome: null,
+      last_completed_at: null,
+      last_run_id: null,
+      webhook: {
+        url: 'http://127.0.0.1:8765/api/hooks/job-hook',
+        path: '/api/hooks/job-hook',
+        reach: 'computer',
+        last_received_at: '2026-05-14T10:00:00+00:00',
+        waiting: 2,
+        dropped: 0,
+      },
+    });
+    listCronJobsMock.mockResolvedValue({
+      jobs: [hookJob],
+      system_timezone: 'UTC',
+    });
+    const secrets = ['vbw_first', 'vbw_second'];
+    rpcMock.mockImplementation(async (method, params) => {
+      if (method === 'cron.webhook_secret') {
+        expect(params).toEqual({ id: 'job-hook' });
+        return { secret: secrets[0], webhook: hookJob.webhook };
+      }
+      if (method === 'cron.rotate_webhook_secret') {
+        secrets.shift();
+        return { secret: secrets[0], webhook: hookJob.webhook };
+      }
+      return createAgentListRpcMock()(method);
+    });
+    mountView();
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="cron-webhook-url"]'),
+    );
+
+    // A webhook job keeps no time and checks nothing; its request starts it.
+    expect(document.getElementById('cron-job-frequency').textContent).toContain(
+      t('cron.frequency.webhook'),
+    );
+    expect(document.getElementById('cron-job-watch')).toBeNull();
+    expect(document.querySelector('.cron-summary').textContent).toContain(
+      t('cron.detail.nextRequest'),
+    );
+    expect(
+      document.querySelector('[data-testid="cron-webhook-url"]').textContent,
+    ).toBe('http://127.0.0.1:8765/api/hooks/job-hook');
+    expect(
+      document.querySelector('[data-testid="cron-webhook-reach"]').textContent,
+    ).toContain(t('cron.webhook.reach.computer'));
+    expect(
+      document.querySelector('[data-testid="cron-webhook-requests"]')
+        .textContent,
+    ).toContain(t('cron.webhook.waitingMany', { count: 2 }));
+
+    // The secret stays hidden until the user asks for it.
+    const secretText = () =>
+      document.querySelector('[data-testid="cron-webhook-secret"]').textContent;
+    expect(secretText()).not.toContain('vbw_');
+    buttonByText(t('cron.webhook.showSecret')).click();
+    await waitForCondition(() => secretText() === 'vbw_first');
+
+    buttonByText(t('cron.webhook.rotate')).click();
+    flushSync();
+    confirmDialog(t('cron.webhook.rotateConfirmLabel'));
+    await waitForCondition(() => secretText() === 'vbw_second');
+    expect(rpcMock).toHaveBeenCalledWith('cron.rotate_webhook_secret', {
+      id: 'job-hook',
+    });
+    expect(toastMock).toHaveBeenCalledWith(
+      expect.objectContaining({ title: t('cron.webhook.rotated') }),
+    );
+    expect(updateCronJobMock).not.toHaveBeenCalled();
+  });
+
   it('keeps unsaved edits on reselecting the row and saves them before switching jobs', async () => {
     const jobs = [cronJob({ id: 'job-one' }), cronJob({ id: 'job-two' })];
     listCronJobsMock.mockResolvedValue({

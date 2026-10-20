@@ -517,6 +517,7 @@ export default Object.freeze({
   'cron.time.tomorrow': 'Tomorrow {time}',
   'cron.time.yesterday': 'Yesterday {time}',
   'cron.schedule.once': 'Once',
+  'cron.schedule.webhook': 'On each webhook request',
   'cron.schedule.event': 'Event: {title} — {timing}',
   'cron.schedule.everyMinute': 'Every minute',
   'cron.schedule.everyMinutes': 'Every {count} minutes',
@@ -561,6 +562,8 @@ export default Object.freeze({
   'cron.detail.newSessionEachRun': 'New Session each Run',
   'cron.detail.waitingForFirstRun': 'Waiting for first execution',
   'cron.detail.waitingForChange': 'Waiting for the check to find a change',
+  'cron.detail.waitingForRequest': 'Waiting for the first webhook request',
+  'cron.detail.nextRequest': 'With the next request',
   'cron.detail.lastCheck': 'Last check',
   'cron.detail.lastChange': 'Last change',
   'cron.card.watch': 'Checks',
@@ -593,6 +596,37 @@ export default Object.freeze({
   'cron.deliveryKind.app': 'vBot, with a notification',
   'cron.deliveryKind.chat': 'A Channel chat',
   'cron.deliveryKind.none': 'Nowhere',
+  'cron.sections.webhook': 'Webhook',
+  'cron.sections.webhookSubtitle':
+    "Each POST request to this URL that proves the secret starts a Run, which gets the request's headers and body. Requests that arrive during a Run wait for the next one.",
+  'cron.webhook.unsaved':
+    'The URL and the secret appear once the schedule is saved.',
+  'cron.webhook.url': 'URL',
+  'cron.webhook.urlPath': "{path} on this server's address",
+  'cron.webhook.reach.internet': 'Reachable from the internet.',
+  'cron.webhook.reach.network':
+    'Reachable from this computer and the home network. Services on the internet, such as GitHub, cannot call it.',
+  'cron.webhook.reach.computer':
+    'Reachable only from this computer. Services on the internet, such as GitHub, cannot call it.',
+  'cron.webhook.copyUrl': 'Copy URL',
+  'cron.webhook.secret': 'Secret',
+  'cron.webhook.secretHelp':
+    'Send it with each request as the header "Authorization: Bearer <secret>", or enter it as the secret of a GitHub webhook.',
+  'cron.webhook.showSecret': 'Show',
+  'cron.webhook.hideSecret': 'Hide',
+  'cron.webhook.copySecret': 'Copy secret',
+  'cron.webhook.rotate': 'Replace…',
+  'cron.webhook.rotateConfirmTitle': 'Replace the secret?',
+  'cron.webhook.rotateConfirm':
+    'Requests that send the current secret are refused from now on. Enter the new secret wherever the webhook is called from.',
+  'cron.webhook.rotateConfirmLabel': 'Replace',
+  'cron.webhook.rotated': 'Secret replaced.',
+  'cron.webhook.lastRequest': 'Last request',
+  'cron.webhook.noRequest': 'No request yet',
+  'cron.webhook.waitingOne': '1 request waits for the next Run',
+  'cron.webhook.waitingMany': '{count} requests wait for the next Run',
+  'cron.webhook.droppedOne': '1 dropped unseen',
+  'cron.webhook.droppedMany': '{count} dropped unseen',
   'cron.sections.watch': 'Change check',
   'cron.sections.watchSubtitle':
     'Check a command or a web page before each Run. The Run starts only when the output changed since the last check, and it gets the changes. A failed check counts as a failed Run.',
@@ -630,6 +664,7 @@ export default Object.freeze({
   'cron.frequency.weekly': 'Weekly',
   'cron.frequency.monthly': 'Monthly',
   'cron.frequency.custom': 'Custom (cron expression)',
+  'cron.frequency.webhook': 'On each webhook request',
   'cron.form.interval': 'Every',
   'cron.form.intervalHelp': 'Counted from when the schedule starts.',
   'cron.form.intervalUnit': 'Interval unit',
@@ -709,6 +744,8 @@ export default Object.freeze({
   'cron.errors.delete': 'Cron job could not be deleted.',
   'cron.errors.toggle': 'Cron job status could not be updated.',
   'cron.errors.chatDelivery': 'A chat delivery needs a Channel and a chat ID.',
+  'cron.errors.secret': 'The secret could not be shown.',
+  'cron.errors.rotate': 'The secret could not be replaced.',
   'cron.errors.watch':
     'A change check needs a command, or a URL that starts with http:// or https://.',
   'cron.errors.missingRequired':

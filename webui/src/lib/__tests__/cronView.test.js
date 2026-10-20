@@ -259,6 +259,66 @@ describe('cron form payloads and history projection', () => {
     expect(buildUpdateCronPayload(form).event_time).toBe('');
   });
 
+  it('keeps a webhook job a webhook job and lists its URL and requests', () => {
+    const job = {
+      id: 'job-hook',
+      agent_id: 'main',
+      name: 'Triage issues',
+      prompt: 'Triage the issue',
+      schedule_type: 'webhook',
+      remaining_runs: 5,
+      status: 'active',
+      next_fire_at: null,
+      webhook: {
+        url: 'https://vbot.example.com/api/hooks/job-hook',
+        path: '/api/hooks/job-hook',
+        reach: 'internet',
+        last_received_at: '2026-07-18T16:00:00+00:00',
+        waiting: 2,
+        dropped: 1,
+      },
+    };
+    const [listed] = visibleCronJobs([job], 'Europe/Berlin');
+    expect(listed.schedule_type).toBe('webhook');
+    expect(listed.webhook).toMatchObject({
+      url: 'https://vbot.example.com/api/hooks/job-hook',
+      reach: 'internet',
+      waiting: 2,
+      dropped: 1,
+    });
+    expect(listed.webhook.last_received_at_display).toContain('18:00');
+    expect(visibleCronJobs([listed])[0].webhook.url).toBe(listed.webhook.url);
+    expect(visibleCronJobs([{ ...job, webhook: null }])[0].webhook).toBe(null);
+
+    // Saving keeps the schedule and its run count, with no time and no watch.
+    const form = createCronFormValues(job);
+    expect(form.frequency).toBe('webhook');
+    expect(buildUpdateCronPayload(form)).toEqual({
+      id: 'job-hook',
+      agent_id: 'main',
+      name: 'Triage issues',
+      prompt: 'Triage the issue',
+      schedule_type: 'webhook',
+      session_id: null,
+      delivery: { kind: 'none' },
+      watch: null,
+      repeat: 5,
+    });
+
+    const draft = createCronFormValues();
+    draft.agent_id = 'main';
+    draft.prompt = 'Triage the issue';
+    draft.watch_kind = 'url';
+    draft.watch_target = 'https://example.com/releases';
+    updateCronSchedule(draft, { frequency: 'webhook' });
+    expect(buildCreateCronPayload(draft)).toEqual({
+      agent_id: 'main',
+      prompt: 'Triage the issue',
+      schedule_type: 'webhook',
+      delivery: { kind: 'app' },
+    });
+  });
+
   it('uses the prompt as a readable fallback for legacy payloads without a name', () => {
     const [job] = visibleCronJobs([
       {

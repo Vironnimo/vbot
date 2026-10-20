@@ -9,6 +9,7 @@ import {
   CRON_SCHEDULE_TYPE_EVENT,
   CRON_SCHEDULE_TYPE_INTERVAL,
   CRON_SCHEDULE_TYPE_ONCE,
+  CRON_SCHEDULE_TYPE_WEBHOOK,
   CRON_WATCH_COMMAND,
   CRON_WATCH_URL,
   applyCronListResponse,
@@ -29,6 +30,8 @@ import {
   disableCronJob,
   enableCronJob,
   deleteCronJob,
+  getCronWebhookSecret,
+  rotateCronWebhookSecret,
 } from '$lib/api.js';
 import { describeCron } from './presentation.js';
 
@@ -61,6 +64,14 @@ export function createCronEditor(context) {
   let deleteConfirmJob = $state(null);
 
   let pendingDiscardAction = null;
+
+  // The shown webhook job's secret once the user asked to see it; '' while
+  // hidden. It is never kept beyond the shown job.
+  let webhookSecret = $state('');
+
+  let webhookSecretBusy = $state(false);
+
+  let showRotateConfirm = $state(false);
 
   let showDiscardConfirm = $state(false);
 
@@ -133,6 +144,10 @@ export function createCronEditor(context) {
     formValues.schedule_type === CRON_SCHEDULE_TYPE_EVENT,
   );
 
+  let isWebhookSchedule = $derived(
+    formValues.schedule_type === CRON_SCHEDULE_TYPE_WEBHOOK,
+  );
+
   // The readable sentence for the cron expression being edited; empty for
   // one-time and interval schedules, which describe themselves.
   let scheduleDescription = $derived(
@@ -166,6 +181,10 @@ export function createCronEditor(context) {
   }
 
   function selectJobNow(job) {
+    if (job.id !== selectedJobId) {
+      webhookSecret = '';
+      showRotateConfirm = false;
+    }
     isCreating = false;
     selectedJobId = job.id;
     formValues = createCronFormValues(job, context.viewState.systemTimezone);
@@ -188,6 +207,8 @@ export function createCronEditor(context) {
   }
 
   function startCreateNow() {
+    webhookSecret = '';
+    showRotateConfirm = false;
     isCreating = true;
     const blank = createCronFormValues(null, context.viewState.systemTimezone);
     blank.agent_id = context.viewState.agents[0]?.id ?? '';
@@ -270,6 +291,9 @@ export function createCronEditor(context) {
       hasScheduleValue =
         formValues.event_id.trim().length > 0 &&
         eventTimeText(formValues) !== '';
+    } else if (isWebhookSchedule) {
+      // Requests start its Runs; it keeps no time.
+      hasScheduleValue = true;
     }
     const repeat = formValues.repeat.trim();
     const repeatValue = Number(repeat);
@@ -371,6 +395,54 @@ export function createCronEditor(context) {
       if (!context.destroyed) {
         submittingForm = false;
       }
+    }
+  }
+
+  // Show the shown webhook job's secret, or hide it again.
+  async function toggleWebhookSecret() {
+    if (webhookSecret) {
+      webhookSecret = '';
+      return;
+    }
+    const jobId = selectedJobId;
+    if (!jobId || webhookSecretBusy) return;
+    webhookSecretBusy = true;
+    try {
+      const result = await getCronWebhookSecret(jobId);
+      if (!context.destroyed && jobId === selectedJobId) {
+        webhookSecret = typeof result?.secret === 'string' ? result.secret : '';
+      }
+    } catch (error) {
+      context.showToast(t('cron.errors.secret'), 'error', error);
+    } finally {
+      webhookSecretBusy = false;
+    }
+  }
+
+  function requestRotateSecret() {
+    if (selectedJobId && !webhookSecretBusy) showRotateConfirm = true;
+  }
+
+  function cancelRotateSecret() {
+    showRotateConfirm = false;
+  }
+
+  // Replace the secret and show the new one, which the caller needs next.
+  async function confirmRotateSecret() {
+    showRotateConfirm = false;
+    const jobId = selectedJobId;
+    if (!jobId || webhookSecretBusy) return;
+    webhookSecretBusy = true;
+    try {
+      const result = await rotateCronWebhookSecret(jobId);
+      if (!context.destroyed && jobId === selectedJobId) {
+        webhookSecret = typeof result?.secret === 'string' ? result.secret : '';
+      }
+      context.showToast(t('cron.webhook.rotated'));
+    } catch (error) {
+      context.showToast(t('cron.errors.rotate'), 'error', error);
+    } finally {
+      webhookSecretBusy = false;
     }
   }
 
@@ -530,6 +602,30 @@ export function createCronEditor(context) {
     },
     get isEventSchedule() {
       return isEventSchedule;
+    },
+    get isWebhookSchedule() {
+      return isWebhookSchedule;
+    },
+    get webhookSecret() {
+      return webhookSecret;
+    },
+    get webhookSecretBusy() {
+      return webhookSecretBusy;
+    },
+    get showRotateConfirm() {
+      return showRotateConfirm;
+    },
+    get toggleWebhookSecret() {
+      return toggleWebhookSecret;
+    },
+    get requestRotateSecret() {
+      return requestRotateSecret;
+    },
+    get cancelRotateSecret() {
+      return cancelRotateSecret;
+    },
+    get confirmRotateSecret() {
+      return confirmRotateSecret;
     },
     set isOnceSchedule(value) {
       isOnceSchedule = value;

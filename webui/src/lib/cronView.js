@@ -7,6 +7,9 @@ export const CRON_SCHEDULE_TYPE_CRON = 'cron';
 export const CRON_SCHEDULE_TYPE_INTERVAL = 'interval';
 export const CRON_SCHEDULE_TYPE_ONCE = 'once';
 export const CRON_SCHEDULE_TYPE_EVENT = 'event';
+// A webhook job runs whenever a request that proves its secret reaches its
+// URL; it keeps no time of its own.
+export const CRON_SCHEDULE_TYPE_WEBHOOK = 'webhook';
 
 // The schedule planner offers readable frequencies instead of raw cron syntax.
 // `once` and `interval` map to their own schedule types; hourly, daily, weekly
@@ -23,6 +26,8 @@ export const CRON_FREQUENCY_CUSTOM = 'custom';
 // A job bound to a calendar event runs at each occurrence; it is not a
 // planner frequency and is only ever loaded, never chosen.
 export const CRON_FREQUENCY_EVENT = 'event';
+// Runs on each webhook request, as its own schedule type.
+export const CRON_FREQUENCY_WEBHOOK = 'webhook';
 
 // Seconds per interval unit, in display order.
 export const CRON_INTERVAL_UNIT_SECONDS = {
@@ -159,6 +164,10 @@ export function updateCronSchedule(formValues, patch) {
   }
   if (frequency === CRON_FREQUENCY_INTERVAL) {
     formValues.schedule_type = CRON_SCHEDULE_TYPE_INTERVAL;
+    return;
+  }
+  if (frequency === CRON_FREQUENCY_WEBHOOK) {
+    formValues.schedule_type = CRON_SCHEDULE_TYPE_WEBHOOK;
     return;
   }
 
@@ -393,6 +402,8 @@ export function createCronFormValues(job = null, systemTimezone = 'UTC') {
     schedule.frequency = CRON_FREQUENCY_INTERVAL;
   } else if (normalized.schedule_type === CRON_SCHEDULE_TYPE_EVENT) {
     schedule.frequency = CRON_FREQUENCY_EVENT;
+  } else if (normalized.schedule_type === CRON_SCHEDULE_TYPE_WEBHOOK) {
+    schedule.frequency = CRON_FREQUENCY_WEBHOOK;
   }
 
   return {
@@ -555,7 +566,7 @@ export function buildCreateCronPayload(formValues) {
   } else if (scheduleType === CRON_SCHEDULE_TYPE_EVENT) {
     payload.event_id = requiredText(formValues?.event_id);
     payload.event_time = eventTimeText(formValues);
-  } else {
+  } else if (scheduleType === CRON_SCHEDULE_TYPE_ONCE) {
     payload.run_at = requiredText(formValues?.run_at);
   }
   // The event's occurrences drive an event job's repetition.
@@ -600,7 +611,7 @@ export function buildUpdateCronPayload(formValues) {
     payload.event_time = eventTimeText(formValues);
     // The event's occurrences drive the repetition; a job has no repeat limit.
     return payload;
-  } else {
+  } else if (scheduleType === CRON_SCHEDULE_TYPE_ONCE) {
     payload.run_at = resolveOnceRunAtValue(formValues);
   }
   const repeat = optionalPositiveInteger(formValues?.repeat);
@@ -689,6 +700,8 @@ function normalizeCronJob(job, systemTimezone = 'UTC') {
       : 0,
     next_fire_at: nextFireAt,
     created_at: optionalText(job?.created_at),
+    // A webhook job's URL and requests; null for another schedule.
+    webhook: normalizeWebhook(job?.webhook, systemTimezone),
     schedule_description: deriveScheduleDescription(
       scheduleType,
       cronExpression,
@@ -702,6 +715,26 @@ function normalizeCronJob(job, systemTimezone = 'UTC') {
     next_fire_at_display: formatTimestamp(nextFireAt, systemTimezone),
     last_checked_at_display: formatTimestamp(lastCheckedAt, systemTimezone),
     last_changed_at_display: formatTimestamp(lastChangedAt, systemTimezone),
+  };
+}
+
+// `url` is null while the server's address is unknown, then `path` names
+// the route; `reach` says who can call it (internet, network or computer).
+// `waiting` requests wait for the next Run; `dropped` ones were dropped unseen
+// since the last Run started. A normalized webhook stays as it is.
+function normalizeWebhook(webhook, systemTimezone) {
+  if (!webhook || typeof webhook !== 'object') {
+    return null;
+  }
+  const lastReceivedAt = optionalText(webhook.last_received_at);
+  return {
+    url: optionalText(webhook.url),
+    path: asText(webhook.path),
+    reach: optionalText(webhook.reach),
+    last_received_at: lastReceivedAt,
+    last_received_at_display: formatTimestamp(lastReceivedAt, systemTimezone),
+    waiting: Number.isInteger(webhook.waiting) ? webhook.waiting : 0,
+    dropped: Number.isInteger(webhook.dropped) ? webhook.dropped : 0,
   };
 }
 
@@ -767,7 +800,10 @@ function deriveScheduleDescription(
   if (scheduleType === CRON_SCHEDULE_TYPE_INTERVAL) {
     return formatInterval(intervalSeconds);
   }
-  if (scheduleType === CRON_SCHEDULE_TYPE_EVENT) {
+  if (
+    scheduleType === CRON_SCHEDULE_TYPE_EVENT ||
+    scheduleType === CRON_SCHEDULE_TYPE_WEBHOOK
+  ) {
     return '';
   }
 
@@ -856,7 +892,8 @@ export {
 function normalizeScheduleType(value) {
   if (
     value === CRON_SCHEDULE_TYPE_INTERVAL ||
-    value === CRON_SCHEDULE_TYPE_EVENT
+    value === CRON_SCHEDULE_TYPE_EVENT ||
+    value === CRON_SCHEDULE_TYPE_WEBHOOK
   ) {
     return value;
   }

@@ -228,6 +228,8 @@ export {
   deleteCronJob,
   enableCronJob,
   disableCronJob,
+  getCronWebhookSecret,
+  rotateCronWebhookSecret,
   getCalendarWindow,
   createCalendarEvent,
   updateCalendarEvent,

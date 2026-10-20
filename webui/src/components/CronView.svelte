@@ -2,10 +2,12 @@
   import CronTimingSettings from './cron/CronTimingSettings.svelte';
   import CronDeliverySettings from './cron/CronDeliverySettings.svelte';
   import CronWatchSettings from './cron/CronWatchSettings.svelte';
+  import CronWebhookSettings from './cron/CronWebhookSettings.svelte';
   import {
     displayValue,
     headerStatusVisible,
     listRowDetail,
+    nextRunText,
     scheduleSummary,
     scheduleTechnicalValue,
     sessionSummary,
@@ -602,7 +604,7 @@
                       {t('cron.detail.nextFire')}
                     </span>
                     <strong class="cron-summary-value">
-                      {displayValue(editor.selectedJob.next_fire_at_display)}
+                      {nextRunText(editor.selectedJob)}
                     </strong>
                     <span class="cron-summary-support">
                       {viewState.systemTimezone}
@@ -844,6 +846,13 @@
               <CronWatchSettings {editor} />
             {/if}
 
+            {#if editor.isWebhookSchedule}
+              <CronWebhookSettings
+                {editor}
+                systemTimezone={viewState.systemTimezone}
+              />
+            {/if}
+
             <section class="s-section" aria-labelledby="cron-section-session">
               <header class="s-section__head">
                 <h3 class="s-section__title" id="cron-section-session">
@@ -961,6 +970,16 @@
       confirmLabel={t('common.delete')}
       onConfirm={editor.confirmDeleteJob}
       onCancel={editor.cancelDeleteJob}
+    />
+  {/if}
+
+  {#if editor.showRotateConfirm}
+    <ConfirmDialog
+      title={t('cron.webhook.rotateConfirmTitle')}
+      body={t('cron.webhook.rotateConfirm')}
+      confirmLabel={t('cron.webhook.rotateConfirmLabel')}
+      onConfirm={editor.confirmRotateSecret}
+      onCancel={editor.cancelRotateSecret}
     />
   {/if}
 
