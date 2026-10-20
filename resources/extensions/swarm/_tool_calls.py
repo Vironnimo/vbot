@@ -33,6 +33,7 @@ from .agent_text import (
     INBOX_ONLY_RECEIVE,
     STATE_ONLY_STATUS,
 )
+from .wiki_text import WIKI_ACTION_IS_FIELD, WIKI_ACTIONS, WIKI_PARAMETERS
 
 Json = dict[str, Any]
 
@@ -194,6 +195,12 @@ _WIKI_ACTIONS = SpellingAliases(
         "restore": ("revert", "rollback", "undelete", "restore_revision"),
     }
 )
+# The fields an action can name by mistake, by spelling: "action": "content".
+_WIKI_FIELD_NAMES = {
+    spelling(field): field
+    for field in (*WIKI_PARAMETERS["properties"], "edits")
+    if field != "action" and spelling(field) not in _WIKI_ACTIONS
+}
 # "latest" and "current" ask for whatever revision is current, which omission means.
 _REVISION_PLACEHOLDERS = frozenset({"latest", "current", "head"})
 
@@ -334,6 +341,7 @@ def normalize_wiki(contract: ToolContract, arguments: Any) -> Any:
     )
     if not isinstance(normalized, dict):
         return normalized
+    _refuse_field_as_action(normalized)
     expected = normalized.get("expected_revision")
     if is_placeholder(expected) or (
         isinstance(expected, str) and spelling(expected) in _REVISION_PLACEHOLDERS
@@ -549,6 +557,27 @@ def _implied_board_action(arguments: Json) -> str | None:
     if {"message_id", "before"} & arguments.keys():
         return "read"
     return None
+
+
+def _refuse_field_as_action(arguments: Json) -> None:
+    """Refuse a swarm_wiki call whose action names one of its fields, as "content" does.
+
+    The call is not run: the fields may fit another action than the one meant.
+    The error names the action the other fields imply, or the valid actions.
+    """
+
+    action = arguments.get("action")
+    if not isinstance(action, str) or action in WIKI_ACTIONS:
+        return
+    field = _WIKI_FIELD_NAMES.get(spelling(action))
+    if field is None:
+        return
+    implied = _implied_wiki_action({key: arguments[key] for key in arguments if key != "action"})
+    if implied is not None:
+        raise ToolContractError(WIKI_ACTION_IS_FIELD["implied"].format(field=field, action=implied))
+    raise ToolContractError(
+        WIKI_ACTION_IS_FIELD["unknown"].format(field=field, actions=", ".join(WIKI_ACTIONS))
+    )
 
 
 def _implied_wiki_action(arguments: Json) -> str | None:

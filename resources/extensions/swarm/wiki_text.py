@@ -9,12 +9,14 @@ WIKI_DESCRIPTION = (
     "post a page's link on the Board when others should notice it."
 )
 
+WIKI_ACTIONS = ("list", "read", "create", "update", "delete", "history", "restore")
+
 WIKI_PARAMETERS: dict[str, Any] = {
     "type": "object",
     "properties": {
         "action": {
             "type": "string",
-            "enum": ["list", "read", "create", "update", "delete", "history", "restore"],
+            "enum": list(WIKI_ACTIONS),
             "description": (
                 "list finds pages, history lists a page's revisions, and restore brings "
                 "back one of them."
@@ -257,6 +259,18 @@ WIKI_NEEDS = {
     ),
     "edits_many": "edits holds {count} edits; send at most {maximum} in one call.",
     "text_long": "{field} has {count} characters. Use at most {maximum} characters.",
+}
+# An action that names a field, as "action": "content" does; the call is not run.
+WIKI_ACTION_IS_FIELD = {
+    "implied": (
+        'Nothing changed. action "{field}" names a field, not an action; the other fields '
+        'you sent fit action "{action}". Repeat the call with "action": "{action}" if you '
+        "meant it."
+    ),
+    "unknown": (
+        'Nothing changed. action "{field}" names a field, not an action. Send action as one '
+        "of {actions}, and {field} as its own field."
+    ),
 }
 WIKI_FIELD_ELSEWHERE = "{field} is used by {users}, not by {action}. Repeat the call without it."
 WIKI_FIELD_UNKNOWN = "swarm_wiki has no field {field}. Repeat the call without it."

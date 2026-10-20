@@ -1127,6 +1127,23 @@ async def test_wiki_create_decides_about_a_page_id_and_a_missing_title(board):
 
 
 @pytest.mark.asyncio
+async def test_wiki_action_naming_a_field_names_the_action_the_fields_fit(board):
+    page_id = await create(board, "Body")
+    replace = {"action": "Content", "page_id": page_id, "content": "New", "expected_revision": 1}
+    assert visible(await invoke(board, replace)) == (
+        'Error (invalid_arguments): Nothing changed. action "content" names a field, not an '
+        'action; the other fields you sent fit action "update". Repeat the call with '
+        '"action": "update" if you meant it.'
+    )
+    assert visible(await invoke(board, {"action": "content", "content": "New"})) == (
+        'Error (invalid_arguments): Nothing changed. action "content" names a field, not an '
+        "action. Send action as one of list, read, create, update, delete, history, restore, "
+        "and content as its own field."
+    )
+    assert (await stored(board, page_id))["revision"] == 1
+
+
+@pytest.mark.asyncio
 async def test_wiki_reading_calls_run_with_a_note(board):
     page_id = await create(board, "Findings about parsers")
     listed = await invoke(board, {"action": "read"})
