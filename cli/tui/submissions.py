@@ -14,8 +14,15 @@ from urllib.parse import quote
 
 from textual.widgets import TextArea
 
+from cli.tui import agent_secrets
 from cli.tui.dialogs import Picker, TextDialog
-from cli.tui.drafts import DraftStore, draft_record, restore_draft, saved_input_record
+from cli.tui.drafts import (
+    DraftStore,
+    draft_record,
+    restore_draft,
+    saved_input_record,
+    secret_command_argument,
+)
 from cli.tui.mentions import resolve_mentions
 from cli.tui.rendering import pretty
 from cli.tui.state import Conversation, JsonObject
@@ -299,6 +306,14 @@ class SubmissionController:
             )
             return
         text = self.app.query_one("#composer", TextArea).text
+        secret_argument = secret_command_argument(text)
+        if secret_argument == "":
+            # A bare `/secret` opens the masked form instead of sending.
+            if await agent_secrets.give(self.app, view):
+                composer = self.app._composer()
+                if self.app.conversation is view and composer is not None and composer.text == text:
+                    composer.load_text("")
+            return
         if view.uncertain:
             if await self.app._guard(self.recover(view)):
                 await self.app._guard(self.app.navigation.refresh(view))
@@ -344,7 +359,7 @@ class SubmissionController:
             if choice != "restore":
                 return
             later_draft = self.snapshot(view)
-            if any(
+            if any(later_draft[key] for key in ("text", "attachments", "mentions")) and any(
                 later_draft[key] != original.get(key) for key in ("text", "attachments", "mentions")
             ):
                 self.saved_drafts.append(later_draft)
@@ -359,6 +374,9 @@ class SubmissionController:
             return
         if not text.strip() and not view.attachments:
             self.app._notice("Nothing to send yet · write a message, or attach a file with F8.")
+            return
+        if secret_argument is not None:
+            await self.send_secret_command(view, text, secret_argument)
             return
         request = view.submission(text)
         if view.session is None:
@@ -426,6 +444,37 @@ class SubmissionController:
         view.mentions = [item for item in view.mentions if item not in submitted_mentions]
         if self.app.conversation is view and self.app.query_one("#composer", TextArea).text == text:
             self.app.query_one("#composer", TextArea).load_text("")
+        await self._admitted(view, result)
+
+    async def send_secret_command(self, view: Conversation, text: str, argument: str) -> None:
+        """Send `/secret NAME ... VALUE` alone and keep no copy of its text.
+
+        No checkpoint precedes it, since one would carry the value to disk, and
+        neither a draft nor the input history keeps it; the draft's attachments
+        wait for the next message. A lost response stays unknown: sending the
+        command again stores the same value once more.
+        """
+        # One space after the command name, which is how the server recognizes it.
+        request = view.submission(f"/secret {argument}", attachments=False)
+        self.pending.add(id(view))
+        try:
+            result = await self.app.client.rpc("chat.stream", request)
+        except ClientError as exc:
+            self.app._notice(
+                f"{exc} Nothing keeps a copy of the /secret command; send it again if "
+                "nothing was stored.",
+                error=True,
+            )
+            return
+        finally:
+            self.pending.discard(id(view))
+        composer = self.app._composer()
+        if self.app.conversation is view and composer is not None and composer.text == text:
+            composer.load_text("")
+        await self._admitted(view, result)
+
+    async def _admitted(self, view: Conversation, result: JsonObject) -> None:
+        """Follow an accepted submission: its new Session, Command result and history."""
         if result.get("session_id") and view.session is None:
             self.app.navigation.views.pop(view.key, None)
             view.session = result["session_id"]

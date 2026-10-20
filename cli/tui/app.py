@@ -20,16 +20,14 @@ from textual.screen import ModalScreen
 from textual.widgets import Markdown, Static, TextArea
 from textual.worker import Worker
 
-from cli.tui import composer
+from cli.tui import agent_secrets, composer
 from cli.tui.commands import ConversationCommands
 from cli.tui.completion import (
     CompletionBar,
 )
 from cli.tui.conversation import ConversationController
 from cli.tui.dialogs import ExtensionDialog, Picker, TextDialog
-from cli.tui.drafts import (
-    DraftStore,
-)
+from cli.tui.drafts import DraftStore, holds_secret, kept_draft
 from cli.tui.mentions import resolve_mentions, retained_mentions
 from cli.tui.models import effective_value
 from cli.tui.rendering import (
@@ -163,6 +161,9 @@ class ConversationApp(App[int]):
         self.rendering = False
         self.render_worker: Worker[Any] | None = None
         self.requests: list[JsonObject] = []
+        # Every pending Secret request; `agent_secrets.requests_for` picks this
+        # conversation's.
+        self.secret_requests: list[JsonObject] = []
         self.queue_items: list[JsonObject] = []
         self.last_notice = ""
         self.notice_level = "info"
@@ -420,6 +421,9 @@ class ConversationApp(App[int]):
                 "Send outcome unknown · Ctrl+R reloads the Session; Send offers recovery",
                 "alert",
             )
+        # The Agent's Run waits on the answer, so the request outranks its spinner.
+        if waiting := agent_secrets.status_text(self, view):
+            return waiting, "alert"
         if view.parent:
             return "Sub-Agent Session · replies go to you · Ctrl+B returns to the parent", "info"
         active = view.facts.get("active_run") or {}
@@ -494,7 +498,8 @@ class ConversationApp(App[int]):
         self._grow_composer(event.text_area)
         self.suggestions.refresh(event.text_area)
         if self.conversation:
-            self.conversation.draft = event.text_area.text
+            # A `/secret` command with its value stays in the composer alone.
+            self.conversation.draft = kept_draft(event.text_area.text)
             mentions = retained_mentions(self.conversation.draft, self.conversation.mentions)
             if mentions != self.conversation.mentions:
                 self.conversation.mentions = mentions
@@ -622,6 +627,12 @@ class ConversationApp(App[int]):
                 or not view.available
             ):
                 return
+            if holds_secret(text):
+                # The Queue keeps its messages; the composer sends the command alone.
+                self._notice(
+                    "A /secret command cannot replace a queued message. Send it from the composer."
+                )
+                return
             params["content"] = text
             params["reply_surface"] = "tui"
             mentions = await resolve_mentions(self.client, view.params(), text)
@@ -708,24 +719,31 @@ class ConversationApp(App[int]):
         await self._guard(self._requests())
 
     async def _requests(self) -> None:
-        await self._load_requests()
-        if not self.requests:
-            self._notice("No Extension requests are waiting.")
-            return
-        request = await self.push_screen_wait(
-            Picker(
-                "Extension requests",
-                [
-                    (
-                        f"{row['extension']} · {row.get('kind', '')} · "
-                        f"{row.get('payload', {}).get('message', row['id'])}",
-                        row,
-                    )
-                    for row in self.requests
-                ],
+        await asyncio.gather(self._load_requests(), agent_secrets.load_requests(self))
+        # This conversation's Secret requests come first: its Run waits on them.
+        choices: list[tuple[str, Any]] = [
+            (
+                f"Secret · {row.get('name', '')} · {row.get('description') or 'the Agent waits'}",
+                ("secret", row),
             )
-        )
+            for row in agent_secrets.requests_for(self, self.conversation)
+        ]
+        choices += [
+            (
+                f"{row['extension']} · {row.get('kind', '')} · "
+                f"{row.get('payload', {}).get('message', row['id'])}",
+                row,
+            )
+            for row in self.requests
+        ]
+        if not choices:
+            self._notice("No Secret or Extension requests are waiting.")
+            return
+        request = await self.push_screen_wait(Picker("Requests", choices))
         if not request:
+            return
+        if isinstance(request, tuple):
+            await agent_secrets.answer(self, request[1])
             return
         values: JsonObject = {}
         problem = ""

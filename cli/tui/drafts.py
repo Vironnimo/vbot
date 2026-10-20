@@ -122,11 +122,45 @@ def _validate(value: Any) -> list[JsonDiagnostic]:
 
 _FORMAT = JsonDocumentFormat("terminal drafts", 1, _SHAPE, _validate)
 
+_SECRET_COMMAND = "/secret"
+
+
+def secret_command_argument(text: str) -> str | None:
+    """The text after `/secret` (empty for the bare command), or None for other input.
+
+    Matches the command as the server does: case-insensitive, surrounding blanks
+    ignored. Any blank may follow the name here, so `/secret` and a line break
+    still count as the command that carries a value.
+    """
+    stripped = text.strip()
+    if stripped[: len(_SECRET_COMMAND)].lower() != _SECRET_COMMAND:
+        return None
+    rest = stripped[len(_SECRET_COMMAND) :]
+    if rest and not rest[0].isspace():
+        return None
+    return rest.strip()
+
+
+def holds_secret(text: str) -> bool:
+    """A `/secret` command with arguments: its value lives only in the composer.
+
+    Such text never becomes a draft, a checkpoint, a saved input or input history.
+    """
+    return bool(secret_command_argument(text))
+
+
+def kept_draft(text: str) -> str:
+    """The composer text a conversation keeps as its draft."""
+    return "" if holds_secret(text) else text
+
 
 def draft_record(view: Conversation) -> JsonObject | None:
-    if not (view.draft or view.attachments or view.mentions or view.uncertain):
+    draft = kept_draft(view.draft)
+    if not (draft or view.attachments or view.mentions or view.uncertain):
         return None
-    return {key: copy.deepcopy(getattr(view, key)) for key in _FIELDS}
+    record = {key: copy.deepcopy(getattr(view, key)) for key in _FIELDS}
+    record["draft"] = draft
+    return record
 
 
 def restore_draft(identifier: str, record: JsonObject) -> Conversation:
@@ -141,7 +175,7 @@ def saved_input_record(value: JsonObject) -> JsonObject:
         session=value.get("session"),
         project=value.get("project"),
         project_selected=value.get("project_selected", False),
-        draft=value["text"],
+        draft=kept_draft(value["text"]),
         attachments=copy.deepcopy(value.get("attachments", [])),
         mentions=list(value.get("mentions", [])),
     )

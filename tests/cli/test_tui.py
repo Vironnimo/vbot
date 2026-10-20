@@ -43,6 +43,7 @@ class Server(TerminalClient):
         self.fail_send = False
         self.active = False
         self.items: list[JsonObject] = []
+        self.secret_requests: list[JsonObject] = []
         self.queued = [
             {
                 "id": "queued-one",
@@ -82,6 +83,8 @@ class Server(TerminalClient):
             return {"items": copy.deepcopy(self.queued)}
         if method == "extensions.requests":
             return {"requests": []}
+        if method == "agent_secrets.list":
+            return {"secrets": [], "requests": copy.deepcopy(self.secret_requests)}
         if method == "chat.work":
             return {"run_active": self.active, "background_work_running": False, "running": []}
         if method == "chat.commands":
@@ -247,7 +250,8 @@ async def test_terminal_send_stream_navigation_and_detach() -> None:
 
 
 @pytest.mark.asyncio
-async def test_queue_edit_shortcut_does_not_send_the_hidden_draft() -> None:
+@pytest.mark.parametrize("edited", ["Edited queue", "/secret NPM_TOKEN npm_value"])
+async def test_queue_edit_shortcut_does_not_send_the_hidden_draft(edited: str) -> None:
     server = Server()
     app = ConversationApp(server, agent_id="main")
     async with app.run_test(size=(120, 40)) as pilot:
@@ -261,10 +265,12 @@ async def test_queue_edit_shortcut_does_not_send_the_hidden_draft() -> None:
         await pilot.press("down", "enter")
         await pilot.pause()
         assert isinstance(app.screen, TextDialog)
-        app.screen.query_one(TextArea).load_text("Edited queue")
+        app.screen.query_one(TextArea).load_text(edited)
         await pilot.press("ctrl+s")
         await pilot.pause()
-        assert server.queued[0]["content"] == "Edited queue"
+        # The Queue keeps what it holds, so a Secret value never enters it.
+        secret = edited.startswith("/secret")
+        assert server.queued[0]["content"] == ("Queue text" if secret else edited)
         assert not server.sent.is_set()
         assert app.query_one("#composer", TextArea).text == "Do not send"
 
