@@ -209,7 +209,7 @@ class ShellTool:
         try:
             secret_environment = await self._secret_environment(context, call)
         except SecretUseError as error:
-            return tool_failure("secret_unavailable", str(error))
+            return tool_failure("secret_unavailable", f"{SHELL_MODEL_NAME} was not run: {error}")
         handoff = _issue_update_handoff(self._update_handoffs, context)
         try:
             command_id = await self._start(context, call, handoff, names, secret_environment)

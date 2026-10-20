@@ -755,7 +755,9 @@ class ToolRegistry:
                     context, tool, normalized_arguments
                 )
             except SecretUseError as error:
-                return tool_failure("secret_unavailable", str(error))
+                return tool_failure(
+                    "secret_unavailable", f"{model_tool_name(tool.name)} was not run: {error}"
+                )
         # From here on the handler runs: only a ToolContractError it raises
         # still means nothing happened; any other exception leaves the call's
         # effects unknown (``tool_failure_for_exception``).
