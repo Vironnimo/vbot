@@ -72,6 +72,7 @@ CHANNEL_RESPONSE_MODES = tuple(sorted(ALLOWED_CHANNEL_RESPONSE_MODES))
 
 
 CRON_STATUSES = ("active", "paused")
+CRON_DELIVERY_KINDS = ("app", "chat", "none")
 
 
 BOOTSTRAP_MODES = ("once", "always")

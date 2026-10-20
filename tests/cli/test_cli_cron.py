@@ -49,6 +49,40 @@ def _webhook(reach: str = "internet") -> dict[str, Any]:
             {"schedule_type": "event", "event_id": "evt_1", "event_time": "start - 30m"},
             id="event",
         ),
+        pytest.param(
+            ("--cron", "0 9 * * *", "--deliver", "app", "--watch", "https://example.com/status"),
+            {
+                "schedule_type": "cron",
+                "cron_expression": "0 9 * * *",
+                "delivery": {"kind": "app"},
+                "watch": {"url": "https://example.com/status"},
+            },
+            id="app-delivery-and-page-watch",
+        ),
+        # A chat named alone can only mean delivery to it.
+        pytest.param(
+            (
+                "--every",
+                "15",
+                "--channel",
+                "telegram",
+                "--chat",
+                "-100123",
+                "--watch",
+                "git log -1",
+            ),
+            {
+                "schedule_type": "interval",
+                "interval_seconds": 900,
+                "delivery": {
+                    "kind": "chat",
+                    "channel_id": "telegram",
+                    "platform_target": "-100123",
+                },
+                "watch": {"command": "git log -1"},
+            },
+            id="chat-delivery-and-command-watch",
+        ),
     ],
 )
 def test_cron_create_sends_the_schedule_fields(
@@ -83,11 +117,21 @@ def test_cron_create_rejects_invalid_schedule_options(
     assert rpc.calls == []
 
 
-def test_cron_create_refuses_an_event_time_without_an_event(rpc: FakeRpc, run_cli: RunCli) -> None:
-    code, out, _err = run_cli(*CREATE, "--cron", "0 9 * * *", "--event-time", "end")
+@pytest.mark.parametrize(
+    ("options", "named"),
+    [
+        pytest.param(("--event-time", "end"), "--event", id="event-time-without-event"),
+        pytest.param(("--deliver", "chat", "--channel", "telegram"), "--chat", id="chat-unnamed"),
+        pytest.param(("--deliver", "app", "--chat", "-100123"), "--chat", id="chat-for-app"),
+    ],
+)
+def test_cron_create_refuses_options_that_need_another(
+    rpc: FakeRpc, run_cli: RunCli, options: tuple[str, ...], named: str
+) -> None:
+    code, out, _err = run_cli(*CREATE, "--cron", "0 9 * * *", *options)
 
     assert code == 1
-    assert "--event" in out
+    assert named in out
     assert rpc.calls == []
 
 
@@ -142,6 +186,8 @@ def test_cron_list_prints_one_row_per_job(rpc: FakeRpc, run_cli: RunCli) -> None
                     "run_at": None,
                     "status": "active",
                     "next_fire_at": "2026-06-12T07:00:00+00:00",
+                    "delivery": {"kind": "app"},
+                    "watch": {"url": "https://example.com/news"},
                 },
                 {
                     "id": "job-2",
@@ -153,6 +199,12 @@ def test_cron_list_prints_one_row_per_job(rpc: FakeRpc, run_cli: RunCli) -> None
                     "run_at": "2026-07-01T09:00:00+00:00",
                     "status": "paused",
                     "next_fire_at": None,
+                    "delivery": {
+                        "kind": "chat",
+                        "channel_id": "telegram",
+                        "platform_target": "-100123",
+                        "thread_id": "7",
+                    },
                 },
                 {
                     "id": "job-3",
@@ -186,19 +238,20 @@ def test_cron_list_prints_one_row_per_job(rpc: FakeRpc, run_cli: RunCli) -> None
     assert out.splitlines()[1:] == [
         "- name=Morning news id=job-1 agent=assistant status=active "
         "schedule=cron[0 9 * * *] remaining_runs=unlimited "
-        "next_fire_at=2026-06-12T07:00:00+00:00 session=new last_outcome=- "
-        "last_error=- prompt=Check the news",
+        "next_fire_at=2026-06-12T07:00:00+00:00 session=new delivery=app "
+        "watch=url[https://example.com/news] last_outcome=- last_error=- prompt=Check the news",
         "- name=One-time audit id=job-2 agent=coder status=paused "
         "schedule=once[2026-07-01T09:00:00+00:00] remaining_runs=1 "
-        "next_fire_at=- session=new last_outcome=- last_error=- "
-        "prompt=" + "A" * 57 + "...",
+        "next_fire_at=- session=new delivery=chat[telegram -100123 7] watch=- "
+        "last_outcome=- last_error=- prompt=" + "A" * 57 + "...",
         "- name=Prepare standup id=job-3 agent=assistant status=active "
         "schedule=event[evt_1 start - 30m] remaining_runs=unlimited "
-        "next_fire_at=2026-06-15T06:30:00+00:00 session=new last_outcome=- "
-        "last_error=- prompt=Prepare the standup",
+        "next_fire_at=2026-06-15T06:30:00+00:00 session=new delivery=none watch=- "
+        "last_outcome=- last_error=- prompt=Prepare the standup",
         "- name=Triage issues id=job-1 agent=assistant status=active "
         f"schedule=webhook[{HOOK_URL}] remaining_runs=unlimited "
-        "next_fire_at=- session=new last_outcome=- last_error=- prompt=Triage the issue",
+        "next_fire_at=- session=new delivery=none watch=- last_outcome=- last_error=- "
+        "prompt=Triage the issue",
     ]
 
 
@@ -252,6 +305,23 @@ def test_cron_show_prints_exactly_the_complete_saved_job(
         ),
         # A job already bound to an event keeps it.
         pytest.param(("--event-time", "end"), {"event_time": "end"}, id="event-time"),
+        pytest.param(
+            ("--deliver", "chat", "--channel", "slack", "--chat", "C01", "--thread", "1712.5"),
+            {
+                "delivery": {
+                    "kind": "chat",
+                    "channel_id": "slack",
+                    "platform_target": "C01",
+                    "thread_id": "1712.5",
+                }
+            },
+            id="chat-delivery",
+        ),
+        pytest.param(
+            ("--deliver", "none", "--clear-watch"),
+            {"delivery": {"kind": "none"}, "watch": None},
+            id="no-delivery-no-watch",
+        ),
     ],
 )
 def test_cron_update_sends_only_the_given_changes(
@@ -284,6 +354,8 @@ def test_cron_update_without_changes_names_every_option(rpc: FakeRpc, run_cli: R
         "--repeat",
         "--session",
         "--status",
+        "--deliver",
+        "--watch",
     ):
         assert option in out
 

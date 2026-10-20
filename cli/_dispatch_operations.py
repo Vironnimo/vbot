@@ -363,9 +363,17 @@ def dispatch_cron_command(
                 message="--event-time needs --event <event-id>",
                 instance=instance,
             )
-        return create_cron_fn(instance, _cron_create_fields_from_args(args))
+        fields = _cron_create_fields_from_args(args)
+        refusal = _add_cron_delivery_and_watch(args, fields)
+        if refusal is not None:
+            return CommandResult(ok=False, message=refusal, instance=instance)
+        return create_cron_fn(instance, fields)
     if args.command == "update":
-        return update_cron_fn(instance, args.id, _cron_changes_from_args(args))
+        changes = _cron_changes_from_args(args)
+        refusal = _add_cron_delivery_and_watch(args, changes)
+        if refusal is not None:
+            return CommandResult(ok=False, message=refusal, instance=instance)
+        return update_cron_fn(instance, args.id, changes)
     if args.command == "delete":
         return delete_cron_fn(instance, args.id)
     if args.command == "enable":
@@ -521,6 +529,41 @@ def _cron_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
     if args.status is not None:
         changes["status"] = args.status
     return changes
+
+
+def _add_cron_delivery_and_watch(args: argparse.Namespace, fields: dict[str, Any]) -> str | None:
+    """Add ``delivery`` and ``watch`` as the cron RPCs take them; a text refuses the call."""
+    chat = {
+        "channel_id": args.channel,
+        "platform_target": args.chat,
+        "thread_id": args.thread,
+    }
+    flags = {"channel_id": "--channel", "platform_target": "--chat", "thread_id": "--thread"}
+    named = [flags[name] for name, value in chat.items() if value]
+    # A chat named alone is clear enough: it can only mean delivery to that chat.
+    kind = args.deliver or ("chat" if named else None)
+    if kind == "chat":
+        if not args.channel or not args.chat:
+            return (
+                "chat delivery needs --channel <channel-id> and --chat <chat-id>; vbot channel "
+                "list shows the Channels and their allowed_chat_ids. Nothing was changed."
+            )
+        fields["delivery"] = {"kind": "chat", **{k: v for k, v in chat.items() if v}}
+    elif kind is not None:
+        if named:
+            verb = "applies" if len(named) == 1 else "apply"
+            return (
+                f"{' and '.join(named)} {verb} only to --deliver chat, not --deliver {kind}. "
+                "Nothing was changed."
+            )
+        fields["delivery"] = {"kind": kind}
+    if args.watch is not None:
+        target = args.watch.strip()
+        is_url = target.casefold().startswith(("http://", "https://"))
+        fields["watch"] = {"url" if is_url else "command": target}
+    elif getattr(args, "clear_watch", False):
+        fields["watch"] = None
+    return None
 
 
 def dispatch_statistics_command(

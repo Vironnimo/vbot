@@ -25,6 +25,9 @@ CRON_UPDATE_FLAGS = (
     "--session",
     "--clear-session",
     "--status",
+    "--deliver",
+    "--watch",
+    "--clear-watch",
 )
 _PROMPT_PREVIEW_LIMIT = 60
 # Who can send requests to a webhook job's URL, by the reach the server reports.
@@ -235,6 +238,8 @@ def _format_job_row(job: object) -> str:
             f" remaining_runs={remaining_runs}",
             f" next_fire_at={next_fire_at}",
             f" session={job.get('session_id') or 'new'}",
+            f" delivery={_format_delivery(job.get('delivery'))}",
+            f" watch={_format_watch(job.get('watch'))}",
             f" last_outcome={last_outcome}",
             f" last_error={job.get('last_error') or '-'}",
             f" prompt={prompt}",
@@ -267,6 +272,28 @@ def _format_schedule(job: Mapping[str, Any]) -> str:
         address = (webhook.get("url") or webhook.get("path")) if isinstance(webhook, dict) else None
         return f"webhook[{_string_or_default(address, '?')}]"
     return "?"
+
+
+def _format_delivery(delivery: object) -> str:
+    if not isinstance(delivery, dict):
+        return "none"
+    kind = _string_or_default(delivery.get("kind"), "none")
+    if kind != "chat":
+        return kind
+    target = " ".join(
+        str(delivery[name])
+        for name in ("channel_id", "platform_target", "thread_id")
+        if delivery.get(name)
+    )
+    return f"chat[{target}]"
+
+
+def _format_watch(watch: object) -> str:
+    if not isinstance(watch, dict):
+        return "-"
+    if isinstance(watch.get("url"), str):
+        return f"url[{watch['url']}]"
+    return f"command[{_prompt_preview(watch.get('command'))}]"
 
 
 def _prompt_preview(value: object) -> str:
