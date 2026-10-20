@@ -3,6 +3,7 @@ import {
   createCronFormValues,
   cronFormFingerprint,
   cronIntervalSeconds,
+  CRON_DELIVERY_CHAT,
   CRON_FREQUENCY_CUSTOM,
   CRON_SCHEDULE_TYPE_CRON,
   CRON_SCHEDULE_TYPE_EVENT,
@@ -277,6 +278,15 @@ export function createCronEditor(context) {
 
     if (!hasCoreValues || !hasScheduleValue || !hasValidRepeat) {
       formErrorMessage = t('cron.errors.missingRequired');
+      return false;
+    }
+    // A chat delivery names its Channel and chat; the thread is optional.
+    if (
+      formValues.delivery_kind === CRON_DELIVERY_CHAT &&
+      (!(formValues.delivery_channel_id ?? '').trim() ||
+        !(formValues.delivery_platform_target ?? '').trim())
+    ) {
+      formErrorMessage = t('cron.errors.chatDelivery');
       return false;
     }
 

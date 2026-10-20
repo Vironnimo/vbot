@@ -32,7 +32,65 @@ describe('cron form payloads and history projection', () => {
       schedule_type: 'interval',
       interval_seconds: 7200,
       repeat: 3,
+      delivery: { kind: 'app' },
     });
+  });
+
+  it('delivers a new job to vBot and round-trips a chat delivery and the last answer', () => {
+    // A new job's answers reach vBot unless the form says otherwise.
+    expect(createCronFormValues().delivery_kind).toBe('app');
+
+    const job = {
+      id: 'job-chat',
+      agent_id: 'main',
+      name: 'Inbox check',
+      prompt: 'Check the inbox',
+      schedule_type: 'interval',
+      interval_seconds: 3600,
+      status: 'active',
+      delivery: {
+        kind: 'chat',
+        channel_id: 'tg-main',
+        platform_target: '42',
+        thread_id: '7',
+      },
+      last_outcome: 'success',
+      last_run_silent: true,
+      last_result: {
+        text: 'Two new mails.',
+        at: '2026-07-18T16:00:00+00:00',
+        run_id: 'run-1',
+      },
+    };
+    const [listed] = visibleCronJobs([job], 'Europe/Berlin');
+    expect(listed.last_run_silent).toBe(true);
+    expect(listed.last_result).toMatchObject({
+      text: 'Two new mails.',
+      run_id: 'run-1',
+    });
+    expect(listed.last_result.at_display).toContain('18:00');
+
+    const form = createCronFormValues(job);
+    const saved = cronFormFingerprint(form);
+    expect(buildUpdateCronPayload(form).delivery).toEqual(job.delivery);
+
+    // The thread is optional; only a chat carries Channel and chat.
+    form.delivery_thread_id = ' ';
+    expect(buildUpdateCronPayload(form).delivery).toEqual({
+      kind: 'chat',
+      channel_id: 'tg-main',
+      platform_target: '42',
+    });
+    form.delivery_kind = 'none';
+    expect(cronFormFingerprint(form)).not.toBe(saved);
+    expect(buildUpdateCronPayload(form).delivery).toEqual({ kind: 'none' });
+
+    // A job without delivery, as RPC callers create it, delivers nowhere.
+    const plain = createCronFormValues({ ...job, delivery: undefined });
+    expect(plain.delivery_kind).toBe('none');
+    expect(
+      visibleCronJobs([{ ...job, last_result: null }])[0].last_result,
+    ).toBe(null);
   });
 
   it('round-trips interval cadence and the repeat limit through the edit form', () => {
@@ -142,6 +200,7 @@ describe('cron form payloads and history projection', () => {
       schedule_type: 'event',
       event_id: 'evt-1',
       event_time: 'end + 2d',
+      delivery: { kind: 'none' },
     });
     // More than 31 days from the event is no event time.
     updateCronSchedule(form, { event_amount: '32' });

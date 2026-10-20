@@ -249,6 +249,7 @@ it('adds a job 30 minutes before the start in a new Session, keeping the edit af
     event_time: 'start - 30m',
     schedule_type: 'event',
     event_id: 'event1',
+    delivery: { kind: 'app' },
   });
   expect(onChanged).toHaveBeenCalledOnce();
   expect(document.querySelector('.calendar-job-editor')).toBeNull();

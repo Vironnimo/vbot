@@ -543,7 +543,7 @@ export default Object.freeze({
   'cron.detail.createTitle': 'Create schedule',
   'cron.detail.editTitle': 'Edit Scheduled Run',
   'cron.detail.createSubtitle':
-    'Define the task, timing, and Session for a new scheduled Run.',
+    'Define the task, timing, Session, and delivery for a new scheduled Run.',
   'cron.detail.summary': 'Schedule summary',
   'cron.detail.lastFired': 'Last fired',
   'cron.detail.lastAttempt': 'Last attempt',
@@ -554,7 +554,9 @@ export default Object.freeze({
   'cron.card.statusFailures': '{status} · {count} failures in a row',
   'cron.card.expression': 'Expression',
   'cron.card.session': 'Session',
+  'cron.card.delivery': 'Answers',
   'cron.detail.lastResult': 'Last result',
+  'cron.detail.lastAnswer': 'Last answer',
   'cron.detail.target': 'Target',
   'cron.detail.newSessionEachRun': 'New Session each Run',
   'cron.detail.waitingForFirstRun': 'Waiting for first execution',
@@ -576,7 +578,18 @@ export default Object.freeze({
   'cron.sections.session': 'Session',
   'cron.sections.sessionSubtitle':
     'Choose whether Runs share existing context.',
+  'cron.sections.delivery': 'Delivery',
+  'cron.sections.deliverySubtitle':
+    "Where each Run's final answer goes. A Run with nothing worth reporting stays silent and delivers nothing.",
+  'cron.delivery.app': 'vBot',
+  'cron.delivery.none': 'Not delivered',
+  'cron.delivery.chat': 'Chat {chat} via {channel}',
+  'cron.delivery.chatThread': 'Chat {chat}, thread {thread} via {channel}',
+  'cron.deliveryKind.app': 'vBot, with a notification',
+  'cron.deliveryKind.chat': 'A Channel chat',
+  'cron.deliveryKind.none': 'Nowhere',
   'cron.outcome.success': 'Succeeded',
+  'cron.outcome.silent': 'Nothing to report',
   'cron.outcome.failed': 'Failed',
   'cron.outcome.cancelled': 'Cancelled',
   'cron.outcome.missed': 'Missed',
@@ -646,6 +659,19 @@ export default Object.freeze({
     'Optional: run inside one fixed, existing Session owned by the target. Leave empty to create a fresh Session for every fire.',
   'cron.form.cronExpressionHelp':
     'Exactly five space-separated fields: minute, hour, day of month, month, weekday. The minimum cadence is one minute; seconds are not supported.\n\nExample: 0 9 * * 1-5 runs at 09:00 on weekdays. * matches any value; ranges (1-5) and lists (1,3,5) work in every field.',
+  'cron.form.delivery': 'Answers go to',
+  'cron.form.deliveryChannel': 'Channel',
+  'cron.form.deliveryChannelPlaceholder': 'Select a Channel',
+  'cron.form.deliveryChannelNone':
+    'No Channel belongs to this Agent. Connect one in Settings under Channels.',
+  'cron.form.deliveryChat': 'Chat ID',
+  'cron.form.deliveryChatPlaceholder': 'Chat ID',
+  'cron.form.deliveryChatHelp':
+    "The chat on the Channel's platform, such as a Telegram chat ID. The Channel's allowed chats are suggested.",
+  'cron.form.deliveryThread': 'Thread',
+  'cron.form.deliveryThreadPlaceholder': 'Optional',
+  'cron.form.deliveryThreadHelp':
+    'Optional: a thread or topic in that chat, such as a Telegram topic ID.',
   'cron.form.repeat': 'Repeat limit',
   'cron.form.repeatPlaceholder': 'Unlimited',
   'cron.deleteConfirmTitle': 'Delete Scheduled Run',
@@ -662,6 +688,7 @@ export default Object.freeze({
   'cron.errors.save': 'Cron job could not be saved.',
   'cron.errors.delete': 'Cron job could not be deleted.',
   'cron.errors.toggle': 'Cron job status could not be updated.',
+  'cron.errors.chatDelivery': 'A chat delivery needs a Channel and a chat ID.',
   'cron.errors.missingRequired':
     'Agent, prompt, and a complete schedule are required: a time, at least one day for weekly schedules, a valid day, minute, or interval, and for an event job a time within 31 days of the event. The repeat limit must be a positive whole number.',
   'cron.messages.created': 'Cron job created.',

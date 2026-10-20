@@ -1,5 +1,6 @@
 <script>
   import CronTimingSettings from './cron/CronTimingSettings.svelte';
+  import CronDeliverySettings from './cron/CronDeliverySettings.svelte';
   import {
     displayValue,
     headerStatusVisible,
@@ -44,6 +45,7 @@
   import { createStandaloneNavigation } from '$lib/navigation.svelte.js';
   import {
     listAgents,
+    listChannels,
     listCronJobs,
     listProjects,
     showProject,
@@ -111,6 +113,10 @@
     listProjects,
     showProject,
   });
+
+  // The Channels a job can deliver to, from `channel.list`. Loaded with the
+  // view; without them the chat delivery offers no Channel.
+  let channels = $state([]);
 
   let destroyed = false;
   // Set once the first job and agent lists arrived, so the place can be
@@ -253,7 +259,19 @@
   });
 
   async function loadInitialData() {
-    await Promise.all([loadAgents(), loadJobs()]);
+    await Promise.all([loadAgents(), loadJobs(), loadChannels()]);
+  }
+
+  // A failure leaves the chat delivery without Channels to offer; the rest of
+  // the view does not depend on them.
+  async function loadChannels() {
+    try {
+      const result = await listChannels();
+      if (destroyed) return;
+      channels = Array.isArray(result?.channels) ? result.channels : [];
+    } catch {
+      // Nothing to offer; a saved chat delivery still shows its Channel id.
+    }
   }
 
   async function loadAgents() {
@@ -610,7 +628,10 @@
                       {t('cron.detail.lastResult')}
                     </span>
                     <strong class="cron-summary-value">
-                      {outcomeLabel(editor.selectedJob.last_outcome)}
+                      {outcomeLabel(
+                        editor.selectedJob.last_outcome,
+                        editor.selectedJob.last_run_silent,
+                      )}
                     </strong>
                     <span class="cron-summary-support">
                       {lastResultSupport(editor.selectedJob)}
@@ -682,6 +703,24 @@
                     </div>
                   </dl>
                 </details>
+
+                <!-- The latest answer that was not silent; a silent Run
+                     keeps the one before it. -->
+                {#if editor.selectedJob.last_result}
+                  <details class="s-disclosure cron-last-answer">
+                    <summary>
+                      {t('cron.detail.lastAnswer')}
+                      {#if editor.selectedJob.last_result.at_display}
+                        <span class="s-disclosure__meta cron-last-answer__time">
+                          {editor.selectedJob.last_result.at_display}
+                        </span>
+                      {/if}
+                    </summary>
+                    <p class="s-disclosure__body cron-last-answer__text">
+                      {editor.selectedJob.last_result.text}
+                    </p>
+                  </details>
+                {/if}
               </div>
 
               {#if editor.selectedJob.last_error}
@@ -806,6 +845,8 @@
                 </div>
               </div>
             </section>
+
+            <CronDeliverySettings {editor} {channels} />
 
             <!-- Identifier and deletion close the page, after everything the
                  user edits. -->

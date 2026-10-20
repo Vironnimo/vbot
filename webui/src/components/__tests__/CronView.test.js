@@ -215,6 +215,9 @@ describe('CronView', () => {
     expect(cardRows[t('cron.card.session')].textContent).toBe(
       t('cron.detail.newSessionEachRun'),
     );
+    expect(cardRows[t('cron.card.delivery')].textContent).toBe(
+      t('cron.delivery.none'),
+    );
     expect(card.dataset.floatingSide).toBe('right');
   });
 
@@ -244,7 +247,7 @@ describe('CronView', () => {
     expect(document.querySelectorAll('.cron-summary-item')).toHaveLength(4);
     expect(
       document.querySelectorAll('.cron-detail-scroll .s-section'),
-    ).toHaveLength(3);
+    ).toHaveLength(4);
     expect(document.querySelector('.cron-technical-details')).toBeTruthy();
     // The Enabled switch states active or paused; no duplicate chip.
     expect(document.querySelector('.detail-btns .chip')).toBeNull();
@@ -254,7 +257,7 @@ describe('CronView', () => {
       document.querySelectorAll(
         '.cron-detail-scroll .s-group label.s-row-label',
       ).length,
-    ).toBe(7);
+    ).toBe(8);
   });
 
   it('shows the job named by the place and records job and new-job steps in it', async () => {
@@ -472,6 +475,7 @@ describe('CronView', () => {
       prompt: 'Prepare morning digest',
       schedule_type: 'cron',
       cron_expression: '0 6 * * *',
+      delivery: { kind: 'app' },
     });
     await waitForCondition(() => listCronJobsMock.mock.calls.length === 2);
     await waitForCondition(() =>
@@ -497,6 +501,7 @@ describe('CronView', () => {
       cron_expression: '0 6 * * *',
       repeat: null,
       session_id: null,
+      delivery: { kind: 'none' },
     });
   });
 
@@ -625,6 +630,7 @@ describe('CronView', () => {
       run_at: storedRunAt,
       repeat: 1,
       session_id: 'session-preserve',
+      delivery: { kind: 'none' },
     });
   });
 
@@ -676,7 +682,89 @@ describe('CronView', () => {
       event_id: 'evt-1',
       event_time: 'start - 45m',
       session_id: null,
+      delivery: { kind: 'none' },
     });
+  });
+
+  it('shows a silent Run and the last answer and delivers to a chat of the Agent', async () => {
+    rpcMock.mockImplementation(
+      createAgentListRpcMock(defaultAgents(), [
+        {
+          id: 'tg-alpha',
+          platform: 'telegram',
+          agent_id: 'agent-alpha',
+          allowed_chat_ids: ['42'],
+        },
+        { id: 'tg-beta', platform: 'telegram', agent_id: 'agent-beta' },
+      ]),
+    );
+    listCronJobsMock.mockResolvedValue({
+      jobs: [
+        cronJob({
+          id: 'job-app',
+          delivery: { kind: 'app' },
+          last_run_silent: true,
+          last_result: {
+            text: 'Two new mails.',
+            at: '2026-05-14T09:35:00+00:00',
+            run_id: 'run-earlier',
+          },
+        }),
+      ],
+    });
+    mountView();
+    await waitForCondition(() => document.getElementById('cron-job-delivery'));
+
+    // The latest Run had nothing to report; the answer before it stays.
+    expect(document.querySelector('.cron-summary').textContent).toContain(
+      t('cron.outcome.silent'),
+    );
+    expect(
+      document.querySelector('.cron-last-answer__text').textContent.trim(),
+    ).toBe('Two new mails.');
+    expect(document.getElementById('cron-job-delivery').textContent).toContain(
+      t('cron.deliveryKind.app'),
+    );
+
+    // A chat offers only the Agent's own Channel and preselects it.
+    chooseOption('cron-job-delivery', t('cron.deliveryKind.chat'));
+    document.getElementById('cron-job-delivery-channel').click();
+    flushSync();
+    const channelOptions = [
+      ...document.querySelectorAll('.dropdown-option'),
+    ].map((option) => option.textContent.trim());
+    expect(channelOptions).toEqual(['tg-alpha · Telegram']);
+    document.getElementById('cron-job-delivery-channel').click();
+    flushSync();
+
+    buttonByText(t('common.save')).click();
+    await waitForCondition(() =>
+      document.body.textContent.includes(t('cron.errors.chatDelivery')),
+    );
+    expect(updateCronJobMock).not.toHaveBeenCalled();
+
+    expect(
+      [...document.querySelectorAll('#cron-job-delivery-chats option')].map(
+        (option) => option.value,
+      ),
+    ).toEqual(['42']);
+    inputById('cron-job-delivery-chat').value = '42';
+    inputById('cron-job-delivery-chat').dispatchEvent(
+      new Event('input', { bubbles: true }),
+    );
+    flushSync();
+    buttonByText(t('common.save')).click();
+    await waitForCondition(() => updateCronJobMock.mock.calls.length === 1);
+    expect(updateCronJobMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'job-app',
+        delivery: {
+          kind: 'chat',
+          channel_id: 'tg-alpha',
+          platform_target: '42',
+        },
+      }),
+    );
   });
 
   it('keeps unsaved edits on reselecting the row and saves them before switching jobs', async () => {
@@ -849,14 +937,29 @@ function confirmDialog(label) {
   button.click();
 }
 
-function createAgentListRpcMock(agents = defaultAgents()) {
+function createAgentListRpcMock(agents = defaultAgents(), channels = []) {
   return async (method) => {
     if (method === 'agent.list') {
       return { agents };
     }
+    if (method === 'channel.list') {
+      return { channels };
+    }
 
     throw new Error(`Unexpected RPC method: ${method}`);
   };
+}
+
+// Opens the dropdown with this id and picks the option with this label.
+function chooseOption(id, label) {
+  document.getElementById(id).click();
+  flushSync();
+  const option = [...document.querySelectorAll('.dropdown-option')].find(
+    (item) => item.textContent.trim() === label,
+  );
+  expect(option, `option not found: ${label}`).toBeTruthy();
+  option.click();
+  flushSync();
 }
 
 function defaultAgents() {

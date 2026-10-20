@@ -280,6 +280,21 @@
   font-size: var(--fs-mono-sm);
 }
 
+/* The latest answer that reached the user, as plain text in its own lines. */
+.cron-view .cron-last-answer__time {
+  margin-left: 8px;
+}
+
+.cron-view .cron-last-answer__text {
+  max-height: 320px;
+  overflow-y: auto;
+  color: var(--text-med);
+  font-size: var(--fs-body-sm);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .cron-view .cron-technical-content {
   display: flex;
   min-width: 0;

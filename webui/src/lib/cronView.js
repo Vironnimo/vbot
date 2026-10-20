@@ -329,6 +329,12 @@ export function describeCronExpression(expression) {
   }
 }
 
+// Where a job delivers each Run's final answer: nowhere, to vBot with a
+// notification, or to a chat of one of the target Agent's Channels.
+export const CRON_DELIVERY_NONE = 'none';
+export const CRON_DELIVERY_APP = 'app';
+export const CRON_DELIVERY_CHAT = 'chat';
+
 export const CRON_STATUS_ACTIVE = 'active';
 const CRON_STATUS_PAUSED = 'paused';
 export const CRON_STATUS_COMPLETED = 'completed';
@@ -365,6 +371,7 @@ export function createCronFormValues(job = null, systemTimezone = 'UTC') {
       ...eventTimeFields('start', 0),
       repeat: '',
       session_id: '',
+      ...deliveryFormFields({ kind: CRON_DELIVERY_APP }),
       original_run_at: '',
       system_timezone: systemTimezone,
     };
@@ -398,9 +405,38 @@ export function createCronFormValues(job = null, systemTimezone = 'UTC') {
         ? ''
         : String(normalized.remaining_runs),
     session_id: normalized.session_id ?? '',
+    ...deliveryFormFields(normalized.delivery),
     original_run_at: normalized.run_at ?? '',
     system_timezone: systemTimezone,
   };
+}
+
+function deliveryFormFields(delivery) {
+  return {
+    delivery_kind: delivery?.kind ?? CRON_DELIVERY_NONE,
+    delivery_channel_id: delivery?.channel_id ?? '',
+    delivery_platform_target: delivery?.platform_target ?? '',
+    delivery_thread_id: delivery?.thread_id ?? '',
+  };
+}
+
+// The `delivery` param of `cron.create` and `cron.update` the form describes.
+// Only a chat carries its Channel, chat and optional thread.
+function cronDeliveryPayload(formValues) {
+  const kind = normalizeDeliveryKind(formValues?.delivery_kind);
+  if (kind !== CRON_DELIVERY_CHAT) {
+    return { kind };
+  }
+  const payload = {
+    kind,
+    channel_id: requiredText(formValues?.delivery_channel_id),
+    platform_target: requiredText(formValues?.delivery_platform_target),
+  };
+  const threadId = optionalText(formValues?.delivery_thread_id);
+  if (threadId !== null) {
+    payload.thread_id = threadId;
+  }
+  return payload;
 }
 
 export function applyAgentListResponse(state, result) {
@@ -447,6 +483,7 @@ export function cronFormFingerprint(formValues) {
     event_time: eventTimeText(values),
     repeat: repeatFingerprint(values.repeat),
     session_id: requiredText(values.session_id),
+    delivery: cronDeliveryPayload(values),
   });
 }
 
@@ -491,6 +528,7 @@ export function buildCreateCronPayload(formValues) {
   if (sessionId !== null) {
     payload.session_id = sessionId;
   }
+  payload.delivery = cronDeliveryPayload(formValues);
 
   return payload;
 }
@@ -505,6 +543,7 @@ export function buildUpdateCronPayload(formValues) {
     prompt: requiredText(formValues?.prompt),
     schedule_type: scheduleType,
     session_id: optionalText(formValues?.session_id),
+    delivery: cronDeliveryPayload(formValues),
   };
 
   if (scheduleType === CRON_SCHEDULE_TYPE_CRON) {
@@ -579,12 +618,17 @@ function normalizeCronJob(job, systemTimezone = 'UTC') {
     event_title: optionalText(job?.event_title),
     remaining_runs: remainingRuns,
     session_id: optionalText(job?.session_id),
+    delivery: normalizeDelivery(job?.delivery),
     status: normalizeStatus(job?.status),
     last_fired_at: lastFiredAt,
     last_attempt_at: lastAttemptAt,
     last_completed_at: lastCompletedAt,
     last_run_id: optionalText(job?.last_run_id),
     last_outcome: optionalText(job?.last_outcome),
+    // The latest Run succeeded with nothing to report ([SILENT]).
+    last_run_silent: job?.last_run_silent === true,
+    // The latest answer that was not silent, or null.
+    last_result: normalizeLastResult(job?.last_result, systemTimezone),
     last_error: optionalText(job?.last_error),
     consecutive_failures: Number.isInteger(job?.consecutive_failures)
       ? job.consecutive_failures
@@ -602,6 +646,39 @@ function normalizeCronJob(job, systemTimezone = 'UTC') {
     last_fired_at_display: formatTimestamp(lastFiredAt, systemTimezone),
     last_completed_at_display: formatTimestamp(lastCompletedAt, systemTimezone),
     next_fire_at_display: formatTimestamp(nextFireAt, systemTimezone),
+  };
+}
+
+function normalizeDelivery(delivery) {
+  const kind = normalizeDeliveryKind(delivery?.kind);
+  if (kind !== CRON_DELIVERY_CHAT) {
+    return { kind };
+  }
+  return {
+    kind,
+    channel_id: asText(delivery.channel_id),
+    platform_target: asText(delivery.platform_target),
+    thread_id: optionalText(delivery.thread_id),
+  };
+}
+
+function normalizeDeliveryKind(value) {
+  return value === CRON_DELIVERY_APP || value === CRON_DELIVERY_CHAT
+    ? value
+    : CRON_DELIVERY_NONE;
+}
+
+function normalizeLastResult(result, systemTimezone) {
+  const text = asText(result?.text);
+  if (!text) {
+    return null;
+  }
+  const at = optionalText(result?.at);
+  return {
+    text,
+    at,
+    run_id: optionalText(result?.run_id),
+    at_display: formatTimestamp(at, systemTimezone),
   };
 }
 

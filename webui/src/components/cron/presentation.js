@@ -1,5 +1,8 @@
 import { activeLocaleTag, t } from '$lib/i18n.js';
 import {
+  CRON_DELIVERY_APP,
+  CRON_DELIVERY_CHAT,
+  CRON_DELIVERY_NONE,
   CRON_FREQUENCY_CUSTOM,
   CRON_FREQUENCY_DAILY,
   CRON_FREQUENCY_HOURLY,
@@ -35,6 +38,35 @@ export function frequencyOptions() {
     { value: CRON_FREQUENCY_MONTHLY, label: t('cron.frequency.monthly') },
     { value: CRON_FREQUENCY_CUSTOM, label: t('cron.frequency.custom') },
   ];
+}
+
+// Where a job's answers go, vBot first as the form's default.
+export function deliveryKindOptions() {
+  return [
+    { value: CRON_DELIVERY_APP, label: t('cron.deliveryKind.app') },
+    { value: CRON_DELIVERY_CHAT, label: t('cron.deliveryKind.chat') },
+    { value: CRON_DELIVERY_NONE, label: t('cron.deliveryKind.none') },
+  ];
+}
+
+// Where a saved job's answers go, in words: "vBot", "Not delivered" or the
+// chat with its thread and Channel.
+export function deliverySummary(job) {
+  const delivery = job?.delivery;
+  if (delivery?.kind === CRON_DELIVERY_APP) {
+    return t('cron.delivery.app');
+  }
+  if (delivery?.kind !== CRON_DELIVERY_CHAT) {
+    return t('cron.delivery.none');
+  }
+  const values = {
+    chat: delivery.platform_target,
+    thread: delivery.thread_id,
+    channel: delivery.channel_id,
+  };
+  return delivery.thread_id
+    ? t('cron.delivery.chatThread', values)
+    : t('cron.delivery.chat', values);
 }
 
 export function intervalUnitOptions() {
@@ -401,9 +433,10 @@ export function statusChipVariant(job) {
   return 'neutral';
 }
 
-export function outcomeLabel(outcome) {
+// `silent`: the successful Run had nothing to report and delivered nothing.
+export function outcomeLabel(outcome, silent = false) {
   if (outcome === 'success') {
-    return t('cron.outcome.success');
+    return silent ? t('cron.outcome.silent') : t('cron.outcome.success');
   }
   if (outcome === 'failed') {
     return t('cron.outcome.failed');
@@ -438,7 +471,8 @@ const OUTCOME_TONES = {
 // Details card beside a Schedule row: the name, the last error as lead text,
 // then what the status dot means, the readable cadence with its exact
 // expression, the next and last Run as absolute and relative moments in the
-// schedule timezone, and where the Run goes. `agentLabel` names the target.
+// schedule timezone, where the Run goes and where its answer goes.
+// `agentLabel` names the target.
 export function scheduleRowDetails(
   job,
   { agentLabel = (target) => target, nowMs = Date.now() } = {},
@@ -473,7 +507,7 @@ export function scheduleRowDetails(
         label: t('cron.detail.lastResult'),
         value: job.last_outcome
           ? [
-              outcomeLabel(job.last_outcome),
+              outcomeLabel(job.last_outcome, job.last_run_silent),
               momentText(
                 job.last_completed_at_display,
                 job.last_completed_at,
@@ -491,6 +525,7 @@ export function scheduleRowDetails(
         value: job.session_id || t('cron.detail.newSessionEachRun'),
         mono: Boolean(job.session_id),
       },
+      { label: t('cron.card.delivery'), value: deliverySummary(job) },
     ],
     placement: 'right',
   };

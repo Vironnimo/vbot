@@ -30,7 +30,11 @@
     buildAgentTargetOptions,
     createAgentTargetCatalogLoader,
   } from '$lib/agentTargetOptions.js';
-  import { eventTimeFields, eventTimeText } from '$lib/cronView.js';
+  import {
+    CRON_DELIVERY_APP,
+    eventTimeFields,
+    eventTimeText,
+  } from '$lib/cronView.js';
   import { eventJobDueAt, eventJobs } from '$lib/calendarView.js';
   import {
     compactTimestamp,
@@ -281,11 +285,14 @@
           session_id: submitted.session || null,
         });
       } else {
+        // Like a job made under Schedules, its answers reach vBot; Schedules
+        // changes where they go.
         await createCronJob({
           ...fields,
           schedule_type: 'event',
           event_id: submittedEventId,
           ...(submitted.session ? { session_id: submitted.session } : {}),
+          delivery: { kind: CRON_DELIVERY_APP },
         });
       }
       if (editor?.id === submitted.id && eventId === submittedEventId) {
