@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
@@ -68,6 +69,24 @@ SOURCE_DEFINITIONS = (
 )
 SOURCE_CATALOG = {source.id: source for source in SOURCE_DEFINITIONS}
 
+# A Skill folder the user added to a Project: ``folder:<path>``, the path
+# repository-relative when the folder lies inside the repository, else absolute.
+FOLDER_SOURCE_PREFIX = "folder:"
+
+
+def folder_source_path(source_id: str) -> str | None:
+    """The stored folder path of a Skill folder Source id, else ``None``."""
+    if not source_id.startswith(FOLDER_SOURCE_PREFIX):
+        return None
+    return source_id.removeprefix(FOLDER_SOURCE_PREFIX) or None
+
+
+def source_definition(source_id: str) -> SourceDefinition | None:
+    """The definition of a catalog or Skill folder Source; ``None`` for unknown ids."""
+    if (path := folder_source_path(source_id)) is not None:
+        return SourceDefinition(source_id, "folder", "skills", (path,))
+    return SOURCE_CATALOG.get(source_id)
+
 
 def default_adapters() -> dict[str, AgentAdapter]:
     from core.projects.sources.codex import CodexAdapter
@@ -114,15 +133,24 @@ def detect_sources(
     *,
     adapters: dict[str, AgentAdapter] | None = None,
     skill_scan: SkillScan | None = None,
+    selections: list[SourceSelection] | None = None,
 ) -> list[DetectedSource]:
+    """Detect the catalog Sources present in ``root`` plus the Skill folders ``selections`` add."""
     from core.skills import scan_skill_names
 
     adapters = default_adapters() if adapters is None else adapters
-    skill_folders = [
-        path for item in SOURCE_DEFINITIONS if item.kind == "skills" for path in item.paths
+    definitions = [
+        *SOURCE_DEFINITIONS,
+        *(
+            definition
+            for selection in selections or ()
+            if folder_source_path(selection.id) is not None
+            and (definition := source_definition(selection.id)) is not None
+        ),
     ]
+    skill_folders = [path for item in definitions if item.kind == "skills" for path in item.paths]
     detected: list[DetectedSource] = []
-    for definition in SOURCE_DEFINITIONS:
+    for definition in definitions:
         paths: list[str] = []
         try:
             for relative in definition.paths:
@@ -224,7 +252,7 @@ def skill_roots(root: Path, selections: list[SourceSelection]) -> list[Path]:
         path
         for selection in selections
         if selection.enabled
-        if (definition := SOURCE_CATALOG.get(selection.id)) is not None
+        if (definition := source_definition(selection.id)) is not None
         and definition.kind == "skills"
         for path in definition.paths
     ]
@@ -252,7 +280,7 @@ def instruction_files(root: Path, selections: list[SourceSelection]) -> list[str
         path
         for selection in selections
         if selection.enabled
-        if (definition := SOURCE_CATALOG.get(selection.id)) is not None
+        if (definition := source_definition(selection.id)) is not None
         and definition.kind == "instructions"
         for path in definition.paths
         if is_file_strict(root / path)
@@ -276,6 +304,10 @@ def normalize_sources(value: Any) -> list[SourceSelection]:
             or not isinstance(enabled, bool)
         ):
             raise ValueError("Sources require unique ids and boolean switches.")
+        if source_id.startswith(FOLDER_SOURCE_PREFIX) and (
+            folder_source_path(source_id) is None or "agent_paths" in entry
+        ):
+            raise ValueError("A Skill folder Source names its folder after 'folder:' only.")
         # Unknown ids remain inert for future adapters and are preserved on disk.
         seen.add(source_id)
         paths = entry.get("agent_paths")
@@ -285,4 +317,50 @@ def normalize_sources(value: Any) -> list[SourceSelection]:
         ):
             raise ValueError("agent_paths must be a list of repository-relative patterns.")
         result.append(SourceSelection(source_id, enabled, None if paths is None else tuple(paths)))
+    return result
+
+
+def adopt_folder_sources(
+    root: Path, selections: list[SourceSelection], *, known: set[str]
+) -> list[SourceSelection]:
+    """Store each newly added Skill folder Source in its canonical form.
+
+    Source ids in ``known`` are already stored and stay as they are, even when
+    their folder is gone. A new folder must be an existing directory; inside the
+    repository it is kept repository-relative, so it follows a re-pointed
+    Project, and elsewhere absolute. Two Sources may not name one folder.
+    """
+    result: list[SourceSelection] = []
+    added: list[str] = []
+    for selection in selections:
+        raw = folder_source_path(selection.id)
+        if raw is None or selection.id in known:
+            result.append(selection)
+            continue
+        folder = Path(raw).expanduser()
+        folder = folder if folder.is_absolute() else root / folder
+        if not is_dir_strict(folder):
+            raise ValueError(f"Skill folder is not an existing directory: {raw}")
+        # Normalized, not resolved: a folder reached through a link stays that link.
+        folder = Path(os.path.normpath(folder))
+        try:
+            stored = folder.relative_to(root).as_posix()
+        except ValueError:
+            stored = folder.as_posix()
+        added.append(stored)
+        result.append(replace(selection, id=f"{FOLDER_SOURCE_PREFIX}{stored}"))
+    claimed = {
+        (root / path).resolve()
+        for item in [
+            *SOURCE_DEFINITIONS,
+            *(source_definition(selection.id) for selection in selections if selection.id in known),
+        ]
+        if item is not None and item.kind == "skills"
+        for path in item.paths
+    }
+    for path in added:
+        target = (root / path).resolve()
+        if target in claimed:
+            raise ValueError(f"Skill folder {path} is already a Source of this Project.")
+        claimed.add(target)
     return result

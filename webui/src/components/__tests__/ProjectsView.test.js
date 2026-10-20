@@ -60,10 +60,9 @@ describe('ProjectsView list and selection', () => {
     ).toBeTruthy();
     expectSectionOrder([
       'Repository',
-      'Sources',
       'Agent defaults',
       'Team',
-      'Auto-load files',
+      'Instructions',
       'Tools',
       'Skills',
     ]);
@@ -495,13 +494,99 @@ describe('ProjectsView list and selection', () => {
 describe('ProjectsView Project settings', () => {
   const view = setupProjectsViewSuite();
 
-  it('keeps migrated Agent paths on a Source switch and expands them explicitly', async () => {
+  it('shows each Source in the section that uses it, keeps migrated Agent paths on a switch and expands them explicitly', async () => {
     const sources = [
       {
         id: 'claude.agents',
         enabled: true,
         agent_paths: ['.claude/agents/*.md'],
       },
+      { id: 'shared.skills', enabled: true },
+      { id: 'claude.instructions', enabled: false },
+    ];
+    const scan = cleanScan({
+      sources: [
+        {
+          id: 'claude.agents',
+          ecosystem: 'claude',
+          kind: 'agents',
+          detected: true,
+          agents: 1,
+          skills: 0,
+        },
+        {
+          id: 'shared.skills',
+          ecosystem: 'shared',
+          kind: 'skills',
+          detected: true,
+          paths: ['.agents/skills'],
+          agents: 0,
+          skills: 1,
+        },
+        {
+          id: 'claude.instructions',
+          ecosystem: 'claude',
+          kind: 'instructions',
+          detected: true,
+          paths: ['CLAUDE.md'],
+          agents: 0,
+          skills: 0,
+        },
+      ],
+    });
+    let record = serveProject({ sources }, scan);
+    setProjectMock.mockImplementation(async (_id, changes) => {
+      record = { ...record, ...changes };
+      return { project: record, scan };
+    });
+    view.mount();
+    await selectDemo();
+    await wait(0);
+    const section = (id) =>
+      document.querySelector(`#${id}`).closest('.s-section');
+    expect(
+      section('project-section-team').querySelector(
+        'button[aria-label="Toggle Claude Code"]',
+      ),
+    ).toBeTruthy();
+    expect(
+      section('project-section-skills').textContent.includes('.agents/skills'),
+    ).toBe(true);
+    expect(
+      section('project-section-auto-load').textContent.includes('CLAUDE.md'),
+    ).toBe(true);
+    toggleByAriaLabel('Toggle Claude Code').click();
+    flushSync();
+    expect(
+      toggleByAriaLabel('Toggle Claude Code').getAttribute('aria-checked'),
+    ).toBe('false');
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="project-save-demo"]'),
+    );
+    buttonByTestId('project-save-demo').click();
+    await waitForCondition(() => setProjectMock.mock.calls.length === 1);
+    expect(setProjectMock).toHaveBeenLastCalledWith('demo', {
+      sources: [{ ...sources[0], enabled: false }, sources[1], sources[2]],
+    });
+    buttonWithTextContent('Include all detected definitions').click();
+    flushSync();
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="project-save-demo"]'),
+    );
+    buttonByTestId('project-save-demo').click();
+    await waitForCondition(() => setProjectMock.mock.calls.length === 2);
+    expect(setProjectMock).toHaveBeenLastCalledWith('demo', {
+      sources: [
+        { id: 'claude.agents', enabled: false },
+        sources[1],
+        sources[2],
+      ],
+    });
+  });
+
+  it('adds a Skill folder first among the Skill Sources and drops one the server refuses', async () => {
+    const sources = [
+      { id: 'claude.agents', enabled: true },
       { id: 'shared.skills', enabled: true },
     ];
     const scan = cleanScan({
@@ -526,37 +611,50 @@ describe('ProjectsView Project settings', () => {
     });
     let record = serveProject({ sources }, scan);
     setProjectMock.mockImplementation(async (_id, changes) => {
-      record = { ...record, ...changes };
+      if (changes.sources.some((source) => source.id === 'folder:missing'))
+        throw new Error('Skill folder is not an existing directory: missing');
+      // The server stores a folder inside the repository relative to it.
+      record = {
+        ...record,
+        sources: changes.sources.map((source) =>
+          source.id === 'folder:C:/repos/demo/.vbot/skills'
+            ? { ...source, id: 'folder:.vbot/skills' }
+            : source,
+        ),
+      };
+      listProjectsMock.mockResolvedValue({ projects: [record] });
       return { project: record, scan };
     });
     view.mount();
     await selectDemo();
     await wait(0);
-    toggleByAriaLabel('Toggle Claude Code · Agents').click();
-    flushSync();
-    expect(
-      toggleByAriaLabel('Toggle Claude Code · Agents').getAttribute(
-        'aria-checked',
+
+    setInputValue('project-skill-folder-add', 'missing');
+    buttonByTestId('project-skill-folder-add').click();
+    await waitForCondition(() =>
+      document.body.textContent.includes(
+        'Skill folder is not an existing directory: missing',
       ),
-    ).toBe('false');
-    await waitForCondition(() =>
-      document.querySelector('[data-testid="project-save-demo"]'),
     );
-    buttonByTestId('project-save-demo').click();
-    await waitForCondition(() => setProjectMock.mock.calls.length === 1);
-    expect(setProjectMock).toHaveBeenLastCalledWith('demo', {
-      sources: [{ ...sources[0], enabled: false }, sources[1]],
-    });
-    buttonWithTextContent('Include all detected definitions').click();
-    flushSync();
+    expect(
+      document.querySelector('button[aria-label="Remove missing"]'),
+    ).toBeNull();
+
+    setInputValue('project-skill-folder-add', 'C:/repos/demo/.vbot/skills');
+    buttonByTestId('project-skill-folder-add').click();
     await waitForCondition(() =>
-      document.querySelector('[data-testid="project-save-demo"]'),
+      document.querySelector('button[aria-label="Remove .vbot/skills"]'),
     );
-    buttonByTestId('project-save-demo').click();
-    await waitForCondition(() => setProjectMock.mock.calls.length === 2);
     expect(setProjectMock).toHaveBeenLastCalledWith('demo', {
-      sources: [{ id: 'claude.agents', enabled: false }, sources[1]],
+      sources: [
+        sources[0],
+        { id: 'folder:C:/repos/demo/.vbot/skills', enabled: true },
+        sources[1],
+      ],
     });
+    expect(inputById('project-skill-folder-add').value).toBe('');
+    await wait(900);
+    expect(setProjectMock).toHaveBeenCalledTimes(2);
   });
 
   it('offers Save only for unsaved edits and saves only the changed fields', async () => {

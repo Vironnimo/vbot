@@ -30,6 +30,8 @@ import {
   seedTeamOverrideDraft,
   normalizeOverrideNumber,
   normalizeScanReport,
+  addSkillFolderSource,
+  sourceKind,
 } from './presentation.js';
 import { createProjectDialogs } from './dialogs.js';
 
@@ -516,6 +518,28 @@ export function createProjectsController({
     state.editError = '';
   }
 
+  // An added Skill folder saves at once: the server checks that it exists and
+  // is no Source yet. A refused folder leaves the list again, and its reason
+  // is returned for the folder field instead of the page banner.
+  async function addSkillFolder(path) {
+    const before = state.editForm.sources;
+    const next = addSkillFolderSource(before, path, (source) =>
+      sourceKind(source, state.activeSources),
+    );
+    if (next === before) return { ok: false, error: '' };
+    const previous = JSON.stringify(before);
+    const added = JSON.stringify(next);
+    updateEditField('sources', next);
+    if (state.editSaving || (await saveSelectedProject()))
+      return { ok: true, error: '' };
+    const error = state.editError;
+    if (JSON.stringify(state.editForm.sources) === added) {
+      state.editForm.sources = JSON.parse(previous);
+      state.editError = '';
+    }
+    return { ok: false, error };
+  }
+
   function moveAutoLoadEntry(from, to) {
     const files = state.editForm.auto_load;
     if (
@@ -937,6 +961,7 @@ export function createProjectsController({
     trackModelDropdownOpen,
     updateAddField,
     updateEditField,
+    addSkillFolder,
     moveAutoLoadEntry,
     updateListField,
     updateModelsRefreshToken,

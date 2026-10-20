@@ -6,6 +6,8 @@ import {
   createProjectsState,
   normalizeScanReport,
   projectTeam,
+  reorderSourcesOfKind,
+  sourceKind,
 } from '../projectsView.js';
 
 function deferred() {
@@ -1093,6 +1095,40 @@ describe('Projects controller Team overrides', () => {
 // Chat's Project context consumes these scan projections too, so they keep
 // direct tests of their shape.
 describe('Project scan projections', () => {
+  it('reorders Sources only among their own kind and keeps the others in place', () => {
+    const rows = [
+      { id: 'claude.agents', kind: 'agents' },
+      { id: 'shared.skills', kind: 'skills' },
+      { id: 'codex.agents', kind: 'agents' },
+    ];
+    const sources = [
+      { id: 'claude.agents' },
+      { id: 'shared.skills' },
+      { id: 'codex.agents' },
+      { id: 'folder:.vbot/skills' },
+      { id: 'future.thing' },
+    ];
+    const kindOf = (source) => sourceKind(source, rows);
+    expect(sources.map(kindOf)).toEqual([
+      'agents',
+      'skills',
+      'agents',
+      'skills',
+      null,
+    ]);
+    expect(
+      reorderSourcesOfKind(sources, kindOf, 'skills', 1, 0).map(
+        (source) => source.id,
+      ),
+    ).toEqual([
+      'claude.agents',
+      'folder:.vbot/skills',
+      'codex.agents',
+      'shared.skills',
+      'future.thing',
+    ]);
+  });
+
   it('projects the scan Team into display-ready members with overrides and provenance', () => {
     expect(
       projectTeam({

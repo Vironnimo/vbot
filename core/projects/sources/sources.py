@@ -8,11 +8,12 @@ from typing import Any
 
 from core.projects.scan_report import FindingType, ScanFinding, ScanReport
 from core.projects.sources.catalog import (
-    SOURCE_CATALOG,
     AgentAdapter,
     DetectedSource,
     default_adapters,
     detect_sources,
+    folder_source_path,
+    source_definition,
 )
 from core.projects.sources.profile import AgentProfile, SourceSelection
 
@@ -32,7 +33,11 @@ def scan_project(
     adapters: dict[str, AgentAdapter] | None = None,
     detected: list[DetectedSource] | None = None,
 ) -> ScanResult:
-    detected = detect_sources(root, adapters=adapters) if detected is None else detected
+    detected = (
+        detect_sources(root, adapters=adapters, selections=sources)
+        if detected is None
+        else detected
+    )
     by_id = {item.definition.id: item for item in detected}
     winners: dict[str, AgentProfile] = {}
     skills: dict[str, str] = {}
@@ -42,7 +47,11 @@ def scan_project(
     for selection in sources:
         item = by_id.get(selection.id)
         if item is None:
-            definition = SOURCE_CATALOG.get(selection.id)
+            definition = source_definition(selection.id)
+            if selection.enabled and (folder := folder_source_path(selection.id)) is not None:
+                findings.append(
+                    ScanFinding(FindingType.INVALID_SOURCE, f"Skill folder not found: {folder}")
+                )
             source_rows.append(
                 {
                     "id": selection.id,
@@ -139,7 +148,7 @@ def read_profile(
     adapters = default_adapters() if adapters is None else adapters
     if selected is not None:
         for selection in sources:
-            definition = SOURCE_CATALOG.get(selection.id)
+            definition = source_definition(selection.id)
             if (
                 selection.enabled
                 and definition is not None
@@ -154,7 +163,7 @@ def read_profile(
     # A removed or renamed selected definition may expose a previously shadowed
     # winner. Preserve the ordinary ordered search for that uncommon case.
     for selection in sources:
-        definition = SOURCE_CATALOG.get(selection.id)
+        definition = source_definition(selection.id)
         if not selection.enabled or definition is None or definition.kind != "agents":
             continue
         for agent in adapters[definition.ecosystem].scan(root):

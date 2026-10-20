@@ -66,7 +66,7 @@ A function vBot offers its Agents, with a name, description and JSON Schema para
 An Identity Agent's own home for its identity and Memory files (`SOUL.md`, `USER.md`, `MEMORY.md`) (`agent.md`). Not a Project, the directory a Session's file and shell work uses, or a Session owner; a Workspace path that equals a Project path does not select that Project.
 
 ## Project
-A registered repository that Agents work in, with ordered repository Sources for instructions, Skills and its Team, plus defaults and capability ceilings; runtime Project state lives in vBot's data directory, not in the repository (`projects.md`). Not the repository directory itself, an Agent, or a Workspace.
+A registered repository that Agents work in, with ordered Sources for instructions, Skills and its Team (repository files, plus Skill folders the user adds), defaults and capability ceilings; runtime Project state lives in vBot's data directory, not in the repository (`projects.md`). Not the repository directory itself, an Agent, or a Workspace.
 
 ## Scratch Area
 The temporary area in vBot's data directory for one conversation and its Sub-Agent tree, with an own Scratch folder for each participating Session (`tools/scratch.md`). Not a Workspace, Memory, a delivery location for the user, or the coding agent's own scratchpad directory.

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -33,7 +34,11 @@ def _write_claude_agent(repo: Path, filename: str, name: str) -> None:
 
 def _write_project_skill(repo: Path, name: str, description: str) -> None:
     """Write a project-owned skill under ``<repo>/.opencode/skills/<name>/``."""
-    skill_dir = repo / ".opencode" / "skills" / name
+    _write_skill(repo / ".opencode" / "skills", name, description)
+
+
+def _write_skill(folder: Path, name: str, description: str) -> None:
+    skill_dir = folder / name
     skill_dir.mkdir(parents=True)
     skill_dir.joinpath("SKILL.md").write_text(
         f"---\nname: {name}\ndescription: {description}\n---\n\nUse this skill.\n",
@@ -392,6 +397,59 @@ async def test_set_sources_switches_team_without_restart(tmp_path: Path) -> None
     ]
     assert _team(switched) == ["reviewer"]
     assert _team(shown) == ["reviewer"]
+
+
+@pytest.mark.asyncio
+async def test_set_adopts_skill_folders_inside_and_outside_the_repository(
+    tmp_path: Path,
+) -> None:
+    # A folder inside the repository is stored relative to it, one elsewhere
+    # absolute; a folder that is gone stays listed with a finding instead of
+    # failing the Project.
+    state, repo = await _vbot_state(tmp_path, "builder.md")
+    _write_skill(repo / ".vbot/skills", "review", "Repository review.")
+    outside = tmp_path / "shared-skills"
+    _write_skill(outside, "review", "Shared review.")
+    _write_skill(outside, "deploy", "Shared deploy.")
+
+    added = await rpc_result(
+        state,
+        "project.set",
+        project_id="vbot",
+        sources=[
+            {"id": f"folder:{repo / '.vbot' / 'skills'}", "enabled": True},
+            {"id": f"folder:{outside}", "enabled": True},
+        ],
+    )
+    stored = [source["id"] for source in added["project"]["sources"]]
+    duplicate = await rpc_error(
+        state,
+        "project.set",
+        project_id="vbot",
+        sources=[*added["project"]["sources"], {"id": "folder:.vbot/skills/", "enabled": True}],
+    )
+    missing = await rpc_error(
+        state,
+        "project.set",
+        project_id="vbot",
+        sources=[{"id": "folder:nowhere", "enabled": True}],
+    )
+    shutil.rmtree(repo / ".vbot")
+    gone = await rpc_result(state, "project.show", project_id="vbot")
+
+    assert stored == ["folder:.vbot/skills", f"folder:{outside.resolve().as_posix()}"]
+    assert [(row["kind"], row["detected"], row["skills"]) for row in added["scan"]["sources"]] == [
+        ("skills", True, 1),
+        ("skills", True, 2),
+    ]
+    assert "already a Source" in duplicate["message"]
+    assert "not an existing directory: nowhere" in missing["message"]
+    # Opening the Project appends its detected Agent Source behind the folders.
+    assert [source["id"] for source in gone["project"]["sources"]][:2] == stored
+    assert [row["detected"] for row in gone["scan"]["sources"]][:2] == [False, True]
+    assert "Skill folder not found: .vbot/skills" in [
+        finding["detail"] for finding in gone["scan"]["report"]["findings"]
+    ]
 
 
 # ---------------------------------------------------------------------------

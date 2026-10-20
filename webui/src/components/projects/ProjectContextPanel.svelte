@@ -6,10 +6,19 @@
   import SortableList from '../ui/SortableList.svelte';
   import PathField from '../ui/PathField.svelte';
   import { tooltip } from '$lib/tooltip.js';
+  import ProjectSourceList from './ProjectSourceList.svelte';
+  import { sourceKind } from '$lib/projectsView.js';
   let { projectsState = $bindable(), projectsController } = $props();
 
   // Auto-load files are picked inside the Project folder, relative to it.
   let projectRoot = $derived(projectsController.selectedProject()?.cwd ?? '');
+  // Instruction files of other tools join the auto-load files here.
+  let hasInstructionSources = $derived(
+    projectsState.editForm.sources.some(
+      (source) =>
+        sourceKind(source, projectsState.activeSources) === 'instructions',
+    ),
+  );
 
   function addAutoLoadEntry() {
     const entry = projectsState.autoLoadDraft.trim();
@@ -46,7 +55,7 @@
   <section class="s-section" aria-labelledby="project-section-auto-load">
     <header class="s-section__head">
       <h3 class="s-section__title" id="project-section-auto-load">
-        {t('projects.detail.sectionAutoLoad')}
+        {t('projects.detail.sectionInstructions')}
       </h3>
       <InfoHint text={t('projects.detail.autoLoadInfo')} />
     </header>
@@ -116,6 +125,21 @@
           </Button>
         </div>
       </div>
+      {#if hasInstructionSources}
+        <div class="s-subhead">
+          <h4 class="s-subhead__title">
+            {t('projects.sources.instructionsTitle')}
+          </h4>
+        </div>
+        <p class="s-group__note projects-sources-help">
+          {t('projects.sources.instructionsHelp')}
+        </p>
+        <ProjectSourceList
+          {projectsState}
+          {projectsController}
+          kind="instructions"
+        />
+      {/if}
     </div>
   </section>
 </div>
