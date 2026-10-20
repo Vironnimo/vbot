@@ -350,7 +350,8 @@ export const backgroundTasks = (
         kind: 'command',
         tool: child,
         dotStatus: commandRowState.dotStatus,
-        label: commandRowState.command,
+        label: commandRowState.description || commandRowState.command,
+        description: commandRowState.description,
         command: commandRowState.command,
         fullCommand: commandRowState.fullCommand,
         commandId: commandRowState.commandId,
@@ -557,11 +558,12 @@ export const backgroundCommandRowState = (
     known && COMMAND_PROGRESS[known.status] === COMMAND_ENDED_WITH_STATUS
       ? known
       : (callEnd ?? known ?? COMMAND_STATE_ENDED);
-  const fullCommand = bashCommand(tool);
+  const fullCommand = bashArgument(tool, 'command');
   return {
     commandId,
     command: commandPreview(fullCommand),
     fullCommand,
+    description: bashArgument(tool, 'description').replace(/\s+/g, ' '),
     dotStatus: state.stillRunning
       ? 'running'
       : COMMAND_DOT_STATUSES[state.status],
@@ -570,9 +572,9 @@ export const backgroundCommandRowState = (
   };
 };
 
-function bashCommand(tool) {
+function bashArgument(tool, name) {
   const args = parseJsonValue(toolArguments(tool));
-  return trimmedString(isPlainObject(args) ? args.command : '');
+  return trimmedString(isPlainObject(args) ? args[name] : '');
 }
 
 function commandPreview(command) {

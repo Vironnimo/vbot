@@ -253,7 +253,7 @@ describe('ChatActivityPanel', () => {
       }),
       failedBash: backgroundCommandTask({
         id: 'bash-failed',
-        command: 'npm test',
+        arguments: { command: 'npm test', description: 'Run the tests' },
       }),
       runningBash: backgroundCommandTask({
         id: 'bash-running',
@@ -301,7 +301,8 @@ describe('ChatActivityPanel', () => {
       ['Sidebar work', subagent, 'running'],
     ]);
     expect(sectionRows(finished)).toEqual([
-      ['npm test', bash, 'failed'],
+      // A description stands in for its command.
+      ['Run the tests', bash, 'failed'],
       // A command without a reported status has ended, never runs.
       ['npm run lint', bash, 'ended'],
       ['tester', subagent, 'failed'],
@@ -338,23 +339,26 @@ describe('ChatActivityPanel', () => {
       ),
     ).toBeNull();
     expect(document.body.textContent).not.toContain('Implement the sidebar');
-    // Each complete command sits in a copy card.
+    // Each complete command sits in a copy card, headed by its description.
     const cards = Object.fromEntries(
       [...document.querySelectorAll('.copyable-value-card')].map((card) => [
         card.querySelector('.copyable-value-card__value').textContent,
-        card.querySelector('button').getAttribute('aria-label'),
+        [
+          card.querySelector('.copyable-value-card__title')?.textContent ?? '',
+          card.querySelector('button').getAttribute('aria-label'),
+        ],
       ]),
     );
     expect(cards).toMatchObject({
-      'npm run dev': t('chat.copyCommand'),
-      'npm test': t('chat.copyCommand'),
-      'npm run lint': t('chat.copyCommand'),
+      'npm run dev': ['', t('chat.copyCommand')],
+      'npm test': ['Run the tests', t('chat.copyCommand')],
+      'npm run lint': ['', t('chat.copyCommand')],
     });
 
     // Bash rows are plain rows that show their command and kind.
     for (const [command, statusKey] of [
       ['npm run dev', 'running'],
-      ['npm test', 'failed'],
+      ['Run the tests', 'failed'],
       ['npm run lint', 'ended'],
     ]) {
       const row = rowContaining(command);

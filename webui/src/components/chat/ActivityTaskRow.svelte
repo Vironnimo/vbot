@@ -70,7 +70,7 @@
 
   const cancelTaskLabel = (task) => {
     if (task.kind === 'command') {
-      return t('chat.activity.cancelCommandAria', { command: task.command });
+      return t('chat.activity.cancelCommandAria', { command: task.label });
     }
     if (task.workRunning) {
       return t('chat.activity.stopSubAgentWorkAria', { agent: task.agentId });
@@ -167,19 +167,23 @@
     >
       <span class="chat-activity__task-copy">
         <!-- The command must receive focus so its complete text and Copy
-             action reach keyboard users. -->
+             action reach keyboard users. A description stands in for the
+             command, which its card then always shows. -->
         <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
         <span
-          class="chat-activity__task-title chat-activity__task-command"
+          class="chat-activity__task-title"
+          class:chat-activity__task-command={!task.description}
           tabindex={task.fullCommand ? 0 : undefined}
         >
-          {task.command}
+          {task.label}
           <CopyableValueCard
             value={task.fullCommand}
+            title={task.description}
             mono
             copyLabel={t('chat.copyCommand')}
             copiedLabel={t('chat.commandCopied')}
-            whenTruncated={task.command === task.fullCommand}
+            whenTruncated={!task.description &&
+              task.command === task.fullCommand}
             placement="left"
           />
         </span>
@@ -213,7 +217,7 @@
         running={task.dotStatus === 'running'}
         load={onLoadCommandOutput}
         label={t('chat.activity.commandOutput.aria', {
-          command: task.command,
+          command: task.label,
         })}
       />
     {/if}
@@ -361,7 +365,7 @@
   <Button
     variant="tertiary"
     class="chat-activity__outcome chat-activity__outcome-toggle"
-    ariaLabel={t('chat.activity.commandOutput.aria', { command: task.command })}
+    ariaLabel={t('chat.activity.commandOutput.aria', { command: task.label })}
     aria-expanded={expanded}
     aria-controls={expanded ? outputId(task) : undefined}
     onClick={() => toggleOutput(task)}

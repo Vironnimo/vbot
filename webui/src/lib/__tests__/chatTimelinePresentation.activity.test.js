@@ -654,6 +654,7 @@ describe('background command rows', () => {
         commandId: 'cmd_one',
         command: 'npm run dev',
         fullCommand: 'npm run dev',
+        description: '',
         dotStatus,
         stillRunning,
         callEnded: false,

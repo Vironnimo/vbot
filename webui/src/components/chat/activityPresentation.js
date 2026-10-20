@@ -59,7 +59,7 @@ export const reflectionRowLabel = (row) =>
 export const taskLabel = (task) => {
   if (task.kind === 'command') {
     return t('chat.activity.commandTaskAria', {
-      command: task.command,
+      command: task.label,
       status: task.rowState?.stillRunning
         ? t('chat.activity.status.stillRunning')
         : statusLabel(task.dotStatus),
