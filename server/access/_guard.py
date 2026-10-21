@@ -12,6 +12,7 @@ from server.access._rules import (
     AUTH_STATUS_PATH,
     RouteClass,
     classify_route,
+    host_header_name,
     is_capability_route,
     is_webhook_route,
     request_host,
@@ -46,16 +47,21 @@ _WEBSOCKET_CLOSE_CODES = {403: WEBSOCKET_ACCESS_DENIED, 503: WEBSOCKET_DEVICES_U
 #: templates and xterm.js set style attributes. Images allow remote URLs because
 #: Markdown shows remote images; everything active is same-origin. In
 #: ``authenticated`` mode remote images must be https: a plain-http image would
-#: tell everyone on the way which page of the WebUI the user is reading.
+#: tell everyone on the way which page of the WebUI the user is reading. Frames
+#: may also show this host's other ports: the Portals, each an origin of its own.
 _WEBUI_CONTENT_SECURITY_POLICY = (
     "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
     "img-src 'self' data: blob: https:{http}; media-src 'self' data: blob:; "
     "font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; "
-    "frame-src 'self'; manifest-src 'self'; form-action 'self'; "
+    "frame-src 'self'{frames}; manifest-src 'self'; form-action 'self'; "
     "frame-ancestors 'none'; object-src 'none'; base-uri 'none'"
 )
-WEBUI_CONTENT_SECURITY_POLICY = _WEBUI_CONTENT_SECURITY_POLICY.format(http=" http:")
-AUTHENTICATED_WEBUI_CONTENT_SECURITY_POLICY = _WEBUI_CONTENT_SECURITY_POLICY.format(http="")
+WEBUI_CONTENT_SECURITY_POLICY = _WEBUI_CONTENT_SECURITY_POLICY.format(
+    http=" http:", frames="{frames}"
+)
+AUTHENTICATED_WEBUI_CONTENT_SECURITY_POLICY = _WEBUI_CONTENT_SECURITY_POLICY.format(
+    http="", frames="{frames}"
+)
 HSTS_VALUE = b"max-age=31536000"
 CLEAR_DEVICE_COOKIE = (
     f"{DEVICE_COOKIE}=; Max-Age=0; Path=/; Secure; HttpOnly; SameSite=Strict".encode("latin-1")
@@ -98,6 +104,7 @@ class AccessGuard:
                 if service.config.mode == "authenticated"
                 else WEBUI_CONTENT_SECURITY_POLICY
             )
+            policy = policy.format(frames=_portal_frame_source(scope, secure=facts.secure))
             send = _with_security_headers(send, route=route, secure=facts.secure, policy=policy)
         if facts.refusal == "host_not_allowed":
             # Answering only to known names defeats DNS rebinding.
@@ -298,6 +305,18 @@ async def _refuse(
         headers.append((b"retry-after", str(max(1, round(retry_after))).encode("ascii")))
     await send({"type": "http.response.start", "status": status, "headers": headers})
     await send({"type": "http.response.body", "body": body})
+
+
+def _portal_frame_source(scope: Scope, *, secure: bool) -> str:
+    """The CSP source of this host's Portal ports, or nothing for an unusable Host."""
+    values = [value for name, value in scope.get("headers") or () if name == b"host"]
+    if len(values) != 1:
+        return ""
+    name = host_header_name(values[0].decode("latin-1"))
+    # CSP host sources cannot name IPv6 literals.
+    if name is None or ":" in name:
+        return ""
+    return f" {'https' if secure else 'http'}://{name}:*"
 
 
 def _with_security_headers(send: Send, *, route: RouteClass, secure: bool, policy: str) -> Send:

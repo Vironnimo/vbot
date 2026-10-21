@@ -238,6 +238,8 @@ class ToolContext:
     # The widget the call shows inline in the chat, recorded via ``show_display_widget``;
     # empty when it shows none.
     presentation_widget: JsonObject = field(default_factory=dict, repr=False, compare=False)
+    # The Portal whose card shows after the call, via ``show_display_portal``.
+    presentation_portal: JsonObject = field(default_factory=dict, repr=False, compare=False)
     # Request-only media: never included in result envelopes or lifecycle events.
     result_media: list[JsonObject] = field(default_factory=list, repr=False, compare=False)
     # Session-scoped file-content tracker for git-style change statistics.
@@ -428,6 +430,15 @@ class ToolContext:
         """
         self.presentation_widget.clear()
         self.presentation_widget.update({"id": widget_id, "title": title})
+
+    def show_display_portal(self, portal_id: str, title: str, port: int) -> None:
+        """Show a card for Portal *portal_id* after this call in the chat.
+
+        The display carries no credential: the WebUI reads the Portal's live
+        state and its access by id.
+        """
+        self.presentation_portal.clear()
+        self.presentation_portal.update({"id": portal_id, "title": title, "port": port})
 
     def add_display_memory_changes(
         self,

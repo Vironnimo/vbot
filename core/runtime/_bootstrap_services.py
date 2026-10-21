@@ -175,6 +175,8 @@ def _archive_services(runtime: Runtime) -> ArchiveServices:
             await asyncio.to_thread(secrets.remove_session, address)
 
     async def close_session_transports(addresses: Sequence[SessionAddress]) -> None:
+        if runtime._portals is not None:
+            runtime._portals.close_sessions(addresses)
         await runtime.close_session_transports(
             (address.agent_id, address.session_id) for address in addresses
         )

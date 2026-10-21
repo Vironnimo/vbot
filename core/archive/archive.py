@@ -104,8 +104,8 @@ class ArchiveServices:
     (``None`` keeps entries until they are deleted) and raises
     :class:`ArchiveRetentionUnknownError` when it cannot be read reliably;
     ``clock`` is the current UTC time retention compares with;
-    ``close_session_transports`` closes the Provider transports (such as a Codex
-    WebSocket) kept open for archived Sessions; ``remove_session_secrets``
+    ``close_session_transports`` closes what stays open for archived Sessions:
+    Provider transports (such as a Codex WebSocket) and Portals; ``remove_session_secrets``
     deletes the Agent Secrets bound to them, which a restore does not bring back.
     """
 

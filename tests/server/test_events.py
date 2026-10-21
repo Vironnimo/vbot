@@ -147,6 +147,7 @@ def test_allowed_resource_kinds_lock_the_documented_wire_contract() -> None:
         "calendar",
         "commands",
         "terminals",
+        "portals",
         "memories",
         "skills",
         "data_store",

@@ -86,6 +86,7 @@ from core.tools import (
 )
 from core.tools.command_manager import CommandManager
 from core.tools.live import LiveToolHosts
+from core.tools.portal_registry import PortalRegistry
 from core.tools.scratch_areas import ScratchAreas
 from core.tools.terminal_manager import TerminalManager
 from core.tools.tools import ToolPromptBlockRegistry, ToolRegistry
@@ -142,6 +143,7 @@ class RuntimeServiceGraph:
         self._update_handoffs: UpdateHandoffs | None = None
         self._terminal_manager: TerminalManager | None = None
         self._command_manager: CommandManager | None = None
+        self._portals: PortalRegistry | None = None
         self._scratch_areas: ScratchAreas | None = None
         self._skills: SkillRegistry | None = None
         self._skill_authoring: SkillAuthoringService | None = None
@@ -280,6 +282,10 @@ class RuntimeServiceGraph:
 
     command_manager: _StartedService[CommandManager] = _StartedService(
         lambda runtime: runtime._command_manager, "Command manager service not available"
+    )
+
+    portals: _StartedService[PortalRegistry] = _StartedService(
+        lambda runtime: runtime._portals, "Portal service not available"
     )
 
     file_read_state: _StartedService[FileReadState] = _StartedService(

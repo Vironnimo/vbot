@@ -278,6 +278,7 @@ def main(argv: list[str] | None = None) -> None:
                 "on_stopped": on_stopped,
                 "access": access,
                 "local_access_token": local_token.value,
+                "tls": tls,
             }
             if safe_startup_mode is not None:
                 app_kwargs["safe_startup_mode"] = safe_startup_mode
