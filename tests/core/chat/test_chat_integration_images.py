@@ -48,12 +48,18 @@ _PNG_BYTES = _png_stream.getvalue()
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("source", "damaged"),
-    [("user", False), ("user", True), ("tool", True)],
-    ids=["user-resized", "user-damaged", "tool-damaged"],
+    ("source", "damaged", "compressible"),
+    [
+        ("user", False, False),
+        ("user", True, False),
+        ("tool", True, False),
+        ("user", False, True),
+        ("tool", False, True),
+    ],
+    ids=["user-resized", "user-damaged", "tool-damaged", "user-lossless", "tool-lossless"],
 )
 async def test_image_validation_and_known_limits_reach_chat_requests(
-    start_runtime: StartRuntime, source: str, damaged: bool
+    start_runtime: StartRuntime, source: str, damaged: bool, compressible: bool
 ) -> None:
     class LimitedAdapter(FakeAdapter):
         @override
@@ -79,9 +85,12 @@ async def test_image_validation_and_known_limits_reach_chat_requests(
     with start_runtime(adapter) as runtime:
         agent = runtime.agents.create("coder", "Coder", model="fake-provider/fake-model-vision")
         stream = io.BytesIO()
-        Image.frombytes("RGB", (128, 64), random.Random(9).randbytes(128 * 64 * 3)).save(
-            stream, format="PNG"
+        pixels = (
+            Image.new("RGB", (128, 64), "blue")
+            if compressible
+            else Image.frombytes("RGB", (128, 64), random.Random(9).randbytes(128 * 64 * 3))
         )
+        pixels.save(stream, format="PNG", compress_level=0 if compressible else 6)
         original = stream.getvalue()
         if damaged:
             original = original[: len(original) // 2]
@@ -121,9 +130,14 @@ async def test_image_validation_and_known_limits_reach_chat_requests(
             assert len(delivered) <= 512
             with Image.open(io.BytesIO(delivered)) as image:
                 image.load()
-                assert image.width < 128
-            assert "resized from 128x64" in notes
-            assert "original file is unchanged" in notes
+                if compressible:
+                    assert image.size == pixels.size
+                    assert image.tobytes() == pixels.tobytes()
+                else:
+                    assert image.width < 128
+            if not compressible:
+                assert "resized from 128x64" in notes
+                assert "original file is unchanged" in notes
         assert path.read_bytes() == original
 
 
@@ -340,7 +354,6 @@ async def test_read_image_stays_on_its_tool_result_until_compaction_for_vision_m
         media_parts = [part for part in tool_result_parts if part.get("type") == "media"]
         assert len(media_parts) == 1
         assert media_parts[0]["media_type"] == "image/png"
-        assert base64.b64decode(media_parts[0]["base64"]) == original_bytes
         later_parts = _tool_result_content_parts(adapter.requests[2].messages)
         assert [part for part in later_parts if part.get("type") == "media"] == media_parts
         assert runtime.chat_runs is not None
@@ -351,8 +364,12 @@ async def test_read_image_stays_on_its_tool_result_until_compaction_for_vision_m
                 for event in await timelines.events(run)
             ]
         )
-        with Image.open(io.BytesIO(base64.b64decode(media_parts[0]["base64"]))) as delivered:
+        with (
+            Image.open(io.BytesIO(base64.b64decode(media_parts[0]["base64"]))) as delivered,
+            Image.open(io.BytesIO(original_bytes)) as original,
+        ):
             assert delivered.size == (16, 12)
+            assert delivered.tobytes() == original.tobytes()
 
         # The canonical Session persists the original user turn and the compact Tool
         # envelope with a reference to a stored copy of the pixels; base64 never
@@ -423,12 +440,14 @@ async def test_rereading_overwritten_image_delivers_each_calls_own_pixels(
                 assert len(media) == 1
                 assert media[0]["media_type"] == "image/png"
                 raw = base64.b64decode(media[0]["base64"])
-                if source_format == "PNG":
-                    assert raw == frames[index]
-                with Image.open(io.BytesIO(raw)) as delivered:
+                with (
+                    Image.open(io.BytesIO(raw)) as delivered,
+                    Image.open(io.BytesIO(frames[index])) as original,
+                ):
                     assert delivered.format == "PNG"
                     assert delivered.size == (16, 12)
                     assert delivered.getpixel((0, 0)) == colors[index]
+                    assert delivered.tobytes() == original.tobytes()
             if step < len(frames):
                 # Every Tool call reads the exact same path, as in a render loop.
                 image_path.write_bytes(frames[step])

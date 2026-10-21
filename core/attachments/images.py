@@ -19,6 +19,7 @@ from typing import Any, override
 from PIL import Image, ImageCms, ImageOps
 from pillow_heif import register_heif_opener
 
+from core.attachments._png import recompress_png
 from core.attachments.attachments import AttachmentError
 from core.utils.workers import BoundedWorkerPool
 
@@ -146,12 +147,13 @@ class ImageTarget:
         return (digest, media_type, self.output_types, self.max_output_bytes, self.max_dimension)
 
 
-@dataclass(frozen=True)
+@dataclass
 class _ImageInfo:
     size: tuple[int, int]
     maximum_size: tuple[int, int]
     frames: int
     pixels: int
+    png_incompressible: bool = False
 
 
 class _EncodingTooLargeError(Exception):
@@ -176,9 +178,9 @@ class _OutputBuffer(io.BytesIO):
 
 
 class ImageConverter:
-    """Validate every image; preserve accepted bytes or prepare a bounded copy.
+    """Validate every image; losslessly repack PNGs or prepare a bounded copy.
 
-    Validation caches retain only hashes and dimensions. Converted-output caches
+    Validation caches retain only metadata. Converted-output caches
     are byte-bounded and include destination formats and limits in the key.
     Inspection, decoding, encoding and cache work runs in bounded workers.
     """
@@ -219,8 +221,15 @@ class ImageConverter:
     ) -> PreparedImage:
         digest = hashlib.sha256(data).digest()
         info = self._validate(data, media_type, digest)
-        if target.accepts(media_type, len(data), info.maximum_size):
-            return PreparedImage(data, media_type, info.size, info.size)
+        native = PreparedImage(data, media_type, info.size, info.size)
+        if (
+            media_type == "image/png"
+            and info.frames == 1
+            and target.accepts(media_type, 0, info.maximum_size)
+        ):
+            native = self._compress_png(native, digest, info)
+        if target.accepts(media_type, len(native.data), info.maximum_size):
+            return native
         targets = target.output_types
         if not targets:
             raise ImageConversionError("unsupported_target")
@@ -247,13 +256,37 @@ class ImageConverter:
                 result = self._fit(converted, target, profile)
         except (*_DECODE_ERRORS, ImageCms.PyCMSError) as exc:
             raise ImageConversionError() from exc
+        self._remember(key, result)
+        return result
+
+    def _compress_png(
+        self, native: PreparedImage, digest: bytes, info: _ImageInfo
+    ) -> PreparedImage:
+        key = (digest, "image/png")
+        if key in self._cache:
+            self._cache.move_to_end(key)
+            return self._cache[key]
+        if info.png_incompressible:
+            return native
+        # At most 8 bytes per pixel (16-bit RGBA), plus a filter byte per
+        # scanline in each of the seven possible Adam7 interlace passes.
+        data = recompress_png(native.data, max_decoded_bytes=info.pixels * 8 + info.size[1] * 7)
+        if data is native.data:
+            info.png_incompressible = True
+            return native
+        # Repacking preserves the encoded pixels, format and metadata exactly;
+        # it needs no conversion note and must not trigger a lossy warning.
+        result = PreparedImage(data, native.media_type, info.size, info.size)
+        self._remember(key, result)
+        return result
+
+    def _remember(self, key: tuple[Any, ...], result: PreparedImage) -> None:
         if len(result.data) <= _CACHE_BYTES:
             while self._cache_bytes + len(result.data) > _CACHE_BYTES:
                 _, evicted = self._cache.popitem(last=False)
                 self._cache_bytes -= len(evicted.data)
             self._cache[key] = result
             self._cache_bytes += len(result.data)
-        return result
 
     def _validate(self, data: bytes, media_type: str, digest: bytes) -> _ImageInfo:
         key = (digest, media_type)
