@@ -148,9 +148,13 @@ class FakeTarget:
     def apps(self) -> list[AppInfo]:
         return list(self.apps_)
 
-    def open(self, application: AppInfo) -> None:
+    def open(self, application: AppInfo) -> bool:
+        """Bring a window of *application* to the front, or launch it when it has none."""
         self.opened.append(application.name)
+        if not any(item.app.matches(application) for item in self.windows_):
+            return True
         self.front(application)
+        return False
 
     def front(self, application: AppInfo) -> None:
         """Bring the topmost window of *application* to the front."""
