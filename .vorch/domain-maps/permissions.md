@@ -4,7 +4,7 @@ The optional rules that confine what an Agent's Tools may read, change, run and 
 
 ## Overview
 
-`core/permissions/` (`permissions.py`, re-exported by `core.permissions`) owns the rule language (parse, normalize, validate, per-part resolution), placeholder expansion, path normalization, the `PermissionBoundary` and its decisions, the protected locations, and the refusal type and its Agent-facing text. `commands/` will hold the shell command analysis (References). The package is a pure library: it keeps no global state and learns every folder it protects or grants from the `BoundaryContext` its caller builds; at import it loads only the standard library and `core.utils.errors` (`idna` and `ctypes` load where first used).
+`core/permissions/` (`permissions.py`, re-exported by `core.permissions`) owns the rule language (parse, normalize, validate, per-part resolution), placeholder expansion, path normalization, the `PermissionBoundary` and its decisions, the protected locations, and the refusal type and its Agent-facing text. `commands/` holds the shell command analysis (References). The package is a pure library: it keeps no global state and learns every folder it protects or grants from the `BoundaryContext` its caller builds; at import it loads only the standard library and `core.utils.errors` (`idna` and `ctypes` load where first used).
 
 Not owned here: storing `permission_rules` on Agents, Settings defaults, Project overrides and `TemporaryAgentConfig` (their owners call `normalize_permission_rules`), building the Run's boundary and carrying it to `ToolContext` (Chat), the checks inside each Tool (Tools), persisting ceilings on Sub-Agent Sessions and Cron jobs (`subagents.md`, `automation.md`), and every UI. `tool_failure_for_exception` maps `PermissionDenied` to `permission_denied` (`tools/registry-dispatch.md` -> Failure codes).
 
@@ -84,4 +84,4 @@ This domain owns the refusal text (`PermissionRefusal.message`, `core/permission
 
 Read these only when your task matches - not by default.
 
-- Analyzing shell command lines (CommandPlan, PowerShell helper, bash lowering) -> permissions/commands.md (written with the command analysis)
+- Changing how shell command lines are analyzed (CommandPlan, PowerShell helper, path tiers, cwd tracking, Shell(...) patterns) -> `permissions/commands.md`
