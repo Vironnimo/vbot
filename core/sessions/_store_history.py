@@ -306,6 +306,21 @@ def tool_result_payload(
     return None if row is None else str(row[0])
 
 
+def tool_result_payload_by_id(
+    connection: sqlite3.Connection, payload_id: str, owner_name: str
+) -> str | None:
+    """Return the JSON text of payload *payload_id* of *owner_name* in any Session.
+
+    Copies of one payload share its id and its content, so any row serves.
+    """
+    row = connection.execute(
+        "SELECT payload_json FROM tool_result_payloads "
+        "WHERE payload_id = ? AND owner_name = ? LIMIT 1",
+        (payload_id, owner_name),
+    ).fetchone()
+    return None if row is None else str(row[0])
+
+
 def latest_note(
     connection: sqlite3.Connection, address: SessionAddress, *, content_prefix: str
 ) -> Callable[[], ChatMessage | None]:

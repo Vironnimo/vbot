@@ -39,6 +39,7 @@ from core.runs import (
     GOAL_EVENT_RECORDED_EVENT,
     REASONING_EVENT,
     SUBAGENT_MESSAGE_RECORDED_EVENT,
+    WIDGET_STATE_RECORDED_EVENT,
     Run,
 )
 from core.sessions import ChatSession
@@ -86,7 +87,7 @@ def _emit_message_event(
 
 
 def _emit_display_records(run: Run, messages: Sequence[ChatMessage]) -> None:
-    """Announce the goal changes and Sub-Agent messages persisted notes record."""
+    """Announce the goal changes, Sub-Agent messages and widget states notes record."""
     for message in messages:
         if message.role != "note":
             continue
@@ -107,6 +108,16 @@ def _emit_display_records(run: Run, messages: Sequence[ChatMessage]) -> None:
                     "id": message.id,
                     "timestamp": message.timestamp,
                     "messages": [entry.to_dict() for entry in message.subagent_messages],
+                },
+                allow_after_cancel=True,
+            )
+        if message.widget_states:
+            run.emit(
+                WIDGET_STATE_RECORDED_EVENT,
+                {
+                    "id": message.id,
+                    "timestamp": message.timestamp,
+                    "widgets": [entry.to_dict() for entry in message.widget_states],
                 },
                 allow_after_cancel=True,
             )

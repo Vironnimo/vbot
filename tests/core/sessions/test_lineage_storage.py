@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from core.chat import ChatMessage, ChatSessionError
-from core.chat.messages import GoalEvent, MessageSender, ModelFallback, ToolCall
+from core.chat.messages import GoalEvent, MessageSender, ModelFallback, ToolCall, WidgetState
 from core.chat.output_files import AssistantFileReference
 from core.prompts.pinned_context import PINNED_MEMORY_FILES_SLOT, PINNED_SKILL_CATALOG_SLOT
 from core.runs import Run, RunExecutionOwner, RunKind
@@ -284,6 +284,7 @@ def _populate(manager: ChatSessionManager, session_id: str) -> ChatSession:
             ),
             ChatMessage.error("provider", "failed"),
             ChatMessage.note("", goal_event=GoalEvent("paused", reason="user")),
+            ChatMessage.note("Values", widget_states=[WidgetState("res_a", "Spacing", {"a": 1})]),
             ChatMessage.compaction_checkpoint(
                 summary="summary", projection=[], compacted_token_count=1
             ),
@@ -341,6 +342,7 @@ def test_deleting_a_session_removes_exactly_what_it_owns(manager: ChatSessionMan
         "user_entry_senders",
         "note_model_fallbacks",
         "note_goal_events",
+        "note_widget_states",
     } <= owned
     assert populated["prompt_blobs"] == before["prompt_blobs"] + 1
 

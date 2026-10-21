@@ -19,10 +19,11 @@ JsonObject = dict[str, Any]
 
 @dataclass(frozen=True)
 class ToolResultPayload:
-    """One JSON payload an Extension attached to its Tool call's result.
+    """One JSON payload a Tool attached to its call's result.
 
-    ``payload_id`` is an opaque safe token the Extension hands to the Agent;
-    ``owner_name`` names the Extension that alone may load the payload again.
+    ``payload_id`` is an opaque safe token; ``owner_name`` names the owner that
+    alone may load the payload again: the Tool's Extension, or ``tool:<name>``
+    for a built-in Tool.
     """
 
     payload_id: str

@@ -621,6 +621,13 @@ class SessionStore:
             )
         )
 
+    def tool_result_payload_by_id(self, payload_id: str, *, owner_name: str) -> str | None:
+        return self._read(
+            lambda connection: _store_history.tool_result_payload_by_id(
+                connection, payload_id, owner_name
+            )
+        )
+
     def latest_note(self, address: SessionAddress, *, content_prefix: str) -> ChatMessage | None:
         return self._read_decoded(
             lambda connection: _store_history.latest_note(

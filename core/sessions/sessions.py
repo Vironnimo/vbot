@@ -884,6 +884,19 @@ class ChatSessionManager:
             return None
         return None if payload_json is None else json.loads(payload_json)
 
+    async def tool_result_payload_by_id_async(
+        self, payload_id: str, *, owner_name: str
+    ) -> Any | None:
+        """Load payload *payload_id* of *owner_name* from whichever Session keeps it.
+
+        For a holder of a capability over the payload id, such as a widget
+        address the server issued; ``None`` once no Session keeps it.
+        """
+        payload_json = await self._store.run_async(
+            lambda: self._store.tool_result_payload_by_id(payload_id, owner_name=owner_name)
+        )
+        return None if payload_json is None else json.loads(payload_json)
+
     def retarget_identity_agent_references(
         self, old_agent_id: str, new_agent_id: str
     ) -> tuple[SessionIdentityReferenceUpdate, ...]:

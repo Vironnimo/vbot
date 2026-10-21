@@ -154,6 +154,8 @@ def _validate_core_fields(message: _records.ChatMessage) -> None:
         raise ChatMessageValidationError(
             f"{message.role} messages cannot include subagent_messages"
         )
+    if message.role != "note" and message.widget_states is not None:
+        raise ChatMessageValidationError(f"{message.role} messages cannot include widget_states")
     if message.role != "compaction_checkpoint":
         _reject_fields(
             message,

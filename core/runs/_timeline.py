@@ -179,6 +179,8 @@ class RunTimeline:
             self._goal_event(event)
         elif kind == "subagent_message_recorded":
             self._subagent_message(event)
+        elif kind == "widget_state_recorded":
+            self._widget_state(event)
         elif kind.startswith("compaction_"):
             self._compaction(event)
         elif kind == "provider_heartbeat":
@@ -214,10 +216,11 @@ class RunTimeline:
             target[index] = item
 
     def _user(self, message: JsonObject, event: JsonObject) -> None:
-        # A goal row of the Run's input precedes its message and keeps it the Run's input.
+        # A goal or widget-state row of the Run's input precedes its message and
+        # keeps it the Run's input.
         if (
             self._first_user is None
-            and all(item["type"] == "goal_event" for item in self.run["items"])
+            and all(item["type"] in {"goal_event", "widget_state"} for item in self.run["items"])
             and not (event.get("payload") or {}).get("queue_item_id")
         ):
             self._first_user = message["id"]
@@ -508,6 +511,22 @@ class RunTimeline:
                 "id": child_id,
                 "type": "subagent_message",
                 "messages": copy.deepcopy(payload.get("messages") or []),
+                "timestamp": payload.get("timestamp") or event.get("timestamp"),
+                "events": [copy.deepcopy(event)],
+            }
+        )
+
+    def _widget_state(self, event: JsonObject) -> None:
+        payload = event.get("payload") or {}
+        note_id = payload.get("id")
+        child_id = f"widget-state-{note_id}" if note_id else self._new_id("widget_state")
+        if any(item["id"] == child_id for item in self.run["items"]):
+            return
+        self.run["items"].append(
+            {
+                "id": child_id,
+                "type": "widget_state",
+                "widgets": copy.deepcopy(payload.get("widgets") or []),
                 "timestamp": payload.get("timestamp") or event.get("timestamp"),
                 "events": [copy.deepcopy(event)],
             }

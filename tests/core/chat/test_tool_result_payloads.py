@@ -1,4 +1,4 @@
-"""Result payloads an Extension Tool attaches persist atomically with its Tool Result."""
+"""Result payloads a Tool attaches persist atomically with its Tool Result."""
 
 from __future__ import annotations
 
@@ -100,7 +100,7 @@ async def test_attached_payload_is_stored_with_its_tool_result(tmp_path) -> None
 
 
 @pytest.mark.asyncio
-async def test_a_failed_or_core_tool_call_keeps_no_payload(tmp_path) -> None:
+async def test_a_failed_call_keeps_no_payload_and_built_in_tools_own_theirs(tmp_path) -> None:
     async def crash(context: ToolContext, _arguments: Any) -> Any:
         context.attach_result_payload({"orphan": True})
         raise OSError("test-owned crash")
@@ -143,12 +143,14 @@ async def test_a_failed_or_core_tool_call_keeps_no_payload(tmp_path) -> None:
     results = _tool_results(runtime)
     assert results["crash-call"]["error"]["code"] == "tool_execution_error"
     assert results["invalid-call"]["error"]["code"] == "invalid_tool_result"
-    # Only Extension Tools may attach payloads; a core Tool's attempt fails its call.
-    core_error = results["core-call"]["error"]
-    assert core_error["code"] == "tool_execution_error"
-    assert "Result payloads are available only to Extension Tools" in core_error["message"]
+    assert results["core-call"]["ok"] is True
     kept = results["failed-call"]["error"]["message"]
-    assert _payload_rows(runtime) == [("failed-call", kept, "owner", '{"kept":true}')]
+    rows = _payload_rows(runtime)
+    assert rows[0] == ("failed-call", kept, "owner", '{"kept":true}')
+    # A built-in Tool owns its payload under the reserved ``tool:<name>`` owner.
+    assert [(row[0], row[2], row[3]) for row in rows[1:]] == [
+        ("core-call", "tool:core_tool", '{"core":true}')
+    ]
 
 
 @pytest.mark.asyncio
