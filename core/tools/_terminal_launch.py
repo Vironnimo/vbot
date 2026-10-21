@@ -46,7 +46,7 @@ import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING
 
 from core.tools.terminal_backend import (
     WINDOWS_COMMAND_PROCESSOR_OPTIONS,
@@ -54,6 +54,9 @@ from core.tools.terminal_backend import (
     windows_command_processor_line,
     windows_program,
 )
+
+if TYPE_CHECKING:
+    from core.permissions.commands.commands import ShellKind
 
 _POWERSHELL_SHELLS = frozenset({"pwsh", "powershell"})
 _POSIX_RC_SHELLS = frozenset({"bash", "zsh"})
@@ -186,7 +189,7 @@ def interactive_shell(argv: Sequence[str], *, environment: Mapping[str, str]) ->
         raise
 
 
-def integrated_shell_kind(argv: Sequence[str]) -> Literal["powershell", "cmd", "bash"] | None:
+def integrated_shell_kind(argv: Sequence[str]) -> ShellKind | None:
     """The command language of *argv* when it starts with vBot's shell integration.
 
     None for a program, a shell started as given (options beyond plain

@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING
 from core.utils.log_conditions import LoggedConditions
 
 if TYPE_CHECKING:
+    from core.permissions.commands.commands import ShellKind
+
     from ._command_types import CompletionSink
     from ._terminal_render_host import TerminalScreen
 
@@ -274,7 +276,7 @@ class TerminalInfo:
     stopped: bool = False
     # As in ``TerminalLaunch``.
     permission_scope: frozenset[str] | None = None
-    shell: Literal["powershell", "cmd", "bash"] | None = None
+    shell: ShellKind | None = None
 
     @property
     def finished(self) -> bool:
@@ -379,7 +381,7 @@ class TerminalLaunch:
     # each, ``_terminal_permissions``); None for full access or the operator.
     permission_scope: frozenset[str] | None = None
     # The command language of a shell started with vBot's shell integration.
-    shell: Literal["powershell", "cmd", "bash"] | None = None
+    shell: ShellKind | None = None
 
 
 def _log_task_failure(task: asyncio.Task[Any], message: str) -> None:
