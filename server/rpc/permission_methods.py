@@ -43,6 +43,9 @@ JsonObject = dict[str, Any]
 async def _validate_permission_rules(state: Any, params: JsonObject) -> JsonObject:
     """Normalize ``permission_rules`` for an editor, without saving anything.
 
+    ``preset`` names the preset the effective rules match (``full_access`` for
+    none) and ``inherited_preset`` the one of what the level inherits.
+
     Without ``agent_id`` the rule set stands alone (the shared default) and the
     preview keeps placeholders. With ``agent_id`` it is that Agent's own rule set
     (``agent@project``: the Team member's vBot override): ``inherited`` and
@@ -76,8 +79,10 @@ async def _validate_permission_rules(state: Any, params: JsonObject) -> JsonObje
         "permission_rules": permission_rules_to_dict(own) if own is not None else None,
         "notes": list(check.notes),
         "errors": [problem.to_dict() for problem in check.problems],
-        "preset": matching_preset(own) if valid else None,
+        # The preset the resulting rules match; an editor's picker shows it.
+        "preset": matching_preset(effective) if valid else None,
         "presets": preset_definitions(),
+        "inherited_preset": matching_preset(inherited),
         "inherited": permission_rules_to_dict(inherited) if inherited is not None else None,
         "effective": permission_rules_to_dict(effective) if effective is not None else None,
         "preview": (

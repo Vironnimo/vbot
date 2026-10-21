@@ -175,7 +175,8 @@ async def test_validate_for_a_team_member_inherits_and_works_in_the_repository(
     )
 
     assert result["inherited"] == {"write": "scratch"}
-    assert result["preset"] == "custom"
+    # The preset of the resulting rules, not of the override alone.
+    assert (result["preset"], result["inherited_preset"]) == ("work_dir_read_only", "custom")
     assert result["effective"] == {"read": "work_area", "write": "scratch"}
     assert result["preview"]["read"] == [_posix(repo.resolve()), "{scratch}"]
     assert result["preview"]["write"] == ["{scratch}"]
