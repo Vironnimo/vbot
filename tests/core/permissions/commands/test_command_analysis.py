@@ -291,12 +291,22 @@ async def test_nesting_beyond_the_limit_is_unresolved() -> None:
 
 
 @pytest.mark.asyncio
-async def test_powershell_without_executable_is_unavailable() -> None:
+async def test_a_shell_without_its_parser_is_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(CommandAnalysisUnavailable):
         await _analyze("Get-ChildItem", "powershell")
     # A nested PowerShell becomes an unresolved command instead.
     plan = await _analyze("pwsh -c 'Remove-Item x'", "bash")
     assert [element.kind for element in plan.unresolved] == ["command"]
+
+    from core.permissions.commands import _bash
+
+    _bash._parser.cache_clear()
+    monkeypatch.setitem(sys.modules, "tree_sitter_bash", None)
+    try:
+        with pytest.raises(CommandAnalysisUnavailable):
+            await _analyze("ls", "bash")
+    finally:
+        _bash._parser.cache_clear()
 
 
 @pytest.mark.parametrize(

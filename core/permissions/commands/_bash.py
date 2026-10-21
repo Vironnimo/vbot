@@ -1,8 +1,9 @@
 """bash command lines lowered through tree-sitter-bash into a ``Script``.
 
 tree-sitter is imported on first use, so importing the command analysis costs
-nothing until a restricted Session runs a bash command. A tree with an error
-or a missing node is not analyzable.
+nothing until a restricted Session runs a bash command; when it cannot load,
+the analysis is unavailable and the command refused. A tree with an error or
+a missing node is not analyzable.
 """
 
 from __future__ import annotations
@@ -33,10 +34,15 @@ _FILE_REDIRECTS = {
 
 @functools.cache
 def _parser() -> Parser:
-    import tree_sitter_bash
-    from tree_sitter import Language, Parser
+    try:
+        import tree_sitter_bash
+        from tree_sitter import Language, Parser
 
-    return Parser(Language(tree_sitter_bash.language()))
+        return Parser(Language(tree_sitter_bash.language()))
+    except (ImportError, OSError, ValueError) as error:
+        from core.permissions.commands.commands import CommandAnalysisUnavailable
+
+        raise CommandAnalysisUnavailable("the bash command parser could not be loaded") from error
 
 
 def parse_bash(text: str) -> Script:
