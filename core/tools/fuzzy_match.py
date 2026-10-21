@@ -463,6 +463,7 @@ def _match_rewrapped(content: str, old: str) -> list[tuple[int, int]]:
         if [run.count("\n") for run in _SPACE_RUN_RE.findall(match[2])] != wanted
         # After indentation alone, the match from the start of the line holds the passage.
         and not (lead and not lead_breaks and _after_indentation(folded, match.start(1)))
+        and _takes_words_at_edges(folded, *match.span(1))
     ]
     if not found:
         return []
@@ -484,6 +485,27 @@ def _after_indentation(text: str, start: int) -> bool:
     return start > line_start and not text[line_start:start].strip(" \t")
 
 
+def _takes_words_at_edges(text: str, start: int, end: int) -> bool:
+    """Whether a passage across line breaks takes a word from a line it starts or ends inside.
+
+    A copy whose first word is only a sign, such as ``|``, can match the sign
+    that ends the line before its place, with the line break read as a space:
+    a Markdown table row copied with an extra ``| `` matched the previous row's
+    closing ``|`` and was written joined to it.
+    """
+    first_break = text.find("\n", start, end)
+    if first_break < 0:
+        return True
+    line_start = text.rfind("\n", 0, start) + 1
+    if text[line_start:start].strip(" \t") and not _WORD_RE.search(text, start, first_break):
+        return False
+    line_end = text.find("\n", end)
+    if line_end < 0:
+        line_end = len(text)
+    last_break = text.rfind("\n", start, end)
+    return not (text[end:line_end].strip(" \t") and not _WORD_RE.search(text, last_break + 1, end))
+
+
 def rewrapped_place(content: str, old: str) -> tuple[int, int] | None:
     """Return the span that holds every word of ``old`` in order, if exactly one place does.
 
@@ -497,7 +519,12 @@ def rewrapped_place(content: str, old: str) -> tuple[int, int] | None:
         return None
     words = _SPACE_RUN_RE.split(core)
     pattern = re.compile("(?=(" + r"[ \t\n]+".join(map(re.escape, words)) + "))")
-    found = [match.span(1) for match in pattern.finditer(_folded(content, typographic=True))]
+    folded = _folded(content, typographic=True)
+    found = [
+        match.span(1)
+        for match in pattern.finditer(folded)
+        if _takes_words_at_edges(folded, *match.span(1))
+    ]
     if len(found) != 1:
         return None
     start, end = found[0]

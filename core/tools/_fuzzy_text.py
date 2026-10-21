@@ -227,8 +227,15 @@ def _apply_replacements(
     file_unit = cache(lambda: _indent_unit([_meaningful_indents(content)]))
     for start, end in sorted(matches):
         if reindent:
+            line_start = content.rfind("\n", 0, start) + 1
             replacement_lf = _reindent_replacement(
-                content[start:end], old_string_lf, replacement_text, file_unit, lines_correspond
+                content[start:end],
+                old_string_lf,
+                replacement_text,
+                file_unit,
+                lines_correspond,
+                starts_inside=bool(content[line_start:start].strip())
+                and content[start : start + 1] not in ("\r", "\n"),
             )
         else:
             replacement_lf = replacement_text
@@ -267,6 +274,8 @@ def _reindent_replacement(
     replacement_text: str,
     file_unit: Callable[[], str | None],
     lines_correspond: bool = True,
+    *,
+    starts_inside: bool = False,
 ) -> str:
     """Rewrite the replacement's indentation in the file's own indentation style.
 
@@ -280,7 +289,11 @@ def _reindent_replacement(
     indent is anchored onto the file's, keeping the relative nesting the model
     intended. ``file_unit`` gives the file's indentation unit when a conversion
     needs it. Without ``lines_correspond``, as when the line breaks fall in other
-    places, only the first lines pair up.
+    places, only the first lines pair up; when the match ``starts_inside`` a
+    file line, the second lines do, and the replacement's first line continues
+    that file line without indentation of its own (Swarm run 2026-10-20: a copy
+    from inside a list item's first line wrote its continuation lines without
+    the item's indentation).
 
     When one model indent pairs with several file indents, a pair whose lines
     read alike (whitespace aside) decides: a copied line that differs, such as
@@ -296,6 +309,13 @@ def _reindent_replacement(
         return replacement_text
     old_indents = [_leading_whitespace(line) for line in old_lines]
     file_indents = [_leading_whitespace(line) for line in file_lines]
+    continued = (
+        starts_inside and not lines_correspond and len(old_lines) > 1 and len(file_lines) > 1
+    )
+    if continued:
+        old_lines, file_lines = old_lines[1:], file_lines[1:]
+        old_indents, file_indents = old_indents[1:], file_indents[1:]
+        replacement_text = replacement_text.lstrip(" \t")
     pairs = (
         list(zip(old_indents, file_indents, strict=True))
         if lines_correspond and len(old_indents) == len(file_indents)
@@ -324,12 +344,17 @@ def _reindent_replacement(
     base_model, base_file = pairs[0]
 
     out_parts: list[str] = []
+    first = True
     for line, ending in replacement_lines:
         if not line.strip():
             out_parts.append(line + ending)
             continue
         indent = _leading_whitespace(line)
         body = line[len(indent) :]
+        if continued and first:
+            first = False
+            out_parts.append(body + ending)
+            continue
         mapped = seen.get(indent)
         if mapped is None and convert is not None:
             mapped = convert(indent)

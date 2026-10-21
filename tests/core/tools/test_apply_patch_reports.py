@@ -574,6 +574,16 @@ FIRST_DIFFERENCE_CASES = {
         "(excerpts truncated):\nFile characters 62-93: ' limit allows; check the rows.\")'\n"
         "old_string characters 62-93: ' limit allows; check the rows.')'\n",
     ),
+    # Session 2026-10-21: a sentence copied from inside a long line, with one word
+    # changed, compares from where it starts there, not from the line's start.
+    "inside-a-long-line": (
+        f"def check(total):\n{LOGGED}\n    return total\n",
+        {"old_string": "is more than the configured limit permits; check", "new_string": "x"},
+        "First difference, file line 2, character 69; copied line 1, character 35 "
+        "(excerpts truncated):\nFile characters 39-93: 'ore than the configured limit allows; "
+        "check the rows.\")'\nold_string characters 1-48: 'is more than the configured limit "
+        "permits; check'\n",
+    ),
 }
 
 

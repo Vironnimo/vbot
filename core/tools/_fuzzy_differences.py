@@ -57,6 +57,8 @@ def first_difference(
     first = next((index for index, line in enumerate(wanted_lines) if line.strip()), 0)
     aligned = start if placed else _aligned_start(file_lines, start, wanted_lines, first)
     last = len(wanted_lines) - 1
+    if not (placed or whole_lines) and first == last == 0 and 0 < aligned <= len(file_lines):
+        character = _copy_start(file_lines[aligned - 1], wanted_lines[0])
     # Whether the copy can start inside its first file line, or end inside its last.
     starts_inside = not whole_lines and first == 0 and last > first
     ends_inside = not whole_lines and not copy.endswith(("\n", "\r")) and last > first
@@ -230,6 +232,29 @@ def line_differences(content: str, copy: str, start: int, *, limit: int) -> Line
     return LineDifferences(
         begin + passage[0] + 1, begin + passage[-1] + 1, tuple(shown), len(differing)
     )
+
+
+_COPY_START_MIN = 12
+_COPY_START_MAX = 60
+
+
+def _copy_start(line: str, copy: str) -> int:
+    """Return the 1-based character of ``line`` where a one-line copy of part of it starts.
+
+    A copy taken from inside a long line, such as a sentence of a paragraph,
+    compares from there: compared from the line's start, its first difference
+    would be its first character. The copy's start must occur once in the line,
+    at least 12 characters of it; otherwise the copy compares from the start.
+    """
+    text = copy.lstrip()
+    if line.lstrip().startswith(text[:_COPY_START_MIN]):
+        return 1
+    for length in range(min(len(text), _COPY_START_MAX), _COPY_START_MIN - 1, -1):
+        found = line.find(text[:length])
+        if found < 0:
+            continue
+        return found + 1 if line.find(text[:length], found + 1) < 0 else 1
+    return 1
 
 
 def _paired_difference(

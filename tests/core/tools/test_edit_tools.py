@@ -261,6 +261,11 @@ WRAPPED = (
 REWRAPPED_SIGNATURE = (
     "def spawn(db, api, *, fault=None, pace=1.0, exit_code=70,\n          start=None):"
 )
+TABLE = (
+    "| Axis | Question | v1 |\n|---|---|---|\n"
+    "| **Scope** | Which paths may the call touch? | path rules |\n"
+    "| **Approval** | Must the user allow the call? | per family |\n\nEnd.\n"
+)
 ONE_LINE_JSON = '{"note": "Marked as estimated.", "status": "predicted", "unit": "kg/m3", "v": 6}\n'
 
 
@@ -683,6 +688,21 @@ async def test_unicode_escapes_in_old_string_match_the_characters_of_the_file(
             ),
             id="inside-a-line",
         ),
+        # Swarm run 2026-10-20: a copy from inside a list item's first line. Its
+        # continuation lines take the item's indentation, not that of its first line.
+        pytest.param(
+            "- Sample:\n    taken in a stopped run (sample, not survey). Raw answers\n"
+            "    are included: body, hash and status for every point.\n- Next\n",
+            (
+                "  survey). Raw answers are included:\n  body, hash and status for every point.",
+                "  survey). Raw answers are included:\n  body, hash and status for every point.\n"
+                "  Coverage is named.",
+            ),
+            "- Sample:\n"
+            "    taken in a stopped run (sample, not survey). Raw answers are included:\n"
+            "    body, hash and status for every point.\n    Coverage is named.\n- Next\n",
+            id="inside-a-list-item",
+        ),
         pytest.param(
             WRAPPED.replace("\n", "\r\n"),
             (REWRAPPED_SIGNATURE, REWRAPPED_SIGNATURE.replace("None):", "None, rows=1):")),
@@ -722,6 +742,18 @@ async def test_unicode_escapes_in_old_string_match_the_characters_of_the_file(
             ('    "status": "predicted",\n    "unit": "kg/m3",', '    "status": "measured",'),
             ("text_not_found", {"1"}),
             id="inside-a-line-without-space",
+        ),
+        # Session 2026-10-21: a table row copied with an extra "| " matched the
+        # previous row's closing "|" across the line break and joined the rows. A
+        # line the copy starts or ends inside must give it a word, not a sign alone.
+        pytest.param(
+            TABLE,
+            (
+                "| | **Approval** | Must the user allow the call? | per family |",
+                "| | **Approval** | Must the user allow the call? | per Tool family |",
+            ),
+            ("text_not_found", {"4"}),
+            id="table-row",
         ),
         # Too few words to tell the place.
         pytest.param(
