@@ -10,7 +10,12 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-from core.permissions import CommandChecker
+from core.permissions import (
+    BoundaryContext,
+    CommandChecker,
+    PermissionBoundary,
+    normalize_permission_rules,
+)
 from core.permissions.commands.commands import (
     CommandAnalysisUnavailable,
     CommandPlan,
@@ -19,6 +24,22 @@ from core.permissions.commands.commands import (
     SimpleCommand,
     UnresolvedElement,
 )
+
+# The vBot server port of ``restricted`` boundaries.
+PORT = 22333
+
+
+def restricted(workdir: Path, **rules: object) -> PermissionBoundary:
+    """A boundary whose Work Area is *workdir*, with vBot's data folder beside it."""
+    return PermissionBoundary.build(
+        normalize_permission_rules({"read": "work_area", "write": "work_area", **rules}),
+        BoundaryContext(
+            workdir=workdir,
+            home=workdir / "home",
+            data_dir=workdir.parent / f"{workdir.name}-vbot-data",
+            loopback_port=PORT,
+        ),
+    )
 
 
 def plan(

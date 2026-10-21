@@ -9,6 +9,8 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
+from dataclasses import replace
+from functools import partial
 from pathlib import Path
 from typing import BinaryIO
 
@@ -23,7 +25,7 @@ from core.tools.terminal_backend import (
 from core.utils.logging import get_logger
 from core.utils.paths import model_path
 
-from ._terminal_launch import ShellLaunch, interactive_shell
+from ._terminal_launch import ShellLaunch, integrated_shell_kind, interactive_shell
 from ._terminal_render_host import TerminalRenderHost, TerminalScreen
 from ._terminal_session import (
     TerminalLaunch,
@@ -102,12 +104,16 @@ class TerminalSessionFactory:
         try:
             screen = await self.open_screen(columns, rows)
             log_path, log_handle, log_lease = await asyncio.to_thread(self._open_raw_log)
-            process_env = await asyncio.to_thread(terminal_environment, env)
+            process_env = await asyncio.to_thread(
+                partial(terminal_environment, env, confined=launch.permission_scope is not None)
+            )
             if integrate_shell:
+                kind = integrated_shell_kind(argv)
                 integration = await asyncio.to_thread(
                     interactive_shell, argv, environment=process_env
                 )
                 if integration is not None:
+                    launch = replace(launch, shell=kind)
                     argv = integration.argv
                     command_line = integration.command_line
                     process_env.update(integration.environment)

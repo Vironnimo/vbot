@@ -57,6 +57,7 @@ One placeholder-free rule set inside a boundary (`PermissionLayer`), tagged with
 - Resolution: `RuntimeAgent.permission_rules` (a `PermissionRules` or `None` for full access) and `RuntimeAgent.permission_ceiling` (temporary Agents); provenance in `effective_config(...)["permission_rules"]` (`projects/resolution.md` -> Permission Rules).
 - Run: `core/chat/_run_permissions.py::run_permission_boundary` builds the boundary once per Run; Tools read `ToolContext.permissions`. `ToolContext.resolve_path(..., access=)` checks `read`, `write` and `start_dir` and raises `PermissionDenied` (`tools/file_state.md` -> Path resolution).
 - Shell: `bash`/`powershell` check every call before launch and run it in a confined environment (`tools/shell.md` -> Permission Rules).
+- Terminal: `start` (program, folder), lines submitted at an integrated shell prompt, and `attach`/`status` only for terminals started under the same or narrower rules (`tools/terminal.md` -> Permission Rules).
 - Ceilings: `AgentOverrides.permission_ceiling` of a Sub-Agent Session (`source` `parent`), `CronJob.permission_ceiling` (`source` `cron`, `CronJob.ceiling()`), `TemporaryAgentConfig.permission_ceiling` (`source` `extension`).
 - UI/RPC summary of an effective boundary: stored and resolved rules through `effective_config`; for a built boundary, `allowed_summary(access)` per access, `layers` for deny rules and sources, and `permissions_block_text(boundary)` for the text the Agent reads.
 

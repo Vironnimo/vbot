@@ -136,11 +136,18 @@ class RunIdentity:
     update_handoff: str | None = None
 
 
-def terminal_environment(overlay: Mapping[str, str] | None = None) -> dict[str, str]:
-    """Environment of an interactive Terminal Session, with *overlay* applied last."""
+def terminal_environment(
+    overlay: Mapping[str, str] | None = None, *, confined: bool = False
+) -> dict[str, str]:
+    """Environment of an interactive Terminal Session, with *overlay* applied last.
+
+    *confined* (a Session with Permission Rules) as for ``command_environment``.
+    """
     environment = _instance_environment()
     _apply(environment, {"TERM": _TERMINAL_TERM})
     _apply(environment, overlay or {})
+    if confined:
+        _confine(environment)
     return environment
 
 

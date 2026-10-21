@@ -876,6 +876,7 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._projects,
             subagents=runtime._subagent_coordinator,
             scratch_areas=runtime._scratch_areas,
+            command_checker=runtime._command_checker,
         )
         register_status_tool(
             runtime._tools,

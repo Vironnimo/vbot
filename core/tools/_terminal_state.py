@@ -272,6 +272,9 @@ class TerminalInfo:
     log_path: Path | None
     # vBot, the user or an Agent stopped the program before it ended on its own.
     stopped: bool = False
+    # As in ``TerminalLaunch``.
+    permission_scope: frozenset[str] | None = None
+    shell: Literal["powershell", "cmd", "bash"] | None = None
 
     @property
     def finished(self) -> bool:
@@ -372,6 +375,11 @@ class TerminalLaunch:
     # A manual start that runs a program inside the interactive shell.
     launch_command: str | None = None
     launch_arguments: tuple[str, ...] = ()
+    # The Permission Rules layers of the Session that started it (canonical JSON
+    # each, ``_terminal_permissions``); None for full access or the operator.
+    permission_scope: frozenset[str] | None = None
+    # The command language of a shell started with vBot's shell integration.
+    shell: Literal["powershell", "cmd", "bash"] | None = None
 
 
 def _log_task_failure(task: asyncio.Task[Any], message: str) -> None:

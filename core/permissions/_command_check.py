@@ -32,6 +32,9 @@ if TYPE_CHECKING:
         UnresolvedElement,
     )
 
+# Refuses a simple command a caller cannot let run: ``(detail, hint)`` or None.
+type CommandRefusal = Callable[[SimpleCommand], tuple[str, str] | None]
+
 # The checkout or installation this code runs from.
 _VBOT_ROOT: Final = Path(__file__).resolve().parents[2]
 # Longest command text a refusal quotes.
@@ -95,8 +98,13 @@ class CommandChecker:
         cwd: Path,
         env: Mapping[str, str],
         home: Path,
+        refuse_command: CommandRefusal | None = None,
     ) -> PermissionRefusal | None:
-        """The refusal of running *command_line* with *shell* in *cwd*, or None to run it."""
+        """The refusal of running *command_line* with *shell* in *cwd*, or None to run it.
+
+        *refuse_command* refuses more: given a simple command, it returns the
+        ``(detail, hint)`` of an ``unanalyzable`` refusal, or None.
+        """
         if not boundary.restricted:
             return None
         refused = boundary.check_path(cwd, "start_dir")
@@ -111,7 +119,16 @@ class CommandChecker:
         )
         if isinstance(plan, PermissionRefusal):
             return plan
-        return self._decide(boundary, plan, cwd, command_line)
+        refused = self._decide(boundary, plan, cwd, command_line)
+        if refused is None and refuse_command is not None:
+            for command in plan.commands:
+                reason = refuse_command(command)
+                if reason is not None:
+                    detail, hint = reason
+                    return boundary.refusal(
+                        "command", _shown(command.source), "unanalyzable", detail=detail, hint=hint
+                    )
+        return refused
 
     async def check_argv(
         self,

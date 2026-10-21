@@ -29,7 +29,7 @@ from typing import Any
 import pytest
 import pytest_asyncio
 
-from core.permissions import BoundaryContext, PermissionBoundary, normalize_permission_rules
+from core.permissions import PermissionBoundary
 from core.permissions.commands.commands import UnresolvedElement
 from core.projects import ProjectNotFoundError
 from core.secrets import KeyFileProtection, SecretStore
@@ -72,10 +72,12 @@ from core.tools.update_handoff import (
 )
 from core.utils.paths import model_path
 from tests.core.permissions.command_check_support import (
+    PORT,
     UNAVAILABLE,
     FakeAnalyzer,
     fake_checker,
     plan,
+    restricted,
 )
 from tests.core.secrets.secrets_test_support import data_directory
 from tests.core.tools.command_manager_helpers import (
@@ -1079,21 +1081,6 @@ async def test_calls_refused_before_the_start_run_nothing(shell: Shell) -> None:
 
 
 # --- Permission Rules -----------------------------------------------------------
-
-PORT = 22333
-
-
-def restricted(tmp_path: Path, **rules: object) -> PermissionBoundary:
-    """A boundary whose Work Area is *tmp_path*, the shell harness's working directory."""
-    return PermissionBoundary.build(
-        normalize_permission_rules({"read": "work_area", "write": "work_area", **rules}),
-        BoundaryContext(
-            workdir=tmp_path,
-            home=tmp_path / "home",
-            data_dir=tmp_path.parent / f"{tmp_path.name}-vbot-data",
-            loopback_port=PORT,
-        ),
-    )
 
 
 @pytest.mark.parametrize(

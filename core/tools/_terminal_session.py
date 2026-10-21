@@ -30,6 +30,7 @@ from ._terminal_attention import TerminalNotices
 from ._terminal_log import TerminalLog
 from ._terminal_output import TerminalOutput
 from ._terminal_render_host import TerminalScreen
+from ._terminal_shell_state import ShellState
 from ._terminal_state import (
     _CONDITIONS,
     TERMINAL_REPAINT_WINDOW_SECONDS,
@@ -97,6 +98,8 @@ class TerminalSession:
         self.finished_at: datetime | None = None
         self.exit_code: int | None = None
         self._launch = launch
+        # The prompt and folder an integrated shell reports (Permission Rules).
+        self.shell_state = ShellState(str(launch.cwd)) if launch.shell is not None else None
         self._adapter = adapter
         self._services = services
         self._lock = asyncio.Lock()
@@ -214,6 +217,8 @@ class TerminalSession:
             acknowledged_attention_revision=self._notices.acknowledged_revision,
             log_path=self._output.log.path,
             stopped=self._stopped,
+            permission_scope=self._launch.permission_scope,
+            shell=self._launch.shell,
         )
 
     # Lifecycle
@@ -612,6 +617,8 @@ class TerminalSession:
         A failing log or renderer degrades the Session instead of ending it:
         its output keeps being read, so the program neither stalls nor ends.
         """
+        if self.shell_state is not None:
+            self.shell_state.feed(received)
         update = await self._output.append(
             received, alternate=self._alternate_screen, publish=self._publish_output
         )
