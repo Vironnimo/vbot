@@ -67,7 +67,11 @@ if TYPE_CHECKING:
     from core.chat.request_runner import WireRequestRunner
     from core.skills.skills import SkillRegistry
 
-from core.chat._request_epoch import _fold_prompt_epoch, _live_session_tool_grants
+from core.chat._request_epoch import (
+    _fold_prompt_epoch,
+    _live_session_tool_grants,
+    _withheld_session_tools,
+)
 
 _LOGGER = get_logger("chat")
 
@@ -441,6 +445,9 @@ class RequestBuilder:
             catalog = await self.tool_catalog._live_tool_catalog(
                 agent,
                 session_tool_grants=live_tool_grants,
+                withheld_tools=_withheld_session_tools(
+                    subagent_tool_withheld=inputs.subagent_tool_withheld
+                ),
                 input_modalities=(
                     effective_input_modalities
                     if inputs.tool_route_input_modalities is None
