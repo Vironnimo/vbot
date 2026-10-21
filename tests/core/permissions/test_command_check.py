@@ -32,6 +32,10 @@ from tests.core.permissions.command_check_support import (
 PORT = 22333
 
 
+# Restricts something unrelated, so vBot's own CLI and server are protected.
+RESTRICTED: dict[str, object] = {"deny": ["Shell(never-run-this *)"]}
+
+
 def boundary(
     work: Path, rules: dict[str, object], *, ceiling: dict[str, object] | None = None
 ) -> PermissionBoundary:
@@ -71,11 +75,17 @@ def boundary(
             "deny_rule",
             id="inherited-deny",
         ),
-        pytest.param({}, None, ("vbot.ps1 agent list",), "protected_location", id="vbot-script"),
         pytest.param(
-            {}, None, (f"curl ws://[::1]:{PORT}/live",), "protected_location", id="host-port-word"
+            RESTRICTED, None, ("vbot.ps1 agent list",), "protected_location", id="vbot-script"
         ),
-        pytest.param({}, None, (f"curl localhost:{PORT + 1}",), None, id="other-port"),
+        pytest.param(
+            RESTRICTED,
+            None,
+            (f"curl ws://[::1]:{PORT}/live",),
+            "protected_location",
+            id="host-port-word",
+        ),
+        pytest.param(RESTRICTED, None, (f"curl localhost:{PORT + 1}",), None, id="other-port"),
     ],
 )
 @pytest.mark.asyncio
@@ -120,7 +130,7 @@ async def test_vbots_own_cli_cannot_be_started(
     checker = fake_checker(analyzer, vbot_root=root)
 
     refusal = await checker.check_line(
-        boundary(work, {}), command, shell="bash", cwd=work, env={}, home=tmp_path
+        boundary(work, RESTRICTED), command, shell="bash", cwd=work, env={}, home=tmp_path
     )
 
     assert (refusal.location if refusal else None) == ("vbot_cli" if refused else None)
@@ -138,7 +148,7 @@ async def test_the_analyzer_starts_on_the_first_restricted_check_and_ends_with_t
         return analyzer
 
     checker = CommandChecker(factory)  # type: ignore[arg-type]
-    restricted = boundary(tmp_path, {})
+    restricted = boundary(tmp_path, RESTRICTED)
 
     unrestricted = await checker.check_line(
         PermissionBoundary.UNRESTRICTED, "ls", shell="bash", cwd=tmp_path, env={}, home=tmp_path
