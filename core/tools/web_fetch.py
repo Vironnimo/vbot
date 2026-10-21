@@ -13,6 +13,7 @@ from urllib.parse import parse_qsl, unquote, urljoin, urlparse
 
 from core.attachments import AttachmentError, sniff_media_type
 from core.fetch_config import DEFAULT_WEB_FETCH_SETTINGS, WEB_FETCH_CREDENTIALS
+from core.permissions import PermissionBoundary, PermissionDenied, PermissionRefusal
 from core.storage.temp_files import TemporaryFileManager
 from core.tools._public_http import (
     HostSlots,
@@ -20,6 +21,7 @@ from core.tools._public_http import (
     PublicResponse,
     check_public_url,
     fetch_public,
+    hop_refusal,
 )
 from core.tools._web_fetch_arguments import (
     MAX_URLS,
@@ -385,21 +387,36 @@ def _accept(output_mode: WebFetchOutput) -> str:
 
 
 async def _direct_fetch(
-    url: str, output_mode: WebFetchOutput, attachment_store: Any, hosts: HostSlots
+    url: str,
+    output_mode: WebFetchOutput,
+    attachment_store: Any,
+    hosts: HostSlots,
+    permissions: PermissionBoundary,
 ) -> tuple[JsonObject, bool]:
     """Return the result and whether an optional service may recover it.
 
     A firewall block is recoverable by a service, which fetches from its own
-    address, but not by the local browser, which shares this machine's.
+    address, but not by the local browser, which shares this machine's. A
+    redirect the permission rules refuse is recovered by neither.
     """
     try:
-        result = await fetch_public(url, accept=_accept(output_mode), hosts=hosts)
+        result = await fetch_public(
+            url, accept=_accept(output_mode), hosts=hosts, permissions=permissions
+        )
+    except PermissionDenied as error:
+        return _refused(error.refusal), False
     except PublicFetchError as error:
         return error.failure(), error.recoverable
     shaped = await run_tool_worker(_shape_success_for_mode, attachment_store, result, output_mode)
     return shaped, not shaped["ok"] and (
         shaped["error"]["code"] in _BROWSER_CODES or shaped["error"]["code"] == "rate_limited"
     )
+
+
+def _refused(refusal: PermissionRefusal) -> JsonObject:
+    """The failure of a page the permission rules refuse; a fetch of several
+    pages keeps the others."""
+    return tool_failure("permission_denied", refusal.message(), retryable=False)
 
 
 def _shape_success_for_mode(
@@ -638,13 +655,21 @@ def make_web_fetch_handler(
         while len(last_pages) > _REMEMBERED_CONVERSATIONS:
             last_pages.popitem(last=False)
 
-    async def render(url: str, output: WebFetchOutput) -> JsonObject | str:
-        """Read ``url`` in the local browser; a string says why it could not."""
+    async def render(
+        url: str, output: WebFetchOutput, permissions: PermissionBoundary
+    ) -> JsonObject | str:
+        """Read ``url`` in the local browser; a string says why it could not.
+
+        The page it ended on is checked against *permissions*; the hops and
+        subresources on the way are not.
+        """
         assert browser is not None
         try:
             response = await browser.fetch(url)
         except BrowserFetchError as error:
             return str(error)
+        if (refused := hop_refusal(permissions, url, response.url)) is not None:
+            return _refused(refused)
         shaped = await run_tool_worker(_shape_success_for_mode, attachment_store, response, output)
         if not shaped["ok"]:
             return (
@@ -656,10 +681,13 @@ def make_web_fetch_handler(
         return shaped
 
     async def direct(
-        url: str, output: WebFetchOutput, settings: Mapping[str, Any]
+        url: str,
+        output: WebFetchOutput,
+        settings: Mapping[str, Any],
+        permissions: PermissionBoundary,
     ) -> tuple[JsonObject, bool]:
         """Read directly; the local browser retries a bot check or JavaScript page."""
-        result, recoverable = await _direct_fetch(url, output, attachment_store, hosts)
+        result, recoverable = await _direct_fetch(url, output, attachment_store, hosts, permissions)
         if (
             result["ok"]
             or result["error"]["code"] not in _BROWSER_CODES
@@ -669,13 +697,15 @@ def make_web_fetch_handler(
             or not browser.available()
         ):
             return result, recoverable
-        rendered = await render(url, output)
+        rendered = await render(url, output, permissions)
         if not isinstance(rendered, str):
             return rendered, False
         result["error"]["message"] += f" The local browser could not read it either: {rendered}."
         return result, recoverable
 
-    async def service(url: str, output: str, provider: str) -> JsonObject:
+    async def service(
+        url: str, output: str, provider: str, permissions: PermissionBoundary
+    ) -> JsonObject:
         variable = WEB_FETCH_CREDENTIALS[provider]
         # A blank value counts as missing, as in web_search and the Settings key status.
         key = (credential_resolver(variable) or "").strip() if credential_resolver else ""
@@ -693,6 +723,8 @@ def make_web_fetch_handler(
             if final.username or final.password:
                 raise ValueError("Service returned a URL containing credentials.")
             await check_public_url(data["url"])
+            if (refused := hop_refusal(permissions, url, data["url"])) is not None:
+                return _refused(refused)
             wall = bot_wall(data["url"], {"title": data.get("title", "")}, data["content"])
             if wall:
                 raise FetchServiceError(wall)
@@ -707,6 +739,10 @@ def make_web_fetch_handler(
         output: WebFetchOutput,
         view: dict[str, Any],
     ) -> JsonObject:
+        permissions = context.permissions
+        # Before any request: neither a DNS lookup nor a provider sees a refused address.
+        if (refused := permissions.check_url(url)) is not None:
+            return _refused(refused)
         try:
             # Preflight also protects prefer-service mode; providers never receive
             # a target rejected by the public-URL policy.
@@ -724,14 +760,14 @@ def make_web_fetch_handler(
         )
         service_failure = None
         if prefer:
-            result = await service(url, output, provider)
+            result = await service(url, output, provider, permissions)
             if not result["ok"]:
                 service_failure = result["error"]["message"]
-                result, _ = await direct(url, output, settings)
+                result, _ = await direct(url, output, settings, permissions)
         else:
-            result, recoverable = await direct(url, output, settings)
+            result, recoverable = await direct(url, output, settings, permissions)
             if enabled and recoverable:
-                recovered = await service(url, output, provider)
+                recovered = await service(url, output, provider, permissions)
                 if recovered["ok"]:
                     result = recovered
                 else:

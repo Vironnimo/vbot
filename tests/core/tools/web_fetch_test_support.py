@@ -15,6 +15,7 @@ import curl_cffi.requests
 import pytest
 
 import core.tools._public_http as public_http
+from core.permissions import PermissionBoundary
 from core.tools._public_http import PublicResponse
 from core.tools.tools import ToolContext, ToolRegistry, is_tool_result_envelope
 from core.tools.web_fetch import WEB_FETCH_TOOL_NAME, register_web_fetch_tool
@@ -23,7 +24,9 @@ IPV6_HOST = "ipv6.example"
 IPV6_ADDRESS = "2606:2800:220:1:248:1893:25c8:1946"
 
 
-def make_context(tmp_path: Path) -> ToolContext:
+def make_context(
+    tmp_path: Path, permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED
+) -> ToolContext:
     return ToolContext(
         agent_id="agent-1",
         session_id="session-1",
@@ -34,6 +37,7 @@ def make_context(tmp_path: Path) -> ToolContext:
         workspace=tmp_path / "workspace",
         vbot_root=tmp_path,
         data_root=tmp_path / "data",
+        permissions=permissions,
     )
 
 
@@ -44,9 +48,16 @@ def web_fetch_registry(*, attachment_store: Any = None, **options: Any) -> ToolR
     return registry
 
 
-async def fetch(tmp_path: Path, arguments: Any, **registration: Any) -> dict[str, Any]:
+async def fetch(
+    tmp_path: Path,
+    arguments: Any,
+    *,
+    permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED,
+    **registration: Any,
+) -> dict[str, Any]:
     """Dispatch one web_fetch call through a freshly registered Tool."""
-    return await web_fetch_registry(**registration).dispatch(make_context(tmp_path), arguments)
+    context = make_context(tmp_path, permissions)
+    return await web_fetch_registry(**registration).dispatch(context, arguments)
 
 
 def make_result(

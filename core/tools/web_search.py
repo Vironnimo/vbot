@@ -506,10 +506,11 @@ async def web_search_handler(
         if not api_key:
             return _missing_key(provider)
     search = provider.search(api_key, settings)
+    request = WebSearchRequest(
+        query, domains, exclude, count, page, recency, permissions=context.permissions
+    )
     try:
-        payload, failure = await search(
-            WebSearchRequest(query, domains, exclude, count, page, recency)
-        )
+        payload, failure = await search(request)
     except _ResponseTooLargeError as error:
         return tool_failure("response_too_large", str(error), retryable=False)
 
@@ -534,6 +535,8 @@ async def web_search_handler(
             ),
             retryable=True,
         )
+    if request.refused:
+        notes.append(_refused_note(request.refused))
     context.add_display_count(len(results), "results")
     data = _model_view(
         payload,
@@ -544,6 +547,21 @@ async def web_search_handler(
     )
     _record_display(context, results, data)
     return tool_success(data)
+
+
+# Hosts a note on refused results names.
+_REFUSED_HOSTS_SHOWN = 5
+
+
+def _refused_note(refused: dict[str, str]) -> str:
+    """Say how many results the permission rules left out, and from which hosts."""
+    hosts = list(dict.fromkeys(refused.values()))
+    shown = ", ".join(hosts[:_REFUSED_HOSTS_SHOWN])
+    if len(hosts) > _REFUSED_HOSTS_SHOWN:
+        shown += f" and {len(hosts) - _REFUSED_HOSTS_SHOWN} more"
+    count = len(refused)
+    left_out = "1 result was" if count == 1 else f"{count} results were"
+    return f"{left_out} left out because the permission rules refuse fetching from {shown}."
 
 
 def _record_display(context: ToolContext, results: list[Any], data: JsonObject) -> None:

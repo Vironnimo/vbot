@@ -16,7 +16,7 @@ Not owned here: storing `permission_rules` on Agents, Settings defaults, Project
 4. The shell is confined "in a sensible way", not only the file Tools.
 5. Rule-based configuration like Claude Code and OpenCode, with presets as starting points; built polished from the start.
 
-Honest limits, stated wherever "restricted" is shown: programs a command starts act with the server user's full rights and are not inspected inside; terminal input is checked only at an integrated shell prompt; MCP servers and Extensions are outside the checks; hardlinks to outside files are not detected; an older vBot ignores the rules after a downgrade.
+Honest limits, stated wherever "restricted" is shown: programs a command starts act with the server user's full rights and are not inspected inside; terminal input is checked only at an integrated shell prompt, input typed ahead while a program runs reaches the shell unchecked once that program ends, and a program can print fake prompt and folder marks; the local browser's redirect hops and the subresources of a page are not checked against web rules; MCP servers and Extensions are outside the checks; hardlinks to outside files are not detected; an older vBot ignores the rules after a downgrade.
 
 ## Terms
 
@@ -60,6 +60,7 @@ One placeholder-free rule set inside a boundary (`PermissionLayer`), tagged with
 - Paths beyond the Tool target: listings, missing-path suggestions, diagnostics, search roots and exclusions, image, media and Channel files, the `project` Tool's instruction files, MCP roots and Assistant `file:` references are checked before any access, so a refused path is neither touched nor named (`tools/file_state.md` -> Path resolution, `chat/request-building.md` for file references, `extensions/mcp.md` for roots).
 - Shell: `bash`/`powershell` check every call before launch and run it in a confined environment (`tools/shell.md` -> Permission Rules).
 - Cron watch checks of a job with a ceiling: the command and URL at every check and when the `cron` Tool saves the watch (`automation/cron-watch.md`).
+- Web: `web_fetch` at the address, every redirect hop, a service's final URL and the browser's final page; `analyze_image` image URLs and their hops (`fetch_public(..., permissions=)`); `web_search` drops results it may not fetch, with a count (`tools/web_fetch.md`, `tools/web_search.md` -> Permission Rules).
 - Terminal: `start` (program, folder), lines submitted at an integrated shell prompt, and `attach`/`status` only for terminals started under the same or narrower rules (`tools/terminal.md` -> Permission Rules).
 - Ceilings: `AgentOverrides.permission_ceiling` of a Sub-Agent Session (`source` `parent`), `CronJob.permission_ceiling` (`source` `cron`, `CronJob.ceiling()`), `TemporaryAgentConfig.permission_ceiling` (`source` `extension`).
 - UI/RPC summary of an effective boundary: stored and resolved rules through `effective_config`; for a built boundary, `allowed_summary(access)` per access, `layers` for deny rules and sources, and `permissions_block_text(boundary)` for the text the Agent reads.

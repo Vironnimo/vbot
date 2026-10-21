@@ -181,6 +181,8 @@ async def test_unusable_local_images_name_the_files_meant_without_substituting(
     ("images", "code"),
     [
         (["private/dog.png"], "permission_denied"),
+        # An image URL is checked before any download.
+        (["https://denied.example/dog.png"], "permission_denied"),
         (["photos"], "image_read_error"),
         (["photos/cat.jpg"], "image_not_found"),
     ],
@@ -191,7 +193,13 @@ async def test_images_the_rules_refuse_are_never_shown_or_suggested(
     write_image(photos / "private" / "dog.png")
     boundary = PermissionBoundary.build(
         normalize_permission_rules(
-            {"deny": ["Read({workdir}/private/**)", "Read({workdir}/photos/cat.png)"]}
+            {
+                "deny": [
+                    "Read({workdir}/private/**)",
+                    "Read({workdir}/photos/cat.png)",
+                    "Web(denied.example)",
+                ]
+            }
         ),
         BoundaryContext(workdir=photos, home=photos / "home", data_dir=photos / "data"),
     )

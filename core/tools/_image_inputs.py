@@ -394,7 +394,11 @@ async def resolve_analysis_images(
     try:
         _check_local(context, items, local, field, False)
         downloaded = await download_images(
-            addresses, field=field, attachment_store=attachment_store, several=len(items) > 1
+            addresses,
+            field=field,
+            attachment_store=attachment_store,
+            several=len(items) > 1,
+            permissions=context.permissions,
         )
     except UnusableImageError:
         _present(context, _named(list(local.values())), source=False)

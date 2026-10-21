@@ -26,6 +26,7 @@ from curl_cffi.requests.exceptions import ConnectionError as CurlConnectionError
 import core.tools._public_http as public_http
 from core.tools._public_http import PublicResponse
 from core.utils.retry import MAX_RETRIES
+from tests.core.permissions.command_check_support import restricted
 from tests.core.tools.web_fetch_test_support import (
     IPV6_ADDRESS,
     IPV6_HOST,
@@ -667,3 +668,45 @@ async def test_responses_over_the_download_limit_are_refused(
         "file or another source."
     )
     assert error["retryable"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("url", "requested", "refused"),
+    [
+        ("https://denied.example/page", [], "denied.example,"),
+        (
+            "https://public.example/start",
+            ["https://public.example/start"],
+            "https://public.example/start, which leads to denied.example,",
+        ),
+    ],
+    ids=["address", "redirect-hop"],
+)
+async def test_the_permission_rules_refuse_an_address_or_redirect_hop_before_it_is_requested(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    url: str,
+    requested: list[str],
+    refused: str,
+) -> None:
+    fetched: list[str] = []
+
+    def responder(request_url: str) -> PublicResponse:
+        fetched.append(request_url)
+        return make_result(
+            status_code=302, headers={"Location": "https://denied.example/page"}, url=request_url
+        )
+
+    install_http_get(monkeypatch, responder)
+    boundary = restricted(tmp_path, deny=["Web(denied.example)"])
+
+    result = await fetch(tmp_path, {"url": url}, permissions=boundary)
+
+    error = assert_failure_envelope(result, "permission_denied")
+    assert error["message"].startswith(
+        f"The permission rules refuse fetching {refused} because the rule "
+        "Web(denied.example) denies it."
+    )
+    assert error["retryable"] is False
+    assert fetched == requested

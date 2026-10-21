@@ -13,6 +13,7 @@ from typing import Any
 import httpx
 import pytest
 
+from core.permissions import PermissionBoundary
 from core.tools.tools import ToolContext, ToolRegistry, is_tool_result_envelope
 from core.tools.web_search import WEB_SEARCH_TOOL_NAME, register_web_search_tool
 
@@ -30,7 +31,9 @@ TAVILY_ENDPOINT = "https://api.tavily.com/search"
 SEARXNG_SETTINGS = {"provider": "searxng", "searxng": {"base_url": "http://localhost:8888"}}
 
 
-def make_context(tmp_path: Path) -> ToolContext:
+def make_context(
+    tmp_path: Path, permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED
+) -> ToolContext:
     return ToolContext(
         agent_id="agent-1",
         session_id="session-1",
@@ -41,6 +44,7 @@ def make_context(tmp_path: Path) -> ToolContext:
         workspace=tmp_path / "workspace",
         vbot_root=tmp_path,
         data_root=tmp_path / "data",
+        permissions=permissions,
     )
 
 
@@ -62,12 +66,13 @@ async def search(
     provider: str | None = None,
     settings: Any = None,
     credentials: Callable[[str], str] = lambda _key: API_KEY,
+    permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED,
 ) -> dict[str, Any]:
     """Dispatch one web_search call; ``provider`` selects it in otherwise default Settings."""
     if provider is not None:
         settings = SEARXNG_SETTINGS if provider == "searxng" else {"provider": provider}
     registry = web_search_registry(settings, credentials=credentials)
-    return await registry.dispatch(make_context(tmp_path), arguments)
+    return await registry.dispatch(make_context(tmp_path, permissions), arguments)
 
 
 @pytest.fixture

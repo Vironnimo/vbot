@@ -28,7 +28,7 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal
 from urllib.parse import urljoin, urlparse
 
-from core.permissions import PermissionBoundary, PermissionDenied
+from core.permissions import PermissionBoundary, PermissionDenied, PermissionRefusal
 from core.tools.tools import JsonObject, tool_failure
 from core.utils.http_status import is_retryable_status, parse_retry_after
 from core.utils.logging import get_logger
@@ -700,15 +700,23 @@ async def _fetch_with_retry(
     raise RuntimeError("unreachable retry loop state")
 
 
+def hop_refusal(permissions: PermissionBoundary, url: str, hop: str) -> PermissionRefusal | None:
+    """Whether *permissions* refuse *hop*, an address a fetch of *url* reached.
+
+    A refused hop other than *url* (a redirect, or the page a service or the
+    browser ended on) names the address asked for and the host it led to.
+    """
+    refused = permissions.check_url(hop)
+    if refused is not None and hop != url:
+        refused = replace(refused, target=url, resolved=refused.target)
+    return refused
+
+
 def _check_hop(permissions: PermissionBoundary, url: str, hop: str) -> None:
     """Raise ``PermissionDenied`` when *permissions* refuse *hop* of a fetch of *url*."""
-    refused = permissions.check_url(hop)
-    if refused is None:
-        return
-    if hop != url:
-        # A redirect: the refusal names the address asked for and where it led.
-        refused = replace(refused, target=url, resolved=refused.target)
-    raise PermissionDenied(refused)
+    refused = hop_refusal(permissions, url, hop)
+    if refused is not None:
+        raise PermissionDenied(refused)
 
 
 def _cookie_state(session: AsyncSession) -> frozenset[tuple[str, str, str, str | None]]:
@@ -924,6 +932,9 @@ async def fetch_public(
     """
     from curl_cffi.requests.exceptions import RequestException
 
+    if permissions is not None:
+        # A refused address opens no session.
+        _check_hop(permissions, url, url)
     try:
         async with _make_session(accept) as session:
             result = await _fetch_with_retry(session, url, {}, max_bytes, what, hosts, permissions)
@@ -967,5 +978,6 @@ __all__ = [
     "PublicResponse",
     "check_public_url",
     "fetch_public",
+    "hop_refusal",
     "resolve_public_address",
 ]

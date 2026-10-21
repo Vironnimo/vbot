@@ -20,6 +20,7 @@ from urllib.parse import unquote, unquote_to_bytes, urlparse
 
 from core.attachments import AttachmentError, sniff_media_type
 from core.model_tasks.artifacts import os_error_reason
+from core.permissions import PermissionBoundary, PermissionDenied
 from core.tools._public_http import PublicFetchError, fetch_public
 
 _IMAGE_ACCEPT = "image/avif,image/webp,image/apng,image/*,*/*;q=0.8"
@@ -168,14 +169,20 @@ def _filename(url: str) -> str:
     return name or "image"
 
 
-async def _download(address: str, max_bytes: int) -> _Image:
+async def _download(address: str, max_bytes: int, permissions: PermissionBoundary) -> _Image:
     if address[:5].casefold() == "data:":
         data, declared = _decode_data_url(address, max_bytes)
         return _checked(data, declared, None, "image")
     try:
         response = await fetch_public(
-            address, accept=_IMAGE_ACCEPT, max_bytes=max_bytes, what="image"
+            address,
+            accept=_IMAGE_ACCEPT,
+            max_bytes=max_bytes,
+            what="image",
+            permissions=permissions,
         )
+    except PermissionDenied as error:
+        raise ImageDownloadError("permission_denied", error.refusal.message()) from error
     except PublicFetchError as error:
         raise ImageDownloadError(
             error.code, str(error), retryable=error.retryable, attempts_made=error.attempts_made
@@ -184,27 +191,44 @@ async def _download(address: str, max_bytes: int) -> _Image:
     return _checked(response.content, declared, address, _filename(response.url))
 
 
-async def _attempt(address: str, max_bytes: int) -> _Image | ImageDownloadError:
+async def _attempt(
+    address: str, max_bytes: int, permissions: PermissionBoundary
+) -> _Image | ImageDownloadError:
     try:
-        return await _download(address, max_bytes)
+        return await _download(address, max_bytes, permissions)
     except ImageDownloadError as error:
         return error
 
 
 async def download_images(
-    addresses: dict[int, str], *, field: str, attachment_store: Any, several: bool
+    addresses: dict[int, str],
+    *,
+    field: str,
+    attachment_store: Any,
+    several: bool,
+    permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED,
 ) -> dict[int, tuple[Path, str]]:
     """Download the images at ``addresses`` (keyed by argument index) and store them.
 
     Returns each stored file with its display name, taken from the address. Every
     failure is reported together, each prefixed with its argument index when the
     call names several images. Nothing is stored unless every image arrived.
+    *permissions* are checked for every address before any download and for
+    every redirect hop (``permission_denied``).
     """
     if not addresses:
         return {}
+    refused = [
+        (index, ImageDownloadError("permission_denied", refusal.message()))
+        for index, address in addresses.items()
+        if address[:5].casefold() != "data:"
+        and (refusal := permissions.check_url(address)) is not None
+    ]
+    if refused:
+        raise _combined(refused, field, several)
     max_bytes = attachment_store.max_size_bytes
     outcomes = await asyncio.gather(
-        *(_attempt(address, max_bytes) for address in addresses.values())
+        *(_attempt(address, max_bytes, permissions) for address in addresses.values())
     )
     failures = [
         (index, outcome)
