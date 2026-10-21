@@ -31,8 +31,9 @@ from server.access import (
     _pairing,
     current_principal,
 )
+from server.access import _rules as access_rules
 from server.access._limits import RefusalLog, SlidingWindow
-from server.access._rules import machine_host_names
+from server.access._rules import ServerHosts, host_policy, machine_host_names
 from server.app import create_app
 from server.rpc import methods
 from server.rpc.methods import dispatch_rpc
@@ -1346,3 +1347,32 @@ def test_webhook_urls_start_with_an_address_their_callers_reach(
         assert bound_url == f"http://{host}:8765"
     else:
         assert bound_url == url
+
+
+@pytest.mark.parametrize(
+    ("bind_host", "beyond"),
+    [("127.0.0.1", False), ("localhost", False), ("0.0.0.0", True), ("::", True)],
+)
+def test_restricted_agents_learn_what_reaches_the_server_beyond_loopback(
+    monkeypatch: pytest.MonkeyPatch, bind_host: str, beyond: bool
+) -> None:
+    addresses = ["192.168.1.20", "fe80::1"]
+    monkeypatch.setattr(access_rules, "interface_addresses", lambda: tuple(addresses))
+    clock = [0.0]
+    config = access_config("lan", allow_hosts=["vbot.home.arpa"])
+    policy = host_policy(config, bind_host=bind_host)
+    hosts = ServerHosts(policy, bind_host=bind_host, clock=lambda: clock[0])
+
+    first = hosts()
+    addresses.append("192.168.1.21")
+    cached = hosts()
+    clock[0] += ServerHosts.REFRESH_SECONDS
+    refreshed = hosts()
+
+    if not beyond:
+        assert first == cached == refreshed == ()
+        return
+    assert {"192.168.1.20", "fe80::1", "vbot.home.arpa", "localhost"} <= set(first)
+    assert policy.names <= set(first)
+    assert cached == first
+    assert "192.168.1.21" in refreshed

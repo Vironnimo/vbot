@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Final
 from core.permissions._addresses import canonical_host
 from core.permissions._paths import is_inside, path_key, split_lexical
 from core.permissions._refusal import PathAccess, PermissionRefusal
-from core.permissions.permissions import PermissionBoundary, is_own_host
+from core.permissions.permissions import PermissionBoundary
 
 if TYPE_CHECKING:
     from core.permissions.commands.commands import (
@@ -374,10 +374,10 @@ class CommandChecker:
             ports = False
             for text in texts:
                 for match in _HOST_PORT.finditer(text):
-                    if match.group(2) == wanted and is_own_host(match.group(1).casefold()):
+                    if match.group(2) == wanted and boundary.is_server_host(match.group(1)):
                         return _server_refusal(boundary, command)
                 value = text.rpartition("=")[2]
-                hosts = hosts or is_own_host(value.casefold())
+                hosts = hosts or boundary.is_server_host(value)
                 ports = ports or value.rpartition(":")[2] == wanted
             if hosts and ports:
                 return _server_refusal(boundary, command)

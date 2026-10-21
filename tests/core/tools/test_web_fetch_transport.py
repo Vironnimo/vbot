@@ -26,7 +26,7 @@ from curl_cffi.requests.exceptions import ConnectionError as CurlConnectionError
 import core.tools._public_http as public_http
 from core.tools._public_http import PublicResponse
 from core.utils.retry import MAX_RETRIES
-from tests.core.permissions.command_check_support import restricted
+from tests.core.permissions.command_check_support import LAN_ADDRESS, PORT, restricted
 from tests.core.tools.web_fetch_test_support import (
     IPV6_ADDRESS,
     IPV6_HOST,
@@ -75,6 +75,8 @@ async def test_addresses_that_are_not_web_urls_are_refused_without_fetching(
     [
         ("http://127.0.0.1/private", "private or local network address"),
         ("http://10.0.0.1/internal", "private or local network address"),
+        # This machine's LAN address with the vBot port: the server's own API.
+        ("http://192.168.1.20:8765/api/rpc", "private or local network address"),
         ("http://100.64.0.1/internal", "private or local network address"),
         ("http://100.127.255.254/internal", "private or local network address"),
         ("http://[::ffff:100.64.0.1]/internal", "private or local network address"),
@@ -710,3 +712,21 @@ async def test_the_permission_rules_refuse_an_address_or_redirect_hop_before_it_
     )
     assert error["retryable"] is False
     assert fetched == requested
+
+
+@pytest.mark.asyncio
+async def test_a_restricted_fetch_cannot_reach_the_vbot_server_through_a_lan_address(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    network = AsyncMock()
+    monkeypatch.setattr(public_http, "_http_get", network)
+
+    result = await fetch(
+        tmp_path,
+        {"url": f"http://{LAN_ADDRESS}:{PORT}/api/rpc"},
+        permissions=restricted(tmp_path),
+    )
+
+    error = assert_failure_envelope(result, "permission_denied")
+    assert "it is the vBot server itself" in error["message"]
+    network.assert_not_awaited()

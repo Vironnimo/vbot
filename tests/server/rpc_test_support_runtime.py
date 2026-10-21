@@ -660,7 +660,9 @@ class StubRuntime:
     def activate_bootstrap(self) -> None:
         return None
 
-    def set_server_port(self, _port: int) -> None:
+    def set_server_port(
+        self, _port: int, *, own_hosts: Callable[[], tuple[str, ...]] | None = None
+    ) -> None:
         return None
 
     def set_extension_change_publisher(

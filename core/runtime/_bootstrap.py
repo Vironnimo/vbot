@@ -701,6 +701,7 @@ def bootstrap(runtime: Runtime) -> None:
                 else None
             ),
             server_port=lambda: runtime._server_port,
+            server_hosts=runtime._own_server_hosts,
         )
         runtime._chat_loop = ChatLoop(
             chat_dependencies,
@@ -984,7 +985,12 @@ def _watch_boundary(
         permissions = session_permissions(
             agent, data_dir=data_dir, project_root=project_root, ceiling=ceiling
         ).without_agent_rules()
-    return permissions.boundary(data_dir, owner=None, loopback_port=runtime._server_port)
+    return permissions.boundary(
+        data_dir,
+        owner=None,
+        loopback_port=runtime._server_port,
+        own_hosts=runtime._own_server_hosts,
+    )
 
 
 def _command_analyzer() -> CommandAnalyzer:

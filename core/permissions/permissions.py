@@ -117,7 +117,10 @@ class BoundaryContext:
     from (its profile and the settings files its translation reads, also missing
     ones): readable where the rules allow, never writable, also under every Run
     that inherits this boundary as a ceiling. ``loopback_port`` is the vBot
-    server's own port on loopback.
+    server's own port on loopback; ``own_hosts`` are the further names and
+    addresses that reach it on that port when it listens beyond loopback (this
+    machine's interface addresses and names, the access configuration's host
+    names).
     """
 
     workdir: PathLike
@@ -131,6 +134,7 @@ class BoundaryContext:
     install_dirs: tuple[PathLike, ...] = ()
     readable_dirs: tuple[PathLike, ...] = ()
     loopback_port: int | None = None
+    own_hosts: tuple[str, ...] = ()
     platform: str = sys.platform
 
 
@@ -157,6 +161,7 @@ class PermissionBoundary:
         "_agent_config",
         "_rule_files",
         "_install_dirs",
+        "_own_hosts",
     )
 
     def __init__(
@@ -190,6 +195,7 @@ class PermissionBoundary:
         self._install_dirs = tuple(
             _Area.of(os.fspath(folder), windows=windows) for folder in context.install_dirs
         )
+        self._own_hosts = frozenset(_host_key(host) for host in context.own_hosts)
 
     @classmethod
     def build(
@@ -231,6 +237,16 @@ class PermissionBoundary:
     @property
     def loopback_port(self) -> int | None:
         return self._context.loopback_port if self._context is not None else None
+
+    def is_server_host(self, host: str) -> bool:
+        """Whether ``host`` reaches the vBot server at ``loopback_port``.
+
+        Loopback names and addresses (:func:`is_own_host`) and, when the server
+        listens beyond loopback, the context's ``own_hosts``.
+        """
+        return is_own_host(host.casefold()) or (
+            bool(self._layers) and _host_key(host) in self._own_hosts
+        )
 
     def to_ceiling_dict(self, *, source: LayerSource) -> dict[str, object] | None:
         """This boundary as a ceiling for a Run it causes, or ``None`` for full access.
@@ -483,7 +499,7 @@ class PermissionBoundary:
         if (
             self.loopback_port is not None
             and effective_port == self.loopback_port
-            and is_own_host(host)
+            and self.is_server_host(host)
         ):
             return self.refusal(
                 "web", f"{scheme}://{parts.netloc}", "protected_location", location="vbot_server"
@@ -832,7 +848,8 @@ def is_own_host(host: str) -> bool:
 
     Loopback and unspecified addresses in every form the resolver reads
     (``127.1``, ``0x7f000001``), ``localhost`` and this machine's own name.
-    Its LAN addresses are not recognized.
+    Its LAN addresses only a boundary knows (``BoundaryContext.own_hosts``,
+    :meth:`PermissionBoundary.is_server_host`).
     """
     host = canonical_host(host.strip("[]").rstrip("."))
     if host == "localhost" or host.endswith(".localhost"):
@@ -852,6 +869,18 @@ def is_own_host(host: str) -> bool:
 @functools.cache
 def _machine_name() -> str:
     return socket.gethostname().casefold().rstrip(".")
+
+
+def _host_key(host: str) -> str:
+    """One comparison form of a host name or address (no brackets, zone or IPv4 mapping)."""
+    text = canonical_host(host.strip().strip("[]").rstrip(".").casefold().partition("%")[0])
+    try:
+        address = ipaddress.ip_address(text)
+    except ValueError:
+        return text
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        return str(address.ipv4_mapped)
+    return address.compressed
 
 
 __all__ = [

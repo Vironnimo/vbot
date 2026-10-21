@@ -205,6 +205,9 @@ class ChatLoopDependencies:
     # The vBot server's own port, which restricted Runs may not reach on loopback;
     # ``None`` outside a server.
     server_port: Callable[[], int | None] | None = None
+    # Blocking: the further names and addresses that reach it on that port when it
+    # listens beyond loopback (``BoundaryContext.own_hosts``).
+    server_hosts: Callable[[], tuple[str, ...]] | None = None
 
 
 def is_subagent_session(sessions: ChatSessionManager, address: SessionAddress) -> bool:

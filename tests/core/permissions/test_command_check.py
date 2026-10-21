@@ -46,6 +46,7 @@ def boundary(
         home=work / "home",
         data_dir=work.parent / "data",
         loopback_port=PORT,
+        own_hosts=("192.168.1.20",),
     )
     ceilings: tuple[PermissionCeiling, ...] = ()
     if ceiling is not None:
@@ -89,6 +90,13 @@ def boundary(
             (f"curl ws://[::1]:{PORT}/live",),
             "protected_location",
             id="host-port-word",
+        ),
+        pytest.param(
+            RESTRICTED,
+            None,
+            (f"curl -X POST 192.168.1.20:{PORT}/api/rpc",),
+            "protected_location",
+            id="lan-address-port-word",
         ),
         pytest.param(RESTRICTED, None, (f"curl localhost:{PORT + 1}",), None, id="other-port"),
     ],

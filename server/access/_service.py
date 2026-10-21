@@ -45,6 +45,7 @@ from server.access._principal import HOST, OPEN, Principal
 from server.access._rules import (
     TICKET_PATH_PREFIX,
     RequestFacts,
+    ServerHosts,
     host_policy,
     inspect_request,
 )
@@ -156,6 +157,8 @@ class AccessService:
         self._admitted = config.admitted_networks()
         self._proxies = config.proxy_networks()
         self._hosts = host_policy(config, bind_host=bind_host)
+        # What else reaches this server, which restricted Agents may not fetch.
+        self.server_hosts = ServerHosts(self._hosts, bind_host=bind_host, clock=clock)
         self._utc_now = utc_now
         self._wall_clock = wall_clock
         self._store: DeviceStore | None = None

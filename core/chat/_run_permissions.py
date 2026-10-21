@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import os
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from functools import cache
 from pathlib import Path
@@ -124,9 +124,12 @@ class SessionPermissions:
         scratch_root: Path | None = None,
         skill_dirs: Sequence[Path] = (),
         loopback_port: int | None = None,
+        own_hosts: Callable[[], tuple[str, ...]] | None = None,
     ) -> PermissionBoundary:
         """Build the boundary; ``owner`` grants that Session's own temporary files.
 
+        ``own_hosts`` returns what else reaches the server on ``loopback_port``
+        (``BoundaryContext.own_hosts``); only a restricted Session asks it.
         Blocking for a restricted Session: rule paths resolve on the filesystem.
         """
         if not self.restricted:
@@ -150,6 +153,7 @@ class SessionPermissions:
             install_dirs=installation_dirs(),
             readable_dirs=(*artifacts, *skill_dirs),
             loopback_port=loopback_port,
+            own_hosts=own_hosts() if own_hosts is not None and loopback_port is not None else (),
         )
         return PermissionBoundary.build(self.rules, context, ceilings=self.ceilings)
 
@@ -306,6 +310,7 @@ async def run_permission_boundary(
         scratch_root,
         skill_registry,
         port,
+        dependencies.server_hosts,
     )
 
 
@@ -318,6 +323,7 @@ def _build_run_permissions(
     scratch_root: Path | None,
     skill_registry: SkillRegistry,
     port: int | None,
+    own_hosts: Callable[[], tuple[str, ...]] | None,
 ) -> RunPermissions:
     """Blocking: the sources' stamps are taken before the boundary is built from them."""
     sources = permissions.rule_sources()
@@ -328,6 +334,7 @@ def _build_run_permissions(
         scratch_root=scratch_root,
         skill_dirs=_skill_dirs(skill_registry, permissions.allowed_skills),
         loopback_port=port,
+        own_hosts=own_hosts,
     )
     return RunPermissions(boundary, documents, address, project_root, sources, stamps)
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import OrderedDict
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, cast
 
 from core.runs import ChatRunManager
@@ -59,6 +60,7 @@ def _initialize_app_state(
     runtime: Runtime,
     *,
     server_bind: ServerBindState,
+    server_hosts: Callable[[], tuple[str, ...]] | None = None,
     log_viewer: LogViewer,
     file_delivery: FileDelivery,
 ) -> None:
@@ -114,7 +116,7 @@ def _initialize_app_state(
     # Tools and commands that select Sessions for automations.
     app.state.agent_delete_lock = runtime.automation_references.lock
     app.state.server_bind = dict(server_bind)
-    runtime.set_server_port(server_bind["listen_port"])
+    runtime.set_server_port(server_bind["listen_port"], own_hosts=server_hosts)
     app.state.live_calls = _build_live_call_registry(app.state)
 
 

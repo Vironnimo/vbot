@@ -25,8 +25,10 @@ from core.permissions.commands.commands import (
     UnresolvedElement,
 )
 
-# The vBot server port of ``restricted`` boundaries.
+# The vBot server port of ``restricted`` boundaries, and the LAN address it also
+# listens on, as in the Access Mode lan.
 PORT = 22333
+LAN_ADDRESS = "192.168.1.20"
 
 
 def restricted(workdir: Path, **rules: object) -> PermissionBoundary:
@@ -38,6 +40,7 @@ def restricted(workdir: Path, **rules: object) -> PermissionBoundary:
             home=workdir / "home",
             data_dir=workdir.parent / f"{workdir.name}-vbot-data",
             loopback_port=PORT,
+            own_hosts=(LAN_ADDRESS,),
         ),
     )
 

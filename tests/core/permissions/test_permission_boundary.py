@@ -414,6 +414,11 @@ def test_host_decisions(area: Area, host: str, reason: str | None) -> None:
         pytest.param(
             f"http://{socket.gethostname()}:22333/", "protected_location", id="server-machine-name"
         ),
+        pytest.param("http://192.168.1.20:22333/api/rpc", "protected_location", id="server-lan"),
+        pytest.param("http://[fe80::1]:22333/", "protected_location", id="server-lan-ipv6"),
+        pytest.param("http://[::ffff:192.168.1.20]:22333/", "protected_location", id="mapped"),
+        pytest.param("http://VBOT.home.arpa.:22333/", "protected_location", id="allowed-host"),
+        pytest.param("http://192.168.1.20:5173/", None, id="other-lan-port"),
         pytest.param("http://127.0.0.1:5173/", None, id="other-local-port"),
         pytest.param("https://example.com/page", None, id="ordinary-url"),
         pytest.param("ftp://example.com/file", "unanalyzable", id="other-scheme"),
@@ -421,8 +426,10 @@ def test_host_decisions(area: Area, host: str, reason: str | None) -> None:
     ],
 )
 def test_url_decisions(area: Area, url: str, reason: str | None) -> None:
-    # Any restriction protects the vBot server; this one leaves the web open.
-    refusal = area.boundary({"write": "scratch"}).check_url(url)
+    # Any restriction protects the vBot server; this one leaves the web open. The
+    # server listens beyond loopback, as in the Access Mode lan.
+    own_hosts = ("192.168.1.20", "fe80::1%12", "vbot.home.arpa")
+    refusal = area.boundary({"write": "scratch"}, own_hosts=own_hosts).check_url(url)
 
     assert (refusal.reason if refusal else None) == reason
 
