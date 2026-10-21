@@ -10,6 +10,8 @@ from core.chat.output_files import (
 )
 from core.permissions import BoundaryContext, PermissionBoundary, normalize_permission_rules
 
+FULL_ACCESS = PermissionBoundary.UNRESTRICTED
+
 
 def test_resolves_absolute_relative_and_repeated_markers_anywhere_in_a_line(
     tmp_path: Path,
@@ -23,7 +25,9 @@ def test_resolves_absolute_relative_and_repeated_markers_anywhere_in_a_line(
     first_line = f"Files: file:{absolute} file:{report}"
     second_line = "Download file:relative.txt when ready"
 
-    assert resolve_assistant_file_references(f"{first_line}\n{second_line}", cwd=tmp_path) == [
+    assert resolve_assistant_file_references(
+        f"{first_line}\n{second_line}", cwd=tmp_path, permissions=FULL_ACCESS
+    ) == [
         _reference(first_line, 0, f"file:{absolute}", absolute),
         _reference(first_line, 0, f"file:{report}", report),
         _reference(second_line, 1, "file:relative.txt", relative),
@@ -40,7 +44,7 @@ def test_markdown_wrapper_pair_belongs_to_the_marker_but_punctuation_does_not(
     marker = f"{wrapper}file:{image}{wrapper}"
     line = f"Look at {marker}, then continue."
 
-    assert resolve_assistant_file_references(line, cwd=tmp_path) == [
+    assert resolve_assistant_file_references(line, cwd=tmp_path, permissions=FULL_ACCESS) == [
         _reference(line, 0, marker, image)
     ]
 
@@ -61,15 +65,15 @@ def test_ignores_unmarked_paths_and_markers_in_code(
     file_path.write_bytes(b"%PDF")
     valid_line = f"Ready file:{file_path}"
 
-    assert resolve_assistant_file_references(template.format(path=file_path), cwd=tmp_path) == [
-        _reference(valid_line, valid_line_index, f"file:{file_path}", file_path)
-    ]
+    assert resolve_assistant_file_references(
+        template.format(path=file_path), cwd=tmp_path, permissions=FULL_ACCESS
+    ) == [_reference(valid_line, valid_line_index, f"file:{file_path}", file_path)]
 
 
 def test_ignores_missing_files_directories_urls_and_embedded_prefix(tmp_path: Path) -> None:
     content = "file:missing.png\nfile:.\nfile:https://example.test/image.png\nprofile:notes.txt"
 
-    assert resolve_assistant_file_references(content, cwd=tmp_path) is None
+    assert resolve_assistant_file_references(content, cwd=tmp_path, permissions=FULL_ACCESS) is None
 
 
 def test_without_workspace_resolves_only_absolute_markers(tmp_path: Path) -> None:
@@ -78,7 +82,7 @@ def test_without_workspace_resolves_only_absolute_markers(tmp_path: Path) -> Non
     second_line = f"Absolute file:{file_path}"
     content = f"file:report.txt\n{second_line}"
 
-    assert resolve_assistant_file_references(content, cwd=None) == [
+    assert resolve_assistant_file_references(content, cwd=None, permissions=FULL_ACCESS) == [
         _reference(second_line, 1, f"file:{file_path}", file_path)
     ]
 
@@ -87,7 +91,12 @@ def test_paths_with_whitespace_are_not_implicitly_guessed(tmp_path: Path) -> Non
     file_path = tmp_path / "report final.pdf"
     file_path.write_bytes(b"%PDF")
 
-    assert resolve_assistant_file_references(f"file:{file_path}", cwd=tmp_path) is None
+    assert (
+        resolve_assistant_file_references(
+            f"file:{file_path}", cwd=tmp_path, permissions=FULL_ACCESS
+        )
+        is None
+    )
 
 
 @pytest.mark.parametrize(

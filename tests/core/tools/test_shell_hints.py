@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 import re
+from functools import partial
 from pathlib import Path
 
 import pytest
 
+from core.permissions import PermissionBoundary
 from core.tools import _shell_hint_common as shell_hint_common
-from core.tools.shell_hints import annotate_failure
+from core.tools import shell_hints
 from tests.core.permissions.command_check_support import restricted
+
+# Hints for a Session with full access; a case with rules passes its own permissions.
+annotate_failure = partial(
+    shell_hints.annotate_failure, permissions=PermissionBoundary.UNRESTRICTED
+)
 
 _NOT_RECOGNIZED = (
     "{name}: The term '{name}' is not recognized as a name of a cmdlet, function, script "

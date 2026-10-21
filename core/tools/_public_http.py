@@ -609,7 +609,8 @@ async def _fetch_with_retry(
     max_bytes: int = MAX_RESPONSE_BYTES,
     what: str = "page",
     hosts: HostSlots | None = None,
-    permissions: PermissionBoundary | None = None,
+    *,
+    permissions: PermissionBoundary,
 ) -> PublicResponse:
     """Fetch a URL, validating each redirect hop against SSRF rules and *permissions*.
 
@@ -637,8 +638,7 @@ async def _fetch_with_retry(
                 "the cookies it sets. Try another source."
             )
         visited[current_url] = cookies
-        if permissions is not None:
-            _check_hop(permissions, url, current_url)
+        _check_hop(permissions, url, current_url)
         try:
             scheme, host, port = _url_parts(current_url)
             normalized_host, pinned_ip = await _validate_public_target(scheme, host, port)
@@ -919,7 +919,7 @@ async def fetch_public(
     max_bytes: int = MAX_RESPONSE_BYTES,
     what: str = "page",
     hosts: HostSlots | None = None,
-    permissions: PermissionBoundary | None = None,
+    permissions: PermissionBoundary,
 ) -> PublicResponse:
     """GET a public address and return its successful response.
 
@@ -932,18 +932,19 @@ async def fetch_public(
     """
     from curl_cffi.requests.exceptions import RequestException
 
-    if permissions is not None:
-        # A refused address opens no session.
-        _check_hop(permissions, url, url)
+    # A refused address opens no session.
+    _check_hop(permissions, url, url)
     try:
         async with _make_session(accept) as session:
-            result = await _fetch_with_retry(session, url, {}, max_bytes, what, hosts, permissions)
+            result = await _fetch_with_retry(
+                session, url, {}, max_bytes, what, hosts, permissions=permissions
+            )
         if result.status_code == 406:
             # The site serves none of the formats asked for; a browser's own
             # request is what sites answer most (a page refused text/markdown).
             async with _make_session(None) as session:
                 result = await _fetch_with_retry(
-                    session, url, {}, max_bytes, what, hosts, permissions
+                    session, url, {}, max_bytes, what, hosts, permissions=permissions
                 )
     except _RedirectTargetBlockedError as error:
         raise PublicFetchError("blocked_url", str(error)) from error

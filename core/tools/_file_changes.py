@@ -225,7 +225,7 @@ class ChangeBatch:
     cwd: Path
     templates: Mapping[str, str] = field(default_factory=dict)
     # The Run's Permission Rules: a file's current text is shown only where they permit reading.
-    permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED
+    permissions: PermissionBoundary = field(kw_only=True)
     # Whether the Model request offered a Tool (``ToolContext.offers``).
     offers: Callable[[str], bool] = field(default=lambda _name: False)
     # Actual observations and completed mutations only; never a speculative final plan.

@@ -1492,14 +1492,17 @@ async def test_statuses_of_background_commands_fold_from_results_and_deliveries(
     result = record("tool", json.dumps(running), SHELL_TOOL_NAME)
     delivery = record("note", "Background results:\n" + shell.sink.bodies[0])
     stopped = record("note", "Background results:\n" + shell.sink.bodies[1])
-    unknown = record("note", format_command_delivery(unknown_end))
+    unknown = record(
+        "note", format_command_delivery(unknown_end, permissions=PermissionBoundary.UNRESTRICTED)
+    )
     # vBot stopped unexpectedly while the command ran; recovery found it ran at least this long.
     restarted = record(
         "note",
         format_command_delivery(
             dataclasses.replace(
                 unknown_end, command_id="cmd_r", stop_reason="server_restart", elapsed_seconds=125
-            )
+            ),
+            permissions=PermissionBoundary.UNRESTRICTED,
         ),
     )
     assert "was stopped after at least 2 minutes 5 seconds: vBot stopped" in restarted.content

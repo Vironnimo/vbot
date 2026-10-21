@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import sys
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from core.permissions import PermissionBoundary
@@ -38,7 +38,7 @@ class _Failure:
     # exception line on, else all of it.
     error_start: int = 0
     # The Session's boundary: a hint names only paths it may read.
-    permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED
+    permissions: PermissionBoundary = field(kw_only=True)
 
     @property
     def error(self) -> str:

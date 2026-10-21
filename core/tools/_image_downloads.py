@@ -206,7 +206,7 @@ async def download_images(
     field: str,
     attachment_store: Any,
     several: bool,
-    permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED,
+    permissions: PermissionBoundary,
 ) -> dict[int, tuple[Path, str]]:
     """Download the images at ``addresses`` (keyed by argument index) and store them.
 

@@ -203,7 +203,7 @@ class WebSearchRequest:
     count: int
     page: int
     recency: str
-    permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED
+    permissions: PermissionBoundary = field(kw_only=True)
     refused: dict[str, str] = field(default_factory=dict, compare=False)
 
     @staticmethod

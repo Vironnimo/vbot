@@ -23,6 +23,7 @@ from typing import Any
 import pytest
 import pytest_asyncio
 
+from core.permissions import PermissionBoundary
 from core.runtime import _bootstrap
 from core.runtime.runtime import Runtime
 from core.sessions import SessionAddress
@@ -677,7 +678,7 @@ async def test_a_log_file_vbot_could_not_write_is_never_called_complete(
         process.exit(1)
     report = await tasks.commands.finish(command_id)
     ended = json.dumps(data(await tasks.call({"action": "status", "id": command_id})))
-    delivery = format_command_delivery(report)
+    delivery = format_command_delivery(report, permissions=PermissionBoundary.UNRESTRICTED)
     explained(ended)
     explained(delivery)
     safe_repeat(ended)

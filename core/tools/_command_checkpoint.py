@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol, cast
 
+from core.permissions import PermissionBoundary
 from core.runs import RunAdmissionBlockedError, RunExecutionOwner
 from core.sessions import SessionAddress, SessionNotFoundError
 from core.utils.logging import get_logger
@@ -337,7 +338,7 @@ class CommandCheckpoints:
             execution = state.get("execution_owner")
             report = self._interrupted(report, log)
             if body is None and state["pending"]:
-                body = format_command_delivery(report)
+                body = format_command_delivery(report, permissions=PermissionBoundary.UNRESTRICTED)
             entry = _Recovered(
                 report,
                 row["origin_run_id"],
