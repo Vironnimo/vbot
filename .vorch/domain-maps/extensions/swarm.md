@@ -169,7 +169,7 @@ management operations and persistence retain their profile/swarm identifiers.
 Profiles are versioned, revision-checked starting configurations. A started Swarm
 retains its prompt and configuration snapshot. The formation is fixed; participant
 Sessions persist across explicit Resume. Temporary execution ownership belongs to
-`core/agents/temporary.py`, not to an Identity Agent or a parent Session.
+`core/agents/temporary_execution.py`, not to an Identity Agent or a parent Session.
 Saving without a command shortcut generates a unique name-based shortcut inside
 the profile transaction; omission on an update retains the existing shortcut.
 Explicit shortcuts remain validated and collision-checked (`store.py`).

@@ -52,7 +52,7 @@ _LOGGER = get_logger("chat.permissions")
 
 _INVALID_CEILING = (
     "This Session's inherited permission rules cannot be read, so it does not run. "
-    "Ask the user to check the Session."
+    "Continue the work in a new Session."
 )
 
 
@@ -337,17 +337,32 @@ def _build_run_permissions(
 # change within an epoch arrives as a ``[prompt-block-change]`` System Reminder.
 PERMISSIONS_BLOCK_ID = "core:permissions"
 _PERMISSIONS_HEADING = "## Permission rules"
-_PERMISSIONS_LEAD = (
-    "The user set permission rules for you: every Tool and command refuses access "
-    "outside these limits."
+_PERMISSIONS_LEAD = "The user set permission rules for you{inherited}."
+_PERMISSIONS_SCOPE = (
+    "vBot's Tools and commands refuse access outside these limits, and the limits also "
+    "apply to scripts and programs that vBot does not check."
 )
+# Where a ceiling's rules come from, as the lead names them.
+_INHERITED_FROM: Final[dict[str, str]] = {
+    "parent": "the Session that started you",
+    "cron": "the Session that scheduled this job",
+    "extension": "the Extension that runs you",
+}
+# What stays readable beyond the listed folders: the Agent's Skill folders and
+# the files vBot's Tool results hand it (command logs, fetched pages, media).
+_ALSO_READABLE = "your Skills and the files vBot's Tool results point you to"
 _PERMISSIONS_LINES: Final[tuple[tuple[PermissionAccess, str, str], ...]] = (
-    ("read", "You can read files only in: {items}.", "You cannot read any files."),
+    (
+        "read",
+        f"You can read files only in: {{items}}, plus {_ALSO_READABLE}.",
+        f"You can read only {_ALSO_READABLE}.",
+    ),
     ("write", "You can change files only in: {items}.", "You cannot change any files."),
     ("command", "You can run only these commands: {items}.", "You cannot run any commands."),
     ("web", "You can fetch only from: {items}.", "You cannot fetch from any host."),
 )
-_PERMISSIONS_DENIED = "These rules refuse access everywhere: {items}."
+_PERMISSIONS_DENIED = "Always refused, even inside these folders: {items}."
+_PERMISSIONS_DENIED_ONLY = "Always refused: {items}."
 
 
 def permissions_block_text(boundary: PermissionBoundary) -> str:
@@ -355,19 +370,25 @@ def permissions_block_text(boundary: PermissionBoundary) -> str:
     if not boundary.restricted:
         return ""
     lines: list[str] = []
+    folders = False
     for access, listed, nothing in _PERMISSIONS_LINES:
         allowed = boundary.allowed_summary(access)
         if allowed is None:
             continue
+        folders = folders or access in ("read", "write")
         lines.append(listed.format(items=_items(allowed)) if allowed else nothing)
     denied = tuple(dict.fromkeys(rule.text for layer in boundary.layers for rule in layer.deny))
     if denied:
-        lines.append(_PERMISSIONS_DENIED.format(items=_items(denied)))
+        template = _PERMISSIONS_DENIED if folders else _PERMISSIONS_DENIED_ONLY
+        lines.append(template.format(items=_items(denied)))
     if not lines:
         return ""
-    return "\n".join(
-        (_PERMISSIONS_HEADING, "", _PERMISSIONS_LEAD, *(f"- {line}" for line in lines))
+    sources = dict.fromkeys(
+        _INHERITED_FROM[layer.source] for layer in boundary.layers if layer.source != "agent"
     )
+    inherited = f", including those of {' and '.join(sources)}" if sources else ""
+    lead = f"{_PERMISSIONS_LEAD.format(inherited=inherited)} {_PERMISSIONS_SCOPE}"
+    return "\n".join((_PERMISSIONS_HEADING, "", lead, *(f"- {line}" for line in lines)))
 
 
 def permissions_prompt_block(boundary: PermissionBoundary) -> BlockDefinition | None:

@@ -25,11 +25,47 @@ const FULL_ACCESS = {
   allow: [],
   deny: [],
 };
+const WORK_DIR = { read: 'work_area', write: 'work_area' };
+// The server's presets, each the change it makes: null unsets a part.
 const PRESETS = {
   full_access: FULL_ACCESS,
-  work_dir: { read: 'work_area', write: 'work_area' },
-  work_dir_read_only: { read: 'work_area', write: 'scratch' },
+  work_dir: { ...WORK_DIR, commands: null, web: null },
+  work_dir_read_only: {
+    read: 'work_area',
+    write: 'scratch',
+    commands: null,
+    web: null,
+  },
 };
+const CHOICES = {
+  read: ['anywhere', 'work_area'],
+  write: ['anywhere', 'work_area', 'scratch'],
+  commands: ['any', 'listed'],
+  web: ['any', 'listed'],
+};
+
+// The server's `bases` for a level without own bases that inherits `inherited`.
+function bases(inherited = {}) {
+  return Object.fromEntries(
+    Object.entries(CHOICES).map(([part, choices]) => {
+      const inherit = inherited[part]
+        ? { value: inherited[part], source: 'inherited' }
+        : { value: choices[0], source: 'default' };
+      return [
+        part,
+        {
+          ...inherit,
+          inherit,
+          choices,
+          excluded: [],
+          ...(part === 'write'
+            ? { narrowed_by_read: { work_area: { anywhere: 'work_area' } } }
+            : {}),
+        },
+      ];
+    }),
+  );
+}
 
 function response(fields) {
   return {
@@ -39,6 +75,7 @@ function response(fields) {
     errors: [],
     preset: 'full_access',
     presets: PRESETS,
+    bases: bases(fields.inherited ?? {}),
     inherited_preset: 'full_access',
     inherited: null,
     effective: null,
@@ -118,7 +155,7 @@ describe('PermissionRulesEditor', () => {
 
     choose(trigger(t('permissions.preset')), t('permissions.preset.work_dir'));
 
-    expect(changes.at(-1)).toEqual({ ...own, ...PRESETS.work_dir });
+    expect(changes.at(-1)).toEqual({ ...own, ...WORK_DIR });
   });
 
   it('names what an Agent without own rules inherits', async () => {
@@ -188,7 +225,7 @@ describe('PermissionRulesEditor', () => {
       t('permissions.preset.full_access'),
     );
     choose(trigger(t('permissions.preset')), t('permissions.preset.work_dir'));
-    expect(changes.at(-1)).toEqual(PRESETS.work_dir);
+    expect(changes.at(-1)).toEqual(WORK_DIR);
     choose(
       trigger(t('permissions.preset')),
       t('permissions.preset.full_access'),

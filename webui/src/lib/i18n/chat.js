@@ -257,7 +257,7 @@ export default Object.freeze({
   'chat.toolStillRunning': 'processes still running',
   'chat.subAgentCommandsRunning': 'commands still running',
   'chat.toolPartial': 'partial',
-  'chat.toolRefused': 'refused by permission rules',
+  'chat.toolRefused': 'refused by Permission Rules',
   'chat.toolInterrupted': 'interrupted',
   'chat.toolState.preparing': 'Preparing',
   'chat.toolState.preparingHint': 'The Model is still writing this Tool call.',

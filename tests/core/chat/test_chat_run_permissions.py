@@ -215,6 +215,9 @@ async def test_an_inherited_ceiling_bounds_an_agent_without_rules(
         refused = context.permissions.check_path(tmp_path / "workspace" / "notes.md", "write")
         assert refused is not None and refused.source == inherited_from
     assert len(seen) == 2
+    # The System Prompt says where the inherited rules come from.
+    source = {"parent": "Session that started you", "cron": "Session that scheduled this job"}
+    assert source[inherited_from] in _system_prompt(runtime)
 
 
 def test_a_ceiling_only_session_boundary_keeps_the_agents_workspace_and_config(

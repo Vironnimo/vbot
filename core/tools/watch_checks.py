@@ -323,8 +323,8 @@ def _shell_start(command: str, workdir: Path, confined: bool) -> HostShellStart:
 
 
 def _refused(refusal: PermissionRefusal) -> str:
-    """A refused check's error: the refusal, which names the job's rules."""
-    return f"The check did not run: {refusal.message()}".rstrip(".")
+    """A refused check's error, for the user's alert as for the Agent reading the job."""
+    return f"The check did not run: {refusal.watch_message()}".rstrip(".")
 
 
 class _CappedOutput:

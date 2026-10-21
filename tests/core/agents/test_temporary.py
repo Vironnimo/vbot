@@ -11,7 +11,7 @@ from typing import Any, cast
 import pytest
 
 from core.agents import AgentStore, TemporaryAgentConfig, TemporaryAgentRegistry
-from core.agents.temporary import TemporaryExecutionGroups, TemporaryRunInput
+from core.agents.temporary_execution import TemporaryExecutionGroups, TemporaryRunInput
 from core.chat import ChatError, ChatMessage, ChatSessionError
 from core.database import write_bootstrap_marker
 from core.permissions import (

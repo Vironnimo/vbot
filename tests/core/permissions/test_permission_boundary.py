@@ -395,6 +395,7 @@ def test_malformed_ceilings_are_refused(stored: object) -> None:
         pytest.param("127.0.0.1", "deny_rule", id="ip-denied-in-short-form"),
         pytest.param("0x7f000001", "deny_rule", id="hex-form-of-denied-ip"),
         pytest.param("other.org", "not_permitted", id="unlisted-host"),
+        pytest.param("", "unanalyzable", id="no-host"),
     ],
 )
 def test_host_decisions(area: Area, host: str, reason: str | None) -> None:
@@ -444,10 +445,19 @@ def test_a_refusal_names_what_the_boundary_allows(area: Area) -> None:
     refusal = boundary.check_path(area.path("{outside}/a.txt"), "read")
 
     assert refusal is not None
+    # The Workspace is readable under every rule set, so it is named too.
     assert refusal.allowed == (
         area.work.as_posix(),
         area.scratch.as_posix(),
         (area.home / "docs" / "**").as_posix(),
+        area.workspace.as_posix(),
+    )
+    # A folder to work in is named without the wildcard part of its rule.
+    assert boundary.allowed_summary("start_dir") == (
+        area.work.as_posix(),
+        area.scratch.as_posix(),
+        (area.home / "docs").as_posix(),
+        area.workspace.as_posix(),
     )
     assert boundary.allowed_summary("command") == ("make",)
     assert boundary.allowed_summary("web") is None

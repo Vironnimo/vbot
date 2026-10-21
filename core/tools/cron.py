@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import json
 import re
 from contextlib import suppress
 from datetime import UTC, datetime
 from functools import cache
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 from core.automation.cron import (
@@ -24,7 +23,7 @@ from core.automation.cron import (
     CronTargetUnavailableError,
     CronWatch,
 )
-from core.permissions import PermissionDenied
+from core.permissions import PermissionDenied, join_ceilings
 from core.projects import InvalidAgentAddressError, format_agent_address, parse_agent_address
 from core.tools._cron_arguments import (
     CURRENT_SESSION,
@@ -499,7 +498,8 @@ async def _handle_update(
     if context.permissions.restricted:
         # The job now also runs under the boundary of the restricted Session
         # that changed it, never wider than before.
-        ceiling = _joined_ceiling(ceiling, context.permissions.to_ceiling_dict(source="cron"))
+        joined = join_ceilings(current.ceiling(), context.permissions.ceiling(source="cron"))
+        ceiling = joined.to_ceiling_dict() if joined is not None else None
         updates["permission_ceiling"] = ceiling
     await _check_watch(
         cron_service,
@@ -658,20 +658,6 @@ async def _check_watch(
     )
     if refused is not None:
         raise PermissionDenied(refused)
-
-
-def _joined_ceiling(
-    stored: dict[str, Any] | None, added: dict[str, object] | None
-) -> dict[str, Any] | None:
-    """A job's stored ceiling with the layers of *added*: every layer limits the job."""
-    if stored is None or added is None:
-        return stored if added is None else dict(added)
-    layers = list(stored["layers"])
-    seen = {json.dumps(layer, sort_keys=True) for layer in layers}
-    for layer in cast(list[dict[str, Any]], added["layers"]):
-        if json.dumps(layer, sort_keys=True) not in seen:
-            layers.append(layer)
-    return {"layers": layers}
 
 
 def _stored_watch(cron_service: CronService, arguments: JsonObject) -> CronWatch | None:

@@ -1,25 +1,34 @@
-"""Permission Rules presets: named starting points that fill the parts of a rule set.
+"""What Permission Rules editors need: presets and the bases a level offers.
 
 Presets are shortcuts of the editors (WebUI, CLI), not a stored form: applying
 one writes ordinary parts, and an editor names the preset a stored rule set
-matches. This module is their one definition; the RPC hands the definitions to
-the WebUI, and the CLI applies them here.
+matches. This module is their one definition, and :func:`editor_bases` says
+which base applies to each part of a level and which it cannot choose; the RPC
+hands both to the WebUI, so no editor re-implements the rule language.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Final, Literal
+from typing import Final, Literal, cast
 
 from core.permissions._rules import (
+    BASE_CHOICES,
+    READ_BASES,
+    UNRESTRICTED_BASES,
+    WRITE_BASES,
     PermissionRules,
     PermissionRulesError,
+    ReadBase,
+    WriteBase,
     permission_rules_to_dict,
+    write_within_read,
 )
 
 type PresetName = Literal["full_access", "work_dir", "work_dir_read_only"]
 type PresetMatch = Literal["full_access", "work_dir", "work_dir_read_only", "custom"]
+type BaseSource = Literal["own", "inherited", "default"]
 
 # Full access sets every part to its unrestricted value with empty rule lists,
 # so a level that chooses it overrides every part of a restrictive default.
@@ -65,9 +74,13 @@ def apply_preset(name: PresetName, rules: Mapping[str, object] | None) -> dict[s
     result: dict[str, object] = {
         part: list(value) if isinstance(value, list) else value
         for part, value in (rules or {}).items()
-        if part not in ("commands", "web") and value is not None
+        if value is not None
     }
-    result.update(preset_definitions()[name])
+    for part, value in preset_definitions()[name].items():
+        if value is None:
+            result.pop(part, None)
+        else:
+            result[part] = value
     return result
 
 
@@ -87,5 +100,74 @@ def matching_preset(rules: PermissionRules | None) -> PresetMatch:
 
 
 def preset_definitions() -> dict[str, dict[str, object]]:
-    """Each preset's stored parts, for an editor to apply (see :func:`apply_preset`)."""
-    return {name: permission_rules_to_dict(preset) for name, preset in PERMISSION_PRESETS.items()}
+    """Each preset as the change it makes to a stored rule set (see :func:`apply_preset`).
+
+    A part set to ``None`` is removed, every other part is set; parts a preset
+    does not name stay. An editor applies a preset by applying this change.
+    """
+    return {
+        name: {"commands": None, "web": None, **permission_rules_to_dict(preset)}
+        for name, preset in PERMISSION_PRESETS.items()
+    }
+
+
+def editor_bases(
+    own: Mapping[str, object] | None, inherited: PermissionRules | None
+) -> dict[str, dict[str, object]]:
+    """Each base part of a level as an editor shows it, in the stored order.
+
+    ``own`` is the level's own rule set in stored form, also while it has
+    problems (a part that is no valid base counts as not set); ``inherited`` is
+    what the level inherits (``None``: nothing). Per part: ``value`` and
+    ``source`` (``own``, ``inherited`` or ``default``) say what applies,
+    ``inherit`` what applies without an own value, ``choices`` the bases and
+    ``excluded`` those the level cannot choose because an Agent can change only
+    files it can read (:func:`write_within_read`). ``write`` adds
+    ``narrowed_by_read``: for a read base, the own write bases it narrows and
+    to what, so an editor that changes ``read`` narrows ``write`` with it.
+    """
+    stored = own or {}
+
+    def fallback(part: str) -> tuple[str, BaseSource]:
+        value = getattr(inherited, part) if inherited is not None else None
+        if value is not None:
+            return cast(str, value), "inherited"
+        return UNRESTRICTED_BASES[part], "default"
+
+    def own_base(part: str) -> str | None:
+        value = stored.get(part)
+        return value if isinstance(value, str) and value in BASE_CHOICES[part] else None
+
+    read = cast(ReadBase, own_base("read") or fallback("read")[0])
+    bases: dict[str, dict[str, object]] = {}
+    for part, choices in BASE_CHOICES.items():
+        inherit_value, inherit_source = fallback(part)
+        excluded: list[str] = []
+        if part == "write":
+            inherit_value = write_within_read(read, cast(WriteBase, inherit_value))
+            excluded = [base for base in WRITE_BASES if write_within_read(read, base) != base]
+        value = own_base(part)
+        entry: dict[str, object] = {
+            "value": value if value is not None else inherit_value,
+            "source": "own" if value is not None else inherit_source,
+            "inherit": {"value": inherit_value, "source": inherit_source},
+            "choices": list(choices),
+            "excluded": excluded,
+        }
+        if part == "write":
+            entry["narrowed_by_read"] = _write_narrowing()
+        bases[part] = entry
+    return bases
+
+
+def _write_narrowing() -> dict[str, dict[str, str]]:
+    narrowing: dict[str, dict[str, str]] = {}
+    for read in READ_BASES:
+        narrowed: dict[str, str] = {
+            write: write_within_read(read, write)
+            for write in WRITE_BASES
+            if write_within_read(read, write) != write
+        }
+        if narrowed:
+            narrowing[read] = narrowed
+    return narrowing

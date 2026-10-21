@@ -96,11 +96,25 @@ async def test_validate_reports_every_problem_and_saves_nothing(tmp_path: Path) 
         ("allow", 1, "Foo(x)"),
     ]
     assert 'permission_rules.allow[1] "Foo(x)": unknown kind Foo' in result["errors"][2]["message"]
-    # The presets come along, so an editor applies them without its own copy.
+    # The presets come along as the change each makes (None unsets a part), so an
+    # editor applies them without its own copy.
     assert result["presets"] == {
         "full_access": _FULL_ACCESS,
-        "work_dir": {"read": "work_area", "write": "work_area"},
-        "work_dir_read_only": {"read": "work_area", "write": "scratch"},
+        "work_dir": {"read": "work_area", "write": "work_area", "commands": None, "web": None},
+        "work_dir_read_only": {
+            "read": "work_area",
+            "write": "scratch",
+            "commands": None,
+            "web": None,
+        },
+    }
+    # A part that is no valid base counts as not set while the editor shows the bases.
+    assert result["bases"]["read"] == {
+        "value": "anywhere",
+        "source": "default",
+        "inherit": {"value": "anywhere", "source": "default"},
+        "choices": ["anywhere", "work_area"],
+        "excluded": [],
     }
 
 
@@ -156,6 +170,19 @@ async def test_validate_for_an_agent_previews_its_new_sessions(tmp_path: Path) -
         "allow": ["Edit({workdir}/docs/**)", "Read(~/x)"],
         "deny": ["Read(.env)"],
     }
+    # Each base with what applies and its source; write stays within the inherited read.
+    bases = result["bases"]
+    assert [(bases[part]["value"], bases[part]["source"]) for part in bases] == [
+        ("work_area", "inherited"),
+        ("work_area", "own"),
+        ("any", "default"),
+        ("any", "default"),
+    ]
+    assert (bases["write"]["inherit"], bases["write"]["excluded"]) == (
+        {"value": "work_area", "source": "default"},
+        ["anywhere"],
+    )
+    assert bases["write"]["narrowed_by_read"] == {"work_area": {"anywhere": "work_area"}}
     preview = result["preview"]
     root = _posix(workspace.resolve())
     home = _posix(Path.home())

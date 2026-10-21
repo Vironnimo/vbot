@@ -10,7 +10,6 @@ Unicode output.
 from __future__ import annotations
 
 import asyncio
-import base64
 import contextlib
 import dataclasses
 import errno
@@ -20,7 +19,7 @@ import re
 import shutil
 import sys
 import threading
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -30,8 +29,6 @@ import pytest
 import pytest_asyncio
 
 from core.permissions import PermissionBoundary
-from core.permissions.commands.commands import UnresolvedElement
-from core.projects import ProjectNotFoundError
 from core.secrets import KeyFileProtection, SecretStore
 from core.secrets.agent_secrets import AgentSecrets
 from core.sessions import SessionAddress
@@ -71,162 +68,28 @@ from core.tools.update_handoff import (
     read_update_handoff_ticket,
 )
 from core.utils.paths import model_path
-from tests.core.permissions.command_check_support import (
-    PORT,
-    UNAVAILABLE,
-    FakeAnalyzer,
-    fake_checker,
-    plan,
-    restricted,
-)
 from tests.core.secrets.secrets_test_support import data_directory
 from tests.core.tools.command_manager_helpers import (
     OWNER,
-    FakeClock,
     FakeLauncher,
-    FakeProcess,
     FakeSink,
-    Harness,
-    command_harness,
-    turns,
+)
+from tests.core.tools.shell_test_support import (
+    COMPANIONS,
+    FakeProjects,
+    Shell,
+    data,
+    launched,
+    started_shell,
 )
 from tests.core.tools.terminal_manager_helpers import eventually
 from tests.core.tools.tools_test_support import dispatch_as_executor
-
-# The Tools a call can name besides the shell, unless a test says otherwise.
-COMPANIONS = (BACKGROUND_TASKS_TOOL_NAME, "terminal")
-
-
-class FakeProjects:
-    """Projects by id, each with its directory."""
-
-    def __init__(self, directories: dict[str, Path]) -> None:
-        self.directories = directories
-
-    def get(self, project_id: str) -> Any:
-        if project_id not in self.directories:
-            raise ProjectNotFoundError(f"Project not found: {project_id}")
-        return SimpleNamespace(project_id=project_id, cwd=str(self.directories[project_id]))
-
-
-class Shell:
-    """The shell Tool over a ``CommandManager`` with fake processes and time."""
-
-    def __init__(
-        self,
-        commands: Harness,
-        *,
-        update_handoffs: UpdateHandoffs | None = None,
-        projects: FakeProjects | None = None,
-        scratch_areas: ScratchAreas | None = None,
-        secrets: AgentSecrets | None = None,
-        analyzer: FakeAnalyzer | None = None,
-        permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED,
-    ) -> None:
-        self.commands = commands
-        self.registry = ToolRegistry()
-        self.checker = fake_checker(analyzer or FakeAnalyzer())
-        self.permissions = permissions
-        register_shell_tool(
-            self.registry,
-            commands.manager,
-            credential_resolver=lambda name: f"value-of-{name}",
-            update_handoffs=update_handoffs,
-            projects=projects,  # type: ignore[arg-type]
-            scratch_areas=scratch_areas,
-            secrets=secrets,
-            command_checker=self.checker,
-        )
-        self.cancel_callbacks: list[Callable[[], Any]] = []
-        self.background_callbacks: list[Callable[[], bool]] = []
-        # Callbacks the call registered to run once its Tool Result is persisted.
-        self.persisted: list[Callable[[], None]] = []
-        # Live output events of the calls.
-        self.live_output: list[JsonObject] = []
-
-    @property
-    def manager(self) -> CommandManager:
-        return self.commands.manager
-
-    @property
-    def launcher(self) -> FakeLauncher:
-        return self.commands.launcher
-
-    @property
-    def clock(self) -> FakeClock:
-        return self.commands.clock
-
-    @property
-    def sink(self) -> FakeSink:
-        return self.commands.sink
-
-    def context(self) -> ToolContext:
-        tmp_path = self.commands.cwd
-        return ToolContext(
-            agent_id="agent-a",
-            session_id="session-a",
-            run_id="run-a",
-            tool_call_id="call-a",
-            tool_name=SHELL_TOOL_NAME,
-            tool_call_index=0,
-            workspace=tmp_path,
-            vbot_root=tmp_path,
-            data_root=tmp_path,
-            cwd=tmp_path,
-            project_id="project-a",
-            tool_settings={"bash": {"allowed_env": ["API_TOKEN"]}},
-            cancel_registration_hook=self.cancel_callbacks.append,
-            background_registration_hook=self.background_callbacks.append,
-            result_persisted_hook=self.persisted.append,
-            emit_hook=lambda _event, payload: self.live_output.append(payload),
-            permissions=self.permissions,
-        )
-
-    def call(
-        self, arguments: JsonObject, *, tools: tuple[str, ...] = COMPANIONS
-    ) -> asyncio.Task[JsonObject]:
-        """Call the shell as the executor does, for an Agent that can call *tools* too."""
-        allowed = [SHELL_TOOL_NAME, *tools]
-        return asyncio.ensure_future(
-            dispatch_as_executor(self.registry, self.context(), arguments, allowed)
-        )
-
-    async def started(self, count: int = 1) -> FakeProcess:
-        """The process of the *count*-th command, once it started.
-
-        Each call prepares its environment in a thread before the launch.
-        """
-        await eventually(lambda: len(self.launcher.processes) >= count, attempts=2000)
-        return self.launcher.processes[count - 1]
-
-    async def returned(
-        self, call: asyncio.Future[JsonObject], *, step: float = 0.5, within: float = 900
-    ) -> JsonObject:
-        """Let fake time pass until *call* returns, at most *within* seconds."""
-        end = self.clock.now + within
-        await turns()
-        while not call.done():
-            assert self.clock.now < end, "the call did not return"
-            await self.commands.advance(step, step=step)
-        return call.result()
-
-
-@contextlib.asynccontextmanager
-async def started_shell(tmp_path: Path, **options: Any) -> AsyncIterator[Shell]:
-    async with command_harness(tmp_path) as commands:
-        yield Shell(commands, **options)
 
 
 @pytest_asyncio.fixture
 async def shell(tmp_path: Path) -> AsyncIterator[Shell]:
     async with started_shell(tmp_path) as harness:
         yield harness
-
-
-def data(result: JsonObject) -> JsonObject:
-    assert result["ok"] is True, result
-    payload: JsonObject = result["data"]
-    return payload
 
 
 _STOP_CALL = re.compile(r"background_tasks (\{.*?\})")
@@ -246,32 +109,6 @@ def log_file(text: str) -> str:
     assert match is not None, text
     assert Path(match[1]).is_file()
     return match[1]
-
-
-def launched(launcher: FakeLauncher, index: int = 0) -> tuple[str, dict[str, str]]:
-    """A launch's command and complete environment, as the host shell runs it.
-
-    On Windows the command and the call's layer of the environment travel in
-    the request PowerShell reads from stdin; elsewhere they are bash's argument
-    and environment.
-    """
-    environment = dict(launcher.envs[index])
-    request = launcher.requests[index]
-    if request is None:
-        return launcher.argv[index][-1], environment
-    lines = request.decode("ascii").splitlines()
-    assert lines[-1] == "."
-
-    def text(field: str) -> str:
-        return base64.b64decode(field).decode("utf-8")
-
-    for line in lines[3:-1]:
-        name, separator, value = line.partition(" ")
-        if separator:
-            environment[text(name)] = text(value)
-        else:
-            environment.pop(text(name), None)
-    return text(lines[2]), environment
 
 
 def not_run_code(launcher: FakeLauncher, reason: NotRunReason, index: int = 0) -> int:
@@ -1078,174 +915,6 @@ async def test_calls_refused_before_the_start_run_nothing(shell: Shell) -> None:
     assert "not granted to this Agent" in secret["error"]["message"]
     assert nul["error"]["code"] == "invalid_arguments"
     assert shell.launcher.argv == []
-
-
-# --- Permission Rules -----------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    ("rules", "analysis", "fragment"),
-    [
-        pytest.param(
-            {"deny": ["Shell(git push *)"]},
-            plan("git push origin main"),
-            "the rule Shell(git push *) denies it",
-            id="denied-command",
-        ),
-        pytest.param(
-            {"commands": "listed", "allow": ["Shell(git status)"]},
-            plan("git status", "rm notes.txt"),
-            'running "rm notes.txt", because only commands that match an allow rule can run',
-            id="unlisted-command",
-        ),
-        pytest.param(
-            {},
-            plan("cp a b", writes=[Path("/elsewhere/b")]),
-            "outside the folders this Agent can change",
-            id="write-outside",
-        ),
-        pytest.param(
-            {"deny": ["Read({workdir}/secrets/**)"]},
-            plan("cat secrets/key", reads=[Path("secrets/key")]),
-            "denies it",
-            id="denied-read",
-        ),
-        pytest.param(
-            {"deny": ["Read({workdir}/secrets/**)"]},
-            plan("rm -r .", subtree_writes=[Path(".")]),
-            "/secrets, which the rule Read(",
-            id="subtree-write-over-denied-folder",
-        ),
-        pytest.param(
-            {"deny": ["Read({workdir}/secrets/**)"]},
-            plan("rg x", subtree_reads=[Path(".")]),
-            "/secrets/**) denies. Use search_files, "
-            "which leaves denied folders out, or name only the folders the command needs.",
-            id="recursive-read-over-denied-folder",
-        ),
-        pytest.param(
-            {"web": "listed", "allow": ["Web(example.com)"]},
-            plan("ssh git.example.org", hosts=["git.example.org"]),
-            "the permission rules refuse fetching git.example.org",
-            id="unlisted-host",
-        ),
-        pytest.param(
-            {},
-            plan(
-                "cd",
-                unresolved=[UnresolvedElement("cwd", "$d", "the folder is computed when it runs")],
-            ),
-            "Change into folders by their literal path, or pass the folder as workdir.",
-            id="unresolved-folder",
-        ),
-        pytest.param(
-            {},
-            plan(
-                "iwr",
-                unresolved=[UnresolvedElement("url", "$u", "the address is computed when it runs")],
-            ),
-            "so the check cannot tell which address it reaches. "
-            "Write each address literally in the command.",
-            id="unresolved-address",
-        ),
-        pytest.param({}, plan("vbot agent list"), "vBot's own command line", id="vbot-cli"),
-        pytest.param(
-            {},
-            plan("curl", urls=[f"http://127.0.0.1:{PORT}/api/agents"]),
-            "it is the vBot server itself",
-            id="loopback-url",
-        ),
-        pytest.param(
-            {},
-            plan(f"nc localhost {PORT}"),
-            "it is the vBot server itself",
-            id="loopback-host-and-port",
-        ),
-        pytest.param(
-            {},
-            plan(
-                "cat",
-                unresolved=[
-                    UnresolvedElement("path_read", "$f", "the path is computed when it runs")
-                ],
-            ),
-            "the path is computed when it runs ($f), so the check cannot tell what it reads. "
-            "Write each path literally in the command.",
-            id="unresolved",
-        ),
-        pytest.param(
-            {}, UNAVAILABLE, "vBot could not analyze it to check it", id="analysis-unavailable"
-        ),
-    ],
-)
-@pytest.mark.asyncio
-async def test_restricted_calls_the_rules_refuse_launch_nothing(
-    tmp_path: Path, rules: dict[str, object], analysis: object, fragment: str
-) -> None:
-    analyzer = FakeAnalyzer()
-    analyzer.result = analysis  # type: ignore[assignment]
-    async with started_shell(
-        tmp_path, analyzer=analyzer, permissions=restricted(tmp_path, **rules)
-    ) as shell:
-        result = await shell.call({"command": "the command", "run_in_background": True})
-
-    assert result["error"]["code"] == "permission_denied", result
-    # Only a failed analysis can pass when the same call is sent again.
-    assert result["error"]["retryable"] is (analysis is UNAVAILABLE)
-    assert fragment in result["error"]["message"]
-    assert result["error"]["message"].startswith(f"{SHELL_MODEL_NAME} was not run: ")
-    assert shell.launcher.argv == []
-    # The analysis saw the call's command in its working directory.
-    assert [(line, cwd) for line, _shell, cwd, _env in analyzer.lines] == [
-        ("the command", tmp_path)
-    ]
-
-
-@pytest.mark.asyncio
-async def test_a_restricted_shell_starts_only_in_its_area_and_without_vbot_control_variables(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("VBOT_DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setenv("VBOT_SERVER_PORT", str(PORT))
-    outside = tmp_path.parent / f"{tmp_path.name}-outside"
-    outside.mkdir()
-    handoffs = UpdateHandoffs(tmp_path / "data")
-    analyzer = FakeAnalyzer(plan("build"))
-    async with started_shell(
-        tmp_path,
-        analyzer=analyzer,
-        permissions=restricted(tmp_path),
-        update_handoffs=handoffs,
-    ) as shell:
-        refused = await shell.call({"command": "build", "workdir": str(outside)})
-        call = shell.call({"command": "build", "env": {"MODE": "ci"}})
-        (await shell.started()).exit(0)
-        assert data(await shell.returned(call))["status"] == "exited"
-
-    assert refused["error"]["code"] == "permission_denied"
-    assert "working in" in refused["error"]["message"]
-    command, env = launched(shell.launcher)
-    assert (command, env["MODE"]) == ("build", "ci")
-    assert not {
-        "VBOT_DATA_DIR",
-        "VBOT_SERVER_PORT",
-        "VBOT_RUN_AGENT_ID",
-        "VBOT_RUN_SESSION_ID",
-        "VBOT_RUN_PROJECT_ID",
-        "VBOT_UPDATE_HANDOFF",
-    } & set(env)
-    # The analysis expanded the call's own variables, in the same confined environment.
-    assert analyzer.lines[-1][3]["MODE"] == "ci"
-    assert "VBOT_DATA_DIR" not in analyzer.lines[-1][3]
-
-
-@pytest.mark.asyncio
-async def test_full_access_runs_commands_without_analyzing_them(shell: Shell) -> None:
-    call = shell.call({"command": "vbot agent list"})
-    (await shell.started()).exit(0)
-    assert data(await shell.returned(call))["status"] == "exited"
-
-    assert shell.checker.analyzer_started is False
 
 
 @pytest.mark.parametrize(
