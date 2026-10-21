@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -63,6 +63,20 @@ def _error_start(output: str) -> int:
         return 0
     exception = _UNINDENTED_LINE.search(output, headers[-1])
     return exception.start() if exception is not None else 0
+
+
+def _exit_codes(failed_programs: Sequence[str], program: str) -> list[str]:
+    """The distinct codes *program*'s failed runs exited with, in order.
+
+    Each entry of *failed_programs* reads ``<name> exited with code <code>``;
+    *program* is lowercase without .exe.
+    """
+    codes: dict[str, None] = {}
+    for entry in failed_programs:
+        name, _, code = entry.partition(" exited with code ")
+        if code and name.lower().removesuffix(".exe") == program:
+            codes[code.split(" ", 1)[0]] = None
+    return list(codes)
 
 
 # Exit-code-only hints for codes POSIX shells give a fixed meaning; on Windows
