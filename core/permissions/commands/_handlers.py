@@ -13,7 +13,7 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING
 
-from core.permissions.commands import _paths
+from core.permissions.commands import _git_files, _paths
 from core.permissions.commands._specs import (
     ATTACHED_OUTPUT_OPTIONS,
     OUTPUT_OPTIONS,
@@ -542,7 +542,7 @@ def handle_git(
     arguments: Sequence[Word],
     fed: bool,
 ) -> None:
-    """git after its global options: the repository it changes, clone targets, remote hosts."""
+    """git after its global options: what it changes and reads, clone targets, remote hosts."""
     location = analysis.first(context, raw)
     texts = [analysis.value(context, word, location).text for word in arguments]
     subcommand = (texts[0] or "") if texts else ""
@@ -582,10 +582,10 @@ def handle_git(
     elif subcommand == "worktree" and operands and operands[0][1] == "add" and len(operands) > 1:
         analysis.access(context, raw, "write", operands[1][0], glob=False, tier="a", subtree=True)
         consumed.add(id(operands[1][0]))
-    elif subcommand in _GIT_WRITES:
-        analysis.access(
-            context, raw, "write", Word.literal(".", source=raw.source), glob=False, tier="a"
-        )
+    else:
+        if subcommand in _GIT_WRITES:
+            consumed |= _git_files.changed_files(analysis, context, raw, subcommand, rest)
+        consumed |= _git_files.read_files(analysis, context, raw, subcommand, rest)
     consumed |= _output_values(analysis, context, raw, rest, _GIT_OUTPUTS)
     analysis.tier_b(context, raw, [word for word in arguments[1:] if id(word) not in consumed])
 

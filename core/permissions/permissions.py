@@ -260,6 +260,7 @@ class PermissionBoundary:
         subtree: bool = False,
         glob: str | None = None,
         pruned: Sequence[str] = (),
+        work_tree: bool = False,
     ) -> PermissionRefusal | None:
         """Whether ``access`` to ``path`` is permitted; relative paths join ``base``.
 
@@ -272,6 +273,9 @@ class PermissionBoundary:
         reaches refuses too, except a deny rule only below a folder whose name
         is in ``pruned``, which the access leaves out at every depth. Such a
         refusal names the denied part in ``PermissionRefusal.below``.
+        ``work_tree``: a git operation replaces the work tree of the repository
+        whose top is ``path``, so the rule files below it may change, as when
+        the repository changes its own settings upstream.
         """
         if not self._layers:
             return None
@@ -319,7 +323,7 @@ class PermissionBoundary:
             if subtree or not reach:
                 reach += ("**",)
             names = frozenset(path_key(name, windows=self._windows) for name in pruned)
-            return self._subtree_refusal(keys, access, target, shown, reach, names)
+            return self._subtree_refusal(keys, access, target, shown, reach, names, work_tree)
         return None
 
     def _subtree_refusal(
@@ -330,6 +334,7 @@ class PermissionBoundary:
         shown: str | None,
         reach: tuple[str, ...],
         pruned: frozenset[str],
+        work_tree: bool,
     ) -> PermissionRefusal | None:
         """A refusal for what the access reaches below the permitted folder ``keys`` name.
 
@@ -339,8 +344,9 @@ class PermissionBoundary:
             ("agent_config", self._agent_config),
             ("data_dir", self._data_dirs),
         ]
-        if access == "write":
+        if access == "write" and not work_tree:
             protected.append(("agent_config", self._rule_files))
+        if access == "write":
             protected.extend(("installation", area) for area in self._install_dirs)
         for location, area in protected:
             if area is not None and any(

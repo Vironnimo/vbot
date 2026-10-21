@@ -15,6 +15,7 @@ Contract: ``.vorch/domain-maps/permissions.md``.
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import sys
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -257,14 +258,15 @@ class CommandChecker:
         for access in plan.paths:
             kind: PathAccess = access.kind
             refused = boundary.check_path(
-                access.path,
+                _work_tree_top(boundary, access.path) if access.work_tree else access.path,
                 kind,
                 subtree=access.subtree,
                 glob=access.glob,
                 pruned=access.pruned,
+                work_tree=access.work_tree,
             )
             if refused is not None:
-                if refused.below is not None and kind == "read":
+                if refused.below is not None and kind == "read" and not access.work_tree:
                     refused = replace(refused, hint=_DENIED_BELOW_HINT)
                 return refused
         for element in plan.unresolved:
@@ -384,6 +386,29 @@ class CommandChecker:
     @staticmethod
     def _key(path: Path, windows: bool) -> str:
         return path_key(split_lexical(str(path), windows=windows).text, windows=windows)
+
+
+def _work_tree_top(boundary: PermissionBoundary, folder: Path) -> Path:
+    """The top folder of the git repository a command works in at *folder*.
+
+    The nearest folder at or above *folder* that holds ``.git`` (a folder, or a
+    file in a linked worktree or submodule); *folder* itself when there is none.
+    The search looks only where the boundary lets the Agent read: it ends at a
+    folder it may not look into, which then counts as the top, so a whole-tree
+    change above what the Agent may read is refused, not silently narrowed.
+    """
+    current = folder
+    while True:
+        marker = current / ".git"
+        if boundary.check_path(current, "read") is not None or (
+            boundary.check_path(marker, "read") is not None
+        ):
+            return current
+        if os.path.lexists(marker):
+            return current
+        if current.parent == current:
+            return folder
+        current = current.parent
 
 
 def _server_refusal(boundary: PermissionBoundary, command: SimpleCommand) -> PermissionRefusal:

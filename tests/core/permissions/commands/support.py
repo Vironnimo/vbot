@@ -13,8 +13,9 @@ from core.permissions.commands.commands import CommandPlan, PlannedPathAccess
 
 # Every table runs in ROOT/w/p with the home folder ROOT/h; expectations name
 # paths relative to ROOT with "/" separators, then a wildcard access's pattern
-# below its literal folder, "/**" for subtree accesses and " !name" for each
-# folder name an exclusion leaves out.
+# below its literal folder, "/**" for subtree accesses, " !name" for each
+# folder name an exclusion leaves out and " (work tree)" for a git command that
+# replaces its repository's work tree.
 ROOT = Path("C:/") if sys.platform == "win32" else Path("/")
 CWD = ROOT / "w" / "p"
 HOME = ROOT / "h"
@@ -71,4 +72,5 @@ def _path(access: PlannedPathAccess) -> str:
     if access.glob is not None:
         text = f"{text}/{access.glob}"
     pruned = "".join(f" !{name}" for name in access.pruned)
-    return f"{access.kind} {text}{'/**' if access.subtree else ''}{pruned}"
+    tree = " (work tree)" if access.work_tree else ""
+    return f"{access.kind} {text}{'/**' if access.subtree else ''}{pruned}{tree}"

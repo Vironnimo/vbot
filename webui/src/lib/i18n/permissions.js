@@ -11,7 +11,7 @@ export default Object.freeze({
   'permissions.limits':
     'The rules limit vBot’s own Tools and check shell commands before they run; programs those commands start, MCP servers and Extensions are not confined.',
   'permissions.limitsHelp':
-    'A script, interpreter or build tool started by a command acts with the server user’s full rights and is not inspected inside. Terminal input is checked only at an integrated shell prompt. MCP servers and Extensions run outside these checks; Tool access decides whether the Agent may use them. Hardlinks to files outside the area are not detected on read. An older vBot ignores the rules.',
+    'A script, interpreter or build tool started by a command acts with the server user’s full rights and is not inspected inside. Terminal input is checked only at an integrated shell prompt. MCP servers and Extensions run outside these checks; Tool access decides whether the Agent may use them. Hardlinks to files outside the area are not detected on read. Git commands that replace the whole working tree, such as pull or switch, can change a repository’s permission settings files. An older vBot ignores the rules.',
   'permissions.createHelp':
     'Single bases and rules are set in the Agent editor after creating.',
   'permissions.preset': 'Preset',

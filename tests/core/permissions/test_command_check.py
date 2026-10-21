@@ -42,7 +42,10 @@ def boundary(
     work: Path, rules: dict[str, object], *, ceiling: dict[str, object] | None = None
 ) -> PermissionBoundary:
     context = BoundaryContext(
-        workdir=work, home=work / "home", data_dir=work.parent / "data", loopback_port=PORT
+        workdir=work,
+        home=work / "home",
+        data_dir=work.parent / "data",
+        loopback_port=PORT,
     )
     ceilings: tuple[PermissionCeiling, ...] = ()
     if ceiling is not None:
@@ -267,3 +270,89 @@ async def test_real_analysis_reaches_the_same_decisions(
     )
 
     assert (refusal.reason if refusal else None) == reason
+
+
+@pytest.mark.parametrize(
+    ("line", "deny", "reason"),
+    [
+        pytest.param("git rm secrets/key.pem", True, "deny_rule", id="rm-denied"),
+        pytest.param("git checkout -- secrets", True, "deny_rule", id="checkout-folder-denied"),
+        pytest.param("git mv secrets/key.pem k", True, "deny_rule", id="mv-denied"),
+        pytest.param(
+            "git checkout -- .claude/settings.json",
+            False,
+            "protected_location",
+            id="checkout-rule-file",
+        ),
+        pytest.param("git restore .", False, "protected_location", id="restore-folder"),
+        pytest.param("git clean -fdx", False, "protected_location", id="clean-folder"),
+        pytest.param("git reset --hard", True, "deny_rule", id="reset-hard-denied"),
+        pytest.param("git -C sub stash pop", True, "deny_rule", id="stash-from-a-subfolder"),
+        pytest.param("git pull", False, None, id="pull-may-update-rule-files"),
+        pytest.param("git switch main", False, None, id="switch-may-update-rule-files"),
+        pytest.param("git restore --staged secrets/key.pem", True, None, id="index-only"),
+        pytest.param("git diff -- secrets", "read", "deny_rule", id="diff-denied"),
+        pytest.param("git add secrets", "read", "deny_rule", id="add-reads"),
+        pytest.param("git -C sub cat-file -p :secrets/k", "read", "deny_rule", id="index-path"),
+        pytest.param("git ls-files secrets", "read", "deny_rule", id="ls-files-denied"),
+        pytest.param("git diff --stat", "read", None, id="pathless-diff"),
+        pytest.param("git show HEAD:secrets/k", "read", None, id="history-unchecked"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_git_reads_and_changes_what_its_paths_or_work_tree_reach(
+    real_analyzer: CommandAnalyzer,
+    tmp_path: Path,
+    line: str,
+    deny: bool | str,
+    reason: str | None,
+) -> None:
+    # deny: an Edit deny of secrets, or a Read deny with "read".
+    work = tmp_path / "work"
+    (work / ".git").mkdir(parents=True)
+    (work / "sub").mkdir()
+    context = BoundaryContext(
+        workdir=work,
+        home=tmp_path / "home",
+        data_dir=tmp_path / "data",
+        rule_files=(work / ".claude" / "settings.json", work / ".claude" / "settings.local.json"),
+    )
+    rules: dict[str, object] = {"read": "work_area", "write": "work_area"}
+    if deny:
+        rules["deny"] = [
+            "Read({workdir}/secrets/**)" if deny == "read" else "Edit({workdir}/secrets/**)"
+        ]
+    checker = CommandChecker(lambda: real_analyzer)
+
+    refusal = await checker.check_line(
+        PermissionBoundary.build(normalize_permission_rules(rules), context),
+        line,
+        shell="bash",
+        cwd=work,
+        env={},
+        home=tmp_path,
+    )
+
+    assert (refusal.reason if refusal else None) == reason
+
+
+@pytest.mark.asyncio
+async def test_a_work_tree_change_above_the_readable_folders_is_refused(
+    real_analyzer: CommandAnalyzer, tmp_path: Path
+) -> None:
+    (tmp_path / ".git").mkdir()
+    work = tmp_path / "work"
+    work.mkdir()
+    checker = CommandChecker(lambda: real_analyzer)
+
+    refusal = await checker.check_line(
+        boundary(work, {"read": "work_area", "write": "work_area"}),
+        "git reset --hard",
+        shell="bash",
+        cwd=work,
+        env={},
+        home=tmp_path,
+    )
+
+    assert refusal is not None and refusal.reason == "not_permitted"
+    assert refusal.target == tmp_path.as_posix()

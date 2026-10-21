@@ -132,7 +132,7 @@ async def _analyze(line: str, shell: ShellKind) -> Any:
         case(
             "git diff ../o --stat; git log origin/main; python s.py --out=../x",
             id="tier B takes only clear paths",
-            paths=("read w/o", "read w/p/s.py", "read w/x"),
+            paths=("read w/o/**", "read w/p/s.py", "read w/x"),
         ),
         case(
             "tar -xzf a.tgz -C d; dd if=i of=o; sed -i s/a/b/ f; cp a b d2/",
@@ -153,6 +153,64 @@ async def _analyze(line: str, shell: ShellKind) -> Any:
             id="global options go before patterns match and -C scopes the folder",
             commands=("git commit -m x", "git log", "git push"),
             paths=("start_dir w/p/sub", "write w/p/sub"),
+        ),
+        case(
+            "git checkout -- .claude/settings.json; git restore .; git rm secrets/key.pem; "
+            "git mv a/k.pem k; git rm '*.pem'; git clean -fdx; git clean -f tmp; git apply p.diff",
+            id="git pathspecs change everything below what they name",
+            commands=None,
+            paths=(
+                "write w/p/.claude/settings.json/**",
+                "write w/p/**",
+                "write w/p/secrets/key.pem/**",
+                "write w/p/a/k.pem/**",
+                "write w/p/k/**",
+                "write w/p/tmp/**",
+                "read w/p/p.diff",
+            ),
+        ),
+        case(
+            "git reset --hard; git stash pop; git -C sub pull; git switch main; git checkout main",
+            id="git commands that replace the work tree",
+            commands=None,
+            paths=(
+                "write w/p/** (work tree)",
+                "start_dir w/p/sub",
+                "write w/p/sub/** (work tree)",
+                "write w/p/main/**",
+            ),
+        ),
+        case(
+            "git restore --staged k; git rm --cached k; git reset HEAD~1; git stash list; "
+            "git commit -a -m x",
+            id="git commands that change only the index or .git",
+            commands=None,
+            paths=("write w/p",),
+        ),
+        case(
+            "git diff -- secrets; git blame src/a.py; git ls-files docs; git add .; "
+            "git diff --no-index a b; git show HEAD:k; git cat-file -p :s/k.pem; git grep foo; "
+            "git grep -e foo -- lib; git status; git log -p x",
+            id="git reads the files its operands and index paths name",
+            commands=None,
+            paths=(
+                "read w/p/secrets/**",
+                "read w/p/src/a.py/**",
+                "read w/p/docs/**",
+                "read w/p/**",
+                "write w/p",
+                "read w/p/a/**",
+                "read w/p/b/**",
+                "read w/p/s/k.pem/** (work tree)",
+                "read w/p/lib/**",
+            ),
+        ),
+        case(
+            "git submodule foreach make; git rebase -x make main; git restore :/k",
+            id="git commands that run commands or use pathspec magic",
+            commands=None,
+            paths=("write w/p/** (work tree)", "read w/p/k/** (work tree)"),
+            unresolved=("command", "path_write"),
         ),
         case(
             "git clone https://e.example/r.git out; npm --prefix web install; "

@@ -97,6 +97,12 @@ class PlannedPathAccess:
     applies too, except below folders named in ``pruned``: names the command
     itself leaves out at every depth (``rg -g '!secret'``), recorded only
     where that exclusion is exact. ``source`` is the text it came from.
+    ``work_tree``: ``path`` is the folder a git command works in, and the
+    access counts from its repository's top folder instead (the check finds
+    it): a ``subtree`` write replaces files across the whole work tree (``git
+    pull``, ``git reset --hard``), where only the repository's own rule files
+    may change; a read with ``glob`` reads that path below the top (the index
+    path ``:secrets/key.pem``).
     """
 
     kind: PathAccessKind
@@ -105,6 +111,7 @@ class PlannedPathAccess:
     subtree: bool = False
     glob: str | None = None
     pruned: tuple[str, ...] = ()
+    work_tree: bool = False
 
 
 @dataclass(frozen=True, slots=True)

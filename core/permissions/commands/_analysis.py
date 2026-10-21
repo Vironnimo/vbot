@@ -807,6 +807,7 @@ class Analysis:
         subtree: bool = False,
         pruned: tuple[str, ...] = (),
         deep: bool = False,
+        work_tree: bool = False,
     ) -> list[tuple[Path, str]]:
         """Record the access *word* makes from every candidate location; return the paths.
 
@@ -868,7 +869,13 @@ class Analysis:
                         )
                     continue
                 self.add(
-                    kind, path, item.source, subtree=reaches_below, glob=pattern, pruned=pruned
+                    kind,
+                    path,
+                    item.source,
+                    subtree=reaches_below,
+                    glob=pattern,
+                    pruned=pruned,
+                    work_tree=work_tree,
                 )
                 found.append((path, item.source))
         return found
@@ -917,14 +924,15 @@ class Analysis:
         subtree: bool = False,
         glob: str | None = None,
         pruned: tuple[str, ...] = (),
+        work_tree: bool = False,
     ) -> None:
-        whole = (kind, path, None, True, ())
-        if whole in self._paths:
+        whole = (kind, path, None, True, (), False)
+        if whole in self._paths and not work_tree:
             return  # the whole subtree is already in the plan
-        key = (kind, path, glob, subtree, pruned)
+        key = (kind, path, glob, subtree, pruned, work_tree)
         if key not in self._paths:
             self._paths[key] = PlannedPathAccess(
-                kind, path, source[:SOURCE_LIMIT], subtree, glob, pruned
+                kind, path, source[:SOURCE_LIMIT], subtree, glob, pruned, work_tree
             )
 
     def add_url(self, url: str, source: str) -> None:
