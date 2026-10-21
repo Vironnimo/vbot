@@ -400,9 +400,6 @@ export const subAgentMessages = (item) => {
     : [];
 };
 
-export const subAgentMessagePreview = (entry) =>
-  truncateToolLabel(trimmedString(entry?.content), MAX_SUBAGENT_PREVIEW_LENGTH);
-
 // The Session of the Sub-Agent that sent a message, as navigation expects it.
 export const subAgentMessageTarget = (entry) => {
   const agentId = qualifyAgentAddress(entry?.agent_id, entry?.project_id);

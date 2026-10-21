@@ -410,7 +410,9 @@ describe('ChatTimeline sub-agent rows', () => {
       expect.stringContaining(t('chat.subagent.messageFromLabel')),
       expect.stringContaining(t('chat.subagent.messageFromLabel')),
     ]);
-    expect(rows[0].textContent).toContain('Worker');
+    const summary = rows[0].querySelector('summary').textContent;
+    expect(summary).toContain('Worker');
+    expect(summary).not.toContain('Found the cause');
     expect(rows[0].textContent).toContain('Found the cause');
     expect(rows[0].closest('.assistant-run')).not.toBeNull();
     expect(rows[1].textContent).toContain('Fixed it');

@@ -19,7 +19,6 @@ export {
   subAgentDescription,
   subAgentPreview,
   subAgentMessages,
-  subAgentMessagePreview,
   subAgentMessageTarget,
   subAgentTask,
   subAgentStatusDetails,

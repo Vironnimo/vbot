@@ -1,13 +1,12 @@
 <script>
   // The `message_parent` messages one Parent Session received at this point of
   // its conversation: a Run child or a History row of type `subagent_message`.
-  // Each message reads like the "Message to Subagent" row, in the other
-  // direction: its start as a preview, the whole text on expanding.
+  // Each message is one collapsed line naming its sender; the text shows on
+  // expanding.
   import Button from '../ui/Button.svelte';
   import { isContextMenuKey } from '../ui/contextMenu.js';
   import { t } from '$lib/i18n.js';
   import {
-    subAgentMessagePreview,
     subAgentMessages,
     subAgentMessageTarget,
   } from '$lib/chatTimelinePresentation.js';
@@ -58,9 +57,6 @@
       {#if entry.title}
         <span class="subagent-agent">{entry.title}</span>
       {/if}
-      <span class="te-arg subagent-preview">
-        {subAgentMessagePreview(entry)}
-      </span>
       {#if target}
         <Button
           variant="tertiary"

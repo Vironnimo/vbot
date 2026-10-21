@@ -325,7 +325,7 @@
                 {t('chat.subagent.label')}
               </span>
               <span class="subagent-agent">
-                {t('agents.form.id')}: {subAgentAgentId(child)}
+                {subAgentAgentId(child)}
               </span>
               {#if description}
                 <span
@@ -460,7 +460,7 @@
               </span>
               {#if sendTarget}
                 <span class="subagent-agent">
-                  {t('agents.form.id')}: {sendTarget.agentId}
+                  {sendTarget.agentId}
                 </span>
               {/if}
               {#if subAgentPreview(child)}
