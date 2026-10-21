@@ -646,10 +646,9 @@
       {agentTargetCatalogError}
       toolLoadingEditable={!agent?.builtin}
       toolLoadingDefault={agent?.tool_loading_default ?? null}
-      permissionRulesEditable={formMode === AGENT_FORM_MODE_EDIT &&
-        Boolean(agent) &&
-        !agent.builtin}
+      permissionRulesEditable={!agent?.builtin}
       permissionRulesDefault={agent?.permission_rules_default ?? null}
+      permissionRulesNewAgent={formMode === AGENT_FORM_MODE_CREATE}
       bind:formValues
       {navigateToExtensions}
       {onToast}

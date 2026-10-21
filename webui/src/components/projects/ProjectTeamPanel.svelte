@@ -709,6 +709,7 @@
                     <PermissionRulesEditor
                       value={overrideDraft(member.agent_id).permission_rules}
                       inherited={member.permission_rules_default ?? null}
+                      level="override"
                       agentId={projectsState.selectedProjectId
                         ? `${member.agent_id}@${projectsState.selectedProjectId}`
                         : ''}

@@ -12,17 +12,22 @@ export default Object.freeze({
     'The rules limit vBot’s own Tools and check shell commands before they run; programs those commands start, MCP servers and Extensions are not confined.',
   'permissions.limitsHelp':
     'A script, interpreter or build tool started by a command acts with the server user’s full rights and is not inspected inside. Terminal input is checked only at an integrated shell prompt. MCP servers and Extensions run outside these checks; Tool access decides whether the Agent may use them. Hardlinks to files outside the area are not detected on read. An older vBot ignores the rules.',
+  'permissions.createHelp':
+    'Single bases and rules are set in the Agent editor after creating.',
   'permissions.preset': 'Preset',
   'permissions.presetHelp':
-    'A preset sets where the Agent may read and change files and keeps your own rules.',
+    'A preset sets where the Agent may read and change files. Full access lifts every limit, also inherited ones; the other presets keep your own rules.',
   'permissions.preset.full_access': 'Full access',
   'permissions.preset.work_dir': 'Work in the working directory',
   'permissions.preset.work_dir_read_only': 'Read-only in the working directory',
   'permissions.preset.custom': 'Custom',
-  'permissions.preset.inherited': 'Inherited: {preset}',
-  'permissions.preset.inheritedCustom': 'Inherited: custom rules',
-  'permissions.preset.inheritedNote':
-    'Full access is not available while rules are inherited: no own rules means the inherited ones apply. Change them where they are set.',
+  'permissions.preset.useDefault': 'Use the default ({preset})',
+  'permissions.preset.useInherited': 'Use inherited ({preset})',
+  'permissions.preset.customRules': 'custom rules',
+  'permissions.preset.ignoresDefault':
+    'This Agent ignores the default restrictions.',
+  'permissions.preset.ignoresInherited':
+    'This Agent ignores the inherited restrictions in this Project.',
   'permissions.part.read': 'Read files',
   'permissions.part.write': 'Change files',
   'permissions.part.commands': 'Shell commands',

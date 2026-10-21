@@ -85,14 +85,16 @@ export function updateAgent(params = {}, options = {}) {
 // Normalizes a candidate Permission Rules set without saving it: its problems,
 // the preset it matches, what it inherits and a preview. `agentId` (an Agent
 // address, `agent@project` for a Team member) previews for that Agent's new
-// Sessions; without it the rule set is the shared default.
+// Sessions; `newAgent` is the rule set of an Agent being created, which
+// inherits the shared default; without either it is the shared default.
 export function validatePermissionRules(
   permissionRules,
-  agentId = '',
+  { agentId = '', newAgent = false } = {},
   options = {},
 ) {
   const params = { permission_rules: permissionRules ?? null };
   if (agentId) params.agent_id = agentId;
+  else if (newAgent) params.new_agent = true;
   return rpc('permissions.validate', params, options);
 }
 
