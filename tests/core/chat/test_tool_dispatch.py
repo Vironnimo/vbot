@@ -368,10 +368,17 @@ async def test_dispatch_carries_final_ui_display_into_event_and_tool_message(
 
 
 @pytest.mark.asyncio
-async def test_secret_values_leave_a_tool_call_only_as_references(tmp_path: Path) -> None:
+@pytest.mark.parametrize("retirement", ["none", "once", "delete", "replace"])
+async def test_secret_values_leave_a_tool_call_only_as_references(
+    tmp_path: Path, retirement: str
+) -> None:
     value = "sk-1234567890abcdef"
 
     def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        if retirement == "delete":
+            secrets.delete(secret.id, actor="user")
+        elif retirement == "replace":
+            secrets.update(secret.id, actor="user", values={"value": "replacement-credential"})
         context.add_display_notice("info", f"printed {arguments['content']}")
         return tool_success({"content": f"output {arguments['content']}"})
 
@@ -392,12 +399,14 @@ async def test_secret_values_leave_a_tool_call_only_as_references(tmp_path: Path
         secret_sinks={"content": "files"},
     )
     harness = ToolDispatchHarness(tmp_path, tools)
-    secrets.create(
+    secret = secrets.create(
         name="api",
         kind="token",
         values={"value": value},
         actor="user",
         agents=[harness.agent.id],
+        lifetime="once" if retirement == "once" else "permanent",
+        session_id=harness.session.id,
     )
 
     dispatched = await harness.dispatch([call("echo", content="{{secret:API}}")])

@@ -17,6 +17,7 @@ import string
 from collections import deque
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
+from dataclasses import field as dataclass_field
 from datetime import datetime
 from threading import RLock
 from typing import Any, Final, Literal
@@ -57,7 +58,7 @@ from core.secrets._references import (
 )
 from core.secrets._totp import TotpSeedError, check_totp_seed, totp_code
 from core.secrets.sources import SecretSource, SecretSourceError, SourceStatus
-from core.secrets.store import AGENT_SECRETS, SecretStore, credential_name_key
+from core.secrets.store import AGENT_SECRETS, SecretStore, SecretTransaction, credential_name_key
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
 
@@ -121,6 +122,8 @@ class SecretUse:
     name: str
     field: str
     sink: SinkClass
+    # The exact grant/value revision resolved by this call, never exposed in output.
+    secret: AgentSecret | None = dataclass_field(default=None, repr=False, compare=False)
 
     @property
     def label(self) -> str:
@@ -196,6 +199,8 @@ class AgentSecrets:
             except SecretRecordError as error:
                 _LOGGER.warning("Agent Secret %s is unreadable and ignored: %s", secret_id, error)
         with self._lock:
+            for previous in self._records.values():
+                self._remember(previous)
             self._records = records
             self._masker = None
             self._loaded = True
@@ -600,9 +605,10 @@ class AgentSecrets:
             )
         value = self.field_value(secret, target)
         self._record_use(secret, target.name, sink, agent_id, session_id)
+        use = SecretUse(secret.name, target.name, sink, secret)
         if consume:
-            self._consume_once(secret)
-        return value, SecretUse(secret.name, target.name, sink)
+            self.consume(agent_id, session_id, [use], passed_only=passed_only)
+        return value, use
 
     def consume(
         self,
@@ -612,20 +618,37 @@ class AgentSecrets:
         *,
         passed_only: bool = False,
     ) -> None:
-        """Delete the ``once`` Secrets among ``uses`` (blocking): their call runs now."""
-        for name in dict.fromkeys(use.name for use in uses):
-            secret = self.lookup(agent_id, session_id, name, passed_only=passed_only)
-            if secret is not None:
-                self._consume_once(secret)
+        """Validate all resolved revisions and atomically spend the call's one-time grants.
 
-    def _consume_once(self, secret: AgentSecret) -> None:
-        if secret.lifetime != "once":
-            return
+        Source reads need no global lock. A concurrent use, revocation, expiry or
+        replacement refuses the entire call before any of its handlers can run.
+        """
         with self._lock:
-            if secret.id not in self._records:
-                return
-            self._remove(secret)
-        self._notify(SecretChange("deleted", secret, "used once"))
+            once: dict[str, AgentSecret] = {}
+            for use in uses:
+                secret = use.secret
+                current = self.lookup(agent_id, session_id, use.name, passed_only=passed_only)
+                if secret is None or current != secret:
+                    raise SecretUseError(
+                        "not_granted",
+                        f"{use.name} changed, expired or was used while this call was prepared. "
+                        "Nothing was run. List the available Secrets before trying again.",
+                    )
+                if secret.lifetime == "once":
+                    once[secret.id] = secret
+            if once:
+
+                def remove(change: SecretTransaction) -> None:
+                    for key in once:
+                        change.remove(AGENT_SECRETS, key)
+
+                self._store.update(remove)
+                for secret in once.values():
+                    self._remember(secret)
+                    self._records.pop(secret.id)
+                self._masker = None
+        for secret in once.values():
+            self._notify(SecretChange("deleted", secret, "used once"))
 
     def field_value(self, secret: AgentSecret, target: SecretField) -> str:
         """The value of one field: stored, from its source, or the current TOTP code."""
@@ -675,7 +698,7 @@ class AgentSecrets:
                         reference,
                         sink,
                         passed_only=passed_only,
-                        consume=consume,
+                        consume=False,
                     )
                 resolved, use = resolved_values[key]
                 parts.append(text[position : reference.start])
@@ -686,7 +709,10 @@ class AgentSecrets:
             parts.append(text[position:])
             return "".join(parts)
 
-        return map_strings(value, replace_text), uses
+        changed = map_strings(value, replace_text)
+        if consume:
+            self.consume(agent_id, session_id, uses, passed_only=passed_only)
+        return changed, uses
 
     def environment_names(
         self, agent_id: str, session_id: str, *, passed_only: bool = False
@@ -729,11 +755,11 @@ class AgentSecrets:
                     "Settings -> Secrets.",
                 )
             values = {variables[item.name]: self.field_value(secret, item) for item in fields}
-            uses = [SecretUse(secret.name, item.name, "environment") for item in fields]
+            uses = [SecretUse(secret.name, item.name, "environment", secret) for item in fields]
             for item in fields:
                 self._record_use(secret, item.name, "environment", agent_id, session_id)
             if consume:
-                self._consume_once(secret)
+                self.consume(agent_id, session_id, uses, passed_only=passed_only)
             return values, uses
         return None
 
@@ -875,13 +901,22 @@ class AgentSecrets:
     def _write(self, secret: AgentSecret) -> None:
         text = encode_record(secret)
         self._store.update(lambda change: change.set(AGENT_SECRETS, secret.id, text))
+        if previous := self._records.get(secret.id):
+            self._remember(previous)
         self._records[secret.id] = secret
         self._masker = None
 
     def _remove(self, secret: AgentSecret) -> None:
         self._store.update(lambda change: change.remove(AGENT_SECRETS, secret.id))
+        self._remember(secret)
         self._records.pop(secret.id, None)
         self._masker = None
+
+    def _remember(self, secret: AgentSecret) -> None:
+        """Keep redacting retired values for this process, like resolved source values."""
+        for item in secret.fields:
+            if item.concealed and item.value is not None:
+                self.remember_value(item.value, secret.reference(item.name))
 
 
 _SINK_WORDS: Final[Mapping[SinkClass, str]] = {

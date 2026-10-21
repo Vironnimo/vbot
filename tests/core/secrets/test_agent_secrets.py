@@ -237,6 +237,7 @@ def test_lifetimes_bound_where_and_how_long_a_secret_is_usable(tmp_path: Path) -
     clock.now += timedelta(hours=2)
     assert [item.name for item in secrets.usable("main", "s1")] == ["API"]
     assert secrets.sweep() == 1
+    assert secrets.masker.mask("temporary-value") == "{{secret:TEMP}}"
     changes.clear()
     secrets.remove_session("s1")
     assert [item.name for item in _secrets(tmp_path, clock).all()] == []

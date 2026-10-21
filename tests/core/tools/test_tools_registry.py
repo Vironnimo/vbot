@@ -7,12 +7,12 @@ import logging
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 import pytest
 
 from core.secrets import KeyFileProtection, SecretStore
-from core.secrets.agent_secrets import AgentSecrets
+from core.secrets.agent_secrets import AgentSecrets, SourceBinding
 from core.tools import (
     DuplicateToolError,
     Tool,
@@ -27,6 +27,7 @@ from core.tools import (
     tool_summary,
 )
 from tests.core.secrets.secrets_test_support import data_directory
+from tests.core.secrets.test_agent_secrets import FakeSource
 from tests.core.tools.tools_test_support import (
     READ_FILE_SCHEMA,
     JsonObject,
@@ -579,3 +580,62 @@ async def test_secret_references_become_values_only_in_declared_sinks(tmp_path: 
     assert arguments["content"] == "key={{secret:API}}"
     assert refused["ok"] is False and refused["error"]["code"] == "secret_unavailable"
     assert len(received) == 1
+
+
+@pytest.mark.asyncio
+async def test_parallel_dispatch_spends_a_once_secret_in_only_one_call(tmp_path: Path) -> None:
+    barrier = threading.Barrier(2, timeout=5)
+
+    class Source(FakeSource):
+        @override
+        def resolve(self, reference: str, field_name: str) -> str:
+            barrier.wait()
+            return super().resolve(reference, field_name)
+
+    source = Source({"value": "one-time-credential"})
+    store = SecretStore(
+        data_directory(tmp_path),
+        protections=(KeyFileProtection(directories=(tmp_path / "keys",)),),
+    )
+    secrets = AgentSecrets(store, clock=lambda: datetime.now(UTC))
+    secrets.replace_sources([source])
+    context = make_context("fixture")
+    secrets.create(
+        name="api",
+        kind="token",
+        values={},
+        actor="user",
+        agents=[context.agent_id],
+        lifetime="once",
+        session_id=context.session_id,
+        source=SourceBinding("vault", "entry"),
+        source_fields={"value": "value"},
+    )
+    received: list[JsonObject] = []
+
+    def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        received.append(arguments)
+        return tool_success({})
+
+    registry = ToolRegistry()
+    registry.set_secrets(secrets)
+    registry.register(
+        "fixture",
+        "Fixture",
+        {"type": "object"},
+        handler,
+        open_input_schema=True,
+        secret_sinks={"content": "files"},
+    )
+    results = await asyncio.gather(
+        *(
+            registry.dispatch(make_context("fixture"), {"content": "{{secret:API}}"})
+            for _ in range(2)
+        )
+    )
+    assert sum(result["ok"] for result in results) == 1
+    assert len(received) == 1
+    assert (
+        next(result for result in results if not result["ok"])["error"]["code"]
+        == "secret_unavailable"
+    )
