@@ -62,8 +62,9 @@ class RuntimeAgent(Protocol):
       ``None`` leaves them off (for a config agent, the Project override).
     - ``permission_rules`` — the resolved Permission Rules (``core.permissions``);
       ``None`` is full access, and so is a set that restricts nothing
-      (``PermissionRules.restricts``), such as a temporary Agent's own or an
-      Identity Agent's explicit full access while no shared default applies.
+      (``PermissionRules.restricts``: no base narrowed, no deny rule), such as a
+      temporary Agent's own, one with allow rules only, or an Identity Agent's
+      explicit full access while no shared default applies.
     """
 
     @property

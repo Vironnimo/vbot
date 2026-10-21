@@ -120,15 +120,19 @@ async def test_a_permission_rules_override_is_saved_normalized_over_what_it_inhe
         state, "project.set_override", **override, value={"allow": ["Copy(x)"]}
     )
     overridden = await rpc_result(
-        state, "project.set_override", **override, value={"allow": ["Write(docs/**)"]}
+        state,
+        "project.set_override",
+        **override,
+        value={"write": "scratch", "allow": ["Write(docs/**)"]},
     )
 
     assert "permission_rules.allow[0]" in refused["message"]
     member = _member(overridden)
-    assert member["overrides"] == {"permission_rules": {"allow": ["Edit(docs/**)"]}}
+    saved = {"write": "scratch", "allow": ["Edit(docs/**)"]}
+    assert member["overrides"] == {"permission_rules": saved}
     # Neither the repository nor the shared default restricts this agent.
     assert member["permission_rules_default"] is None
-    assert member["effective"]["permission_rules"]["value"] == {"allow": ["Edit(docs/**)"]}
+    assert member["effective"]["permission_rules"]["value"] == saved
 
 
 @pytest.mark.asyncio

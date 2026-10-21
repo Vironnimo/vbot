@@ -92,10 +92,10 @@ class PermissionRule:
 class PermissionRules:
     """An Agent's rule set; a part that is ``None`` is not set at this level.
 
-    A set restricts only when some part does (:attr:`restricts`); one that
-    restricts nothing, like the absence of a rule set, is full access. A level
-    still sets its parts: the explicit full set overrides every part of a
-    restrictive default.
+    A set restricts only when it narrows a base or denies something
+    (:attr:`restricts`); one that restricts nothing, like the absence of a rule
+    set, is full access. A level still sets its parts: the explicit full set
+    overrides every part of a restrictive default.
     """
 
     read: ReadBase | None = None
@@ -107,16 +107,15 @@ class PermissionRules:
 
     @property
     def restricts(self) -> bool:
-        """Whether a base is narrower than its unrestricted default or any rule is set.
+        """Whether a base is narrower than its unrestricted default or a deny rule is set.
 
         The one decision whether an Agent is restricted: a set that restricts
         nothing resolves to full access, and a boundary built from it is
-        ``UNRESTRICTED`` (no protected locations either).
+        ``UNRESTRICTED`` (no protected locations either). Allow rules alone
+        restrict nothing: they only widen a narrowed base.
         """
-        return (
-            bool(self.allow)
-            or bool(self.deny)
-            or any(getattr(self, part) not in (None, UNRESTRICTED_BASES[part]) for part in _BASES)
+        return bool(self.deny) or any(
+            getattr(self, part) not in (None, UNRESTRICTED_BASES[part]) for part in _BASES
         )
 
 

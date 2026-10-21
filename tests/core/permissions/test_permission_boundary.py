@@ -266,7 +266,7 @@ def test_every_layer_must_permit_and_any_layer_can_deny(area: Area) -> None:
     parent = area.boundary({"read": "work_area", "deny": ["Read({workdir}/private)"]})
     ceiling = PermissionCeiling.from_ceiling_dict(parent.to_ceiling_dict(source="parent"))
     child = PermissionBoundary.build(
-        normalize_permission_rules({"allow": ["Read({workdir}/private)"]}),
+        normalize_permission_rules({"write": "scratch", "allow": ["Read({workdir}/private)"]}),
         area.context(workdir=area.outside),
         ceilings=[ceiling],
     )

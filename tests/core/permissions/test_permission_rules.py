@@ -192,6 +192,11 @@ _FULL_ACCESS = PermissionRules(
         pytest.param((None, None), None, id="no-rule-set-is-full-access"),
         pytest.param((None, _rules()), None, id="a-set-that-restricts-nothing-is-full-access"),
         pytest.param(
+            (_rules(allow=["Read(/docs)", "Shell(npm test)"]), None),
+            None,
+            id="allow-rules-alone-restrict-nothing",
+        ),
+        pytest.param(
             (_FULL_ACCESS, _rules(read="work_area", write="scratch", deny=["Shell(rm *)"])),
             None,
             id="the-explicit-full-set-overrides-a-restrictive-default",
@@ -262,8 +267,10 @@ def test_full_access_is_the_explicit_full_set() -> None:
     assert [matching_preset(rules) for rules in (None, _rules(), _FULL_ACCESS)] == [
         "full_access"
     ] * 3
-    # Rules make a set restricted, even with every base at full access.
+    # A deny rule makes a set restricted, even with every base at full access; allow
+    # rules alone do not, as they only widen a narrowed base.
     assert matching_preset(_rules(**{**applied, "deny": ["Read(**/.env)"]})) == "custom"
+    assert matching_preset(_rules(**{**applied, "allow": ["Shell(npm test)"]})) == "full_access"
 
 
 def test_a_description_expands_placeholders_and_lists_inactive_rules() -> None:

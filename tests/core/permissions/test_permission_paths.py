@@ -111,7 +111,7 @@ def test_unsafe_forms_are_refused_before_any_filesystem_access(
 
 @windows_only
 def test_an_allow_rule_that_names_a_network_path_permits_it(tmp_path: Path) -> None:
-    boundary = _boundary(tmp_path, {"allow": ["Read(//fileserver/share/docs)"]})
+    boundary = _boundary(tmp_path, {"web": "listed", "allow": ["Read(//fileserver/share/docs)"]})
 
     assert boundary.check_path("\\\\fileserver\\share\\docs\\a.txt", "read") is None
     assert boundary.check_path("\\\\fileserver\\share\\other.txt", "read") is not None
