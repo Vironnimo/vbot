@@ -8,12 +8,12 @@ from fnmatch import fnmatchcase
 from typing import TYPE_CHECKING, Any, Literal
 
 from core.permissions import (
+    PERMISSION_RULE_PARTS,
     PermissionRules,
     normalize_permission_rules,
     permission_rules_to_dict,
     resolve_rule_set,
 )
-from core.permissions._rules import PARTS
 from core.projects._runtime_agent import (
     AgentResolutionError,
     ConfigAgent,
@@ -362,7 +362,7 @@ def resolve_permission_rules(
     """
     if all(
         any(level is not None and getattr(level, part) is not None for level in levels)
-        for part in PARTS
+        for part in PERMISSION_RULE_PARTS
     ):
         return resolve_rule_set(*levels)
     try:
@@ -391,7 +391,7 @@ def permission_rules_source(
     named = (*levels, ("global_default", default))
     effective = resolve_rule_set(*(rules for _name, rules in named))
     parts: dict[str, str] = {}
-    for part in PARTS:
+    for part in PERMISSION_RULE_PARTS:
         for name, rules in named:
             if rules is not None and getattr(rules, part) is not None:
                 parts[part] = name

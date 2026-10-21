@@ -9,6 +9,7 @@ the WebUI, and the CLI applies them here.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final, Literal
 
 from core.permissions._rules import (
@@ -23,14 +24,17 @@ type PresetMatch = Literal["full_access", "work_dir", "work_dir_read_only", "cus
 # Full access sets every part to its unrestricted value with empty rule lists,
 # so a level that chooses it overrides every part of a restrictive default.
 # The other presets set ``read`` and ``write``; applying one also unsets
-# ``commands`` and ``web`` and keeps the own allow and deny lists.
-PERMISSION_PRESETS: Final[dict[PresetName, PermissionRules]] = {
-    "full_access": PermissionRules(
-        read="anywhere", write="anywhere", commands="any", web="any", allow=(), deny=()
-    ),
-    "work_dir": PermissionRules(read="work_area", write="work_area"),
-    "work_dir_read_only": PermissionRules(read="work_area", write="scratch"),
-}
+# ``commands`` and ``web`` and keeps the own allow and deny lists. Read-only:
+# the rule sets are frozen, and so is the mapping.
+PERMISSION_PRESETS: Final[Mapping[PresetName, PermissionRules]] = MappingProxyType(
+    {
+        "full_access": PermissionRules(
+            read="anywhere", write="anywhere", commands="any", web="any", allow=(), deny=()
+        ),
+        "work_dir": PermissionRules(read="work_area", write="work_area"),
+        "work_dir_read_only": PermissionRules(read="work_area", write="scratch"),
+    }
+)
 CUSTOM_PRESET: Final = "custom"
 
 

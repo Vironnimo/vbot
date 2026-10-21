@@ -4,6 +4,7 @@ from core.permissions._command_check import CommandChecker
 from core.permissions.permissions import (
     CUSTOM_PRESET,
     PERMISSION_PRESETS,
+    PERMISSION_RULE_PARTS,
     PLACEHOLDERS,
     RULE_KINDS,
     BoundaryContext,
@@ -51,6 +52,7 @@ from core.permissions.permissions import (
 __all__ = [
     "CUSTOM_PRESET",
     "PERMISSION_PRESETS",
+    "PERMISSION_RULE_PARTS",
     "PLACEHOLDERS",
     "RULE_KINDS",
     "BoundaryContext",

@@ -13,9 +13,11 @@ contacts SMB.
 
 from __future__ import annotations
 
+import functools
 import os
 import re
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from urllib.parse import unquote, urlsplit
 
@@ -335,18 +337,29 @@ def _expand_short_names(lexical: LexicalPath) -> LexicalPath:
 
 
 def _long_path_name(path: str) -> str | None:
-    if sys.platform != "win32":
-        return None
-    import ctypes
-    from ctypes import wintypes
+    # An ``if`` block, not an early return: mypy for other platforms then skips
+    # the name defined only on Windows.
+    if sys.platform == "win32":
+        import ctypes
 
-    function = ctypes.WinDLL("kernel32", use_last_error=True).GetLongPathNameW
-    function.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
-    function.restype = wintypes.DWORD
-    size = function(path, None, 0)
-    if size == 0:
-        return None
-    buffer = ctypes.create_unicode_buffer(size)
-    if function(path, buffer, size) == 0:
-        return None
-    return buffer.value
+        function = _get_long_path_name()
+        size = function(path, None, 0)
+        if size != 0:
+            buffer = ctypes.create_unicode_buffer(size)
+            if function(path, buffer, size) != 0:
+                return buffer.value
+    return None
+
+
+if sys.platform == "win32":
+
+    @functools.cache
+    def _get_long_path_name() -> Callable[..., int]:
+        """kernel32's ``GetLongPathNameW``, loaded on first use and kept."""
+        import ctypes
+        from ctypes import wintypes
+
+        function = ctypes.WinDLL("kernel32", use_last_error=True).GetLongPathNameW
+        function.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
+        function.restype = wintypes.DWORD
+        return function

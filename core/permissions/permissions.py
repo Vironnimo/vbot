@@ -24,7 +24,7 @@ import re
 import socket
 import sys
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import ClassVar, Final, cast
 from urllib.parse import urlsplit
 
@@ -69,6 +69,7 @@ from core.permissions._refusal import (
     RefusalReason,
 )
 from core.permissions._rules import (
+    PERMISSION_RULE_PARTS,
     PLACEHOLDERS,
     RULE_KINDS,
     CommandsBase,
@@ -845,17 +846,7 @@ def _optional_text(path: PathLike | None, *, windows: bool) -> str | None:
 
 
 def _retagged(layer: PermissionLayer, source: LayerSource) -> PermissionLayer:
-    return PermissionLayer(
-        source=source,
-        read=layer.read,
-        write=layer.write,
-        commands=layer.commands,
-        web=layer.web,
-        workdir=layer.workdir,
-        scratch=layer.scratch,
-        allow=layer.allow,
-        deny=layer.deny,
-    )
+    return replace(layer, source=source)
 
 
 def is_own_host(host: str) -> bool:
@@ -986,6 +977,7 @@ def _absolute_folder(value: object, where: str, *, windows: bool) -> str:
 __all__ = [
     "CUSTOM_PRESET",
     "PERMISSION_PRESETS",
+    "PERMISSION_RULE_PARTS",
     "PLACEHOLDERS",
     "RULE_KINDS",
     "BoundaryContext",

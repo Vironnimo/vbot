@@ -28,7 +28,15 @@ type WebBase = Literal["any", "listed"]
 RULE_KINDS: Final[tuple[RuleKind, ...]] = ("Read", "Edit", "Shell", "Web")
 PATH_RULE_KINDS: Final[frozenset[str]] = frozenset({"Read", "Edit"})
 PLACEHOLDERS: Final[tuple[str, ...]] = ("workdir", "project", "scratch", "workspace", "home")
-PARTS: Final[tuple[str, ...]] = ("read", "write", "commands", "web", "allow", "deny")
+# Every part a stored rule set may name; a stored set naming another one is invalid.
+PERMISSION_RULE_PARTS: Final[tuple[str, ...]] = (
+    "read",
+    "write",
+    "commands",
+    "web",
+    "allow",
+    "deny",
+)
 READ_BASES: Final[tuple[ReadBase, ...]] = ("anywhere", "work_area")
 WRITE_BASES: Final[tuple[WriteBase, ...]] = ("anywhere", "work_area", "scratch")
 COMMANDS_BASES: Final[tuple[CommandsBase, ...]] = ("any", "listed")
@@ -180,7 +188,7 @@ def normalize_permission_rules(
         return value
     if not isinstance(value, Mapping):
         raise PermissionRulesError(_not_an_object(value))
-    unknown = [key for key in value if key not in PARTS]
+    unknown = [key for key in value if key not in PERMISSION_RULE_PARTS]
     if unknown:
         raise PermissionRulesError(_unknown_part(unknown[0]))
     bases = {part: _base(part, value.get(part)) for part in _BASES}
@@ -210,7 +218,11 @@ def check_permission_rules(value: object, *, platform: str = sys.platform) -> Ru
     if not isinstance(value, Mapping):
         return RuleSetCheck(None, (), (RuleSetProblem(None, _not_an_object(value)),))
     mapping = cast("Mapping[object, object]", value)
-    problems = [RuleSetProblem(str(key), _unknown_part(key)) for key in mapping if key not in PARTS]
+    problems = [
+        RuleSetProblem(str(key), _unknown_part(key))
+        for key in mapping
+        if key not in PERMISSION_RULE_PARTS
+    ]
     bases: dict[str, str | None] = {}
     for part in _BASES:
         try:
