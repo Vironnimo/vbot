@@ -17,7 +17,7 @@
   const noop = () => {};
 
   // The shared Permission Rules default (`defaults.agent.permission_rules`):
-  // every Agent and Project Agent inherits each part it does not set itself.
+  // Identity Agents and Project Agents inherit each part they do not set themselves.
   // Without it, Agents have full access.
   let { settings = null, onCommit = noop, onError = noop } = $props();
 
