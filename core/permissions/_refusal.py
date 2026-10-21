@@ -86,7 +86,7 @@ class PermissionRefusal:
         """The Agent-facing refusal; with ``tool``, phrased as that Tool's failure."""
         action = _ACTIONS[self.access].format(target=self.target)
         if self.resolved is not None:
-            action = f"{action}, which leads to {self.resolved},"
+            action = f"{action}, which leads to {self.resolved}"
         lead = (
             f"{tool} was not run: the permission rules refuse {action}"
             if tool
