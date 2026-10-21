@@ -11,7 +11,8 @@ not on the server. A socket remembers the request it continues by its
 not hold a Session's screenshots. :class:`ResponsesTransports` is the Runtime-wide owner that keeps
 a Session's socket and its continuation open between Runs (each Run has its own
 Adapter), bounds how many stay open and for how long, and remembers per
-Connection whether the WebSocket or request compression currently works.
+Connection whether the WebSocket or request compression currently works and
+which message size the backend refuses.
 :class:`ResponsesWebSocket` streams one Adapter's requests over those sockets.
 """
 
@@ -29,13 +30,13 @@ from contextlib import aclosing, suppress
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, override
 
-from websockets.exceptions import ProtocolError
+from websockets.exceptions import ConnectionClosed, ProtocolError
 from websockets.extensions.base import Extension
 from websockets.extensions.permessage_deflate import (
     ClientPerMessageDeflateFactory,
     PerMessageDeflate,
 )
-from websockets.frames import CONT, CTRL_OPCODES, Frame
+from websockets.frames import CONT, CTRL_OPCODES, CloseCode, Frame
 from websockets.protocol import State
 from websockets.typing import ExtensionParameter
 
@@ -237,8 +238,9 @@ class ResponsesTransports:
     ``max_sockets`` stay open (``RESPONSES_MAX_OPEN_SOCKETS``). Per Connection it
     remembers consecutive WebSocket failures (after
     ``RESPONSES_WEBSOCKET_FAILURE_LIMIT`` the Connection uses SSE for
-    ``RESPONSES_WEBSOCKET_RETRY_AFTER_SECONDS``) and whether the backend rejected
-    a compressed request body. Correctness never depends on the explicit
+    ``RESPONSES_WEBSOCKET_RETRY_AFTER_SECONDS``), the smallest message the
+    backend closed a socket on as too big, and whether it rejected a
+    compressed request body. Correctness never depends on the explicit
     closing calls: a socket is reused only on its route and handshake.
     """
 
@@ -257,6 +259,7 @@ class ResponsesTransports:
         self._closing: set[asyncio.Task[None]] = set()
         self._failures: dict[ResponsesConnectionKey, int] = {}
         self._websocket_retry_at: dict[ResponsesConnectionKey, float] = {}
+        self._message_limits: dict[ResponsesConnectionKey, int] = {}
         self._uncompressed: set[ResponsesConnectionKey] = set()
 
     # -- WebSocket availability and request compression ------------------------
@@ -295,6 +298,27 @@ class ResponsesTransports:
     def record_websocket_success(self, connection: ResponsesConnectionKey) -> None:
         """A completed exchange ends a run of consecutive failures."""
         self._failures.pop(connection, None)
+
+    def websocket_message_limit(self, connection: ResponsesConnectionKey) -> int | None:
+        """The smallest ``response.create`` text, in bytes, ``connection`` refused as too big."""
+        return self._message_limits.get(connection)
+
+    def record_message_too_big(self, connection: ResponsesConnectionKey, size: int) -> None:
+        """Send ``connection``'s messages of ``size`` bytes or more over SSE from now on.
+
+        The backend refused the message, not the Connection: smaller messages
+        keep the WebSocket.
+        """
+        limit = self._message_limits.get(connection)
+        if limit is not None and limit <= size:
+            return
+        self._message_limits[connection] = size
+        _LOGGER.info(
+            "Responses WebSocket refused a %d-byte request as too big on %s:%s; "
+            "requests this large use SSE",
+            size,
+            *connection,
+        )
 
     def compresses_requests(self, connection: ResponsesConnectionKey) -> bool:
         """Whether ``connection``'s HTTP request bodies are sent zstd-compressed."""
@@ -585,23 +609,34 @@ class _ResponsesWebSocketTransportError(NetworkError):
     """Responses WebSocket failed before or after receiving a provider event.
 
     ``handshake_status`` is the HTTP status that refused the upgrade, if any.
+    ``message_too_big`` means the backend refuses a message this large (close
+    code 1009, or the size it refused before), so the request was not answered.
     """
 
     def __init__(
-        self, message: str, *, events_received: bool, handshake_status: int | None = None
+        self,
+        message: str,
+        *,
+        events_received: bool,
+        handshake_status: int | None = None,
+        message_too_big: bool = False,
     ) -> None:
         super().__init__(message)
         self.events_received = events_received
         self.handshake_status = handshake_status
+        self.message_too_big = message_too_big
 
 
 @dataclass(frozen=True, slots=True)
 class _ResponsesMessage:
-    """One rendered ``response.create``: the request, its UTF-8 text and the bytes sent."""
+    """One rendered ``response.create``: the request, its UTF-8 text and the bytes to send.
+
+    ``data`` is ``None`` when the text reaches the size the backend refused.
+    """
 
     request: dict[str, Any]
     text: bytes
-    data: bytes
+    data: bytes | None
 
 
 def _websocket_response_head(websocket: Any) -> tuple[int, dict[str, str]]:
@@ -649,19 +684,23 @@ def _render_websocket_message(
     digest: ResponsesRequestDigest,
     continuation: _ResponsesContinuation | None,
     deflate_window_bits: int | None,
+    size_limit: int | None,
 ) -> _ResponsesMessage:
     """Chain ``payload`` to ``continuation``, encode it and deflate it if negotiated.
 
     The request is ``payload`` itself unless it extends ``continuation``'s
     request and output unchanged; then it carries only the new input items
-    after ``previous_response_id``. The encoding and the compression grow with
-    the Session, so this runs on the request-body worker.
+    after ``previous_response_id``. A text of ``size_limit`` bytes or more is
+    not deflated: it will not be sent. The encoding and the compression grow
+    with the Session, so this runs on the request-body worker.
     """
 
     request = _continued_request(payload, digest, continuation)
     text = json.dumps(
         {"type": "response.create", **request}, ensure_ascii=False, separators=(",", ":")
     ).encode("utf-8")
+    if size_limit is not None and len(text) >= size_limit:
+        return _ResponsesMessage(request, text, None)
     data = text if deflate_window_bits is None else _deflate_message(text, deflate_window_bits)
     return _ResponsesMessage(request, text, data)
 
@@ -774,7 +813,8 @@ class ResponsesWebSocket:
         a transport failure retries once in full on a fresh socket. A
         :class:`_ResponsesWebSocketTransportError` without events means the caller
         may send the same request another way (SSE): the Connection failed
-        repeatedly, answered HTTP 426, or refused the credentials.
+        repeatedly, answered HTTP 426, or refused the credentials, or the
+        backend refuses a message this large.
         """
 
         url = self._websocket_url()
@@ -809,6 +849,10 @@ class ResponsesWebSocket:
                         retryable=True,
                     ) from None
             except _ResponsesWebSocketTransportError as error:
+                if error.message_too_big:
+                    # A fresh socket would refuse the full request too; the
+                    # Connection itself works, so nothing counts as a failure.
+                    raise
                 if error.handshake_status == _UPGRADE_REQUIRED_STATUS:
                     self._transports.mark_websocket_unavailable(self._connection)
                     raise
@@ -846,6 +890,8 @@ class ResponsesWebSocket:
         if pooled is None:
             pooled = await self._open(url, key, headers=headers, route=route, handshake=handshake)
         capture = None
+        message_size: int | None = None
+        unsent = False
         events_received = False
         model_delta_received = False
         completed = False
@@ -856,7 +902,17 @@ class ResponsesWebSocket:
                 digest,
                 pooled.continuation,
                 pooled.deflate_window_bits,
+                self._transports.websocket_message_limit(self._connection),
             )
+            message_size = len(message.text)
+            if message.data is None:
+                # The socket stays intact for the Session's next request.
+                unsent = True
+                raise _ResponsesWebSocketTransportError(
+                    f"Responses WebSocket refuses {message_size}-byte requests",
+                    events_received=False,
+                    message_too_big=True,
+                )
             continued = "previous_response_id" in message.request
             if self._debug_recorder is not None:
                 capture = self._debug_recorder.begin_capture(
@@ -932,15 +988,27 @@ class ResponsesWebSocket:
                     yield delta
                 if completed:
                     return
-        except _FreshSocketRequiredError:
+        except _FreshSocketRequiredError, _ResponsesWebSocketTransportError:
             raise
         except ProviderError:
             raise
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            too_big = False
+            if (
+                message_size is not None
+                and not events_received
+                and isinstance(exc, ConnectionClosed)
+                and exc.rcvd is not None
+                and exc.rcvd.code == CloseCode.MESSAGE_TOO_BIG
+            ):
+                too_big = True
+                self._transports.record_message_too_big(self._connection, message_size)
             transport_error = _ResponsesWebSocketTransportError(
-                f"Responses WebSocket failed: {exc}", events_received=events_received
+                f"Responses WebSocket failed: {exc}",
+                events_received=events_received,
+                message_too_big=too_big,
             )
             if capture is not None:
                 capture.record_error(transport_error)
@@ -948,7 +1016,7 @@ class ResponsesWebSocket:
         finally:
             if capture is not None:
                 capture.finalize()
-            await self._transports.release(pooled, reusable=completed)
+            await self._transports.release(pooled, reusable=completed or unsent)
 
     async def _open(
         self,

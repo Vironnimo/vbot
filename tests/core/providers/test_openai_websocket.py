@@ -16,7 +16,8 @@ from zoneinfo import ZoneInfo
 import pytest
 import respx
 from websockets.datastructures import Headers
-from websockets.exceptions import InvalidStatus
+from websockets.exceptions import ConnectionClosedError, InvalidStatus
+from websockets.frames import Close, CloseCode
 from websockets.http11 import Response
 from websockets.protocol import State
 
@@ -813,6 +814,38 @@ async def test_failed_codex_websockets_fall_back_to_sse_for_a_bounded_time(
 
     assert len(connector.calls) == len(failures) + 1
     assert len(websocket.sent_payloads) == 1
+    await adapter.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_message_refused_as_too_big_sends_only_requests_that_large_over_sse() -> None:
+    """Close code 1009 refuses the message, not the Connection: that request goes over
+    SSE without a fresh-socket retry, later requests as large skip the WebSocket, and
+    smaller ones keep it."""
+
+    too_big = Close(CloseCode.MESSAGE_TOO_BIG, "message too big")
+    refusing = FakeCodexWebSocket([[ConnectionClosedError(too_big, too_big, True)]])
+    websocket = FakeCodexWebSocket([_final_turn("resp_small")])
+    connector = FakeCodexWebSocketConnector([refusing, websocket])
+    adapter = codex_adapter(responses_websocket_connect=connector)
+    large = _screenshot_history(screenshot="aW1hZ2U=" * 1000)
+
+    with respx.mock:
+        sse = respx.post(OPENAI_SUBSCRIPTION_URL).mock(
+            return_value=codex_sse_response(
+                {"id": "resp_sse", "status": "completed", "output": [dict(_FINAL_MESSAGE_ITEM)]}
+            )
+        )
+        assert (await _send(adapter, large))["content"] == "Done"
+        assert (await _send(adapter, large))["content"] == "Done"
+        assert sse.call_count == 2
+        assert (await _send(adapter, _screenshot_history()))["content"] == "Done"
+        assert sse.call_count == 2
+
+    assert len(refusing.sent_payloads) == 1
+    assert len(connector.calls) == 2
+    [small] = websocket.sent_payloads
+    assert small["input"][-1]["content"][-1]["image_url"].endswith("aW1hZ2U=")
     await adapter.aclose()
 
 
