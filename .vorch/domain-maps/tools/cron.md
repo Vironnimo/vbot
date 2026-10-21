@@ -68,6 +68,8 @@ The definition is 610 estimated tokens (`python -m scripts.tool_lab definitions 
 
 | Text | Reason |
 |---|---|
+| `Waiting webhook requests could not be read; retrying without replacing them.` | The job is waiting for storage recovery, not an empty webhook queue. No sender acceptance or Model Run may overwrite unread acknowledged requests. |
+| `delivery_progress`: waiting and uncertain counts, retained error, last delivered time; `Delivery could not be confirmed. Check the chat before retrying this notification.` | A successful Run does not prove delivery. The result exposes delayed and ambiguous sends so the Agent can report them accurately; the user retries uncertain sends in Schedules after checking the chat. |
 | Description: `Schedule jobs that run an instruction later: once, repeatedly, before, at or after a calendar event, ...` | Names the third kind of job, so an Agent asked for a reminder before an event looks here instead of for calendar reminders. |
 | event_id: `Calendar event to run the job at, for every occurrence.` | Says what the id names and that a repeating event needs one job, not one per occurrence (so `repeat` does not apply). |
 | event_id: `schedule is then start or end, optionally +/- a duration, e.g. 'start - 30m'.` | One canonical form with the sign spelled out; the reminder minutes Models know from Google `reminders.overrides` are accepted as dialects. |

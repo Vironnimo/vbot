@@ -245,14 +245,18 @@ class OnePasswordSource:
         if not isinstance(item, dict):
             raise SecretSourceError("unavailable", "op did not answer with an item.")
         title = str(item.get("title") or reference)
+        optional = _optional_fields(str(item.get("category") or "").upper())
+        missing_code: SourceFailure = (
+            "optional_field_missing" if field_name in optional else "not_found"
+        )
         found, value = _field_value(item, field_name)
         if not found:
             raise SecretSourceError(
-                "not_found", f"The 1Password item {title} has no {field_name} field."
+                missing_code, f"The 1Password item {title} has no {field_name} field."
             )
         if not value:
             raise SecretSourceError(
-                "not_found", f"The {field_name} field of the 1Password item {title} is empty."
+                missing_code, f"The {field_name} field of the 1Password item {title} is empty."
             )
         return value
 
@@ -465,6 +469,12 @@ def _labels(vaults: Sequence[_Vault]) -> list[str]:
     ]
 
 
+def _optional_fields(category: str) -> frozenset[str]:
+    kind, names = _CATEGORIES.get(category, _OTHER_CATEGORY)
+    required = "password" if kind == "login" else names[0]
+    return frozenset(name for name in names if name != required)
+
+
 def _entry(raw: Mapping[str, Any], vault: _Vault, label: str) -> SourceEntry | None:
     item_id = raw.get("id")
     if not isinstance(item_id, str) or not item_id:
@@ -476,7 +486,13 @@ def _entry(raw: Mapping[str, Any], vault: _Vault, label: str) -> SourceEntry | N
         "url": _primary_url(raw),
     }
     fields = tuple(
-        SourceField(name, name not in _VISIBLE_FIELDS, visible.get(name) or None) for name in names
+        SourceField(
+            name,
+            name not in _VISIBLE_FIELDS,
+            visible.get(name) or None,
+            optional=name in _optional_fields(category),
+        )
+        for name in names
     )
     return SourceEntry(
         reference=f"{vault.id}/{item_id}",

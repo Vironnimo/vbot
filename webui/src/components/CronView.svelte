@@ -745,6 +745,38 @@
                 {/if}
               </div>
 
+              {#if editor.selectedJob.delivery_progress.waiting}
+                <Banner
+                  variant={editor.selectedJob.delivery_progress.uncertain
+                    ? 'error'
+                    : 'warn'}
+                  role="status"
+                  data-testid="cron-delivery-progress"
+                >
+                  <div>
+                    <p>
+                      {t('cron.delivery.waiting', {
+                        count: editor.selectedJob.delivery_progress.waiting,
+                      })}
+                    </p>
+                    {#if editor.selectedJob.delivery_progress.uncertain}
+                      <p>{t('cron.delivery.uncertain')}</p>
+                    {:else if editor.selectedJob.delivery_progress.error}
+                      <p>{editor.selectedJob.delivery_progress.error}</p>
+                    {/if}
+                  </div>
+                  <Button
+                    disabled={Boolean(editor.mutatingJobId)}
+                    onClick={() => editor.retryDelivery(editor.selectedJob)}
+                  >
+                    {t(
+                      editor.selectedJob.delivery_progress.uncertain
+                        ? 'cron.delivery.checkedRetry'
+                        : 'cron.delivery.retry',
+                    )}
+                  </Button>
+                </Banner>
+              {/if}
               {#if editor.selectedJob.last_error}
                 <Banner variant="error" role="status">
                   {editor.selectedJob.last_error}

@@ -15,6 +15,8 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any, Final, Literal, cast
 
+from core.secrets._totp import TotpSeedError, check_totp_seed
+from core.sessions import SessionAddress
 from core.utils.timestamps import format_canonical_timestamp, parse_timestamp
 
 SecretKind = Literal["token", "login", "text"]
@@ -79,6 +81,7 @@ _KNOWN_RECORD_FIELDS = frozenset(
         "expires_at",
         "agents",
         "sessions",
+        "session_grants",
         "sinks",
         "source",
         "created_at",
@@ -111,6 +114,30 @@ class SourceBinding:
 
 
 @dataclass(frozen=True)
+class SessionGrant:
+    """A pass-through path rooted in one explicit Agent grant."""
+
+    agent: str
+    path: tuple[SessionAddress, ...]
+
+
+def agent_address(address: SessionAddress) -> str:
+    from core.projects.address import format_agent_address
+
+    return format_agent_address(address.agent_id, address.project_id)
+
+
+def session_address(agent: str, session_id: str) -> SessionAddress:
+    from core.projects.address import InvalidAgentAddressError, parse_agent_address
+
+    try:
+        agent_id, project_id = parse_agent_address(agent)
+    except InvalidAgentAddressError as error:
+        raise SecretRecordError(str(error)) from None
+    return SessionAddress(project_id, agent_id, session_id)
+
+
+@dataclass(frozen=True)
 class AgentSecret:
     """One Secret: what an Agent may use by name without seeing its value."""
 
@@ -125,10 +152,11 @@ class AgentSecret:
     #: The Session a ``session`` or ``once`` Secret belongs to.
     session_id: str | None = None
     expires_at: datetime | None = None
-    #: Agents a Secret is granted to, by Agent id.
+    #: Qualified Agent addresses (a bare id denotes an Identity Agent).
     agents: tuple[str, ...] = ()
     #: Sessions a Secret was passed to explicitly (Sub-Agent pass-through).
     sessions: tuple[str, ...] = ()
+    session_grants: tuple[SessionGrant, ...] = ()
     sinks: frozenset[SinkClass] = frozenset()
     source: SourceBinding | None = None
     extra: Mapping[str, Any] = field(default_factory=dict, repr=False, compare=False)
@@ -163,17 +191,26 @@ class AgentSecret:
     def expired(self, now: datetime) -> bool:
         return self.expires_at is not None and now >= self.expires_at
 
-    def granted_to(self, agent_id: str, session_id: str, *, passed_only: bool = False) -> bool:
-        """Whether the Agent of ``session_id`` may use this Secret there.
+    def grant_for(
+        self, address: SessionAddress, *, passed_only: bool = False
+    ) -> SessionGrant | None:
+        """The authority for this exact Session, including the root of a passed grant."""
+        agent = agent_address(address)
+        local = self.lifetime in ("session", "once")
+        if agent in self.agents and (
+            self.session_id == address.session_id if local else not passed_only
+        ):
+            return SessionGrant(agent, (address,))
+        for grant in self.session_grants:
+            if grant.path[-1] != address or grant.agent not in self.agents:
+                continue
+            if local and grant.path[0] != session_address(grant.agent, self.session_id or ""):
+                continue
+            return grant
+        return None
 
-        ``passed_only`` (a Sub-Agent Session) leaves out the grants to the Agent.
-        """
-        if session_id in self.sessions:
-            return True
-        if self.lifetime in ("session", "once"):
-            # Records written before Session Secrets kept their Agent have none.
-            return self.session_id == session_id and (not self.agents or agent_id in self.agents)
-        return not passed_only and agent_id in self.agents
+    def granted_to(self, address: SessionAddress, *, passed_only: bool = False) -> bool:
+        return self.grant_for(address, passed_only=passed_only) is not None
 
 
 def normalize_secret_name(raw: str) -> str:
@@ -244,6 +281,20 @@ def encode_record(secret: AgentSecret) -> str:
             "lifetime": secret.lifetime,
             "agents": list(secret.agents),
             "sessions": list(secret.sessions),
+            "session_grants": [
+                {
+                    "agent": grant.agent,
+                    "path": [
+                        {
+                            "project_id": address.project_id,
+                            "agent_id": address.agent_id,
+                            "session_id": address.session_id,
+                        }
+                        for address in grant.path
+                    ],
+                }
+                for grant in secret.session_grants
+            ],
             "sinks": sorted(secret.sinks),
             "created_at": format_canonical_timestamp(secret.created_at),
             "created_by": secret.created_by,
@@ -333,6 +384,7 @@ def decode_record(secret_id: str, text: str) -> AgentSecret:
         expires_at=expires_at,
         agents=tuple(_strings(data.get("agents"))),
         sessions=tuple(_strings(data.get("sessions"))),
+        session_grants=_session_grants(data.get("session_grants", [])),
         sinks=frozenset(cast(Sequence[SinkClass], sinks)),
         source=binding,
         created_at=created_at,
@@ -347,3 +399,150 @@ def _strings(value: Any) -> list[str]:
 
 def with_changes(secret: AgentSecret, **changes: Any) -> AgentSecret:
     return replace(secret, **changes)
+
+
+def _session_grants(raw: Any) -> tuple[SessionGrant, ...]:
+    if not isinstance(raw, list):
+        raise SecretRecordError("Invalid Session grant evidence")
+    grants = []
+    for item in raw:
+        if not isinstance(item, dict) or not isinstance(item.get("agent"), str):
+            raise SecretRecordError("Invalid Session grant owner")
+        path = item.get("path")
+        if not isinstance(path, list) or not path:
+            raise SecretRecordError("Invalid Session grant path")
+        addresses = []
+        for address in path:
+            if (
+                not isinstance(address, dict)
+                or not isinstance(address.get("agent_id"), str)
+                or not isinstance(address.get("session_id"), str)
+                or address.get("project_id") is not None
+                and not isinstance(address["project_id"], str)
+            ):
+                raise SecretRecordError("Invalid Session grant address")
+            addresses.append(
+                SessionAddress(
+                    address.get("project_id"), address["agent_id"], address["session_id"]
+                )
+            )
+        grants.append(SessionGrant(item["agent"], tuple(addresses)))
+    return tuple(grants)
+
+
+def _check_lifetime(
+    lifetime: Lifetime, session_id: str | None, expires_at: datetime | None, now: datetime
+) -> None:
+    if lifetime in ("session", "once") and not session_id:
+        raise SecretRecordError(f"A {lifetime} Secret needs its Session.")
+    if lifetime == "until" and expires_at is None:
+        raise SecretRecordError("A time-limited Secret needs an expiry time.")
+    if expires_at is not None and expires_at <= now:
+        raise SecretRecordError("The expiry time has already passed.")
+
+
+def with_given_lifetime(
+    secret: AgentSecret,
+    lifetime: Lifetime,
+    address: SessionAddress,
+    expires_at: datetime | None,
+    now: datetime,
+) -> AgentSecret:
+    """Apply the user's replacement scope, retaining only grants it still permits."""
+    _check_lifetime(lifetime, address.session_id, expires_at, now)
+    if lifetime == "permanent" and expires_at is not None:
+        lifetime = "until"
+    agent = agent_address(address)
+    local = lifetime in ("session", "once")
+    agents = (agent,) if local else tuple(dict.fromkeys((*secret.agents, agent)))
+    grants = (
+        ()
+        if local
+        else tuple(
+            dict.fromkeys(
+                (
+                    *secret.session_grants,
+                    SessionGrant(agent, (address,)),
+                )
+            )
+        )
+    )
+    return replace(
+        secret,
+        lifetime=lifetime,
+        expires_at=expires_at,
+        session_id=address.session_id if local else None,
+        agents=agents,
+        session_grants=grants,
+        sessions=tuple(dict.fromkeys(grant.path[-1].session_id for grant in grants)),
+    )
+
+
+def _build_fields(
+    kind: SecretKind,
+    values: Mapping[str, str],
+    concealed: Mapping[str, bool],
+    source_fields: Mapping[str, str] | None,
+    *,
+    bound: bool,
+) -> tuple[SecretField, ...]:
+    """The fields of a new Secret: stored values, or the source fields of a bound one."""
+    defaults = dict(KIND_FIELDS[kind])
+    if bound:
+        if any(values.values()):
+            raise SecretRecordError("A Secret from a source takes all its values from the source.")
+        mapped = {normalize_field_name(key): value for key, value in (source_fields or {}).items()}
+        if not mapped:
+            raise SecretRecordError("A Secret from a source needs the source fields it uses.")
+        return tuple(
+            SecretField(
+                name=name,
+                concealed=bool(concealed.get(name, defaults.get(name, True))),
+                source_field=source_field,
+            )
+            for name, source_field in mapped.items()
+        )
+    given = {normalize_field_name(key): value for key, value in values.items() if value != ""}
+    for name, _hidden in KIND_FIELDS[kind]:
+        if name not in given and name not in OPTIONAL_KIND_FIELDS[kind]:
+            raise SecretRecordError(f"A {kind} Secret needs its {name}.")
+    names = [name for name in defaults if name in given]
+    names += [name for name in given if name not in defaults]
+    if not names:
+        raise SecretRecordError("A Secret needs at least one field.")
+    fields: list[SecretField] = []
+    for name in names:
+        value = _checked_value(name, given[name])
+        hidden = bool(concealed.get(name, defaults.get(name, True)))
+        fields.append(SecretField(name=name, concealed=hidden, value=value))
+    return tuple(fields)
+
+
+def _checked_value(name: str, value: str) -> str:
+    checked = check_value(value, field_name=name)
+    if name == TOTP_FIELD:
+        try:
+            check_totp_seed(checked)
+        except TotpSeedError as error:
+            raise SecretRecordError(f"The totp field is not a TOTP seed: {error}.") from None
+    return checked
+
+
+def _with_values(secret: AgentSecret, values: Mapping[str, str]) -> tuple[SecretField, ...]:
+    updates = {normalize_field_name(key): value for key, value in values.items()}
+    fields = []
+    for item in secret.fields:
+        if item.name in updates:
+            fields.append(replace(item, value=_checked_value(item.name, updates.pop(item.name))))
+        else:
+            fields.append(item)
+    defaults = dict(KIND_FIELDS[secret.kind])
+    for name, value in updates.items():
+        fields.append(
+            SecretField(
+                name=name,
+                concealed=defaults.get(name, True),
+                value=_checked_value(name, value),
+            )
+        )
+    return tuple(fields)

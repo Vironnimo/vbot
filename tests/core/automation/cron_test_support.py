@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,6 +17,7 @@ from core.calendar import CalendarService
 from core.channels import ChannelNotFoundError
 from core.runs import RunStatus
 from core.secrets import KeyFileProtection, SecretStore
+from core.secrets._references import EMPTY_MASKER, SecretMasker
 
 
 def secret_store(tmp_path: Path) -> SecretStore:
@@ -35,6 +37,7 @@ def make_service(
     sessions: Any = None,
     tz: str | ZoneInfo | None = None,
     calendar: CalendarService | None = None,
+    secret_masker: Callable[[], SecretMasker] = lambda: EMPTY_MASKER,
 ) -> tuple[CronService, SimpleNamespace]:
     """A CronService with a mock trigger; with ``calendar``, bound to it both ways."""
     trigger_service = SimpleNamespace(trigger_run=AsyncMock())
@@ -45,6 +48,7 @@ def make_service(
         sessions=sessions,
         tz=tz,
         calendar=calendar,
+        secret_masker=secret_masker,
     )
     if calendar is not None:
         calendar.bind_event_jobs(service)

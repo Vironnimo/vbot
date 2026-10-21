@@ -29,6 +29,7 @@ from core.secrets.sources import (
     NewSourceEntry,
     SecretSourceError,
     SourceEntry,
+    SourceFailure,
     SourceField,
     SourceStatus,
     UnlockField,
@@ -186,7 +187,10 @@ class KeePassXCSource:
         group = (container or "").strip().strip("/")
         if group and group not in listing.groups:
             raise SecretSourceError("not_found", f"KeePassXC has no group {group} with entries.")
-        fields = tuple(SourceField(name, concealed) for name, (_, concealed) in _FIELDS.items())
+        fields = tuple(
+            SourceField(name, concealed, optional=name != "password")
+            for name, (_, concealed) in _FIELDS.items()
+        )
         found = []
         for path in listing.entries:
             parent, _, title = path.rpartition("/")
@@ -206,14 +210,22 @@ class KeePassXCSource:
     def resolve(self, reference: str, field_name: str) -> str:
         program, unlocked = self._require_unlocked()
         path = reference.strip().strip("/")
-        for attribute in _attributes(field_name):
+        missing_code: SourceFailure = (
+            "optional_field_missing"
+            if field_name in _FIELDS and field_name != "password"
+            else "not_found"
+        )
+        attributes = _attributes(field_name)
+        for attribute in attributes:
             result = self._call(program, unlocked, "show", ["-s", "-a", attribute], [path])
             if result.returncode == 0:
                 value = _single_value(result.stdout)
                 if value:
                     return value
+                if attribute != attributes[-1]:
+                    continue
                 raise SecretSourceError(
-                    "not_found", f"The {field_name} field of the KeePassXC entry {path} is empty."
+                    missing_code, f"The {field_name} field of the KeePassXC entry {path} is empty."
                 )
         listing = self._list(refresh=True)
         if path not in listing.entries:
@@ -223,7 +235,7 @@ class KeePassXCSource:
                 "Bind the Secret to an existing entry in Settings -> Secrets.",
             )
         raise SecretSourceError(
-            "not_found", f"The KeePassXC entry {path} has no {field_name} field."
+            missing_code, f"The KeePassXC entry {path} has no {field_name} field."
         )
 
     def store(self, entry: NewSourceEntry) -> str:

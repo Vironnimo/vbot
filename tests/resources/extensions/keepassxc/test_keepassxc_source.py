@@ -267,6 +267,7 @@ def test_entries_are_listed_by_group_and_served_from_one_listing(files: dict[str
     mail = entries["Work/Mail"]
     assert (mail.title, mail.container, mail.kind) == ("Mail", "Work", "login")
     assert entries["Root Entry"].container is None
+    assert [item.name for item in mail.fields if not item.optional] == ["password"]
     assert [(item.name, item.concealed, item.value) for item in mail.fields] == [
         ("username", False, None),
         ("password", True, None),
@@ -317,9 +318,14 @@ def test_resolve_reads_the_field_from_its_attribute(
     assert value not in argv and stdin == f"{MASTER}\n"
 
 
-def test_totp_falls_back_to_the_legacy_seed_attribute(files: dict[str, str]) -> None:
+@pytest.mark.parametrize("empty_modern_field", [False, True])
+def test_totp_falls_back_to_the_legacy_seed_attribute(
+    files: dict[str, str], empty_modern_field: bool
+) -> None:
     source, cli, _config = _unlocked(files)
 
+    if empty_modern_field:
+        cli.entries["Work/Sub/Legacy"]["otp"] = ""
     assert source.resolve("Work/Sub/Legacy", "totp") == "JBSWY3DPEHPK3PXP"
     assert [argv[argv.index("-a") + 1] for argv, _ in cli.calls[-2:]] == ["otp", "TOTP Seed"]
 
@@ -340,7 +346,7 @@ def test_resolve_reports_a_missing_entry_field_or_value(
     with pytest.raises(SecretSourceError) as raised:
         source.resolve(reference, field_name)
 
-    assert raised.value.code == "not_found"
+    assert raised.value.code == ("optional_field_missing" if field_name == "totp" else "not_found")
     assert source.status().state == "available"
 
 

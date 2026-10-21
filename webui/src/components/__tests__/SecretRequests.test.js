@@ -112,6 +112,8 @@ describe('SecretRequests', () => {
       listed([
         request('req-1', 'GITHUB'),
         request('req-2', 'OTHER', { session_id: 'sess-2' }),
+        request('req-3', 'PROJECT', { project_id: 'alpha' }),
+        request('req-4', 'AGENT', { agent_id: 'helper' }),
       ]),
     );
     api.answerSecretRequest.mockResolvedValue({});
@@ -136,6 +138,9 @@ describe('SecretRequests', () => {
     });
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(notices()).toEqual([]);
+    props.projectId = 'alpha';
+    await settle();
+    expect(notices()).toEqual(['PROJECT']);
   });
 
   it('declines a request and drops a notice once the request is gone', async () => {

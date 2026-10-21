@@ -132,6 +132,7 @@ async def test_run_passes_only_named_secrets_the_parent_can_use(
         actor="user",
         lifetime="session",
         session_id=harness.parent.session_id,
+        agents=[harness.parent.agent_id],
     )
     harness.loop.hold("review")
 
@@ -142,7 +143,10 @@ async def test_run_passes_only_named_secrets_the_parent_can_use(
 
     assert not refused["ok"] and "GITLAB" in refused["error"]["message"]
     child = harness.subagent_session(data["id"])
-    assert [item.name for item in harness.secrets.usable("worker", child.session_id)] == ["API"]
+    assert [
+        item.name
+        for item in harness.secrets.usable(SessionAddress(None, "worker", child.session_id))
+    ] == ["API"]
     notes = [
         message.content for message in harness.sessions.get(child).load() if message.role == "note"
     ]

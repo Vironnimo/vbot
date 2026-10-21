@@ -16,7 +16,9 @@ from typing import Final, Literal, Protocol, runtime_checkable
 from core.secrets._agent_secret_model import SecretKind
 
 SourceState = Literal["available", "locked", "unavailable"]
-SourceFailure = Literal["locked", "denied", "not_found", "unavailable", "timed_out"]
+SourceFailure = Literal[
+    "locked", "denied", "not_found", "optional_field_missing", "unavailable", "timed_out"
+]
 
 #: The optional capabilities a source can declare.
 SOURCE_CAPABILITY_STORE: Final = "store"
@@ -43,6 +45,8 @@ class SourceField:
     name: str
     concealed: bool
     value: str | None = field(default=None, repr=False)
+    # A catalog can offer an optional field without proving this entry has it.
+    optional: bool = False
 
 
 @dataclass(frozen=True)

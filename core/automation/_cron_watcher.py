@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -102,7 +103,11 @@ class CronWatcher:
                 _LOGGER.error(
                     "Cron watch first check failed (job=%s)",
                     job_id,
-                    exc_info=(type(error), error, error.__traceback__),
+                    exc_info=(
+                        RuntimeError,
+                        RuntimeError("Watch check failed"),
+                        error.__traceback__,
+                    ),
                 )
 
         task.add_done_callback(done)
@@ -151,12 +156,31 @@ class CronWatcher:
             ):
                 return None
             watch = job.watch
+            checked_at = _timing._utc_now_iso()
             baseline = await self._owner._writer.call_async(
                 partial(read_baseline, self.state_dir, job_id, watch)
             )
+            if baseline is not None:
+                protected = replace(
+                    baseline, output=self._owner._secret_masker().mask(baseline.output)
+                )
+                if protected.output != baseline.output:
+                    try:
+                        await self._owner._writer.call_async(
+                            partial(write_baseline, self.state_dir, job_id, protected)
+                        )
+                    except CronStorageError:
+                        await self._record_failure(
+                            job_id,
+                            watch,
+                            "The protected watch baseline could not be saved",
+                            checked_at=checked_at,
+                            counts=not first,
+                        )
+                        return None
+                baseline = protected
             if first and baseline is not None:
                 return None
-            checked_at = _timing._utc_now_iso()
             try:
                 output = await self._run(job, watch)
             except WatchCheckError as error:
@@ -164,7 +188,9 @@ class CronWatcher:
                     job_id, watch, str(error), checked_at=checked_at, counts=not first
                 )
                 return None
-            comparison = await _COMPARE_WORKERS.run(compare, output, baseline)
+            comparison = await _COMPARE_WORKERS.run(
+                compare, output, baseline, self._owner._secret_masker()
+            )
             if not self._still_watching(job_id, watch):
                 # An edit replaced or stopped what was checked.
                 return None
@@ -217,7 +243,7 @@ class CronWatcher:
             _LOGGER.error(
                 "Cron watch check could not run (job=%s)",
                 job.id,
-                exc_info=(type(error), error, error.__traceback__),
+                exc_info=(RuntimeError, RuntimeError("Watch check failed"), error.__traceback__),
             )
             raise WatchCheckError(f"The check could not run: {error}") from error
 
@@ -249,15 +275,14 @@ class CronWatcher:
             return
         baseline = self._owner._execution._failure_baseline(job_id)
         job.last_checked_at = checked_at
-        job.last_check_error = _truncate_error(message)
+        job.last_check_error = _truncate_error(self._owner._secret_masker().mask(message))
         if counts:
             _count_consecutive_failure(job)
         _LOGGER.warning(
-            "Cron watch check failed (job=%s failures=%d first=%s): %s",
+            "Cron watch check failed (job=%s failures=%d first=%s)",
             job_id,
             job.consecutive_failures,
             not counts,
-            job.last_check_error,
         )
         await self._owner._execution._save_jobs_after_fire(job_id)
         if counts:

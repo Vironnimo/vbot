@@ -33,7 +33,12 @@
   const componentId = $props.id();
   const FORM_ID = `${componentId}-form`;
 
-  let { agentId = '', sessionId = '', refreshToken = 0 } = $props();
+  let {
+    agentId = '',
+    projectId = null,
+    sessionId = '',
+    refreshToken = 0,
+  } = $props();
 
   let requests = $state([]);
   let loadGeneration = 0;
@@ -49,7 +54,8 @@
       ? requests.filter(
           (request) =>
             request.session_id === sessionId &&
-            (!agentId || request.agent_id === agentId),
+            request.agent_id === agentId &&
+            (request.project_id ?? null) === projectId,
         )
       : [],
   );

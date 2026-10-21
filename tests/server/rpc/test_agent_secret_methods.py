@@ -5,14 +5,16 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
-from core.secrets.agent_secrets import AgentSecrets
+from core.secrets.agent_secrets import AgentSecrets, Lifetime
 from core.secrets.requests import SecretRequests
+from core.sessions import SessionAddress
 from server.app import _publish_secret_changes
 from tests.core.secrets.secrets_test_support import data_directory, open_store
 from tests.core.secrets.test_agent_secrets import Clock, FakeSource
@@ -55,7 +57,9 @@ async def test_secrets_are_managed_and_only_reveal_returns_a_concealed_value(
         description="GitHub account",
     )
     secret_id = created["secret"]["id"]
-    state.runtime.agent_secrets.substitute("main", "s1", "{{secret:GITHUB.password}}", "typing")
+    state.runtime.agent_secrets.substitute(
+        SessionAddress(None, "main", "s1"), "{{secret:GITHUB.password}}", "typing"
+    )
     listed = await rpc_result(state, "agent_secrets.list")
     updated = await rpc_result(
         state, "agent_secrets.update", id=secret_id, sinks=["terminal"], agents=["main", "coder"]
@@ -139,9 +143,79 @@ async def test_answering_a_request_stores_the_value_for_the_waiting_agent(
     assert stored["secret"]["lifetime"] == "session"
     assert stored["secret"]["session_id"] == "s1"
     assert PASSWORD not in json.dumps([stored, gave])
-    assert state.runtime.agent_secrets.lookup("main", "s1", "STRIPE") is not None
+    assert (
+        state.runtime.agent_secrets.lookup(SessionAddress(None, "main", "s1"), "STRIPE") is not None
+    )
     assert stale["message"] == "This request is no longer waiting; the Agent stopped asking."
     assert (await rpc_result(state, "agent_secrets.list"))["requests"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["give", "answer"])
+@pytest.mark.parametrize("lifetime", ["session", "once", "permanent", "until"])
+async def test_replacing_a_secret_applies_the_chosen_lifetime_and_expiry(
+    tmp_path: Path,
+    path: str,
+    lifetime: Lifetime,
+) -> None:
+    state = _state(tmp_path)
+    secrets = state.runtime.agent_secrets
+    state.runtime.chat_sessions.create("main", session_id="s1")
+    address = SessionAddress(None, "main", "s1")
+    child = SessionAddress(None, "main", "child")
+    old = secrets.create(
+        name="API",
+        kind="token",
+        values={"value": "old-credential"},
+        actor="user",
+        lifetime="until",
+        expires_at=datetime(2030, 1, 1, tzinfo=UTC),
+        agents=["main", "other"],
+        session_id="s1",
+    )
+    secrets.pass_to_session(address, ["API"], child)
+    expiry = datetime(2031, 1, 1, tzinfo=UTC) if lifetime == "until" else None
+    params: dict[str, Any] = {"values": {"value": PASSWORD}, "lifetime": lifetime}
+    if expiry is not None:
+        params["expires_at"] = expiry.isoformat()
+    if path == "answer":
+        requests = state.runtime.secret_requests
+        task = asyncio.create_task(
+            requests.request(
+                agent_id="main",
+                session_id="s1",
+                project_id=None,
+                name="API",
+                kind="token",
+                description="Sign in again",
+                lifetime="session",
+            )
+        )
+        await asyncio.sleep(0)
+        pending = requests.pending_for(address, "API")
+        assert pending is not None
+        result = await rpc_result(state, "agent_secrets.answer", id=pending.id, **params)
+        assert (await task).status == "stored"
+    else:
+        result = await rpc_result(
+            state,
+            "agent_secrets.give",
+            agent_id="main",
+            session_id="s1",
+            name="API",
+            kind="token",
+            **params,
+        )
+    assert result["secret"]["id"] == old.id
+    secrets.reload()
+    updated = secrets.get(old.id)
+    assert updated.lifetime == lifetime and updated.expires_at == expiry
+    assert updated.fields[0].value == PASSWORD
+    assert secrets.lookup(address, "API") is not None
+    local = lifetime in {"session", "once"}
+    assert (secrets.lookup(child, "API", passed_only=True) is None) is local
+    assert (secrets.lookup(SessionAddress(None, "other", "s1"), "API") is None) is local
+    assert "old-credential" not in secrets.masker.mask("old-credential")
 
 
 @pytest.mark.asyncio

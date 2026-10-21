@@ -16,6 +16,7 @@ const updateCronJobMock = vi.fn();
 const deleteCronJobMock = vi.fn();
 const enableCronJobMock = vi.fn();
 const disableCronJobMock = vi.fn();
+const retryCronDeliveryMock = vi.fn();
 
 vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
@@ -29,6 +30,7 @@ vi.mock('$lib/api.js', () =>
     deleteCronJob: (...args) => deleteCronJobMock(...args),
     enableCronJob: (...args) => enableCronJobMock(...args),
     disableCronJob: (...args) => disableCronJobMock(...args),
+    retryCronDelivery: (...args) => retryCronDeliveryMock(...args),
   }),
 );
 
@@ -53,6 +55,7 @@ describe('CronView', () => {
     deleteCronJobMock.mockReset();
     enableCronJobMock.mockReset();
     disableCronJobMock.mockReset();
+    retryCronDeliveryMock.mockReset();
 
     rpcMock.mockImplementation(createAgentListRpcMock());
     listCronJobsMock.mockResolvedValue({ jobs: [] });
@@ -61,6 +64,7 @@ describe('CronView', () => {
     deleteCronJobMock.mockResolvedValue({ ok: true });
     enableCronJobMock.mockResolvedValue({ ok: true });
     disableCronJobMock.mockResolvedValue({ ok: true });
+    retryCronDeliveryMock.mockResolvedValue({ ok: true });
   });
 
   afterEach(async () => {
@@ -689,6 +693,35 @@ describe('CronView', () => {
       delivery: { kind: 'none' },
       watch: null,
     });
+  });
+
+  it('keeps uncertain delivery visible on a completed job and retries without rerunning it', async () => {
+    listCronJobsMock.mockResolvedValue({
+      jobs: [
+        cronJob({
+          id: 'job-done',
+          status: 'completed',
+          delivery_progress: {
+            waiting: 1,
+            uncertain: 1,
+            error: 'Unknown delivery',
+          },
+        }),
+      ],
+    });
+    mountView();
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="cron-delivery-progress"]'),
+    );
+    const banner = document.querySelector(
+      '[data-testid="cron-delivery-progress"]',
+    );
+    expect(banner.textContent).toContain(t('cron.delivery.uncertain'));
+    banner.querySelector('button').click();
+    await waitForCondition(() => retryCronDeliveryMock.mock.calls.length === 1);
+    expect(retryCronDeliveryMock).toHaveBeenCalledWith('job-done');
+    expect(enableCronJobMock).not.toHaveBeenCalled();
+    expect(updateCronJobMock).not.toHaveBeenCalled();
   });
 
   it('shows a silent Run and the last answer and delivers to a chat of the Agent', async () => {

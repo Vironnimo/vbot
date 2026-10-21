@@ -24,8 +24,8 @@ The bundled Extension `resources/extensions/onepassword/` contributes the `onepa
 ## Entries and fields
 
 - Reference = `<vault id>/<item id>` (an `op://` prefix is tolerated); containers are vault names, with ` (<id>)` added when two vaults share a name. `entries(container)` accepts the label or the vault id.
-- Category -> kind and offered fields: `LOGIN` login (username, password, url, totp, notes), `PASSWORD` token (password, notes), `API_CREDENTIAL` token (credential, username, notes), `SECURE_NOTE` text (notes), `DATABASE` login (username, password, notes), `SERVER` login (username, password, url, notes), others text (notes). Listed visible values: the LOGIN username (`additional_information`) and the primary URL.
-- Resolve order: `url`/`website` -> the primary URL; `totp`/`otp` -> the value of the `OTP` field (an `otpauth://` URI; AgentSecrets derives the code); otherwise the field with the purpose `USERNAME`/`PASSWORD`/`NOTES`, then exact field id, then id and label case-insensitively. Missing or empty -> `not_found`.
+- Category -> kind and offered fields: `LOGIN` login (username, password, url, totp, notes), `PASSWORD` token (password, notes), `API_CREDENTIAL` token (credential, username, notes), `SECURE_NOTE` text (notes), `DATABASE` login (username, password, notes), `SERVER` login (username, password, url, notes), others text (notes). Login password, token credential/password, or text notes is required; the remaining category fields are marked optional. Listed visible values: the LOGIN username (`additional_information`) and the primary URL.
+- Resolve order: `url`/`website` -> the primary URL; `totp`/`otp` -> the value of the `OTP` field (an `otpauth://` URI; AgentSecrets derives the code); otherwise the field with the purpose `USERNAME`/`PASSWORD`/`NOTES`, then exact field id, then id and label case-insensitively. Missing or empty required/custom fields -> `not_found`; fields optional for the item category -> `optional_field_missing` (only after reading the item successfully).
 - `store` is not offered (empty capabilities); a call raises `unavailable`.
 
 ## Constraints & Gotchas

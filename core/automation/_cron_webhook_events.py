@@ -344,31 +344,17 @@ def state_path(directory: Path, job_id: str) -> Path:
 
 
 def read_state(directory: Path, job_id: str) -> WebhookState:
-    """The job's stored state; an empty one when there is none. Blocking.
-
-    An unreadable state is logged and counts as empty: its waiting requests are lost.
-    """
+    """Read accepted requests; only a missing file means an empty queue."""
     path = state_path(directory, job_id)
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
+        return _parse_state(payload, job_id)
     except FileNotFoundError:
         return WebhookState(job_id)
-    except (OSError, UnicodeError, ValueError) as error:
-        _LOGGER.warning(
-            "Cron webhook requests unreadable; the waiting requests are dropped (job=%s): %s",
-            job_id,
-            error,
-        )
-        return WebhookState(job_id)
-    try:
-        return _parse_state(payload, job_id)
-    except (ValueError, TypeError) as error:
-        _LOGGER.warning(
-            "Cron webhook requests invalid; the waiting requests are dropped (job=%s): %s",
-            job_id,
-            error,
-        )
-        return WebhookState(job_id)
+    except (OSError, UnicodeError, ValueError, TypeError) as error:
+        raise CronStorageError(
+            "Waiting webhook requests could not be read; retrying without replacing them."
+        ) from error
 
 
 def write_state(directory: Path, job_id: str, payload: dict[str, Any]) -> None:

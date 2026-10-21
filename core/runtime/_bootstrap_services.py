@@ -172,7 +172,7 @@ def _archive_services(runtime: Runtime) -> ArchiveServices:
         if secrets is None:
             return
         for address in addresses:
-            await asyncio.to_thread(secrets.remove_session, address.session_id)
+            await asyncio.to_thread(secrets.remove_session, address)
 
     async def close_session_transports(addresses: Sequence[SessionAddress]) -> None:
         await runtime.close_session_transports(

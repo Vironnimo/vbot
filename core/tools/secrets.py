@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any, Final
 
+from core.projects.address import format_agent_address
 from core.runs import RunKind
 from core.secrets.agent_secrets import (
     DEFAULT_PASSWORD_SYMBOLS,
@@ -20,6 +21,7 @@ from core.secrets.agent_secrets import (
 )
 from core.secrets.commands import secret_command_example
 from core.secrets.requests import REQUEST_TIMEOUT_SECONDS
+from core.sessions import SessionAddress
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -207,7 +209,7 @@ def _render_prompt_block(context: Any, secrets: AgentSecrets) -> Any:
     # A Sub-Agent Session has only the Secrets passed to it; its Tool results list them.
     if context.subagent_session:
         return ""
-    agent_id = context.agent.id
+    agent_id = format_agent_address(context.agent.id, context.agent_project_id)
     own = [
         secret
         for secret in secrets.all()
@@ -331,7 +333,8 @@ def _with_note(result: JsonObject, unknown: list[str]) -> JsonObject:
 
 def _list_text(secrets: AgentSecrets, context: ToolContext) -> str:
     usable = secrets.usable(
-        context.agent_id, context.session_id, passed_only=context.subagent_session
+        SessionAddress(context.project_id, context.agent_id, context.session_id),
+        passed_only=context.subagent_session,
     )
     if not usable:
         return "You have no Secrets. Use action request to ask the user for one."
@@ -407,7 +410,9 @@ async def _request(
         return lifetime
     description = str(arguments.get("description") or "").strip()
     existing = secrets.lookup(
-        context.agent_id, context.session_id, name, passed_only=context.subagent_session
+        SessionAddress(context.project_id, context.agent_id, context.session_id),
+        name,
+        passed_only=context.subagent_session,
     )
     if existing is not None and existing.source is not None:
         return tool_failure(
@@ -495,7 +500,9 @@ async def _generate(
     symbols = DEFAULT_PASSWORD_SYMBOLS if symbols is None else str(symbols)
     if (
         secrets.lookup(
-            context.agent_id, context.session_id, name, passed_only=context.subagent_session
+            SessionAddress(context.project_id, context.agent_id, context.session_id),
+            name,
+            passed_only=context.subagent_session,
         )
         is not None
     ):
@@ -517,7 +524,7 @@ async def _generate(
             values=values,
             actor=f"agent:{context.agent_id}",
             session_id=context.session_id,
-            agents=[context.agent_id],
+            agents=[format_agent_address(context.agent_id, context.project_id)],
             description=str(arguments.get("description") or "").strip(),
         )
     except SecretRecordError as error:

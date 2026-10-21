@@ -166,7 +166,7 @@ class CronExecution:
                         project_id=latest.project_id,
                         run_kind=RunKind.CRON,
                         contributes_to_agent_activity=False,
-                        context_note=context,
+                        context_note=self._owner._secret_masker().mask(context),
                         completion_activity=_delivery.completion_activity(
                             partial(self._owner._jobs.get, job.id)
                         ),
@@ -256,6 +256,7 @@ class CronExecution:
                 completed_at = _timing._utc_now_iso()
                 answer = _delivery.final_answer_text(result)
                 silent = _delivery.is_silent(answer)
+                answer = self._owner._secret_masker().mask(answer)
                 latest.last_completed_at = completed_at
                 latest.last_outcome = "success"
                 latest.last_error = None
@@ -266,12 +267,21 @@ class CronExecution:
                     latest.last_result = CronResult.excerpt(
                         answer, at=completed_at, run_id=run_id if isinstance(run_id, str) else None
                     )
+                if not silent:
+                    session_id = getattr(run, "session_id", None)
+                    self._owner._notifications.stage(
+                        latest,
+                        answer,
+                        session_id=session_id if isinstance(session_id, str) else None,
+                    )
                 self._owner._jobs[latest.id] = latest
-                await self._save_jobs_after_fire(latest.id)
+                saved = await self._save_jobs_after_fire(latest.id)
                 await self._finalize_exhausted_job(latest.id)
                 if not silent:
-                    await self._deliver_answer(latest, run, answer)
-                return CronRunOutcome(succeeded=True, admitted=admitted)
+                    self._owner._notifications.wake()
+                return CronRunOutcome(
+                    succeeded=saved or not latest.notifications, admitted=admitted
+                )
         finally:
             if batch is not None and not admitted:
                 self._owner._webhooks.release(job.id, batch)
@@ -419,98 +429,9 @@ class CronExecution:
                 )
             )
             return
-        chats = self._owner._chats
-        delivery = job.delivery
-        assert delivery is not None and delivery.channel_id and delivery.platform_target
-        if chats is None:
-            _LOGGER.warning(
-                "Cron job failure alert not sent: Channels are not running (job=%s)", job_id
-            )
-            return
-        try:
-            await chats.send(
-                delivery.channel_id,
-                text,
-                delivery.platform_target,
-                thread_id=delivery.thread_id,
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception as error:
-            _LOGGER.warning(
-                "Cron job failure alert not sent (job=%s channel=%s): %s",
-                job_id,
-                delivery.channel_id,
-                error,
-            )
-            return
-        await self._note_in_chat(job, _delivery.outbound_note(job, text), skip_session_id=None)
-
-    async def _deliver_answer(self, job: CronJob, run: Any, answer: str) -> None:
-        """Deliver a Run's final answer to the job's chat; best effort after the outcome.
-
-        The Channel owes the answer durably, so it reaches the chat once the
-        Channel is connected. Nothing is logged of its content.
-        """
-        if _delivery.delivery_kind(job) != "chat":
-            return
-        chats = self._owner._chats
-        delivery = job.delivery
-        assert delivery is not None and delivery.channel_id and delivery.platform_target
-        run_id = getattr(run, "id", None)
-        if chats is None:
-            _LOGGER.warning(
-                "Cron job answer not delivered: Channels are not running (job=%s run=%s)",
-                job.id,
-                run_id,
-            )
-            return
-        try:
-            await chats.relay_run_to_chat(
-                run, delivery.channel_id, delivery.platform_target, thread_id=delivery.thread_id
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception as error:
-            _LOGGER.warning(
-                "Cron job answer not delivered (job=%s run=%s channel=%s): %s",
-                job.id,
-                run_id,
-                delivery.channel_id,
-                error,
-            )
-            return
-        session_id = getattr(run, "session_id", None)
-        await self._note_in_chat(
-            job,
-            _delivery.outbound_note(job, answer),
-            skip_session_id=session_id if isinstance(session_id, str) else None,
-        )
-
-    async def _note_in_chat(self, job: CronJob, note: str, *, skip_session_id: str | None) -> None:
-        """Tell the chat's Session what the job sent there, unless it is that Session."""
-        chats = self._owner._chats
-        delivery = job.delivery
-        if chats is None or delivery is None or not delivery.channel_id:
-            return
-        assert delivery.platform_target is not None
-        try:
-            await chats.record_outbound_note(
-                delivery.channel_id,
-                delivery.platform_target,
-                note,
-                thread_id=delivery.thread_id,
-                skip_session_id=skip_session_id,
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception as error:
-            _LOGGER.warning(
-                "Cron job message not noted in its chat's Session (job=%s channel=%s): %s",
-                job.id,
-                delivery.channel_id,
-                error,
-            )
+        self._owner._notifications.stage(job, text)
+        await self._save_jobs_after_fire(job.id)
+        self._owner._notifications.wake()
 
     async def _persist_after_fire(self, job_id: str) -> bool:
         """Persist job state after a fire, giving up after bounded retries.

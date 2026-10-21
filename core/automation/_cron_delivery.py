@@ -1,8 +1,9 @@
 """Where a Cron job's Run answers go: delivery, [SILENT], continuity and failure alerts.
 
 Cron never imports Channel internals: the Runtime wires a :class:`ChatDelivery`
-(the Channel service) in. Delivery is best effort after the Run's outcome is
-recorded, and logs never carry answer content.
+(the Channel service) in. Notifications are saved with the Run outcome and
+retried independently of Runs;
+logs never carry answer content.
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ from core.chat.content_blocks import TextBlock
 from core.runs import RunStatus
 
 if TYPE_CHECKING:
-    from core.runs import CompletionActivity, Run
+    from core.runs import CompletionActivity
 
 SILENT_ANSWER = "[SILENT]"
 
@@ -44,10 +45,6 @@ class ChatDelivery(Protocol):
     """What Cron needs from Channels to deliver to a chat."""
 
     async def get_channel(self, channel_id: str) -> ChannelOwner: ...
-
-    async def relay_run_to_chat(
-        self, run: Run, channel_id: str, platform_target: str, *, thread_id: str | None = None
-    ) -> None: ...
 
     async def send(
         self, channel_id: str, message: str, platform_target: str, *, thread_id: str | None = None

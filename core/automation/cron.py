@@ -64,6 +64,7 @@ from core.automation._cron_jobs import (
     validate_cron_jobs_data,
     validate_cron_jobs_file,
 )
+from core.automation._cron_notifications import CronNotifications
 from core.automation._cron_projection import CronProjection
 from core.automation._cron_scheduler import CronScheduler
 from core.automation._cron_watch import WatchCheckError, WatchChecks
@@ -84,6 +85,7 @@ from core.projects import (
     ResolutionProjectNotFoundError,
     format_agent_address,
 )
+from core.secrets._references import EMPTY_MASKER, SecretMasker
 from core.sessions import SessionAddress
 from core.utils.file_status import exists_strict
 from core.utils.ids import new_id
@@ -201,7 +203,9 @@ class CronService:
         sessions: ChatSessionManager | None = None,
         tz: str | ZoneInfo | None = None,
         calendar: EventCalendar | None = None,
+        secret_masker: Callable[[], SecretMasker] = lambda: EMPTY_MASKER,
     ) -> None:
+        self._secret_masker = secret_masker
         self._writer = _CRON_WRITER
         self._trigger_service = trigger_service
         self._agent_resolver = agent_resolver
@@ -209,6 +213,7 @@ class CronService:
         self._calendar = calendar
         # Delivers Run answers and failure alerts to Channel chats once wired.
         self._chats: ChatDelivery | None = None
+        self._notifications = CronNotifications(self)
         # Runs the checks of watching jobs once wired.
         self._watch_checks: WatchChecks | None = None
         self._data_root = Path(data_root).expanduser()
@@ -861,6 +866,10 @@ class CronService:
             self._reject_past_once_run(candidate)
         self._validate_capacity(candidate, replacing_id=job_id)
         return job, candidate, changed_fields, restart_task
+
+    async def retry_delivery(self, job_id: str) -> None:
+        """Retry retained notifications, including an explicitly checked uncertain send."""
+        await self._notifications.retry(job_id)
 
     async def delete_job(self, job_id: str, *, actor: str = _DEFAULT_ACTOR) -> None:
         """Delete one cron job and cancel any active task."""

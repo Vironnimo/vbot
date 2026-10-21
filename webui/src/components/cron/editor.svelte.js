@@ -29,6 +29,7 @@ import {
   updateCronJob,
   disableCronJob,
   enableCronJob,
+  retryCronDelivery,
   deleteCronJob,
   getCronWebhookSecret,
   rotateCronWebhookSecret,
@@ -446,6 +447,19 @@ export function createCronEditor(context) {
     }
   }
 
+  async function retryDelivery(job) {
+    if (!job?.id || mutatingJobId) return;
+    mutatingJobId = job.id;
+    try {
+      await retryCronDelivery(job.id);
+      await context.loadJobs({ silent: true });
+    } catch (error) {
+      context.showToast(t('cron.delivery.retryError'), 'error', error);
+    } finally {
+      mutatingJobId = '';
+    }
+  }
+
   async function toggleJob(job) {
     if (
       !job?.id ||
@@ -674,6 +688,9 @@ export function createCronEditor(context) {
     },
     get toggleWeekday() {
       return toggleWeekday;
+    },
+    get retryDelivery() {
+      return retryDelivery;
     },
     get toggleJob() {
       return toggleJob;

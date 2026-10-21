@@ -31,6 +31,7 @@ from core.projects import (
     ResolutionProjectNotFoundError,
 )
 from core.runs import RunKind, RunStatus
+from core.secrets._references import SecretMasker
 from core.sessions import SessionNotFoundError
 from tests.core.automation.cron_test_support import (
     FakeChats,
@@ -255,7 +256,8 @@ _CHAT = CronDelivery(kind="chat", channel_id="tg-main", platform_target="chat-42
 async def test_a_run_answer_reaches_the_jobs_chat_unless_it_is_silent(
     tmp_path: Path, answer: str, delivered: bool
 ) -> None:
-    service, trigger_service = make_service(tmp_path)
+    masker = SecretMasker({"[SILENT]": "{{secret:MARKER}}"})
+    service, trigger_service = make_service(tmp_path, secret_masker=lambda: masker)
     chats = FakeChats()
     service.set_chat_delivery(chats)
     job = await service.create_job(
@@ -272,16 +274,20 @@ async def test_a_run_answer_reaches_the_jobs_chat_unless_it_is_silent(
     updated = service.get_job(job.id)
     assert updated.last_outcome == "success"
     assert updated.last_run_silent is not delivered
+    await service._notifications.flush()
     if delivered:
-        [(run, *target)] = chats.relayed
-        assert (run.id, *target) == ("run-1", "tg-main", "chat-42", "7")
+        assert chats.sent == [("tg-main", masker.mask(answer), "chat-42", "7")]
+        assert service.get_job(job.id).delivery_progress()["waiting"] == 0
         # The chat's Session learns what was sent, unless the job ran in it.
         [(channel_id, platform_target, note, thread_id, skip_session_id)] = chats.notes
         assert (channel_id, platform_target, thread_id) == ("tg-main", "chat-42", "7")
         assert skip_session_id == "ses-1"
-        assert json.loads(note.splitlines()[-1]) == {"message": answer}
+        assert json.loads(note.splitlines()[-1]) == {"message": masker.mask(answer)}
         assert updated.last_result is not None
-        assert (updated.last_result.text, updated.last_result.run_id) == (answer, "run-1")
+        assert (updated.last_result.text, updated.last_result.run_id) == (
+            masker.mask(answer),
+            "run-1",
+        )
     else:
         assert (chats.relayed, chats.notes, chats.sent) == ([], [], [])
         assert updated.last_result is None
@@ -359,9 +365,10 @@ async def test_what_reaches_the_user_follows_the_jobs_delivery(
     reported = [True, False, False, True, False, False, True]
     assert decisions == (reported if delivery == "app" else [False] * len(reported))
     assert in_app == []
+    await service._notifications.flush()
     if delivery == "chat":
-        assert [run.id for run, *_ in chats.relayed] == ["run-1"]
-        alerts = [message for _, message, *_ in chats.sent]
+        assert chats.sent[0][1] == "The build is red."
+        alerts = [message for _, message, *_ in chats.sent[1:]]
         assert len(alerts) == 2
         assert "failed twice in a row" in alerts[0] and "model unavailable" in alerts[0]
         assert "stopped after 5 failures in a row" in alerts[1]
@@ -415,6 +422,7 @@ async def test_the_user_learns_when_a_once_job_fails_for_good(
         assert "will not run again" in alert.message
         assert chats.sent == []
         return
+    await service._notifications.flush()
     [(channel_id, message, platform_target, thread_id)] = chats.sent
     assert (channel_id, platform_target, thread_id) == ("tg-main", "chat-42", "7")
     assert "will not run again" in message

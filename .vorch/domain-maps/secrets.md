@@ -72,7 +72,7 @@ The document is in `DURABLE_DOCUMENTS` (`"secrets"`, validated by `validate_secr
 ### Agent Secrets
 
 - `Runtime.agent_secrets` (`AgentSecrets` over `StorageManager.secrets`) and `Runtime.secret_requests`: reads come from memory; writes and Secret Source calls block, so run them off the Event Loop.
-- Use is checked per Agent id and Session; a Sub-Agent Session uses only what was bound to or passed into it (`passed_only`). A value leaves only through `substitute` (sink arguments), `environment` (shell `env_keys`) and `agent_secrets.reveal`, the one RPC that returns a concealed value; all else is `describe()` or masked text.
+- Use is checked against the full `SessionAddress` (Project, Agent and Session); a Sub-Agent Session uses only what was bound to or passed into it (`passed_only`). A value leaves only through `substitute` (sink arguments), `environment` (shell `env_keys`) and `agent_secrets.reveal`, the one RPC that returns a concealed value; all else is `describe()` or masked text.
 - The `agent_secrets.*` RPCs are distinct from `secrets.*`; changes publish `resource_changed` kind `agent_secrets`. Extension API 17 adds `api.register_secret_source` and `secret_sinks`.
 
 ## States

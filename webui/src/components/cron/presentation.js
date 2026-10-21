@@ -58,6 +58,7 @@ export function webhookReachText(reach) {
 // Run, such as "Today 10:00 · 2 requests wait for the next Run".
 export function webhookRequestsText(job, timezone, now = new Date()) {
   const webhook = job?.webhook;
+  if (webhook?.error) return webhook.error;
   if (!webhook?.last_received_at) {
     return t('cron.webhook.noRequest');
   }
@@ -632,7 +633,12 @@ export function scheduleRowDetails(
         value: job.session_id || t('cron.detail.newSessionEachRun'),
         mono: Boolean(job.session_id),
       },
-      { label: t('cron.card.delivery'), value: deliverySummary(job) },
+      {
+        label: t('cron.card.delivery'),
+        value: job.delivery_progress?.waiting
+          ? `${deliverySummary(job)} · ${t('cron.delivery.waiting', { count: job.delivery_progress.waiting })}`
+          : deliverySummary(job),
+      },
     ],
     placement: 'right',
   };

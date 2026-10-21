@@ -128,6 +128,15 @@ export function enableCronJob(id, options = {}) {
   return rpc('cron.enable', { id }, options);
 }
 
+export function retryCronDelivery(id, options = {}) {
+  requireNonEmptyString(
+    id,
+    'Cron job id must be a non-empty string',
+    'cron.retry_delivery',
+  );
+  return rpc('cron.retry_delivery', { id }, options);
+}
+
 export function disableCronJob(id, options = {}) {
   requireNonEmptyString(
     id,

@@ -227,6 +227,7 @@ export {
   updateCronJob,
   deleteCronJob,
   enableCronJob,
+  retryCronDelivery,
   disableCronJob,
   getCronWebhookSecret,
   rotateCronWebhookSecret,

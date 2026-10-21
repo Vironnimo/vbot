@@ -15,6 +15,7 @@ from core.providers.adapter import tool_result_text
 from core.runs import RunKind
 from core.secrets.agent_secrets import AgentSecrets
 from core.secrets.requests import SecretRequests
+from core.sessions import SessionAddress
 from core.tools.secrets import register_secrets_tool
 from core.tools.tools import ToolContext, ToolRegistry
 from tests.core.secrets.secrets_test_support import data_directory, open_store
@@ -37,10 +38,15 @@ class _Tool:
         self.tmp_path = tmp_path
 
     async def call(
-        self, arguments: dict[str, object], *, surface: ReplySurface | None = None
+        self,
+        arguments: dict[str, object],
+        *,
+        surface: ReplySurface | None = None,
+        project_id: str | None = None,
     ) -> tuple[bool, str]:
         context = ToolContext(
             agent_id="main",
+            project_id=project_id,
             session_id="s1",
             run_id="run-1",
             tool_call_id="call",
@@ -55,9 +61,9 @@ class _Tool:
         result = await dispatch_as_executor(self.registry, context, arguments)
         return bool(result["ok"]), str(tool_result_text(json.dumps(result)))
 
-    async def pending(self) -> dict[str, object]:
+    async def pending(self, project_id: str | None = None) -> dict[str, object]:
         for _ in range(100):
-            if listed := self.requests.list():
+            if listed := self.requests.list(SessionAddress(project_id, "main", "s1")):
                 return listed[0]
             await asyncio.sleep(0)
         raise AssertionError("no request appeared")
@@ -72,6 +78,13 @@ async def test_a_requested_secret_reaches_the_agent_only_as_a_reference(tmp_path
         )
     )
     pending = await tool.pending()
+    other_call = asyncio.create_task(
+        tool.call({"action": "request", "name": "github", "kind": "login"}, project_id="alpha")
+    )
+    other = await tool.pending("alpha")
+    assert len(tool.requests.list()) == 2
+    scoped = tool.requests.pending_for(SessionAddress("alpha", "main", "s1"), "GITHUB")
+    assert scoped is not None and scoped.id == other["id"]
     assert pending["name"] == "GITHUB" and pending["kind"] == "login"
     assert pending["description"] == "push to vbot"
     await tool.requests.answer(str(pending["id"]), {"username": "julian", "password": PASSWORD})
@@ -79,10 +92,13 @@ async def test_a_requested_secret_reaches_the_agent_only_as_a_reference(tmp_path
 
     assert ok and PASSWORD not in text
     assert "username julian" in text and "{{secret:GITHUB.password}}" in text
-    assert tool.secrets.substitute("main", "s1", "{{secret:GITHUB.password}}", "terminal")[0] == (
-        PASSWORD
-    )
-    assert tool.requests.list() == []
+    assert tool.secrets.substitute(
+        SessionAddress(None, "main", "s1"), "{{secret:GITHUB.password}}", "terminal"
+    )[0] == (PASSWORD)
+    assert [item["id"] for item in tool.requests.list()] == [other["id"]]
+    tool.requests.decline(str(other["id"]))
+    await other_call
+    assert tool.secrets.usable(SessionAddress("alpha", "main", "s1")) == []
     ok, listed = await tool.call({"action": "list"})
     assert ok and "- GITHUB (login, this session)" in listed and PASSWORD not in listed
 
@@ -127,8 +143,10 @@ async def test_generate_stores_a_password_the_agent_never_sees(tmp_path: Path) -
     )
     again_ok, again = await tool.call({"action": "generate", "name": "shop"})
 
-    (secret,) = tool.secrets.usable("main", "s1")
-    password = tool.secrets.substitute("main", "s1", "{{secret:SHOP.password}}", "terminal")[0]
+    (secret,) = tool.secrets.usable(SessionAddress(None, "main", "s1"))
+    password = tool.secrets.substitute(
+        SessionAddress(None, "main", "s1"), "{{secret:SHOP.password}}", "terminal"
+    )[0]
     assert ok and password not in text and "{{secret:SHOP.password}}" in text
     assert len(password) == 24 and password.isalnum()
     assert secret.lifetime == "permanent" and secret.agents == ("main",)
@@ -181,11 +199,14 @@ async def test_the_prompt_block_lists_only_the_agents_own_secrets_without_values
         actor="user",
         lifetime="session",
         session_id="s1",
+        agents=["main"],
     )
 
     def render(agent_id: str, *, subagent_session: bool = False) -> Any:
         context = SimpleNamespace(
-            agent=SimpleNamespace(id=agent_id), subagent_session=subagent_session
+            agent=SimpleNamespace(id=agent_id),
+            subagent_session=subagent_session,
+            agent_project_id=None,
         )
         return definition.render(context)
 

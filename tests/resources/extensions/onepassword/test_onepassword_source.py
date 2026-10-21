@@ -53,6 +53,7 @@ ITEMS: dict[str, list[dict[str, Any]]] = {
 }
 DETAILS: dict[str, dict[str, Any]] = {
     "i1login": {
+        "category": "LOGIN",
         "id": "i1login",
         "title": "GitHub",
         "urls": [{"primary": True, "href": "https://github.com"}],
@@ -65,6 +66,7 @@ DETAILS: dict[str, dict[str, Any]] = {
         ],
     },
     "i3api": {
+        "category": "API_CREDENTIAL",
         "id": "i3api",
         "title": "Deploy key",
         "fields": [{"id": "credential", "type": "CONCEALED", "value": "api-credential-1"}],
@@ -260,6 +262,7 @@ def test_vaults_and_items_become_containers_and_entries(op_path: str) -> None:
     entries = {entry.reference: entry for entry in source.entries()}
     login = entries["v1private/i1login"]
     assert (login.title, login.kind, login.container) == ("GitHub", "login", "Private")
+    assert [item.name for item in login.fields if not item.optional] == ["password"]
     assert [(item.name, item.concealed, item.value) for item in login.fields] == [
         ("username", False, "alice"),
         ("password", True, None),
@@ -322,7 +325,9 @@ def test_resolve_finds_the_field_by_purpose_type_id_or_label(
     [
         pytest.param("v1private/gone", "password", None, "not_found", id="missing-item"),
         pytest.param("v1private/i1login", "pin", None, "not_found", id="missing-field"),
-        pytest.param("v1private/i1login", "notes", None, "not_found", id="empty-value"),
+        pytest.param(
+            "v1private/i1login", "notes", None, "optional_field_missing", id="empty-value"
+        ),
         pytest.param("not-a-reference", "password", None, "not_found", id="bad-reference"),
         pytest.param(
             "v1private/i1login",

@@ -742,6 +742,7 @@ def bootstrap(runtime: Runtime) -> None:
             sessions=runtime._chat_sessions,
             tz=timezone_name,
             calendar=runtime._calendar_service,
+            secret_masker=lambda: runtime.agent_secrets.masker,
         )
         runtime._calendar_service.bind_event_jobs(runtime._cron_service)
         runtime._automation_references = AutomationReferences(

@@ -420,6 +420,7 @@ def _source_entries(state: Any, params: JsonObject) -> JsonObject:
                     {
                         "name": item.name,
                         "concealed": item.concealed,
+                        "optional": item.optional,
                         **({} if item.concealed or item.value is None else {"value": item.value}),
                     }
                     for item in entry.fields

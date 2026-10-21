@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import re
+from contextlib import suppress
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -58,6 +59,7 @@ class WebhookStatus:
     """Requests waiting for the next Run."""
     dropped: int
     """Requests dropped unseen since the last Run started."""
+    error: str | None = None
 
 
 class CronWebhooks:
@@ -80,6 +82,7 @@ class CronWebhooks:
         self._base_url: str | None = None
         self._reach: WebhookReach | None = None
         self._states: dict[str, WebhookState] = {}
+        self._state_errors: dict[str, str] = {}
         self._secrets: dict[str, str] = {}
         self._locks: dict[str, asyncio.Lock] = {}
         self._wakes: dict[str, asyncio.Event] = {}
@@ -115,12 +118,14 @@ class CronWebhooks:
             last_received_at=None if state is None else state.last_received_at,
             waiting=0 if state is None else len(state.waiting(taken=taken)),
             dropped=0 if state is None else state.dropped,
+            error=self._state_errors.get(job.id),
         )
 
     def load_states(self, job_ids: list[str]) -> None:
         """Read the stored requests of these jobs before their tasks start. Blocking."""
         for job_id in job_ids:
-            self._states[job_id] = _events.read_state(self.state_dir, job_id)
+            with suppress(CronStorageError):
+                self._states[job_id] = self._read_state(job_id)
 
     def wake(self, job_id: str) -> asyncio.Event:
         """The event a job's task waits on; set when a request is accepted."""
@@ -174,6 +179,7 @@ class CronWebhooks:
         """
         async with self._lock(job_id):
             self._states.pop(job_id, None)
+            self._state_errors.pop(job_id, None)
             self._taken.pop(job_id, None)
             await self._owner._writer.call_async(
                 partial(_events.remove_state, self.state_dir, job_id)
@@ -230,7 +236,10 @@ class CronWebhooks:
             latest = self._owner._jobs.get(job_id)
             if latest is None or latest.schedule_type != "webhook" or latest.status != "active":
                 return "refused"
-            state = await self._state(job_id)
+            try:
+                state = await self._state(job_id)
+            except CronStorageError:
+                return "unavailable"
             updated = state.copy()
             updated.add(
                 _events.WebhookRequest(
@@ -323,11 +332,29 @@ class CronWebhooks:
     async def _state(self, job_id: str) -> WebhookState:
         state = self._states.get(job_id)
         if state is None:
-            state = await self._owner._writer.call_async(
-                partial(_events.read_state, self.state_dir, job_id)
-            )
+            previous_error = self._state_errors.get(job_id)
+            try:
+                state = await self._owner._writer.call_async(partial(self._read_state, job_id))
+            finally:
+                if previous_error != self._state_errors.get(job_id):
+                    self._owner._notify_changed()
             # Another caller may have loaded or changed it meanwhile.
             state = self._states.setdefault(job_id, state)
+        return state
+
+    def _read_state(self, job_id: str) -> WebhookState:
+        try:
+            state = _events.read_state(self.state_dir, job_id)
+        except CronStorageError as error:
+            self._state_errors[job_id] = str(error)
+            if self._conditions.started(("state", job_id)):
+                _LOGGER.warning(
+                    "Cron webhook requests unavailable; retained for retry (job=%s)", job_id
+                )
+            raise
+        self._state_errors.pop(job_id, None)
+        if self._conditions.ended(("state", job_id)):
+            _LOGGER.info("Cron webhook requests readable again (job=%s)", job_id)
         return state
 
     async def _write(self, state: WebhookState) -> None:
