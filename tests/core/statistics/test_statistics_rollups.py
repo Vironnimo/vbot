@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from collections.abc import Iterator
 from dataclasses import replace
@@ -167,15 +168,23 @@ async def test_incremental_maintenance_equals_a_full_rebuild(
     manager: ChatSessionManager,
     index: StatisticsIndex,
     ledger: UsageRecorder,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     prices: Prices = {"chat/m": TokenPricing.from_cost({"input": 1, "output": 2}, source="t")}
     checks = 0
 
     def check() -> Rows:
-        """The incremental index matches a rebuilt file index and a transient one."""
+        """The incremental index matches a rebuilt file index and a transient one.
+
+        A failing incremental step would rebuild the index and still match, so
+        the incremental index must never fall back to a rebuild.
+        """
         nonlocal checks
         checks += 1
-        incremental = _rollups(index, manager, ledger, prices)
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="vbot.statistics"):
+            incremental = _rollups(index, manager, ledger, prices)
+        assert not [record for record in caplog.records if record.name == "vbot.statistics"]
         rebuilt = StatisticsIndex(tmp_path / f"rebuilt-{checks}")
         transient = StatisticsIndex(tmp_path / f"transient-{checks}")
         transient._read_file = _unavailable  # type: ignore[method-assign]

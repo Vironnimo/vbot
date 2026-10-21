@@ -865,6 +865,14 @@ def _usage_select(
         if first_token
         else ", ".join(_MEASURE_SQL[name] for name in _USAGE_CUBE_MEASURES)
     )
+    # SQLite resolves a GROUP BY name to a source column before a result
+    # alias, and a before-image source has columns named like the keys, so
+    # the keys group by their expressions.
+    keys = (
+        f"{'r.seq, ' if sequence else ''}{_HOUR}, r.session_key, {USAGE_ORIGIN_SQL}, "
+        "c.model_key, c.purpose, r.status, COALESCE(r.failure_class, ''), "
+        "COALESCE(r.http_status, 0)"
+    )
     return f"""
         SELECT {"r.seq, " if sequence else ""}{_HOUR} AS hour, r.session_key,
             {USAGE_ORIGIN_SQL} AS origin,
@@ -880,9 +888,7 @@ def _usage_select(
         LEFT JOIN stat_run_records rr ON rr.session_key = s.session_key AND rr.run_id = r.run_id
         WHERE {where}
             {"AND c.first_token_ms IS NOT NULL" if first_token else ""}
-        GROUP BY {"r.seq, " if sequence else ""}hour, r.session_key, origin,
-            c.model_key, c.purpose, r.status, failure_class, http_status
-            {", c.first_token_ms" if first_token else ""}
+        GROUP BY {keys}{", c.first_token_ms" if first_token else ""}
     """
 
 
