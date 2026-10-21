@@ -276,6 +276,7 @@ describe('cron form payloads and history projection', () => {
         last_received_at: '2026-07-18T16:00:00+00:00',
         waiting: 2,
         dropped: 1,
+        error: 'test-owned-storage-error',
       },
     };
     const [listed] = visibleCronJobs([job], 'Europe/Berlin');
@@ -285,6 +286,7 @@ describe('cron form payloads and history projection', () => {
       reach: 'internet',
       waiting: 2,
       dropped: 1,
+      error: 'test-owned-storage-error',
     });
     expect(listed.webhook.last_received_at_display).toContain('18:00');
     expect(visibleCronJobs([listed])[0].webhook.url).toBe(listed.webhook.url);

@@ -258,8 +258,11 @@ async def test_requests_during_a_run_start_one_follow_up_run_dropping_the_oldest
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("read_failure", [None, "io", "corrupt"])
 async def test_waiting_requests_survive_a_run_that_could_not_start_and_a_restart(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    read_failure: str | None,
 ) -> None:
     service, trigger_service = make_service(tmp_path)
     service.set_webhook_secrets(secret_store(tmp_path))
@@ -274,7 +277,36 @@ async def test_waiting_requests_survive_a_run_that_could_not_start_and_a_restart
     restarted, restarted_trigger = make_service(tmp_path)
     restarted.set_webhook_secrets(secret_store(tmp_path))
     scripted_runs(restarted_trigger, (RunStatus.COMPLETED, "Done."))
-    restarted.start()
+    retry = asyncio.Event()
+
+    async def wait_for_recovery(_delay: float) -> None:
+        await retry.wait()
+
+    monkeypatch.setattr(cron_timing, "_sleep", wait_for_recovery)
+    path = state_path(service._cron_dir / WEBHOOK_STATE_DIR_NAME, job_id)
+    saved = path.read_bytes()
+    original_read = Path.read_text
+
+    def read(target: Path, *args: Any, **kwargs: Any) -> str:
+        if target == path:
+            if read_failure == "io":
+                raise PermissionError("temporarily unavailable")
+            if read_failure == "corrupt":
+                return "not JSON"
+        return original_read(target, *args, **kwargs)
+
+    with monkeypatch.context() as blocked:
+        blocked.setattr(Path, "read_text", read)
+        restarted.start()
+        if read_failure:
+            assert (
+                await restarted.receive_webhook(job_id, _bearer(secret), b"not-accepted")
+                == "unavailable"
+            )
+            status = restarted.webhook_status(restarted.get_job(job_id))
+            assert status is not None and status.error
+            assert path.read_bytes() == saved
+    retry.set()
     try:
         await _until(restarted, lambda: restarted.get_job(job_id).last_outcome == "success")
         # The secret outlives the process, so the sender keeps working.

@@ -731,6 +731,7 @@ function normalizeWebhook(webhook, systemTimezone) {
     url: optionalText(webhook.url),
     path: asText(webhook.path),
     reach: optionalText(webhook.reach),
+    error: optionalText(webhook.error),
     last_received_at: lastReceivedAt,
     last_received_at_display: formatTimestamp(lastReceivedAt, systemTimezone),
     waiting: Number.isInteger(webhook.waiting) ? webhook.waiting : 0,

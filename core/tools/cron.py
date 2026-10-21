@@ -841,6 +841,8 @@ def _job_fields(cron_service: CronService, job: CronJob, zone: ZoneInfo) -> Json
         data["event"] = job.event_id if event is None else f"{event.title} ({job.event_id})"
     webhook = cron_service.webhook_status(job)
     if webhook is not None:
+        if webhook.error is not None:
+            data["webhook_error"] = webhook.error
         data["url"] = webhook.url or f"{webhook.path} on vBot's server address"
         if webhook.reach is not None:
             data["reachable_from"] = _WEBHOOK_REACH[webhook.reach]

@@ -148,3 +148,5 @@ Reasons for the late-fire System Reminder (`LateFire.notice`, `core/automation/_
 | `vBot did not run the job at those times, for example because the server was off or the computer was asleep.` | Gives the cause, so the Agent does not report a fault or retry. |
 | `Carry out the instruction that follows now, and adapt any part of it that depends on when it runs, ...` | Without it Agents either refuse the stale task or send a "good morning" at noon and report on the wrong period. |
 | `If the instruction no longer makes sense this late, say so instead of carrying it out.` | Without `max_delay`, a late Run whose task has become moot (a wake-up call at noon) must be able to decline it instead of doing it anyway (user decision 2026-10-08). |
+
+| `Waiting webhook requests could not be read; retrying without replacing them.` | The job is waiting for storage recovery, not an empty webhook queue. No sender acceptance or Model Run may overwrite unread acknowledged requests. |

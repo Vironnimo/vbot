@@ -406,6 +406,7 @@ def _webhook_response(cron_service: Any, job: Any) -> JsonObject | None:
         "path": status.path,
         "reach": status.reach,
         "last_received_at": status.last_received_at,
+        **({"error": status.error} if status.error else {}),
         "waiting": status.waiting,
         "dropped": status.dropped,
     }

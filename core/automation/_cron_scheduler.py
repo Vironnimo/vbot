@@ -293,17 +293,21 @@ class CronScheduler:
                 return
             wake = webhooks.wake(job.id)
             wake.clear()
-            if not await webhooks.waiting(job.id):
-                await wake.wait()
-                continue
-            outcome = await self._owner._execution._trigger_job_run(current, webhook=True)
-            if job.id in self._owner._pending_restarts:
-                return
-            if outcome.admitted or not await webhooks.waiting(job.id):
-                failed_attempts = 0
-                continue
-            failed_attempts += 1
-            await _timing._sleep(_timing._once_retry_delay(failed_attempts))
+            try:
+                if not await webhooks.waiting(job.id):
+                    await wake.wait()
+                    continue
+                outcome = await self._owner._execution._trigger_job_run(current, webhook=True)
+                if job.id in self._owner._pending_restarts:
+                    return
+                if outcome.admitted or not await webhooks.waiting(job.id):
+                    failed_attempts = 0
+                    continue
+                failed_attempts += 1
+                await _timing._sleep(_timing._once_retry_delay(failed_attempts))
+            except CronStorageError:
+                failed_attempts += 1
+                await _timing._sleep(_timing._once_retry_delay(failed_attempts))
 
     async def _run_once_job(self, job: CronJob) -> None:
         """Sleep until run_at, fire once, then mark completed.

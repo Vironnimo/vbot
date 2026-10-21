@@ -58,6 +58,7 @@ export function webhookReachText(reach) {
 // Run, such as "Today 10:00 · 2 requests wait for the next Run".
 export function webhookRequestsText(job, timezone, now = new Date()) {
   const webhook = job?.webhook;
+  if (webhook?.error) return webhook.error;
   if (!webhook?.last_received_at) {
     return t('cron.webhook.noRequest');
   }
