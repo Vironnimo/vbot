@@ -360,14 +360,16 @@ def resolve_permission_rules(
     default then refuses the Agent (:class:`AgentResolutionError`) instead of
     giving it full access.
     """
-    specific = resolve_rule_set(*levels)
-    if specific is not None and all(getattr(specific, part) is not None for part in PARTS):
-        return specific
+    if all(
+        any(level is not None and getattr(level, part) is not None for level in levels)
+        for part in PARTS
+    ):
+        return resolve_rule_set(*levels)
     try:
         default = defaults.resolved_permission_rules()
     except InvalidPermissionRulesDefaultError as error:
         raise AgentResolutionError(str(error)) from error
-    return resolve_rule_set(specific, default)
+    return resolve_rule_set(*levels, default)
 
 
 def permission_rules_source(

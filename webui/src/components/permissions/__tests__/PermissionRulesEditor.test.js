@@ -17,8 +17,16 @@ vi.mock('$lib/api.js', () => ({
 const { default: PermissionRulesEditor } =
   await import('../PermissionRulesEditor.svelte');
 
+const FULL_ACCESS = {
+  read: 'anywhere',
+  write: 'anywhere',
+  commands: 'any',
+  web: 'any',
+  allow: [],
+  deny: [],
+};
 const PRESETS = {
-  full_access: null,
+  full_access: FULL_ACCESS,
   work_dir: { read: 'work_area', write: 'work_area' },
   work_dir_read_only: { read: 'work_area', write: 'scratch' },
 };
@@ -100,7 +108,10 @@ describe('PermissionRulesEditor', () => {
     );
     await mountEditor({ value: own });
 
-    expect(validateMock).toHaveBeenCalledWith(own, 'coder');
+    expect(validateMock).toHaveBeenCalledWith(own, {
+      agentId: 'coder',
+      newAgent: false,
+    });
     expect(triggerLabel(t('permissions.preset'))).toBe(
       t('permissions.preset.custom'),
     );
@@ -121,7 +132,7 @@ describe('PermissionRulesEditor', () => {
     await mountEditor({ value: null });
 
     expect(triggerLabel(t('permissions.preset'))).toBe(
-      t('permissions.preset.inherited', {
+      t('permissions.preset.useDefault', {
         preset: t('permissions.preset.work_dir_read_only'),
       }),
     );
@@ -130,6 +141,60 @@ describe('PermissionRulesEditor', () => {
         value: t('permissions.base.write.scratch'),
       }),
     );
+  });
+
+  it('offers Full access over a restrictive default and says it overrides it', async () => {
+    const inherited = { read: 'work_area', write: 'scratch' };
+    const answer = (rules) =>
+      response({
+        permission_rules: rules,
+        preset: rules ? 'full_access' : 'work_dir_read_only',
+        inherited_preset: 'work_dir_read_only',
+        inherited,
+        effective: rules ? null : inherited,
+      });
+    validateMock.mockImplementation(async (rules) => answer(rules));
+    await mountEditor({ value: null });
+
+    choose(
+      trigger(t('permissions.preset')),
+      t('permissions.preset.full_access'),
+    );
+    // The explicit full set overrides every inherited part.
+    expect(changes.at(-1)).toEqual(FULL_ACCESS);
+    expect(document.body.textContent).not.toContain(
+      t('permissions.preset.ignoresDefault'),
+    );
+
+    await unmount(component);
+    await mountEditor({ value: FULL_ACCESS });
+
+    expect(triggerLabel(t('permissions.preset'))).toBe(
+      t('permissions.preset.full_access'),
+    );
+    expect(document.body.textContent).toContain(
+      t('permissions.preset.ignoresDefault'),
+    );
+    expect(document.body.textContent).toContain(
+      t('permissions.preview.fullAccess'),
+    );
+  });
+
+  it('makes Full access of the shared default no rules at all', async () => {
+    validateMock.mockResolvedValue(response({}));
+    await mountEditor({ value: null, level: 'default', agentId: '' });
+
+    expect(triggerLabel(t('permissions.preset'))).toBe(
+      t('permissions.preset.full_access'),
+    );
+    choose(trigger(t('permissions.preset')), t('permissions.preset.work_dir'));
+    expect(changes.at(-1)).toEqual(PRESETS.work_dir);
+    choose(
+      trigger(t('permissions.preset')),
+      t('permissions.preset.full_access'),
+    );
+    // The default inherits nothing, so Full access stores no default.
+    expect(changes.at(-1)).toBeNull();
   });
 
   // An Agent can change only files it can read.

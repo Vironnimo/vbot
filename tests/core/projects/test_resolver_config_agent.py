@@ -422,6 +422,18 @@ def test_permission_rules_resolve_each_part_from_override_then_repository_then_d
         "deny": "global_default",
     }
 
+    # The Full access preset as an override lifts the repository's and the default's limits.
+    projects.set_override(
+        "vbot",
+        "builder",
+        "permission_rules",
+        {"read": "anywhere", "write": "anywhere", "commands": "any", "web": "any",
+         "allow": [], "deny": []},
+    )  # fmt: skip
+
+    assert resolver.resolve_agent("vbot", "builder").permission_rules is None
+    assert resolver.effective_config("vbot", "builder")["permission_rules"]["value"] is None
+
 
 @pytest.mark.parametrize(
     ("mode", "granted_access", "usable"),

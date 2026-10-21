@@ -63,6 +63,17 @@ def _posix(path: Path) -> str:
     return path.as_posix()
 
 
+# The stored form of the Full access preset: every part set, nothing restricted.
+_FULL_ACCESS: JsonObject = {
+    "read": "anywhere",
+    "write": "anywhere",
+    "commands": "any",
+    "web": "any",
+    "allow": [],
+    "deny": [],
+}
+
+
 @pytest.mark.asyncio
 async def test_validate_reports_every_problem_and_saves_nothing(tmp_path: Path) -> None:
     state = _state(tmp_path, {})
@@ -87,7 +98,7 @@ async def test_validate_reports_every_problem_and_saves_nothing(tmp_path: Path) 
     assert 'permission_rules.allow[1] "Foo(x)": unknown kind Foo' in result["errors"][2]["message"]
     # The presets come along, so an editor applies them without its own copy.
     assert result["presets"] == {
-        "full_access": None,
+        "full_access": _FULL_ACCESS,
         "work_dir": {"read": "work_area", "write": "work_area"},
         "work_dir_read_only": {"read": "work_area", "write": "scratch"},
     }
@@ -98,6 +109,7 @@ async def test_validate_reports_every_problem_and_saves_nothing(tmp_path: Path) 
     ("rules", "preset"),
     [
         pytest.param(None, "full_access", id="no-rules"),
+        pytest.param(_FULL_ACCESS, "full_access", id="explicit-full-access"),
         pytest.param({"read": "work_area", "write": "work_area"}, "work_dir", id="work-dir"),
         # Allow and deny rules do not change the preset a rule set matches.
         pytest.param(
@@ -155,6 +167,34 @@ async def test_validate_for_an_agent_previews_its_new_sessions(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
+async def test_explicit_full_access_overrides_a_restrictive_default(tmp_path: Path) -> None:
+    state = _state(tmp_path, {"permission_rules": {"read": "work_area", "deny": ["Read(.env)"]}})
+    state.runtime.agents.create("coder", "Coder")
+
+    result = await rpc_result(
+        state, "permissions.validate", agent_id="coder", permission_rules=_FULL_ACCESS
+    )
+
+    assert (result["preset"], result["inherited_preset"]) == ("full_access", "custom")
+    assert (result["permission_rules"], result["effective"]) == (_FULL_ACCESS, None)
+    assert result["preview"] is None
+
+
+@pytest.mark.asyncio
+async def test_validate_for_a_new_agent_inherits_the_shared_default(tmp_path: Path) -> None:
+    state = _state(tmp_path, {"permission_rules": {"read": "work_area", "write": "work_area"}})
+
+    result = await rpc_result(
+        state, "permissions.validate", new_agent=True, permission_rules={"write": "scratch"}
+    )
+
+    assert result["inherited"] == {"read": "work_area", "write": "work_area"}
+    assert (result["preset"], result["inherited_preset"]) == ("work_dir_read_only", "work_dir")
+    # The Agent has no folders yet, so the preview keeps their placeholders.
+    assert result["preview"]["read"] == ["{workdir}", "{scratch}"]
+
+
+@pytest.mark.asyncio
 async def test_validate_for_a_team_member_inherits_and_works_in_the_repository(
     tmp_path: Path,
 ) -> None:
@@ -189,6 +229,11 @@ async def test_validate_for_a_team_member_inherits_and_works_in_the_repository(
         pytest.param({}, "params.permission_rules is required", id="rules-missing"),
         pytest.param({"permission_rules": None, "agent_id": 5}, "agent_id", id="bad-agent"),
         pytest.param({"permission_rules": None, "scope": "x"}, "scope", id="unknown-param"),
+        pytest.param(
+            {"permission_rules": None, "new_agent": True, "agent_id": "coder"},
+            "new_agent",
+            id="new-agent-with-agent",
+        ),
     ],
 )
 async def test_validate_rejects_malformed_requests(
@@ -204,10 +249,11 @@ async def test_validate_rejects_malformed_requests(
 async def test_an_unrestricted_session_reports_full_access(tmp_path: Path) -> None:
     state = _state(tmp_path, {})
     state.runtime.agents.create("coder", "Coder")
+    state.runtime.agents.create("free", "Free", permission_rules=_FULL_ACCESS)
     state.runtime.chat_sessions.create("coder", session_id="s1")
 
-    for params in ({"session_id": "s1"}, {}):
-        result = await rpc_result(state, "permissions.session", agent_id="coder", **params)
+    for agent_id, params in (("coder", {"session_id": "s1"}), ("coder", {}), ("free", {})):
+        result = await rpc_result(state, "permissions.session", agent_id=agent_id, **params)
 
         assert result == {"restricted": False, "layers": []}
 

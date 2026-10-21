@@ -10,7 +10,7 @@ from typing import Any, cast
 from core.chat import ChatMessage
 from core.chat.model_resolution import resolve_agent_context_window
 from core.compaction import effective_compaction_policy
-from core.permissions import PermissionRules, permission_rules_to_dict
+from core.permissions import PermissionRules, permission_rules_to_dict, resolve_rule_set
 from core.providers.providers import (
     model_is_local,
     resolve_effective_context_window,
@@ -240,7 +240,9 @@ def _agent_response(state: Any, agent: Any) -> JsonObject:
         # shared default (``config.permission_rules`` holds its own); ``None`` is full
         # access. Built-in Agents always have full access.
         "permission_rules": (
-            _permission_rules_payload(agent) if getattr(agent, "builtin", None) is None else None
+            _effective_permission_rules_payload(agent)
+            if getattr(agent, "builtin", None) is None
+            else None
         ),
         # What the Agent inherits for each part it does not set; ``None`` for nothing.
         "permission_rules_default": state.runtime.agent_resolver.inherited_permission_rules(),
@@ -267,6 +269,13 @@ def _tool_loading_payload(agent: Any) -> JsonObject | None:
 def _permission_rules_payload(agent: Any) -> JsonObject | None:
     rules = getattr(agent, "permission_rules", None)
     return permission_rules_to_dict(rules) if isinstance(rules, PermissionRules) else None
+
+
+def _effective_permission_rules_payload(agent: Any) -> JsonObject | None:
+    """The resolved rules, ``None`` for full access: also for rules that restrict nothing."""
+    rules = getattr(agent, "permission_rules", None)
+    resolved = resolve_rule_set(rules) if isinstance(rules, PermissionRules) else None
+    return permission_rules_to_dict(resolved) if resolved is not None else None
 
 
 def _agent_raw_config(state: Any, agent_id: str) -> JsonObject:

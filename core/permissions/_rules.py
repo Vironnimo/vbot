@@ -39,6 +39,13 @@ _BASES: Final[dict[str, tuple[str, ...]]] = {
     "commands": COMMANDS_BASES,
     "web": WEB_BASES,
 }
+# The value of a base no level sets: full access.
+UNRESTRICTED_BASES: Final[dict[str, str]] = {
+    "read": "anywhere",
+    "write": "anywhere",
+    "commands": "any",
+    "web": "any",
+}
 
 _KINDS: Final[dict[str, RuleKind]] = {kind.lower(): kind for kind in RULE_KINDS}
 # Kinds other harnesses use (Claude Code, OpenCode), saved as the vBot kind.
@@ -85,8 +92,10 @@ class PermissionRule:
 class PermissionRules:
     """An Agent's rule set; a part that is ``None`` is not set at this level.
 
-    An instance, even one with no part set, means restricted; the absence of a
-    rule set (``None`` where one is expected) means full access.
+    A set restricts only when some part does (:attr:`restricts`); one that
+    restricts nothing, like the absence of a rule set, is full access. A level
+    still sets its parts: the explicit full set overrides every part of a
+    restrictive default.
     """
 
     read: ReadBase | None = None
@@ -95,6 +104,20 @@ class PermissionRules:
     web: WebBase | None = None
     allow: tuple[PermissionRule, ...] | None = None
     deny: tuple[PermissionRule, ...] | None = None
+
+    @property
+    def restricts(self) -> bool:
+        """Whether a base is narrower than its unrestricted default or any rule is set.
+
+        The one decision whether an Agent is restricted: a set that restricts
+        nothing resolves to full access, and a boundary built from it is
+        ``UNRESTRICTED`` (no protected locations either).
+        """
+        return (
+            bool(self.allow)
+            or bool(self.deny)
+            or any(getattr(self, part) not in (None, UNRESTRICTED_BASES[part]) for part in _BASES)
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -265,11 +288,12 @@ def permission_rules_to_dict(rules: PermissionRules) -> dict[str, object]:
 def resolve_rule_set(*levels: PermissionRules | None) -> PermissionRules | None:
     """Resolve rule sets per part; callers pass the most specific level first.
 
-    For each part the first level that sets it wins. Without any rule set the
-    result is ``None`` (full access); a level without any part set still makes
-    the result restricted. A ``write: anywhere`` from one level under a
-    ``read: work_area`` from another becomes ``work_area`` (see
-    :func:`write_within_read`).
+    For each part the first level that sets it wins. The result is ``None``
+    (full access) without any rule set and when the resolved set restricts
+    nothing (:attr:`PermissionRules.restricts`), so pass every level in one
+    call: a ``None`` from part of the levels says nothing about the parts they
+    set. A ``write: anywhere`` from one level under a ``read: work_area`` from
+    another becomes ``work_area`` (see :func:`write_within_read`).
     """
     present = [level for level in levels if level is not None]
     if not present:
@@ -284,7 +308,7 @@ def resolve_rule_set(*levels: PermissionRules | None) -> PermissionRules | None:
 
     read = cast("ReadBase | None", first("read"))
     write = cast("WriteBase | None", first("write"))
-    return PermissionRules(
+    resolved = PermissionRules(
         read=read,
         write=None if write is None else write_within_read(read, write),
         commands=cast("CommandsBase | None", first("commands")),
@@ -292,6 +316,7 @@ def resolve_rule_set(*levels: PermissionRules | None) -> PermissionRules | None:
         allow=cast("tuple[PermissionRule, ...] | None", first("allow")),
         deny=cast("tuple[PermissionRule, ...] | None", first("deny")),
     )
+    return resolved if resolved.restricts else None
 
 
 def _require_write_within_read(read: str | None, write: str | None) -> None:

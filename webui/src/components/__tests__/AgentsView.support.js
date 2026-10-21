@@ -238,6 +238,31 @@ export function textInputValue(controlId) {
   return document.getElementById(controlId)?.value;
 }
 
+// The server's preset definitions (`permissions.validate`).
+export const PERMISSION_PRESETS = Object.freeze({
+  full_access: {
+    read: 'anywhere',
+    write: 'anywhere',
+    commands: 'any',
+    web: 'any',
+    allow: [],
+    deny: [],
+  },
+  work_dir: { read: 'work_area', write: 'work_area' },
+  work_dir_read_only: { read: 'work_area', write: 'scratch' },
+});
+
+function permissionRulesRestrict(rules) {
+  const unrestricted = ['anywhere', 'any', undefined];
+  return (
+    ['read', 'write', 'commands', 'web'].some(
+      (part) => !unrestricted.includes(rules[part]),
+    ) ||
+    (rules.allow ?? []).length > 0 ||
+    (rules.deny ?? []).length > 0
+  );
+}
+
 export function createAgentsRpcMock(options = {}) {
   const models = options.models ?? [openaiModel(), anthropicModel()];
   const agents = options.agents ?? [baseAgent()];
@@ -400,21 +425,26 @@ export function createAgentsRpcMock(options = {}) {
     }
 
     // The Permissions section checks the Agent's rules as it shows them.
+    // A new Agent inherits `permissionRulesDefault` (named by its preset).
     if (method === 'permissions.validate') {
+      const own = params.permission_rules ?? null;
+      const inherited = params.new_agent
+        ? (options.permissionRulesDefault ?? null)
+        : null;
+      const effective = own ?? inherited;
+      const free = effective === null || !permissionRulesRestrict(effective);
       return {
         valid: true,
-        permission_rules: params.permission_rules ?? null,
+        permission_rules: own,
         notes: [],
         errors: [],
-        preset: params.permission_rules ? 'custom' : 'full_access',
-        presets: {
-          full_access: null,
-          work_dir: { read: 'work_area', write: 'work_area' },
-          work_dir_read_only: { read: 'work_area', write: 'scratch' },
-        },
-        inherited_preset: 'full_access',
-        inherited: null,
-        effective: params.permission_rules ?? null,
+        preset: free ? 'full_access' : 'custom',
+        presets: PERMISSION_PRESETS,
+        inherited_preset: inherited
+          ? (options.permissionRulesDefaultPreset ?? 'custom')
+          : 'full_access',
+        inherited,
+        effective: free ? null : effective,
         preview: null,
       };
     }

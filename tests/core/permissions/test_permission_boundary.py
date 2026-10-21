@@ -199,8 +199,30 @@ def test_a_subtree_access_is_refused_for_what_lies_below(
     assert boundary.check_path(target, access) is None
 
 
-def test_an_empty_rule_set_keeps_full_reach_but_protects_vbot(area: Area) -> None:
-    boundary = area.boundary({})
+@pytest.mark.parametrize(
+    "rules",
+    [
+        pytest.param({}, id="empty"),
+        pytest.param(
+            {
+                "read": "anywhere",
+                "write": "anywhere",
+                "commands": "any",
+                "web": "any",
+                "allow": [],
+                "deny": [],
+            },
+            id="explicit-full-access",
+        ),
+    ],
+)
+def test_rules_that_restrict_nothing_are_full_access(area: Area, rules: dict[str, object]) -> None:
+    # Full-access Agents keep managing vBot: no protected data directory, no refused CLI.
+    assert area.boundary(rules) is PermissionBoundary.UNRESTRICTED
+
+
+def test_a_restriction_elsewhere_keeps_full_reach_but_protects_vbot(area: Area) -> None:
+    boundary = area.boundary({"web": "listed"})
 
     assert boundary.restricted
     assert boundary.check_path(area.path("{outside}/x"), "write") is None
@@ -375,7 +397,8 @@ def test_host_decisions(area: Area, host: str, reason: str | None) -> None:
     ],
 )
 def test_url_decisions(area: Area, url: str, reason: str | None) -> None:
-    refusal = area.boundary({}).check_url(url)
+    # Any restriction protects the vBot server; this one leaves the web open.
+    refusal = area.boundary({"write": "scratch"}).check_url(url)
 
     assert (refusal.reason if refusal else None) == reason
 
@@ -413,12 +436,21 @@ def test_a_refusal_names_what_the_boundary_allows(area: Area) -> None:
         pytest.param(
             "{work}/src", "read", {"deny": ["Read({workdir}/**/.env)"]}, {"**/.env"}, id="wildcard"
         ),
-        # The data directory and the Agent's own configuration are protected below a root.
+        # Under any restriction, the data directory and the Agent's own configuration
+        # are protected below a root.
         pytest.param(
-            "{root}", "read", {}, {"data", "data/agents/a1/agent.json"}, id="protected-locations"
+            "{root}",
+            "read",
+            {"web": "listed"},
+            {"data", "data/agents/a1/agent.json"},
+            id="protected-locations",
         ),
         pytest.param(
-            "{root}", "write", {}, {"data", "data/agents/a1/agent.json", "install"}, id="installs"
+            "{root}",
+            "write",
+            {"web": "listed"},
+            {"data", "data/agents/a1/agent.json", "install"},
+            id="installs",
         ),
     ],
 )

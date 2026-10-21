@@ -61,7 +61,9 @@ class RuntimeAgent(Protocol):
     - ``tool_loading`` — the On-demand Tools setting (``core.tools.on_demand``);
       ``None`` leaves them off (for a config agent, the Project override).
     - ``permission_rules`` — the resolved Permission Rules (``core.permissions``);
-      ``None`` is full access.
+      ``None`` is full access, and so is a set that restricts nothing
+      (``PermissionRules.restricts``), such as a temporary Agent's own or an
+      Identity Agent's explicit full access while no shared default applies.
     """
 
     @property

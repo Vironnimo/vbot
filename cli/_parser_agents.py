@@ -226,9 +226,10 @@ def _add_agent_change_arguments(
         help=(
             "Set the agent's own Permission Rules. work-dir: read and change files only in the "
             "working directory; work-dir-read-only: read there, write only to the "
-            "conversation's scratch folder; full-access: remove the agent's own rules. A preset "
-            "keeps the agent's own allow and deny rules; a JSON object replaces the whole "
-            "rule set. Omit to keep the current rules"
+            "conversation's scratch folder; full-access: no limits, even where the shared "
+            "default restricts (--clear-permissions follows the default instead). work-dir and "
+            "work-dir-read-only keep the agent's own allow and deny rules; full-access and a "
+            "JSON object replace the whole rule set. Omit to keep the current rules"
         ),
     )
     parser.add_argument(
@@ -530,7 +531,8 @@ def _add_project_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         metavar="<value>",
         help=(
             "Field value; compaction_policy, tool_access and tool_loading take a JSON object; "
-            "permission_rules takes a JSON object or the preset work-dir or work-dir-read-only"
+            "permission_rules takes a JSON object or the preset full-access, work-dir or "
+            "work-dir-read-only"
         ),
     )
 
