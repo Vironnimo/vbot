@@ -8,10 +8,9 @@ from pathlib import Path
 from typing import Any, cast
 
 from core.agents import AgentStore, normalize_agent_tools
-from core.agents.temporary import (
+from core.agents.temporary import TemporaryAgentConfig, TemporaryAgentRegistry
+from core.agents.temporary_execution import (
     ExecutionResources,
-    TemporaryAgentConfig,
-    TemporaryAgentRegistry,
     TemporaryExecutionGroups,
     release_temporary_group,
 )
