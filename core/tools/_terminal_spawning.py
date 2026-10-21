@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import BinaryIO
 
 from core.runs import RunExecutionOwner
-from core.storage.temp_files import TemporaryFileLease, TemporaryFileManager
+from core.storage.temp_files import TemporaryFileLease, TemporaryFileManager, artifact_owner
 from core.tools import terminal_backend
 from core.tools.shell_environment import terminal_environment
 from core.tools.terminal_backend import (
@@ -103,7 +103,7 @@ class TerminalSessionFactory:
         integration: ShellLaunch | None = None
         try:
             screen = await self.open_screen(columns, rows)
-            log_path, log_handle, log_lease = await asyncio.to_thread(self._open_raw_log)
+            log_path, log_handle, log_lease = await asyncio.to_thread(self._open_raw_log, owner)
             process_env = await asyncio.to_thread(
                 partial(terminal_environment, env, confined=launch.permission_scope is not None)
             )
@@ -205,12 +205,24 @@ class TerminalSessionFactory:
         return self._render_host.open_screen(columns, rows, scrollback_lines=self._scrollback_lines)
 
     def _open_raw_log(
-        self,
+        self, owner: TerminalOwner | None
     ) -> tuple[Path | None, BinaryIO | None, TemporaryFileLease | None]:
-        """Open the log that receives the output as the terminal receives it."""
+        """Open the log that receives the output as the terminal receives it.
+
+        A Session's terminal logs to that Session's folder, which only it may read
+        under Permission Rules; an operator terminal's log has no owner.
+        """
         if self._temporary_files is None:
             return None, None, None
-        lease = self._temporary_files.create(TERMINAL_TEMPORARY_CATEGORY, ".log")
+        lease = self._temporary_files.create(
+            TERMINAL_TEMPORARY_CATEGORY,
+            ".log",
+            owner=(
+                artifact_owner(owner.project_id, owner.agent_id, owner.session_id)
+                if owner is not None
+                else None
+            ),
+        )
         try:
             handle = lease.path.open("ab")
         except BaseException:

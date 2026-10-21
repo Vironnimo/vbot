@@ -29,7 +29,7 @@ from core.database import write_bootstrap_marker
 from core.permissions import PermissionBoundary
 from core.runs import RunAdmissionBlockedError, RunExecutionOwner
 from core.sessions import ChatSessionManager, SessionAddress
-from core.storage.temp_files import TemporaryFileManager
+from core.storage.temp_files import TemporaryFileManager, artifact_owner
 from core.tools import _command_output as command_output_module
 from core.tools._command_cleaning import OutputCleaner, OutputUpdate
 from core.tools._interpreter_host import InterpreterHost
@@ -164,7 +164,11 @@ async def test_log_file_has_every_byte_the_command_wrote_as_it_arrives(
 ) -> None:
     command_id, process = await harness.launch()
     log_path = harness.manager.report(command_id).log_path
-    assert log_path is not None and log_path.parent.name == COMMAND_TEMPORARY_CATEGORY
+    # The log lies in its Session's own folder, which only that Session may read.
+    assert log_path is not None and log_path.parent.parent.name == COMMAND_TEMPORARY_CATEGORY
+    assert log_path.parent.name == artifact_owner(
+        OWNER.project_id, OWNER.agent_id, OWNER.session_id
+    )
     mark = {"utf-8": b"", "utf-16-le": b"\xff\xfe", "utf-16-be": b"\xfe\xff"}[encoding]
     chunks = [
         mark + "PARTIAL-".encode(encoding),

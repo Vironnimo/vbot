@@ -33,7 +33,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from core.storage.temp_files import TemporaryFileLease, TemporaryFileManager
+from core.sessions import SessionAddress
+from core.storage.temp_files import TemporaryFileLease, TemporaryFileManager, artifact_owner
 
 from . import _command_cleaning, _command_decoding
 from ._command_cleaning import OutputCleaner, OutputLines
@@ -380,9 +381,15 @@ class _Uncleaned:
 __all__ = ["CommandLog", "CommandOutput", "LogSnapshot", "command_output_host", "read_log"]
 
 
-def open_log(temporary_files: TemporaryFileManager) -> tuple[TemporaryFileLease, int]:
-    """Create the command's private log file and open it for writing (blocking)."""
-    lease = temporary_files.create(COMMAND_TEMPORARY_CATEGORY, ".log")
+def open_log(
+    temporary_files: TemporaryFileManager, owner: SessionAddress
+) -> tuple[TemporaryFileLease, int]:
+    """Create the command's private log file in its Session's folder and open it (blocking)."""
+    lease = temporary_files.create(
+        COMMAND_TEMPORARY_CATEGORY,
+        ".log",
+        owner=artifact_owner(owner.project_id, owner.agent_id, owner.session_id),
+    )
     try:
         if os.name != "nt":
             lease.path.chmod(0o600)

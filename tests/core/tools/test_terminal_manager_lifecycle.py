@@ -318,9 +318,11 @@ async def test_cancelled_start_waits_for_child_cleanup(
 
     class TemporaryFiles(TemporaryFileManager):
         @override
-        def create(self, category: str, suffix: str) -> TemporaryFileLease:
+        def create(
+            self, category: str, suffix: str, *, owner: str | None = None
+        ) -> TemporaryFileLease:
             assert threading.get_ident() != loop_thread
-            lease = super().create(category, suffix)
+            lease = super().create(category, suffix, owner=owner)
             log_paths.append(lease.path)
             if paused_at == "log":
                 pause()

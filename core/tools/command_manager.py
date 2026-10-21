@@ -812,7 +812,7 @@ class CommandManager:
             if not directory:
                 raise CommandLaunchError(f"The workdir is not a directory: {model_path(cwd)}")
             if self._temporary_files is not None:
-                lease, log_fd = await self._run_blocking(open_log, self._temporary_files)
+                lease, log_fd = await self._run_blocking(open_log, self._temporary_files, owner)
             # Starts an output worker for this command when one more may run.
             await self._run_blocking(self._output_host.prepare)
             try:
