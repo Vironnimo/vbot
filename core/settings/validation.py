@@ -189,6 +189,33 @@ def load_runtime_settings_json(
     return _settings_fields(usable), errors
 
 
+_PERMISSION_RULES_KEY = "permission_rules"
+
+
+def unusable_settings_fallback(settings_path: str | Path) -> JsonObject:
+    """The Settings a runtime reader uses when ``settings.json`` cannot be used at all.
+
+    Every section falls back to its default except ``defaults.agent.permission_rules``:
+    a file that cannot be read, or whose text names that key, may hold default
+    Permission Rules, and dropping them would give every inheriting Agent full
+    access. They become ``INVALID_PERMISSION_RULES`` instead, so those Agents
+    refuse to run until the file is repaired, while Agents whose own rules set
+    every part keep running.
+    """
+    try:
+        raw: bytes | None = Path(settings_path).read_bytes()
+    except FileNotFoundError:
+        return {}
+    except OSError:
+        raw = None
+    if raw is not None and not any(
+        _PERMISSION_RULES_KEY.encode(encoding) in raw
+        for encoding in ("utf-8", "utf-16-le", "utf-16-be")
+    ):
+        return {}
+    return {"defaults": {"agent": {_PERMISSION_RULES_KEY: INVALID_PERMISSION_RULES}}}
+
+
 def _usable_defaults(defaults: Any, errors: tuple[JsonDiagnostic, ...]) -> JsonObject | None:
     """Keep the default Permission Rules of an invalid ``defaults`` section.
 

@@ -7,9 +7,16 @@ from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any
 
+from core.permissions import normalize_permission_rule, normalize_permission_rules
 from core.projects.paths import slugify_agent_id
 from core.projects.sources._reading import SourceError, names, string
-from core.projects.sources.profile import AgentProfile, AgentTargetRule, ToolRule, Translation
+from core.projects.sources.profile import (
+    AgentProfile,
+    AgentTargetRule,
+    ToolRule,
+    Translation,
+    TranslationStatus,
+)
 from core.settings import validate_temperature, validate_thinking_effort, validate_top_p
 
 # A foreign shell denial also closes vBot's independent interactive shell.
@@ -135,11 +142,14 @@ def tool_list(
     deny: bool = False,
     setting: str = "tools",
     wildcard: bool = False,
+    translated_scopes: frozenset[str] = frozenset(),
 ) -> AgentProfile:
     """Map a foreign Tool list onto vBot Tools.
 
     vBot grants whole Tools: an entry the Agent may use for some commands or paths
-    grants the Tool, and only an unscoped denial removes it.
+    grants the Tool, and only an unscoped denial removes it. The scopes of the
+    entries named in ``translated_scopes`` become Permission Rules, which the
+    caller translates and reports.
     """
     entries = names(value, comma_separated=True)
     targets: list[AgentTargetRule] = list(agent.agent_target_rules)
@@ -182,14 +192,16 @@ def tool_list(
                 continue
             if not deny:
                 allowed.update(mapped)
-            reports.append(
-                Translation(
-                    f"{setting}.{entry}",
-                    "translated",
-                    "Command and path rules do not apply; the whole vBot Tool "
-                    + ("stays available." if deny else "is granted."),
+            if base not in translated_scopes:
+                reports.append(
+                    Translation(
+                        f"{setting}.{entry}",
+                        "translated",
+                        "The whole vBot Tool "
+                        + ("stays available" if deny else "is granted")
+                        + "; its command or path scope is not translated.",
+                    )
                 )
-            )
         elif deny:
             denied.update(mapped)
             if "bash" in mapped:
@@ -220,6 +232,101 @@ def tool_list(
         agent_target_rules=tuple(targets),
         translations=tuple(reports),
     )
+
+
+class RuleDraft:
+    """Permission Rules an adapter translates from a repository's own permission settings.
+
+    The result restricts only when the repository restricts: a narrowed base or
+    a deny rule. Allow rules that only widen (``additionalDirectories``, extra
+    writable roots) join such a rule set and are dropped otherwise, because an
+    unrestricted Agent needs none. Each translated or untranslatable setting adds
+    a row to the Profile's translation report.
+    """
+
+    def __init__(self) -> None:
+        self._bases: dict[str, str] = {}
+        self._allow: list[str] = []
+        self._deny: list[str] = []
+        self._widening: list[tuple[str, str]] = []
+        self.reports: list[Translation] = []
+
+    def narrow(self, part: str, value: str, setting: str, detail: str) -> None:
+        """Set a base, keeping the narrower one when two settings set it."""
+        order = _BASE_ORDER[part]
+        current = self._bases.get(part)
+        if current is None or order.index(value) < order.index(current):
+            self._bases[part] = value
+        self.report(setting, "translated", detail)
+
+    def rule(self, effect: str, text: str, setting: str, *, detail: str = "") -> bool:
+        """Add one allow or deny rule string; an invalid one is reported, not added."""
+        outcome = normalize_permission_rule(text)
+        if outcome.rule is None:
+            reason = (outcome.error or "").removeprefix(f'"{text.strip()}": ')
+            self.report(setting, "not_supported", f"Not translated: {reason}")
+            return False
+        target = self._allow if effect == "allow" else self._deny
+        if outcome.rule.text not in target:
+            target.append(outcome.rule.text)
+        self.report(
+            setting,
+            "translated",
+            f"Translated to the {effect} rule {outcome.rule.text}."
+            + (f" {detail}" if detail else ""),
+        )
+        return True
+
+    def widen(self, text: str, setting: str) -> None:
+        """An allow rule that matters only beside a restriction (see the class)."""
+        self._widening.append((text, setting))
+
+    def report(self, setting: str, status: TranslationStatus, detail: str) -> None:
+        self.reports.append(Translation(setting, status, detail))
+
+    def apply(self, agent: AgentProfile) -> AgentProfile:
+        restricts = bool(self._deny) or any(
+            value != _BASE_ORDER[part][-1] for part, value in self._bases.items()
+        )
+        for text, setting in self._widening:
+            if restricts:
+                self.rule("allow", text, setting)
+            else:
+                self.report(
+                    setting,
+                    "translated",
+                    "Needs no rule: the repository does not otherwise restrict this Agent.",
+                )
+        rules = None
+        if restricts:
+            # A base at full access would replace a narrower vBot default.
+            document: dict[str, Any] = {
+                part: value for part, value in self._bases.items() if value != _BASE_ORDER[part][-1]
+            }
+            if self._allow:
+                document["allow"] = self._allow
+            if self._deny:
+                document["deny"] = self._deny
+            rules = normalize_permission_rules(document)
+        return replace(
+            agent,
+            permission_rules=rules,
+            translations=(*agent.translations, *self.reports),
+        )
+
+
+# Bases from the narrowest to full access.
+_BASE_ORDER: dict[str, tuple[str, ...]] = {
+    "read": ("work_area", "anywhere"),
+    "write": ("scratch", "work_area", "anywhere"),
+    "commands": ("listed", "any"),
+    "web": ("listed", "any"),
+}
+
+ASK_DETAIL = (
+    "Not translated: rules that only ask first still let the Agent act, since vBot asks "
+    "no approvals."
+)
 
 
 def permission_rules(value: Any) -> tuple[AgentTargetRule, ...]:

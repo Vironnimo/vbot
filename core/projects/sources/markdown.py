@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import re
+import sys
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from core.projects.sources import _reading as reading
 from core.projects.sources._translation import (
+    ASK_DETAIL,
     READ_ONLY_TOOLS,
     SHELL_TOOLS,
+    RuleDraft,
     profile,
     tool_list,
     unavailable,
@@ -80,7 +84,7 @@ class MarkdownAdapter:
         )
 
     def _settings(self, root: Path) -> tuple[dict[str, Any], str | None]:
-        settings: dict[str, Any] = {}
+        settings: dict[str, Any] = {"other": []}
         problem = None
         if self.source == "claude":
             try:
@@ -93,11 +97,14 @@ class MarkdownAdapter:
                         if not isinstance(permissions, dict):
                             raise reading.SourceError("permissions must be an object.")
                         for key, value in permissions.items():
-                            # Rules that only ask first still let the Agent act.
-                            if key in {"allow", "deny"}:
+                            if key in {"allow", "deny", "ask", "additionalDirectories"}:
                                 settings[key] = [*settings.get(key, []), *reading.names(value)]
                             elif key == "defaultMode":
                                 settings[key] = value
+                            elif key == "blockReadsOutsideWorkingDirectories":
+                                settings[key] = reading.boolean(permissions, key)
+                            elif key not in settings["other"]:
+                                settings["other"].append(key)
             except (OSError, ValueError) as error:
                 problem = str(error)
         return settings, problem
@@ -144,10 +151,16 @@ class MarkdownAdapter:
                     _CLAUDE_TOOLS,
                     deny=True,
                     setting="disallowedTools",
+                    translated_scopes=_TRANSLATED_SCOPES,
                 )
             if "deny" in settings:
                 agent = tool_list(
-                    agent, settings["deny"], _CLAUDE_TOOLS, deny=True, setting="permissions.deny"
+                    agent,
+                    settings["deny"],
+                    _CLAUDE_TOOLS,
+                    deny=True,
+                    setting="permissions.deny",
+                    translated_scopes=_TRANSLATED_SCOPES,
                 )
             if "skills" in fields:
                 agent = replace(
@@ -184,7 +197,11 @@ class MarkdownAdapter:
                 # dontAsk refuses every Tool the allow rules do not pre-approve.
                 selected = agent.allowed_tools
                 agent = tool_list(
-                    agent, settings.get("allow", []), _CLAUDE_TOOLS, setting="permissions.allow"
+                    agent,
+                    settings.get("allow", []),
+                    _CLAUDE_TOOLS,
+                    setting="permissions.allow",
+                    translated_scopes=_TRANSLATED_SCOPES,
                 )
                 if selected is not None and agent.allowed_tools is not None:
                     agent = replace(agent, allowed_tools=agent.allowed_tools & selected)
@@ -202,6 +219,7 @@ class MarkdownAdapter:
                 )
             elif mode:
                 raise reading.SourceError("Unknown permissionMode.")
+            agent = _claude_permission_rules(agent, fields, settings, mode)
             known |= {"disallowedTools", "skills", "permissionMode"}
         elif self.source == "copilot":
             if "tools" in fields:
@@ -252,3 +270,182 @@ class MarkdownAdapter:
             agent = replace(agent, denied_tools=agent.denied_tools | {"subagent"})
             known.add("kind")
         return unsupported(agent, fields, known)
+
+
+# Claude Code rule kinds with a vBot Permission Rule kind. Claude Code itself
+# consults only Read and Edit path rules; a Write, Glob or similar path rule still
+# says what the repository means to keep the Agent from.
+_CLAUDE_RULE_KINDS = {
+    "read": "Read",
+    "glob": "Read",
+    "grep": "Read",
+    "ls": "Read",
+    "edit": "Edit",
+    "write": "Edit",
+    "multiedit": "Edit",
+    "notebookedit": "Edit",
+    "bash": "Shell",
+    "powershell": "Shell",
+    "webfetch": "Web",
+}
+_TRANSLATED_SCOPES = frozenset(_CLAUDE_RULE_KINDS)
+_PATH_KINDS = frozenset({"Read", "Edit"})
+_SINGLE_SEGMENT_DIRECTORY = re.compile(r"[^/]+/\*\*")
+_WINDOWS_DRIVE = re.compile(r"([A-Za-z])(?:/(.*))?", re.DOTALL)
+_ABSOLUTE = re.compile(r"(?:[A-Za-z]:)?/")
+
+
+def _claude_permission_rules(
+    agent: AgentProfile, fields: dict[str, Any], settings: dict[str, Any], mode: str
+) -> AgentProfile:
+    """Translate Claude Code's permission settings into Permission Rules.
+
+    Scoped deny entries (``permissions.deny`` and the Agent's ``disallowedTools``)
+    become deny rules in every mode. ``dontAsk`` refuses whatever its allow rules
+    do not pre-approve: reads outside the working directories, and commands,
+    hosts and file changes where the Agent keeps the Tool only through scoped
+    allow rules. ``additionalDirectories`` widen such a restriction; ``ask`` rules
+    are not translated.
+    """
+    draft = RuleDraft()
+    for setting, value in (
+        ("permissions.deny", settings.get("deny", [])),
+        ("disallowedTools", fields.get("disallowedTools", [])),
+    ):
+        for entry in reading.names(value, comma_separated=True):
+            scoped = _claude_scope(entry)
+            if scoped is not None:
+                _claude_rule(draft, "deny", *scoped, f"{setting}.{entry}")
+    if settings.get("ask"):
+        draft.report("permissions.ask", "not_supported", ASK_DETAIL)
+    for key in settings["other"]:
+        draft.report(f"permissions.{key}", "not_supported", "This setting has no vBot equivalent.")
+    directory_kind = "Edit"
+    if mode == "dontAsk":
+        mode_setting = "permissionMode" if "permissionMode" in fields else "defaultMode"
+        # Reads in the working directories run; everything else needs an allow rule.
+        directory_kind = "Read"
+        whole: set[str] = set()
+        scoped_kinds: set[str] = set()
+        for entry in settings.get("allow", []):
+            scoped = _claude_scope(entry)
+            if scoped is None:
+                kind = _CLAUDE_RULE_KINDS.get(entry.strip().partition("(")[0].strip().lower())
+                if kind is not None:
+                    whole.add(kind)
+            elif _claude_rule(draft, "allow", *scoped, f"permissions.allow.{entry}"):
+                scoped_kinds.add(scoped[0])
+        if "Read" not in whole:
+            draft.narrow(
+                "read",
+                "work_area",
+                mode_setting,
+                "dontAsk reads only the working directories and what allow rules name "
+                "(read: work_area).",
+            )
+        for kind, part, value, detail in (
+            ("Edit", "write", "scratch", "File changes are limited to the Edit allow rules"),
+            ("Shell", "commands", "listed", "Commands are limited to the Bash allow rules"),
+            ("Web", "web", "listed", "Web access is limited to the WebFetch allow rules"),
+        ):
+            if kind in scoped_kinds and kind not in whole:
+                draft.narrow(part, value, mode_setting, f"{detail} ({part}: {value}).")
+        if "Shell" in scoped_kinds and "Shell" not in whole:
+            draft.report(
+                mode_setting,
+                "translated",
+                "Commands Claude Code runs without asking, such as ls or git status, need "
+                "Shell allow rules in vBot.",
+            )
+    if settings.get("blockReadsOutsideWorkingDirectories"):
+        draft.narrow(
+            "read",
+            "work_area",
+            "permissions.blockReadsOutsideWorkingDirectories",
+            "Reads are limited to the working directories (read: work_area).",
+        )
+    for directory in settings.get("additionalDirectories", []):
+        draft.widen(
+            f"{directory_kind}({_claude_directory(directory)})",
+            f"permissions.additionalDirectories.{directory}",
+        )
+    return draft.apply(agent)
+
+
+def _claude_scope(entry: str) -> tuple[str, str] | None:
+    """The vBot kind and Claude Code pattern of a scoped rule entry, if it has one."""
+    base, separator, rest = entry.strip().partition("(")
+    kind = _CLAUDE_RULE_KINDS.get(base.strip().lower())
+    if kind is None or not separator or not rest.endswith(")") or not rest[:-1].strip():
+        return None
+    return kind, rest[:-1].strip()
+
+
+def _claude_rule(draft: RuleDraft, effect: str, kind: str, pattern: str, setting: str) -> bool:
+    detail = ""
+    if kind in _PATH_KINDS:
+        if pattern.startswith("!"):
+            draft.report(
+                setting,
+                "not_supported",
+                "Not translated: vBot rules have no exceptions, so the rules this one "
+                "carves from apply in full.",
+            )
+            return False
+        translated = _claude_path(pattern, deny=effect == "deny")
+        if translated is None:
+            draft.report(
+                setting,
+                "not_supported",
+                "Not translated: a vBot rule on Windows names one drive, not every drive.",
+            )
+            return False
+    elif kind == "Web":
+        translated = pattern.removeprefix("domain:").strip()
+        if not translated.startswith("*"):
+            # Claude Code matches exactly this host; a vBot host rule covers subdomains too.
+            detail = "It also covers the host's subdomains."
+    else:
+        translated = pattern
+    return draft.rule(effect, f"{kind}({translated})", setting, detail=detail)
+
+
+def _claude_path(pattern: str, *, deny: bool) -> str | None:
+    """A Claude Code path pattern in vBot's form (code.claude.com/docs/en/permissions).
+
+    ``//path`` is absolute (on Windows ``//c/...`` names drive C:), ``~/path`` is
+    in the home directory, ``/path`` is relative to the project whose settings
+    file holds the rule, and ``path`` or ``./path`` is relative to the working
+    directory with gitignore depth: a bare name matches at any depth, and so does
+    a single directory segment such as ``secrets/**`` in a deny rule. ``None`` when
+    vBot cannot express the pattern.
+    """
+    if pattern.startswith("//"):
+        rest = pattern[2:]
+        if sys.platform != "win32":
+            return "/" + rest
+        drive = _WINDOWS_DRIVE.fullmatch(rest)
+        if drive is None:
+            return None
+        return f"{drive.group(1).upper()}:/{drive.group(2) or ''}"
+    if pattern == "~" or pattern.startswith("~/"):
+        return pattern
+    if pattern.startswith("/"):
+        return "{project}" + pattern.rstrip("/")
+    body = pattern
+    while body.startswith("./"):
+        body = body[2:]
+    body = body.rstrip("/")
+    if body in ("", "."):
+        return "{workdir}"
+    if "/" not in body or (deny and _SINGLE_SEGMENT_DIRECTORY.fullmatch(body)):
+        return "{workdir}/**/" + body
+    return "{workdir}/" + body
+
+
+def _claude_directory(directory: str) -> str:
+    """An ``additionalDirectories`` entry, an ordinary path; relative to the working directory."""
+    text = directory.strip().replace("\\", "/").rstrip("/")
+    if not (text == "~" or text.startswith("~/") or _ABSOLUTE.match(text + "/")):
+        text = "{workdir}/" + text.removeprefix("./")
+    return text + "/**"

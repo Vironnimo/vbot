@@ -883,7 +883,7 @@ class AgentResolver:
             "permission_rules": permission_rules_source(
                 (
                     ("override", _override_permission_rules(project, scanned.agent_id)),
-                    ("agent", scanned.permission_rules),
+                    ("repository", scanned.permission_rules),
                 ),
                 global_defaults,
             ),

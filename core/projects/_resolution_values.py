@@ -375,7 +375,7 @@ def permission_rules_source(
 ) -> dict[str, Any]:
     """The effective rule set and, per part, the level that supplied it.
 
-    ``levels`` pairs each source name (``override``, ``agent``) with its rule set,
+    ``levels`` pairs each source name (``override``, ``repository``, ``agent``) with its rule set,
     most specific first; ``global_default`` follows. ``value`` is ``None`` for
     full access; ``source`` names the most specific level that set anything.
     """
