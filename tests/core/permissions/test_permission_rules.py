@@ -143,6 +143,10 @@ def test_the_check_reports_every_problem_of_a_rule_set() -> None:
         ("deny", None, None),
     ]
     assert "allow[2]" in check.problems[2].message
+    # Valid parts that do not fit together are a problem of write, not an exception.
+    conflict = check_permission_rules({"read": "work_area", "write": "anywhere"})
+    assert (conflict.rules, [problem.part for problem in conflict.problems]) == (None, ["write"])
+    assert "can change only files it can read" in conflict.problems[0].message
 
 
 def test_the_stored_form_round_trips_and_reports_rewritten_rules() -> None:

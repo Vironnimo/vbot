@@ -490,6 +490,11 @@ async def test_workspace_is_set_by_update_only(tmp_path: Path) -> None:
             'permission_rules.allow[1] "Foo(x)": unknown kind Foo',
         ),
         ("agent.create", {"id": "writer", "permission_rules": ["Read(x)"]}, "permission_rules"),
+        (
+            "agent.update",
+            {"id": "coder", "permission_rules": {"read": "work_area", "write": "anywhere"}},
+            "an Agent can change only files it can read",
+        ),
         ("agent.reorder", {"agent_ids": ["coder", "coder"], "expected_revision": 1}, ""),
     ],
 )

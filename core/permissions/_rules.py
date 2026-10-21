@@ -162,12 +162,7 @@ def normalize_permission_rules(
     if unknown:
         raise PermissionRulesError(_unknown_part(unknown[0]))
     bases = {part: _base(part, value.get(part)) for part in _BASES}
-    if bases["read"] == "work_area" and bases["write"] == "anywhere":
-        raise PermissionRulesError(
-            "permission_rules cannot set write to anywhere while read is work_area: "
-            "an Agent can change only files it can read. Set write to work_area or "
-            "scratch, or read to anywhere."
-        )
+    _require_write_within_read(bases["read"], bases["write"])
     lists = {
         part: _rule_list(part, value.get(part), notes=notes, windows=platform == "win32")
         for part in ("allow", "deny")
@@ -194,11 +189,17 @@ def check_permission_rules(value: object, *, platform: str = sys.platform) -> Ru
         return RuleSetCheck(None, (), (RuleSetProblem(None, _not_an_object(value)),))
     mapping = cast("Mapping[object, object]", value)
     problems = [RuleSetProblem(str(key), _unknown_part(key)) for key in mapping if key not in PARTS]
+    bases: dict[str, str | None] = {}
     for part in _BASES:
         try:
-            _base(part, mapping.get(part))
+            bases[part] = _base(part, mapping.get(part))
         except PermissionRulesError as error:
             problems.append(RuleSetProblem(part, str(error)))
+    if "read" in bases and "write" in bases:
+        try:
+            _require_write_within_read(bases["read"], bases["write"])
+        except PermissionRulesError as error:
+            problems.append(RuleSetProblem("write", str(error)))
     notes: list[str] = []
     for part in ("allow", "deny"):
         listed = mapping.get(part)
@@ -291,6 +292,16 @@ def resolve_rule_set(*levels: PermissionRules | None) -> PermissionRules | None:
         allow=cast("tuple[PermissionRule, ...] | None", first("allow")),
         deny=cast("tuple[PermissionRule, ...] | None", first("deny")),
     )
+
+
+def _require_write_within_read(read: str | None, write: str | None) -> None:
+    """Refuse one rule set that lets the Agent change files it cannot read."""
+    if read == "work_area" and write == "anywhere":
+        raise PermissionRulesError(
+            "permission_rules cannot set write to anywhere while read is work_area: "
+            "an Agent can change only files it can read. Set write to work_area or "
+            "scratch, or read to anywhere."
+        )
 
 
 def write_within_read(read: ReadBase | None, write: WriteBase) -> WriteBase:
