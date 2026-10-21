@@ -16,6 +16,7 @@ from core.channels.adapter import RouteFacts
 from core.database import write_bootstrap_marker
 from core.sessions import ChatSessionManager
 from core.tools import ToolContext, ToolRegistry, tool_failure
+from core.tools._tool_context import PathResolveAccess
 from core.tools.channel import _normalize_channel_send_arguments, register_channel_send_tool
 from core.tools.contracts import compile_tool_contract
 from core.tools.tools import ToolDefinitionProfileContext
@@ -56,8 +57,14 @@ async def channel_case(
 ) -> dict[str, Any]:
     class FixtureContext(ToolContext):
         @override
-        def resolve_path(self, path: str | Path, *, follow_final_link: bool = True) -> Path:
-            target = super().resolve_path(path, follow_final_link=follow_final_link)
+        def resolve_path(
+            self,
+            path: str | Path,
+            *,
+            access: PathResolveAccess,
+            follow_final_link: bool = True,
+        ) -> Path:
+            target = super().resolve_path(path, access=access, follow_final_link=follow_final_link)
             if not target.is_relative_to(self.workspace):
                 raise ValueError("Only the disposable fixture directory is in scope")
             return target

@@ -324,7 +324,7 @@ async def test_wiki_collaboration_conflicts_history_delete_restore(board):
     # conflicts, and the stale passage edit finds its change already made.
     assert updated["ok"], updated
     if conflict["ok"]:
-        assert updated["data"]["status"] == WIKI_STATUS["unchanged"]
+        assert updated["data"]["status"] == WIKI_STATUS["unchanged_passage"].format(line=2)
     else:
         assert conflict["error"]["code"] == "wiki_revision_conflict"
     current = await stored(board, page_id)
