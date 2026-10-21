@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import {
   PERMISSION_PRESET_INHERIT,
   applyPermissionPreset,
-  effectivePermissionBase,
   isPermissionDeniedResult,
   parsePastedPermissionRules,
   permissionPresetChoice,
@@ -12,7 +11,8 @@ import {
   withPermissionBase,
 } from '../permissionRules.js';
 
-// The server's preset definitions (`permissions.validate` `presets`).
+// The server's presets (`permissions.validate` `presets`), each the change it
+// makes: null unsets a part.
 const FULL_ACCESS = {
   read: 'anywhere',
   write: 'anywhere',
@@ -23,17 +23,29 @@ const FULL_ACCESS = {
 };
 const PRESETS = {
   full_access: FULL_ACCESS,
-  work_dir: { read: 'work_area', write: 'work_area' },
-  work_dir_read_only: { read: 'work_area', write: 'scratch' },
+  work_dir: {
+    read: 'work_area',
+    write: 'work_area',
+    commands: null,
+    web: null,
+  },
+  work_dir_read_only: {
+    read: 'work_area',
+    write: 'scratch',
+    commands: null,
+    web: null,
+  },
+};
+// The server's `bases.write.narrowed_by_read`.
+const BASES = {
+  write: { narrowed_by_read: { work_area: { anywhere: 'work_area' } } },
 };
 
 describe('Permission Rules editing', () => {
   it('applies a preset over the bases and keeps the own rules', () => {
     const own = { commands: 'listed', allow: ['Shell(git *)'], deny: ['x'] };
 
-    expect(
-      applyPermissionPreset(own, { read: 'work_area', write: 'scratch' }),
-    ).toEqual({
+    expect(applyPermissionPreset(own, PRESETS.work_dir_read_only)).toEqual({
       allow: ['Shell(git *)'],
       deny: ['x'],
       read: 'work_area',
@@ -68,31 +80,13 @@ describe('Permission Rules editing', () => {
     },
   );
 
-  it.each([
-    ['own', { read: 'work_area' }, { read: 'anywhere' }, 'work_area', 'own'],
-    ['inherited', null, { read: 'work_area' }, 'work_area', 'inherited'],
-    ['default', {}, null, 'anywhere', 'default'],
-  ])('takes a base from the %s level', (_label, own, parent, value, source) => {
-    expect(effectivePermissionBase(own, parent, 'read')).toEqual({
-      value,
-      source,
-    });
-  });
-
-  // An Agent can change only files it can read.
+  // An Agent can change only files it can read; the server says how.
   it('keeps write within read', () => {
     expect(
-      withPermissionBase({ write: 'anywhere' }, 'read', 'work_area'),
+      withPermissionBase({ write: 'anywhere' }, 'read', 'work_area', BASES),
     ).toEqual({ write: 'work_area', read: 'work_area' });
     expect(
-      effectivePermissionBase(
-        { read: 'work_area' },
-        { write: 'anywhere' },
-        'write',
-      ),
-    ).toEqual({ value: 'work_area', source: 'inherited' });
-    expect(
-      withPermissionBase({ read: 'work_area' }, 'write', 'scratch'),
+      withPermissionBase({ read: 'work_area' }, 'write', 'scratch', BASES),
     ).toEqual({ read: 'work_area', write: 'scratch' });
   });
 

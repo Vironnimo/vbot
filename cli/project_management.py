@@ -30,7 +30,7 @@ from cli.formatting import record_fields
 from cli.formatting import string_or_default as _string_or_default
 from cli.rpc_client import rpc_call as _rpc_call
 from cli.server_management import CommandResult, ServerInstance
-from core.permissions import PermissionRulesError, preset_definitions, preset_name
+from core.permissions import PermissionRulesError, apply_preset, preset_name
 
 PROJECT_SET_FLAGS = (
     "--cwd",
@@ -516,8 +516,8 @@ def _preset_rules(raw_value: str) -> object:
     except PermissionRulesError as exc:
         raise ValueError(str(exc)) from exc
     # full-access is the explicit full set: it overrides the repository's rules and the
-    # shared default; clear-override permission_rules follows them instead.
-    return preset_definitions()[name]
+    # shared default; `project override clear ... permission_rules` follows them instead.
+    return apply_preset(name, None)
 
 
 def _json_or_default(value: object) -> str:

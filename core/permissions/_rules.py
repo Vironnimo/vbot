@@ -42,7 +42,7 @@ READ_BASES: Final[tuple[ReadBase, ...]] = ("anywhere", "work_area")
 WRITE_BASES: Final[tuple[WriteBase, ...]] = ("anywhere", "work_area", "scratch")
 COMMANDS_BASES: Final[tuple[CommandsBase, ...]] = ("any", "listed")
 WEB_BASES: Final[tuple[WebBase, ...]] = ("any", "listed")
-_BASES: Final[dict[str, tuple[str, ...]]] = {
+BASE_CHOICES: Final[dict[str, tuple[str, ...]]] = {
     "read": READ_BASES,
     "write": WRITE_BASES,
     "commands": COMMANDS_BASES,
@@ -124,7 +124,7 @@ class PermissionRules:
         restrict nothing: they only widen a narrowed base.
         """
         return bool(self.deny) or any(
-            getattr(self, part) not in (None, UNRESTRICTED_BASES[part]) for part in _BASES
+            getattr(self, part) not in (None, UNRESTRICTED_BASES[part]) for part in BASE_CHOICES
         )
 
 
@@ -192,7 +192,7 @@ def normalize_permission_rules(
     unknown = [key for key in value if key not in PERMISSION_RULE_PARTS]
     if unknown:
         raise PermissionRulesError(_unknown_part(unknown[0]))
-    bases = {part: _base(part, value.get(part)) for part in _BASES}
+    bases = {part: _base(part, value.get(part)) for part in BASE_CHOICES}
     _require_write_within_read(bases["read"], bases["write"])
     lists = {
         part: _rule_list(part, value.get(part), notes=notes, windows=platform == "win32")
@@ -225,7 +225,7 @@ def check_permission_rules(value: object, *, platform: str = sys.platform) -> Ru
         if key not in PERMISSION_RULE_PARTS
     ]
     bases: dict[str, str | None] = {}
-    for part in _BASES:
+    for part in BASE_CHOICES:
         try:
             bases[part] = _base(part, mapping.get(part))
         except PermissionRulesError as error:
@@ -391,7 +391,7 @@ def validated_base(part: str, value: object) -> str:
     base = _base(part, value)
     if base is None:
         raise PermissionRulesError(
-            f"{part} must be one of {_choices(_BASES[part])}; received nothing."
+            f"{part} must be one of {_choices(BASE_CHOICES[part])}; received nothing."
         )
     return base
 
@@ -399,7 +399,7 @@ def validated_base(part: str, value: object) -> str:
 def _base(part: str, value: object) -> str | None:
     if value is None:
         return None
-    accepted = _BASES[part]
+    accepted = BASE_CHOICES[part]
     if isinstance(value, str):
         text = value.strip().lower().replace("-", "_").replace(" ", "_")
         if text in accepted:

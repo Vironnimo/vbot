@@ -5,13 +5,13 @@ export default Object.freeze({
     'Where this Agent may read and change files, which commands it may run and which sites it may open.',
   'permissions.defaultsTitle': 'Permissions',
   'permissions.defaultsDescription':
-    'The Permission Rules every Agent and Project Agent inherits for each part it does not set itself. Without them, Agents have full access.',
+    'The Permission Rules that Identity Agents and Project Agents inherit for each part they do not set themselves. Without them, Agents have full access.',
   'permissions.overrideDescription':
     'Rules for this Agent in this Project. Each part it does not set comes from the inherited value.',
   'permissions.limits':
     'The rules limit vBot’s own Tools and check shell commands before they run; programs those commands start, MCP servers and Extensions are not confined.',
   'permissions.limitsHelp':
-    'A script, interpreter or build tool started by a command acts with the server user’s full rights and is not inspected inside. Terminal input is checked only at an integrated shell prompt. MCP servers and Extensions run outside these checks; Tool access decides whether the Agent may use them. Hardlinks to files outside the area are not detected on read. Git commands that replace the whole working tree, such as pull or switch, can change a repository’s permission settings files. An older vBot ignores the rules.',
+    'A script, interpreter or build tool started by a command acts with the server user’s full rights and is not inspected inside. In a terminal, only command lines typed at the shell’s own prompt are checked; input to programs running there is not. Pages the local browser opens can follow redirects and load content from sites the rules do not allow. MCP servers and Extensions run outside these checks; Tool access decides whether the Agent may use them. Hardlinks to files outside the area are not detected on read. Git can show the contents of files from its history. Git commands that replace the whole working tree, such as pull or switch, can change a repository’s permission settings files. If you go back to an older vBot version, it ignores these rules.',
   'permissions.createHelp':
     'Single bases and rules are set in the Agent editor after creating.',
   'permissions.preset': 'Preset',
@@ -51,10 +51,10 @@ export default Object.freeze({
     'The work area is the folder a Session works in plus its scratch area.',
   'permissions.allowTitle': 'Allow rules',
   'permissions.allowDescription':
-    'Extra folders, commands and sites the Agent may use beyond its bases.',
+    'Extra folders, commands and sites the Agent may use beyond the settings above.',
   'permissions.denyTitle': 'Deny rules',
   'permissions.denyDescription':
-    'Refused even where a base or an allow rule would permit them.',
+    'Refused even where the settings above or an allow rule permit them.',
   'permissions.rulesHelp':
     'Write paths or globs: Read(docs/**), Edit({workdir}/src/**). Shell(git push *) matches a command, Web(*.github.com) a site. {workdir} is the folder a Session works in, {project} the Working Project’s repository, {scratch} the Session’s scratch area, {workspace} the Agent’s Workspace and ~ the home folder. A relative path starts in {workdir}.',
   'permissions.rulesInherited': 'Inherited rules',
@@ -101,12 +101,13 @@ export default Object.freeze({
   'permissions.session.badge': 'Restricted',
   'permissions.session.title': 'Permission Rules limit this Session',
   'permissions.session.text':
-    'Its Tools refuse what these limits do not allow. Every layer applies.',
+    'Its Tools refuse what these limits do not allow. When several sets of limits are listed, all of them apply.',
   'permissions.session.source.agent': 'This Agent’s rules',
   'permissions.session.source.parent':
     'Inherited from the Agent that started it',
   'permissions.session.source.extension': 'Set by an Extension',
-  'permissions.session.source.cron': 'Inherited from the Cron job’s creator',
+  'permissions.session.source.cron':
+    'Inherited from the Session that scheduled this Run',
   'permissions.session.source.other': 'Inherited limit',
   'permissions.session.workdir': 'Works in',
   'permissions.session.clear': 'Remove inherited limits',

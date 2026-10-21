@@ -60,8 +60,7 @@ _NO_FOLDER: Final = (
 _NO_FOLDER_HINT: Final = 'Start a new terminal with terminal {"action": "start"}.'
 _NO_CHECKER: Final = "this vBot cannot analyze commands to check them"
 _STARTED_OUTSIDE: Final = (
-    "it was started outside this Session's permission rules (by the user, or by a "
-    "Session with other rules)"
+    "it was started outside your permission rules (by the user, or by a Session with other rules)"
 )
 _SUBMIT: Final = frozenset("\r\n")
 _ERASE: Final = frozenset("\x7f\b")
@@ -95,15 +94,14 @@ def may_attach(boundary: PermissionBoundary, info: TerminalInfo) -> bool:
 def attach_refused_message(terminal_id: str) -> str:
     return (
         f"terminal was not run: the permission rules refuse attaching {terminal_id}, because "
-        f"{_STARTED_OUTSIDE}. The user set these rules for this Agent. To work in a terminal, "
-        'start one with terminal {"action": "start"}.'
+        f'{_STARTED_OUTSIDE}. To work in a terminal, start one with terminal {{"action": "start"}}.'
     )
 
 
 def screen_hidden_note() -> str:
     return (
-        f"Its screen and history are not shown: {_STARTED_OUTSIDE}, and the permission "
-        "rules let this Session read only terminals started under them."
+        f"Its screen and history are not shown: {_STARTED_OUTSIDE}, and you can read only "
+        "terminals started under your rules."
     )
 
 

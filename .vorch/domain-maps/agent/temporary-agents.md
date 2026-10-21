@@ -1,6 +1,6 @@
 # Temporary Agents
 
-Read when changing Extension-owned temporary Agents in `core/agents/temporary.py`: their resolution, immutable configurations and bindings, execution groups and group deletion, `prompt_blocks`, `compaction_policy` and `repository_profile`. How they resolve against a selected Project is owned by `../projects.md`.
+Read when changing Extension-owned temporary Agents in `core/agents/temporary.py` (resolution, immutable configurations and bindings) and `core/agents/temporary_execution.py` (execution groups and group deletion), including `prompt_blocks`, `compaction_policy` and `repository_profile`. How they resolve against a selected Project is owned by `../projects.md`.
 
 ## Resolution and execution groups
 

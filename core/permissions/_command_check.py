@@ -252,7 +252,7 @@ class CommandChecker:
             if refused is not None:
                 return refused
         for host in plan.hosts:
-            refused = boundary.check_host(canonical_host(host))
+            refused = boundary.check_host(canonical_host(host), "connect")
             if refused is not None:
                 return refused
         for access in plan.paths:

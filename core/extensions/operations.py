@@ -38,7 +38,7 @@ class ExtensionHost:
     resolve_cwd: Callable[[str | None, str], Path] | None = None
     for_owner: Callable[[Any], ExtensionHost] | None = None
     # Owner-bound hosts: this Extension's ``TemporaryExecutionGroups``
-    # (``core/agents/temporary.py``). API v10 adds ``groups()``, which pages the
+    # (``core/agents/temporary_execution.py``). API v10 adds ``groups()``, which pages the
     # owner's group ids with live participant Sessions, and ``archive_group()``.
     temporary_agents: Any | None = None
     state_dir: Path | None = None

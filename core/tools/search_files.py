@@ -21,7 +21,7 @@ from core.tools._search_arguments import (
 from core.tools._search_arguments import (
     normalize_search_arguments as normalize_search_arguments,
 )
-from core.tools._search_confinement import confine_flags
+from core.tools._search_confinement import CONFINED_NOTE, confine_flags
 from core.tools._search_definition import (
     HELP_EXAMPLES as HELP_EXAMPLES,
 )
@@ -782,6 +782,8 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
             return tool_failure("path_not_found", _nothing_searched(missing, roots, query))
         _directory_globs(query, roots.paths, cwd, context.permissions)
         outcome = _search(execution, query, roots.paths)
+        if execution.confined:
+            query.notes.append(CONFINED_NOTE)
     except (SearchArgumentError, ToolContractError, ValueError) as error:
         return tool_failure("invalid_arguments", str(error))
     except SearchRefusedError as error:

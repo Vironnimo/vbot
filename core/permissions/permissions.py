@@ -58,11 +58,13 @@ from core.permissions._presets import (
     PresetMatch,
     PresetName,
     apply_preset,
+    editor_bases,
     matching_preset,
     preset_definitions,
     preset_name,
 )
 from core.permissions._refusal import (
+    HostAccess,
     LayerSource,
     PathAccess,
     PermissionAccess,
@@ -463,25 +465,31 @@ class PermissionBoundary:
                 kept.append(entry)
         return kept
 
-    def check_host(self, host: str) -> PermissionRefusal | None:
-        """Whether a web access to ``host`` is permitted."""
+    def check_host(self, host: str, access: HostAccess = "web") -> PermissionRefusal | None:
+        """Whether fetching from ``host`` (``connect``: reaching it at all) is permitted.
+
+        ``Web(...)`` rules decide both; ``connect`` only words the refusal for a
+        network program such as ssh.
+        """
         if not self._layers:
             return None
         normalized = normalize_host(host)
         if not normalized:
-            return self.refusal("web", host, "unanalyzable", detail="the URL names no host")
+            return self.refusal(
+                access, f'"{host}"', "unanalyzable", detail="the address names no host"
+            )
         for layer in self._compiled:
             for rule in layer.web_deny:
                 if host_matches(rule.pattern, normalized):
                     return self.refusal(
-                        "web", normalized, "deny_rule", rule=rule.text, source=layer.layer.source
+                        access, normalized, "deny_rule", rule=rule.text, source=layer.layer.source
                     )
         for layer in self._compiled:
             if layer.layer.web == "listed" and not any(
                 host_matches(rule.pattern, normalized) for rule in layer.web_allow
             ):
                 return self.refusal(
-                    "web", normalized, "not_permitted", source=layer.layer.source, base="listed"
+                    access, normalized, "not_permitted", source=layer.layer.source, base="listed"
                 )
         return None
 
@@ -550,13 +558,17 @@ class PermissionBoundary:
     def allowed_summary(self, access: PermissionAccess) -> tuple[str, ...] | None:
         """The folders, commands or hosts ``access`` may reach; ``None`` for no limit.
 
-        Lists what a restricted layer allows and every other layer permits too.
+        Lists what a restricted layer allows and every other layer permits too;
+        for reading, also the Workspace, which every layer lets the Agent read.
+        A folder to work in (``start_dir``) is named without the wildcard part
+        of its rule. Skill folders and the Session's own vBot files stay
+        readable but are not listed.
         """
         if not self._layers:
             return None
         if access == "command":
             return self._listed_summary("Shell", lambda layer: layer.commands == "listed")
-        if access == "web":
+        if access == "web" or access == "connect":
             return self._listed_summary("Web", lambda layer: layer.web == "listed")
         path_access: PathAccess = access
         restricting = [
@@ -567,13 +579,17 @@ class PermissionBoundary:
         items: list[str] = []
         for layer in restricting:
             for candidate in layer.candidates(path_access):
-                probe = self._key(
-                    literal_prefix(split_lexical(candidate, windows=self._windows)).text
-                )
-                if candidate not in items and all(
-                    other.permits(probe, path_access) for other in self._compiled
+                folder = literal_prefix(split_lexical(candidate, windows=self._windows)).text
+                shown = folder if path_access == "start_dir" else candidate
+                if shown not in items and all(
+                    other.permits(self._key(folder), path_access) for other in self._compiled
                 ):
-                    items.append(candidate)
+                    items.append(shown)
+        workspace = self._context.workspace if self._context is not None else None
+        if path_access != "write" and workspace is not None:
+            text = lexical_text(os.fspath(workspace), windows=self._windows)
+            if text not in items:
+                items.append(text)
         return tuple(items)
 
     def _listed_summary(
@@ -928,6 +944,7 @@ __all__ = [
     "WebBase",
     "WriteBase",
     "apply_preset",
+    "editor_bases",
     "check_permission_rules",
     "describe_layer",
     "describe_permission_rules",

@@ -238,7 +238,7 @@ export function textInputValue(controlId) {
   return document.getElementById(controlId)?.value;
 }
 
-// The server's preset definitions (`permissions.validate`).
+// The server's presets (`permissions.validate`), each the change it makes.
 export const PERMISSION_PRESETS = Object.freeze({
   full_access: {
     read: 'anywhere',
@@ -248,8 +248,18 @@ export const PERMISSION_PRESETS = Object.freeze({
     allow: [],
     deny: [],
   },
-  work_dir: { read: 'work_area', write: 'work_area' },
-  work_dir_read_only: { read: 'work_area', write: 'scratch' },
+  work_dir: {
+    read: 'work_area',
+    write: 'work_area',
+    commands: null,
+    web: null,
+  },
+  work_dir_read_only: {
+    read: 'work_area',
+    write: 'scratch',
+    commands: null,
+    web: null,
+  },
 });
 
 function permissionRulesRestrict(rules) {

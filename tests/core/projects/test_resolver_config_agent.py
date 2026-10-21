@@ -236,7 +236,7 @@ async def test_async_temporary_resolution_reads_the_binding_on_the_session_pool(
     )
     threads: dict[str, str] = {}
     resolve_binding = registry.resolve
-    require_project = resolver._require_temporary_project
+    require_project = resolver._temporary_resolution._require_project
 
     def recording_resolve(*args: Any, **kwargs: Any) -> Any:
         threads["binding"] = threading.current_thread().name
@@ -247,7 +247,7 @@ async def test_async_temporary_resolution_reads_the_binding_on_the_session_pool(
         return require_project(*args)
 
     monkeypatch.setattr(registry, "resolve", recording_resolve)
-    monkeypatch.setattr(resolver, "_require_temporary_project", recording_project)
+    monkeypatch.setattr(resolver._temporary_resolution, "_require_project", recording_project)
     try:
         resolved = await resolver.resolve_temporary_agent_async(
             binding.address, generation_id=binding.generation_id

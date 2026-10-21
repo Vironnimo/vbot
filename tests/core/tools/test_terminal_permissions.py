@@ -194,9 +194,8 @@ async def test_a_restricted_session_attaches_and_reads_only_terminals_under_its_
         "code": "permission_denied",
         "retryable": False,
         "message": f"terminal was not run: the permission rules refuse attaching {operator_id}, "
-        "because it was started outside this Session's permission rules (by the user, or by a "
-        "Session with other rules). The user set these rules for this Agent. To work in a "
-        'terminal, start one with terminal {"action": "start"}.',
+        "because it was started outside your permission rules (by the user, or by a Session "
+        'with other rules). To work in a terminal, start one with terminal {"action": "start"}.',
     }
     assert "screen" not in status["data"]
     assert status["data"]["note"].startswith("Its screen and history are not shown")

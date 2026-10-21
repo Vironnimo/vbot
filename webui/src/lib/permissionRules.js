@@ -4,27 +4,12 @@ import { isPlainObject } from './values.js';
 // own rule set, the shared default, or a Project Team override. A rule set is
 // null (no own rules: the level inherits, full access when nothing is
 // inherited) or an object with the optional parts below. The server owns the
-// rule language, the presets and validation (`permissions.validate`); this
-// module only edits the stored form.
+// rule language, the presets and validation (`permissions.validate`, which
+// also says what applies to each base and which bases a level cannot choose);
+// this module only edits the stored form with what the server answers.
 
-export const PERMISSION_BASES = Object.freeze({
-  read: Object.freeze(['anywhere', 'work_area']),
-  write: Object.freeze(['anywhere', 'work_area', 'scratch']),
-  commands: Object.freeze(['any', 'listed']),
-  web: Object.freeze(['any', 'listed']),
-});
-
-export const PERMISSION_BASE_PARTS = Object.freeze(
-  Object.keys(PERMISSION_BASES),
-);
-
-// The value of a base no level sets.
-export const PERMISSION_BASE_DEFAULTS = Object.freeze({
-  read: 'anywhere',
-  write: 'anywhere',
-  commands: 'any',
-  web: 'any',
-});
+// The parts of the stored form that hold a base.
+const BASE_PARTS = Object.freeze(['read', 'write', 'commands', 'web']);
 
 export const PERMISSION_RULE_EFFECTS = Object.freeze(['allow', 'deny']);
 export const PERMISSION_RULE_KINDS = Object.freeze([
@@ -53,7 +38,7 @@ const RULE_PATTERN = /^\s*([A-Za-z]+)\s*\(([\s\S]*)\)\s*$/;
 export function normalizePermissionRules(value) {
   if (!isPlainObject(value)) return null;
   const rules = {};
-  for (const part of PERMISSION_BASE_PARTS) {
+  for (const part of BASE_PARTS) {
     if (typeof value[part] === 'string') rules[part] = value[part];
   }
   for (const effect of PERMISSION_RULE_EFFECTS) {
@@ -80,22 +65,18 @@ export function joinPermissionRule(kind, pattern) {
   return `${kind}(${pattern})`;
 }
 
-// An Agent can change only files it can read (the server's rule): `write`
-// `anywhere` under `read` `work_area` narrows to `work_area`. The server
-// refuses one rule set that holds both and narrows them across levels.
-export function writeWithinRead(read, write) {
-  return read === 'work_area' && write === 'anywhere' ? 'work_area' : write;
-}
-
 // `rules` with one base set; `null` removes the part so it is inherited. A
 // rule set without own rules starts empty: setting a part makes it own rules.
-// An own `write` that the new `read` no longer permits narrows with it.
-export function withPermissionBase(rules, part, value) {
+// An own `write` that the own `read` no longer permits narrows with it, as
+// the server's `bases.write.narrowed_by_read` says (an Agent can change only
+// files it can read).
+export function withPermissionBase(rules, part, value, bases = null) {
   const next = { ...(normalizePermissionRules(rules) ?? {}) };
   if (value === null || value === undefined) delete next[part];
   else next[part] = value;
-  if (typeof next.write === 'string') {
-    next.write = writeWithinRead(next.read, next.write);
+  const narrowed = bases?.write?.narrowed_by_read?.[next.read]?.[next.write];
+  if (typeof next.write === 'string' && typeof narrowed === 'string') {
+    next.write = narrowed;
   }
   return next;
 }
@@ -109,19 +90,17 @@ export function withPermissionRuleList(rules, effect, list) {
   return next;
 }
 
-// `rules` with a preset applied (`definition` from the server's `presets`):
-// `commands` and `web` are unset, then every part the definition sets is
-// set. Full access defines every part, empty lists included, so it replaces
-// the own rules and overrides everything inherited; the other presets set
-// their bases and keep the own allow and deny lists.
-export function applyPermissionPreset(rules, definition) {
-  if (!isPlainObject(definition)) return null;
-  const own = normalizePermissionRules(rules) ?? {};
-  const next = {};
-  for (const effect of PERMISSION_RULE_EFFECTS) {
-    if (own[effect]) next[effect] = [...own[effect]];
+// `rules` with a preset applied. `change` is the preset from the server's
+// `presets`, the change it makes: a part set to null is removed, every other
+// part is set, and parts it does not name stay.
+export function applyPermissionPreset(rules, change) {
+  if (!isPlainObject(change)) return null;
+  const next = { ...(normalizePermissionRules(rules) ?? {}) };
+  for (const [part, value] of Object.entries(change)) {
+    if (value === null) delete next[part];
+    else next[part] = value;
   }
-  return { ...next, ...normalizePermissionRules(definition) };
+  return normalizePermissionRules(next);
 }
 
 // Whether two rule sets hold the same parts and rules.
@@ -165,30 +144,6 @@ export function permissionPresetChoice(rules, { level, preset, presets }) {
     return preset;
   }
   return PERMISSION_PRESET_CUSTOM;
-}
-
-// The base `part` that applies: the own value, else the inherited one, else
-// its unrestricted default. `source` says which level supplied it. `write`
-// stays within the `read` that applies.
-export function effectivePermissionBase(rules, inherited, part) {
-  if (part === 'write') {
-    const write = levelPermissionBase(rules, inherited, part);
-    const read = levelPermissionBase(rules, inherited, 'read').value;
-    return { ...write, value: writeWithinRead(read, write.value) };
-  }
-  return levelPermissionBase(rules, inherited, part);
-}
-
-function levelPermissionBase(rules, inherited, part) {
-  const own = normalizePermissionRules(rules);
-  if (typeof own?.[part] === 'string') {
-    return { value: own[part], source: 'own' };
-  }
-  const parent = normalizePermissionRules(inherited);
-  if (typeof parent?.[part] === 'string') {
-    return { value: parent[part], source: 'inherited' };
-  }
-  return { value: PERMISSION_BASE_DEFAULTS[part], source: 'default' };
 }
 
 // Rules pasted into an editor: one rule per line, or a JSON object in the

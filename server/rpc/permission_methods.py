@@ -20,6 +20,7 @@ from core.permissions import (
     check_permission_rules,
     describe_layer,
     describe_permission_rules,
+    editor_bases,
     matching_preset,
     normalize_permission_rules,
     permission_rules_to_dict,
@@ -49,6 +50,9 @@ async def _validate_permission_rules(state: Any, params: JsonObject) -> JsonObje
 
     ``preset`` names the preset the effective rules match (``full_access`` for
     none) and ``inherited_preset`` the one of what the level inherits.
+    ``presets`` holds each preset as the change it makes, and ``bases`` what
+    applies to each base part and which bases the level cannot choose
+    (:func:`editor_bases`), so the editor re-implements no rule.
 
     Without ``agent_id`` the rule set stands alone (the shared default) and the
     preview keeps placeholders. With ``agent_id`` it is that Agent's own rule set
@@ -99,6 +103,7 @@ async def _validate_permission_rules(state: Any, params: JsonObject) -> JsonObje
         # The preset the resulting rules match; an editor's picker shows it.
         "preset": matching_preset(effective) if valid else None,
         "presets": preset_definitions(),
+        "bases": editor_bases(value if isinstance(value, dict) else None, inherited),
         "inherited_preset": matching_preset(inherited),
         "inherited": permission_rules_to_dict(inherited) if inherited is not None else None,
         "effective": permission_rules_to_dict(effective) if effective is not None else None,
