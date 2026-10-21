@@ -35,8 +35,6 @@ from core.tools.tools import JsonObject, ToolContext, tool_failure, tool_success
 _FAILED = {"failed", "skipped", "partial"}
 _NOT_FOUND_CODES = {"text_not_found", "context_not_found", "line_numbered_content"}
 _AMBIGUOUS_CODES = {"ambiguous_match", "ambiguous_context"}
-# A failure in a file the Session may change but not read shows none of its text.
-_UNREADABLE_TEXT = "Its current text is not shown, because the permission rules refuse reading it."
 # An Update names at most this many changed places before counting the rest.
 _NAMED_PLACES = 5
 # A written line with this many escaped line breaks followed by indentation, the
@@ -535,9 +533,7 @@ def failure_text(error: JsonObject) -> str:
         first = int(candidate["line"])
         shown.update(range(first, first + candidate["text"].count("\n") + 1))
     if code in _NOT_FOUND_CODES or code == "eof_not_found":
-        if error.get("unreadable"):
-            lines.append(_UNREADABLE_TEXT)
-        elif error.get("split"):
+        if error.get("split"):
             lines.append(_split_text(error["split"], held))
             lines.extend(_excerpts(candidates, error.get("path_label")))
         elif candidates:

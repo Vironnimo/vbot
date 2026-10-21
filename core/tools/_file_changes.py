@@ -98,12 +98,6 @@ _ELSEWHERE = (
 # A guard failure shows the whole current file when it is this small.
 _GUARD_CONTENT_MAX_BYTES = 16 * 1024
 _GUARD_CONTENT_MAX_LINES = 400
-_UNREADABLE_GUARD = (
-    "Its current content is not shown, because the permission rules refuse reading it; "
-    "if the task needs this file replaced, tell the user."
-)
-# Failure details that show a file's current text (see ``_edit_diagnostics``).
-_CURRENT_TEXT_KEYS = ("candidates", "difference", "part_of", "absent", "split", "already_present")
 
 
 def decode_text(payload: bytes, path: object) -> str:
@@ -319,11 +313,6 @@ def _error_data(error: _PatchError | OSError, batch: ChangeBatch) -> JsonObject:
             data["message"] = missing_file_message(
                 path, batch.cwd, permissions=batch.permissions, elsewhere=page
             )
-        elif batch.permissions.check_path(path, "read") is not None:
-            # Writing a file does not permit seeing its text: no excerpt of it is shown.
-            for key in _CURRENT_TEXT_KEYS:
-                data.pop(key, None)
-            data["unreadable"] = True
     label = error.values.get("label")
     if isinstance(label, str) and label:
         data["label"] = label
@@ -484,8 +473,6 @@ def _guard_failure(
         else "it changed after this Session last read it"
     )
     lead = f"{label} already exists and {why}, so it was not replaced."
-    if batch.permissions.check_path(path, "read") is not None:
-        return {"code": code, "message": f"{lead} {_UNREADABLE_GUARD}"}
     text = _text(snapshot)
     payload = snapshot.payload or b""
     lines = split_text_lines(text or "", keepends=True)

@@ -71,6 +71,7 @@ from core.permissions._rules import (
     permission_rules_to_dict,
     resolve_rule_set,
     validated_base,
+    write_within_read,
 )
 
 type PathLike = str | os.PathLike[str]
@@ -742,10 +743,11 @@ def _expand(rules: PermissionRules, context: BoundaryContext) -> PermissionLayer
                 result.append(rule)
         return tuple(result)
 
+    read = rules.read or "anywhere"
     return PermissionLayer(
         source="agent",
-        read=rules.read or "anywhere",
-        write=rules.write or "anywhere",
+        read=read,
+        write=write_within_read(read, rules.write or "anywhere"),
         commands=rules.commands or "any",
         web=rules.web or "any",
         workdir=workdir,
@@ -849,7 +851,7 @@ def _layer_from_dict(value: object, where: str, *, windows: bool) -> PermissionL
     return PermissionLayer(
         source=cast(LayerSource, source),
         read=cast(ReadBase, bases["read"]),
-        write=cast(WriteBase, bases["write"]),
+        write=write_within_read(cast(ReadBase, bases["read"]), cast(WriteBase, bases["write"])),
         commands=cast(CommandsBase, bases["commands"]),
         web=cast(WebBase, bases["web"]),
         workdir=workdir,

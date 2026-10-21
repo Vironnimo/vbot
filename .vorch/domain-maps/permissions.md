@@ -15,6 +15,7 @@ Not owned here: storing `permission_rules` on Agents, Settings defaults, Project
 3. No OS sandbox, no approvals: vBot enforces the rules itself. A later OS backend must be able to enforce the same rule model unchanged.
 4. The shell is confined "in a sensible way", not only the file Tools.
 5. Rule-based configuration like Claude Code and OpenCode, with presets as starting points; built polished from the start.
+6. An Agent can change only files it can read. A stored rule set with `write: anywhere` beside `read: work_area` is refused; when per-part resolution combines them from different levels, writing narrows to `work_area` (`write_within_read`). So no Tool result can leak a file's content to an Agent that may change but not read it.
 
 Honest limits, stated wherever "restricted" is shown: programs a command starts act with the server user's full rights and are not inspected inside; terminal input is checked only at an integrated shell prompt; MCP servers and Extensions are outside the checks; hardlinks to outside files are not detected; an older vBot ignores the rules after a downgrade.
 

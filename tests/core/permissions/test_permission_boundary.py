@@ -186,6 +186,15 @@ def test_scratch_base_keeps_the_working_directory_read_only(area: Area) -> None:
     assert boundary.allowed_summary("write") == (area.scratch.as_posix(),)
 
 
+def test_confined_reading_confines_writing_too(area: Area) -> None:
+    boundary = area.boundary({"read": "work_area"})
+
+    assert boundary.check_path("a.txt", "write") is None
+    refusal = boundary.check_path(area.path("../outside/z"), "write")
+    assert refusal is not None and refusal.reason == "not_permitted"
+    assert refusal.base == "work_area"
+
+
 def test_a_workspace_working_directory_is_writable_except_agent_json(area: Area) -> None:
     boundary = area.boundary({"write": "work_area"}, workdir=area.workspace)
 

@@ -141,6 +141,12 @@ def normalize_permission_rules(
             "Use read, write, commands, web, allow or deny."
         )
     bases = {part: _base(part, value.get(part)) for part in _BASES}
+    if bases["read"] == "work_area" and bases["write"] == "anywhere":
+        raise PermissionRulesError(
+            "permission_rules cannot set write to anywhere while read is work_area: "
+            "an Agent can change only files it can read. Set write to work_area or "
+            "scratch, or read to anywhere."
+        )
     lists = {
         part: _rule_list(part, value.get(part), notes=notes, windows=platform == "win32")
         for part in ("allow", "deny")
@@ -193,7 +199,9 @@ def resolve_rule_set(*levels: PermissionRules | None) -> PermissionRules | None:
 
     For each part the first level that sets it wins. Without any rule set the
     result is ``None`` (full access); a level without any part set still makes
-    the result restricted.
+    the result restricted. A ``write: anywhere`` from one level under a
+    ``read: work_area`` from another becomes ``work_area`` (see
+    :func:`write_within_read`).
     """
     present = [level for level in levels if level is not None]
     if not present:
@@ -206,14 +214,29 @@ def resolve_rule_set(*levels: PermissionRules | None) -> PermissionRules | None:
                 return value
         return None
 
+    read = cast("ReadBase | None", first("read"))
+    write = cast("WriteBase | None", first("write"))
     return PermissionRules(
-        read=cast("ReadBase | None", first("read")),
-        write=cast("WriteBase | None", first("write")),
+        read=read,
+        write=None if write is None else write_within_read(read, write),
         commands=cast("CommandsBase | None", first("commands")),
         web=cast("WebBase | None", first("web")),
         allow=cast("tuple[PermissionRule, ...] | None", first("allow")),
         deny=cast("tuple[PermissionRule, ...] | None", first("deny")),
     )
+
+
+def write_within_read(read: ReadBase | None, write: WriteBase) -> WriteBase:
+    """The write base narrowed so an Agent can change only files it can read.
+
+    Only ``write: anywhere`` under ``read: work_area`` is wider than reading;
+    it narrows to ``work_area``. Every other path rule keeps writing within
+    reading by itself: a Read deny also refuses changes, and an Edit allow also
+    permits reading.
+    """
+    if read == "work_area" and write == "anywhere":
+        return "work_area"
+    return write
 
 
 def normalize_host(host: str) -> str:

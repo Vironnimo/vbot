@@ -110,6 +110,9 @@ def test_a_drive_relative_pattern_is_refused_on_windows() -> None:
         pytest.param({"allow": "Read(docs)"}, "list", id="rules-not-a-list"),
         pytest.param({"deny": ["Read(docs)", 3]}, "deny[1]", id="rule-not-a-string"),
         pytest.param({"deny": ["Read(docs)", "Copy(x)"]}, "deny[1]", id="rule-error-located"),
+        pytest.param(
+            {"read": "work_area", "write": "anywhere"}, "only files it can read", id="write-wider"
+        ),
     ],
 )
 def test_invalid_rule_sets_are_refused_naming_the_part(value: object, named: str) -> None:
@@ -160,6 +163,11 @@ def _rules(**parts: object) -> PermissionRules:
             (_rules(read="work_area"), _rules(read="anywhere", write="scratch")),
             PermissionRules(read="work_area", write="scratch"),
             id="first-level-wins-per-part",
+        ),
+        pytest.param(
+            (_rules(read="work_area"), _rules(write="anywhere")),
+            PermissionRules(read="work_area", write="work_area"),
+            id="write-narrows-to-read",
         ),
         pytest.param(
             (_rules(allow=[]), _rules(allow=["Read(/docs)"], deny=["Shell(rm *)"])),
