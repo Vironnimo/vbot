@@ -8,6 +8,7 @@ import textwrap
 from datetime import UTC, datetime
 from typing import Any
 
+from cli.formatting import duration_text
 from core.utils.ids import is_safe_id
 
 # A Tool row is one line, built as the WebUI builds it: its primary values
@@ -335,18 +336,6 @@ def _fact_text(fact: Any) -> str:
         label = labels[0] if value == 1 and not at_least else labels[1]
         return f"{value}{'+' if at_least else ''} {label}"
     return ""
-
-
-def duration_text(milliseconds: float) -> str:
-    """A duration as the WebUI writes it: 0.4s, 12s, 1m 5s, 1h 2m."""
-    seconds = max(0.0, milliseconds / 1000)
-    if seconds < 10:
-        return f"{seconds:.1f}s"
-    if seconds < 60:
-        return f"{round(seconds)}s"
-    hours, rest = divmod(round(seconds), 3600)
-    minutes, seconds_left = divmod(rest, 60)
-    return f"{hours}h {minutes}m" if hours else f"{minutes}m {seconds_left}s"
 
 
 def _instant(value: Any) -> datetime | None:

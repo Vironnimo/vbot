@@ -6,7 +6,6 @@ import asyncio
 import json
 from collections.abc import Callable, Coroutine
 from contextlib import suppress
-from datetime import UTC, datetime
 from time import monotonic
 from typing import Any, override
 
@@ -252,9 +251,11 @@ class ConversationApp(App[int]):
     def _render_if_dirty(self) -> None:
         self.navigation.completion_if_visible()
         view = self.conversation
-        if view is not None and view.facts.get("active_run"):
-            # The status row's spinner and elapsed time; the tick can outlive the
-            # widgets while the app shuts down.
+        if view is not None and (
+            view.facts.get("active_run") or self.navigation.activity.of(view) is not None
+        ):
+            # The status row's spinner and elapsed work span; the tick can outlive
+            # the widgets while the app shuts down.
             with suppress(NoMatches):
                 self._update_status(view)
         if (
@@ -426,33 +427,13 @@ class ConversationApp(App[int]):
             return waiting, "alert"
         if view.parent:
             return "Sub-Agent Session · replies go to you · Ctrl+B returns to the parent", "info"
-        active = view.facts.get("active_run") or {}
-        if active:
-            spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"[int(monotonic() * 10) % 10]
-            elapsed = self._run_elapsed(view)
-            status = str(active.get("status") or "working")
-            label = "Working" if status in {"running", "working"} else status.capitalize()
-            return f"{spinner} {label}{elapsed} · Ctrl+X stops", "info"
+        if work := self.navigation.activity.status(view):
+            return work, "info"
         if self.queue_items:
             return f"{len(self.queue_items)} queued message(s) · F6", "info"
         if self.requests:
             return f"{len(self.requests)} Extension request(s) · F7", "info"
         return "", "info"
-
-    @staticmethod
-    def _run_elapsed(view: Conversation) -> str:
-        """` · 1m 05s` since the running Run started, from its timeline row."""
-        for item in reversed(view.items):
-            if item.get("type") == "assistant_run" and item.get("status") == "running":
-                started = item.get("startTimestamp") or item.get("timestamp")
-                try:
-                    begun = datetime.fromisoformat(str(started))
-                except ValueError:
-                    return ""
-                seconds = max(0, int((datetime.now(UTC) - begun).total_seconds()))
-                minutes, seconds = divmod(seconds, 60)
-                return f" · {minutes}m {seconds:02d}s" if minutes else f" · {seconds}s"
-        return ""
 
     def _notice(self, message: str, *, error: bool = False) -> None:
         """Show one message in one place: the status row, plus a toast when it failed."""

@@ -15,8 +15,8 @@ from rich.theme import Theme as RichTheme
 from textual.strip import Strip
 from textual.widget import Widget
 
+from cli.formatting import duration_text
 from cli.tui.rendering import (
-    duration_text,
     item_heading,
     item_text,
     tool_detail,

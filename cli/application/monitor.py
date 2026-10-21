@@ -3,7 +3,9 @@
 The monitor holds one ``/ws`` connection as the ``tray`` accessor. The server
 pushes Run and resource events, and the connection's protocol pings are the only
 traffic while nothing happens, so an idle tray does no periodic work for its
-server. While disconnected, the monitor retries with a bounded backoff and
+server. Each connection's ``connection_ready`` hello reaches the listener as an
+event too, ahead of the events that follow it, so it can start over from the
+hello's snapshots. While disconnected, the monitor retries with a bounded backoff and
 classifies the listener through ``/health``; when that goes unanswered too, the
 optional ``classify`` callback tells a busy server from an unreachable target,
 and when nothing listens, a starting or stopping server process from a stopped one.
@@ -96,7 +98,12 @@ class MonitorStatus:
 
 
 class MonitorListener(Protocol):
-    """Receives monitor observations on the monitor's event-loop thread."""
+    """Receives monitor observations on the monitor's event-loop thread.
+
+    ``event_received`` gets every server event except heartbeats, and each
+    connection's ``connection_ready`` hello right after ``status_changed`` reported
+    the connection.
+    """
 
     def status_changed(self, status: MonitorStatus) -> None: ...
 
@@ -303,6 +310,7 @@ class ServerMonitor:
                         started_at=_text(server.get("started_at")),
                     )
                 )
+                self._notify("event_received", hello)
                 cursor = await self._stream(url, connection, cursor)
             finally:
                 await connection.close()
