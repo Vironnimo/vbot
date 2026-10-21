@@ -74,6 +74,6 @@ Every refusal starts with `<tool> was not run:` like the other dispatch refusals
 | Text | Reason |
 |---|---|
 | `The user gave you a Secret for this session: <line> Write its reference where the value belongs; vBot inserts the value there.` | Session Secrets are not in the System Prompt block (it is fixed per Agent until Compaction), so the Agent learns of them from a note at the moment they arrive. A Sub-Agent Session has no block at all, so there a permanent Secret given with `/secret` gets this note too. |
-| `The user replaced the value of the Secret <NAME>.` | After a failed sign-in the Agent knows a retry can now succeed. |
+| `The user replaced the Secret: <line>` | After a failed sign-in the Agent knows a retry can now succeed, and the line gives the replacement's actual lifetime and references, including when the user narrowed a permanent grant to one use. |
 | No note for a new permanent or until Secret | The block's change reminder reports it; a note as well would say it twice. |
 

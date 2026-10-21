@@ -228,7 +228,14 @@ class SecretRequests:
     ) -> tuple[AgentSecret, bool]:
         current = self._secrets.get(pending.replaces) if pending.replaces else None
         if current is not None and current.source is None:
-            return self._secrets.update(current.id, actor="user", values=values), True
+            return self._secrets.update(
+                current.id,
+                actor="user",
+                values=values,
+                lifetime=lifetime,
+                given_to=pending.address,
+                expires_at=expires_at,
+            ), True
         return (
             self._secrets.create(
                 name=pending.name,

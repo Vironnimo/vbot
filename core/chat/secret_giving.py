@@ -62,7 +62,15 @@ async def give_secret(
     )
     existing = secrets.lookup(address, secret_name, passed_only=passed_only)
     if existing is not None and existing.source is None:
-        secret = await asyncio.to_thread(secrets.update, existing.id, actor="user", values=values)
+        secret = await asyncio.to_thread(
+            secrets.update,
+            existing.id,
+            actor="user",
+            values=values,
+            lifetime=lifetime,
+            given_to=address,
+            expires_at=expires_at,
+        )
         given = GivenSecret(secret, replaced=True, answered_request=False)
     else:
         secret = await asyncio.to_thread(
@@ -93,7 +101,7 @@ async def _tell_agent(
 
     secret = given.secret
     if given.replaced:
-        note = f"The user replaced the value of the Secret {secret.name}."
+        note = f"The user replaced the Secret: {secret_line(secret)[2:]}"
     # A Sub-Agent Session has no System Prompt block that would list it.
     elif secret.session_id is not None or passed_only:
         note = (

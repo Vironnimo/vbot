@@ -117,3 +117,5 @@ For a Command with `secret_argument` and a non-empty argument, the engine calls 
 ## Recent uses
 
 `recent_uses(secret_id)` keeps the last 20 uses per Secret, substitutions and shell environment alike (field, sink, Agent id, Session id, time; never a value), in memory since process start; RPC results carry them as `recent_uses`. Each use also logs at DEBUG.
+
+Replacement values given through `/secret`, its form, or an answered Secret request apply the newly selected lifetime and expiry in the same write as the values. Session/once replacements retain only the receiving full Session address and revoke previous derived grants. Permanent/until replacements retain explicit Agent grants and applicable passed grants, and include the receiving Session; selecting permanent clears an earlier expiry. Ordinary Settings edits still change only supplied fields.

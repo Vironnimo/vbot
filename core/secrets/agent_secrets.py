@@ -47,6 +47,7 @@ from core.secrets._agent_secret_model import (
     encode_record,
     normalize_secret_name,
     session_address,
+    with_given_lifetime,
 )
 from core.secrets._references import (
     EMPTY_MASKER,
@@ -416,6 +417,8 @@ class AgentSecrets:
         expires_at: datetime | None = None,
         clear_expiry: bool = False,
         permanent: bool = False,
+        lifetime: Lifetime | None = None,
+        given_to: SessionAddress | None = None,
     ) -> AgentSecret:
         """Change a Secret (blocking); only the given parts change."""
         with self._lock:
@@ -440,6 +443,10 @@ class AgentSecrets:
                 secret = replace(secret, description=check_description(description))
             if sinks is not None:
                 secret = replace(secret, sinks=check_sinks(sinks))
+            if lifetime is not None:
+                if given_to is None:
+                    raise SecretRecordError("A replacement lifetime needs its receiving Session.")
+                secret = with_given_lifetime(secret, lifetime, given_to, expires_at, self._clock())
             if permanent and secret.lifetime != "permanent":
                 secret = replace(secret, lifetime="permanent", expires_at=None, session_id=None)
             if clear_expiry and secret.lifetime == "until":
@@ -467,7 +474,11 @@ class AgentSecrets:
                 )
             if secret == current:
                 return current
-            if secret.lifetime != current.lifetime:
+            if (secret.lifetime, secret.session_id, secret.agents) != (
+                current.lifetime,
+                current.session_id,
+                current.agents,
+            ):
                 self._check_name_free(secret)
             self._write(secret)
         _LOGGER.info("Agent Secret %s changed (actor=%s)", secret.name, actor)

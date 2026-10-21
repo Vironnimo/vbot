@@ -441,6 +441,43 @@ def _check_lifetime(
         raise SecretRecordError("The expiry time has already passed.")
 
 
+def with_given_lifetime(
+    secret: AgentSecret,
+    lifetime: Lifetime,
+    address: SessionAddress,
+    expires_at: datetime | None,
+    now: datetime,
+) -> AgentSecret:
+    """Apply the user's replacement scope, retaining only grants it still permits."""
+    _check_lifetime(lifetime, address.session_id, expires_at, now)
+    if lifetime == "permanent" and expires_at is not None:
+        lifetime = "until"
+    agent = agent_address(address)
+    local = lifetime in ("session", "once")
+    agents = (agent,) if local else tuple(dict.fromkeys((*secret.agents, agent)))
+    grants = (
+        ()
+        if local
+        else tuple(
+            dict.fromkeys(
+                (
+                    *secret.session_grants,
+                    SessionGrant(agent, (address,)),
+                )
+            )
+        )
+    )
+    return replace(
+        secret,
+        lifetime=lifetime,
+        expires_at=expires_at,
+        session_id=address.session_id if local else None,
+        agents=agents,
+        session_grants=grants,
+        sessions=tuple(dict.fromkeys(grant.path[-1].session_id for grant in grants)),
+    )
+
+
 def _build_fields(
     kind: SecretKind,
     values: Mapping[str, str],
