@@ -82,6 +82,7 @@ from core.subagents._delegation import (
     _emit,
     _event_data,
     _load_subagent_settings,
+    _nesting_limit_reached,
     _open_subagent_session,
     _parse_session_overrides,
     _public_identity,
@@ -251,6 +252,20 @@ class SubAgentCoordinator:
     def subagent_reply_to_user(self, address: SessionAddress, message_id: str) -> None:
         """Handle an input that switches a Sub-Agent to user-directed answers."""
         self._forwarding.reply_to_user(address, message_id)
+
+    def subagent_tool_usable(self, address: SessionAddress) -> bool:
+        """Return whether the Session at *address* has a use for ``subagent``. Blocking.
+
+        Chat asks this for each Run of a Sub-Agent Session and leaves the Tool
+        out of its Tool list when not. Below the nesting limit the Session can
+        start Sub-Agents. At the limit, ``run`` is always refused, and only
+        Sub-Agents of its own, started before the limit was lowered, give the
+        Tool a use (``send``).
+        """
+        runtime = self._runtime
+        if _nesting_limit_reached(runtime, address) is None:
+            return True
+        return bool(children(runtime.chat_sessions, address))
 
     async def spawn(self, context: ToolContext, arguments: JsonObject) -> JsonObject:
         """Handle one ``subagent`` call."""
@@ -485,13 +500,15 @@ class SubAgentCoordinator:
                 )
             return failure
 
-        settings = _load_subagent_settings(runtime)
-        chain = await sessions.run_async(ancestors, sessions, caller)
-        if len(chain) >= settings["max_subagent_depth"]:
+        # Chat leaves the Tool out of the Tool list of a Session at the nesting
+        # limit (``subagent_tool_usable``); this refusal stays the safety net.
+        depth_limit = await sessions.run_async(_nesting_limit_reached, runtime, caller)
+        if depth_limit is not None:
             return tool_failure(
                 "subagent_depth_exceeded",
-                SUBAGENT_DEPTH_LIMIT_MESSAGE_TEMPLATE.format(limit=settings["max_subagent_depth"]),
+                SUBAGENT_DEPTH_LIMIT_MESSAGE_TEMPLATE.format(limit=depth_limit),
             )
+        settings = _load_subagent_settings(runtime)
         async with self._admission_lock:
             refusal = await self._limit_refusal(
                 caller, settings, can_stop=context.can_call(BACKGROUND_TASKS_TOOL_NAME)

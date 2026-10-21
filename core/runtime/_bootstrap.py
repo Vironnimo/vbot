@@ -693,6 +693,10 @@ def bootstrap(runtime: Runtime) -> None:
                 if runtime._subagent_coordinator is not None
                 else None
             ),
+            subagent_tool_usable=lambda address: (
+                runtime._subagent_coordinator is None
+                or runtime._subagent_coordinator.subagent_tool_usable(address)
+            ),
         )
         runtime._chat_loop = ChatLoop(
             chat_dependencies,

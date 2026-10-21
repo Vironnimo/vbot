@@ -46,6 +46,7 @@ from core.subagents.forwarding import (
 from core.subagents.links import (
     SubAgentLink,
     _link_metadata,
+    ancestors,
     read_link,
 )
 from core.tools.availability import subagent_allowed_agents
@@ -239,6 +240,16 @@ def _load_subagent_settings(runtime: RuntimeServices) -> dict[str, int]:
             settings.get("max_active_subagents_total"), DEFAULT_MAX_ACTIVE_SUBAGENTS_TOTAL
         ),
     }
+
+
+def _nesting_limit_reached(runtime: RuntimeServices, address: SessionAddress) -> int | None:
+    """Return the nesting limit when the Session at *address* has reached it, else ``None``.
+
+    Blocking. A Session at the limit already has that many Parents, so it cannot
+    start a Sub-Agent; its depth is fixed when it is created.
+    """
+    limit = _load_subagent_settings(runtime)["max_subagent_depth"]
+    return limit if len(ancestors(runtime.chat_sessions, address)) >= limit else None
 
 
 def _counts_as_working(runtime: RuntimeServices, link: SubAgentLink) -> bool:

@@ -2,7 +2,8 @@
 
 A Session with a Parent link frames input from the Parent Agent as not from the
 user, selects the recipient for final answers from each external input,
-and offers ``message_parent``; an ordinary Session does none of that.
+and offers ``message_parent``; an ordinary Session does none of that. A
+Sub-Agent at the nesting limit is not offered ``subagent``.
 """
 
 from __future__ import annotations
@@ -22,14 +23,15 @@ from core.chat.messages import (
 )
 from core.runs import RunAdmission, RunCancelledError, RunKind
 from core.sessions import (
-    SUBAGENT_PARENT_META_KEY,
     SUBAGENT_REPLY_TARGET_META_KEY,
-    SUBAGENT_SESSION_META_KEY,
     ChatSession,
     SessionAddress,
 )
+from core.subagents import SubAgentCoordinator
+from core.subagents.links import link_session
 from core.tools import ToolContext, ToolRegistry, tool_success
 from core.tools.availability import MESSAGE_PARENT_TOOL_NAME, TOOL_ACTIVATION_SESSION_GRANT
+from core.tools.model_names import SUBAGENT_TOOL_NAME
 from tests.core.chat.chat_loop_support import (
     StubAdapter,
     StubAgent,
@@ -88,34 +90,40 @@ def _runtime(tmp_path: Path, adapter: StubAdapter) -> Any:
         session_scoped=True,
         activation=TOOL_ACTIVATION_SESSION_GRANT,
     )
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=[])
+    tools.register(
+        SUBAGENT_TOOL_NAME,
+        "Delegate work to a Sub-Agent.",
+        {"type": "object", "properties": {"content": {"type": "string"}}},
+        lambda _context, _arguments: tool_success({}),
+        open_input_schema=True,
+    )
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=[SUBAGENT_TOOL_NAME])
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
     runtime.user_reply_switches = []
     runtime.tool_calls = calls
     runtime.subagent_reply_to_user = lambda address, _message_id: (
         runtime.user_reply_switches.append(address)
     )
+    runtime.subagent_tool_usable = SubAgentCoordinator(runtime, None).subagent_tool_usable
     return runtime
 
 
-def _create(runtime: Any, session_id: str, *, linked: bool) -> SessionAddress:
+def _create(
+    runtime: Any, session_id: str, *, linked: bool, parent: SessionAddress | None = None
+) -> SessionAddress:
+    """Create a Session, linked to *parent* (else a Parent Session that is gone)."""
     runtime.chat_sessions.create("coder", session_id=session_id)
     address = session_address("coder", session_id)
     if linked:
-
-        def link(metadata: dict[str, Any]) -> None:
-            metadata[SUBAGENT_SESSION_META_KEY] = True
-            metadata[SUBAGENT_PARENT_META_KEY] = {
-                "id": "sub_aaaaaaaaaaaa",
-                "agent_id": "lead",
-                "session_id": "parent",
-                "run_id": "parent-run",
-                "tool_call_id": None,
-                "tool_call_index": None,
-                "project_id": None,
-            }
-
-        runtime.chat_sessions.mutate_metadata(address, link)
+        link_session(
+            runtime.chat_sessions,
+            address,
+            subagent_id=f"sub_{session_id}",
+            parent=parent or session_address("lead", "parent"),
+            run_id="parent-run",
+            tool_call_id=None,
+            tool_call_index=None,
+        )
     return address
 
 
@@ -242,18 +250,25 @@ async def test_a_run_cancelled_as_its_user_input_commits_keeps_the_answer_destin
     ]
 
 
-async def test_message_parent_is_offered_only_in_a_subagent_session(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "max_depth", [2, 1], ids=["below-the-nesting-limit", "at-the-limit-with-own-subagents"]
+)
+async def test_the_session_decides_which_subagent_tools_are_offered(
+    tmp_path: Path, max_depth: int
+) -> None:
     call = {"id": "call_parent", "name": MESSAGE_PARENT_TOOL_NAME, "arguments": {"content": "x"}}
-    adapter = StubAdapter([{"content": None, "tool_calls": [call]}, *_answers(2)])
+    adapter = StubAdapter([{"content": None, "tool_calls": [call]}, *_answers(3)])
     runtime = _runtime(tmp_path, adapter)
-    _create(runtime, "linked", linked=True)
+    runtime.storage.subagent_settings = {"max_subagent_depth": max_depth}
+    linked = _create(runtime, "linked", linked=True)
+    nested = _create(runtime, "nested", linked=True, parent=linked)
     plain = _create(runtime, "plain", linked=False)
     loop = build_chat_loop(runtime)
 
-    await (await loop.start_run("coder", "Hi", session_id="linked")).wait()
-    await (await loop.start_run("coder", "Hi", session_id="plain")).wait()
+    for session_id in ("linked", "nested", "plain"):
+        await (await loop.start_run("coder", "Hi", session_id=session_id)).wait()
 
-    offered = [
+    linked_tools, _, nested_tools, plain_tools = [
         {tool["name"] for tool in request["kwargs"]["tools"]} for request in adapter.requests
     ]
     assert all(
@@ -261,10 +276,15 @@ async def test_message_parent_is_offered_only_in_a_subagent_session(tmp_path: Pa
         for request in adapter.requests
         for message in request["messages"]
     )
-    assert MESSAGE_PARENT_TOOL_NAME in offered[0]
-    assert MESSAGE_PARENT_TOOL_NAME not in offered[2]
+    # message_parent belongs to Sub-Agent Sessions. "nested" has as many Parents
+    # as the limit allows and no Sub-Agent of its own, so subagent could only
+    # start one there, which is refused. "linked" can start one below the limit,
+    # and at a lowered limit still message the Sub-Agent it has.
+    assert linked_tools == {MESSAGE_PARENT_TOOL_NAME, SUBAGENT_TOOL_NAME}
+    assert nested_tools == {MESSAGE_PARENT_TOOL_NAME}
+    assert plain_tools == {SUBAGENT_TOOL_NAME}
     # Its Tool calls know the Session is a Sub-Agent Session (for Secrets).
     assert [context.subagent_session for context in runtime.tool_calls] == [True]
     # A user message in an ordinary Session does not change Sub-Agent routing.
     assert runtime.chat_sessions.metadata_value(plain, SUBAGENT_REPLY_TARGET_META_KEY) is None
-    assert len(runtime.user_reply_switches) == 1
+    assert runtime.user_reply_switches == [linked, nested]

@@ -20,6 +20,7 @@ from core.chat._run_state import (
     _CompactionPromptRefresh,
     has_open_goal,
     is_subagent_session,
+    withholds_subagent_tool,
 )
 from core.chat._scratch_context import SCRATCH_ANNOUNCED_META_KEY
 from core.chat._tool_epoch import called_tool_names
@@ -261,6 +262,12 @@ class ChatCompactionHost:
                 connection_id,
                 model_id,
             )
+            subagent_session = await self.run_transform(
+                is_subagent_session, self._dependencies.sessions, session.address
+            )
+            subagent_tool_withheld = subagent_session and await self.run_transform(
+                withholds_subagent_tool, self._dependencies, session.address
+            )
             inputs = RequestBuildInputs(
                 replay_policy=adapter.reasoning_replay_policy(model_id),
                 reasoning_scope_model=model_reference,
@@ -281,9 +288,8 @@ class ChatCompactionHost:
                 skill_registry=skill_registry,
                 skill_catalog=skill_catalog,
                 session_messages_override=messages,
-                subagent_session=await self.run_transform(
-                    is_subagent_session, self._dependencies.sessions, session.address
-                ),
+                subagent_session=subagent_session,
+                subagent_tool_withheld=subagent_tool_withheld,
                 goal_session=await self.run_transform(
                     has_open_goal, self._dependencies.sessions, session.address
                 ),
