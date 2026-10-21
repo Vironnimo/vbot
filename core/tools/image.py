@@ -462,10 +462,10 @@ def _generate_image_output_dir(context: ToolContext, arguments: JsonObject) -> P
     if output_dir:
         return context.resolve_path(output_dir, access="write")
 
-    if context.project_id is None:
-        # The Workspace default is vBot's own folder, which the rules allow.
-        return context.workspace / _GENERATE_IMAGE_DIRECTORY_NAME
-    default = context.effective_cwd / _GENERATE_IMAGE_DIRECTORY_NAME
+    # The default is checked like an explicit folder: a Session whose rules
+    # do not let it write there names one they do, such as its Scratch Area.
+    base = context.workspace if context.project_id is None else context.effective_cwd
+    default = base / _GENERATE_IMAGE_DIRECTORY_NAME
     refusal = context.permissions.check_path(default, "write")
     if refusal is not None:
         raise PermissionDenied(refusal)

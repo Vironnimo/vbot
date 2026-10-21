@@ -425,10 +425,9 @@ def _output_dir(context: ToolContext, arguments: JsonObject, *, default_name: st
     value = optional_string(arguments.get("output_dir"), field_name="output_dir")
     if value:
         return context.resolve_path(value, access="write")
-    if context.project_id is None:
-        # The Workspace default is vBot's own folder, which the rules allow.
-        return context.workspace / default_name
-    default = context.effective_cwd / default_name
+    # The default is checked like an explicit folder (``image.py``).
+    base = context.workspace if context.project_id is None else context.effective_cwd
+    default = base / default_name
     refusal = context.permissions.check_path(default, "write")
     if refusal is not None:
         raise PermissionDenied(refusal)

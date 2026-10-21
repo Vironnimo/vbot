@@ -127,8 +127,9 @@ async def test_video_tool_resolves_frames_and_caller_owned_default(tmp_path: Pat
     ("arguments", "project"),
     [
         ({"output_dir": "../outside"}, False),
-        # A Project's working directory is no vBot folder: its default is checked too.
+        # The default folder is checked too: in the Project and in the Workspace.
         ({}, True),
+        ({}, False),
         ({"first_frame": "../outside/start.png"}, False),
     ],
 )

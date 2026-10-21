@@ -10,7 +10,7 @@ Local frame/reference files are resolved against the Run's effective cwd and upl
 
 Dialects (owner argument normalizers): `start_frame`, `start_image`, `first_frame_image` -> `first_frame`; `end_frame`, `end_image`, `last_frame_image` -> `last_frame`; `source_image`, `input_image(s)`, `reference_image(s)`, `image_path(s)` -> `source_images` (one string or path object becomes a list); `output_directory`, `out_dir`, `save_dir`, `output_folder` -> `output_dir`; a `duration` of `"6s"` or `"6 seconds"` -> `6`. Empty optional strings (`output_dir`, frames, `resolution`, `aspect_ratio`) count as omitted, and a whitespace-only `output_dir` uses the default folder.
 
-Under Permission Rules frame and reference images are read-checked and an explicit `output_dir` or a default folder inside a Working Project is write-checked before the Task Model is called; the Workspace default folder is vBot-owned and unchecked (as `generate_image`, `tools/image.md`).
+Under Permission Rules frame and reference images are read-checked and an explicit `output_dir` or a default folder inside a Working Project is write-checked before the Task Model is called; the Workspace default folder is write-checked too (as `generate_image`, `tools/image.md`).
 
 Requested frame and reference images are recorded via `ToolContext.add_display_media` as sources, and a successful call records the written file, so expanded details show the sources and a video or audio player (see `tools/display.md`).
 
