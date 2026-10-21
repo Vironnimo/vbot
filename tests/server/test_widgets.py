@@ -68,13 +68,6 @@ def test_a_shown_widget_is_served_and_its_values_reach_the_agent_with_the_messag
         served = client.get(widget["url"])
         forged = client.get(widget["url"][:-4] + "AAAA")
         values = [{"widget_id": widget["id"], "state": {"line_height": 1.6}}]
-        unknown = _rpc(
-            client,
-            "chat.send",
-            **session,
-            content="Take it",
-            widget_states=[{"widget_id": "res_unknown", "state": {}}],
-        )
         new_session = _rpc(
             client,
             "chat.send",
@@ -83,8 +76,14 @@ def test_a_shown_widget_is_served_and_its_values_reach_the_agent_with_the_messag
             content="Take it",
             widget_states=values,
         )
+        # A widget the conversation no longer shows, such as after an edit, is dropped.
+        gone = {"widget_id": "res_unknown", "state": {"line_height": 9}}
         sent = _rpc(
-            client, "chat.send", **session, content="Take it like this", widget_states=values
+            client,
+            "chat.send",
+            **session,
+            content="Take it like this",
+            widget_states=[gone, *values],
         )
         history = _rpc(client, "chat.history", **session)["result"]
 
@@ -97,10 +96,9 @@ def test_a_shown_widget_is_served_and_its_values_reach_the_agent_with_the_messag
     assert "connect-src 'none'" in policy and "frame-ancestors 'self'" in policy
     assert served.headers["cache-control"] == "no-store"
     assert forged.status_code == 404
-    # An unknown widget or a new Session refuses the send before anything is stored.
-    for refused in (unknown, new_session):
-        assert refused["ok"] is False
-        assert refused["error"]["code"] == "invalid_request"
+    # A new Session shows no widget, so the send is refused before anything is stored.
+    assert new_session["ok"] is False
+    assert new_session["error"]["code"] == "invalid_request"
     assert sent["ok"] is True
     # The Model reads the values as quoted data right before the user's words.
     request = json.dumps(adapter.requests[-1]["messages"], ensure_ascii=False)

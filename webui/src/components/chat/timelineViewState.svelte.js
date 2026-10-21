@@ -28,6 +28,8 @@ export function createTimelineViewState() {
   // eslint-disable-next-line svelte/prefer-svelte-reactivity -- bookkeeping, not rendered state
   const scopes = new Map();
   let scope = $state.raw(createScope());
+  // The displayed Session's key; '' for a store outside a Chat timeline.
+  let shownSessionKey = $state('');
   // Sources whose automatic start was already requested; speech URLs are
   // unique, so this is not scoped per Session. Claims are made while
   // rendering and must not be reactive state.
@@ -50,6 +52,12 @@ export function createTimelineViewState() {
         scopes.delete(scopes.keys().next().value);
       }
       scope = next;
+      shownSessionKey = key;
+    },
+    // The key of the Session whose rows read this store: its Chat widgets
+    // keep their states under it.
+    get sessionKey() {
+      return shownSessionKey;
     },
     isOpen(key) {
       return scope.open[key] === true;

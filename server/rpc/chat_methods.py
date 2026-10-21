@@ -122,7 +122,9 @@ async def _submit_chat(
 
     dispatcher: CommandDispatcher = state.command_dispatcher
     prepared_command = dispatcher.prepare(content)
-    if widget_states and (prepared_command is not None or isinstance(target, _NewSessionTarget)):
+    # A new Session shows no widget yet. A command takes no widget values; the
+    # client keeps them for the next message.
+    if widget_states and isinstance(target, _NewSessionTarget):
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST,
             "params.widget_states can accompany only a message to an existing Session",
@@ -159,8 +161,8 @@ async def _submit_chat(
     run_options: JsonObject = {}
     if input_origin is not None:
         run_options["input_origin"] = input_origin
-    if widget_states:
-        run_options["context_note"] = await _widget_state_note(state, address, widget_states)
+    if widget_states and (note := await _widget_state_note(state, address, widget_states)):
+        run_options["context_note"] = note
     content = await _expand_content_file_mentions(state, address, content, file_mentions)
 
     # A user message makes this session the agent's current one: after a server
@@ -207,11 +209,12 @@ async def _submit_chat(
 
 async def _widget_state_note(
     state: Any, address: SessionAddress, entries: list[tuple[str, JsonObject]]
-) -> ChatMessage:
+) -> ChatMessage | None:
     """Return the note that hands *entries* to the Agent with the user's message.
 
-    Each widget must be one the Session's current view shows; an unknown id
-    refuses the send before anything is stored.
+    Only widgets the Session's current view shows count: a widget whose Run an
+    edit removed is no longer part of the conversation, so its values are
+    dropped instead of refusing the message. ``None`` when none is left.
     """
     owner_name = builtin_payload_owner(SHOW_WIDGET_TOOL_NAME)
     widgets: list[WidgetState] = []
@@ -220,13 +223,9 @@ async def _widget_state_note(
             address, widget_id, owner_name=owner_name
         )
         title = payload.get(WIDGET_PAYLOAD_TITLE) if isinstance(payload, dict) else None
-        if not isinstance(title, str):
-            raise RpcError(
-                RPC_ERROR_INVALID_REQUEST,
-                f"params.widget_states names widget {widget_id}, which this Session does not show",
-            )
-        widgets.append(WidgetState(widget_id, title, values))
-    return widget_state_note(widgets)
+        if isinstance(title, str):
+            widgets.append(WidgetState(widget_id, title, values))
+    return widget_state_note(widgets) if widgets else None
 
 
 async def _start_chat_in_new_session(

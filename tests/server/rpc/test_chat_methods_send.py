@@ -195,15 +195,6 @@ async def test_submission_parses_content_blocks_and_forwards_the_input_origin(
                 [{"widget_id": f"res_{index}", "state": {}} for index in range(9)],
             )
         ],
-        (
-            "chat.send",
-            {
-                "session_id": "s1",
-                "content": "/new",
-                "widget_states": [{"widget_id": "a", "state": {}}],
-            },
-            "params.widget_states",
-        ),
     ],
 )
 async def test_submission_rejects_malformed_params_before_starting_anything(

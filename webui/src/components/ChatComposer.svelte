@@ -19,6 +19,7 @@
   import { createComposerMedia } from './composer/media.svelte.js';
   import { createComposerPicker } from './composer/picker.svelte.js';
   import { createComposerSubmission } from './composer/submission.svelte.js';
+  import ComposerWidgetStates from './composer/ComposerWidgetStates.svelte';
   import './composer/composer.css';
 
   let {
@@ -870,6 +871,7 @@
       {/each}
     </div>
   {/if}
+  <ComposerWidgetStates sessionKey={draftKey} />
   {#if footer}
     <div class="composer-footer">
       {@render footer()}

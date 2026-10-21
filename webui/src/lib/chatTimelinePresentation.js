@@ -115,6 +115,13 @@ export {
   isTerminalEvent,
 } from './chatTimelinePresentation/messages.js';
 export {
+  isShowWidgetTool,
+  showWidgetFromTool,
+  widgetStateEntries,
+  widgetStateJson,
+  widgetStatePreview,
+} from './chatTimelinePresentation/widgets.js';
+export {
   toolStatus,
   isToolPreparing,
   toolArguments,

@@ -88,7 +88,7 @@ def _optional_widget_states(params: JsonObject) -> list[tuple[str, JsonObject]]:
 
     ``[{widget_id, state}]``: values the user changed in Agent widgets, sent
     with this message. Absent -> empty list. Each ``state`` is a JSON object of
-    at most ``MAX_WIDGET_STATE_BYTES`` serialized; ids appear at most once.
+    at most ``MAX_WIDGET_STATE_BYTES`` as compact UTF-8 JSON; ids appear at most once.
     """
     if "widget_states" not in params:
         return []
@@ -119,7 +119,11 @@ def _optional_widget_states(params: JsonObject) -> list[tuple[str, JsonObject]]:
                 RPC_ERROR_INVALID_REQUEST, "params.widget_states state must be a JSON object"
             )
         try:
-            size = len(json.dumps(state, ensure_ascii=False, allow_nan=False).encode("utf-8"))
+            size = len(
+                json.dumps(
+                    state, ensure_ascii=False, allow_nan=False, separators=(",", ":")
+                ).encode("utf-8")
+            )
         except TypeError, ValueError:
             raise RpcError(
                 RPC_ERROR_INVALID_REQUEST, "params.widget_states state must be a JSON object"

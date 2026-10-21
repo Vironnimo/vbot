@@ -38,6 +38,7 @@
     metaForEvent,
     reasoningDurationLabel,
     shouldRenderMessage,
+    showWidgetFromTool,
     speechArtifactFromResult,
     takeoverSeparatorLabel,
     goalEventLabel,
@@ -59,6 +60,8 @@
   import TextArea from '../ui/TextArea.svelte';
   import ChatCompactionSeparator from './ChatCompactionSeparator.svelte';
   import ChatSubAgentMessage from './ChatSubAgentMessage.svelte';
+  import ChatWidget from './ChatWidget.svelte';
+  import ChatWidgetState from './ChatWidgetState.svelte';
   import MarkdownContent from './MarkdownContent.svelte';
   import ChatReasoning from './ChatReasoning.svelte';
   import ToolDetails from './ToolDetails.svelte';
@@ -495,10 +498,15 @@
       {onSubAgentContextMenu}
     />
   </div>
+{:else if item.type === 'widget_state'}
+  <div class="widget-state-message-row">
+    <ChatWidgetState {item} />
+  </div>
 {:else if item.type === 'event'}
   {#if isToolEvent(item.event)}
     {@const eventToolRow = toolRowFromEvent(item.event)}
     {@const eventPresentation = toolRowPresentation(eventToolRow)}
+    {@const eventWidget = showWidgetFromTool(eventToolRow)}
     <article class="msg assistant">
       <div class="msg-header">
         <span class="msg-author">{labelForEvent(item.event)}</span>
@@ -569,6 +577,9 @@
               autoplay={viewState.claimAutoplay(speechArtifact.url)}
             />
           {/if}
+        {/if}
+        {#if eventWidget}
+          <ChatWidget widget={eventWidget} />
         {/if}
       </div>
     </article>
