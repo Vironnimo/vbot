@@ -1,55 +1,75 @@
 # E2E Test Workflow
 
-Run the Playwright E2E suite only when the user explicitly requests E2E test execution. A request to implement, verify, live-test, or run the normal tests does not implicitly authorize this suite.
+An end-to-end test is a sweep of the whole running product: coding agents drive the built WebUI in a real browser against vBot's deterministic fake Provider, work through every journey of `.vorch/workflows/e2e-journeys.md`, look further wherever something seems off, and fix the clear regressions they find. There is no scripted E2E suite. Run this workflow only when the user asks for an E2E test; neither CI nor the release runs it.
 
-## Scope and Current Baseline
+You orchestrate: you prepare one isolated environment per journey group, hand the groups to tester subagents running in parallel, triage what they report, fix what is clear and bounded, and report the rest.
 
-The suite lives in `tests/e2e/` as its own Node package and exercises the built WebUI against a dedicated vBot server and fake Provider. It is intentionally not part of the regular pytest and Vitest runs. `.github/workflows/e2e.yml` installs its clean CI prerequisites and runs the complete Chromium job; it is not part of CI or the Release gate, and only runs when the maintainer dispatches it. Failed runs upload evidence for seven days.
+## 1. Prepare
 
-The suite is not kept green continuously: the maintainer runs it occasionally and then has the failures fixed. Report failures accurately, and do not fix, skip, delete, or rebaseline failing tests unless the user explicitly asks to stabilize or update the E2E suite. Changes elsewhere do not need to keep it green, and an E2E failure does not broaden unrelated task scope.
+Start from the primary checkout on a committed `main` and record the commit you test (`git rev-parse --short HEAD`). Check the prerequisites once: the current Python environment, `webui/node_modules/`, `node` and `python` on `PATH` (the fake Provider, the Tool-cancellation command and the terminal harness need them), and the `playwright-cli` Skill. Do not install missing prerequisites; report them as blocked.
 
-## What Belongs in the Suite
+Pick a run id (the date, `YYYY-MM-DD`, plus a suffix when it is taken) and an evidence folder outside every checkout, so it survives the worktree cleanup: `<repo>-data/e2e-runs/<run-id>/` (for `C:/Development/projects/vBot`: `C:/Development/projects/vBot-data/e2e-runs/<run-id>/`).
 
-A spec earns its place by proving a user journey across the browser, the server, and the fake Provider that the Python and Vitest suites cannot: live streaming and Run reattachment, several clients on one Session, real PTY terminals, uploads and served media, persistence across reloads, Scheduled Runs that actually fire, and configuration that must reach the Provider request. Tool semantics, form validation, and component interaction belong in the lower-level suites; an E2E spec that only repeats them adds runtime and locator maintenance without new evidence.
-
-Drive the journey under test through the browser. Prerequisites that another spec already covers through the UI, such as creating an Agent, go through RPC with `tests/rpc-support.js`, and cleanup runs in `finally` so a failed assertion does not leak state into later specs. The fake Provider and its settings fixture belong to the live-testing tooling (`scripts/fake-provider.mjs`, `scripts/fake-provider-settings.json`, started by `scripts/test-env.py`); the suite and worktree live-testing environments both run it, so a scenario may deliberately serve manual testing, such as the website preview demo; any other scenario is removed together with its last spec.
-
-A fake Provider scenario reads its request as a Model does: Tool Results arrive as their plain-text rendering, not as JSON envelopes (`providers/request-policy.md`), and the shell Tool is offered and replayed as `powershell` on Windows and `bash` elsewhere (`tools.md` -> Model Tool names). Key scenario progress on the scenario's own calls and on result text, never on envelope fields or a single shell name.
-
-## Prerequisites
-
-For a local agent run, start from the repository root. The current Python environment, `webui/node_modules/`, `tests/e2e/node_modules/`, and the Playwright Chromium browser must already be available. Do not install missing dependencies or browsers as part of a local E2E run; report the missing prerequisite as blocked. One exception: in a task worktree, which `python scripts/worktree.py create` sets up without the E2E package, run the suite from the worktree root after `npm ci --prefix tests/e2e`; it installs only the locked packages, while Playwright finds the Chromium browser in its per-user cache. Worktrees may run the suite in parallel, so set both port overrides there. The GitHub workflow is the clean-run exception: it deliberately installs the locked npm dependencies, Chromium, and required Linux libraries on its disposable runner before executing the suite.
-
-The suite owns ports `8437` for vBot and `8438` for its fake Provider by default. Override them with `VBOT_E2E_PORT` and `VBOT_E2E_PROVIDER_PORT` when either port is unavailable, and use `VBOT_E2E_PYTHON` when the required Python interpreter is not the platform default. Never point the suite at product data or a user-owned server.
-
-## Run the Suite
-
-Run the full suite with the HTML report disabled by its checked-in Playwright configuration:
+Give each journey group of the catalog its own worktree, so groups run in parallel without sharing state:
 
 ```bash
-npm --prefix tests/e2e test
+python scripts/worktree.py create e2e-<group>
 ```
 
-Run a specific spec by passing its path relative to the E2E package:
+`create` makes the worktree from `main`, with its own ports, a fresh data directory and Settings seeded for the fake Provider (`scripts/README-worktree.md`). Then start its environment from inside that worktree:
 
 ```bash
-npm --prefix tests/e2e test -- tests/primary-navigation.spec.js
+python scripts/test-env.py start
 ```
 
-Global setup recreates only `tests/e2e/.data/` and `tests/e2e/.resources/`, starts the dedicated fake Provider, builds the WebUI, and starts vBot on the dedicated target. Global teardown stops both test-owned processes. The suite uses no real Provider credentials.
+It builds the WebUI, starts the fake Provider declared in the worktree's Settings and then vBot, and prints the URL. Confirm that the output reports the fake Provider as started; without it every Run fails. Record per group the worktree path, URL, data directory and fake Provider port. If startup fails, keep the reported error and log path and report that group as blocked instead of repairing the environment.
 
-## Evidence and Failures
+Never point a sweep at the installed product's data, the primary `vBot-data/dev` instance or any server you did not start.
 
-Playwright writes its HTML report, traces, screenshots, videos, and test results under `tests/e2e/artifacts/`; these artifacts are local and git-ignored. Report the command, target ports, passed and failed specs, and the relevant artifact paths. For each failure, distinguish an outdated expectation or locator from an observed product regression when the evidence allows it; otherwise report the ambiguity without guessing.
+## 2. Sweep
 
-Do not treat a red suite as permission to change application code or tests. Preserve the artifacts needed to diagnose the run and follow the user's requested scope.
+Launch one tester subagent per group with the Agent tool, all in one message so they run concurrently. They need no `isolation`: each works in the worktree you made for it and changes no files there. Each brief names the group, its worktree path, URL, data directory, fake Provider port and evidence folder `<run-id>/<group>/`, and tells the tester to read, in full, `.vorch/workflows/e2e-journeys.md` -> General and its group's section, this section and section 3 of `.vorch/workflows/web-test-workflow.md` (browser testing rules).
 
-## Cleanup After Interruption
+Rules for testers:
 
-Normal runs clean up through Playwright global teardown. After an interrupted or aborted run, explicitly stop the dedicated vBot server and fake Provider:
+- **Report, never repair.** A tester changes no code, test, journey or Setting beyond what a journey's steps do, and reports every failure.
+- **Own browser session.** Use the `playwright-cli` Skill with a session named after the group (`-s=e2e-<group>`), so parallel testers never share a browser. Take a snapshot before interacting; refer to elements by what the snapshot shows, since the catalog names visible labels, not selectors.
+- **Order and state.** Run the group's journeys in catalog order: later journeys rely on the cleanup of earlier ones. Start each journey in a new Session unless its steps continue one, and do its cleanup even when it failed.
+- **The catalog is the minimum.** When something looks wrong or unexpected beyond the journey's expectations (a flicker, a stale count, a console error, a duplicated message, a confusing state), stay with it: repeat it, vary the input, check the neighboring behavior, reload, and read the browser console and the server log (`<data-dir>/logs/`). Report what you observed, even when no expectation names it.
+- **Timing.** Some journeys act inside a window of a few seconds (marked in the catalog). Prepare the next command before you trigger the Run. A missed window is a tester miss, not a failure: repeat the journey in a new Session, and report a failure only when it reproduces.
+- **Evidence.** Save screenshots into the group's evidence folder (`playwright-cli screenshot --filename=<path>`), at least one for every pass or failure claim and several across a streaming Run. An RPC response alone does not prove what the WebUI showed.
 
-```bash
-npm --prefix tests/e2e run cleanup
-```
+Each tester reports, per journey: passed, failed or blocked, with screenshot paths. A failure adds the steps to reproduce it, expected and actual behavior, relevant console and server log lines, and the tester's guess whether the product or the journey is wrong. Further observations come in their own list. Before reporting, the tester closes its browser session.
 
-Confirm that both dedicated ports are released. Never stop a process on a different target as part of this cleanup.
+## 3. Triage
+
+Sort every failure and observation, reading the evidence yourself and reproducing it in the group's environment when the report leaves doubt:
+
+- **Regression:** the product breaks a behavior the journey expects and nothing intended that change.
+- **Outdated journey:** the product changed on purpose (check `git log` and the owning domain map); the journey, or the fake Provider scenario behind it, is stale.
+- **Tester or environment:** a missed window, state leaked from an earlier journey, a missing prerequisite. Repeat the journey cleanly before you dismiss it.
+- **Unclear:** the evidence does not decide. Say so; do not guess.
+
+## 4. Fix
+
+Fix in one worktree of its own, never in a sweep worktree: `python scripts/worktree.py create e2e-fixes`.
+
+- **Regressions with a clear, bounded, low-risk fix:** fix them following `AGENTS.md` (Architecture, Testing: extend the test that owns the behavior), one commit per fix.
+- **Outdated journeys:** update the journey in `.vorch/workflows/e2e-journeys.md`, and the fake Provider scenario when needed, in their own commit.
+- **Everything else** (a fix that is large, risky or needs a product decision, or an unclear cause): do not fix it. Report it, and record each confirmed one in `.vorch/FLAGGED.md` of the primary checkout.
+
+Then start the fix worktree's own environment (`python scripts/test-env.py start` inside it) and repeat every affected journey in the browser. A fix counts only once its journey passes there. Stop that environment and merge: `python scripts/worktree.py merge e2e-fixes`. Push only when the user asks for it.
+
+## 5. Clean up
+
+Inside each sweep worktree run `python scripts/test-env.py stop` and confirm the server and fake Provider stopped; then remove it with `python scripts/worktree.py delete e2e-<group>`, which also removes its data directory. Close any browser session still open. The evidence folder stays.
+
+## 6. Report
+
+Report to the user: the tested commit; per group the passed, failed and blocked journeys; each failure with its classification, reproduction and evidence path; the fixes with their merged commits and the journeys that confirmed them; what is left open, and which items went into `FLAGGED.md`; and product areas that have no journey yet, as suggestions for the catalog.
+
+## Maintaining the catalog
+
+A journey earns its place by proving user-visible behavior that crosses the browser, the server and the fake Provider: live streaming and Run reattachment, several clients on one Session, real terminals, uploads and served media, persistence across reloads, Scheduled Runs that actually fire, configuration that must reach the Provider request. Tool semantics, form validation details and component behavior belong in the pytest and Vitest suites. Product changes do not have to update the catalog; the next sweep reconciles it.
+
+The fake Provider and its Settings fixture (`scripts/fake-provider.mjs`, `scripts/fake-provider-settings.json`, started by `scripts/test-env.py`) serve the sweep and manual live testing alike; `scripts/fake-provider-project/` is the repository fixture of the Project journey. A scenario reads its request as a Model does: Tool results arrive as their plain-text rendering, not as JSON envelopes (`providers/request-policy.md`), and the shell Tool is offered and replayed as `powershell` on Windows and `bash` elsewhere (`tools.md` -> Model Tool names). Key scenario progress on the scenario's own calls and on result text, never on envelope fields or a single shell name. A scenario that neither a journey nor a named manual check uses is removed together with its last journey.

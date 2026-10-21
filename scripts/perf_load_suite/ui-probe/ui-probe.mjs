@@ -29,8 +29,7 @@
 //   The stdin command `select-run` clicks the first entry in the Swarm page's
 //   run list and answers `{"event":"selected"}` (or `select-failed`).
 //
-// Lives outside the Playwright testDir (./tests) so E2E runs never collect it;
-// it reuses the E2E Playwright installation (`npm ci` in tests/e2e).
+// Needs its own Playwright installation: `npm ci` in this folder.
 
 import { writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline";

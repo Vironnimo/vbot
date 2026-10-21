@@ -228,8 +228,9 @@ def build_run_parser() -> argparse.ArgumentParser:
         "--ui",
         action="store_true",
         help="watch one streaming Session (swarm: the Swarm page with the running Swarm) "
-        "in a headless browser and count its RPC calls (needs Node.js, npm ci in tests/e2e "
-        "and a built WebUI); skipped with a message when unavailable",
+        "in a headless browser and count its RPC calls (needs Node.js, npm ci in "
+        "scripts/perf_load_suite/ui-probe and a built WebUI); skipped with a message "
+        "when unavailable",
     )
     measure.add_argument(
         "--ui-profile",

@@ -1,0 +1,8 @@
+{
+  "name": "vbot-perf-ui-probe",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@playwright/test": "^1.61.1"
+  }
+}
