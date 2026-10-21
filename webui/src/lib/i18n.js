@@ -6,6 +6,7 @@ import operations from './i18n/operations.js';
 import insights from './i18n/insights.js';
 import access from './i18n/access.js';
 import secrets from './i18n/secrets.js';
+import permissions from './i18n/permissions.js';
 
 const DEFAULT_LOCALE = 'en';
 
@@ -20,6 +21,7 @@ for (const catalog of [
   insights,
   access,
   secrets,
+  permissions,
 ]) {
   for (const [key, value] of Object.entries(catalog)) {
     if (Object.hasOwn(mergedEnglish, key))

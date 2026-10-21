@@ -726,6 +726,7 @@ describe('Projects controller Team overrides', () => {
           top_p: 0.8,
           thinking_effort: 'low',
           tool_loading: { on_demand: false, always_loaded: ['read'] },
+          permission_rules: { read: 'work_area', deny: ['Read(.env)'] },
         },
         effective: {
           model: { value: 'openai/gpt-mini', source: 'override' },
@@ -761,6 +762,7 @@ describe('Projects controller Team overrides', () => {
       tool_access: { mode: 'all' },
       // Switched off, the override keeps its Always loaded list.
       tool_loading: { on_demand: false, always_loaded: ['read'] },
+      permission_rules: { read: 'work_area', deny: ['Read(.env)'] },
     });
     expect(controller.overrideDraft('planner')).toEqual({
       model: 'openai/gpt-5.2',
@@ -770,6 +772,7 @@ describe('Projects controller Team overrides', () => {
       compaction_policy: null,
       tool_access: { mode: 'all' },
       tool_loading: null,
+      permission_rules: null,
     });
   });
 

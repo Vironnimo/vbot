@@ -1,3 +1,4 @@
+import { normalizePermissionRules } from '../permissionRules.js';
 import { normalizeToolLoading } from '../toolAccess.js';
 import { isPlainObject } from '../values.js';
 import { textOrEmpty, positiveIntegerOrDefault } from './values.js';
@@ -81,6 +82,31 @@ export function buildToolLoadingDefaultPayload(formValues) {
     defaults: {
       agent: {
         tool_loading: normalizeToolLoading(formValues?.tool_loading),
+      },
+    },
+  };
+}
+
+// The shared Permission Rules default (`defaults.agent.permission_rules`):
+// null while Agents inherit no rules.
+export function normalizePermissionRulesDefaultSettings(rawSettings) {
+  const source =
+    isPlainObject(rawSettings) && !('defaults' in rawSettings)
+      ? rawSettings
+      : rawSettings?.defaults?.agent;
+  return {
+    permission_rules: normalizePermissionRules(source?.permission_rules),
+  };
+}
+
+// A sparse `defaults.agent` update; null removes the shared default.
+export function buildPermissionRulesDefaultPayload(formValues) {
+  return {
+    defaults: {
+      agent: {
+        permission_rules: normalizePermissionRules(
+          formValues?.permission_rules,
+        ),
       },
     },
   };

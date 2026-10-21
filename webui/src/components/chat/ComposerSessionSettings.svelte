@@ -34,6 +34,7 @@
   import Dropdown from '../Dropdown.svelte';
   import SearchableDropdown from '../SearchableDropdown.svelte';
   import SaveStatus from '../ui/SaveStatus.svelte';
+  import SessionPermissionsBadge from '../permissions/SessionPermissionsBadge.svelte';
 
   const noop = () => {};
 
@@ -446,6 +447,13 @@
         />
       </span>
     {/if}
+    <SessionPermissionsBadge
+      agentAddress={view.agentAddress}
+      sessionId={view.sessionId}
+      workingProjectId={view.kind === 'draft' && !view.project.team
+        ? (view.project.value ?? null)
+        : undefined}
+    />
     {#if speedLabel || latencyLabel}
       <span class="session-settings__field session-settings__field--icon">
         <svg

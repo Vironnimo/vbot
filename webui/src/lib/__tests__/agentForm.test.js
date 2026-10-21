@@ -35,6 +35,7 @@ describe('createAgentFormValues', () => {
       custom_system_prompt_enabled: false,
       librarian_enabled: true,
       tool_loading: null,
+      permission_rules: null,
     });
   });
 
@@ -334,6 +335,26 @@ describe('normalizeAgentForm', () => {
       normalizeAgentForm({ id: 'coder', tool_loading: edited }).payload
         .tool_loading,
     ).toEqual(sent ?? undefined);
+  });
+
+  // Permission Rules: an edit sends the own rule set, null removes it; a rule
+  // without a pattern keeps the form from saving.
+  it.each([
+    ['set', null, { read: 'work_area' }, { read: 'work_area' }, true],
+    ['removed', { write: 'scratch' }, null, null, true],
+    ['incomplete', null, { allow: ['Read()'] }, { allow: ['Read()'] }, false],
+  ])('sends Permission Rules %s', (_label, saved, edited, sent, valid) => {
+    const initialValues = createAgentFormValues({
+      id: 'coder',
+      config: { permission_rules: saved },
+    });
+    const result = normalizeAgentForm(
+      { ...initialValues, permission_rules: edited },
+      { mode: AGENT_FORM_MODE_EDIT, initialValues },
+    );
+
+    expect(result.isValid).toBe(valid);
+    expect(result.payload).toEqual({ id: 'coder', permission_rules: sent });
   });
 });
 

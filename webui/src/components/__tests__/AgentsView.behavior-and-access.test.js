@@ -461,7 +461,7 @@ describe('AgentsView behavior and access', () => {
     });
   });
 
-  it('orders access sections as Tools, Skills, then Sub-Agents', async () => {
+  it('orders access sections as Tools, Permissions, Skills, then Sub-Agents', async () => {
     rpcMock.mockImplementation(
       createAgentsRpcMock({
         agents: [baseAgent(), { ...baseAgent(), id: 'worker' }],
@@ -475,13 +475,14 @@ describe('AgentsView behavior and access', () => {
     const panel = document.querySelector('#agent-detail-panel-access');
     expect(panel.hidden).toBe(false);
     const sections = Array.from(panel.querySelectorAll(':scope > .s-section'));
-    expect(sections).toHaveLength(3);
+    expect(sections).toHaveLength(4);
     expect(sections[0].contains(toolAccessToggle('subagent'))).toBe(true);
+    expect(sections[1].querySelector('[data-permission-rules]')).not.toBeNull();
     expect(
-      sections[1].contains(getButtonByAriaLabel('Toggle skill sample-skill')),
+      sections[2].contains(getButtonByAriaLabel('Toggle skill sample-skill')),
     ).toBe(true);
     expect(
-      sections[2].contains(getButtonByAriaLabel('Toggle agent worker')),
+      sections[3].contains(getButtonByAriaLabel('Toggle agent worker')),
     ).toBe(true);
   });
 
@@ -501,7 +502,7 @@ describe('AgentsView behavior and access', () => {
     mountedComponent = mount(AgentsView, { target: document.body });
     const accessSections = () =>
       document.body.querySelectorAll('#agent-detail-panel-access > .s-section');
-    await waitForCondition(() => accessSections().length === 2, 100);
+    await waitForCondition(() => accessSections().length === 3, 100);
 
     expect(document.body.textContent).not.toContain(
       t('agents.form.subagentTargets'),
