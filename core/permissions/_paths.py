@@ -226,6 +226,34 @@ def literal_prefix(lexical: LexicalPath) -> LexicalPath:
     return LexicalPath(lexical.root, tuple(segments), lexical.unsafe)
 
 
+def patterns_below(pattern_key: str, folder_key: str) -> set[str]:
+    """What of the pattern ``pattern_key`` can match below ``folder_key``, relative to it.
+
+    Both are comparison keys. Each result is a relative pattern in the same
+    syntax that also covers everything below what it names; together they cover
+    at least every match below the folder. ``**`` stands for the whole folder.
+    """
+    found = _relative(tuple(pattern_key.rstrip("/").split("/")), folder_key.rstrip("/").split("/"))
+    return {pattern.removesuffix("/**") for pattern in found}
+
+
+def _relative(pattern: tuple[str, ...], folder: list[str]) -> set[str]:
+    for index, segment in enumerate(folder):
+        if index == len(pattern):
+            return {"**"}
+        if pattern[index] == "**":
+            rest = pattern[index + 1 :]
+            # ``**`` absorbs some of the folder's segments, or all of them and more.
+            found = {"/".join(("**", *rest))}
+            for skip in range(index, len(folder)):
+                found |= _relative(rest, folder[skip:])
+            return found
+        if compile_pattern(pattern[index]).fullmatch(segment) is None:
+            return set()
+    rest = pattern[len(folder) :]
+    return {"/".join(rest)} if rest else {"**"}
+
+
 def _file_url_path(text: str, *, windows: bool) -> tuple[str, str | None]:
     parts = urlsplit(text)
     host = parts.netloc

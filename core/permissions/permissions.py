@@ -37,6 +37,7 @@ from core.permissions._paths import (
     literal_prefix,
     normalize_access_path,
     path_key,
+    patterns_below,
     resolve_text,
     split_lexical,
 )
@@ -337,6 +338,66 @@ class PermissionBoundary:
                 )
         return None
 
+    def refusable_below(self, folder: PathLike, access: PathAccess) -> tuple[str, ...]:
+        """Patterns, relative to ``folder``, of what below it may be refused.
+
+        Below a folder the boundary permits, only deny rules, protected locations
+        and links leading out can refuse an entry, because bases and allow rules
+        always cover whole subtrees. Each pattern uses the rule syntax with ``/``
+        separators and covers what it names and everything below; ``**`` stands
+        for the whole folder. Together they cover every refused entry except
+        links, which a caller checks with :meth:`check_path`. Empty for full
+        access and for a folder below which nothing but links can be refused.
+        """
+        if not self._layers:
+            return ()
+        normalized = normalize_access_path(
+            folder, base=self._workdir, home=self._home, windows=self._windows
+        )
+        folders = tuple(
+            dict.fromkeys((self._key(normalized.lexical), self._key(normalized.resolved)))
+        )
+        keys: list[str] = []
+        for layer in self._compiled:
+            rules = layer.read_deny + layer.edit_deny if access == "write" else layer.read_deny
+            keys.extend(key for rule in rules for key in rule.keys)
+        for area in (self._agent_config, *(self._install_dirs if access == "write" else ())):
+            keys.extend(area.keys if area is not None else ())
+        if not all(self._data_dir_allowed(key, access) for key in folders):
+            keys.extend(self._data_dirs.keys)
+        found: dict[str, None] = {}
+        for key in keys:
+            for below in folders:
+                found.update(dict.fromkeys(sorted(patterns_below(key, below))))
+        return tuple(found)
+
+    def readable_entries(
+        self, folder: PathLike, entries: Iterable[os.DirEntry[str]]
+    ) -> list[os.DirEntry[str]]:
+        """The entries of a listing of the readable ``folder`` that may be read.
+
+        Only links and junctions are checked unless :meth:`refusable_below`
+        names something below the folder, so listing a plain permitted folder
+        costs no check per entry; full access checks nothing.
+        """
+        listed = list(entries)
+        if not self._layers:
+            return listed
+        every = bool(self.refusable_below(folder, "read"))
+        kept: list[os.DirEntry[str]] = []
+        for entry in listed:
+            if not every:
+                try:
+                    linked = entry.is_symlink() or entry.is_junction()
+                except OSError:
+                    linked = True
+                if not linked:
+                    kept.append(entry)
+                    continue
+            if self.check_path(entry.path, "read") is None:
+                kept.append(entry)
+        return kept
+
     def check_host(self, host: str) -> PermissionRefusal | None:
         """Whether a web access to ``host`` is permitted."""
         if not self._layers:
@@ -492,21 +553,21 @@ class PermissionBoundary:
                 return "agent_config"
             if access == "write" and any(area.contains(key) for area in self._install_dirs):
                 return "installation"
-            if not self._data_dirs.contains(key):
-                continue
-            if access == "write":
-                allowed = _contains(self._scratch, key) or (
-                    _contains(self._workspace, key) and self._workdir_area.contains(key)
-                )
-            else:
-                allowed = (
-                    _contains(self._scratch, key)
-                    or _contains(self._workspace, key)
-                    or any(area.contains(key) for area in self._readable)
-                )
-            if not allowed:
+            if self._data_dirs.contains(key) and not self._data_dir_allowed(key, access):
                 return "data_dir"
         return None
+
+    def _data_dir_allowed(self, key: str, access: PathAccess) -> bool:
+        """Whether ``key`` lies in a part of the data directory ``access`` may reach."""
+        if access == "write":
+            return _contains(self._scratch, key) or (
+                _contains(self._workspace, key) and self._workdir_area.contains(key)
+            )
+        return (
+            _contains(self._scratch, key)
+            or _contains(self._workspace, key)
+            or any(area.contains(key) for area in self._readable)
+        )
 
 
 PermissionBoundary.UNRESTRICTED = PermissionBoundary()
@@ -558,6 +619,8 @@ def _contains(area: _Area | None, key: str) -> bool:
 @dataclass(frozen=True, slots=True)
 class _PathRule:
     rule: PermissionRule
+    # Comparison keys of the pattern as written and with its literal prefix resolved.
+    keys: tuple[str, ...]
     patterns: tuple[re.Pattern[str], ...]
     literal: str | None
 
@@ -570,9 +633,9 @@ class _PathRule:
             resolved = split_lexical(resolve_text(prefix.text, windows=windows), windows=windows)
             rest = lexical.segments[len(prefix.segments) :]
             variants.append(LexicalPath(resolved.root, resolved.segments + rest).text)
-        keys = dict.fromkeys(path_key(variant, windows=windows) for variant in variants)
+        keys = tuple(dict.fromkeys(path_key(variant, windows=windows) for variant in variants))
         literal = None if has_wildcard(lexical.text) else path_key(lexical.text, windows=windows)
-        return cls(rule, tuple(compile_pattern(key) for key in keys), literal)
+        return cls(rule, keys, tuple(compile_pattern(key) for key in keys), literal)
 
     def matches(self, key: str) -> bool:
         return any(pattern.fullmatch(key) is not None for pattern in self.patterns)

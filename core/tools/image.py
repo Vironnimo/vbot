@@ -24,6 +24,7 @@ from core.model_tasks import (
 from core.model_tasks.artifacts import OutputDirectoryError, OutputWriteError
 from core.model_tasks.image import DEFAULT_IMAGE_ANALYSIS_MAX_IMAGES
 from core.model_tasks.image_profile import ImageProfile
+from core.permissions import PermissionDenied
 from core.tools._image_inputs import (
     UnusableImageError,
     analysis_image_label,
@@ -461,8 +462,14 @@ def _generate_image_output_dir(context: ToolContext, arguments: JsonObject) -> P
     if output_dir:
         return context.resolve_path(output_dir, access="write")
 
-    root = context.workspace if context.project_id is None else context.effective_cwd
-    return root / _GENERATE_IMAGE_DIRECTORY_NAME
+    if context.project_id is None:
+        # The Workspace default is vBot's own folder, which the rules allow.
+        return context.workspace / _GENERATE_IMAGE_DIRECTORY_NAME
+    default = context.effective_cwd / _GENERATE_IMAGE_DIRECTORY_NAME
+    refusal = context.permissions.check_path(default, "write")
+    if refusal is not None:
+        raise PermissionDenied(refusal)
+    return default
 
 
 def register_generate_image_tool(registry: ToolRegistry, image_service: Any) -> None:

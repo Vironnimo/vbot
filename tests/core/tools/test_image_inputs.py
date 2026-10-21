@@ -19,6 +19,7 @@ from core.model_tasks import (
     ImageUnderstandingUnavailableError,
     ImageUnsupportedMediaTypeError,
 )
+from core.permissions import BoundaryContext, PermissionBoundary, normalize_permission_rules
 from core.providers.errors import NetworkError, ProviderAuthError, ProviderRateLimitError
 from core.tools import InvalidToolResultError
 from core.tools.image import ANALYZE_IMAGE_TOOL_NAME
@@ -173,6 +174,39 @@ async def test_unusable_local_images_name_the_files_meant_without_substituting(
     assert [item["filename"] for item in context.presentation_media] == [
         Path(item).name for item in images
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("images", "code"),
+    [
+        (["private/dog.png"], "permission_denied"),
+        (["photos"], "image_read_error"),
+        (["photos/cat.jpg"], "image_not_found"),
+    ],
+)
+async def test_images_the_rules_refuse_are_never_shown_or_suggested(
+    photos: Path, images: list[str], code: str
+) -> None:
+    write_image(photos / "private" / "dog.png")
+    boundary = PermissionBoundary.build(
+        normalize_permission_rules(
+            {"deny": ["Read({workdir}/private/**)", "Read({workdir}/photos/cat.png)"]}
+        ),
+        BoundaryContext(workdir=photos, home=photos / "home", data_dir=photos / "data"),
+    )
+    service = ImageService()
+    context = make_context(photos, ANALYZE_IMAGE_TOOL_NAME, permissions=boundary)
+
+    result = await dispatch_as_executor(
+        image_registry(service), context, {"prompt": "Describe", "images": images}
+    )
+
+    assert result["error"]["code"] == code
+    assert "cat.png" not in result["error"]["message"]
+    assert service.analyzed is None
+    if code == "permission_denied":
+        assert context.presentation_media == []
 
 
 @pytest.mark.asyncio

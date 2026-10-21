@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from core.permissions import BoundaryContext, PermissionBoundary, normalize_permission_rules
 from tests.core.tools.channel_send_test_support import (
     channel_send,
     delivered,
@@ -223,4 +224,27 @@ def test_files_that_cannot_be_sent_are_refused(
         assert all(part in result for part in message)
     else:
         assert result == message.replace("<missing path>", missing_path)
+    assert tool.sent() == []
+
+
+@pytest.mark.parametrize(
+    ("file_paths", "code"),
+    [(["private.txt"], "permission_denied"), (["private"], "invalid_arguments")],
+)
+def test_files_the_rules_refuse_are_neither_sent_nor_suggested(
+    tmp_path: Path, file_paths: list[str], code: str
+) -> None:
+    tool = channel_send(tmp_path)
+    _workspace_files(tool.workspace)
+    (tool.workspace / "private.txt").write_bytes(b"secret")
+    boundary = PermissionBoundary.build(
+        normalize_permission_rules({"deny": ["Read({workdir}/private.txt)"]}),
+        BoundaryContext(workdir=tool.workspace, home=tmp_path / "home", data_dir=tmp_path / "data"),
+    )
+
+    envelope = tool.call({"file_paths": file_paths}, permissions=boundary)
+
+    assert envelope["error"]["code"] == code
+    # A missing name never points at the refused file beside it.
+    assert code == "permission_denied" or "private.txt" not in envelope["error"]["message"]
     assert tool.sent() == []

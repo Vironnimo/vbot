@@ -834,7 +834,12 @@ def _start_failure(
         return tool_failure(
             "command_not_started",
             f"{SHELL_MODEL_NAME} was not run: "
-            f"{_missing_workdir(call.workdir, given=given, cwd=context.effective_cwd)}",
+            + _missing_workdir(
+                call.workdir,
+                given=given,
+                cwd=context.effective_cwd,
+                permissions=context.permissions,
+            ),
             retryable=False,
         )
     _LOGGER.warning("Starting a shell command failed", exc_info=error)
