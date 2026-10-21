@@ -208,7 +208,7 @@ class RowPainter:
                 mark = (_SPINNER[int(monotonic() * 10) % len(_SPINNER)], self.style("warning"))
             elif status in _FAILED:
                 mark = ("●", self.style("error"))
-            elif status in {"cancelled", "partial", "interrupted"}:
+            elif status in {"cancelled", "partial", "interrupted", "refused"}:
                 mark = ("●", self.style("warning"))
             else:
                 mark = ("●", self.style("success"))
