@@ -17,7 +17,8 @@
   // tab, and Close. The state comes from the displayed Session's
   // `portal.list` projection, shared by all its cards
   // (`lib/portals.svelte.js`); the credential in the Portal's address stays
-  // in that memory and in the rendered link and frame.
+  // in that memory and in the rendered link and frame. The frame keeps the
+  // app's own origin (another port) but may not navigate the WebUI's tab.
   import { t } from '$lib/i18n.js';
   import { mountHold } from '$lib/mountHold.js';
   import {
@@ -215,6 +216,7 @@
       src={url}
       {title}
       referrerpolicy="no-referrer"
+      sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"
     ></iframe>
   {/if}
 </section>
