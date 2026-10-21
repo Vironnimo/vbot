@@ -118,6 +118,26 @@ export function getSessionPermissions(
   return rpc('permissions.session', params, options);
 }
 
+// Remove the limits a Session inherited from the Session that started it or a
+// scheduled job; its later Runs work under the Agent's own rules only.
+export function clearSessionCeiling({ agentId, sessionId } = {}, options = {}) {
+  requireNonEmptyString(
+    agentId,
+    'Agent id must be a non-empty string',
+    'permissions.clear_session_ceiling',
+  );
+  requireNonEmptyString(
+    sessionId,
+    'Session id must be a non-empty string',
+    'permissions.clear_session_ceiling',
+  );
+  return rpc(
+    'permissions.clear_session_ceiling',
+    { agent_id: agentId, session_id: sessionId },
+    options,
+  );
+}
+
 export function renameAgent(id, newId, options = {}) {
   requireNonEmptyString(
     id,

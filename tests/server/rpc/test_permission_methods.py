@@ -48,6 +48,7 @@ def _state(tmp_path: Path, defaults: JsonObject) -> SimpleNamespace:
     projects = ProjectStore(data_dir)
     checker = ModelConfigurationChecker(_NoModels(), _NoModels(), _NoCredentials())
     resolver = AgentResolver(agents, projects, checker, lambda: defaults, sessions=sessions)
+    events: list[tuple[str, JsonObject]] = []
     return SimpleNamespace(
         runtime=SimpleNamespace(
             agents=agents,
@@ -55,7 +56,10 @@ def _state(tmp_path: Path, defaults: JsonObject) -> SimpleNamespace:
             chat_sessions=sessions,
             projects=projects,
             storage=StorageManager(data_dir),
-        )
+        ),
+        # What the RPCs published, as (event, payload).
+        events=events,
+        event_bus=SimpleNamespace(publish=lambda event, payload: events.append((event, payload))),
     )
 
 
@@ -255,7 +259,7 @@ async def test_an_unrestricted_session_reports_full_access(tmp_path: Path) -> No
     for agent_id, params in (("coder", {"session_id": "s1"}), ("coder", {}), ("free", {})):
         result = await rpc_result(state, "permissions.session", agent_id=agent_id, **params)
 
-        assert result == {"restricted": False, "layers": []}
+        assert result == {"restricted": False, "layers": [], "stored_ceiling": False}
 
 
 @pytest.mark.asyncio
@@ -293,3 +297,19 @@ async def test_a_restricted_session_describes_its_rules_and_inherited_ceiling(
     assert inherited["source"] == "parent"
     assert inherited["read"] is None
     assert inherited["write"] == [_posix(tmp_path / "parent-scratch")]
+    assert result["stored_ceiling"] is True
+
+    # The user lifts the inherited ceiling; the Agent's own rules stay.
+    cleared = await rpc_result(
+        state, "permissions.clear_session_ceiling", agent_id="coder", session_id="s1"
+    )
+    repeated = await rpc_result(
+        state, "permissions.clear_session_ceiling", agent_id="coder", session_id="s1"
+    )
+    after = await rpc_result(state, "permissions.session", agent_id="coder", session_id="s1")
+
+    assert (cleared, repeated) == ({"cleared": True}, {"cleared": False})
+    # Only the change tells open views of the Session to reload it.
+    assert [payload["kind"] for _event, payload in state.events] == ["sessions"]
+    assert [layer["source"] for layer in after["layers"]] == ["agent"]
+    assert after["stored_ceiling"] is False

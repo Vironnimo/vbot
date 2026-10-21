@@ -17,6 +17,7 @@ from core.projects._runtime_agent import (
     WorkingProjectMissingError,
 )
 from core.sessions import AGENT_DEFAULT_PROJECT
+from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -25,6 +26,8 @@ if TYPE_CHECKING:
     from core.permissions import PermissionCeiling
     from core.projects.resolver import AgentResolver
     from core.sessions import SessionAddress, SessionWorkingProject, WorkingProjectChoice
+
+_LOGGER = get_logger("projects.sessions")
 
 
 class SessionResolution:
@@ -209,6 +212,35 @@ class SessionResolution:
             }
 
         self._owner._sessions.ensure_metadata(address, join)
+
+    def clear_session_ceiling(self, address: SessionAddress) -> bool:
+        """Remove the Session's stored ceiling; whether it had one.
+
+        The user's decision: later Runs of the Session work under the Agent's
+        own rules only. A Run in progress keeps its boundary, and a later Cron
+        fire or delegation joins its ceiling again.
+        """
+        if self._owner._sessions is None:
+            raise AgentResolutionError("Session Agent overrides are unavailable")
+
+        def clear(metadata: Any) -> None:
+            stored = metadata.get(AGENT_OVERRIDES_META_KEY)
+            if isinstance(stored, dict) and "permission_ceiling" in stored:
+                metadata[AGENT_OVERRIDES_META_KEY] = {
+                    key: value for key, value in stored.items() if key != "permission_ceiling"
+                }
+
+        previous, _updated = self._owner._sessions.ensure_metadata(address, clear)
+        stored = previous.get(AGENT_OVERRIDES_META_KEY)
+        cleared = isinstance(stored, dict) and "permission_ceiling" in stored
+        if cleared:
+            _LOGGER.info(
+                "Session permission ceiling cleared (agent=%s project=%s session=%s)",
+                address.agent_id,
+                address.project_id,
+                address.session_id,
+            )
+        return cleared
 
     def preserve_agent_sessions(self, project_id: str | None, agent_id: str) -> None:
         """Keep existing Sessions' choices before changing their Agent's start values.

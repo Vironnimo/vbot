@@ -2,8 +2,10 @@
 
 ``permissions.validate`` normalizes a candidate rule set without saving it, with
 every problem, the preset it matches and a preview of what it lets the Agent
-reach. ``permissions.session`` describes the limits a Session's Runs work under.
-Both read Agents, so they run on the Session database's pool like Agent reads.
+reach. ``permissions.session`` describes the limits a Session's Runs work under,
+and ``permissions.clear_session_ceiling`` lifts the limits a Session inherited.
+They read Agents or Sessions, so they run on the Session database's pool like
+Agent reads.
 """
 
 from __future__ import annotations
@@ -29,12 +31,14 @@ from core.sessions import SessionAddress, WorkingProjectChoice
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
+from server.rpc.event_bridge import publish_session_changed
 from server.rpc.validation import (
     _draft_working_project,
     _optional_bool,
     _optional_string,
     _reject_unsupported,
     _required_agent_address,
+    _required_session_address,
 )
 
 JsonObject = dict[str, Any]
@@ -143,7 +147,9 @@ async def _session_permissions(state: Any, params: JsonObject) -> JsonObject:
     Sub-Agent's inherited ceiling); without it the result is for a new Session
     in ``working_project_id`` (left out: the Agent's default Project). Each layer
     is described on its own: the Agent's rules (``source`` ``agent``) and every
-    ceiling it inherited (``parent``, ``extension``).
+    ceiling it inherited (``parent``, ``cron``, ``extension``).
+    ``stored_ceiling`` says whether the Session stores an inherited ceiling
+    that ``permissions.clear_session_ceiling`` removes.
     """
     _reject_unsupported(
         params, {"agent_id", "session_id", "working_project_id"}, "permissions.session"
@@ -181,7 +187,7 @@ def _session_summary(
     # Composed without the Working Project first: full access resolves no more.
     permissions = session_permissions(agent, data_dir=data_dir, project_root=None, ceiling=ceiling)
     if not permissions.restricted:
-        return {"restricted": False, "layers": []}
+        return {"restricted": False, "layers": [], "stored_ceiling": False}
     layers: list[JsonObject] = []
     if permissions.rules is not None:
         working = resolver.resolve_working_project(
@@ -199,7 +205,26 @@ def _session_summary(
         )
     for inherited in permissions.ceilings:
         layers.extend(describe_layer(layer) for layer in inherited.layers)
-    return {"restricted": True, "layers": layers}
+    return {"restricted": True, "layers": layers, "stored_ceiling": ceiling is not None}
+
+
+async def _clear_session_ceiling(state: Any, params: JsonObject) -> JsonObject:
+    """Remove the ceiling a Session inherited from a Cron job or a parent Session.
+
+    The user lifts limits a Session keeps for all later Runs; a Run in progress
+    keeps its boundary. ``cleared`` is false when the Session stored none.
+    """
+    _reject_unsupported(params, {"agent_id", "session_id"}, "permissions.clear_session_ceiling")
+    address = _required_session_address(params)
+    try:
+        cleared: bool = await state.runtime.chat_sessions.run_async(
+            state.runtime.agent_resolver.clear_session_ceiling, address
+        )
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    if cleared:
+        publish_session_changed(state, address)
+    return {"cleared": cleared}
 
 
 def _session_values(
@@ -230,4 +255,5 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
     return {
         "permissions.validate": _validate_permission_rules,
         "permissions.session": _session_permissions,
+        "permissions.clear_session_ceiling": _clear_session_ceiling,
     }

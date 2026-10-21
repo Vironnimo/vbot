@@ -131,6 +131,7 @@ export {
   updateAgent,
   validatePermissionRules,
   getSessionPermissions,
+  clearSessionCeiling,
   renameAgent,
   deleteAgent,
   listModels,

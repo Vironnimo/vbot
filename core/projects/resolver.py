@@ -473,6 +473,10 @@ class AgentResolver:
         """Narrow the Session's stored permission ceiling by *ceiling*. Blocking."""
         self._session_resolution.join_session_ceiling(address, ceiling)
 
+    def clear_session_ceiling(self, address: SessionAddress) -> bool:
+        """Remove the Session's stored permission ceiling; whether it had one. Blocking."""
+        return self._session_resolution.clear_session_ceiling(address)
+
     def preserve_agent_sessions(self, project_id: str | None, agent_id: str) -> None:
         """Keep existing Sessions' choices before changing their Agent's start values.
 

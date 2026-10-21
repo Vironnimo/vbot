@@ -109,4 +109,10 @@ export default Object.freeze({
   'permissions.session.source.cron': 'Inherited from the Cron job’s creator',
   'permissions.session.source.other': 'Inherited limit',
   'permissions.session.workdir': 'Works in',
+  'permissions.session.clear': 'Remove inherited limits',
+  'permissions.session.clearTitle': 'Remove inherited limits?',
+  'permissions.session.clearText':
+    'Later Runs in this Session then follow only this Agent’s own rules. A scheduled job or the Session that started this one adds its limits again when it runs here.',
+  'permissions.session.clearConfirm': 'Remove limits',
+  'permissions.session.clearFailed': 'The limits could not be removed.',
 });
