@@ -3,6 +3,14 @@
 Pathspec operands are subtree accesses of what they name; subcommands that
 replace the whole work tree record a ``work_tree`` write the check places at
 the repository's top folder; index paths (``:path``) count from that top too.
+
+Operations that bring tracked files to a committed state or a patch (``pull``,
+``restore``, ``apply``) and reads that list or compare them (``add``,
+``diff``, ``status``) are ``git`` accesses: deny rules and rule files below
+what they reach do not refuse them, only a path that names one. Operations
+that delete or move files the history may not hold (``clean``, ``rm``, ``mv``,
+``stash -u``), wildcard pathspecs, and reads that print file contents
+(``grep``, ``blame``) stay ordinary subtree accesses.
 """
 
 from __future__ import annotations
@@ -60,7 +68,12 @@ _GIT_READS = frozenset(
     {"add", "annotate", "blame", "commit", "diff", "difftool", "grep", "hash-object",
      "ls-files", "stage", "status"}
 )  # fmt: skip
+# Reads that print the contents of the files they name, checked like any read.
+_GIT_CONTENT_READS = frozenset({"annotate", "blame", "grep", "hash-object"})
+# Subcommands whose pathspecs delete or move files, also ones git does not track.
+_GIT_UNTRACKED = frozenset({"clean", "mv", "rm", "worktree"})
 _GIT_STASH_TREE = frozenset({"push", "save", "pop", "apply", "branch"})
+_GIT_STASH_UNTRACKED = frozenset({"-u", "--include-untracked", "-a", "--all"})
 _GIT_APPLY_READ_ONLY = frozenset({"--check", "--stat", "--numstat", "--summary"})
 
 
@@ -125,8 +138,11 @@ def changed_files(
         if not (flags & _GIT_APPLY_READ_ONLY or "--cached" in flags) or "--apply" in flags:
             # From inside a repository it changes only files below its folder.
             pathspecs = [(Word.literal(".", source=raw.source), ".")]
+    tracked = subcommand not in _GIT_UNTRACKED and not (
+        subcommand == "stash" and flags & _GIT_STASH_UNTRACKED
+    )
     for word, text in pathspecs:
-        _git_pathspec(analysis, context, raw, word, text)
+        _git_pathspec(analysis, context, raw, word, text, tracked=tracked)
     if work_tree:
         analysis.access(
             context,
@@ -137,6 +153,7 @@ def changed_files(
             tier="a",
             subtree=True,
             work_tree=True,
+            git=tracked,
         )
     elif not pathspecs:
         analysis.access(
@@ -179,15 +196,18 @@ def read_files(
         return consumed
     if subcommand == "grep" and not before and not after:
         paths = [(Word.literal(".", source=raw.source), ".")]
+    listing = subcommand not in _GIT_CONTENT_READS and "--no-index" not in options
     for word, text in paths:
         target = word
+        git = listing
         if text is not None and _paths.has_glob(text):
             prefix = _paths.glob_prefix(text)
             if isinstance(prefix, _paths.Unresolvable):
                 analysis.unresolve("path_read", word.source, f"the path {prefix.reason}")
                 continue
             target = Word.literal(prefix, source=word.source)
-        analysis.access(context, raw, "read", target, glob=False, tier="a", subtree=True)
+            git = False
+        analysis.access(context, raw, "read", target, glob=False, tier="a", subtree=True, git=git)
         consumed.add(id(word))
     return consumed
 
@@ -260,12 +280,20 @@ def _short_flag(option: str, letter: str) -> bool:
 
 
 def _git_pathspec(
-    analysis: Analysis, context: Context, raw: RawCommand, word: Word, text: str | None
+    analysis: Analysis,
+    context: Context,
+    raw: RawCommand,
+    word: Word,
+    text: str | None,
+    *,
+    tracked: bool,
 ) -> None:
     """A pathspec git changes the files of: everything below what it names.
 
-    A git wildcard also matches across folders (``*.pem`` matches
-    ``keys/a.pem``), so it reaches its whole literal folder.
+    *tracked*: the subcommand changes only files to a committed state or a
+    patch, so a literal pathspec is a ``git`` access. A git wildcard also
+    matches across folders (``*.pem`` matches ``keys/a.pem``), so it reaches
+    its whole literal folder as an ordinary subtree access.
     """
     if text is not None and text.startswith(":"):
         analysis.unresolve("path_write", word.source, "git pathspec magic is not analyzed")
@@ -277,4 +305,5 @@ def _git_pathspec(
             analysis.unresolve("path_write", word.source, f"the path {prefix.reason}")
             return
         target = Word.literal(prefix, source=word.source)
-    analysis.access(context, raw, "write", target, glob=False, tier="a", subtree=True)
+        tracked = False
+    analysis.access(context, raw, "write", target, glob=False, tier="a", subtree=True, git=tracked)

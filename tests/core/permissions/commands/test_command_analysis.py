@@ -132,7 +132,7 @@ async def _analyze(line: str, shell: ShellKind) -> Any:
         case(
             "git diff ../o --stat; git log origin/main; python s.py --out=../x",
             id="tier B takes only clear paths",
-            paths=("read w/o/**", "read w/p/s.py", "read w/x"),
+            paths=("read w/o/** (git)", "read w/p/s.py", "read w/x"),
         ),
         case(
             "tar -xzf a.tgz -C d; dd if=i of=o; sed -i s/a/b/ f; cp a b d2/",
@@ -157,14 +157,15 @@ async def _analyze(line: str, shell: ShellKind) -> Any:
         case(
             "git checkout -- .claude/settings.json; git restore .; git rm secrets/key.pem; "
             "git mv a/k.pem k; git rm '*.pem'; git clean -fdx; git clean -f tmp; git apply p.diff",
-            id="git pathspecs change everything below what they name",
+            id="git pathspecs change everything below what they name, tracked files as git",
             commands=None,
             paths=(
-                "write w/p/.claude/settings.json/**",
-                "write w/p/**",
+                "write w/p/.claude/settings.json/** (git)",
+                "write w/p/** (git)",
                 "write w/p/secrets/key.pem/**",
                 "write w/p/a/k.pem/**",
                 "write w/p/k/**",
+                "write w/p/**",
                 "write w/p/tmp/**",
                 "read w/p/p.diff",
             ),
@@ -174,10 +175,10 @@ async def _analyze(line: str, shell: ShellKind) -> Any:
             id="git commands that replace the work tree",
             commands=None,
             paths=(
-                "write w/p/** (work tree)",
+                "write w/p/** (work tree) (git)",
                 "start_dir w/p/sub",
-                "write w/p/sub/** (work tree)",
-                "write w/p/main/**",
+                "write w/p/sub/** (work tree) (git)",
+                "write w/p/main/** (git)",
             ),
         ),
         case(
@@ -194,14 +195,15 @@ async def _analyze(line: str, shell: ShellKind) -> Any:
             id="git reads the files its operands and index paths name",
             commands=None,
             paths=(
-                "read w/p/secrets/**",
+                "read w/p/secrets/** (git)",
                 "read w/p/src/a.py/**",
-                "read w/p/docs/**",
-                "read w/p/**",
+                "read w/p/docs/** (git)",
                 "write w/p",
+                "read w/p/** (git)",
                 "read w/p/a/**",
                 "read w/p/b/**",
                 "read w/p/s/k.pem/** (work tree)",
+                "read w/p/**",
                 "read w/p/lib/**",
             ),
         ),
@@ -209,7 +211,7 @@ async def _analyze(line: str, shell: ShellKind) -> Any:
             "git submodule foreach make; git rebase -x make main; git restore :/k",
             id="git commands that run commands or use pathspec magic",
             commands=None,
-            paths=("write w/p/** (work tree)", "read w/p/k/** (work tree)"),
+            paths=("write w/p/** (work tree) (git)", "read w/p/k/** (work tree)"),
             unresolved=("command", "path_write"),
         ),
         case(

@@ -907,6 +907,7 @@ class Analysis:
         pruned: tuple[str, ...] = (),
         deep: bool = False,
         work_tree: bool = False,
+        git: bool = False,
         every_depth: bool = False,
         mention: bool = False,
     ) -> list[tuple[Path, str]]:
@@ -999,6 +1000,7 @@ class Analysis:
                     glob=pattern,
                     pruned=pruned,
                     work_tree=work_tree,
+                    git=git,
                 )
                 found.append((path, item.source))
         return found
@@ -1055,14 +1057,15 @@ class Analysis:
         glob: str | None = None,
         pruned: tuple[str, ...] = (),
         work_tree: bool = False,
+        git: bool = False,
     ) -> None:
-        whole = (kind, path, None, True, (), False)
+        whole = (kind, path, None, True, (), False, False)
         if whole in self._paths and not work_tree:
             return  # the whole subtree is already in the plan
-        key = (kind, path, glob, subtree, pruned, work_tree)
+        key = (kind, path, glob, subtree, pruned, work_tree, git)
         if key not in self._paths:
             self._paths[key] = PlannedPathAccess(
-                kind, path, source[:SOURCE_LIMIT], subtree, glob, pruned, work_tree
+                kind, path, source[:SOURCE_LIMIT], subtree, glob, pruned, work_tree, git
             )
 
     def add_url(self, url: str, source: str) -> None:

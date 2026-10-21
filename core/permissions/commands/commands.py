@@ -102,7 +102,9 @@ class PlannedPathAccess:
     it): a ``subtree`` write replaces files across the whole work tree (``git
     pull``, ``git reset --hard``), where only the repository's own rule files
     may change; a read with ``glob`` reads that path below the top (the index
-    path ``:secrets/key.pem``).
+    path ``:secrets/key.pem``). ``git``: a git operation across the files
+    below ``path``, which deny rules and rule files below it do not refuse
+    (``PermissionBoundary.check_path``).
     """
 
     kind: PathAccessKind
@@ -112,6 +114,7 @@ class PlannedPathAccess:
     glob: str | None = None
     pruned: tuple[str, ...] = ()
     work_tree: bool = False
+    git: bool = False
 
 
 @dataclass(frozen=True, slots=True)

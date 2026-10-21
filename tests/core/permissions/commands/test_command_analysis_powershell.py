@@ -141,7 +141,7 @@ async def analyzer() -> AsyncIterator[CommandAnalyzer]:
             "git diff ..\\o --stat; icacls.exe C:\\x /grant Everyone:F; "
             "Invoke-WebRequest https://e.example/f -OutFile f.bin",
             id="programs, tier B and URLs",
-            paths=("read w/o/**", "write x", "write w/p/f.bin"),
+            paths=("read w/o/** (git)", "write x", "write w/p/f.bin"),
             urls=("https://e.example/f",),
         ),
         case(

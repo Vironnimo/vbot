@@ -265,7 +265,7 @@ class CommandChecker:
                 subtree=access.subtree,
                 glob=access.glob,
                 pruned=access.pruned,
-                work_tree=access.work_tree,
+                git=access.git,
             )
             if refused is not None:
                 if refused.below is not None and kind == "read" and not access.work_tree:
