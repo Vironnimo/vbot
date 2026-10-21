@@ -12,7 +12,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any, Literal
 
-from core.permissions import CommandChecker, PermissionDenied
+from core.permissions import CommandChecker, PermissionBoundary, PermissionDenied
 from core.projects import ProjectStore
 from core.runs import TOOL_CALL_OUTPUT_EVENT
 from core.secrets.agent_secrets import AgentSecrets, SecretUse, SecretUseError, describe_uses
@@ -262,7 +262,9 @@ class ShellTool:
         if handoff is not None:
             self._keep(self._release_when_finished(command_id, handoff))
         if call.background:
-            return await self._background_result(call, command_id, names, reason="background")
+            return await self._background_result(
+                call, command_id, names, context.permissions, reason="background"
+            )
         return await self._wait(context, call, command_id, names)
 
     async def _scratch(self, context: ToolContext) -> ScratchFolder | None:
@@ -357,6 +359,7 @@ class ShellTool:
         call: _ShellCall,
         command_id: str,
         names: ToolNames,
+        permissions: PermissionBoundary,
         *,
         reason: str,
         idle: bool = False,
@@ -374,7 +377,13 @@ class ShellTool:
             report = self._commands.report(command_id)
             recovery_failed = True
         return _result(
-            call, report, names, reason=reason, idle=idle, recovery_failed=recovery_failed
+            call,
+            report,
+            names,
+            permissions,
+            reason=reason,
+            idle=idle,
+            recovery_failed=recovery_failed,
         )
 
     async def _start(
@@ -430,7 +439,11 @@ class ShellTool:
                 env=start.env,
                 origin_run_id=context.run_id,
                 # The delivery names only Tools named now; it outlives this context.
-                formatter=partial(format_command_delivery, names=delivery_names(names)),
+                formatter=partial(
+                    format_command_delivery,
+                    names=delivery_names(names),
+                    permissions=context.permissions,
+                ),
                 execution_owner=context.execution_owner,
                 on_output=progress,
                 request=start.request.data if start.request is not None else None,
@@ -493,14 +506,16 @@ class ShellTool:
         idle = waiting.done() and not waiting.cancelled() and waiting.result() == "idle"
         report = self._commands.report(command_id)
         if report.ended and not report.still_running:
-            return _result(call, report, names)
+            return _result(call, report, names, context.permissions)
         # Listed from now on, so the user and the Agent can see and stop it; a
         # command that ended is delivered by this result, not later.
         handed_off = True
         reason = "timeout" if call.timeout_given else "default"
         if moved.is_set():
             reason = "moved"
-        return await self._background_result(call, command_id, names, reason=reason, idle=idle)
+        return await self._background_result(
+            call, command_id, names, context.permissions, reason=reason, idle=idle
+        )
 
     async def _stop(self, command_id: str, reason: StopReason) -> None:
         try:
@@ -538,6 +553,7 @@ def _result(
     call: _ShellCall,
     report: CommandReport,
     names: ToolNames,
+    permissions: PermissionBoundary,
     *,
     reason: str = "",
     idle: bool = False,
@@ -554,7 +570,7 @@ def _result(
                 f"{SHELL_MODEL_NAME} was not run: {problem}",
                 retryable=retryable,
             )
-        data = ended_result(report, names)
+        data = ended_result(report, names, permissions=permissions)
     else:
         data = {"status": "running", "command_id": report.command_id}
         output = running_output_text(report)

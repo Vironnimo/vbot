@@ -21,6 +21,7 @@ import sys
 from collections.abc import Callable, Sequence
 from typing import Any
 
+from core.permissions import PermissionBoundary
 from core.tools._background_tasks_arguments import BACKGROUND_TASKS_TOOL_NAME
 from core.tools.command_manager import (
     COMMAND_HEAD_CHARS,
@@ -331,7 +332,11 @@ def not_run_problem(report: CommandReport) -> tuple[str, bool] | None:
 
 
 def ended_result(
-    report: CommandReport, names: ToolNames, *, subagent: str | None = None
+    report: CommandReport,
+    names: ToolNames,
+    *,
+    subagent: str | None = None,
+    permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED,
 ) -> JsonObject:
     """The result data of an ended command, fields in order and omitted when empty.
 
@@ -364,7 +369,7 @@ def ended_result(
     failed = failed_programs(report)
     if failed:
         data["failed_programs"] = list(failed)
-    hint = failure_hint(report, output, names)
+    hint = failure_hint(report, output, names, permissions)
     if hint is not None:
         data["hint"] = hint
     if report.still_running:
@@ -406,12 +411,18 @@ def failed_programs(report: CommandReport) -> tuple[str, ...]:
     return exits
 
 
-def failure_hint(report: CommandReport, output: str, names: ToolNames) -> str | None:
+def failure_hint(
+    report: CommandReport,
+    output: str,
+    names: ToolNames,
+    permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED,
+) -> str | None:
     """A hint for a command that failed or did not run as written.
 
     A stop by vBot explains itself; its hint only says why output piped into
     a stage that holds it is missing. The line count is the command's own,
-    since a long *output* keeps only its first and last lines.
+    since a long *output* keeps only its first and last lines. A hint names
+    only paths *permissions*, the reading Session's boundary, may read.
     """
     if report.stop_reason is not None:
         stage = holding_stage(report.command)
@@ -430,6 +441,7 @@ def failure_hint(report: CommandReport, output: str, names: ToolNames) -> str | 
         offers=names,
         failed_programs=report.failed_programs,
         output_lines=report.transcript.total_lines,
+        permissions=permissions,
     )
     if hint is None and report.exit_code == 0 and report.failed_programs:
         # Agents read exit code 0 as success although a test script before
@@ -623,10 +635,16 @@ def lost_output(report: CommandReport, *, name_file: bool = True) -> str | None:
 # Delivery
 
 
-def format_command_delivery(report: CommandReport, *, names: ToolNames = _names_nothing) -> str:
+def format_command_delivery(
+    report: CommandReport,
+    *,
+    names: ToolNames = _names_nothing,
+    permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED,
+) -> str:
     """The message that delivers a background command's result when it ends.
 
-    *names* tells which Tools the message can name. A command the shell ran
+    *names* tells which Tools the message can name and *permissions* which
+    paths its hint can name. A command the shell ran
     nothing of gets one line that says why.
     """
     not_run = not_run_problem(report)
@@ -658,7 +676,7 @@ def format_command_delivery(report: CommandReport, *, names: ToolNames = _names_
         # The label names the purpose; the Agent needs the exact command too.
         lines.append(f"Command: {_capped(report.command, _DELIVERY_COMMAND_CHARS)}")
     output = command_output_text(report)
-    hint = failure_hint(report, output, names)
+    hint = failure_hint(report, output, names, permissions)
     if hint is not None:
         lines.append(f"Hint: {hint}")
     failed = failed_programs(report)

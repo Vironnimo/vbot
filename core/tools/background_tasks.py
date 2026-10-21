@@ -22,6 +22,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
+from core.permissions import PermissionBoundary
 from core.sessions import SessionAddress
 from core.tools._background_tasks_arguments import (
     ACTION_MISSING,
@@ -336,7 +337,7 @@ class BackgroundTasksTool:
             self._checks.pop(report.command_id, None)
             if subagent is None:
                 self._acknowledge_when_persisted(context, report.command_id)
-            return _ended(report, subagent, names)
+            return _ended(report, subagent, names, context.permissions)
         data: JsonObject = {"status": "running", "command_id": report.command_id}
         if subagent is not None:
             data["subagent"] = subagent
@@ -401,7 +402,7 @@ class BackgroundTasksTool:
         # Every stop result shows the command's end; its own Session needs no delivery.
         if subagent is None:
             self._acknowledge_when_persisted(context, command_id)
-        data = _ended(report, subagent, names)
+        data = _ended(report, subagent, names, context.permissions)
         notes: list[str] = []
         if before.ended or report.stop_reason is None:
             if before.still_running:
@@ -595,12 +596,17 @@ def _command_row(report: CommandReport, subagent: str | None) -> JsonObject:
     return row
 
 
-def _ended(report: CommandReport, subagent: str | None, names: ToolNames) -> JsonObject:
+def _ended(
+    report: CommandReport,
+    subagent: str | None,
+    names: ToolNames,
+    permissions: PermissionBoundary,
+) -> JsonObject:
     """An ended command as the shell reports it, with its id and its complete output's file.
 
     For a Sub-Agent's command, ``stopped_because`` speaks to the caller above it.
     """
-    shell = ended_result(report, names, subagent=subagent)
+    shell = ended_result(report, names, subagent=subagent, permissions=permissions)
     data: JsonObject = {"status": shell.pop("status"), "command_id": report.command_id}
     if subagent is not None:
         data["subagent"] = subagent

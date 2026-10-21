@@ -9,6 +9,7 @@ import pytest
 
 from core.tools import _shell_hint_common as shell_hint_common
 from core.tools.shell_hints import annotate_failure
+from tests.core.permissions.command_check_support import restricted
 
 _NOT_RECOGNIZED = (
     "{name}: The term '{name}' is not recognized as a name of a cmdlet, function, script "
@@ -1572,3 +1573,6 @@ def test_a_script_python_cannot_open_names_the_existing_path(
     else:
         assert hint is not None and "tools/quote_check.py" in hint
         assert re.findall(r"`([^`]+)`", hint)[-1:] == ([call] if call else [])
+    # A hint names no path the Session's permission rules refuse.
+    denied = restricted(tmp_path, deny=["Read(tools/**)"])
+    assert annotate_failure(command, 2, output, workdir=tmp_path, permissions=denied) is None

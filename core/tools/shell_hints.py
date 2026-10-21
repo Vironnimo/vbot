@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+from core.permissions import PermissionBoundary
+
 from ._shell_hint_common import (
     _EXIT_CODE_HINTS,
     _TIMEOUT_PROGRAM,
@@ -86,6 +88,7 @@ def annotate_failure(
     offers: Callable[[str], bool] = _offers_none,
     failed_programs: Sequence[str] = (),
     output_lines: int | None = None,
+    permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED,
 ) -> str | None:
     """Return one short next action for a failed command, or None.
 
@@ -95,7 +98,9 @@ def annotate_failure(
     the Tool of a registry name; a hint names only offered Tools.
     *failed_programs* are the command's failed child programs
     (``<name> exited with code <code>``) and *output_lines* the number of lines
-    it printed (the lines of *output* when omitted).
+    it printed (the lines of *output* when omitted). *permissions* is the
+    boundary of the Session that reads the hint; a hint names only paths it
+    may read.
 
     A command that did not run as written gets a hint whatever its exit code,
     since a later statement's success can hide its failure: a typographic quote
@@ -123,7 +128,7 @@ def annotate_failure(
     if quote:
         return quote
     if exit_code:
-        hint = _failure_hint(command, exit_code, output, workdir, offers)
+        hint = _failure_hint(command, exit_code, output, workdir, offers, permissions)
     else:
         try:
             hint = _hint_hidden_failure(command, exit_code, output, offers)
@@ -153,10 +158,11 @@ def _failure_hint(
     output: str,
     workdir: Path | None,
     offers: Callable[[str], bool],
+    permissions: PermissionBoundary,
 ) -> str | None:
     window = _scan_window(output)
     if window:
-        failure = _Failure(command, window, workdir, offers, _error_start(window))
+        failure = _Failure(command, window, workdir, offers, _error_start(window), permissions)
         for hint_for in _OUTPUT_HINTS:
             try:
                 hint = hint_for(failure)

@@ -8,6 +8,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from core.permissions import PermissionBoundary
+
 # The shell Tool runs commands in PowerShell on Windows and in bash elsewhere.
 _POWERSHELL = sys.platform == "win32"
 # Bounded scan windows at both ends: error headers open short output and end
@@ -35,6 +37,8 @@ class _Failure:
     # Where the output reports the failure: from the last Python traceback's
     # exception line on, else all of it.
     error_start: int = 0
+    # The Session's boundary: a hint names only paths it may read.
+    permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED
 
     @property
     def error(self) -> str:
