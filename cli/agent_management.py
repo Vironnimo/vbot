@@ -23,9 +23,9 @@ from cli.server_management import CommandResult, ServerInstance
 from core.permissions import (
     PermissionRulesError,
     PresetName,
+    apply_preset,
     matching_preset,
     normalize_permission_rules,
-    preset_definitions,
 )
 
 AGENT_UPDATE_FLAGS = (
@@ -68,10 +68,12 @@ AGENT_UPDATE_FLAGS = (
 class PermissionEdit:
     """What the permission flags of ``agent create`` and ``agent update`` ask for.
 
-    ``rules`` replaces the agent's own rule set and ``preset`` sets its bases;
-    ``allow`` and ``deny`` add rules; ``clear`` removes the own rule set. Unless
-    ``rules`` or ``clear`` replaces everything, the edit starts from the agent's
-    current own rules.
+    ``rules`` replaces the agent's own rule set and ``preset`` applies a preset
+    (``full_access`` stores the explicit full set, which overrides a restrictive
+    shared default); ``allow`` and ``deny`` add rules; ``clear`` removes the own
+    rule set, so the agent follows the shared default. Unless ``rules``,
+    ``clear`` or full access replaces everything, the edit starts from the
+    agent's current own rules.
     """
 
     rules: Mapping[str, Any] | None = None
@@ -86,13 +88,11 @@ class PermissionEdit:
 
     def apply(self, current: Mapping[str, Any] | None) -> dict[str, Any] | None:
         """The own rule set after this edit, starting from ``current``."""
-        if self.clear or self.preset == "full_access":
+        if self.clear:
             return None
         result = dict(self.rules if self.rules is not None else current or {})
         if self.preset is not None:
-            for part in ("commands", "web"):
-                result.pop(part, None)
-            result.update(preset_definitions()[self.preset] or {})
+            result = apply_preset(self.preset, result)
         for part, added in (("allow", self.allow), ("deny", self.deny)):
             if added:
                 listed = result.get(part)
@@ -490,7 +490,8 @@ def _permission_lines(agent: Mapping[str, Any]) -> list[str]:
     own = _own_config(agent).get("permission_rules")
     default = agent.get("permission_rules_default")
     if effective is None:
-        summary = "full-access"
+        # Own rules that restrict nothing (the full-access preset) override the default.
+        summary = "full-access (own rules)" if own is not None else "full-access"
     else:
         try:
             preset: str = matching_preset(normalize_permission_rules(effective))

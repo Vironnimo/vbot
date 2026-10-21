@@ -336,6 +336,19 @@ def test_project_set_without_changes_lists_every_option(rpc: FakeRpc, run_cli: R
             {"deny": ["Read(.env)"]},
             id="permission-rules-json",
         ),
+        pytest.param(
+            "permission_rules",
+            "full-access",
+            {
+                "read": "anywhere",
+                "write": "anywhere",
+                "commands": "any",
+                "web": "any",
+                "allow": [],
+                "deny": [],
+            },
+            id="permission-full-access",
+        ),
     ],
 )
 def test_project_override_set_coerces_the_value(
@@ -355,23 +368,16 @@ def test_project_override_set_coerces_the_value(
     assert f"set builder.{field} override on" in out and "vbot" in out
 
 
-@pytest.mark.parametrize(
-    ("raw", "named"),
-    [
-        pytest.param("full-access", "clear-override permission_rules", id="full-access"),
-        pytest.param("everything", "work-dir-read-only", id="unknown-preset"),
-    ],
-)
-def test_project_override_refuses_a_permission_value_before_any_request(
-    rpc: FakeRpc, run_cli: RunCli, raw: str, named: str
+def test_project_override_refuses_an_unknown_preset_before_any_request(
+    rpc: FakeRpc, run_cli: RunCli
 ) -> None:
     code, out, _err = run_cli(
-        "project", "override", "set", "vbot", "builder", "permission_rules", raw
+        "project", "override", "set", "vbot", "builder", "permission_rules", "everything"
     )
 
     assert code == 1
     assert rpc.calls == []
-    assert named in out
+    assert "work-dir-read-only" in out
 
 
 @pytest.mark.parametrize(

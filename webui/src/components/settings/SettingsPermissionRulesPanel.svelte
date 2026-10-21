@@ -82,6 +82,7 @@
 
 <PermissionRulesEditor
   value={form.permission_rules}
+  level="default"
   idPrefix="default-permission-rules"
   onChange={change}
 />

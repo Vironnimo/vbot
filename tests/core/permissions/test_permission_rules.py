@@ -181,11 +181,26 @@ def _rules(**parts: object) -> PermissionRules:
     return normalize_permission_rules(parts, platform="linux")
 
 
+_FULL_ACCESS = PermissionRules(
+    read="anywhere", write="anywhere", commands="any", web="any", allow=(), deny=()
+)
+
+
 @pytest.mark.parametrize(
     ("levels", "expected"),
     [
         pytest.param((None, None), None, id="no-rule-set-is-full-access"),
-        pytest.param((None, _rules()), PermissionRules(), id="empty-set-is-restricted"),
+        pytest.param((None, _rules()), None, id="a-set-that-restricts-nothing-is-full-access"),
+        pytest.param(
+            (_FULL_ACCESS, _rules(read="work_area", write="scratch", deny=["Shell(rm *)"])),
+            None,
+            id="the-explicit-full-set-overrides-a-restrictive-default",
+        ),
+        pytest.param(
+            (_rules(read="anywhere"), _rules(read="work_area", write="scratch")),
+            PermissionRules(read="anywhere", write="scratch"),
+            id="parts-left-unset-still-inherit",
+        ),
         pytest.param(
             (_rules(read="work_area"), _rules(read="anywhere", write="scratch")),
             PermissionRules(read="work_area", write="scratch"),
@@ -211,17 +226,44 @@ def test_rule_sets_resolve_per_part(
 
 @pytest.mark.parametrize("written", ["work-dir", "work_dir", " Work dir "])
 def test_a_preset_sets_the_bases_and_keeps_the_rules(written: str) -> None:
-    custom = _rules(commands="listed", allow=["Shell(npm test)"], deny=["Read(**/.env)"])
+    custom = {"commands": "listed", "allow": ["Shell(npm test)"], "deny": ["Read(**/.env)"]}
 
     applied = apply_preset(preset_name(written), custom)
 
-    assert applied == PermissionRules(
-        read="work_area", write="work_area", allow=custom.allow, deny=custom.deny
+    assert applied == {
+        "read": "work_area",
+        "write": "work_area",
+        "allow": ["Shell(npm test)"],
+        "deny": ["Read(**/.env)"],
+    }
+    assert (matching_preset(_rules(**applied)), matching_preset(_rules(**custom))) == (
+        "work_dir",
+        "custom",
     )
-    assert (matching_preset(applied), matching_preset(custom)) == ("work_dir", "custom")
-    assert apply_preset("full_access", custom) is None
     with pytest.raises(PermissionRulesError, match="full-access, work-dir or work-dir-read-only"):
         preset_name("everything")
+
+
+def test_full_access_is_the_explicit_full_set() -> None:
+    custom = {"read": "work_area", "write": "scratch", "deny": ["Read(**/.env)"]}
+
+    applied = apply_preset("full_access", custom)
+
+    # Every part is set, so the level overrides each part of a restrictive default.
+    assert applied == {
+        "read": "anywhere",
+        "write": "anywhere",
+        "commands": "any",
+        "web": "any",
+        "allow": [],
+        "deny": [],
+    }
+    assert _rules(**applied) == _FULL_ACCESS and not _FULL_ACCESS.restricts
+    assert [matching_preset(rules) for rules in (None, _rules(), _FULL_ACCESS)] == [
+        "full_access"
+    ] * 3
+    # Rules make a set restricted, even with every base at full access.
+    assert matching_preset(_rules(**{**applied, "deny": ["Read(**/.env)"]})) == "custom"
 
 
 def test_a_description_expands_placeholders_and_lists_inactive_rules() -> None:

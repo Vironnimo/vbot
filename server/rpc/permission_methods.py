@@ -32,6 +32,7 @@ from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.validation import (
     _draft_working_project,
+    _optional_bool,
     _optional_string,
     _reject_unsupported,
     _required_agent_address,
@@ -50,9 +51,13 @@ async def _validate_permission_rules(state: Any, params: JsonObject) -> JsonObje
     preview keeps placeholders. With ``agent_id`` it is that Agent's own rule set
     (``agent@project``: the Team member's vBot override): ``inherited`` and
     ``effective`` add what it inherits, and the preview expands placeholders for
-    the folder its new Sessions work in.
+    the folder its new Sessions work in. ``new_agent`` (without ``agent_id``) is
+    the rule set of an Agent being created: it inherits the shared default and
+    the preview keeps the placeholders of folders the Agent does not have yet.
     """
-    _reject_unsupported(params, {"permission_rules", "agent_id"}, "permissions.validate")
+    _reject_unsupported(
+        params, {"permission_rules", "agent_id", "new_agent"}, "permissions.validate"
+    )
     if "permission_rules" not in params:
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST,
@@ -60,10 +65,19 @@ async def _validate_permission_rules(state: Any, params: JsonObject) -> JsonObje
         )
     value = params["permission_rules"]
     address = _required_agent_address(params, "agent_id") if "agent_id" in params else None
+    new_agent = _optional_bool(params, "new_agent", default=False)
+    if new_agent and address is not None:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "params.new_agent is for an Agent being created; leave out agent_id",
+        )
     check = check_permission_rules(value) if value is not None else RuleSetCheck(None, (), ())
     inherited: PermissionRules | None = None
     values: dict[str, str | None] = {}
-    if address is not None:
+    if new_agent:
+        inherited = _rules_or_none(state.runtime.agent_resolver.inherited_permission_rules())
+        values = {"project": None, "home": str(Path.home())}
+    elif address is not None:
         agent_id, project_id = address
         try:
             inherited, values = await state.runtime.chat_sessions.run_async(
@@ -157,6 +171,9 @@ def _session_summary(
     resolver = state.runtime.agent_resolver
     agent = resolver.resolve_agent(project_id, agent_id, session_id=session_id, require_model=False)
     rules = getattr(agent, "permission_rules", None)
+    if isinstance(rules, PermissionRules) and not rules.restricts:
+        # Rules that restrict nothing are full access, as in the Run's boundary.
+        rules = None
     ceilings: list[PermissionCeiling] = []
     if session_id is not None:
         inherited = resolver.session_overrides(

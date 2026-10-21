@@ -92,7 +92,8 @@ def test_spellings_of_one_path_get_the_same_decision(tmp_path: Path, spelling: s
 def test_unsafe_forms_are_refused_before_any_filesystem_access(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, path: str, form: str
 ) -> None:
-    boundary = _boundary(tmp_path, {})
+    # Any restriction refuses unsafe forms; this one leaves files open.
+    boundary = _boundary(tmp_path, {"web": "listed"})
 
     def touched(*_args: object, **_kwargs: object) -> object:
         raise AssertionError("the check touched the filesystem")

@@ -36,6 +36,15 @@ export const PERMISSION_RULE_KINDS = Object.freeze([
 
 export const PERMISSION_PRESET_FULL_ACCESS = 'full_access';
 export const PERMISSION_PRESET_CUSTOM = 'custom';
+// The preset choice for no own rules: the level uses what it inherits.
+export const PERMISSION_PRESET_INHERIT = 'inherit';
+
+// The levels an editor edits: an Agent's own rules, a Team member's Project
+// override (both inherit), and the shared default (inherits nothing, so no
+// rules and Full access are the same choice there).
+export const PERMISSION_LEVEL_AGENT = 'agent';
+export const PERMISSION_LEVEL_OVERRIDE = 'override';
+export const PERMISSION_LEVEL_DEFAULT = 'default';
 
 const RULE_PATTERN = /^\s*([A-Za-z]+)\s*\(([\s\S]*)\)\s*$/;
 
@@ -100,10 +109,11 @@ export function withPermissionRuleList(rules, effect, list) {
   return next;
 }
 
-// `rules` with the bases of a preset (`definition` from the server's
-// `presets`). Full access (a null definition) removes the own rules; the other
-// presets set their bases, unset `commands` and `web`, and keep the own allow
-// and deny lists.
+// `rules` with a preset applied (`definition` from the server's `presets`):
+// `commands` and `web` are unset, then every part the definition sets is
+// set. Full access defines every part, empty lists included, so it replaces
+// the own rules and overrides everything inherited; the other presets set
+// their bases and keep the own allow and deny lists.
 export function applyPermissionPreset(rules, definition) {
   if (!isPlainObject(definition)) return null;
   const own = normalizePermissionRules(rules) ?? {};
@@ -111,7 +121,50 @@ export function applyPermissionPreset(rules, definition) {
   for (const effect of PERMISSION_RULE_EFFECTS) {
     if (own[effect]) next[effect] = [...own[effect]];
   }
-  return { ...next, ...definition };
+  return { ...next, ...normalizePermissionRules(definition) };
+}
+
+// Whether two rule sets hold the same parts and rules.
+export function samePermissionRules(left, right) {
+  const a = normalizePermissionRules(left);
+  const b = normalizePermissionRules(right);
+  if (a === null || b === null) return a === b;
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+  return [...keys].every(
+    (key) => JSON.stringify(a[key]) === JSON.stringify(b[key]),
+  );
+}
+
+// The preset choice an editor shows for the own rules `rules` at `level`.
+// `preset` is the server's `preset` of the resulting rules, `presets` its
+// definitions. Where a level inherits, no own rules is "use the inherited
+// rules" and Full access only the stored Full access set, which overrides
+// them; rules that merely restrict nothing yet show as Custom. The shared
+// default inherits nothing, so no rules shows as Full access there.
+export function permissionPresetChoice(rules, { level, preset, presets }) {
+  const own = normalizePermissionRules(rules);
+  const definitions = isPlainObject(presets) ? presets : {};
+  if (level === PERMISSION_LEVEL_DEFAULT) {
+    if (own === null || preset === PERMISSION_PRESET_FULL_ACCESS) {
+      return PERMISSION_PRESET_FULL_ACCESS;
+    }
+  } else {
+    if (own === null) return PERMISSION_PRESET_INHERIT;
+    if (
+      Object.hasOwn(definitions, PERMISSION_PRESET_FULL_ACCESS) &&
+      samePermissionRules(own, definitions[PERMISSION_PRESET_FULL_ACCESS])
+    ) {
+      return PERMISSION_PRESET_FULL_ACCESS;
+    }
+  }
+  if (
+    typeof preset === 'string' &&
+    preset !== PERMISSION_PRESET_FULL_ACCESS &&
+    Object.hasOwn(definitions, preset)
+  ) {
+    return preset;
+  }
+  return PERMISSION_PRESET_CUSTOM;
 }
 
 // The base `part` that applies: the own value, else the inherited one, else

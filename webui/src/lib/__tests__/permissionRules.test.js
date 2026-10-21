@@ -1,14 +1,31 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  PERMISSION_PRESET_INHERIT,
   applyPermissionPreset,
   effectivePermissionBase,
   isPermissionDeniedResult,
   parsePastedPermissionRules,
+  permissionPresetChoice,
   permissionRulesComplete,
   withPastedPermissionRules,
   withPermissionBase,
 } from '../permissionRules.js';
+
+// The server's preset definitions (`permissions.validate` `presets`).
+const FULL_ACCESS = {
+  read: 'anywhere',
+  write: 'anywhere',
+  commands: 'any',
+  web: 'any',
+  allow: [],
+  deny: [],
+};
+const PRESETS = {
+  full_access: FULL_ACCESS,
+  work_dir: { read: 'work_area', write: 'work_area' },
+  work_dir_read_only: { read: 'work_area', write: 'scratch' },
+};
 
 describe('Permission Rules editing', () => {
   it('applies a preset over the bases and keeps the own rules', () => {
@@ -22,9 +39,34 @@ describe('Permission Rules editing', () => {
       read: 'work_area',
       write: 'scratch',
     });
-    // Full access has no definition: no own rules.
-    expect(applyPermissionPreset(own, null)).toBeNull();
+    // Full access defines every part: it replaces the own rules.
+    expect(applyPermissionPreset(own, FULL_ACCESS)).toEqual(FULL_ACCESS);
   });
+
+  it.each([
+    ['agent', null, 'full_access', PERMISSION_PRESET_INHERIT],
+    ['agent', FULL_ACCESS, 'full_access', 'full_access'],
+    // Own rules that restrict nothing yet are no choice of Full access.
+    ['agent', { read: 'anywhere' }, 'full_access', 'custom'],
+    ['override', { read: 'work_area' }, 'work_dir', 'work_dir'],
+    ['agent', { commands: 'listed' }, 'custom', 'custom'],
+    // The shared default inherits nothing: no rules is Full access.
+    ['default', null, 'full_access', 'full_access'],
+    ['default', {}, 'full_access', 'full_access'],
+    [
+      'default',
+      { read: 'work_area', write: 'scratch' },
+      'work_dir_read_only',
+      'work_dir_read_only',
+    ],
+  ])(
+    'shows the preset choice of a %s level with %j',
+    (level, rules, preset, choice) => {
+      expect(
+        permissionPresetChoice(rules, { level, preset, presets: PRESETS }),
+      ).toBe(choice);
+    },
+  );
 
   it.each([
     ['own', { read: 'work_area' }, { read: 'anywhere' }, 'work_area', 'own'],

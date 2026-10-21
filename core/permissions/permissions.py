@@ -260,11 +260,12 @@ class PermissionBoundary:
         """The boundary of one Run: the Agent's resolved rules plus inherited ceilings.
 
         Placeholders expand against ``context``; a rule whose placeholder has no
-        value in this Run is dropped. Without rules and ceilings the Run has full
-        access (``UNRESTRICTED``).
+        value in this Run is dropped. Without ceilings, rules that restrict nothing
+        (:attr:`PermissionRules.restricts`) give the Run full access
+        (``UNRESTRICTED``): no protected locations either.
         """
         layers: list[PermissionLayer] = []
-        if rules is not None:
+        if rules is not None and rules.restricts:
             layers.append(_expand(rules, context))
         for ceiling in ceilings:
             layers.extend(ceiling.layers)
