@@ -118,6 +118,8 @@ class StubAgent:
     compaction_policy: JsonObject | None = None
     tool_loading: JsonObject | None = None
     librarian_enabled: bool = True
+    permission_rules: Any = None
+    builtin: str | None = None
     current_session_id: str = ""
     created_at: str = "2026-05-04T00:00:00Z"
     updated_at: str = "2026-05-04T00:00:00Z"

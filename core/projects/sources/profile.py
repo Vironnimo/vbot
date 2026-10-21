@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Literal
 
+from core.permissions import PermissionRules
+
 type TranslationStatus = Literal["applied", "translated", "not_supported", "overridden"]
 
 
@@ -53,6 +55,9 @@ class AgentProfile:
     skill_rules: tuple[AgentTargetRule, ...] = ()
     translations: tuple[Translation, ...] = ()
     unavailable_reason: str | None = None
+    # Permission Rules translated from the repository's own permission settings;
+    # ``None`` when the source names none (a vBot override or the defaults apply).
+    permission_rules: PermissionRules | None = None
 
     @property
     def status(self) -> str:

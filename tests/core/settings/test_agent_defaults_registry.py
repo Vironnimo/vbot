@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 
 from core.config_validation import JsonDiagnostic
+from core.permissions import normalize_permission_rules
 from core.settings import (
     AGENT_DEFAULT_FIELDS,
     MAX_FALLBACK_MODELS,
@@ -26,7 +27,11 @@ from core.settings import (
     normalize_agent_default_value,
     parse_agent_default_value,
 )
-from core.settings.agent_defaults import agent_default_specs
+from core.settings.agent_defaults import (
+    INVALID_PERMISSION_RULES,
+    InvalidPermissionRulesDefaultError,
+    agent_default_specs,
+)
 from core.settings.paths import setting_definitions
 from core.settings.settings import (
     ALLOWED_THINKING_EFFORTS,
@@ -62,6 +67,9 @@ def test_every_field_dispatches_through_all_three_surfaces(field: str) -> None:
     elif field == "tool_loading":
         value = {"on_demand": True, "always_loaded": ["read"]}
         assert parse_agent_default_value(field, value, label="l") == value
+    elif field == "permission_rules":
+        value = {"read": "work_area", "deny": ["Read({workdir}/x)"]}
+        assert parse_agent_default_value(field, value, label="l") == value
     else:
         assert parse_agent_default_value(field, "high", label="l") == "high"
 
@@ -89,6 +97,7 @@ def test_agent_defaults_round_trips_non_null_fields() -> None:
         "top_p": 0.9,
         "thinking_effort": "high",
         "tool_loading": {"on_demand": True},
+        "permission_rules": {"write": "scratch"},
     }
     assert AgentDefaults.from_dict(data).to_dict() == data
 
@@ -101,6 +110,7 @@ def test_agent_defaults_absent_fields_are_none() -> None:
     assert defaults.top_p is None
     assert defaults.thinking_effort is None
     assert defaults.tool_loading is None
+    assert defaults.permission_rules is None
     assert defaults.to_dict() == {}
 
 
@@ -153,6 +163,38 @@ def test_invalid_fallback_chain_is_rejected_by_every_surface(
     assert usable == {"port": 23456}
     assert ignored == tuple(diagnostics)
     assert path.read_text(encoding="utf-8") == content
+
+
+@pytest.mark.parametrize(
+    ("rules", "loaded"),
+    [
+        pytest.param({"write": "nowhere"}, INVALID_PERMISSION_RULES, id="invalid"),
+        pytest.param({"write": "scratch"}, {"write": "scratch"}, id="valid-beside-invalid"),
+    ],
+)
+def test_runtime_settings_never_drop_default_permission_rules(
+    tmp_path: Path, rules: dict[str, Any], loaded: object
+) -> None:
+    # An invalid ``defaults`` section is left out, but losing the rules would give
+    # every inheriting Agent full access: they stay, or refuse when unreadable.
+    path = tmp_path / "settings.json"
+    agent = {"permission_rules": rules, "temperature": 9}
+    path.write_text(json.dumps({"format_version": 1, "defaults": {"agent": agent}}))
+
+    usable, ignored = load_runtime_settings_json(path)
+
+    assert usable == {"defaults": {"agent": {"permission_rules": loaded}}}
+    assert ignored
+    defaults = AgentDefaults.from_dict(usable["defaults"]["agent"])
+    if loaded == INVALID_PERMISSION_RULES:
+        with pytest.raises(InvalidPermissionRulesDefaultError, match="vbot doctor config"):
+            defaults.resolved_permission_rules()
+        # Baking skips it, so the Agent still lists; resolution refuses it.
+        assert "permission_rules" not in _bake_defaults(usable["defaults"]["agent"])
+    else:
+        assert _bake_defaults(usable["defaults"]["agent"]) == {
+            "permission_rules": normalize_permission_rules(rules)
+        }
 
 
 def test_valid_fallback_chain_is_stripped_by_normalize_and_bake() -> None:

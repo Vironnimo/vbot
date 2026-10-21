@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any
 
 from core.archive import ArchiveSubjectInUseError
+from core.permissions import normalize_permission_rules, permission_rules_to_dict
 from core.projects import (
     Project,
     cwd_exists,
@@ -594,6 +595,11 @@ def _validate_override_value(
             return normalize_tool_loading(value)
         except ValueError as exc:
             raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+    if field == "permission_rules":
+        try:
+            return permission_rules_to_dict(normalize_permission_rules(value))
+        except ValueError as exc:
+            raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.value: {exc}") from exc
     try:
         return validate_thinking_effort(value, label="params.value", allow_none=False)
     except SettingsValidationError as exc:

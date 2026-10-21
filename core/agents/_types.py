@@ -10,6 +10,7 @@ from core.memory import (
     DEFAULT_MEMORY_PROMPT_MODE,
     MemoryPromptMode,
 )
+from core.permissions import PermissionRules
 from core.tools.availability import (
     ToolAccess,
 )
@@ -137,6 +138,9 @@ class Agent:
     compaction_policy: dict[str, Any] | None = None
     # On-demand Tools (``core.tools.on_demand``): ``None`` leaves them off.
     tool_loading: dict[str, Any] | None = None
+    # Permission Rules (``core.permissions``); ``None`` sets no part, so the
+    # Agent inherits ``defaults.agent.permission_rules`` or has full access.
+    permission_rules: PermissionRules | None = None
     # Whether Librarian passes curate this Agent's own Skills; ``librarian.enabled``
     # still switches scheduled passes off for every Agent.
     librarian_enabled: bool = DEFAULT_LIBRARIAN_ENABLED

@@ -121,7 +121,8 @@ def project_tool_configurability_reason(
 
 # The optional fields a per-agent override may carry. Each maps to the top tier of
 # the matching config-agent resolver chain (model / temperature / top_p / thinking effort);
-# ``tool_loading`` inherits each part it does not set from ``defaults.agent.tool_loading``.
+# ``tool_loading`` inherits each part it does not set from ``defaults.agent.tool_loading``;
+# ``permission_rules`` resolves per part over the repository profile and the defaults.
 OVERRIDE_FIELDS: frozenset[str] = frozenset(
     {
         "model",
@@ -131,6 +132,7 @@ OVERRIDE_FIELDS: frozenset[str] = frozenset(
         "compaction_policy",
         "tool_access",
         "tool_loading",
+        "permission_rules",
     }
 )
 
@@ -168,6 +170,7 @@ def project_shape() -> JsonShape:
     Built on first use because the Tools-owned ``tool_access`` and ``tool_loading``
     fields are imported lazily (see :func:`_normalize_tool_access_policy`).
     """
+    from core.permissions._rules import PARTS
     from core.tools.availability import TOOL_ACCESS_FIELDS
     from core.tools.tool_loading import TOOL_LOADING_FIELDS
 
@@ -185,6 +188,7 @@ def project_shape() -> JsonShape:
                         "compaction_policy": COMPACTION_POLICY_SHAPE,
                         "tool_access": json_object(TOOL_ACCESS_FIELDS),
                         "tool_loading": json_object(TOOL_LOADING_FIELDS),
+                        "permission_rules": json_object(PARTS),
                     },
                 ),
                 drop_empty=True,
@@ -859,6 +863,15 @@ def _validate_override(agent_id: str, override: Any) -> dict[str, Any]:
     if "tool_loading" in override:
         try:
             validated["tool_loading"] = _normalize_tool_loading(override["tool_loading"])
+        except ValueError as exc:
+            raise ProjectError(f"overrides[{agent_id!r}].{exc}") from exc
+    if "permission_rules" in override:
+        from core.permissions import normalize_permission_rules, permission_rules_to_dict
+
+        try:
+            validated["permission_rules"] = permission_rules_to_dict(
+                normalize_permission_rules(override["permission_rules"])
+            )
         except ValueError as exc:
             raise ProjectError(f"overrides[{agent_id!r}].{exc}") from exc
     return validated

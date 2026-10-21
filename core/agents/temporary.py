@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import builtins
 import hashlib
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import AsyncExitStack
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
@@ -15,6 +15,12 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 from core.chat.errors import ChatSessionError
 from core.chat.messages import ChatMessage
 from core.memory import MEMORY_PROMPT_MODE_OFF, MemoryPromptMode
+from core.permissions import (
+    PermissionCeiling,
+    PermissionRules,
+    normalize_permission_rules,
+    permission_rules_to_dict,
+)
 from core.runs import (
     ActiveRunError,
     ChatRunManager,
@@ -61,6 +67,13 @@ class TemporaryAgentConfig:
     # complete Agent-level Policy for automatic and manual Compaction.
     compaction_policy: dict[str, Any] | None = None
     repository_profile: str | None = None
+    # The owner's Permission Rules for this participant (``None``: full access);
+    # with a ``repository_profile`` each part it leaves unset resolves like that
+    # Team member's. A mapping is normalized to :class:`PermissionRules`.
+    permission_rules: PermissionRules | Mapping[str, Any] | None = None
+    # A boundary the owner imposes on top, in its stored ceiling form
+    # (``PermissionBoundary.to_ceiling_dict(source="extension")``).
+    permission_ceiling: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
         """Validate and snapshot caller-owned mutable configuration at the boundary."""
@@ -117,6 +130,13 @@ class TemporaryAgentConfig:
             except StorageError as error:
                 raise ValueError(f"temporary compaction_policy is invalid: {error}") from error
             object.__setattr__(self, "compaction_policy", policy)
+        if self.permission_rules is not None:
+            object.__setattr__(
+                self, "permission_rules", normalize_permission_rules(self.permission_rules)
+            )
+        if self.permission_ceiling is not None:
+            PermissionCeiling.from_ceiling_dict(self.permission_ceiling)
+            object.__setattr__(self, "permission_ceiling", deepcopy(dict(self.permission_ceiling)))
         object.__setattr__(self, "cwd", cwd)
         object.__setattr__(self, "tool_access", normalized_access)
         object.__setattr__(self, "allowed_skills", list(self.allowed_skills))
@@ -152,6 +172,9 @@ class TemporaryAgent:
     compaction_policy: dict[str, Any] | None = None
     # A temporary Agent has no On-demand Tools.
     tool_loading: dict[str, Any] | None = None
+    # The owner's rules (``TemporaryAgentConfig.permission_rules``) and ceiling.
+    permission_rules: PermissionRules | None = None
+    permission_ceiling: PermissionCeiling | None = None
 
 
 class TemporaryAgentRegistry:
@@ -256,6 +279,10 @@ class TemporaryAgentRegistry:
             result["fixed_tool_access"] = True
         if config.repository_profile is not None:
             result["repository_profile"] = config.repository_profile
+        if isinstance(config.permission_rules, PermissionRules):
+            result["permission_rules"] = permission_rules_to_dict(config.permission_rules)
+        if config.permission_ceiling is not None:
+            result["permission_ceiling"] = deepcopy(dict(config.permission_ceiling))
         return result
 
     def resolve(self, address: SessionAddress, *, generation_id: str) -> TemporaryAgent | None:
@@ -292,6 +319,17 @@ class TemporaryAgentRegistry:
                 thinking_effort=config.get("thinking_effort"),
                 current_session_id=address.session_id,
                 compaction_policy=deepcopy(compaction_policy),
+                # Unreadable stored rules refuse the Session instead of dropping them.
+                permission_rules=(
+                    normalize_permission_rules(config["permission_rules"])
+                    if config.get("permission_rules") is not None
+                    else None
+                ),
+                permission_ceiling=(
+                    PermissionCeiling.from_ceiling_dict(config["permission_ceiling"])
+                    if config.get("permission_ceiling") is not None
+                    else None
+                ),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("temporary Session binding configuration is invalid") from error

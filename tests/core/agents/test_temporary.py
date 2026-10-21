@@ -14,6 +14,12 @@ from core.agents import AgentStore, TemporaryAgentConfig, TemporaryAgentRegistry
 from core.agents.temporary import TemporaryExecutionGroups, TemporaryRunInput
 from core.chat import ChatError, ChatMessage, ChatSessionError
 from core.database import write_bootstrap_marker
+from core.permissions import (
+    BoundaryContext,
+    PermissionBoundary,
+    PermissionCeiling,
+    normalize_permission_rules,
+)
 from core.runs import (
     ChatRunManager,
     RunAdmission,
@@ -338,13 +344,56 @@ def test_temporary_agent_compaction_policy_round_trips_and_absence_inherits(
         create("inherit", policy)
 
 
+def test_temporary_agent_permission_rules_and_ceiling_round_trip(
+    tmp_path: Path, sessions: ChatSessionManager
+) -> None:
+    registry = TemporaryAgentRegistry(sessions)
+    ceiling = PermissionBoundary.build(
+        normalize_permission_rules({"write": "scratch"}),
+        BoundaryContext(workdir=tmp_path, home=tmp_path, data_dir=tmp_path / "data"),
+    ).to_ceiling_dict(source="extension")
+    rules = {"read": "work_area", "deny": ["read({workdir}/secrets/**)"]}
+
+    restricted = registry.create(
+        owner_name="extension",
+        group_id="group",
+        participant_id="restricted",
+        config=_config(tmp_path, permission_rules=rules, permission_ceiling=ceiling),
+    )
+    agent = registry.resolve(restricted.address, generation_id=restricted.generation_id)
+
+    assert restricted.config["permission_rules"] == {
+        "read": "work_area",
+        "deny": ["Read({workdir}/secrets/**)"],
+    }
+    assert agent is not None
+    assert agent.permission_rules == normalize_permission_rules(rules)
+    assert agent.permission_ceiling == PermissionCeiling.from_ceiling_dict(ceiling)
+
+    # Full access stores neither key.
+    open_binding = registry.create(
+        owner_name="extension", group_id="group", participant_id="open", config=_config(tmp_path)
+    )
+    assert {"permission_rules", "permission_ceiling"}.isdisjoint(open_binding.config)
+    agent = registry.resolve(open_binding.address, generation_id=open_binding.generation_id)
+    assert agent is not None
+    assert (agent.permission_rules, agent.permission_ceiling) == (None, None)
+
+
 @pytest.mark.parametrize(
     ("overrides", "message"),
     [
         ({"compaction_policy": "summary_tail"}, "compaction_policy"),
         ({"cwd": Path("relative")}, "cwd must be absolute"),
+        ({"permission_rules": {"write": "nowhere"}}, "permission_rules.write"),
+        ({"permission_ceiling": {"layers": "all"}}, "layers"),
     ],
-    ids=["invalid-compaction-policy", "relative-cwd"],
+    ids=[
+        "invalid-compaction-policy",
+        "relative-cwd",
+        "invalid-permission-rules",
+        "invalid-permission-ceiling",
+    ],
 )
 def test_temporary_agent_config_rejects_an_invalid_snapshot(
     tmp_path: Path, overrides: dict[str, Any], message: str
