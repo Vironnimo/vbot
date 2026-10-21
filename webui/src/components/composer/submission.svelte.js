@@ -9,6 +9,7 @@ import {
   resolveMentionFiles,
 } from '$lib/fileMentions.js';
 import { isBareSecretCommand } from '$lib/agentSecrets.js';
+import { pendingWidgetStates } from '$lib/widgetStates.svelte.js';
 
 // Snapshot a submission before asynchronous lookups, then consume only its admitted draft.
 export function createComposerSubmission(context) {
@@ -66,6 +67,9 @@ export function createComposerSubmission(context) {
     listedEntries: picker.listedEntries(),
     listFiles: context.onListFiles,
     sendMessage: context.onSendMessage,
+    // The changed widget states of the Session this draft writes to, which
+    // the send attaches; the controller marks them sent once accepted.
+    widgetStates: pendingWidgetStates(context.draftKey),
     attachments: media.pendingAttachments.map((attachment) => ({
       source: attachment,
       attachment_id: attachment.attachment_id,
@@ -111,6 +115,9 @@ export function createComposerSubmission(context) {
     const sendOptionCandidates = {
       ...(snapshot.inputOrigin ? { inputOrigin: snapshot.inputOrigin } : {}),
       ...(fileMentions.length > 0 ? { fileMentions } : {}),
+      ...(snapshot.widgetStates.length > 0
+        ? { widgetStates: snapshot.widgetStates }
+        : {}),
     };
     const sendOptions =
       Object.keys(sendOptionCandidates).length > 0
@@ -287,6 +294,7 @@ ${movedText}`
       inputOrigin: '',
       mentionTokens: [],
       attachments: [],
+      widgetStates: [],
     };
     if (submitBlocked(snapshot)) return;
     context.content = command;

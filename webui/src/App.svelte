@@ -120,6 +120,7 @@
     flushComposerMemory,
     renameComposerAgent,
   } from '$lib/composerMemory.js';
+  import { renameWidgetStatesAgent } from '$lib/widgetStates.svelte.js';
   import {
     isDesktopAccessor,
     onDesktopOpenSession,
@@ -495,6 +496,7 @@
     onLoadProjects: selection.loadProjects,
     onAgentIdChanged: (oldAgentId, newAgentId) => {
       renameComposerAgent(oldAgentId, newAgentId);
+      renameWidgetStatesAgent(oldAgentId, newAgentId);
       // Chat areas re-key their Sessions here; the place Chat's first area
       // reported follows, so the remapped place reads as already shown.
       selection.remapIdentityAgentId(oldAgentId, newAgentId);

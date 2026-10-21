@@ -148,6 +148,9 @@ from core.chat._message_records import (
 from core.chat._message_records import (
     ToolCallRejection as ToolCallRejection,
 )
+from core.chat._message_records import (
+    WidgetState as WidgetState,
+)
 from core.chat.content_blocks import (
     ContentBlock,
     TextBlock,
@@ -204,6 +207,7 @@ class ChatMessage:
     model_fallback: ModelFallback | None = None
     goal_event: GoalEvent | None = None
     subagent_messages: tuple[SubAgentMessage, ...] | None = None
+    widget_states: tuple[WidgetState, ...] | None = None
     # Internal destination captured by Sessions when this entry is persisted.
     subagent_reply_target: str | None = None
     # Actual package loaded by a Skill activation; never sent to the Model.
@@ -247,13 +251,14 @@ class ChatMessage:
         model_fallback: ModelFallback | None = None,
         goal_event: GoalEvent | None = None,
         subagent_messages: Sequence[SubAgentMessage] | None = None,
+        widget_states: Sequence[WidgetState] | None = None,
         timestamp: datetime | None = None,
     ) -> ChatMessage:
         """Create a kernel-internal note message.
 
-        A note that records a Model fallback switch, a goal change or the
-        ``message_parent`` messages it delivers also carries that record, which
-        History shows in place of the note.
+        A note that records a Model fallback switch, a goal change, the
+        ``message_parent`` messages it delivers or the widget states the user
+        sent also carries that record, which History shows in place of the note.
         """
         return cls(
             id=_new_message_id(),
@@ -263,6 +268,7 @@ class ChatMessage:
             model_fallback=model_fallback,
             goal_event=goal_event,
             subagent_messages=tuple(subagent_messages) if subagent_messages else None,
+            widget_states=tuple(widget_states) if widget_states else None,
         )
 
     @classmethod
@@ -590,6 +596,8 @@ class ChatMessage:
             message["goal_event"] = self.goal_event.to_dict()
         if self.subagent_messages is not None:
             message["subagent_messages"] = [entry.to_dict() for entry in self.subagent_messages]
+        if self.widget_states is not None:
+            message["widget_states"] = [entry.to_dict() for entry in self.widget_states]
         return message
 
     @classmethod
@@ -674,6 +682,16 @@ class ChatMessage:
             if subagent_messages_data is not None
             else None
         )
+        widget_states_data = data.get("widget_states")
+        if widget_states_data is not None and (
+            not isinstance(widget_states_data, list) or not widget_states_data
+        ):
+            raise ChatMessageValidationError("widget_states must be a non-empty array")
+        widget_states = (
+            tuple(WidgetState.from_dict(entry) for entry in widget_states_data)
+            if widget_states_data is not None
+            else None
+        )
         try:
             package_data = data.get("skill_package")
             skill_package = (
@@ -728,6 +746,7 @@ class ChatMessage:
             model_fallback=model_fallback,
             goal_event=goal_event,
             subagent_messages=subagent_messages,
+            widget_states=widget_states,
         )
         message.validate()
         return message

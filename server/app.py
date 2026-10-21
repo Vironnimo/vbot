@@ -91,6 +91,7 @@ from server._streams import (
 )
 from server._terminal_socket import serve_terminal_socket
 from server._upload_routes import register_upload_routes
+from server._widget_routes import register_widget_routes
 from server.access import (
     AccessGuard,
     AccessService,
@@ -381,6 +382,7 @@ def create_app(
 
     register_upload_routes(app)
     register_speech_routes(app)
+    register_widget_routes(app)
 
     @app.get("/api/files/{token}")
     async def get_assistant_file(request: Request, token: str, download: bool = False) -> Response:

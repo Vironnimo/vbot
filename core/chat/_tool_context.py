@@ -19,6 +19,7 @@ from core.tools import (
     ToolNotFoundError,
     ToolRegistry,
     ToolResultPersistedCallback,
+    builtin_payload_owner,
     edit_tool_siblings,
 )
 from core.tools.availability import (
@@ -126,17 +127,17 @@ class ToolDispatchContext:
     def stage_result_payload(self, tool_call_id: str, tool_name: str, payload: Any) -> str:
         """Keep one payload for this call's Tool Result; persisted with that result.
 
-        The owner is the Extension that registered *tool_name*. The payload is
+        The owner is the Extension that registered *tool_name*, or
+        ``builtin_payload_owner(tool_name)`` for a built-in Tool. The payload is
         serialized now, so later changes to the handler's object have no effect.
         """
         if tool_call_id in self._closed_payload_calls:
             raise RuntimeError("Result payloads can be attached only while the Tool call runs")
         try:
-            owner_name = self.registry.get(tool_name).extension
+            tool = self.registry.get(tool_name)
         except ToolNotFoundError:
-            owner_name = None
-        if owner_name is None:
-            raise RuntimeError("Result payloads are available only to Extension Tools")
+            raise RuntimeError(f"Result payloads need a registered Tool: {tool_name}") from None
+        owner_name = tool.extension or builtin_payload_owner(tool_name)
         payload_json = json.dumps(
             payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False
         )

@@ -20,6 +20,14 @@ def _record_key(message: JsonObject) -> str:
     return f"record-{sequence}" if isinstance(sequence, int) else str(message["id"])
 
 
+# Display records that form their own row outside a Run, by role: their id prefix.
+_DISPLAY_ROWS = {
+    "goal_event": "goal",
+    "subagent_message": "subagent-message",
+    "widget_state": "widget-state",
+}
+
+
 def history_timeline(messages: Sequence[JsonObject]) -> list[JsonObject]:
     """Project complete Run segments from public Session History records."""
     items: list[JsonObject] = []
@@ -49,9 +57,9 @@ def history_timeline(messages: Sequence[JsonObject]) -> list[JsonObject]:
         run_id = message.get("history_run_id") or message.get("run_id")
         if not run_id and run is not None and role in {"assistant", "tool", "run_summary"}:
             run_id = run.run_id
-        if role in {"goal_event", "subagent_message"} and not run_id:
+        if role in _DISPLAY_ROWS and not run_id:
             row = {
-                "id": f"{'goal' if role == 'goal_event' else 'subagent-message'}-{message['id']}",
+                "id": f"{_DISPLAY_ROWS[role]}-{message['id']}",
                 "type": role,
                 "timestamp": message.get("timestamp"),
                 "message": copy.deepcopy(message),
@@ -135,6 +143,8 @@ def history_timeline(messages: Sequence[JsonObject]) -> list[JsonObject]:
             event.update(type="goal_event_recorded", payload=message)
         elif role == "subagent_message":
             event.update(type="subagent_message_recorded", payload=message)
+        elif role == "widget_state":
+            event.update(type="widget_state_recorded", payload=message)
         elif role == "compaction_checkpoint":
             event["type"] = "compaction_completed"
         elif role == "run_summary":

@@ -37,6 +37,14 @@ _DISPLAY_MEDIA_KINDS = ("image", "video", "audio")
 TOOL_ALLOWLIST_WILDCARD = "*"
 
 
+def builtin_payload_owner(tool_name: str) -> str:
+    """Return the result-payload owner name of the built-in Tool *tool_name*.
+
+    Extension owners are safe ids without ``:``, so the two kinds never collide.
+    """
+    return f"tool:{tool_name}"
+
+
 def _path_argument(path: str | Path, *, windows: bool) -> str | Path:
     """Remove only quoting that cannot be a legal literal in the host path grammar."""
     if windows and isinstance(path, str):
@@ -227,6 +235,9 @@ class ToolContext:
     presentation_details: list[JsonObject] = field(default_factory=list, repr=False, compare=False)
     # The Secrets this call used, as ``NAME.field (sink)``, shown with every display.
     presentation_secret_uses: list[str] = field(default_factory=list, repr=False, compare=False)
+    # The widget the call shows inline in the chat, recorded via ``show_display_widget``;
+    # empty when it shows none.
+    presentation_widget: JsonObject = field(default_factory=dict, repr=False, compare=False)
     # Request-only media: never included in result envelopes or lifecycle events.
     result_media: list[JsonObject] = field(default_factory=list, repr=False, compare=False)
     # Session-scoped file-content tracker for git-style change statistics.
@@ -409,6 +420,15 @@ class ToolContext:
             item["role"] = "source"
         self.presentation_media.append(item)
 
+    def show_display_widget(self, widget_id: str, title: str) -> None:
+        """Show the widget stored as this call's result payload *widget_id* in the chat.
+
+        The display carries only the payload id; the server turns it into a
+        signed widget address before any client sees it.
+        """
+        self.presentation_widget.clear()
+        self.presentation_widget.update({"id": widget_id, "title": title})
+
     def add_display_memory_changes(
         self,
         scope: str,
@@ -505,9 +525,11 @@ class ToolContext:
 
         The payload is persisted in the same transaction as the Tool Result, so a
         call that raises, is cancelled, or whose batch is never persisted leaves
-        nothing behind. Only Extension Tools running in a Session can attach
-        payloads; check :attr:`result_payloads_available` first. The owning
-        Extension reads the payload back with ``ExtensionHost.load_result_payload``.
+        nothing behind. Only Tools running in a Session can attach payloads;
+        check :attr:`result_payloads_available` first. The owner is the Tool's
+        Extension, which reads the payload back with
+        ``ExtensionHost.load_result_payload``, or ``builtin_payload_owner`` of a
+        built-in Tool.
         """
         if self.result_payload_hook is None:
             raise RuntimeError("Result payloads are unavailable for this Tool call")

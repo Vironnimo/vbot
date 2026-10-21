@@ -1,6 +1,6 @@
 # Chat Agent-facing Text
 
-Why each sentence of the Compaction checkpoint guidance the Chat domain owns in `core/chat/messages.py` exists; the reasons for Chat's steering, interruption, reply-surface and command texts stay in the `## Agent-facing text` sections of `chat/run-execution.md`, `chat/request-building.md` and `chat/commands.md`. Rules for this file: `.vorch/workflows/domain-map-workflow.md` -> Agent-facing text.
+Why each sentence of the Compaction checkpoint guidance the Chat domain owns in `core/chat/messages.py` exists; the reasons for Chat's steering, interruption, reply-surface and command texts stay in the `## Agent-facing text` sections of `chat/run-execution.md`, `chat/request-building.md` and `chat/commands.md`, and those of the widget value note (`core/chat/widget_states.py`) in `tools/show_widget.md` -> Agent-facing text. Rules for this file: `.vorch/workflows/domain-map-workflow.md` -> Agent-facing text.
 
 | Text | Reason |
 |---|---|

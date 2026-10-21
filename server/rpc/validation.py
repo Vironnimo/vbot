@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import re
 from collections.abc import Set as AbstractSet
 from typing import Any, Literal, cast
 
@@ -74,6 +76,65 @@ def _optional_file_mentions(params: JsonObject) -> list[str]:
     if "file_mentions" not in params:
         return []
     return _required_string_list(params, "file_mentions")
+
+
+MAX_WIDGET_STATES = 8
+MAX_WIDGET_STATE_BYTES = 8 * 1024
+_WIDGET_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
+def _optional_widget_states(params: JsonObject) -> list[tuple[str, JsonObject]]:
+    """Read the optional ``widget_states`` list on the chat send RPCs.
+
+    ``[{widget_id, state}]``: values the user changed in Agent widgets, sent
+    with this message. Absent -> empty list. Each ``state`` is a JSON object of
+    at most ``MAX_WIDGET_STATE_BYTES`` as compact UTF-8 JSON; ids appear at most once.
+    """
+    if "widget_states" not in params:
+        return []
+    value = params["widget_states"]
+    if not isinstance(value, list) or not value or len(value) > MAX_WIDGET_STATES:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"params.widget_states must be a list of 1 to {MAX_WIDGET_STATES} widget states",
+        )
+    parsed: list[tuple[str, JsonObject]] = []
+    for item in value:
+        if not isinstance(item, dict) or set(item) != {"widget_id", "state"}:
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                "params.widget_states items must be objects with widget_id and state",
+            )
+        widget_id, state = item["widget_id"], item["state"]
+        if not isinstance(widget_id, str) or _WIDGET_ID.fullmatch(widget_id) is None:
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST, "params.widget_states widget_id must be a widget id"
+            )
+        if any(widget_id == seen for seen, _ in parsed):
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST, f"params.widget_states names {widget_id} twice"
+            )
+        if not isinstance(state, dict):
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST, "params.widget_states state must be a JSON object"
+            )
+        try:
+            size = len(
+                json.dumps(
+                    state, ensure_ascii=False, allow_nan=False, separators=(",", ":")
+                ).encode("utf-8")
+            )
+        except TypeError, ValueError:
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST, "params.widget_states state must be a JSON object"
+            ) from None
+        if size > MAX_WIDGET_STATE_BYTES:
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                f"params.widget_states state must be at most {MAX_WIDGET_STATE_BYTES} bytes",
+            )
+        parsed.append((widget_id, state))
+    return parsed
 
 
 def _required_agent_address(params: JsonObject, key: str) -> tuple[str, str | None]:

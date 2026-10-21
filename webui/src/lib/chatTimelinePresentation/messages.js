@@ -388,7 +388,8 @@ export function timestampForItem(item) {
     item.type === 'compaction_separator' ||
     item.type === 'takeover_separator' ||
     item.type === 'goal_event' ||
-    item.type === 'subagent_message'
+    item.type === 'subagent_message' ||
+    item.type === 'widget_state'
   ) {
     return item.timestamp;
   }

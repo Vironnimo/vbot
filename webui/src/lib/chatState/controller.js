@@ -32,6 +32,7 @@ import {
   undoLearningChanges as requestUndoLearningChanges,
 } from '../api.js';
 import { t } from '../i18n.js';
+import { markWidgetStatesSent } from '../widgetStates.svelte.js';
 import { createChatHistory } from './historyLoading.js';
 import { createChatQueue } from './queue.js';
 import { createChatActivity } from './activity.js';
@@ -360,21 +361,33 @@ export function createChatController({
     }
   }
 
+  // Widget states ride only on a message to an existing Session, whose
+  // widgets they come from; the server refuses them with a command, so a
+  // send naming a known command carries none. An accepted message delivers
+  // them, so they stop counting as changed; a command or a refused send
+  // leaves them pending.
   async function sendMessage(sessionState, content, options = {}) {
     if (!sessionState) {
       return { kind: 'ignored' };
     }
     sessionState.actionError = '';
     const previousRunId = sessionState.currentRun?.runId;
+    const widgetStates =
+      Array.isArray(options.widgetStates) &&
+      !namesKnownCommand(content, chatState.availableSkills)
+        ? options.widgetStates
+        : [];
     try {
       const run = await operations.startChatRun({
         agent_id: sessionState.agentId,
         session_id: sessionState.sessionId,
         ...messageParams(content, options),
+        ...(widgetStates.length > 0 ? { widget_states: widgetStates } : {}),
       });
       if (run?.command_handled) {
         return commandOutcome(run, sessionState.agentId);
       }
+      markWidgetStatesSent(sessionState.key, widgetStates);
       return await admitSend(sessionState, run, previousRunId);
     } catch (error) {
       sessionState.actionError = `${t('chat.sendError')} ${errorMessage(error)}`;
@@ -798,6 +811,25 @@ export function createChatController({
     undoReflection: reflections.undo,
     updateQueued,
   };
+}
+
+// Whether `content` starts with a command of the loaded catalog, the way
+// the server recognizes one: its only text begins with `/<name>`.
+function namesKnownCommand(content, availableSkills) {
+  const texts =
+    typeof content === 'string'
+      ? [content]
+      : (Array.isArray(content) ? content : [])
+          .filter((block) => block?.type === 'text')
+          .map((block) => block.text);
+  const text = texts.length === 1 ? String(texts[0] ?? '').trim() : '';
+  if (!text.startsWith('/')) {
+    return false;
+  }
+  const name = text.slice(1).split(/\s/, 1)[0].toLowerCase();
+  return (Array.isArray(availableSkills) ? availableSkills : []).some(
+    (item) => item?.type === 'command' && item.name === name,
+  );
 }
 
 function normalizeBuiltInCommandName(value) {

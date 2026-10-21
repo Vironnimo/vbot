@@ -15,7 +15,7 @@ import pytest
 
 from core.automation import LearningChanges
 from core.chat import ChatMessage, ChatSessionManager, ToolCall
-from core.chat.messages import GoalEvent, ModelFallback, SubAgentMessage
+from core.chat.messages import GoalEvent, ModelFallback, SubAgentMessage, WidgetState
 from core.database import write_bootstrap_marker
 from core.memory import MemoryService, MemoryWriter
 from core.projects import AgentResolutionError
@@ -228,6 +228,12 @@ async def test_history_hides_notes(history: _History) -> None:
             SubAgentMessage("sub_a", "Worker", "Found it", "d1", "coder", "child", "proj")
         ],
     )
+    session.add_note_message(
+        ChatMessage.note(
+            "Widget values for the Model",
+            widget_states=[WidgetState("res_a", "Spacing", {"line_height": 1.6})],
+        )
+    )
 
     result = await history.read(session_id="session-one")
 
@@ -237,7 +243,13 @@ async def test_history_hides_notes(history: _History) -> None:
         "assistant",
         "goal_event",
         "subagent_message",
+        "widget_state",
     ]
+    # Widget values the user sent appear only as their display row.
+    assert result["messages"][5]["widgets"] == [
+        {"widget_id": "res_a", "title": "Spacing", "state": {"line_height": 1.6}}
+    ]
+    assert "Widget values for the Model" not in str(result["messages"])
     # A delivered Sub-Agent message appears only as its display row.
     assert result["messages"][4]["messages"] == [
         {

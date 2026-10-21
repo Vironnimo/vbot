@@ -385,6 +385,43 @@ class SubAgentMessage:
 
 
 @dataclass(frozen=True)
+class WidgetState:
+    """The state of a ``show_widget`` widget the user sent with a message, for display.
+
+    Presentation only: the note's text is what the Model reads; this record
+    never enters a Provider request. ``widget_id`` is the widget's result
+    payload id, ``title`` its title, ``state`` the JSON object its frame reported.
+    """
+
+    widget_id: str
+    title: str
+    state: JsonObject
+
+    def __post_init__(self) -> None:
+        for key in ("widget_id", "title"):
+            text = getattr(self, key)
+            if not isinstance(text, str) or not text:
+                raise ChatMessageValidationError(f"widget state {key} must be a non-empty string")
+        if not isinstance(self.state, dict):
+            raise ChatMessageValidationError("widget state state must be an object")
+
+    def to_dict(self) -> JsonObject:
+        """Return a JSON-serializable dictionary."""
+        return {"widget_id": self.widget_id, "title": self.title, "state": dict(self.state)}
+
+    @classmethod
+    def from_dict(cls, data: Any) -> WidgetState:
+        """Build a widget state from a JSON object, ignoring unknown fields."""
+        if not isinstance(data, dict):
+            raise ChatMessageValidationError("widget_states entries must be objects")
+        return cls(
+            widget_id=cast(str, data.get("widget_id")),
+            title=cast(str, data.get("title")),
+            state=cast(JsonObject, data.get("state")),
+        )
+
+
+@dataclass(frozen=True)
 class ReplySurface:
     """Immutable identity and rendering facts for one interactive reply destination."""
 

@@ -181,6 +181,20 @@ async def test_submission_parses_content_blocks_and_forwards_the_input_origin(
             {"new_session": {"agent_overrides": {"model": None}}},
             "params.new_session.agent_overrides values must not be null",
         ),
+        # Widget values: a short list of {widget_id, state} for an existing Session.
+        *[
+            ("chat.send", {"session_id": "s1", "widget_states": value}, "params.widget_states")
+            for value in (
+                [],
+                {"widget_id": "res_a", "state": {}},
+                [{"widget_id": "res_a"}],
+                [{"widget_id": "../a", "state": {}}],
+                [{"widget_id": "res_a", "state": [1]}],
+                [{"widget_id": "res_a", "state": {"text": "x" * 9000}}],
+                [{"widget_id": "res_a", "state": {}}, {"widget_id": "res_a", "state": {}}],
+                [{"widget_id": f"res_{index}", "state": {}} for index in range(9)],
+            )
+        ],
     ],
 )
 async def test_submission_rejects_malformed_params_before_starting_anything(

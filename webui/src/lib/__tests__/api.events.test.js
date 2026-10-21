@@ -35,6 +35,7 @@ describe('subscribeRunEvents()', () => {
         'model_fallback_activated',
         'goal_event_recorded',
         'subagent_message_recorded',
+        'widget_state_recorded',
         'error_message_persisted',
         'compaction_started',
         'compaction_aborted',

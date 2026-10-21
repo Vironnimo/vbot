@@ -21,6 +21,7 @@ const DEFAULT_ESTIMATES = new Map([
   ['takeover_separator', 44],
   ['goal_event', 44],
   ['subagent_message', 36],
+  ['widget_state', 36],
 ]);
 const FALLBACK_ESTIMATE = 120;
 // Sub-pixel noise from fractional layout must not count as a change.

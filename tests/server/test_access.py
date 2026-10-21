@@ -253,6 +253,7 @@ def test_every_route_but_the_exempt_ones_needs_a_principal_when_authenticated(
         "/api/preview-assets/",
         "/api/extension-assets/",
         "/api/extension-runs/",
+        "/api/widgets/",
     )
     shell = {("GET", "/"), ("HEAD", "/"), ("GET", "/{path:path}"), ("HEAD", "/{path:path}")}
 

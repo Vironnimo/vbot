@@ -2,13 +2,18 @@ import { formatDurationMs, timestampToMs } from './time.js';
 import { t } from '$lib/i18n.js';
 import { toolDurationMs, toolStartedTimestamp } from './toolFacts.js';
 import { visibleRunChildren } from './activity.js';
+import { isShowWidgetTool } from './widgets.js';
 
+// A `show_widget` row is output for the user, like an Agent message: it ends
+// a span, so its widget stays visible in compact mode.
 const isWorkingChild = (child) =>
-  child.type === 'reasoning' || child.type === 'tool_call';
+  child.type === 'reasoning' ||
+  (child.type === 'tool_call' && !isShowWidgetTool(child));
 
 // Compact Work details fold each contiguous span of at least two Thinking or
-// Tool rows into one Working line; Assistant output, user messages and every
-// other row stay in place, and a single Thinking or Tool row stays inline.
+// Tool rows into one Working line; Assistant output, widgets, user messages
+// and every other row stay in place, and a single Thinking or Tool row stays
+// inline.
 export function groupRunChildren(children, workingMode) {
   if (workingMode !== 'compact') {
     return children.map((child) => ({
