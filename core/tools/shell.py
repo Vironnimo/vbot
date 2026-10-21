@@ -215,7 +215,8 @@ class ShellTool:
             terminal_available=names(TERMINAL_TOOL_NAME),
             secret_names=(
                 secrets.environment_names(
-                    context.agent_id, context.session_id, passed_only=context.subagent_session
+                    SessionAddress(context.project_id, context.agent_id, context.session_id),
+                    passed_only=context.subagent_session,
                 )
                 if secrets is not None
                 else frozenset()
@@ -255,8 +256,7 @@ class ShellTool:
             uses: list[SecretUse] = []
             for name in call.secret_keys:
                 found = secrets.environment(
-                    context.agent_id,
-                    context.session_id,
+                    SessionAddress(context.project_id, context.agent_id, context.session_id),
                     name,
                     passed_only=passed_only,
                     consume=False,
@@ -266,15 +266,18 @@ class ShellTool:
                     uses.extend(found[1])
             for name, reference in call.secret_variables:
                 variables[name], found_uses = secrets.substitute(
-                    context.agent_id,
-                    context.session_id,
+                    SessionAddress(context.project_id, context.agent_id, context.session_id),
                     reference,
                     "environment",
                     passed_only=passed_only,
                     consume=False,
                 )
                 uses.extend(found_uses)
-            secrets.consume(context.agent_id, context.session_id, uses, passed_only=passed_only)
+            secrets.consume(
+                SessionAddress(context.project_id, context.agent_id, context.session_id),
+                uses,
+                passed_only=passed_only,
+            )
             return variables, uses
 
         variables, uses = await asyncio.to_thread(resolve)

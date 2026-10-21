@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Final, Literal
 
+from core.projects.address import format_agent_address
 from core.secrets._agent_secret_model import (
     KIND_FIELDS,
     OPTIONAL_KIND_FIELDS,
@@ -25,6 +26,7 @@ from core.secrets._agent_secret_model import (
     normalize_secret_name,
 )
 from core.secrets.agent_secrets import AgentSecrets
+from core.sessions import SessionAddress
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
 
@@ -65,6 +67,10 @@ class PendingSecretRequest:
     # The Secret an answer replaces the values of, when the name exists already.
     replaces: str | None
     outcome: asyncio.Future[SecretRequestOutcome] = field(repr=False)
+
+    @property
+    def address(self) -> SessionAddress:
+        return SessionAddress(self.project_id, self.agent_id, self.session_id)
 
     def describe(self) -> dict[str, Any]:
         """The form the user answers: never a value."""
@@ -130,7 +136,9 @@ class SecretRequests:
         first, whose caller then gets ``declined``.
         """
         secret_name = normalize_secret_name(name)
-        existing = self._secrets.lookup(agent_id, session_id, secret_name, passed_only=passed_only)
+        existing = self._secrets.lookup(
+            SessionAddress(project_id, agent_id, session_id), secret_name, passed_only=passed_only
+        )
         now = self._clock()
         pending = PendingSecretRequest(
             id=new_id("sreq", claim=lambda item: item not in self._pending),
@@ -147,7 +155,7 @@ class SecretRequests:
             outcome=asyncio.get_running_loop().create_future(),
         )
         for other in list(self._pending.values()):
-            if other.session_id == session_id and other.name == secret_name:
+            if other.address == pending.address and other.name == secret_name:
                 self._finish(other, SecretRequestOutcome("declined"))
         self._pending[pending.id] = pending
         self._changed(pending.id)
@@ -162,14 +170,14 @@ class SecretRequests:
             if self._pending.pop(pending.id, None) is not None:
                 self._changed(pending.id)
 
-    def list(self, session_id: str | None = None) -> list[dict[str, Any]]:
+    def list(self, address: SessionAddress | None = None) -> list[dict[str, Any]]:
         return [
             item.describe()
             for item in self._pending.values()
-            if session_id is None or item.session_id == session_id
+            if address is None or item.address == address
         ]
 
-    def pending_for(self, session_id: str, name: str) -> PendingSecretRequest | None:
+    def pending_for(self, address: SessionAddress, name: str) -> PendingSecretRequest | None:
         try:
             secret_name = normalize_secret_name(name)
         except SecretRecordError:
@@ -178,7 +186,7 @@ class SecretRequests:
             (
                 item
                 for item in self._pending.values()
-                if item.session_id == session_id and item.name == secret_name
+                if item.address == address and item.name == secret_name
             ),
             None,
         )
@@ -230,7 +238,7 @@ class SecretRequests:
                 lifetime=lifetime,
                 session_id=pending.session_id,
                 expires_at=expires_at,
-                agents=[pending.agent_id],
+                agents=[format_agent_address(pending.agent_id, pending.project_id)],
                 description=pending.description,
             ),
             False,

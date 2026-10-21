@@ -13,12 +13,14 @@ import pytest
 
 from core.secrets.agent_secrets import (
     AgentSecrets,
+    Lifetime,
     SecretRecordError,
     SecretUse,
     SecretUseError,
     SourceBinding,
 )
 from core.secrets.sources import SecretSourceError, SourceEntry, SourceStatus, UnlockField
+from core.sessions import SessionAddress
 from tests.core.secrets.secrets_test_support import data_directory, open_store
 
 PASSWORD = "hunter2-very-secret"
@@ -99,13 +101,13 @@ def test_secrets_persist_sealed_and_are_described_without_concealed_values(
     _login(secrets, description="GitHub account")
 
     reopened = _secrets(tmp_path)
-    (secret,) = reopened.usable("main", "s1")
+    (secret,) = reopened.usable(SessionAddress(None, "main", "s1"))
     described = reopened.describe(secret)
 
     assert secret.name == "GITHUB"
-    assert reopened.substitute("main", "s1", "{{secret:github.password}}", "terminal")[0] == (
-        PASSWORD
-    )
+    assert reopened.substitute(
+        SessionAddress(None, "main", "s1"), "{{secret:github.password}}", "terminal"
+    )[0] == (PASSWORD)
     assert PASSWORD not in json.dumps(described)
     assert {item["name"]: item.get("value") for item in described["fields"]} == {
         "username": "julian",
@@ -143,7 +145,7 @@ def test_substitution_refuses_what_the_caller_may_not_use(
     _login(secrets)
 
     with pytest.raises(SecretUseError) as raised:
-        secrets.substitute(agent_id, session_id, text, sink)  # type: ignore[arg-type]
+        secrets.substitute(SessionAddress(None, agent_id, session_id), text, sink)  # type: ignore[arg-type]
 
     assert raised.value.code == code
     assert PASSWORD not in str(raised.value)
@@ -156,8 +158,7 @@ def test_substitution_replaces_references_in_nested_values_and_reports_uses(
     _login(secrets)
 
     value, uses = secrets.substitute(
-        "main",
-        "s1",
+        SessionAddress(None, "main", "s1"),
         {"lines": ["{{secret:GITHUB.username}}:{{ secret:github.password }}", "plain"]},
         "terminal",
     )
@@ -181,6 +182,7 @@ def test_lifetimes_bound_where_and_how_long_a_secret_is_usable(tmp_path: Path) -
         actor="user",
         lifetime="once",
         session_id="s1",
+        agents=["main"],
     )
     secrets.create(
         name="api",
@@ -202,10 +204,12 @@ def test_lifetimes_bound_where_and_how_long_a_secret_is_usable(tmp_path: Path) -
 
     # A call whose other arguments fail does not consume a once Secret;
     # consume ends it when the call runs.
-    _, uses = secrets.substitute("main", "s1", "{{secret:CODE}}", "files", consume=False)
-    secrets.consume("main", "s1", uses)
+    _, uses = secrets.substitute(
+        SessionAddress(None, "main", "s1"), "{{secret:CODE}}", "files", consume=False
+    )
+    secrets.consume(SessionAddress(None, "main", "s1"), uses)
     with pytest.raises(SecretUseError):
-        secrets.substitute("main", "s1", "{{secret:CODE}}", "files")
+        secrets.substitute(SessionAddress(None, "main", "s1"), "{{secret:CODE}}", "files")
     secrets.create(
         name="code",
         kind="token",
@@ -213,14 +217,15 @@ def test_lifetimes_bound_where_and_how_long_a_secret_is_usable(tmp_path: Path) -
         actor="user",
         lifetime="once",
         session_id="s1",
+        agents=["main"],
     )
     # A once Secret named twice in one call is used once, then it is gone,
     # through the environment too.
-    assert secrets.substitute("main", "s1", "{{secret:CODE}} {{secret:CODE}}", "files")[0] == (
-        "otp-12345678 otp-12345678"
-    )
+    assert secrets.substitute(
+        SessionAddress(None, "main", "s1"), "{{secret:CODE}} {{secret:CODE}}", "files"
+    )[0] == ("otp-12345678 otp-12345678")
     with pytest.raises(SecretUseError):
-        secrets.substitute("main", "s1", "{{secret:CODE}}", "files")
+        secrets.substitute(SessionAddress(None, "main", "s1"), "{{secret:CODE}}", "files")
     secrets.create(
         name="code",
         kind="token",
@@ -228,18 +233,19 @@ def test_lifetimes_bound_where_and_how_long_a_secret_is_usable(tmp_path: Path) -
         actor="user",
         lifetime="once",
         session_id="s1",
+        agents=["main"],
     )
-    assert secrets.environment("main", "s1", "CODE") is not None
-    assert secrets.lookup("main", "s1", "CODE") is None
+    assert secrets.environment(SessionAddress(None, "main", "s1"), "CODE") is not None
+    assert secrets.lookup(SessionAddress(None, "main", "s1"), "CODE") is None
     # A Session Secret exists only in its Session, and only for its Agent.
-    assert [item.name for item in secrets.usable("main", "s2")] == ["TEMP"]
-    assert secrets.usable("other", "s1") == []
+    assert [item.name for item in secrets.usable(SessionAddress(None, "main", "s2"))] == ["TEMP"]
+    assert secrets.usable(SessionAddress(None, "other", "s1")) == []
     clock.now += timedelta(hours=2)
-    assert [item.name for item in secrets.usable("main", "s1")] == ["API"]
+    assert [item.name for item in secrets.usable(SessionAddress(None, "main", "s1"))] == ["API"]
     assert secrets.sweep() == 1
     assert secrets.masker.mask("temporary-value") == "{{secret:TEMP}}"
     changes.clear()
-    secrets.remove_session("s1")
+    secrets.remove_session(SessionAddress(None, "main", "s1"))
     assert [item.name for item in _secrets(tmp_path, clock).all()] == []
     assert changes == ["deleted"]
 
@@ -250,18 +256,32 @@ def test_a_parent_passes_only_its_own_secrets_and_the_grant_ends_with_the_child(
     secrets = _secrets(tmp_path)
     _login(secrets)
 
-    secrets.pass_to_session("main", "s1", ["GITHUB"], child_session_id="child")
+    secrets.pass_to_session(
+        SessionAddress(None, "main", "s1"),
+        ["GITHUB"],
+        child=SessionAddress(None, "helper", "child"),
+    )
     with pytest.raises(SecretUseError):
-        secrets.pass_to_session("helper", "child", ["GITLAB"], child_session_id="grandchild")
+        secrets.pass_to_session(
+            SessionAddress(None, "helper", "child"),
+            ["GITLAB"],
+            child=SessionAddress(None, "helper", "grandchild"),
+        )
     # A Sub-Agent Session of the same Agent has none of the Agent's Secrets
     # unless they were passed, and passes on only what it has.
     with pytest.raises(SecretUseError) as refused:
         secrets.pass_to_session(
-            "main", "other-child", ["GITHUB"], child_session_id="grandchild", passed_only=True
+            SessionAddress(None, "main", "other-child"),
+            ["GITHUB"],
+            child=SessionAddress(None, "helper", "grandchild"),
+            passed_only=True,
         )
     with pytest.raises(SecretUseError) as unpassed:
         secrets.substitute(
-            "main", "other-child", "{{secret:GITHUB.password}}", "typing", passed_only=True
+            SessionAddress(None, "main", "other-child"),
+            "{{secret:GITHUB.password}}",
+            "typing",
+            passed_only=True,
         )
     requested = secrets.create(
         name="stripe",
@@ -276,11 +296,19 @@ def test_a_parent_passes_only_its_own_secrets_and_the_grant_ends_with_the_child(
     assert unpassed.value.code == "not_granted"
     assert "not passed to you" in str(unpassed.value)
     # A permanent Secret given in a Session stays usable there.
-    assert secrets.usable("main", "other-child", passed_only=True) == [requested]
-    assert [item.name for item in secrets.usable("helper", "child", passed_only=True)] == ["GITHUB"]
-    secrets.remove_session("child")
-    assert secrets.usable("helper", "child") == []
-    assert [item.name for item in secrets.usable("main", "s1")] == ["GITHUB", "STRIPE"]
+    assert secrets.usable(SessionAddress(None, "main", "other-child"), passed_only=True) == [
+        requested
+    ]
+    assert [
+        item.name
+        for item in secrets.usable(SessionAddress(None, "helper", "child"), passed_only=True)
+    ] == ["GITHUB"]
+    secrets.remove_session(SessionAddress(None, "helper", "child"))
+    assert secrets.usable(SessionAddress(None, "helper", "child")) == []
+    assert [item.name for item in secrets.usable(SessionAddress(None, "main", "s1"))] == [
+        "GITHUB",
+        "STRIPE",
+    ]
 
 
 def test_environment_gives_every_field_for_a_name_or_one_field_for_its_variable(
@@ -290,14 +318,14 @@ def test_environment_gives_every_field_for_a_name_or_one_field_for_its_variable(
     clock.now = datetime.fromtimestamp(59, UTC)
     secrets = _secrets(tmp_path, clock)
     _login(secrets)
-    secret_id = secrets.usable("main", "s1")[0].id
+    secret_id = secrets.usable(SessionAddress(None, "main", "s1"))[0].id
     # A field added later is checked like one given at creation.
     with pytest.raises(SecretRecordError):
         secrets.update(secret_id, actor="user", values={"totp": "not a seed!"})
     secrets.update(secret_id, actor="user", values={"totp": TOTP_SEED})
 
-    everything = secrets.environment("main", "s1", "GITHUB")
-    one = secrets.environment("main", "s1", "github_password")
+    everything = secrets.environment(SessionAddress(None, "main", "s1"), "GITHUB")
+    one = secrets.environment(SessionAddress(None, "main", "s1"), "github_password")
 
     assert everything is not None and everything[0] == {
         "GITHUB_USERNAME": "julian",
@@ -305,8 +333,8 @@ def test_environment_gives_every_field_for_a_name_or_one_field_for_its_variable(
         "GITHUB_TOTP": "287082",
     }
     assert one is not None and one[0] == {"GITHUB_PASSWORD": PASSWORD}
-    assert secrets.environment("main", "s1", "PATH") is None
-    assert "GITHUB_PASSWORD" in secrets.environment_names("main", "s1")
+    assert secrets.environment(SessionAddress(None, "main", "s1"), "PATH") is None
+    assert "GITHUB_PASSWORD" in secrets.environment_names(SessionAddress(None, "main", "s1"))
 
 
 def test_source_bound_secrets_resolve_at_use_and_stay_masked(tmp_path: Path) -> None:
@@ -323,19 +351,19 @@ def test_source_bound_secrets_resolve_at_use_and_stay_masked(tmp_path: Path) -> 
         source_fields={"username": "UserName", "password": "Password"},
     )
 
-    assert secrets.substitute("main", "s1", "{{secret:DB.password}}", "terminal")[0] == (
-        "from-the-vault-123"
-    )
+    assert secrets.substitute(
+        SessionAddress(None, "main", "s1"), "{{secret:DB.password}}", "terminal"
+    )[0] == ("from-the-vault-123")
     assert secrets.masker.mask("printed from-the-vault-123") == "printed {{secret:DB.password}}"
     source.locked = True
     with pytest.raises(SecretUseError) as raised:
-        secrets.substitute("main", "s1", "{{secret:DB.password}}", "terminal")
+        secrets.substitute(SessionAddress(None, "main", "s1"), "{{secret:DB.password}}", "terminal")
     assert raised.value.code == "source_failed"
     source.locked = False
     secrets.replace_sources([])
     assert source.lock_calls == 1
     with pytest.raises(SecretUseError):
-        secrets.substitute("main", "s1", "{{secret:DB.password}}", "terminal")
+        secrets.substitute(SessionAddress(None, "main", "s1"), "{{secret:DB.password}}", "terminal")
 
 
 def test_masking_replaces_known_values_and_their_encodings_with_references(
@@ -359,3 +387,42 @@ def test_masking_replaces_known_values_and_their_encodings_with_references(
     # Too short to recognize safely.
     assert masker.mask("abc") == "abc"
     assert masker.mask_value(untouched) is untouched
+
+
+@pytest.mark.parametrize("lifetime", ["permanent", "session", "once"])
+def test_grants_use_full_addresses_and_revocation_reaches_descendants(
+    tmp_path: Path, lifetime: Lifetime
+) -> None:
+    secrets = _secrets(tmp_path)
+    owner = SessionAddress("alpha", "main", "same")
+    child = SessionAddress("beta", "helper", "same")
+    descendant = SessionAddress(None, "helper", "descendant")
+    secret = secrets.create(
+        name="API",
+        kind="token",
+        values={"value": TOKEN},
+        actor="user",
+        agents=["main@alpha"],
+        session_id="same",
+        lifetime=lifetime,
+    )
+    for outsider in [
+        SessionAddress(None, "main", "same"),
+        SessionAddress("beta", "main", "same"),
+        SessionAddress("alpha", "other", "same"),
+    ]:
+        assert secrets.usable(outsider) == []
+        secrets.remove_session(outsider)
+        assert secrets.lookup(owner, "API") is not None
+    secrets.pass_to_session(owner, ["API"], child)
+    secrets.pass_to_session(child, ["API"], descendant, passed_only=True)
+    secrets = _secrets(tmp_path)
+    assert secrets.lookup(child, "API", passed_only=True) is not None
+    assert secrets.lookup(descendant, "API", passed_only=True) is not None
+    if lifetime == "permanent":
+        secrets.update(secret.id, actor="user", agents=[])
+        assert secrets.usable(owner) == []
+    else:
+        secrets.remove_session(owner)
+    assert secrets.usable(child, passed_only=True) == []
+    assert _secrets(tmp_path).usable(descendant, passed_only=True) == []

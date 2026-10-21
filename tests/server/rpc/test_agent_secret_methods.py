@@ -13,6 +13,7 @@ import pytest
 
 from core.secrets.agent_secrets import AgentSecrets
 from core.secrets.requests import SecretRequests
+from core.sessions import SessionAddress
 from server.app import _publish_secret_changes
 from tests.core.secrets.secrets_test_support import data_directory, open_store
 from tests.core.secrets.test_agent_secrets import Clock, FakeSource
@@ -55,7 +56,9 @@ async def test_secrets_are_managed_and_only_reveal_returns_a_concealed_value(
         description="GitHub account",
     )
     secret_id = created["secret"]["id"]
-    state.runtime.agent_secrets.substitute("main", "s1", "{{secret:GITHUB.password}}", "typing")
+    state.runtime.agent_secrets.substitute(
+        SessionAddress(None, "main", "s1"), "{{secret:GITHUB.password}}", "typing"
+    )
     listed = await rpc_result(state, "agent_secrets.list")
     updated = await rpc_result(
         state, "agent_secrets.update", id=secret_id, sinks=["terminal"], agents=["main", "coder"]
@@ -139,7 +142,9 @@ async def test_answering_a_request_stores_the_value_for_the_waiting_agent(
     assert stored["secret"]["lifetime"] == "session"
     assert stored["secret"]["session_id"] == "s1"
     assert PASSWORD not in json.dumps([stored, gave])
-    assert state.runtime.agent_secrets.lookup("main", "s1", "STRIPE") is not None
+    assert (
+        state.runtime.agent_secrets.lookup(SessionAddress(None, "main", "s1"), "STRIPE") is not None
+    )
     assert stale["message"] == "This request is no longer waiting; the Agent stopped asking."
     assert (await rpc_result(state, "agent_secrets.list"))["requests"] == []
 

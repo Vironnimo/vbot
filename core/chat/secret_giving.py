@@ -14,6 +14,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from core.chat._run_state import is_subagent_session
+from core.projects.address import format_agent_address
 from core.secrets.agent_secrets import AgentSecret, Lifetime, SecretKind, normalize_secret_name
 from core.sessions import SessionAddress
 from core.utils.logging import get_logger
@@ -52,16 +53,14 @@ async def give_secret(
 ) -> GivenSecret:
     """Store the value; :class:`SecretRecordError` when nothing was stored."""
     secret_name = normalize_secret_name(name)
-    pending = requests.pending_for(address.session_id, secret_name)
+    pending = requests.pending_for(address, secret_name)
     if pending is not None:
         secret = await requests.answer(pending.id, values, lifetime=lifetime, expires_at=expires_at)
         return GivenSecret(secret, replaced=pending.replaces is not None, answered_request=True)
     passed_only = sessions is not None and await asyncio.to_thread(
         is_subagent_session, sessions, address
     )
-    existing = secrets.lookup(
-        address.agent_id, address.session_id, secret_name, passed_only=passed_only
-    )
+    existing = secrets.lookup(address, secret_name, passed_only=passed_only)
     if existing is not None and existing.source is None:
         secret = await asyncio.to_thread(secrets.update, existing.id, actor="user", values=values)
         given = GivenSecret(secret, replaced=True, answered_request=False)
@@ -75,7 +74,7 @@ async def give_secret(
             lifetime=lifetime,
             session_id=address.session_id,
             expires_at=expires_at,
-            agents=[address.agent_id],
+            agents=[format_agent_address(address.agent_id, address.project_id)],
             description=description,
         )
         given = GivenSecret(secret, replaced=False, answered_request=False)

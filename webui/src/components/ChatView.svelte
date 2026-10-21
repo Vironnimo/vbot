@@ -890,6 +890,7 @@
           <div class="chat-view__measure">
             <SecretRequests
               agentId={displayedSecretAddress.agentId}
+              projectId={displayedSecretAddress.projectId}
               sessionId={target.activeSessionState?.sessionId ?? ''}
               refreshToken={agentSecretsRefreshToken}
             />

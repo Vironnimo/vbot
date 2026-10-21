@@ -415,8 +415,7 @@ class SubAgentCoordinator:
                 )
             try:
                 self._secrets.passable(
-                    context.agent_id,
-                    context.session_id,
+                    SessionAddress(context.project_id, context.agent_id, context.session_id),
                     passed,
                     passed_only=context.subagent_session,
                 )
@@ -606,10 +605,9 @@ class SubAgentCoordinator:
         assert self._secrets is not None
         granted = await asyncio.to_thread(
             self._secrets.pass_to_session,
-            context.agent_id,
-            context.session_id,
+            SessionAddress(context.project_id, context.agent_id, context.session_id),
             names,
-            session.address.session_id,
+            session.address,
             passed_only=context.subagent_session,
         )
         lines = "\n".join(secret_line(secret) for secret in granted)

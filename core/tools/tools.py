@@ -20,6 +20,7 @@ from core.secrets.agent_secrets import (
     describe_uses,
     has_reference,
 )
+from core.sessions import SessionAddress
 from core.tools._tool_context import (
     TOOL_ALLOWLIST_WILDCARD,
     ToolCall,
@@ -806,8 +807,7 @@ class ToolRegistry:
             uses: list[SecretUse] = []
             for name, sink in sinks.items():
                 changed[name], found = secrets.substitute(
-                    context.agent_id,
-                    context.session_id,
+                    SessionAddress(context.project_id, context.agent_id, context.session_id),
                     arguments[name],
                     sink,
                     passed_only=context.subagent_session,
@@ -815,7 +815,9 @@ class ToolRegistry:
                 )
                 uses.extend(use for use in found if use not in uses)
             secrets.consume(
-                context.agent_id, context.session_id, uses, passed_only=context.subagent_session
+                SessionAddress(context.project_id, context.agent_id, context.session_id),
+                uses,
+                passed_only=context.subagent_session,
             )
             return changed, uses
 

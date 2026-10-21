@@ -369,7 +369,7 @@ async def test_agent_secrets_reach_only_the_command_environment(tmp_path: Path) 
         kind="login",
         values={"username": "julian", "password": "hunter2-very-secret"},
         actor="user",
-        agents=["agent-a"],
+        agents=["agent-a@project-a"],
     )
     async with started_shell(tmp_path, secrets=secrets) as shell:
         refused = await shell.call({"command": "login {{secret:GITHUB.password}}"})

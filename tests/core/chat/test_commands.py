@@ -725,7 +725,12 @@ async def test_secret_stores_the_value_and_tells_the_agent_only_its_reference(
     assert dispatcher.prepare([TextBlock(type="text", text="/rename Plans"), attachment]) is None
     assert stored.feedback is not None and value not in stored.feedback.text
     assert "{{secret:OPENAI_KEY}}" in stored.feedback.text
-    assert secrets.substitute("coder", "session-one", "{{secret:OPENAI_KEY}}", "files")[0] == value
+    assert (
+        secrets.substitute(
+            SessionAddress(None, "coder", "session-one"), "{{secret:OPENAI_KEY}}", "files"
+        )[0]
+        == value
+    )
     # The waiting request's Tool result tells the Agent; only the first Secret needed a note.
     assert len(sessions.notes) == 1 and "{{secret:OPENAI_KEY}}" in sessions.notes[0]
     assert value not in sessions.notes[0]

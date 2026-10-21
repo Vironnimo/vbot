@@ -67,6 +67,8 @@ Every refusal starts with `<tool> was not run:` like the other dispatch refusals
 | `<NAME> may not be used in <place> (allowed: ...). Tell the user if this use is needed; they can allow it in Settings -> Secrets.` | The user restricts sinks; the Agent must not work around the restriction, only report it. |
 | `<source> did not deliver <NAME>.<field>: <error> Tell the user to unlock it ...` / `Tell the user what failed.` | A locked or failing password manager has a remedy only the user can apply. |
 
+| `NAME changed, expired or was used while this call was prepared.` | A concurrent use or grant/value change invalidates a prepared call; no handler ran. Listing available Secrets avoids repeating a stale one-time reference. |
+
 ## Session notes
 
 | Text | Reason |
@@ -75,4 +77,3 @@ Every refusal starts with `<tool> was not run:` like the other dispatch refusals
 | `The user replaced the value of the Secret <NAME>.` | After a failed sign-in the Agent knows a retry can now succeed. |
 | No note for a new permanent or until Secret | The block's change reminder reports it; a note as well would say it twice. |
 
-| `NAME changed, expired or was used while this call was prepared.` | A concurrent use or grant/value change invalidates a prepared call; no handler ran. Listing available Secrets avoids repeating a stale one-time reference. |

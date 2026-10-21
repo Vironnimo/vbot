@@ -24,9 +24,7 @@ from typing import Any, Final, Literal
 
 from core.secrets._agent_secret_model import (
     DEFAULT_SINKS,
-    KIND_FIELDS,
     LIFETIMES,
-    OPTIONAL_KIND_FIELDS,
     SECRET_ID_PREFIX,
     SECRET_KINDS,
     SINK_CLASSES,
@@ -36,15 +34,19 @@ from core.secrets._agent_secret_model import (
     SecretField,
     SecretKind,
     SecretRecordError,
+    SessionGrant,
     SinkClass,
     SourceBinding,
+    _build_fields,
+    _check_lifetime,
+    _with_values,
+    agent_address,
     check_description,
     check_sinks,
-    check_value,
     decode_record,
     encode_record,
-    normalize_field_name,
     normalize_secret_name,
+    session_address,
 )
 from core.secrets._references import (
     EMPTY_MASKER,
@@ -56,9 +58,10 @@ from core.secrets._references import (
     has_reference,
     map_strings,
 )
-from core.secrets._totp import TotpSeedError, check_totp_seed, totp_code
+from core.secrets._totp import TotpSeedError, totp_code
 from core.secrets.sources import SecretSource, SecretSourceError, SourceStatus
 from core.secrets.store import AGENT_SECRETS, SecretStore, SecretTransaction, credential_name_key
+from core.sessions import SessionAddress
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
 
@@ -269,9 +272,7 @@ class AgentSecrets:
             secret = self._records.get(secret_id)
         return None if secret is None or secret.expired(self._clock()) else secret
 
-    def usable(
-        self, agent_id: str, session_id: str, *, passed_only: bool = False
-    ) -> list[AgentSecret]:
+    def usable(self, address: SessionAddress, *, passed_only: bool = False) -> list[AgentSecret]:
         """The Secrets this Agent may use in this Session, one per name.
 
         A Secret bound to or passed into the Session wins over one granted to
@@ -280,19 +281,19 @@ class AgentSecrets:
         """
         chosen: dict[str, AgentSecret] = {}
         for secret in self.all():
-            if not secret.granted_to(agent_id, session_id, passed_only=passed_only):
+            if not secret.granted_to(address, passed_only=passed_only):
                 continue
             current = chosen.get(secret.name)
-            if current is None or _session_bound(secret, session_id) > _session_bound(
-                current, session_id
+            if current is None or _session_bound(secret, address) > _session_bound(
+                current, address
             ):
                 chosen[secret.name] = secret
         return [chosen[name] for name in sorted(chosen)]
 
     def lookup(
-        self, agent_id: str, session_id: str, name: str, *, passed_only: bool = False
+        self, address: SessionAddress, name: str, *, passed_only: bool = False
     ) -> AgentSecret | None:
-        usable = self.usable(agent_id, session_id, passed_only=passed_only)
+        usable = self.usable(address, passed_only=passed_only)
         return next((item for item in usable if item.name == name), None)
 
     def describe(self, secret: AgentSecret) -> dict[str, Any]:
@@ -358,6 +359,10 @@ class AgentSecrets:
         )
         now = self._clock()
         _check_lifetime(lifetime, session_id, expires_at, now)
+        if session_id and not agents:
+            raise SecretRecordError("A Session Secret needs its Agent address.")
+        for agent in agents:
+            session_address(agent, session_id or "")
         if lifetime == "permanent" and expires_at is not None:
             lifetime = "until"
         secret = AgentSecret(
@@ -372,6 +377,11 @@ class AgentSecrets:
             agents=tuple(dict.fromkeys(agents)),
             # The Session it was given in keeps it, a Sub-Agent Session too.
             sessions=(session_id,) if session_id and lifetime in ("permanent", "until") else (),
+            session_grants=tuple(
+                SessionGrant(agent, (session_address(agent, session_id),)) for agent in agents
+            )
+            if session_id and lifetime in ("permanent", "until")
+            else (),
             sinks=DEFAULT_SINKS[kind] if sinks is None else check_sinks(sinks),
             source=source,
             created_at=now,
@@ -446,7 +456,15 @@ class AgentSecrets:
                     raise SecretRecordError(
                         f"{secret.name} belongs to one Session; make it permanent to grant it."
                     )
-                secret = replace(secret, agents=tuple(dict.fromkeys(agents)))
+                for agent in agents:
+                    session_address(agent, "")
+                secret = replace(
+                    secret,
+                    agents=tuple(dict.fromkeys(agents)),
+                    session_grants=tuple(
+                        grant for grant in secret.session_grants if grant.agent in agents
+                    ),
+                )
             if secret == current:
                 return current
             if secret.lifetime != current.lifetime:
@@ -465,7 +483,7 @@ class AgentSecrets:
         return secret
 
     def passable(
-        self, agent_id: str, session_id: str, names: Sequence[str], *, passed_only: bool = False
+        self, address: SessionAddress, names: Sequence[str], *, passed_only: bool = False
     ) -> list[AgentSecret]:
         """The caller's Secrets ``names`` stand for; :class:`SecretUseError` names the others."""
         granted: list[AgentSecret] = []
@@ -476,7 +494,7 @@ class AgentSecrets:
             except SecretRecordError:
                 missing.append(str(raw))
                 continue
-            secret = self.lookup(agent_id, session_id, name, passed_only=passed_only)
+            secret = self.lookup(address, name, passed_only=passed_only)
             if secret is None:
                 missing.append(name)
             elif secret not in granted:
@@ -486,58 +504,69 @@ class AgentSecrets:
                 "unknown_secret",
                 f"You cannot pass {', '.join(missing)}: "
                 f"{'it is' if len(missing) == 1 else 'they are'} not among your Secrets. "
-                f"Your Secrets: {self._names_text(agent_id, session_id, passed_only)}.",
+                f"Your Secrets: {self._names_text(address, passed_only)}.",
             )
         return granted
 
     def pass_to_session(
         self,
-        agent_id: str,
-        session_id: str,
+        address: SessionAddress,
         names: Sequence[str],
-        child_session_id: str,
+        child: SessionAddress,
         *,
         passed_only: bool = False,
     ) -> list[AgentSecret]:
-        """Grant named Secrets the caller can use to a Sub-Agent's Session (blocking)."""
-        granted = self.passable(agent_id, session_id, names, passed_only=passed_only)
-        changed: list[AgentSecret] = []
+        """Pass grants to an exact child Session, retaining their revocation path."""
+        changed = []
         with self._lock:
+            granted = self.passable(address, names, passed_only=passed_only)
             for secret in granted:
-                current = self._records.get(secret.id, secret)
-                if child_session_id in current.sessions:
+                authority = secret.grant_for(address, passed_only=passed_only)
+                assert authority is not None
+                if child in authority.path:
+                    raise SecretRecordError("A Secret cannot be passed back into its grant path.")
+                grant = SessionGrant(authority.agent, (*authority.path, child))
+                if grant in secret.session_grants:
                     continue
-                updated = replace(current, sessions=(*current.sessions, child_session_id))
+                updated = replace(
+                    secret,
+                    sessions=tuple(dict.fromkeys((*secret.sessions, child.session_id))),
+                    session_grants=(*secret.session_grants, grant),
+                )
                 self._write(updated)
                 changed.append(updated)
         for secret in changed:
-            self._notify(SecretChange("changed", secret, f"session:{session_id}"))
+            self._notify(SecretChange("changed", secret, f"session:{address.session_id}"))
         return granted
 
-    def remove_session(self, session_id: str) -> None:
-        """Forget a Session (blocking): its own Secrets go, passed grants are withdrawn."""
+    def remove_session(self, address: SessionAddress) -> None:
+        """Withdraw the Session's own and derived grants, without touching namesakes."""
+        changes = []
         with self._lock:
-            affected = [
-                item
-                for item in self._records.values()
-                if item.session_id == session_id or session_id in item.sessions
-            ]
-            changes = []
-            for secret in affected:
-                if secret.session_id == session_id and secret.lifetime in ("session", "once"):
+            for secret in list(self._records.values()):
+                if (
+                    secret.session_id == address.session_id
+                    and agent_address(address) in secret.agents
+                    and secret.lifetime in ("session", "once")
+                ):
                     self._remove(secret)
                     changes.append(SecretChange("deleted", secret, "session removed"))
-                else:
+                    continue
+                grants = tuple(
+                    grant for grant in secret.session_grants if address not in grant.path
+                )
+                if grants != secret.session_grants:
                     kept = replace(
                         secret,
-                        sessions=tuple(item for item in secret.sessions if item != session_id),
+                        session_grants=grants,
+                        sessions=tuple(
+                            dict.fromkeys(grant.path[-1].session_id for grant in grants)
+                        ),
                     )
                     self._write(kept)
                     changes.append(SecretChange("changed", kept, "session removed"))
         for change in changes:
             self._notify(change)
-        if affected:
-            _LOGGER.info("Agent Secrets of a removed Session withdrawn (count=%d)", len(affected))
 
     def sweep(self) -> int:
         """Remove expired Secrets (blocking); how many were removed."""
@@ -573,8 +602,7 @@ class AgentSecrets:
 
     def resolve(
         self,
-        agent_id: str,
-        session_id: str,
+        address: SessionAddress,
         reference: Reference,
         sink: SinkClass,
         *,
@@ -586,9 +614,9 @@ class AgentSecrets:
         A ``once`` Secret is deleted here unless ``consume`` is false; then the
         caller passes the uses to :meth:`consume` once its whole call can run.
         """
-        secret = self.lookup(agent_id, session_id, reference.name, passed_only=passed_only)
+        secret = self.lookup(address, reference.name, passed_only=passed_only)
         if secret is None:
-            raise self._unknown(agent_id, session_id, reference, passed_only)
+            raise self._unknown(address, reference, passed_only)
         target = secret.field_named(reference.field) if reference.field else secret.default_field()
         if target is None:
             available = ", ".join(secret.reference(item.name) for item in secret.fields)
@@ -604,16 +632,15 @@ class AgentSecrets:
                 "Tell the user if this use is needed; they can allow it in Settings -> Secrets.",
             )
         value = self.field_value(secret, target)
-        self._record_use(secret, target.name, sink, agent_id, session_id)
+        self._record_use(secret, target.name, sink, address)
         use = SecretUse(secret.name, target.name, sink, secret)
         if consume:
-            self.consume(agent_id, session_id, [use], passed_only=passed_only)
+            self.consume(address, [use], passed_only=passed_only)
         return value, use
 
     def consume(
         self,
-        agent_id: str,
-        session_id: str,
+        address: SessionAddress,
         uses: Iterable[SecretUse],
         *,
         passed_only: bool = False,
@@ -627,7 +654,7 @@ class AgentSecrets:
             once: dict[str, AgentSecret] = {}
             for use in uses:
                 secret = use.secret
-                current = self.lookup(agent_id, session_id, use.name, passed_only=passed_only)
+                current = self.lookup(address, use.name, passed_only=passed_only)
                 if secret is None or current != secret:
                     raise SecretUseError(
                         "not_granted",
@@ -669,8 +696,7 @@ class AgentSecrets:
 
     def substitute(
         self,
-        agent_id: str,
-        session_id: str,
+        address: SessionAddress,
         value: Any,
         sink: SinkClass,
         *,
@@ -693,8 +719,7 @@ class AgentSecrets:
                 key = (reference.name, reference.field)
                 if key not in resolved_values:
                     resolved_values[key] = self.resolve(
-                        agent_id,
-                        session_id,
+                        address,
                         reference,
                         sink,
                         passed_only=passed_only,
@@ -711,23 +736,22 @@ class AgentSecrets:
 
         changed = map_strings(value, replace_text)
         if consume:
-            self.consume(agent_id, session_id, uses, passed_only=passed_only)
+            self.consume(address, uses, passed_only=passed_only)
         return changed, uses
 
     def environment_names(
-        self, agent_id: str, session_id: str, *, passed_only: bool = False
+        self, address: SessionAddress, *, passed_only: bool = False
     ) -> frozenset[str]:
         """Every name ``env_keys`` accepts for this Agent: Secret names and field variables."""
         names: set[str] = set()
-        for secret in self.usable(agent_id, session_id, passed_only=passed_only):
+        for secret in self.usable(address, passed_only=passed_only):
             names.add(secret.name)
             names.update(secret.environment_names().values())
         return frozenset(names)
 
     def environment(
         self,
-        agent_id: str,
-        session_id: str,
+        address: SessionAddress,
         name: str,
         *,
         passed_only: bool = False,
@@ -739,7 +763,7 @@ class AgentSecrets:
         field's variable name (``GITHUB_PASSWORD``) gives only that field.
         """
         wanted = name.upper()
-        for secret in self.usable(agent_id, session_id, passed_only=passed_only):
+        for secret in self.usable(address, passed_only=passed_only):
             variables = secret.environment_names()
             if secret.name == wanted:
                 fields = list(secret.fields)
@@ -757,9 +781,9 @@ class AgentSecrets:
             values = {variables[item.name]: self.field_value(secret, item) for item in fields}
             uses = [SecretUse(secret.name, item.name, "environment", secret) for item in fields]
             for item in fields:
-                self._record_use(secret, item.name, "environment", agent_id, session_id)
+                self._record_use(secret, item.name, "environment", address)
             if consume:
-                self.consume(agent_id, session_id, uses, passed_only=passed_only)
+                self.consume(address, uses, passed_only=passed_only)
             return values, uses
         return None
 
@@ -769,13 +793,17 @@ class AgentSecrets:
             return list(reversed(self._uses.get(secret_id, ())))
 
     def _record_use(
-        self, secret: AgentSecret, field_name: str, sink: SinkClass, agent_id: str, session_id: str
+        self, secret: AgentSecret, field_name: str, sink: SinkClass, address: SessionAddress
     ) -> None:
-        use = RecordedUse(field_name, sink, agent_id, session_id, self._clock())
+        use = RecordedUse(field_name, sink, address.agent_id, address.session_id, self._clock())
         with self._lock:
             self._uses.setdefault(secret.id, deque(maxlen=_RECENT_USES)).append(use)
         _LOGGER.debug(
-            "Agent Secret %s.%s used (sink=%s agent=%s)", secret.name, field_name, sink, agent_id
+            "Agent Secret %s.%s used (sink=%s agent=%s)",
+            secret.name,
+            field_name,
+            sink,
+            agent_address(address),
         )
 
     # -- masking ---------------------------------------------------------------
@@ -843,10 +871,10 @@ class AgentSecrets:
         return value
 
     def _unknown(
-        self, agent_id: str, session_id: str, reference: Reference, passed_only: bool
+        self, address: SessionAddress, reference: Reference, passed_only: bool
     ) -> SecretUseError:
         exists = any(item.name == reference.name for item in self.all())
-        names = self._names_text(agent_id, session_id, passed_only)
+        names = self._names_text(address, passed_only)
         if exists and passed_only:
             return SecretUseError(
                 "not_granted",
@@ -872,8 +900,8 @@ class AgentSecrets:
             "Use the secrets Tool to request one from the user.",
         )
 
-    def _names_text(self, agent_id: str, session_id: str, passed_only: bool) -> str:
-        usable = self.usable(agent_id, session_id, passed_only=passed_only)
+    def _names_text(self, address: SessionAddress, passed_only: bool) -> str:
+        usable = self.usable(address, passed_only=passed_only)
         names = [item.name for item in usable]
         return ", ".join(names) if names else "none"
 
@@ -893,7 +921,11 @@ class AgentSecrets:
         for other in self._records.values():
             if other.id == secret.id or other.name != secret.name or other.expired(now):
                 continue
-            same_session = secret.session_id is not None and other.session_id == secret.session_id
+            same_session = (
+                secret.session_id is not None
+                and other.session_id == secret.session_id
+                and bool(set(secret.agents) & set(other.agents))
+            )
             both_agent_wide = secret.session_id is None and other.session_id is None
             if same_session or both_agent_wide:
                 raise SecretRecordError(f"A Secret named {secret.name} already exists.")
@@ -928,86 +960,8 @@ _SINK_WORDS: Final[Mapping[SinkClass, str]] = {
 }
 
 
-def _session_bound(secret: AgentSecret, session_id: str) -> int:
-    return 1 if secret.session_id == session_id or session_id in secret.sessions else 0
-
-
-def _check_lifetime(
-    lifetime: Lifetime, session_id: str | None, expires_at: datetime | None, now: datetime
-) -> None:
-    if lifetime in ("session", "once") and not session_id:
-        raise SecretRecordError(f"A {lifetime} Secret needs its Session.")
-    if lifetime == "until" and expires_at is None:
-        raise SecretRecordError("A time-limited Secret needs an expiry time.")
-    if expires_at is not None and expires_at <= now:
-        raise SecretRecordError("The expiry time has already passed.")
-
-
-def _build_fields(
-    kind: SecretKind,
-    values: Mapping[str, str],
-    concealed: Mapping[str, bool],
-    source_fields: Mapping[str, str] | None,
-    *,
-    bound: bool,
-) -> tuple[SecretField, ...]:
-    """The fields of a new Secret: stored values, or the source fields of a bound one."""
-    defaults = dict(KIND_FIELDS[kind])
-    if bound:
-        if any(values.values()):
-            raise SecretRecordError("A Secret from a source takes all its values from the source.")
-        mapped = {normalize_field_name(key): value for key, value in (source_fields or {}).items()}
-        if not mapped:
-            raise SecretRecordError("A Secret from a source needs the source fields it uses.")
-        return tuple(
-            SecretField(
-                name=name,
-                concealed=bool(concealed.get(name, defaults.get(name, True))),
-                source_field=source_field,
-            )
-            for name, source_field in mapped.items()
-        )
-    given = {normalize_field_name(key): value for key, value in values.items() if value != ""}
-    for name, _hidden in KIND_FIELDS[kind]:
-        if name not in given and name not in OPTIONAL_KIND_FIELDS[kind]:
-            raise SecretRecordError(f"A {kind} Secret needs its {name}.")
-    names = [name for name in defaults if name in given]
-    names += [name for name in given if name not in defaults]
-    if not names:
-        raise SecretRecordError("A Secret needs at least one field.")
-    fields: list[SecretField] = []
-    for name in names:
-        value = _checked_value(name, given[name])
-        hidden = bool(concealed.get(name, defaults.get(name, True)))
-        fields.append(SecretField(name=name, concealed=hidden, value=value))
-    return tuple(fields)
-
-
-def _checked_value(name: str, value: str) -> str:
-    checked = check_value(value, field_name=name)
-    if name == TOTP_FIELD:
-        try:
-            check_totp_seed(checked)
-        except TotpSeedError as error:
-            raise SecretRecordError(f"The totp field is not a TOTP seed: {error}.") from None
-    return checked
-
-
-def _with_values(secret: AgentSecret, values: Mapping[str, str]) -> tuple[SecretField, ...]:
-    updates = {normalize_field_name(key): value for key, value in values.items()}
-    fields = []
-    for item in secret.fields:
-        if item.name in updates:
-            fields.append(replace(item, value=_checked_value(item.name, updates.pop(item.name))))
-        else:
-            fields.append(item)
-    defaults = dict(KIND_FIELDS[secret.kind])
-    for name, value in updates.items():
-        fields.append(
-            SecretField(
-                name=name,
-                concealed=defaults.get(name, True),
-                value=_checked_value(name, value),
-            )
-        )
-    return tuple(fields)
+def _session_bound(secret: AgentSecret, address: SessionAddress) -> int:
+    return int(
+        secret.session_id == address.session_id
+        or any(grant.path[-1] == address for grant in secret.session_grants)
+    )
