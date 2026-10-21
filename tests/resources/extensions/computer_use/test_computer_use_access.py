@@ -46,8 +46,14 @@ async def test_by_default_every_app_takes_input_without_approval(computer: Harne
     result = await computer.call("computer_apps", {"action": "request", "apps": ["Slack"]})
     assert model_text(result).startswith("No approval is needed: you may operate every app.")
     assert computer.api.operations.pending_inputs() == []  # type: ignore[misc]
+    # open says whether it brought an open window to the front or started the app.
     result = await computer.call("computer_apps", {"action": "open", "app": "paint"})
-    assert model_text(result).startswith('Opened Paint.\nScreenshot of display 2 of 2 "Wide"')
+    activated = model_text(result)
+    assert activated.startswith("Brought the open window of Paint to the front;")
+    assert '\nScreenshot of display 2 of 2 "Wide"' in activated
+    result = await computer.call("computer_apps", {"action": "open", "app": "Calculator"})
+    assert model_text(result).startswith("Started Calculator, which had no open window.")
+    assert computer.target.opened == ["Paint", "Calculator"]
 
 
 @pytest.mark.parametrize("ask", [False, True])

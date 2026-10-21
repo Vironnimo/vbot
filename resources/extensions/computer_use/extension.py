@@ -875,7 +875,7 @@ class ComputerUseService:
         async with self._active_call(context):
             try:
                 desktop.input_started = True
-                await self._on_worker(self._target.open, match, interrupt_on_cancel=True)
+                started = await self._on_worker(self._target.open, match, interrupt_on_cancel=True)
                 await self._pause(OPEN_SETTLE_SECONDS)
                 shot = await self._on_worker(desktop.screenshot)
             except InputInterrupted:
@@ -883,7 +883,17 @@ class ComputerUseService:
                     f"{self._stopped_text()} while {match.name} was opening. {_STOPPED_ADVICE}",
                     "computer_use_interrupted",
                 ) from None
-        return f"Opened {match.name}.\n{shot}"
+        if not started:
+            return (
+                f"Brought the open window of {match.name} to the front; no new instance was "
+                f"started.\n{shot}"
+            )
+        return (
+            f"Started {match.name}, which had no open window. A starting app can take a few "
+            "seconds to show its window: if the screenshot does not show it yet, wait with "
+            'computer {"action":"wait","duration":3} instead of opening it again.\n'
+            f"{shot}"
+        )
 
 
 def register(api: ExtensionAPI) -> None:
