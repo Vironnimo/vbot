@@ -13,6 +13,7 @@ from typing import Literal
 
 type PartKind = Literal["text", "variable", "dynamic"]
 type RedirectKind = Literal["read", "write"]
+type CallTargetKind = Literal["type", "new", "command", "item", "other"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +75,35 @@ class Binding:
     errors: list[str]
 
 
+@dataclass(frozen=True, slots=True)
+class CallTarget:
+    """What a PowerShell method call is made on.
+
+    ``type``: a static call on the .NET type ``type_name`` (``[IO.File]::Delete``);
+    ``new``: an object of ``type_name`` built from ``arguments``
+    (``[IO.FileInfo]::new(x)``, ``[IO.FileInfo]'x'``); ``command``: the output
+    of the command at source ``offset`` (``(Get-Item x).Delete()``); ``item``:
+    the pipeline input ``$_`` of the command at ``feed``; ``other``: anything
+    else, such as a variable. ``type_name`` is lower-case without ``system.``.
+    """
+
+    kind: CallTargetKind
+    type_name: str | None = None
+    arguments: tuple[Word, ...] = ()
+    offset: int | None = None
+    feed: Pipeline | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MemberCall:
+    """A PowerShell .NET method call; ``member`` None when the name is computed."""
+
+    member: str | None
+    static: bool
+    target: CallTarget
+    arguments: tuple[Word, ...]
+
+
 @dataclass(slots=True)
 class RawCommand:
     """One simple command (or, without ``words``, a statement that only redirects).
@@ -83,6 +113,11 @@ class RawCommand:
     PowerShell adds the ``invocation`` operator (``&``, ``.``), the
     ``resolved`` cmdlet or function name with its ``binding``, and whether the
     name is a function the script defines itself.
+
+    PowerShell also lowers what its expressions do into entries without
+    ``words``: a .NET method ``call`` and an ``expression`` string (a string
+    an expression names, not a command word). ``offset`` is the PowerShell
+    source position an entry is ordered by.
     """
 
     words: list[Word]
@@ -95,6 +130,9 @@ class RawCommand:
     binding: Binding | None = None
     script_function: bool = False
     stop_parsing: bool = False
+    offset: int = -1
+    call: MemberCall | None = None
+    expression: Word | None = None
 
 
 @dataclass(slots=True)

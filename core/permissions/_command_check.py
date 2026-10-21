@@ -6,8 +6,10 @@ It owns the ``CommandAnalyzer``, creates it on the first check of a restricted
 boundary and closes it at shutdown; full access never creates it. The decision
 order: the start directory, then every simple command against deny rules and
 ``commands: listed`` allow rules, vBot's own CLI, the URLs and host names that
-reach the vBot server, every path access, and last whatever the analysis could
-not resolve. Contract: ``.vorch/domain-maps/permissions.md``.
+reach the vBot server, every URL and host, every path access, and last whatever
+the analysis could not resolve. The analysis and the decision run on bounded
+worker pools (the decision resolves links on disk), never on the Event Loop.
+Contract: ``.vorch/domain-maps/permissions.md``.
 """
 
 from __future__ import annotations
@@ -16,9 +18,11 @@ import asyncio
 import re
 import sys
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
+from core.permissions._addresses import canonical_host
 from core.permissions._paths import is_inside, path_key, split_lexical
 from core.permissions._refusal import PathAccess, PermissionRefusal
 from core.permissions.permissions import PermissionBoundary, is_own_host
@@ -31,12 +35,11 @@ if TYPE_CHECKING:
         SimpleCommand,
         UnresolvedElement,
     )
+    from core.utils.workers import BoundedWorkerPool
 
 # Refuses a simple command a caller cannot let run: ``(detail, hint)`` or None.
 type CommandRefusal = Callable[[SimpleCommand], tuple[str, str] | None]
 
-# The checkout or installation this code runs from.
-_VBOT_ROOT: Final = Path(__file__).resolve().parents[2]
 # Longest command text a refusal quotes.
 _TARGET_CHARS: Final = 300
 _PYTHONS: Final = re.compile(r"^(?:python[\d.]*w?|py|pythonw|uv)$", re.IGNORECASE)
@@ -54,14 +57,26 @@ _UNRESOLVED: Final[dict[str, tuple[str, str]]] = {
     ),
     "cwd": (
         "so the check cannot tell which folder it works in",
-        "Change into folders by their literal path, or pass the folder as workdir.",
+        "Change into folders by their literal path.",
     ),
     "command": (
         "so the check cannot tell what it runs",
         "Write each command and its arguments literally.",
     ),
+    "url": (
+        "so the check cannot tell which address it reaches",
+        "Write each address literally in the command.",
+    ),
 }
+# For callers whose Tool takes the folder to run in (the shell Tool).
+_CWD_HINT_WITH_WORKDIR: Final = (
+    "Change into folders by their literal path, or pass the folder as workdir."
+)
 _UNAVAILABLE_HINT: Final = "Run it again; if this repeats, tell the user."
+# A recursive read over a denied folder: what reads the same files and works.
+_DENIED_BELOW_HINT: Final = (
+    "Use search_files, which leaves denied folders out, or name only the folders the command needs."
+)
 
 
 class CommandChecker:
@@ -76,8 +91,12 @@ class CommandChecker:
         self,
         analyzer_factory: Callable[[], CommandAnalyzer],
         *,
-        vbot_root: Path = _VBOT_ROOT,
+        vbot_root: Path | None = None,
     ) -> None:
+        if vbot_root is None:
+            from core.utils.config import VBOT_ROOT
+
+            vbot_root = VBOT_ROOT
         self._factory = analyzer_factory
         self._analyzer: CommandAnalyzer | None = None
         self._closed = False
@@ -99,17 +118,17 @@ class CommandChecker:
         env: Mapping[str, str],
         home: Path,
         refuse_command: CommandRefusal | None = None,
+        workdir_parameter: bool = False,
     ) -> PermissionRefusal | None:
         """The refusal of running *command_line* with *shell* in *cwd*, or None to run it.
 
         *refuse_command* refuses more: given a simple command, it returns the
         ``(detail, hint)`` of an ``unanalyzable`` refusal, or None.
+        *workdir_parameter*: the caller's Tool takes the folder to run in as
+        ``workdir``, which a refusal of an unknown folder then suggests.
         """
         if not boundary.restricted:
             return None
-        refused = boundary.check_path(cwd, "start_dir")
-        if refused is not None:
-            return refused
         plan = await self._analyze(
             boundary,
             command_line,
@@ -119,7 +138,7 @@ class CommandChecker:
         )
         if isinstance(plan, PermissionRefusal):
             return plan
-        refused = self._decide(boundary, plan, cwd, command_line)
+        refused = await self._decision(boundary, plan, cwd, command_line, workdir_parameter)
         if refused is None and refuse_command is not None:
             for command in plan.commands:
                 reason = refuse_command(command)
@@ -142,9 +161,6 @@ class CommandChecker:
         """The refusal of starting the program *argv* directly in *cwd*, or None."""
         if not boundary.restricted:
             return None
-        refused = boundary.check_path(cwd, "start_dir")
-        if refused is not None:
-            return refused
         text = " ".join(argv)
         plan = await self._analyze(
             boundary,
@@ -153,7 +169,7 @@ class CommandChecker:
         )
         if isinstance(plan, PermissionRefusal):
             return plan
-        return self._decide(boundary, plan, cwd, text)
+        return await self._decision(boundary, plan, cwd, text, False)
 
     async def aclose(self) -> None:
         """Stop the analyzer; later checks of restricted boundaries refuse."""
@@ -175,13 +191,14 @@ class CommandChecker:
             analyzer = await self._analyzer_instance()
             plan = await run(analyzer)
         except CommandAnalysisUnavailable as error:
-            return boundary.refusal(
+            refusal = boundary.refusal(
                 "command",
                 _shown(text),
                 "unanalyzable",
                 detail=f"vBot could not analyze it to check it ({str(error).rstrip('.')})",
                 hint=_UNAVAILABLE_HINT,
             )
+            return replace(refusal, retryable=True)
         return plan
 
     async def _analyzer_instance(self) -> CommandAnalyzer:
@@ -194,10 +211,32 @@ class CommandChecker:
                 self._analyzer = self._factory()
             return self._analyzer
 
-    def _decide(
-        self, boundary: PermissionBoundary, plan: CommandPlan, cwd: Path, text: str
+    async def _decision(
+        self,
+        boundary: PermissionBoundary,
+        plan: CommandPlan,
+        cwd: Path,
+        text: str,
+        workdir_parameter: bool,
     ) -> PermissionRefusal | None:
-        windows = sys.platform == "win32"
+        return await _decision_pool().run(
+            self._decide, boundary, plan, cwd, text, workdir_parameter
+        )
+
+    def _decide(
+        self,
+        boundary: PermissionBoundary,
+        plan: CommandPlan,
+        cwd: Path,
+        text: str,
+        workdir_parameter: bool,
+    ) -> PermissionRefusal | None:
+        """The first refusal in the decision order; blocking (resolves links), off the loop."""
+        refused = boundary.check_path(cwd, "start_dir")
+        if refused is not None:
+            return refused
+        context = boundary.context
+        windows = (context.platform if context is not None else sys.platform) == "win32"
         for check in (
             self._deny_rules,
             self._listed,
@@ -211,13 +250,25 @@ class CommandChecker:
             refused = boundary.check_url(url)
             if refused is not None:
                 return refused
-        for access in plan.paths:
-            kind: PathAccess = access.kind
-            refused = boundary.check_path(access.path, kind, subtree=access.subtree)
+        for host in plan.hosts:
+            refused = boundary.check_host(canonical_host(host))
             if refused is not None:
                 return refused
+        for access in plan.paths:
+            kind: PathAccess = access.kind
+            refused = boundary.check_path(
+                access.path,
+                kind,
+                subtree=access.subtree,
+                glob=access.glob,
+                pruned=access.pruned,
+            )
+            if refused is not None:
+                if refused.below is not None and kind == "read":
+                    refused = replace(refused, hint=_DENIED_BELOW_HINT)
+                return refused
         for element in plan.unresolved:
-            return _unresolved_refusal(boundary, element, text)
+            return _unresolved_refusal(boundary, element, text, workdir_parameter)
         return None
 
     def _deny_rules(
@@ -342,9 +393,11 @@ def _server_refusal(boundary: PermissionBoundary, command: SimpleCommand) -> Per
 
 
 def _unresolved_refusal(
-    boundary: PermissionBoundary, element: UnresolvedElement, text: str
+    boundary: PermissionBoundary, element: UnresolvedElement, text: str, workdir_parameter: bool
 ) -> PermissionRefusal:
     consequence, hint = _UNRESOLVED[element.kind]
+    if element.kind == "cwd" and workdir_parameter:
+        hint = _CWD_HINT_WITH_WORKDIR
     reason = element.reason.rstrip(".")
     source = _shown(element.source)
     where = "" if source == _shown(text) else f" ({source})"
@@ -355,6 +408,19 @@ def _unresolved_refusal(
         detail=f"{reason}{where}, {consequence}",
         hint=hint,
     )
+
+
+_POOL: BoundedWorkerPool | None = None
+
+
+def _decision_pool() -> BoundedWorkerPool:
+    """The pool decisions run on, created on first use."""
+    global _POOL
+    if _POOL is None:
+        from core.utils.workers import BoundedWorkerPool
+
+        _POOL = BoundedWorkerPool(name="command-check", max_workers=2)
+    return _POOL
 
 
 def _shown(text: str) -> str:

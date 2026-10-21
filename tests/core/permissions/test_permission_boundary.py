@@ -164,25 +164,37 @@ def test_path_decisions(area: Area, path: str, access: PathAccess, reason: str |
 
 
 @pytest.mark.parametrize(
-    ("path", "access", "reason"),
+    ("path", "access", "glob", "pruned", "reason"),
     [
-        pytest.param("src", "write", None, id="nothing-protected-below"),
-        pytest.param(".", "write", "deny_rule", id="deny-rule-below"),
-        pytest.param(".", "read", "deny_rule", id="read-deny-below"),
-        pytest.param("{data}/..", "read", "protected_location", id="data-dir-below"),
-        pytest.param("{root}", "write", "protected_location", id="installation-below"),
+        pytest.param("src", "write", None, (), None, id="nothing-protected-below"),
+        pytest.param(".", "write", None, (), "deny_rule", id="deny-rule-below"),
+        pytest.param(".", "read", None, (), "deny_rule", id="read-deny-below"),
+        pytest.param(".", "read", "*.md", (), None, id="glob-misses-the-denied-folder"),
+        pytest.param(".", "read", "s*/key", (), "deny_rule", id="glob-reaches-the-denied-folder"),
+        pytest.param(".", "read", None, ("secrets",), None, id="denied-folder-left-out"),
+        pytest.param("{data}/..", "read", None, (), "protected_location", id="data-dir-below"),
+        pytest.param("{root}", "write", None, (), "protected_location", id="installation-below"),
     ],
 )
 def test_a_subtree_access_is_refused_for_what_lies_below(
-    area: Area, path: str, access: PathAccess, reason: str | None
+    area: Area,
+    path: str,
+    access: PathAccess,
+    glob: str | None,
+    pruned: tuple[str, ...],
+    reason: str | None,
 ) -> None:
     rules = {"deny": ["Read({workdir}/secrets/**)", "Edit({workdir}/*.lock)"]}
     target = str(area.root) if path == "{root}" else area.path(path)
     boundary = area.boundary(rules)
 
-    refusal = boundary.check_path(target, access, subtree=True)
+    refusal = boundary.check_path(target, access, subtree=True, glob=glob, pruned=pruned)
 
     assert (refusal.reason if refusal else None) == reason
+    if reason == "deny_rule":
+        # The refusal names the denied part it would reach.
+        assert refusal is not None and refusal.below is not None
+        assert "/secrets" in refusal.below or refusal.below.endswith(".lock")
     # Without subtree the folder itself is permitted.
     assert boundary.check_path(target, access) is None
 
@@ -392,6 +404,8 @@ def test_host_decisions(area: Area, host: str, reason: str | None) -> None:
         pytest.param("http://localhost:22333/", "protected_location", id="server-localhost"),
         pytest.param("http://[::1]:22333/", "protected_location", id="server-ipv6"),
         pytest.param("http://0.0.0.0:22333/", "protected_location", id="server-unspecified"),
+        pytest.param("http://127.1:22333/", "protected_location", id="server-short-ipv4"),
+        pytest.param("http://2130706433:22333/", "protected_location", id="server-ipv4-number"),
         pytest.param(
             f"http://{socket.gethostname()}:22333/", "protected_location", id="server-machine-name"
         ),

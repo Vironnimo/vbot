@@ -215,6 +215,38 @@ def glob_prefix(text: str, *, brace: bool = False) -> str | Unresolvable:
     return prefix[: cut + 1] if cut == 0 or (WINDOWS and prefix[cut - 1] == ":") else prefix[:cut]
 
 
+def glob_split(text: str, *, brace: bool = False) -> tuple[str, str] | Unresolvable:
+    """A glob's literal folder and the pattern below it (``src/*.py`` -> ``src``, ``*.py``).
+
+    The pattern uses the rule syntax with ``/`` separators: a character class
+    becomes ``?``, a bash brace group ``*`` (``**`` when it holds a separator).
+    """
+    characters = _BASH_GLOB_CHARACTERS if brace else GLOB_CHARACTERS
+    first = next(index for index, character in enumerate(text) if character in characters)
+    if ".." in re.split(r"[\\/]", text[first:]):
+        return Unresolvable("climbs out of a folder a wildcard names")
+    head = text[:first]
+    cut = max(head.rfind("/"), head.rfind("\\") if WINDOWS else -1)
+    if cut < 0:
+        drive = _DRIVE.match(head) if WINDOWS else None
+        if drive is not None:
+            return head[:2], _rule_pattern(text[2:], brace=brace)
+        return ".", _rule_pattern(text, brace=brace)
+    folder = head[: cut + 1] if cut == 0 or (WINDOWS and head[cut - 1] == ":") else head[:cut]
+    return folder, _rule_pattern(text[cut + 1 :], brace=brace)
+
+
+def _rule_pattern(text: str, *, brace: bool) -> str:
+    if WINDOWS:
+        text = text.replace("\\", "/")
+    while brace and re.search(r"\{[^{}]*\}", text):
+        if re.search(r"\{[^{}]*/[^{}]*\}", text):
+            return "**"
+        text = re.sub(r"\{[^{}]*\}", "*", text)
+    text = re.sub(r"\[[^\]]*\]", "?", text)
+    return "/".join(segment for segment in text.split("/") if segment not in ("", "."))
+
+
 def is_clearly_path(text: str, *, windows_switches: bool) -> bool:
     """Whether a word of a command without a path spec is clearly a path (tier B).
 

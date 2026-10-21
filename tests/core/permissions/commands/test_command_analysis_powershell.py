@@ -47,7 +47,7 @@ async def analyzer() -> AsyncIterator[CommandAnalyzer]:
             "rm -Recurse build; del *.tmp",
             id="aliases resolve and bind",
             commands=("Remove-Item -Recurse build", "Remove-Item *.tmp"),
-            paths=("write w/p/build/**", "write w/p/**"),
+            paths=("write w/p/build/**", "write w/p/*.tmp/**"),
         ),
         case("rm -rf build", id="binding error is unresolved", unresolved=("path_write",)),
         case(
@@ -155,6 +155,50 @@ async def analyzer() -> AsyncIterator[CommandAnalyzer]:
             id="redefined names",
             paths=("write w/p/y/**",),
             unresolved=("command",),
+        ),
+        case(
+            "[IO.File]::WriteAllText('a.txt', 'x'); [System.IO.File]::ReadAllText(\"..\\b\"); "
+            "[IO.Directory]::Delete('d', $true)",
+            id="static .NET file calls",
+            commands=(),
+            paths=("write w/p/a.txt", "read w/b", "write w/p/d/**"),
+        ),
+        case(
+            "gci *.log | % { $_.Delete() }; (Get-Item a.txt).Delete(); "
+            "(New-Object IO.StreamWriter 'w.txt').Close()",
+            id="methods of listed items and file objects",
+            paths=(
+                "read w/p/*.log",
+                "write w/p/*.log/**",
+                "read w/p/a.txt",
+                "write w/p/a.txt/**",
+                "write w/p/w.txt",
+            ),
+        ),
+        case(
+            "[IO.File]::Delete($f); $p = '..\\c.txt'; $o.Foo('x')",
+            id="computed .NET paths and path-like strings",
+            commands=(),
+            paths=("read w/c.txt",),
+            unresolved=("path_write",),
+        ),
+        case(
+            "iwr ('http://' + $h); iwr e.example/x; "
+            "(New-Object Net.WebClient).DownloadFile('https://e.example/f', 'f')",
+            id="computed and scheme-less addresses and web downloads",
+            paths=("write w/p/f",),
+            unresolved=("url",),
+            urls=("http://e.example/x", "https://e.example/f"),
+        ),
+        case(
+            "Get-ChildItem -Depth 2; Import-Module ..\\m.psm1; . ..\\s.ps1; & ..\\t.ps1",
+            id="depth recurses and scripts and modules are read",
+            paths=("read w/p/**", "read w/m.psm1", "read w/s.ps1", "read w/t.ps1"),
+        ),
+        case(
+            "Get-ChildItem *.md; Select-String -Path *.md x",
+            id="wildcards stay patterns below their folder",
+            paths=("read w/p/*.md",),
         ),
         case("Remove-Item (", id="parse error is unresolved", unresolved=("command",)),
     ],

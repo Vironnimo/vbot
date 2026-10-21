@@ -23,11 +23,12 @@ import os
 import re
 import socket
 import sys
-from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass, replace
 from typing import ClassVar, Final, cast
 from urllib.parse import urlsplit
 
+from core.permissions._addresses import canonical_host
 from core.permissions._describe import (
     LayerDescription,
     describe_layer,
@@ -46,6 +47,8 @@ from core.permissions._paths import (
     normalize_access_path,
     path_key,
     patterns_below,
+    pruned_away,
+    reaches,
     resolve_text,
     split_lexical,
 )
@@ -255,14 +258,20 @@ class PermissionBoundary:
         *,
         base: PathLike | None = None,
         subtree: bool = False,
+        glob: str | None = None,
+        pruned: Sequence[str] = (),
     ) -> PermissionRefusal | None:
         """Whether ``access`` to ``path`` is permitted; relative paths join ``base``.
 
         ``base`` defaults to the working directory. ``start_dir`` (the directory a
-        process starts in) is decided like reading that directory. With
-        ``subtree`` the access also reaches everything below ``path`` (a
-        recursive delete or listing): a protected location or a deny rule that
-        could match below it refuses too.
+        process starts in) is decided like reading that directory. ``glob`` (a
+        relative pattern in rule syntax, ``*.md``) means the access also reaches
+        the entries below ``path`` it matches; ``subtree`` that it reaches
+        everything below them, or below ``path`` (a recursive delete or
+        listing). A protected location or a deny rule that could match what it
+        reaches refuses too, except a deny rule only below a folder whose name
+        is in ``pruned``, which the access leaves out at every depth. Such a
+        refusal names the denied part in ``PermissionRefusal.below``.
         """
         if not self._layers:
             return None
@@ -305,14 +314,27 @@ class PermissionBoundary:
                     base=layer.layer.write if access == "write" else layer.layer.read,
                     resolved=shown,
                 )
-        if subtree:
-            return self._subtree_refusal(keys, access, target, shown)
+        if subtree or glob is not None:
+            reach = tuple(glob.split("/")) if glob else ()
+            if subtree or not reach:
+                reach += ("**",)
+            names = frozenset(path_key(name, windows=self._windows) for name in pruned)
+            return self._subtree_refusal(keys, access, target, shown, reach, names)
         return None
 
     def _subtree_refusal(
-        self, keys: tuple[str, ...], access: PathAccess, target: str, shown: str | None
+        self,
+        keys: tuple[str, ...],
+        access: PathAccess,
+        target: str,
+        shown: str | None,
+        reach: tuple[str, ...],
+        pruned: frozenset[str],
     ) -> PermissionRefusal | None:
-        """A refusal for what lies below the permitted folder that ``keys`` name."""
+        """A refusal for what the access reaches below the permitted folder ``keys`` name.
+
+        ``reach`` is the pattern of what it reaches below the folder, as segments.
+        """
         protected: list[tuple[ProtectedLocation, _Area | None]] = [
             ("agent_config", self._agent_config),
             ("data_dir", self._data_dirs),
@@ -322,7 +344,7 @@ class PermissionBoundary:
             protected.extend(("installation", area) for area in self._install_dirs)
         for location, area in protected:
             if area is not None and any(
-                is_inside(folder, key) for folder in area.keys for key in keys
+                reaches(key, reach, folder) for folder in area.keys for key in keys
             ):
                 return self.refusal(
                     access, target, "protected_location", location=location, resolved=shown
@@ -330,15 +352,20 @@ class PermissionBoundary:
         for layer in self._compiled:
             rules = layer.read_deny + layer.edit_deny if access == "write" else layer.read_deny
             for rule in rules:
-                if any(rule.may_match_below(key) for key in keys):
-                    return self.refusal(
-                        access,
-                        target,
-                        "deny_rule",
-                        rule=rule.rule.text,
-                        source=layer.layer.source,
-                        resolved=shown,
-                    )
+                for pattern in rule.keys:
+                    for key in keys:
+                        if reaches(key, reach, pattern) and not pruned_away(pattern, key, pruned):
+                            refusal = self.refusal(
+                                access,
+                                target,
+                                "deny_rule",
+                                rule=rule.rule.text,
+                                source=layer.layer.source,
+                                resolved=shown,
+                            )
+                            below = sorted(patterns_below(pattern, key))
+                            part = target.rstrip("/") + "/" + below[0] if below else target
+                            return replace(refusal, below=part.removesuffix("/**"))
         return None
 
     def refusable_below(self, folder: PathLike, access: PathAccess) -> tuple[str, ...]:
@@ -445,7 +472,8 @@ class PermissionBoundary:
                 "unanalyzable",
                 detail="only http and https URLs with a host and a valid port can be checked",
             )
-        host = normalize_host(parts.hostname)
+        # 127.1 and 2130706433 reach 127.0.0.1 too.
+        host = canonical_host(normalize_host(parts.hostname))
         effective_port = port if port is not None else _DEFAULT_PORTS[scheme]
         if (
             self.loopback_port is not None
@@ -654,10 +682,6 @@ class _PathRule:
     def matches(self, key: str) -> bool:
         return any(pattern.fullmatch(key) is not None for pattern in self.patterns)
 
-    def may_match_below(self, folder_key: str) -> bool:
-        """Whether the rule can match an entry below the folder ``folder_key``."""
-        return any(_may_match_below(pattern, folder_key) for pattern in self.keys)
-
 
 class _CompiledLayer:
     __slots__ = (
@@ -801,10 +825,11 @@ def _optional_text(path: PathLike | None, *, windows: bool) -> str | None:
 def is_own_host(host: str) -> bool:
     """Whether the normalized ``host`` names this machine, where the vBot API listens.
 
-    Loopback and unspecified addresses, ``localhost`` and this machine's own
-    name. Its LAN addresses are not recognized.
+    Loopback and unspecified addresses in every form the resolver reads
+    (``127.1``, ``0x7f000001``), ``localhost`` and this machine's own name.
+    Its LAN addresses are not recognized.
     """
-    host = host.strip("[]").rstrip(".")
+    host = canonical_host(host.strip("[]").rstrip("."))
     if host == "localhost" or host.endswith(".localhost"):
         return True
     machine = _machine_name()
@@ -822,35 +847,6 @@ def is_own_host(host: str) -> bool:
 @functools.cache
 def _machine_name() -> str:
     return socket.gethostname().casefold().rstrip(".")
-
-
-def _may_match_below(pattern_key: str, folder_key: str) -> bool:
-    """Whether the path pattern can match an entry strictly below ``folder_key``.
-
-    Segment by segment: the folder's segments must fit the pattern's leading
-    segments, and the pattern must have segments left; ``**`` can always match.
-    """
-    pattern = pattern_key.rstrip("/").split("/")
-    folder = folder_key.rstrip("/").split("/")
-    for index, segment in enumerate(folder):
-        if index >= len(pattern):
-            # The pattern names the folder or one above it, so it covers the folder.
-            return True
-        if "**" in pattern[index]:
-            return True
-        if _segment_pattern(pattern[index]).fullmatch(segment) is None:
-            return False
-    return len(pattern) > len(folder)
-
-
-@functools.cache
-def _segment_pattern(segment: str) -> re.Pattern[str]:
-    return re.compile(
-        "".join(
-            "[^/]*" if char == "*" else "[^/]" if char == "?" else re.escape(char)
-            for char in segment
-        )
-    )
 
 
 __all__ = [

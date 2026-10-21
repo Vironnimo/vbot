@@ -38,18 +38,13 @@ from ._terminal_shell_state import ShellState
 from ._terminal_state import TERMINAL_INPUT_KEY_SEQUENCES, TerminalInfo
 
 if TYPE_CHECKING:
-    from core.permissions.commands.commands import SimpleCommand
-
-ShellKind = Literal["powershell", "cmd", "bash"]
+    from core.permissions.commands.commands import ShellKind, SimpleCommand
 
 _SHOWN_CHARS: Final = 300
 # Environment variables a typed line is analyzed with. Others are unknown,
 # since the shell may have changed them at an earlier prompt.
 _LINE_ENVIRONMENT: Final = ("PATH", "PATHEXT")
-_UNCHECKED_SHELL: Final = (
-    "vBot cannot check the command lines typed at its prompt: it starts without "
-    "vBot's shell integration"
-)
+_UNCHECKED_SHELL: Final = "vBot cannot check the lines typed into this shell"
 _UNCHECKED_SHELL_HINT: Final = (
     "Start the terminal without command for the default shell, whose lines are checked, "
     "or start one program with command and args."

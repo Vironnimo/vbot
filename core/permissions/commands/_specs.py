@@ -7,6 +7,7 @@ get tier B (only clearly-path words count, as reads; ``_analysis.py``).
 
 from __future__ import annotations
 
+import re
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -20,16 +21,16 @@ class CmdletParameter:
     """One path parameter: the access, whether wildcards expand, what makes it reach a subtree.
 
     ``subtree`` is True when the access always covers what lies below the
-    path, or the name of the switch parameter that makes it do so.
+    path, or the names of the parameters that make it do so.
     """
 
     kind: AccessKind
     literal: bool = False
-    subtree: bool | str = False
+    subtree: bool | tuple[str, ...] = False
 
 
 def _parameters(
-    kind: AccessKind, *names: str, subtree: bool | str = False
+    kind: AccessKind, *names: str, subtree: bool | tuple[str, ...] = False
 ) -> dict[str, CmdletParameter]:
     return {
         name: CmdletParameter(kind, literal=name == "LiteralPath", subtree=subtree)
@@ -54,8 +55,8 @@ CMDLETS: Mapping[str, Mapping[str, CmdletParameter]] = {
     },
     "rename-item": _parameters("write", *_PATH, subtree=True),
     "copy-item": {
-        **_parameters("read", *_PATH, subtree="Recurse"),
-        **_parameters("write", "Destination", subtree="Recurse"),
+        **_parameters("read", *_PATH, subtree=("Recurse",)),
+        **_parameters("write", "Destination", subtree=("Recurse",)),
     },
     "set-item": _parameters("write", *_PATH),
     "clear-item": _parameters("write", *_PATH),
@@ -80,7 +81,7 @@ CMDLETS: Mapping[str, Mapping[str, CmdletParameter]] = {
     "mkdir": _parameters("write", *_PATH),
     # Reads.
     "get-content": _parameters("read", *_PATH),
-    "get-childitem": _parameters("read", *_PATH, subtree="Recurse"),
+    "get-childitem": _parameters("read", *_PATH, subtree=("Recurse", "Depth")),
     "get-item": _parameters("read", *_PATH),
     "get-itemproperty": _parameters("read", *_PATH),
     "get-itempropertyvalue": _parameters("read", *_PATH),
@@ -95,7 +96,11 @@ CMDLETS: Mapping[str, Mapping[str, CmdletParameter]] = {
     "invoke-item": _parameters("read", *_PATH),
     "invoke-command": _parameters("read", "FilePath"),
     "start-job": _parameters("read", "FilePath"),
+    "import-module": _parameters("read", "Name"),
 }
+# Parameters that name a module or a file: only a value that looks like a file is a path.
+NAME_OR_PATH_PARAMETERS = frozenset({("import-module", "Name")})
+MODULE_FILE = re.compile(r"[\\/]|\.(?:psm1|psd1|ps1|dll|cdxml|xaml)$", re.IGNORECASE)
 
 # Verbs whose cmdlets change what their path parameters name, for cmdlets the
 # table does not list (Export-Csv, Save-Help, ...).
@@ -141,8 +146,9 @@ def cmdlet_parameters(name: str) -> Mapping[str, CmdletParameter] | None:
 class ProgramSpec:
     """How a program's options and operands touch paths.
 
-    ``operands`` is the access of each operand, ``last`` overrides it for the
-    last of at least two (``cp a b``), ``skip`` operands lead that name no path
+    ``operands`` is the access of each operand, ``first`` overrides it for the
+    first (``zip out.zip files``), ``last`` for the last of at least two
+    (``cp a b``), ``skip`` operands lead that name no path
     (``grep PATTERN``, ``chmod MODE``) unless an option of ``skip_cancel``
     supplies them. ``values`` lists options that take a value, with that
     value's access or None. Options of ``subtree_flags`` (or ``subtree``)
@@ -154,6 +160,7 @@ class ProgramSpec:
     """
 
     operands: AccessKind | None = None
+    first: AccessKind | None = None
     last: AccessKind | None = None
     skip: int = 0
     skip_cancel: frozenset[str] = frozenset()
@@ -195,6 +202,23 @@ PROGRAMS: Mapping[str, ProgramSpec] = {
     "rsync": ProgramSpec(
         operands="read", last="write", subtree=True, values={"-e": None, "--rsh": None}
     ),
+    "scp": ProgramSpec(
+        operands="read",
+        last="write",
+        subtree_flags=frozenset({"-r"}),
+        values={
+            "-i": "read",
+            "-F": "read",
+            "-P": None,
+            "-o": None,
+            "-J": None,
+            "-l": None,
+            "-c": None,
+            "-S": None,
+            "-D": None,
+            "-X": None,
+        },
+    ),  # fmt: skip
     "mkdir": ProgramSpec(operands="write", values={"-m": None, "--mode": None}),
     "touch": ProgramSpec(
         operands="write",
@@ -324,6 +348,7 @@ PROGRAMS: Mapping[str, ProgramSpec] = {
             "--file": "read",
             "-g": None,
             "--glob": None,
+            "--iglob": None,
             "-t": None,
             "-T": None,
             "--type": None,
@@ -359,7 +384,12 @@ PROGRAMS: Mapping[str, ProgramSpec] = {
             "-X": None,
         },
     ),  # fmt: skip
-    "zip": ProgramSpec(operands="read", subtree_flags=frozenset({"-r", "--recurse-paths"})),
+    "zip": ProgramSpec(
+        operands="read", first="write", subtree_flags=frozenset({"-r", "--recurse-paths"})
+    ),
+    "virtualenv": ProgramSpec(
+        operands="write", subtree=True, values={"-p": None, "--python": None}
+    ),
     "gzip": ProgramSpec(operands="write"),
     "gunzip": ProgramSpec(operands="write"),
     "bzip2": ProgramSpec(operands="write"),
@@ -397,6 +427,12 @@ CMD_BUILTINS: Mapping[str, ProgramSpec] = {
 
 # Programs whose output names the files below the folders they list.
 LISTING_PROGRAMS = frozenset({"find", "ls", "dir", "fd", "fdfind", "grep", "rg"})
+# Options that leave a folder out at every depth of a recursive search, by program:
+# option -> (the value names it after "!", the match ignores case).
+PRUNE_OPTIONS: Mapping[str, Mapping[str, tuple[bool, bool]]] = {
+    "rg": {"-g": (True, False), "--glob": (True, False), "--iglob": (True, True)},
+    "grep": {"--exclude-dir": (False, False)},
+}
 
 # Wrappers that only change how the command after them runs (Claude Code's
 # list); the inner command is analyzed instead of the wrapper.
@@ -440,6 +476,247 @@ ELEVATING_WRAPPERS: Mapping[str, Mapping[str, bool]] = {
     },
     "doas": {"-u": True, "-C": True},
 }
+
+
+@dataclass(frozen=True, slots=True)
+class RunnerSpec:
+    """A program that runs the command after its subcommand (``uv run``, ``pipx run``).
+
+    ``subcommands``: the words that make it run a command (none: it always
+    does, ``uvx``); options may stand before and after them. ``values``:
+    options that take a value; ``directories``: options whose value is the
+    folder the command runs in. ``environment_prefix``: the command may start
+    with ``<environment>:`` (``hatch run test:pytest``).
+    """
+
+    subcommands: tuple[tuple[str, ...], ...] = ()
+    values: frozenset[str] = frozenset()
+    directories: frozenset[str] = frozenset()
+    environment_prefix: bool = False
+
+
+_UV_VALUES = frozenset(
+    {
+        "--directory", "--project", "--with", "--with-editable", "--with-requirements",
+        "--python", "-p", "--package", "--extra", "--group", "--only-group", "--no-group",
+        "--env-file", "--index", "--index-url", "--default-index", "--extra-index-url",
+        "--find-links", "-f", "--config-file", "--cache-dir", "--color", "--from", "--script",
+        "--python-preference", "--index-strategy", "--keyring-provider", "--resolution",
+        "--prerelease", "--exclude-newer", "--link-mode", "--refresh-package",
+        "--reinstall-package", "--upgrade-package", "-P",
+    }
+)  # fmt: skip
+_CONDA_VALUES = frozenset({"-n", "--name", "-p", "--prefix", "--cwd"})
+
+# Runners: both the runner and the command it runs are commands of the plan.
+RUNNERS: Mapping[str, RunnerSpec] = {
+    "uv": RunnerSpec(
+        subcommands=(("run",), ("tool", "run")),
+        values=_UV_VALUES,
+        directories=frozenset({"--directory"}),
+    ),
+    "uvx": RunnerSpec(values=_UV_VALUES, directories=frozenset({"--directory"})),
+    "pipx": RunnerSpec(
+        subcommands=(("run",),),
+        values=frozenset({"--spec", "--python", "--pip-args", "--index-url"}),
+    ),
+    "poetry": RunnerSpec(
+        subcommands=(("run",),),
+        values=frozenset({"--directory", "-C", "--project", "-P"}),
+        directories=frozenset({"--directory", "-C"}),
+    ),
+    "pdm": RunnerSpec(subcommands=(("run",),), values=frozenset({"-p", "--project"})),
+    "hatch": RunnerSpec(
+        subcommands=(("run",),),
+        values=frozenset({"-e", "--env", "--data-dir", "--cache-dir", "--config"}),
+        environment_prefix=True,
+    ),
+    "pixi": RunnerSpec(
+        subcommands=(("run",),),
+        values=frozenset({"-e", "--environment", "--manifest-path"}),
+    ),
+    "rye": RunnerSpec(subcommands=(("run",),), values=frozenset({"--pyproject"})),
+    "conda": RunnerSpec(
+        subcommands=(("run",),), values=_CONDA_VALUES, directories=frozenset({"--cwd"})
+    ),
+    "mamba": RunnerSpec(
+        subcommands=(("run",),), values=_CONDA_VALUES, directories=frozenset({"--cwd"})
+    ),
+    "micromamba": RunnerSpec(
+        subcommands=(("run",),), values=_CONDA_VALUES, directories=frozenset({"--cwd"})
+    ),
+}
+
+
+@dataclass(frozen=True, slots=True)
+class GlobalOptions:
+    """Options a program takes before its subcommand (``git -C dir push``).
+
+    ``values`` take a value (next word or ``=``; attached for short options
+    in ``attached``); every other leading ``-x`` is a flag only when listed
+    in ``flags``, so an unknown option ends the stripping. ``directories``
+    run the subcommand in their folder, ``writes`` and ``reads`` are paths.
+    """
+
+    values: frozenset[str] = frozenset()
+    flags: frozenset[str] = frozenset()
+    attached: frozenset[str] = frozenset()
+    directories: frozenset[str] = frozenset()
+    writes: frozenset[str] = frozenset()
+    reads: frozenset[str] = frozenset()
+
+
+# Their global options are removed before Shell(...) patterns match, as wrappers are.
+GLOBAL_OPTIONS: Mapping[str, GlobalOptions] = {
+    "git": GlobalOptions(
+        values=frozenset(
+            {
+                "-C",
+                "-c",
+                "--git-dir",
+                "--work-tree",
+                "--namespace",
+                "--super-prefix",
+                "--config-env",
+                "--exec-path",
+                "--list-cmds",
+                "--attr-source",
+            }
+        ),
+        flags=frozenset(
+            {
+                "-p",
+                "-P",
+                "--paginate",
+                "--no-pager",
+                "--no-replace-objects",
+                "--bare",
+                "--literal-pathspecs",
+                "--glob-pathspecs",
+                "--noglob-pathspecs",
+                "--icase-pathspecs",
+                "--no-optional-locks",
+                "--no-advice",
+                "--html-path",
+                "--man-path",
+                "--info-path",
+                "--version",
+                "--help",
+            }
+        ),
+        attached=frozenset({"-C", "-c"}),
+        directories=frozenset({"-C"}),
+        writes=frozenset({"--git-dir", "--work-tree"}),
+    ),  # fmt: skip
+    "docker": GlobalOptions(
+        values=frozenset(
+            {
+                "--config",
+                "-c",
+                "--context",
+                "-H",
+                "--host",
+                "-l",
+                "--log-level",
+                "--tlscacert",
+                "--tlscert",
+                "--tlskey",
+            }
+        ),
+        flags=frozenset({"-D", "--debug", "--tls", "--tlsverify"}),
+        reads=frozenset({"--config", "--tlscacert", "--tlscert", "--tlskey"}),
+    ),  # fmt: skip
+    "kubectl": GlobalOptions(
+        values=frozenset(
+            {
+                "--context",
+                "-n",
+                "--namespace",
+                "--kubeconfig",
+                "-s",
+                "--server",
+                "--cluster",
+                "--user",
+                "--token",
+                "--as",
+                "--as-group",
+                "--request-timeout",
+                "-v",
+                "--cache-dir",
+                "--certificate-authority",
+                "--client-certificate",
+                "--client-key",
+            }
+        ),
+        flags=frozenset({"--insecure-skip-tls-verify"}),
+        reads=frozenset(
+            {"--kubeconfig", "--certificate-authority", "--client-certificate", "--client-key"}
+        ),
+    ),  # fmt: skip
+    "npm": GlobalOptions(
+        values=frozenset({"--prefix", "-w", "--workspace", "--userconfig", "--cache"}),
+        flags=frozenset(
+            {"-g", "--global", "-s", "--silent", "-q", "--quiet", "--ws", "--workspaces", "-ws"}
+        ),
+        writes=frozenset({"--prefix"}),
+        reads=frozenset({"--userconfig"}),
+    ),  # fmt: skip
+    "cargo": GlobalOptions(
+        values=frozenset({"-C", "--config", "-Z", "--color"}),
+        flags=frozenset(
+            {"-v", "-vv", "-q", "--quiet", "--verbose", "--frozen", "--locked", "--offline"}
+        ),
+        directories=frozenset({"-C"}),
+    ),  # fmt: skip
+    "dotnet": GlobalOptions(flags=frozenset({"-d", "--diagnostics"})),
+}
+
+# Options whose value is a path the program writes, for programs without a spec.
+# Only where the option means that for every subcommand.
+OUTPUT_OPTIONS: Mapping[str, frozenset[str]] = {
+    "pip": frozenset(
+        {"--target", "-t", "--prefix", "--root", "-d", "--dest", "-w", "--wheel-dir", "--src",
+         "--log", "--report"}
+    ),
+    "dotnet": frozenset({"-o", "--output"}),
+    "npm": frozenset({"--prefix"}),
+    "pnpm": frozenset({"-C", "--dir"}),
+    "yarn": frozenset({"--cwd"}),
+    "cargo": frozenset({"--target-dir", "--artifact-dir", "--out-dir"}),
+    "go": frozenset({"-o"}),
+    "gcc": frozenset({"-o"}),
+    "g++": frozenset({"-o"}),
+    "cc": frozenset({"-o"}),
+    "clang": frozenset({"-o"}),
+    "clang++": frozenset({"-o"}),
+    "rustc": frozenset({"-o", "--out-dir"}),
+    "javac": frozenset({"-d"}),
+    "tsc": frozenset({"--outDir", "--outFile", "--declarationDir"}),
+    "esbuild": frozenset({"--outfile", "--outdir"}),
+    "webpack": frozenset({"-o", "--output-path"}),
+    "pandoc": frozenset({"-o", "--output"}),
+    "pyinstaller": frozenset({"--distpath", "--workpath", "--specpath"}),
+    "mkdocs": frozenset({"-d", "--site-dir"}),
+    "hugo": frozenset({"-d", "--destination"}),
+    "7z": frozenset({"-o"}),
+    "uv": frozenset({"--target", "--prefix", "-o", "--output-file"}),
+}  # fmt: skip
+# Of those, the short options that also take their value attached (``-o<dir>``).
+ATTACHED_OUTPUT_OPTIONS = frozenset({"-o", "-d", "-t", "-w", "-C"})
+# Python modules that create the folders their operands name.
+VENV_MODULES = frozenset({"venv", "virtualenv"})
+
+# cmd's internal commands; cmd ends their name at the first of . \ / : = ; , + (
+# (``cd..`` is ``cd ..``).
+CMD_INTERNALS = frozenset(
+    {
+        "assoc", "break", "call", "cd", "chdir", "cls", "color", "copy", "date", "del", "dir",
+        "echo", "endlocal", "erase", "exit", "for", "ftype", "goto", "if", "md", "mkdir",
+        "mklink", "move", "path", "pause", "popd", "prompt", "pushd", "rd", "rem", "ren",
+        "rename", "rmdir", "set", "setlocal", "shift", "start", "time", "title", "type", "ver",
+        "verify", "vol",
+    }
+)  # fmt: skip
 
 POSIX_SHELLS = frozenset({"bash", "sh", "dash", "zsh", "ksh", "ash", "mksh"})
 POWERSHELLS = frozenset({"pwsh", "powershell", "pwsh-preview"})

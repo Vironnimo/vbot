@@ -67,7 +67,10 @@ class PermissionRefusal:
     (``detail`` says what could not be analyzed; ``hint`` is a sentence saying how
     to write the access so it can be checked). ``allowed`` lists the folders, commands or hosts this
     access kind may reach; ``None`` when its base allows everything. ``resolved``
-    is where a link or junction on the path leads, when that differs.
+    is where a link or junction on the path leads, when that differs. ``below``:
+    a recursive or wildcard access to ``target`` is refused for the part below
+    it that ``rule`` denies. ``retryable``: the same call can succeed when
+    repeated (the check itself failed), which Tools report.
     """
 
     access: PermissionAccess
@@ -81,6 +84,8 @@ class PermissionRefusal:
     resolved: str | None = None
     allowed: tuple[str, ...] | None = None
     hint: str | None = None
+    below: str | None = None
+    retryable: bool = False
 
     def message(self, tool: str | None = None) -> str:
         """The Agent-facing refusal; with ``tool``, phrased as that Tool's failure."""
@@ -93,8 +98,8 @@ class PermissionRefusal:
             else f"The permission rules refuse {action}"
         )
         parts = [f"{lead}, because {self._reason()}."]
-        # What could not be analyzed can still pass when written so it can be.
-        if self.reason != "unanalyzable":
+        # A hint names another way that works, so the same-everywhere sentence would be false.
+        if self.reason != "unanalyzable" and self.hint is None:
             parts.append(_SAME_EVERYWHERE)
         if self.hint is not None:
             parts.append(self.hint)
@@ -107,6 +112,10 @@ class PermissionRefusal:
 
     def _reason(self) -> str:
         inherited = _INHERITED.get(self.source)
+        if self.reason == "deny_rule" and self.below is not None:
+            verb = "change" if self.access == "write" else "read"
+            rule = f"{self.rule}, {inherited}," if inherited else self.rule
+            return f"it would also {verb} {self.below}, which the rule {rule} denies"
         if self.reason == "deny_rule":
             if inherited:
                 return f"the rule {self.rule}, {inherited}, denies it"
@@ -135,7 +144,7 @@ class PermissionRefusal:
 class PermissionDenied(VBotError):  # noqa: N818 - reads as the refusal it carries
     """An access the Permission Boundary refused, raised before any effect.
 
-    Tools map it to the failure code ``permission_denied`` (not retryable).
+    Tools map it to the failure code ``permission_denied``, retryable as the refusal says.
     """
 
     def __init__(self, refusal: PermissionRefusal) -> None:

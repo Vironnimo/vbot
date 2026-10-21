@@ -308,6 +308,7 @@ class ShellTool:
             cwd=call.workdir,
             env=environment.complete(),
             home=Path.home(),
+            workdir_parameter=True,
         )
         if refusal is not None:
             raise PermissionDenied(refusal)

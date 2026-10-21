@@ -106,8 +106,9 @@ def tool_failure_for_exception(tool_name: str, error: Exception) -> JsonObject:
     (``invalid_arguments``); the registry errors refused it before it ran; an
     ``InvalidToolResultError`` rejects what a finished handler returned;
     ``PermissionDenied`` is a Permission Rules refusal raised before any effect
-    (``permission_denied``, not retryable). Every other exception escaped a
-    running handler, so the call's effects are unknown (``tool_execution_error``);
+    (``permission_denied``, retryable only when the check itself failed). Every
+    other exception escaped a running handler, so the call's effects are unknown
+    (``tool_execution_error``);
     it is logged with its traceback.
     Building the envelope never raises, even for an exception without a message.
     """
@@ -127,7 +128,11 @@ def tool_failure_for_exception(tool_name: str, error: Exception) -> JsonObject:
     if isinstance(error, ToolNotAllowedError):
         return tool_failure("tool_not_allowed", _error_text(error) or f"Tool not allowed: {name}.")
     if isinstance(error, PermissionDenied):
-        return tool_failure("permission_denied", error.refusal.message(tool=name), retryable=False)
+        return tool_failure(
+            "permission_denied",
+            error.refusal.message(tool=name),
+            retryable=error.refusal.retryable,
+        )
     if isinstance(error, InvalidToolResultError):
         return tool_failure(
             "invalid_tool_result",
