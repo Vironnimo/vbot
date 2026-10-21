@@ -60,6 +60,7 @@ What becomes an unresolved `command`: a command line above the limit or that doe
 
 ## PowerShell helper
 
+- `CommandChecker` creates its `CommandAnalyzer` at the first restricted check, through the Runtime's factory (`core/runtime/_bootstrap.py::_command_analyzer`, the shell's own `pwsh`), so a server whose Agents all have full access never starts the helper.
 - One long-lived `pwsh` per analyzer, started lazily: `-NoLogo -NoProfile -NonInteractive -Command <bootstrap>`; the bootstrap reads the base64 helper script `powershell_analysis.ps1` (a resource beside the module, shipped with `core`) from the first stdin line and runs it, so no execution policy applies. Module autoloading is off; the helper imports the built-in Management, Utility, Security and Archive modules from `$PSHOME`, builds its command table and runs one warm-up analysis before it reports ready.
 - JSON lines over stdin/stdout: ready line `{"ready": true, "version": ...}`, request `{id, script: base64}`, answer `{id, ok, result | error}`. The result lists commands, .NET member calls (`calls`) and expression strings (`strings`), each with its offset; lowering orders them by offset. Requests are serialized.
 - One helper, not a pool: it takes about 115 MB and a typical line a few milliseconds, so a second one costs memory without gain. A request that waited 1 s or more for the helper is logged at WARNING.

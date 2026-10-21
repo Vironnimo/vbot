@@ -18,6 +18,7 @@ Stored form `{read, write, commands, web, allow, deny}`, every part optional:
 - Kinds `Read`, `Edit`, `Shell`, `Web`; aliases `Write`, `MultiEdit`, `NotebookEdit` -> `Edit`, `Glob`, `Grep`, `LS`, `List` -> `Read`, `Bash`, `PowerShell` -> `Shell`, `WebFetch(domain:x)` -> `Web(x)`. `Shell(...)` patterns: `commands.md` -> Patterns.
 - Placeholders `{workdir}`, `{project}`, `{scratch}`, `{workspace}`, `{home}` and `~` may only start a path pattern; a relative pattern resolves against `{workdir}`. A rule whose placeholder has no value in a Run is dropped from that Run (`PermissionBoundary.build`).
 - Host patterns (`Web(...)`): `example.com` covers the host and its subdomains, `*.example.com` only subdomains, `*` every host, IP literals match exactly, an IPv4 address in its dotted form whichever form a rule or access writes (`127.1`, `_addresses.py`). The same rules decide hosts that ssh, scp and `git@host:` reach (`check_host(host, "connect")`).
+- The vBot server's own port is refused on every host `is_server_host` names (`check_url`): loopback and unspecified addresses in any IPv4 form, `localhost`, this machine's name, and `own_hosts`, which the server fills while it listens beyond loopback - every interface address, its names and the access configuration's host names (`access.md` -> ServerHosts).
 
 ## Resolution
 
