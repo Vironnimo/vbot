@@ -659,3 +659,35 @@ export function steerQueueItem(agentId, sessionId, itemId, options = {}) {
     options,
   );
 }
+
+// The open Portals of one Session (`portal` Tool): `{ portals: [{ id, title,
+// path, target_port, listen_port, listening, token }], reverse_proxy }`.
+// `token` opens a Portal for this browser; keep it in memory only.
+export function listPortals(agentId, sessionId, options = {}) {
+  requireNonEmptyString(
+    agentId,
+    'Agent id must be a non-empty string',
+    'portal.list',
+  );
+  requireNonEmptyString(
+    sessionId,
+    'Session id must be a non-empty string',
+    'portal.list',
+  );
+  return rpc(
+    'portal.list',
+    { agent_id: agentId, session_id: sessionId },
+    options,
+  );
+}
+
+// Closes one Portal; the app behind it keeps running. Resolves to
+// `{ id, closed }`, where `closed` is false when it was no longer open.
+export function closePortal(portalId, options = {}) {
+  requireNonEmptyString(
+    portalId,
+    'Portal id must be a non-empty string',
+    'portal.close',
+  );
+  return rpc('portal.close', { id: portalId }, options);
+}
