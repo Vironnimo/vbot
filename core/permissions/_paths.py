@@ -13,6 +13,7 @@ contacts SMB.
 
 from __future__ import annotations
 
+import functools
 import os
 import re
 import sys
@@ -235,6 +236,83 @@ def patterns_below(pattern_key: str, folder_key: str) -> set[str]:
     """
     found = _relative(tuple(pattern_key.rstrip("/").split("/")), folder_key.rstrip("/").split("/"))
     return {pattern.removesuffix("/**") for pattern in found}
+
+
+def reaches(folder_key: str, reach: tuple[str, ...], pattern_key: str) -> bool:
+    """Whether an access to ``reach`` below ``folder_key`` can touch what ``pattern_key`` covers.
+
+    Both cover an entry and everything below it only where they end in ``**``;
+    a pattern key always covers what lies below its matches.
+    """
+    access = (*folder_key.rstrip("/").split("/"), *reach)
+    covered = (*pattern_key.rstrip("/").split("/"), "**")
+    return _segments_meet(tuple(map(_segment, access)), tuple(map(_segment, covered)))
+
+
+def _segment(text: str) -> str:
+    return "**" if text == "**" else text.replace("**", "*")
+
+
+@functools.cache
+def _segments_meet(first: tuple[str, ...], second: tuple[str, ...]) -> bool:
+    """Whether two segment patterns (``*``, ``?`` within, ``**`` across) share a path."""
+    if not first or not second:
+        rest = first or second
+        return all(segment == "**" for segment in rest)
+    if first[0] == "**" and (
+        _segments_meet(first[1:], second) or _segments_meet(first, second[1:])
+    ):
+        return True
+    if second[0] == "**" and (
+        _segments_meet(first, second[1:]) or _segments_meet(first[1:], second)
+    ):
+        return True
+    if "**" in (first[0], second[0]):
+        return False
+    return _segment_meets(first[0], second[0]) and _segments_meet(first[1:], second[1:])
+
+
+@functools.cache
+def _segment_meets(first: str, second: str) -> bool:
+    """Whether two one-segment wildcard patterns match a common name."""
+
+    @functools.cache
+    def meet(i: int, j: int) -> bool:
+        if i == len(first) and j == len(second):
+            return True
+        if i < len(first) and first[i] == "*" and meet(i + 1, j):
+            return True
+        if j < len(second) and second[j] == "*" and meet(i, j + 1):
+            return True
+        if i == len(first) or j == len(second):
+            return False
+        if first[i] == "*":
+            return meet(i, j + 1)
+        if second[j] == "*":
+            return meet(i + 1, j)
+        return (first[i] == second[j] or "?" in (first[i], second[j])) and meet(i + 1, j + 1)
+
+    return meet(0, 0)
+
+
+def pruned_away(pattern_key: str, folder_key: str, pruned: frozenset[str]) -> bool:
+    """Whether every match of the pattern lies in a folder the access leaves out by name.
+
+    True when a literal segment of the pattern that lies below the folder in
+    every match is a pruned name: one at or past the folder's depth with no
+    ``**`` above that depth before it.
+    """
+    if not pruned:
+        return False
+    depth = len(folder_key.rstrip("/").split("/"))
+    for index, segment in enumerate(pattern_key.rstrip("/").split("/")):
+        if "**" in segment:
+            if index < depth:
+                return False  # where the rest lies is not fixed
+            continue
+        if index >= depth and not has_wildcard(segment) and segment in pruned:
+            return True
+    return False
 
 
 def _relative(pattern: tuple[str, ...], folder: list[str]) -> set[str]:
