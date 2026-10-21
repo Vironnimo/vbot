@@ -20,6 +20,10 @@ A match may start or end inside a longer word, so a stem such as ``magnet``
 finds ``magnetic`` and ``Eisen`` finds the compound ``Gusseisen``. When every
 match starts inside a longer word (``used by`` only in ``caused by``), the
 result names such words, so the text is not taken for the one searched.
+
+A ``|`` directly between two characters separates alternatives, as in the
+regular expressions of search Tools, when the query as written is not found:
+each alternative is searched, and the result names them.
 """
 
 from __future__ import annotations
@@ -56,6 +60,12 @@ _UNSPACED = re.compile(r"[\u0e00-\u0eff\u1000-\u109f\u1780-\u17ff\u2e80-\u9fff\u
 # How far a longer word named in a result reaches on each side of its match.
 _WORD_REACH = 40
 _NAMED_WORDS = 3
+# Alternation as Agents write it for regex search Tools ("approval|deny", 2026-10-21);
+# a "|" between spaces separates table cells.
+_ALTERNATION = re.compile(r"\S\|\S")
+# Regular expression syntax that page text hardly holds: ".*", ".+", "\b", "\d",
+# "\s", "\w" (not LaTeX commands such as "\sum").
+_PATTERN_SYNTAX = re.compile(r"\.[*+]|\\[bdsw](?![A-Za-z])")
 type _Replacement = tuple[int, int, str]
 
 
@@ -64,11 +74,29 @@ class FoundText:
     """Where ``find`` text occurs, as ``find_spans`` returns it.
 
     ``spans`` are the ranges to show, in order. When every match starts inside
-    a longer word, ``inside_words`` names up to three such words.
+    a longer word, ``inside_words`` names up to three such words. When the
+    query was searched as alternatives, ``alternatives`` names them.
     """
 
     spans: list[tuple[int, int]]
     inside_words: tuple[str, ...] = ()
+    alternatives: tuple[str, ...] = ()
+
+
+def looks_like_pattern(find: str) -> bool:
+    """Whether ``find`` holds regular expression syntax that ``find`` takes literally."""
+    return _PATTERN_SYNTAX.search(find) is not None
+
+
+def _alternatives(find: str) -> tuple[str, ...]:
+    """Return the alternatives a ``|`` between two characters separates; none without one."""
+    if not _ALTERNATION.search(find):
+        return ()
+    parts: dict[str, str] = {}
+    for part in find.split("|"):
+        if part.strip():
+            parts.setdefault(part.strip().casefold(), part.strip())
+    return tuple(parts.values()) if len(parts) > 1 else ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -265,13 +293,10 @@ def _names(passage: str, address: str) -> bool:
     return bool(parts.netloc) and f"]({path})" in passage
 
 
-def find_spans(text: str, find: str, *, markdown: bool, offset: int = 0) -> FoundText:
-    """Return where ``find`` matches ``text`` from ``offset`` on.
-
-    ``markdown`` says the text is a Markdown rendering whose syntax is presentation.
-    Overlapping matches merge into one range.
-    """
-    readable = _readable(text, markdown)
+def _matches(
+    text: str, readable: SearchText, find: str, *, markdown: bool, offset: int
+) -> list[_Match]:
+    """Return the matches of one query in ``text`` from ``offset`` on."""
     matches = [
         _match(text, found.span(), text, found.span(), find)
         for found in re.finditer(re.escape(find), text, re.IGNORECASE)
@@ -291,6 +316,22 @@ def find_spans(text: str, find: str, *, markdown: bool, offset: int = 0) -> Foun
                 passage = text[start : readable.resume(found[1])]
                 if start >= offset and all(_names(passage, address) for address in addresses):
                     matches.append(_match(text, (start, end), readable.text, found, query))
+    return matches
+
+
+def find_spans(text: str, find: str, *, markdown: bool, offset: int = 0) -> FoundText:
+    """Return where ``find`` matches ``text`` from ``offset`` on.
+
+    ``markdown`` says the text is a Markdown rendering whose syntax is presentation.
+    A query not found as written that holds ``|`` between two characters is
+    searched as the alternatives it separates. Overlapping matches merge into one
+    range.
+    """
+    readable = _readable(text, markdown)
+    matches = _matches(text, readable, find, markdown=markdown, offset=offset)
+    alternatives = () if matches else _alternatives(find)
+    for alternative in alternatives:
+        matches += _matches(text, readable, alternative, markdown=markdown, offset=offset)
     matches.sort(key=lambda match: (match.start, match.end))
     merged: list[tuple[int, int]] = []
     for match in matches:
@@ -304,4 +345,4 @@ def find_spans(text: str, find: str, *, markdown: bool, offset: int = 0) -> Foun
             if match.inside is not None and len(words) < _NAMED_WORDS:
                 word = _longer_word(*match.inside)
                 words.setdefault(word.casefold(), word)
-    return FoundText(merged, tuple(words.values()))
+    return FoundText(merged, tuple(words.values()), alternatives)

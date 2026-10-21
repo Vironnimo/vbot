@@ -248,6 +248,48 @@ async def test_find_names_the_longer_words_that_hold_every_match(
         assert data["shown"].count('"') == 2  # only the search text itself is quoted
 
 
+_RULES_PAGE = _FILLER.join(
+    [
+        "<main><p>Every request needs approval first.</p>",
+        "<p>Use mode=read|write for files.</p>",
+        "<p>Rules deny network access.</p></main>",
+    ]
+)
+
+
+@pytest.mark.parametrize(
+    ("find", "places", "alternatives"),
+    [
+        # "|" between words separates alternatives, as in the regular expressions
+        # of search Tools; an Agent sent 7 such finds that all missed (2026-10-21).
+        ("approval|deny", ["needs approval", "deny network"], ["approval", "deny"]),
+        ("absent|missing", [], ["absent", "missing"]),
+        # Text the page holds with its "|" is found as written.
+        ("read|write", ["mode=read|write"], []),
+        # Between spaces, "|" separates table cells.
+        ("approval | deny", [], []),
+    ],
+)
+@pytest.mark.asyncio
+async def test_find_reads_a_pipe_between_words_as_alternatives(
+    tmp_path, monkeypatch, find, places, alternatives
+):
+    install_http_get(monkeypatch, lambda url: make_result(text=_RULES_PAGE, url=url))
+
+    found = await fetch(tmp_path, {"url": "https://example.com/rules", "find": find})
+
+    data = found["data"]
+    if places:
+        assert data["shown"].startswith(f"{len(places)} passage")
+        assert all(place in data["content"] for place in places)
+    else:
+        assert "shown" not in data
+    # The result names each alternative it searched for.
+    named = data.get("shown", data["content"])
+    assert all(f'"{alternative}"' in named for alternative in alternatives)
+    assert (f'"{find}"' in named) == (not alternatives)
+
+
 @pytest.mark.asyncio
 async def test_find_in_plain_text_keeps_its_asterisks_and_pipes(tmp_path, monkeypatch):
     code = "def call(x, **kwargs):\n    return x | kwargs\n"
