@@ -42,6 +42,7 @@ from core.config_validation import (
     warn_unknown_keys,
 )
 from core.json_documents import (
+    OPAQUE,
     JsonDocumentFormat,
     JsonShape,
     json_document,
@@ -170,7 +171,6 @@ def project_shape() -> JsonShape:
     Built on first use because the Tools-owned ``tool_access`` and ``tool_loading``
     fields are imported lazily (see :func:`_normalize_tool_access_policy`).
     """
-    from core.permissions._rules import PARTS
     from core.tools.availability import TOOL_ACCESS_FIELDS
     from core.tools.tool_loading import TOOL_LOADING_FIELDS
 
@@ -188,7 +188,9 @@ def project_shape() -> JsonShape:
                         "compaction_policy": COMPACTION_POLICY_SHAPE,
                         "tool_access": json_object(TOOL_ACCESS_FIELDS),
                         "tool_loading": json_object(TOOL_LOADING_FIELDS),
-                        "permission_rules": json_object(PARTS),
+                        # An unknown part makes the Project invalid instead of being
+                        # left out, so the owner writes the whole set.
+                        "permission_rules": OPAQUE,
                     },
                 ),
                 drop_empty=True,
@@ -403,6 +405,14 @@ def _validate_one_override_schema(
             _normalize_tool_loading(override["tool_loading"])
         except ValueError as error:
             add_error(diagnostics, child_path(path, "tool_loading"), str(error))
+    if "permission_rules" in override:
+        from core.permissions import normalize_permission_rules
+
+        try:
+            # A part this vBot does not know is an error too: it may restrict.
+            normalize_permission_rules(override["permission_rules"])
+        except ValueError as error:
+            add_error(diagnostics, child_path(path, "permission_rules"), str(error))
 
 
 def _validate_override_ceiling_diagnostics(

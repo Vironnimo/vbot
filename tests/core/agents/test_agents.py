@@ -765,14 +765,29 @@ def test_agent_update_keeps_unknown_fields_of_every_modeled_level(store: AgentSt
     assert rewritten["tool_loading"] == {"on_demand": True, "future_loading": 7}
 
 
-def test_agent_written_by_a_newer_vbot_is_refused_and_left_unchanged(store: AgentStore) -> None:
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"format_version": 2}, "written by a newer vBot"),
+        # A rule part this vBot does not know may restrict: never apply the rest
+        # without it, never drop it.
+        (
+            {"permission_rules": {"read": "work_area", "mcp": "listed"}},
+            'permission_rules has no part "mcp"',
+        ),
+    ],
+    ids=["newer-format", "unknown-permission-rule-part"],
+)
+def test_agent_written_by_a_newer_vbot_is_refused_and_left_unchanged(
+    store: AgentStore, changes: dict[str, Any], message: str
+) -> None:
     store.create("coder", "Coder")
-    rewrite(store, "coder", format_version=2)
+    rewrite(store, "coder", **changes)
     original = agent_path(store, "coder").read_text(encoding="utf-8")
 
-    with pytest.raises(AgentError, match="written by a newer vBot"):
+    with pytest.raises(AgentError, match=message):
         store.get("coder")
-    with pytest.raises(AgentError, match="written by a newer vBot"):
+    with pytest.raises(AgentError, match=message):
         store.update("coder", name="Renamed")
     assert agent_path(store, "coder").read_text(encoding="utf-8") == original
 

@@ -12,7 +12,6 @@ from core.json_documents import (
     json_object,
 )
 from core.model_tasks.constants import SUPPORTED_TASK_TYPES
-from core.permissions._rules import PARTS as PERMISSION_RULE_PARTS
 from core.settings._provider_settings import (
     CUSTOM_MODEL_CAPABILITY_FIELDS,
     CUSTOM_PROVIDER_FIELDS,
@@ -204,7 +203,9 @@ SETTINGS_SHAPE: JsonShape = json_document(
                     AGENT_DEFAULT_FIELDS,
                     {
                         "tool_loading": json_object(TOOL_LOADING_FIELDS),
-                        "permission_rules": json_object(PERMISSION_RULE_PARTS),
+                        # An unknown part makes the default invalid instead of
+                        # being left out, so the owner writes the whole set.
+                        "permission_rules": OPAQUE,
                     },
                 )
             },

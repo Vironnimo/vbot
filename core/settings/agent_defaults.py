@@ -222,16 +222,13 @@ def _diagnose_tool_loading(diagnostics: list[JsonDiagnostic], path: str, value: 
 
 def _diagnose_permission_rules(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:
     from core.config_validation import add_error
-    from core.json_documents import json_object, strip_unknown_fields, warn_unknown_fields
     from core.permissions import normalize_permission_rules
-    from core.permissions._rules import PARTS
 
     if value is None:
         return
-    shape = json_object(PARTS)
-    warn_unknown_fields(diagnostics, path, value, shape, label="permission_rules part")
     try:
-        normalize_permission_rules(strip_unknown_fields(value, shape))
+        # A part this vBot does not know is an error too: it may restrict.
+        normalize_permission_rules(value)
     except ValueError as error:
         add_error(diagnostics, path, str(error))
 
@@ -515,15 +512,11 @@ class AgentDefaults:
             return None
         if self.permission_rules == INVALID_PERMISSION_RULES:
             raise InvalidPermissionRulesDefaultError()
-        from core.json_documents import json_object, strip_unknown_fields
         from core.permissions import normalize_permission_rules
-        from core.permissions._rules import PARTS
 
         try:
-            # Parts a newer vBot added only warn (``vbot doctor config``), like in agent.json.
-            return normalize_permission_rules(
-                strip_unknown_fields(self.permission_rules, json_object(PARTS))
-            )
+            # Also refuses a part this vBot does not know, such as one a newer vBot added.
+            return normalize_permission_rules(self.permission_rules)
         except (TypeError, ValueError) as error:
             raise InvalidPermissionRulesDefaultError() from error
 

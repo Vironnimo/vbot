@@ -169,6 +169,10 @@ def test_invalid_fallback_chain_is_rejected_by_every_surface(
     ("rules", "loaded"),
     [
         pytest.param({"write": "nowhere"}, INVALID_PERMISSION_RULES, id="invalid"),
+        # A part this vBot does not know may restrict, so the rest never applies alone.
+        pytest.param(
+            {"write": "scratch", "mcp": "listed"}, INVALID_PERMISSION_RULES, id="unknown-part"
+        ),
         pytest.param({"write": "scratch"}, {"write": "scratch"}, id="valid-beside-invalid"),
     ],
 )

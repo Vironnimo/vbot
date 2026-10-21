@@ -68,7 +68,6 @@ from core.permissions import (
     normalize_permission_rules,
     permission_rules_to_dict,
 )
-from core.permissions._rules import PARTS as PERMISSION_RULE_PARTS
 from core.settings import (
     AgentDefaults,
     SettingsValidationError,
@@ -185,14 +184,16 @@ AGENT_RENAME_FORMAT_VERSION = 1
 
 TOOL_ACCESS_SHAPE = json_object(TOOL_ACCESS_FIELDS)
 TOOL_LOADING_SHAPE = json_object(TOOL_LOADING_FIELDS)
-PERMISSION_RULES_SHAPE = json_object(PERMISSION_RULE_PARTS)
 AGENT_SHAPE = json_document(
     _AGENT_CONFIG_FIELDS,
     {
         "compaction_policy": COMPACTION_POLICY_SHAPE,
         "tool_access": TOOL_ACCESS_SHAPE,
         "tool_loading": TOOL_LOADING_SHAPE,
-        "permission_rules": PERMISSION_RULES_SHAPE,
+        # A part this vBot does not know makes the Agent invalid instead of being
+        # left out (``validate_permission_rules_diagnostics``), so there is nothing
+        # to strip or merge back: the owner writes the whole set.
+        "permission_rules": OPAQUE,
         "delegation_bindings": json_map(OPAQUE),
         "tools": json_map(
             OPAQUE,
@@ -466,16 +467,15 @@ def validate_tool_loading_diagnostics(
 def validate_permission_rules_diagnostics(
     diagnostics: list[JsonDiagnostic], path: str, value: Any
 ) -> None:
-    """Report a stored ``permission_rules`` object that cannot apply; unknown parts only warn.
+    """Report a stored ``permission_rules`` object that cannot apply, an unknown part included.
 
     An invalid rule set makes its whole document invalid, so the Agent never runs
-    with fewer restrictions than its stored rules name.
+    with fewer restrictions than its stored rules name: a part this vBot does not
+    know, such as one a newer vBot added, may restrict. The write guard then keeps
+    the file as it is.
     """
-    warn_unknown_fields(
-        diagnostics, path, value, PERMISSION_RULES_SHAPE, label="permission_rules part"
-    )
     try:
-        normalize_permission_rules(strip_unknown_fields(value, PERMISSION_RULES_SHAPE))
+        normalize_permission_rules(value)
     except ValueError as error:
         add_error(diagnostics, path, str(error))
 
