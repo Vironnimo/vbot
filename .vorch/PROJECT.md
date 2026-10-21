@@ -177,7 +177,7 @@ Before live tests, fully read `.vorch/workflows/web-test-workflow.md` for browse
 
 ## End-to-End Testing
 
-Playwright `tests/e2e/` is excluded from the pytest and Vitest suites; neither CI nor the release gate runs it. The maintainer starts it occasionally, locally or by dispatching `.github/workflows/e2e.yml`. Local runs require explicit user request and a full read of `.vorch/workflows/e2e-test-workflow.md` before every run.
+End-to-end testing is an agent-driven sweep of the whole running WebUI against the fake Provider, with no scripted suite; neither CI nor the release gate runs it. Run it only when the user requests an E2E test, after a full read of `.vorch/workflows/e2e-test-workflow.md`.
 
 ## Context
 

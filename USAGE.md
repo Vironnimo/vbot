@@ -1455,7 +1455,7 @@ the complete suites included, on the commit it pushes. CI
 every push to `main`, alongside the main package builds (`main-build.yml`), and
 before every release.
 
-The Playwright E2E suite under `tests/e2e/` is separate from the regular test runs because it controls a real server and browser environment. Local runs remain explicit opt-in and follow the repository workflow instructions; Release CI calls the same reusable Chromium job as a required pre-publish gate.
+End-to-end testing has no scripted suite: a coding agent tests the running WebUI in a real browser against a deterministic fake Provider, following `.vorch/workflows/e2e-test-workflow.md`. Maintainers start it by hand; neither CI nor the release runs it.
 
 Package builders and maintainers should also read the
 [Windows packaging guide](scripts/windows/README.md) and the
