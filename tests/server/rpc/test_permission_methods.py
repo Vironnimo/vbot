@@ -100,6 +100,9 @@ async def test_validate_reports_every_problem_and_saves_nothing(tmp_path: Path) 
         ("allow", 1, "Foo(x)"),
     ]
     assert 'permission_rules.allow[1] "Foo(x)": unknown kind Foo' in result["errors"][2]["message"]
+    # Beside the rule an editor shows only the rule and the reason, without the field path.
+    assert result["errors"][2]["reason"].startswith('"Foo(x)": unknown kind Foo')
+    assert result["errors"][1]["reason"].startswith('Use "anywhere" or "work_area"')
     # The presets come along as the change each makes (None unsets a part), so an
     # editor applies them without its own copy.
     assert result["presets"] == {

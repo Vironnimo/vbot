@@ -218,7 +218,8 @@ export function permissionRulesComplete(rules) {
 }
 
 // The problems `permissions.validate` reported for one rule, or for a part
-// (`index` null).
+// (`index` null), as the user reads them beside it: the server's `reason`,
+// which leaves out the field path that `message` names for API callers.
 export function permissionProblems(errors, part, index = null) {
   if (!Array.isArray(errors)) return [];
   return errors
@@ -226,7 +227,7 @@ export function permissionProblems(errors, part, index = null) {
       (error) =>
         error?.part === part && (error?.index ?? null) === (index ?? null),
     )
-    .map((error) => String(error.message ?? ''));
+    .map((error) => String(error.reason ?? error.message ?? ''));
 }
 
 // Whether a Tool result is a refusal by the Agent's Permission Rules.

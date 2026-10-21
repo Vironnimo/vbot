@@ -78,7 +78,16 @@ _HOST_LABEL = re.compile(r"(?!-)[a-z0-9-]{1,63}(?<!-)\Z")
 
 
 class PermissionRulesError(VBotError, ValueError):
-    """A stored or submitted rule set, rule string or ceiling is invalid."""
+    """A stored or submitted rule set, rule string or ceiling is invalid.
+
+    The message names the field path (``permission_rules.allow[0]``) for a CLI or
+    API caller; ``reason`` says the same without it, for an editor that shows the
+    problem beside its part or rule.
+    """
+
+    def __init__(self, message: str, *, reason: str | None = None) -> None:
+        super().__init__(message)
+        self.reason = reason if reason is not None else message
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,16 +157,25 @@ class RuleSetProblem:
 
     ``part`` names the part (``None`` when the value itself is no object),
     ``index`` and ``rule`` the rule string of an ``allow`` or ``deny`` list.
-    ``message`` is the normalizer's sentence, which names part, value and reason.
+    ``message`` is the normalizer's sentence, which names part, value and reason;
+    ``reason`` says the same without the field path, as the user reads it beside
+    the part or rule (``"Web(exa mple.com)": Web takes a host ...``).
     """
 
     part: str | None
     message: str
     index: int | None = None
     rule: str | None = None
+    reason: str | None = None
 
     def to_dict(self) -> dict[str, object]:
-        return {"part": self.part, "index": self.index, "rule": self.rule, "message": self.message}
+        return {
+            "part": self.part,
+            "index": self.index,
+            "rule": self.rule,
+            "message": self.message,
+            "reason": self.reason if self.reason is not None else self.message,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -229,12 +247,12 @@ def check_permission_rules(value: object, *, platform: str = sys.platform) -> Ru
         try:
             bases[part] = _base(part, mapping.get(part))
         except PermissionRulesError as error:
-            problems.append(RuleSetProblem(part, str(error)))
+            problems.append(RuleSetProblem(part, str(error), reason=error.reason))
     if "read" in bases and "write" in bases:
         try:
             _require_write_within_read(bases["read"], bases["write"])
         except PermissionRulesError as error:
-            problems.append(RuleSetProblem("write", str(error)))
+            problems.append(RuleSetProblem("write", str(error), reason=error.reason))
     notes: list[str] = []
     for part in ("allow", "deny"):
         listed = mapping.get(part)
@@ -244,7 +262,7 @@ def check_permission_rules(value: object, *, platform: str = sys.platform) -> Ru
             try:
                 _rule_list(part, listed, notes=None, windows=platform == "win32")
             except PermissionRulesError as error:
-                problems.append(RuleSetProblem(part, str(error)))
+                problems.append(RuleSetProblem(part, str(error), reason=error.reason))
             continue
         for index, item in enumerate(listed):
             try:
@@ -257,6 +275,7 @@ def check_permission_rules(value: object, *, platform: str = sys.platform) -> Ru
                         message,
                         index=index,
                         rule=item if isinstance(item, str) else None,
+                        reason=error.reason,
                     )
                 )
     if problems:
@@ -405,7 +424,8 @@ def _base(part: str, value: object) -> str | None:
         if text in accepted:
             return text
     raise PermissionRulesError(
-        f"permission_rules.{part} must be {_choices(accepted)}; received {_shown(value)}."
+        f"permission_rules.{part} must be {_choices(accepted)}; received {_shown(value)}.",
+        reason=f"Use {_choices(accepted)}; received {_shown(value)}.",
     )
 
 
@@ -417,20 +437,28 @@ def _rule_list(
     if not _is_rule_list(value):
         raise PermissionRulesError(
             f"permission_rules.{part} must be a list of rule strings such as "
-            f'"Read({{workdir}}/docs/**)"; received {_kind_of(value)}.'
+            f'"Read({{workdir}}/docs/**)"; received {_kind_of(value)}.',
+            reason=(
+                'Use a list of rule strings such as "Read({workdir}/docs/**)"; '
+                f"received {_kind_of(value)}."
+            ),
         )
     rules: list[PermissionRule] = []
     for index, item in enumerate(value):
         if not isinstance(item, str):
             raise PermissionRulesError(
                 f"permission_rules.{part}[{index}] must be a rule string such as "
-                f'"Shell(git status)"; received {_kind_of(item)}.'
+                f'"Shell(git status)"; received {_kind_of(item)}.',
+                reason=(
+                    f'A rule is a string such as "Shell(git status)"; received {_kind_of(item)}.'
+                ),
             )
         try:
             rule, note = _parse_rule(item, windows=windows)
         except _RuleProblemError as problem:
             raise PermissionRulesError(
-                f"permission_rules.{part}[{index}] {_quote(item.strip())}: {problem}"
+                f"permission_rules.{part}[{index}] {_quote(item.strip())}: {problem}",
+                reason=f"{_quote(item.strip())}: {problem}",
             ) from None
         if note is not None and notes is not None:
             notes.append(note)
