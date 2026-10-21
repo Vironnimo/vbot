@@ -14,6 +14,12 @@ import core.tools._read_text as read_text_module
 import core.tools.read as read_module
 import core.tools.read_extract as read_extract_module
 from core.model_tasks import SpeechError
+from core.permissions import (
+    BoundaryContext,
+    PermissionBoundary,
+    PermissionDenied,
+    normalize_permission_rules,
+)
 from core.sessions import SessionAddress
 from core.tools import (
     READ_TOOL_NAME,
@@ -22,6 +28,7 @@ from core.tools import (
     FileReadState,
     ToolContractError,
     ToolRegistry,
+    tool_failure_for_exception,
 )
 from core.tools.file_state import StaleReason
 from core.tools.search_files import register_search_files_tool
@@ -269,6 +276,40 @@ async def test_a_read_time_filesystem_error_names_the_reason(
     result = await read(tmp_path, {"path": "notes.txt"})
 
     assert "notes.txt" in failure(result, "file_read_error")
+
+
+@pytest.mark.asyncio
+async def test_permission_rules_refuse_a_read_before_the_file_is_touched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+    secret = tmp_path / "outside" / "secret.txt"
+    secret.parent.mkdir()
+    secret.write_bytes(b"secret")
+    boundary = PermissionBoundary.build(
+        normalize_permission_rules({"read": "work_area"}),
+        BoundaryContext(workdir=work, home=tmp_path / "home", data_dir=tmp_path / "data"),
+    )
+    context = replace(make_context(work, cwd=work), permissions=boundary)
+    file_state = FileReadState()
+
+    def untouched(*_args: object, **_kwargs: object) -> Any:
+        raise AssertionError("the refused file was accessed")
+
+    registry = read_registry(file_state=file_state)
+    for name in ("open", "stat", "resolve", "read_bytes"):
+        monkeypatch.setattr(Path, name, untouched)
+    with pytest.raises(PermissionDenied) as refused:
+        await registry.dispatch(context, {"path": str(secret)})
+    monkeypatch.undo()
+    # Tool execution turns the refusal into the envelope the Model reads.
+    result = tool_failure_for_exception(READ_TOOL_NAME, refused.value)
+
+    message = failure(result, "permission_denied")
+    assert result["error"]["retryable"] is False
+    assert secret.as_posix() in message and "permission rules" in message
+    assert file_state.check_stale("session-1", secret.resolve()) is StaleReason.NEVER_READ
 
 
 _ELEVEN = "".join(f"line{i}\n" for i in range(1, 12))

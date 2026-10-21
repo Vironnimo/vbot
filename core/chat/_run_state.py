@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from core.chat._effort_epoch import EffortState
 from core.chat._prompt_block_epoch import PromptBlockPin
+from core.chat._run_permissions import run_permission_boundary
 from core.chat._step_outcomes import _ToolProgress
 from core.chat._stream_draft import StreamDraft
 from core.chat._tool_epoch import ToolChange, ToolEpochView
@@ -27,6 +28,7 @@ from core.chat.messages import (
 from core.chat.recovery import RecoveryBudget
 from core.chat.usage import RequestContextUsage
 from core.chat.wire_shaping import RequestImageBudget
+from core.permissions import PermissionBoundary, PermissionCeiling
 from core.projects import (
     FolderInstructions,
     resolve_prompt_project,
@@ -200,6 +202,9 @@ class ChatLoopDependencies:
 
     # Called when a persisted user input switches a Sub-Agent's answer destination.
     subagent_reply_to_user: Callable[[SessionAddress, str], None] | None = None
+    # The vBot server's own port, which restricted Runs may not reach on loopback;
+    # ``None`` outside a server.
+    server_port: Callable[[], int | None] | None = None
 
 
 def is_subagent_session(sessions: ChatSessionManager, address: SessionAddress) -> bool:
@@ -268,6 +273,8 @@ class _RunRequest:
     parent_agent_input: bool = False
     # A note stored right before the input, such as what happened since the last Run.
     context_note: str | ChatMessage | None = None
+    # The boundary of the Session that created the Cron job firing this Run.
+    permission_ceiling: PermissionCeiling | None = None
 
     @property
     def supports_steering(self) -> bool:
@@ -281,6 +288,7 @@ class _RunRequest:
             and self.max_tool_iterations is None
             and self.input_persisted_hook is None
             and self.context_note is None
+            and self.permission_ceiling is None
             and self.temporary_binding is None
             and self.temporary_parent_binding is None
             and not self.input_already_persisted
@@ -341,6 +349,8 @@ class _RunExecutionContext:
     subagent_session: bool = False
     # The Session has an open goal, which grants ``update_goal`` for this Run.
     goal_session: bool = False
+    # Every Tool Call of this Run checks its accesses against this boundary.
+    permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED
     request_state: _RequestState | None = None
     # Finds the folder instruction files of the Working Project's subfolders;
     # ``None`` without a Working Project or with its folder instructions off.
@@ -578,6 +588,9 @@ class RequestBuildInputs:
     subagent_session: bool = False
     # The Session has an open goal and grants ``update_goal``.
     goal_session: bool = False
+    # The Run's Permission Boundary; a restricted one shows the ``core:permissions``
+    # block, pinned per prompt epoch like the temporary Session blocks.
+    permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED
     # Start a new prompt epoch's Tool pin and dynamic block pin from the current
     # Tools and blocks instead of reading the Session's pins; the caller persists
     # them (Compaction commit).
@@ -629,6 +642,7 @@ class RequestBuildInputs:
             temporary_binding=context.request.temporary_binding,
             subagent_session=context.subagent_session,
             goal_session=context.goal_session,
+            permissions=context.permissions,
             list_announced_tools=not target.unlisted_tool_calls,
             list_all_tools=target is not context.primary_target,
         )
@@ -889,6 +903,17 @@ async def create_run_execution_context(
         goal_session = await _CHAT_TRANSFORM_WORKERS.run(
             has_open_goal, dependencies.sessions, session_address
         )
+        permissions = await run_permission_boundary(
+            dependencies,
+            run,
+            agent,
+            cron_ceiling=request.permission_ceiling,
+            address=session_address,
+            project_cwd=project_cwd,
+            prompt_project=prompt_project,
+            skill_registry=skill_registry,
+            subagent_session=subagent_session,
+        )
         session.activated_skill_contents(session_snapshot.active_messages)
         context = _RunExecutionContext(
             run=run,
@@ -910,6 +935,7 @@ async def create_run_execution_context(
             session_snapshot=session_snapshot,
             subagent_session=subagent_session,
             goal_session=goal_session,
+            permissions=permissions,
             folder_instructions=folder_instructions,
             # The Session's newest measurement still anchors this Run's Context.
             context_usage=RequestContextUsage.resume(

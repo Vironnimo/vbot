@@ -60,7 +60,7 @@ async def test_tool_paths_expand_home_without_retargeting_literal_names(tmp_path
     seen = []
 
     def probe(context: ToolContext, arguments: JsonObject) -> JsonObject:
-        seen.append(context.resolve_path(spelling))
+        seen.append(context.resolve_path(spelling, access="display"))
         return tool_success({})
 
     registry.register("probe", "Probe paths.", {"type": "object"}, probe)
@@ -92,7 +92,7 @@ async def test_handler_context_carries_the_run_configuration(tmp_path: Path) -> 
         context.on_cancel(lambda: None)
         seen.update(
             effective_cwd=context.effective_cwd,
-            resolved=context.resolve_path("src/main.py"),
+            resolved=context.resolve_path("src/main.py", access="display"),
             run_cancelled=context.is_cancelled(),
             call_cancelled=context.was_cancelled_by_user(),
         )

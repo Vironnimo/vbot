@@ -9,7 +9,9 @@ import pytest
 
 from core.agents.temporary import TemporaryAgent, TemporaryAgentConfig, TemporaryAgentRegistry
 from core.database import DatabaseUnavailableError
+from core.permissions import normalize_permission_rules
 from core.projects import AgentOverrides, AgentResolutionError, ModelConfigurationError
+from core.projects.projects import ProjectError
 from core.projects.resolver import AgentResolver
 from core.sessions import ChatSessionManager, SessionAddress
 from core.tools.availability import ToolAccess, resolve_tool_access
@@ -382,6 +384,34 @@ def test_tool_loading_override_inherits_each_part_it_does_not_set(
     assert inherited == default
     assert switched_off == {"on_demand": False, "always_loaded": ["read"]}
     assert resolver.inherited_tool_loading() == default
+
+
+def test_permission_rules_resolve_each_part_from_override_then_default(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
+    _project(projects, repo)
+    default = {"read": "work_area", "write": "work_area", "deny": ["Read({home}/.ssh/**)"]}
+    resolver = _resolver(agents, projects, _openai_configured(), global_permission_rules=default)
+
+    assert resolver.resolve_agent("vbot", "builder").permission_rules == (
+        normalize_permission_rules(default)
+    )
+    with pytest.raises(ProjectError, match="permission_rules.write"):
+        projects.set_override("vbot", "builder", "permission_rules", {"write": "nowhere"})
+
+    projects.set_override("vbot", "builder", "permission_rules", {"write": "scratch"})
+
+    assert resolver.resolve_agent("vbot", "builder").permission_rules == (
+        normalize_permission_rules({**default, "write": "scratch"})
+    )
+    effective = resolver.effective_config("vbot", "builder")["permission_rules"]
+    assert effective["source"] == "override"
+    assert effective["parts"] == {
+        "read": "global_default",
+        "write": "override",
+        "deny": "global_default",
+    }
 
 
 @pytest.mark.parametrize(

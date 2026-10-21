@@ -19,6 +19,7 @@ from typing import Any, ClassVar, cast, override
 from core.automation.cron import CronJob, CronService
 from core.calendar import CalendarEvent, CalendarService
 from core.chat import ReplySurface
+from core.permissions import PermissionBoundary
 from core.providers.adapter import tool_result_text
 from core.tools.calendar import CALENDAR_TOOL_NAME, register_calendar_tool
 from core.tools.cron import CRON_TOOL_NAME, register_cron_tool
@@ -53,13 +54,20 @@ class _DispatchedTool:
         *,
         project_id: str | None = None,
         reply_surface: ReplySurface | None = None,
+        permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED,
     ) -> tuple[dict[str, Any], str]:
         """Dispatch like the Tool executor; return the envelope and the text the Model reads.
 
         ``reply_surface`` is where the calling Run answers; without it, no chat.
+        ``permissions`` is the calling Run's boundary.
         """
         return asyncio.run(
-            self.call_async(arguments, project_id=project_id, reply_surface=reply_surface)
+            self.call_async(
+                arguments,
+                project_id=project_id,
+                reply_surface=reply_surface,
+                permissions=permissions,
+            )
         )
 
     async def call_async(
@@ -68,6 +76,7 @@ class _DispatchedTool:
         *,
         project_id: str | None = None,
         reply_surface: ReplySurface | None = None,
+        permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED,
     ) -> tuple[dict[str, Any], str]:
         """:meth:`call` on the running Event Loop."""
         context = ToolContext(
@@ -82,6 +91,7 @@ class _DispatchedTool:
             data_root=self.workspace,
             project_id=project_id,
             reply_surface=reply_surface,
+            permissions=permissions,
         )
         envelope = await dispatch_as_executor(self.registry, context, arguments, self.offered)
         text = str(tool_result_text(json.dumps(envelope, ensure_ascii=False)))

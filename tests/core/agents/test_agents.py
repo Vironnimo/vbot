@@ -24,6 +24,7 @@ from core.agents import (
     validate_agent_file,
 )
 from core.agents._config import AGENT_DESCRIPTION_MAX_LENGTH
+from core.permissions import normalize_permission_rules
 from core.tools.availability import ToolAccess
 from core.tools.live import LIVE_TOOL_NAMES
 from core.utils.timestamps import is_canonical_timestamp
@@ -460,6 +461,24 @@ def test_tool_loading_persists_as_given_and_clears(store: AgentStore) -> None:
         assert "tool_loading" not in persisted(store, "coder")
 
 
+def test_permission_rules_persist_normalized_and_clear(store: AgentStore) -> None:
+    store.create(
+        "coder", "Coder", permission_rules={"read": "work_area", "deny": ["read({workdir}/x)"]}
+    )
+
+    # The normalized form is stored and read back; unset parts stay unset.
+    stored = {"read": "work_area", "deny": ["Read({workdir}/x)"]}
+    assert persisted(store, "coder")["permission_rules"] == stored
+    assert store.get("coder").permission_rules == normalize_permission_rules(stored)
+
+    with pytest.raises(AgentError, match="permission_rules.write"):
+        store.update("coder", permission_rules={"write": "everywhere"})
+    assert persisted(store, "coder")["permission_rules"] == stored
+
+    assert store.update("coder", permission_rules=None).permission_rules is None
+    assert "permission_rules" not in persisted(store, "coder")
+
+
 def test_description_persists_as_one_trimmed_line_and_clears(store: AgentStore) -> None:
     store.create("coder", "Coder", description="  Reviews code changes  ")
 
@@ -623,8 +642,13 @@ def test_unknown_or_case_variant_agent_id_is_not_found(store: AgentStore, agent_
 
 @pytest.mark.parametrize(
     "changes",
-    [{"id": "other"}, {"tool_access": {"mode": "selected"}}],
-    ids=["id-disagrees-with-directory", "invalid-schema"],
+    [
+        {"id": "other"},
+        {"tool_access": {"mode": "selected"}},
+        # Never run unrestricted on rules that cannot be read.
+        {"permission_rules": {"read": "everywhere"}},
+    ],
+    ids=["id-disagrees-with-directory", "invalid-schema", "invalid-permission-rules"],
 )
 def test_get_rejects_an_invalid_stored_agent(store: AgentStore, changes: dict[str, Any]) -> None:
     store.create("coder", "Coder")

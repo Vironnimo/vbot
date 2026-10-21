@@ -59,7 +59,7 @@ def _build_file_data(
                 "computer. Send the file's local path, or put the link in message."
             )
         path_text = local_path
-        resolved_path = context.resolve_path(path_text)
+        resolved_path = context.resolve_path(path_text, access="read")
         if resolved_path.is_dir():
             raise ChannelSendRefusedError(
                 f'{REFUSAL_PREFIX}file_paths "{path_text}" is a folder; list the files in it '

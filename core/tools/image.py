@@ -459,7 +459,7 @@ def _generate_image_output_dir(context: ToolContext, arguments: JsonObject) -> P
 
     output_dir = optional_string(arguments.get("output_dir"), field_name="output_dir")
     if output_dir:
-        return context.resolve_path(output_dir)
+        return context.resolve_path(output_dir, access="write")
 
     root = context.workspace if context.project_id is None else context.effective_cwd
     return root / _GENERATE_IMAGE_DIRECTORY_NAME

@@ -23,6 +23,7 @@ from core.agents._config import (
     _validate_excluded_skills,
     _validate_fallback_models,
     _validate_memory_prompt_mode,
+    _validate_permission_rules,
     _validate_root_project_id,
     _validate_string_field,
     _validate_temperature,
@@ -48,13 +49,33 @@ from core.agents._types import (
 )
 from core.agents._workspace import _resolve_workspace, _WorkspaceRelocation
 from core.memory import DEFAULT_MEMORY_PROMPT_MODE, MemoryPromptMode
+from core.permissions import PermissionRules
 from core.settings.normalizers import normalize_compaction_policy
 from core.tools.availability import ToolAccess
 from core.utils.file_status import exists_strict
+from core.utils.logging import get_logger
 from core.utils.timestamps import utc_now_timestamp
 
 if TYPE_CHECKING:
     from core.agents.agents import AgentStore
+
+
+_LOGGER = get_logger("agents")
+
+
+def _log_permission_rules(agent_id: str, rules: PermissionRules | None) -> None:
+    """Log a change of an Agent's Permission Rules: which parts, never their contents."""
+    if rules is None:
+        _LOGGER.info("Agent permission rules removed (agent=%s)", agent_id)
+        return
+    parts = [part for part in ("read", "write", "commands", "web") if getattr(rules, part)]
+    _LOGGER.info(
+        "Agent permission rules set (agent=%s, bases=%s, allow=%d, deny=%d)",
+        agent_id,
+        ",".join(parts) or "-",
+        len(rules.allow or ()),
+        len(rules.deny or ()),
+    )
 
 
 class AgentMutations:
@@ -81,6 +102,7 @@ class AgentMutations:
         custom_system_prompt_enabled: bool = DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED,
         compaction_policy: dict[str, Any] | None = None,
         tool_loading: Mapping[str, Any] | None = None,
+        permission_rules: PermissionRules | Mapping[str, Any] | None = None,
         librarian_enabled: bool = DEFAULT_LIBRARIAN_ENABLED,
         description: str | None = None,
     ) -> Agent:
@@ -122,6 +144,7 @@ class AgentMutations:
                 else None
             )
             validated_tool_loading = _validate_tool_loading(tool_loading)
+            validated_permission_rules = _validate_permission_rules(permission_rules)
             now = _delegation.new_creation_timestamp(self._owner)
             workspace_value = workspace
             if workspace_value is None or (
@@ -151,6 +174,7 @@ class AgentMutations:
                 custom_system_prompt_enabled=validated_custom_system_prompt_enabled,
                 compaction_policy=validated_compaction_policy,
                 tool_loading=validated_tool_loading,
+                permission_rules=validated_permission_rules,
                 librarian_enabled=validated_librarian_enabled,
                 created_at=now,
                 updated_at=now,
@@ -169,6 +193,8 @@ class AgentMutations:
             # roster entry and persists that projection. The config write remains the
             # creation commit point; an auxiliary order write failure is logged there
             # and never turns a successfully created identity into a false failure.
+            if agent.permission_rules is not None:
+                _log_permission_rules(agent.id, agent.permission_rules)
             self._owner.list_with_order()
             return _apply_defaults(agent, self._owner._agent_defaults())
 
@@ -281,6 +307,10 @@ class AgentMutations:
                 )
             if "tool_loading" in changes:
                 changes["tool_loading"] = _validate_tool_loading(changes["tool_loading"])
+            if "permission_rules" in changes:
+                changes["permission_rules"] = _validate_permission_rules(
+                    changes["permission_rules"]
+                )
             if changes.get("current_session_id"):
                 self._owner._validate_current_session(agent_id, changes["current_session_id"])
 
@@ -305,6 +335,8 @@ class AgentMutations:
             except Exception:
                 relocation.rollback()
                 raise
+            if updated_agent.permission_rules != agent.permission_rules:
+                _log_permission_rules(agent_id, updated_agent.permission_rules)
             return AgentUpdateResult(
                 agent=_apply_defaults(updated_agent, self._owner._agent_defaults()),
                 copied_files=relocation.copied_files,

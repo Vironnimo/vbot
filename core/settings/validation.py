@@ -86,6 +86,7 @@ from core.settings._raw_sections import (
     validate_thinking_effort_diagnostic,
     validate_top_p_diagnostic,
 )
+from core.settings.agent_defaults import INVALID_PERMISSION_RULES
 from core.settings.settings import SettingsValidationError
 
 SettingsDiagnostic = JsonDiagnostic
@@ -181,7 +182,30 @@ def load_runtime_settings_json(
     )
     invalid_keys = {_settings_top_level_key(diagnostic.path) for diagnostic in errors}
     usable = {key: value for key, value in data.items() if key not in invalid_keys}
+    if "defaults" in invalid_keys:
+        defaults = _usable_defaults(data.get("defaults"), errors)
+        if defaults is not None:
+            usable["defaults"] = defaults
     return _settings_fields(usable), errors
+
+
+def _usable_defaults(defaults: Any, errors: tuple[JsonDiagnostic, ...]) -> JsonObject | None:
+    """Keep the default Permission Rules of an invalid ``defaults`` section.
+
+    The section is left out as a whole, except ``defaults.agent.permission_rules``:
+    dropping it would give inheriting Agents full access. A valid value stays; an
+    invalid one becomes ``INVALID_PERMISSION_RULES``, so those Agents refuse to run.
+    """
+    agent = defaults.get("agent") if isinstance(defaults, dict) else None
+    if not isinstance(agent, dict) or agent.get("permission_rules") is None:
+        return None
+    field_path = "$.defaults.agent.permission_rules"
+    failed = any(
+        item.path == field_path or item.path.startswith((f"{field_path}.", f"{field_path}["))
+        for item in errors
+    )
+    rules = INVALID_PERMISSION_RULES if failed else agent["permission_rules"]
+    return {"agent": {"permission_rules": rules}}
 
 
 def _settings_fields(data: JsonObject) -> JsonObject:

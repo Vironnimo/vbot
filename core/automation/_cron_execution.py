@@ -170,6 +170,7 @@ class CronExecution:
                         completion_activity=_delivery.completion_activity(
                             partial(self._owner._jobs.get, job.id)
                         ),
+                        **_ceiling_kwargs(latest),
                     )
                     admitted = True
                     if batch is not None:
@@ -515,3 +516,9 @@ def _log_fire_save_failure(job_id: str, error: CronStorageError) -> None:
 
 
 _LOGGER = get_logger("automation.cron")
+
+
+def _ceiling_kwargs(job: CronJob) -> dict[str, Any]:
+    """The creator boundary a fire runs under; omitted for full access."""
+    ceiling = job.ceiling()
+    return {} if ceiling is None else {"permission_ceiling": ceiling}

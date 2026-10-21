@@ -8,6 +8,8 @@ Temporary Agents involve no Identity creation, workspace seeding or roster opera
 
 For new temporary Sessions outside a Project, Runtime injects `AgentStore.capture_delegation_bindings` so explicit Identity targets carry the same incarnation evidence as new Identity grants (`delegation.md`). The optional private `delegation_bindings` snapshot persists and resolves with the temporary Agent; replay of the same creation request keeps its first evidence after target replacement or repository edits. Existing snapshots without the field retain their legacy meaning. Wildcard/unrestricted and Project-qualified grants keep their scope rules, and Project-scoped temporary Agents capture no Identity evidence.
 
+`TemporaryAgentConfig.permission_rules` (the Agent's own rules, normalized like `agent.json`) and `permission_ceiling` (a strict `PermissionCeiling` dict, `source` `extension`) round-trip through the snapshot; an invalid one makes the config invalid. They resolve onto `RuntimeAgent.permission_rules` / `.permission_ceiling` (`../projects/resolution.md` -> Permission Rules). Test: `test_temporary_agent_permission_rules_and_ceiling_round_trip`.
+
 ## Group deletion
 
 `TemporaryExecutionGroups.delete_group` requires a closed group and current

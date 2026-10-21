@@ -23,6 +23,7 @@ import core.subagents.subagents as subagents_module
 from core.chat import ChatMessage
 from core.chat.messages import ToolCall
 from core.database import DatabaseUnavailableError
+from core.permissions import BoundaryContext, PermissionBoundary, normalize_permission_rules
 from core.projects import AgentResolutionError, ResolutionProjectNotFoundError
 from core.runs import (
     Run,
@@ -454,6 +455,37 @@ async def test_model_and_thinking_effort_belong_to_the_subagent_session(
     assert harness.manager.waiting_work_count() == (1 if busy else 32)
     for reservation in reservations:
         assert harness.manager.release_waiting_work(reservation)
+
+
+async def test_a_restricted_parent_bounds_every_run_of_its_subagent_session(
+    harness: SubAgentHarness, tmp_path: Path
+) -> None:
+    parent = PermissionBoundary.build(
+        normalize_permission_rules({"write": "scratch", "deny": ["Shell(rm *)"]}),
+        BoundaryContext(workdir=tmp_path, home=tmp_path, data_dir=tmp_path / "data"),
+    )
+
+    started = await harness.call(
+        {"description": "Do review", "content": "review"}, permissions=parent
+    )
+    assert started["ok"], started
+    restricted = started["data"]
+    unrestricted = await harness.spawn("audit")
+    await harness.settle()
+    child = harness.subagent_session(restricted["id"])
+
+    expected = parent.ceiling(source="parent")
+    assert (await harness.resolver.session_overrides_async(child)).ceiling() == expected
+    open_child = harness.subagent_session(unrestricted["id"])
+    assert (await harness.resolver.session_overrides_async(open_child)).ceiling() is None
+
+    # A later message, also one that changes the Session's Model, keeps the ceiling.
+    sent = await harness.call(
+        {"action": "send", "id": restricted["id"], "content": "more", "model": "acme/other"}
+    )
+    assert sent["ok"], sent
+    stored = await harness.resolver.session_overrides_async(child)
+    assert (stored.model, stored.ceiling()) == ("acme/other", expected)
 
 
 @pytest.mark.parametrize(

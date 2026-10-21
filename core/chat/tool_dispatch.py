@@ -117,6 +117,7 @@ class ToolRound:
             skill_agent_id=getattr(agent, "skill_agent_id", None),
             run_kind=run.run_kind,
             subagent_session=context.subagent_session,
+            permissions=context.permissions,
             reply_surface=context.reply_surface,
             allowed_tools=_dispatch_allowed_tools(
                 agent,

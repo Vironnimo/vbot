@@ -62,6 +62,13 @@ from core.memory import (
     MemoryPromptMode,
     validate_memory_prompt_mode,
 )
+from core.permissions import (
+    PermissionRules,
+    PermissionRulesError,
+    normalize_permission_rules,
+    permission_rules_to_dict,
+)
+from core.permissions._rules import PARTS as PERMISSION_RULE_PARTS
 from core.settings import (
     AgentDefaults,
     SettingsValidationError,
@@ -148,6 +155,7 @@ _AGENT_CONFIG_FIELDS = frozenset(
         "memory_prompt_mode",
         "model",
         "name",
+        "permission_rules",
         "root_project_id",
         "tools",
         "temperature",
@@ -177,12 +185,14 @@ AGENT_RENAME_FORMAT_VERSION = 1
 
 TOOL_ACCESS_SHAPE = json_object(TOOL_ACCESS_FIELDS)
 TOOL_LOADING_SHAPE = json_object(TOOL_LOADING_FIELDS)
+PERMISSION_RULES_SHAPE = json_object(PERMISSION_RULE_PARTS)
 AGENT_SHAPE = json_document(
     _AGENT_CONFIG_FIELDS,
     {
         "compaction_policy": COMPACTION_POLICY_SHAPE,
         "tool_access": TOOL_ACCESS_SHAPE,
         "tool_loading": TOOL_LOADING_SHAPE,
+        "permission_rules": PERMISSION_RULES_SHAPE,
         "delegation_bindings": json_map(OPAQUE),
         "tools": json_map(
             OPAQUE,
@@ -336,6 +346,10 @@ def validate_agent_data(data: Any) -> list[JsonDiagnostic]:
             add_error(diagnostics, "$.tool_access", str(error))
     if data.get("tool_loading") is not None:
         validate_tool_loading_diagnostics(diagnostics, "$.tool_loading", data["tool_loading"])
+    if data.get("permission_rules") is not None:
+        validate_permission_rules_diagnostics(
+            diagnostics, "$.permission_rules", data["permission_rules"]
+        )
     if data.get("allowed_skills") is not None:
         validate_string_list(diagnostics, "$.allowed_skills", data["allowed_skills"])
     excluded_skills = data.get("excluded_skills")
@@ -447,6 +461,32 @@ def validate_tool_loading_diagnostics(
         normalize_tool_loading(strip_unknown_fields(value, TOOL_LOADING_SHAPE))
     except ValueError as error:
         add_error(diagnostics, path, str(error))
+
+
+def validate_permission_rules_diagnostics(
+    diagnostics: list[JsonDiagnostic], path: str, value: Any
+) -> None:
+    """Report a stored ``permission_rules`` object that cannot apply; unknown parts only warn.
+
+    An invalid rule set makes its whole document invalid, so the Agent never runs
+    with fewer restrictions than its stored rules name.
+    """
+    warn_unknown_fields(
+        diagnostics, path, value, PERMISSION_RULES_SHAPE, label="permission_rules part"
+    )
+    try:
+        normalize_permission_rules(strip_unknown_fields(value, PERMISSION_RULES_SHAPE))
+    except ValueError as error:
+        add_error(diagnostics, path, str(error))
+
+
+def _validate_permission_rules(value: Any) -> PermissionRules | None:
+    if value is None:
+        return None
+    try:
+        return normalize_permission_rules(value)
+    except PermissionRulesError as error:
+        raise AgentError(str(error)) from error
 
 
 def _validate_tool_loading(value: Any) -> dict[str, Any] | None:
@@ -741,6 +781,7 @@ def _agent_from_dict(
             else None
         ),
         tool_loading=_validate_tool_loading(data.get("tool_loading")),
+        permission_rules=_validate_permission_rules(data.get("permission_rules")),
         librarian_enabled=(
             DEFAULT_LIBRARIAN_ENABLED if librarian_enabled is None else bool(librarian_enabled)
         ),
@@ -770,6 +811,7 @@ def _with_builtin_capabilities(agent: Agent) -> Agent:
         root_project_id=None,
         tools={},
         tool_loading=None,
+        permission_rules=None,
     )
 
 
@@ -798,6 +840,10 @@ def _agent_document(agent: Agent, *, workspace: str) -> JsonObject:
         persisted.pop("top_p")
     if persisted["tool_loading"] is None:
         persisted.pop("tool_loading")
+    if agent.permission_rules is None:
+        persisted.pop("permission_rules")
+    else:
+        persisted["permission_rules"] = permission_rules_to_dict(agent.permission_rules)
     if persisted["builtin"] is None:
         persisted.pop("builtin")
     if not persisted["description"]:
@@ -868,11 +914,13 @@ def _apply_defaults(agent: Agent, defaults: AgentDefaults) -> Agent:
         top_p=agent.top_p,
         thinking_effort=agent.thinking_effort,
         tool_loading=agent.tool_loading,
+        permission_rules=agent.permission_rules,
         defaults=defaults,
     )
     if agent.builtin is not None:
-        # Built-in Agents never load Tools on demand.
+        # Built-in Agents never load Tools on demand and keep full access.
         changes.pop("tool_loading", None)
+        changes.pop("permission_rules", None)
     if not changes:
         return agent
     return replace(agent, **changes)

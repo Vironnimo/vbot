@@ -7,6 +7,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Protocol
 
 from core.agents import SKILL_AGENT_CREATED_AT_KEY
+from core.permissions import PermissionCeiling, PermissionRules
 from core.projects._model_configuration import (
     ConnectionRestrictedModel,
     CredentialProbe,
@@ -35,11 +36,14 @@ from core.projects._resolution_values import (
     _identity_string_list_source,
     _identity_string_source,
     _overridden_model,
+    _override_permission_rules,
     _project_agent_tool_access,
     _project_agent_tools,
     _resolve_sampling,
     _resolve_thinking_effort,
     effective_project_allowed_skills,
+    permission_rules_source,
+    resolve_permission_rules,
 )
 from core.projects._runtime_agent import (
     AGENT_OVERRIDE_FIELDS,
@@ -550,11 +554,25 @@ class AgentResolver:
                 # The participant's own Model stands in for an unusable wish.
                 model = config.model
         self.require_model_configured(model)
+        owner_rules = (
+            config.permission_rules
+            if isinstance(config.permission_rules, PermissionRules)
+            else None
+        )
         return replace(
             config,
             model=model,
             tool_access=access,
             allowed_skills=skills,
+            # The owner's parts first, then the Team member's resolution.
+            permission_rules=resolve_permission_rules(
+                (
+                    owner_rules,
+                    _override_permission_rules(project, profile.agent_id),
+                    profile.permission_rules,
+                ),
+                AgentDefaults.from_dict(self._global_agent_defaults()),
+            ),
             instructions="\n\n".join(part for part in (profile.body, config.instructions) if part),
             temperature=overrides.get(
                 "temperature",
@@ -593,6 +611,16 @@ class AgentResolver:
             top_p=config.top_p,
             thinking_effort=config.thinking_effort,
             compaction_policy=config.compaction_policy,
+            permission_rules=(
+                config.permission_rules
+                if isinstance(config.permission_rules, PermissionRules)
+                else None
+            ),
+            permission_ceiling=(
+                PermissionCeiling.from_ceiling_dict(config.permission_ceiling)
+                if config.permission_ceiling is not None
+                else None
+            ),
         )
         self._require_temporary_project(project_id)
         return agent
@@ -625,9 +653,16 @@ class AgentResolver:
         from core.agents.agents import AgentError
 
         try:
-            return self._agents.get(agent_id)
+            agent = self._agents.get(agent_id)
         except AgentError as error:
             raise _identity_resolution_error(error) from error
+        if agent.builtin is None:
+            # The store baked a valid default; an invalid one refuses the Agent
+            # unless its own rules set every part.
+            resolve_permission_rules(
+                (agent.permission_rules,), AgentDefaults.from_dict(self._global_agent_defaults())
+            )
+        return agent
 
     def _resolve_config_agent(
         self,
@@ -695,6 +730,10 @@ class AgentResolver:
             tool_loading=inherit_tool_loading(
                 project.overrides.get(agent_id, {}).get("tool_loading"),
                 global_defaults.tool_loading,
+            ),
+            permission_rules=resolve_permission_rules(
+                (_override_permission_rules(project, agent_id), scanned.permission_rules),
+                global_defaults,
             ),
         )
         return replace(
@@ -795,6 +834,12 @@ class AgentResolver:
             "thinking_effort": _identity_optional_source(
                 raw.thinking_effort, defaults.thinking_effort
             ),
+            # Built-in Agents keep full access whatever is stored or inherited.
+            "permission_rules": (
+                {"value": None, "source": None, "parts": {}}
+                if raw.builtin is not None
+                else permission_rules_source((("agent", raw.permission_rules),), defaults)
+            ),
         }
 
     def _config_effective_config(self, project_id: str, agent_id: str) -> dict[str, dict[str, Any]]:
@@ -819,6 +864,13 @@ class AgentResolver:
             "top_p": _config_sampling_source("top_p", project, scanned, global_defaults),
             "thinking_effort": _config_thinking_effort_source(project, scanned, global_defaults),
             "tool_access": _config_tool_access_source(project, scanned),
+            "permission_rules": permission_rules_source(
+                (
+                    ("override", _override_permission_rules(project, scanned.agent_id)),
+                    ("agent", scanned.permission_rules),
+                ),
+                global_defaults,
+            ),
         }
 
     def _config_model_source(

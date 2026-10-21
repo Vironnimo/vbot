@@ -403,6 +403,8 @@ async def _handle_create(
         project_id=project_id,
         delivery=delivery.stored(),
         watch=watch,
+        # A restricted Session's job never runs with more access than it has.
+        permission_ceiling=context.permissions.to_ceiling_dict(source="cron"),
         actor="tool",
     )
     notes = [note] if note else []
@@ -488,6 +490,9 @@ async def _handle_update(
         updates["watch"] = _watch(arguments)
     if ENABLED_FIELD in arguments:
         updates["status"] = "active" if arguments[ENABLED_FIELD] else "paused"
+    if context.permissions.restricted:
+        # The job now runs under the boundary of the restricted Session that changed it.
+        updates["permission_ceiling"] = context.permissions.to_ceiling_dict(source="cron")
     job = await cron_service.update_job(job_id, actor="tool", **updates)
     notes = [note] if note else []
     # A job that just became a webhook job got its secret with this call.

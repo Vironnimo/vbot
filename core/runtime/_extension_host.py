@@ -77,6 +77,8 @@ def _temporary_config_from_binding(binding: Any) -> TemporaryAgentConfig:
             fallback_models=raw.get("fallback_models"),
             instructions=raw.get("instructions", ""),
             prompt_blocks=raw.get("prompt_blocks"),
+            permission_rules=raw.get("permission_rules"),
+            permission_ceiling=raw.get("permission_ceiling"),
         )
     except (KeyError, TypeError, ValueError) as error:
         raise RuntimeError("temporary execution configuration is invalid") from error

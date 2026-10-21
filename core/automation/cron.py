@@ -375,6 +375,7 @@ class CronService:
         project_id: str | None = None,
         delivery: CronDelivery | None = None,
         watch: CronWatch | None = None,
+        permission_ceiling: dict[str, Any] | None = None,
         actor: str = _DEFAULT_ACTOR,
     ) -> CronJob:
         """Create and persist a new cron job.
@@ -386,6 +387,9 @@ class CronService:
         chat must belong to a Channel of the job's Identity Agent. ``watch``
         makes a recurring job run only when the output of its check changed;
         an active job checks it at once (:meth:`await_first_check`).
+        ``permission_ceiling`` is the creating Session's boundary
+        (``PermissionBoundary.to_ceiling_dict(source="cron")``); every fire
+        runs under it.
         """
         if schedule_type != "event" and (
             event_id is not None or event_edge is not None or event_offset_minutes is not None
@@ -420,6 +424,7 @@ class CronService:
                 project_id=project_id,
                 delivery=delivery,
                 watch=watch,
+                permission_ceiling=permission_ceiling,
             )
             self._validate_job(job, validate_references=False)
             self._check_watch_available(job)
@@ -452,13 +457,14 @@ class CronService:
             await settle_before_cancelling(save())
 
         _LOGGER.info(
-            "Cron job created (job=%s agent=%s%s schedule_type=%s status=%s actor=%s)",
+            "Cron job created (job=%s agent=%s%s schedule_type=%s status=%s actor=%s%s)",
             job.id,
             job.agent_id,
             f" project={job.project_id}" if job.project_id else "",
             job.schedule_type,
             job.status,
             actor,
+            " restricted=true" if job.permission_ceiling is not None else "",
         )
         return self._clone_job(job)
 

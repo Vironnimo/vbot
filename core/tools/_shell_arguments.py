@@ -688,7 +688,7 @@ def _workdir(context: ToolContext, arguments: JsonObject, projects: ProjectStore
         except ProjectWorkdirError as error:
             raise _call_error(str(error)) from error
     else:
-        workdir = context.resolve_path(raw)
+        workdir = context.resolve_path(raw, access="start_dir")
     try:
         directory = is_dir_strict(workdir)
     except OSError:

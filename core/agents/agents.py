@@ -87,6 +87,7 @@ from core.agents._workspace import (
 from core.database import MemberFrozenError, SnapshotBarrier
 from core.json_documents import JsonDocumentWriteError, document_change, write_json_document
 from core.memory import DEFAULT_MEMORY_PROMPT_MODE, MemoryPromptMode
+from core.permissions import PermissionRules
 from core.sessions import ChatSessionManager, SessionAddress
 from core.settings import AgentDefaults, is_valid_agent_id
 from core.tools.availability import ToolAccess
@@ -239,6 +240,7 @@ class AgentStore:
         custom_system_prompt_enabled: bool = DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED,
         compaction_policy: dict[str, Any] | None = None,
         tool_loading: Mapping[str, Any] | None = None,
+        permission_rules: PermissionRules | Mapping[str, Any] | None = None,
         librarian_enabled: bool = DEFAULT_LIBRARIAN_ENABLED,
         description: str | None = None,
     ) -> Agent:
@@ -265,6 +267,7 @@ class AgentStore:
             custom_system_prompt_enabled=custom_system_prompt_enabled,
             compaction_policy=compaction_policy,
             tool_loading=tool_loading,
+            permission_rules=permission_rules,
             librarian_enabled=librarian_enabled,
             description=description,
         )

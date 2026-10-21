@@ -180,7 +180,7 @@ def _edit_operations(
         target = edit.get("path", path)
         if target not in identities:
             try:
-                identities[target] = _resolve(context, target)
+                identities[target] = _resolve(context, target, access="read")
             except _PatchError:
                 # The pipeline reports an invalid path; it cannot alias a valid one.
                 identities[target] = target

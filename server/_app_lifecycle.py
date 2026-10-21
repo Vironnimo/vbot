@@ -114,6 +114,7 @@ def _initialize_app_state(
     # Tools and commands that select Sessions for automations.
     app.state.agent_delete_lock = runtime.automation_references.lock
     app.state.server_bind = dict(server_bind)
+    runtime.set_server_port(server_bind["listen_port"])
     app.state.live_calls = _build_live_call_registry(app.state)
 
 
