@@ -88,6 +88,16 @@ function ConvertTo-Word($Ast) {
             foreach ($element in $Ast.Elements) { $word.items.Add((ConvertTo-Word $element)) }
         }
         'ScriptBlockExpressionAst' { $word.block = $true; $word.parts.Add(@{ k = 'd'; v = $Ast.Extent.Text }) }
+        'ParenExpressionAst' {
+            # ('x') and ('a', 'b') are their value; any other pipeline is computed.
+            $inner = Get-SoleExpression $Ast.Pipeline
+            if ($null -ne $inner) {
+                $converted = ConvertTo-Word $inner
+                $converted.source = $Ast.Extent.Text
+                return $converted
+            }
+            $word.parts.Add(@{ k = 'd'; v = $Ast.Extent.Text })
+        }
         'CommandParameterAst' {
             $word.parameter = $Ast.ParameterName
             if ($null -ne $Ast.Argument) { $word.argument = (ConvertTo-Word $Ast.Argument) }
@@ -95,6 +105,103 @@ function ConvertTo-Word($Ast) {
         default { $word.parts.Add(@{ k = 'd'; v = $Ast.Extent.Text }) }
     }
     return $word
+}
+
+function Get-SoleExpression($Pipeline) {
+    # The expression a pipeline of one expression statement without redirection holds.
+    if ($Pipeline -is [System.Management.Automation.Language.PipelineAst] -and $Pipeline.PipelineElements.Count -eq 1) {
+        $element = $Pipeline.PipelineElements[0]
+        if ($element -is [System.Management.Automation.Language.CommandExpressionAst] -and $element.Redirections.Count -eq 0) {
+            return $element.Expression
+        }
+    }
+    return $null
+}
+
+function Get-TypeName($TypeName) {
+    $type = $null
+    try { $type = $TypeName.GetReflectionType() } catch { }
+    if ($type) { return $type.FullName }
+    return $TypeName.FullName
+}
+
+function Get-Feed($Ast) {
+    # The pipeline position of the command whose script block holds $Ast ($_ there is its input).
+    $node = $Ast.Parent
+    while ($null -ne $node -and $node -isnot [System.Management.Automation.Language.ScriptBlockExpressionAst]) { $node = $node.Parent }
+    if ($null -eq $node) { return $null }
+    $command = $node.Parent
+    if ($command -is [System.Management.Automation.Language.CommandParameterAst]) { $command = $command.Parent }
+    if ($command -is [System.Management.Automation.Language.CommandAst]) { return (Get-Pipeline $command) }
+    return $null
+}
+
+function Get-CallTarget($Expression) {
+    # What a method is called on: a type, a new object, a command's output, the pipeline item.
+    while ($Expression -is [System.Management.Automation.Language.ParenExpressionAst] -or $Expression -is [System.Management.Automation.Language.SubExpressionAst]) {
+        if ($Expression -is [System.Management.Automation.Language.ParenExpressionAst]) { $pipeline = $Expression.Pipeline }
+        elseif ($Expression.SubExpression.Statements.Count -eq 1) { $pipeline = $Expression.SubExpression.Statements[0] }
+        else { return @{ kind = 'other' } }
+        $inner = Get-SoleExpression $pipeline
+        if ($null -ne $inner) { $Expression = $inner; continue }
+        if ($pipeline -is [System.Management.Automation.Language.PipelineAst] -and $pipeline.PipelineElements.Count -ge 1) {
+            $last = $pipeline.PipelineElements[$pipeline.PipelineElements.Count - 1]
+            if ($pipeline.PipelineElements.Count -eq 1 -and $last -is [System.Management.Automation.Language.CommandAst]) {
+                return @{ kind = 'command'; offset = $last.Extent.StartOffset }
+            }
+        }
+        return @{ kind = 'other' }
+    }
+    if ($Expression -is [System.Management.Automation.Language.TypeExpressionAst]) {
+        return @{ kind = 'type'; type = (Get-TypeName $Expression.TypeName) }
+    }
+    if ($Expression -is [System.Management.Automation.Language.ConvertExpressionAst]) {
+        $arguments = New-List
+        $arguments.Add((ConvertTo-Word $Expression.Child))
+        return @{ kind = 'new'; type = (Get-TypeName $Expression.Type.TypeName); arguments = $arguments }
+    }
+    if ($Expression -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -and $Expression.Static -and
+        $Expression.Expression -is [System.Management.Automation.Language.TypeExpressionAst] -and
+        $Expression.Member -is [System.Management.Automation.Language.StringConstantExpressionAst] -and $Expression.Member.Value -eq 'new') {
+        $arguments = New-List
+        foreach ($argument in @($Expression.Arguments)) { if ($null -ne $argument) { $arguments.Add((ConvertTo-Word $argument)) } }
+        return @{ kind = 'new'; type = (Get-TypeName $Expression.Expression.TypeName); arguments = $arguments }
+    }
+    if ($Expression -is [System.Management.Automation.Language.VariableExpressionAst]) {
+        $name = Get-VariableName $Expression
+        if ($name -eq '_' -or $name -eq 'psitem') {
+            $feed = Get-Feed $Expression
+            if ($null -ne $feed) { return @{ kind = 'item'; feed = $feed } }
+        }
+    }
+    return @{ kind = 'other' }
+}
+
+function Get-Call($Node) {
+    $arguments = New-List
+    foreach ($argument in @($Node.Arguments)) { if ($null -ne $argument) { $arguments.Add((ConvertTo-Word $argument)) } }
+    $member = $null
+    if ($Node.Member -is [System.Management.Automation.Language.StringConstantExpressionAst]) { $member = $Node.Member.Value }
+    return @{
+        offset = $Node.Extent.EndOffset; source = $Node.Extent.Text; member = $member
+        static = [bool]$Node.Static; target = (Get-CallTarget $Node.Expression); arguments = $arguments
+    }
+}
+
+function Test-ExpressionString($Node) {
+    # A string an expression names: not a command word, parameter value, redirection target,
+    # member name or hashtable key, which have their own meaning.
+    $parent = $Node.Parent
+    while ($parent -is [System.Management.Automation.Language.ArrayLiteralAst]) { $parent = $parent.Parent }
+    if ($parent -is [System.Management.Automation.Language.CommandAst] -or
+        $parent -is [System.Management.Automation.Language.CommandParameterAst] -or
+        $parent -is [System.Management.Automation.Language.FileRedirectionAst] -or
+        $parent -is [System.Management.Automation.Language.ExpandableStringExpressionAst]) { return $false }
+    if ($parent -is [System.Management.Automation.Language.MemberExpressionAst] -and [object]::ReferenceEquals($parent.Member, $Node)) { return $false }
+    if ($parent -is [System.Management.Automation.Language.HashtableAst]) {
+        foreach ($pair in $parent.KeyValuePairs) { if ([object]::ReferenceEquals($pair.Item1, $Node)) { return $false } }
+    }
+    return $true
 }
 
 function Get-Pipeline($CommandAst) {
@@ -141,7 +248,7 @@ function Get-Analysis([string]$Text) {
     $tokens = $null
     $parseErrors = $null
     $ast = [System.Management.Automation.Language.Parser]::ParseInput($Text, [ref]$tokens, [ref]$parseErrors)
-    $result = @{ errors = (New-List); incomplete = $false; commands = (New-List); assigned = (New-List); functions = (New-List); environment_changed = $false }
+    $result = @{ errors = (New-List); incomplete = $false; commands = (New-List); assigned = (New-List); functions = (New-List); environment_changed = $false; calls = (New-List); strings = (New-List) }
     foreach ($parseError in $parseErrors) {
         $result.errors.Add($parseError.Message)
         if ($parseError.IncompleteInput) { $result.incomplete = $true }
@@ -219,11 +326,23 @@ function Get-Analysis([string]$Text) {
         }
         $result.commands.Add($entry)
     }
+    # .NET method calls and the strings expressions name, for paths and URLs outside commands.
+    foreach ($node in $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.InvokeMemberExpressionAst] }, $true)) {
+        $result.calls.Add((Get-Call $node))
+    }
+    foreach ($node in $ast.FindAll({ param($node)
+                $node -is [System.Management.Automation.Language.StringConstantExpressionAst] -or
+                $node -is [System.Management.Automation.Language.ExpandableStringExpressionAst]
+            }, $true)) {
+        if (Test-ExpressionString $node) {
+            $result.strings.Add(@{ offset = $node.Extent.StartOffset; word = (ConvertTo-Word $node) })
+        }
+    }
     return $result
 }
 
 # Warm up: the first analysis compiles the code paths every later one takes.
-$warmUp = 'Get-ChildItem -Path x | Remove-Item -Recurse; tool "$env:HOME" > $null'
+$warmUp = 'Get-ChildItem -Path x | Remove-Item -Recurse; tool "$env:HOME" > $null; [IO.File]::Delete((''y''))'
 $null = ConvertTo-Json -Compress -Depth 64 -InputObject (Get-Analysis $warmUp)
 
 $writer = [System.IO.StreamWriter]::new([Console]::OpenStandardOutput(), [System.Text.UTF8Encoding]::new($false))

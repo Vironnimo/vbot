@@ -116,7 +116,7 @@ async def _analyze(line: str, shell: ShellKind) -> Any:
         case(
             "ls src | xargs rm",
             id="pipeline-fed write is bounded by the listing",
-            paths=("read w/p/src", "write w/p/src/**"),
+            paths=("read w/p/src", "write w/p/src/*/**"),
         ),
         case(
             "echo x | xargs rm",
@@ -126,13 +126,13 @@ async def _analyze(line: str, shell: ShellKind) -> Any:
         case(
             "rm src/*.py; rm src/*/../x",
             id="globs at their literal folder",
-            paths=("write w/p/src/**",),
+            paths=("write w/p/src/*.py",),
             unresolved=("path_write",),
         ),
         case(
             "git diff ../o --stat; git log origin/main; python s.py --out=../x",
             id="tier B takes only clear paths",
-            paths=("read w/o", "read w/x"),
+            paths=("read w/o", "read w/p/s.py", "read w/x"),
         ),
         case(
             "tar -xzf a.tgz -C d; dd if=i of=o; sed -i s/a/b/ f; cp a b d2/",
@@ -147,6 +147,43 @@ async def _analyze(line: str, shell: ShellKind) -> Any:
                 "read w/p/b",
                 "write w/p/d2",
             ),
+        ),
+        case(
+            "git -C sub commit -m x; git --no-pager -c a=b log; git --git-dir=.g push",
+            id="global options go before patterns match and -C scopes the folder",
+            commands=("git commit -m x", "git log", "git push"),
+            paths=("start_dir w/p/sub", "write w/p/sub"),
+        ),
+        case(
+            "git clone https://e.example/r.git out; npm --prefix web install; "
+            "pip install --target lib x; python -m venv .venv; dotnet build -o bin",
+            id="programs write where their arguments say",
+            paths=(
+                "write w/p/out/**",
+                "write w/p/web/**",
+                "write w/p/lib/**",
+                "write w/p/.venv/**",
+                "write w/p/bin/**",
+            ),
+            urls=("https://e.example/r.git",),
+        ),
+        case("mytool ../a out.txt", id="unknown programs only read", paths=("read w/a",)),
+        case(
+            "uv run vbot agent list; uvx ruff check",
+            id="runners unwrap",
+            commands=("uv run vbot agent list", "vbot agent list", "uvx ruff check", "ruff check"),
+        ),
+        case(
+            "curl e.example:8080/x; ssh u@h.example; scp f u@h.example:/t",
+            id="targets without scheme are addresses and hosts",
+            paths=("read w/p/f",),
+            urls=("http://e.example:8080/x",),
+            hosts=("h.example",),
+        ),
+        case(
+            "rg --iglob '!Secrets' foo; rg foo src",
+            id="recursive searches and their exact exclusions",
+            paths=("read w/p/** !secrets", "read w/p/src/**"),
         ),
         case("rm (", id="parse error is unresolved", unresolved=("command",)),
         case(
@@ -224,6 +261,12 @@ async def test_bash_plan(line: str, expected: Expected) -> None:
             commands=(r"start t /d sub notepad ..\x.txt", r"notepad ..\x.txt", r"type ..\y.txt"),
             paths=("start_dir w/p/sub", "read w/p/x.txt", "read w/y.txt"),
             marks=_WINDOWS,
+        ),
+        case(
+            "cd..\\x & del y",
+            id="built-in names end before a dot or slash",
+            commands=("cd ..\\x", "del y"),
+            paths=("start_dir w/x", "write w/p/y", "write w/x/y"),
         ),
         case(
             "mklink link target",

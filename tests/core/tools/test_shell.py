@@ -1113,8 +1113,40 @@ async def test_calls_refused_before_the_start_run_nothing(shell: Shell) -> None:
         pytest.param(
             {"deny": ["Read({workdir}/secrets/**)"]},
             plan("rm -r .", subtree_writes=[Path(".")]),
-            "denies it",
+            "/secrets, which the rule Read(",
             id="subtree-write-over-denied-folder",
+        ),
+        pytest.param(
+            {"deny": ["Read({workdir}/secrets/**)"]},
+            plan("rg x", subtree_reads=[Path(".")]),
+            "/secrets/**) denies. Use search_files, "
+            "which leaves denied folders out, or name only the folders the command needs.",
+            id="recursive-read-over-denied-folder",
+        ),
+        pytest.param(
+            {"web": "listed", "allow": ["Web(example.com)"]},
+            plan("ssh git.example.org", hosts=["git.example.org"]),
+            "the permission rules refuse fetching git.example.org",
+            id="unlisted-host",
+        ),
+        pytest.param(
+            {},
+            plan(
+                "cd",
+                unresolved=[UnresolvedElement("cwd", "$d", "the folder is computed when it runs")],
+            ),
+            "Change into folders by their literal path, or pass the folder as workdir.",
+            id="unresolved-folder",
+        ),
+        pytest.param(
+            {},
+            plan(
+                "iwr",
+                unresolved=[UnresolvedElement("url", "$u", "the address is computed when it runs")],
+            ),
+            "so the check cannot tell which address it reaches. "
+            "Write each address literally in the command.",
+            id="unresolved-address",
         ),
         pytest.param({}, plan("vbot agent list"), "vBot's own command line", id="vbot-cli"),
         pytest.param(
@@ -1158,7 +1190,8 @@ async def test_restricted_calls_the_rules_refuse_launch_nothing(
         result = await shell.call({"command": "the command", "run_in_background": True})
 
     assert result["error"]["code"] == "permission_denied", result
-    assert result["error"]["retryable"] is False
+    # Only a failed analysis can pass when the same call is sent again.
+    assert result["error"]["retryable"] is (analysis is UNAVAILABLE)
     assert fragment in result["error"]["message"]
     assert result["error"]["message"].startswith(f"{SHELL_MODEL_NAME} was not run: ")
     assert shell.launcher.argv == []

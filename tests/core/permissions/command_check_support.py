@@ -20,7 +20,7 @@ from core.permissions.commands.commands import (
     CommandAnalysisUnavailable,
     CommandPlan,
     CommandWord,
-    PathAccess,
+    PlannedPathAccess,
     SimpleCommand,
     UnresolvedElement,
 )
@@ -46,8 +46,10 @@ def plan(
     *commands: str,
     reads: Sequence[Path] = (),
     writes: Sequence[Path] = (),
+    subtree_reads: Sequence[Path] = (),
     subtree_writes: Sequence[Path] = (),
     urls: Sequence[str] = (),
+    hosts: Sequence[str] = (),
     unresolved: Sequence[UnresolvedElement] = (),
 ) -> CommandPlan:
     """A plan of the simple *commands* (``"git push origin"``), with static words."""
@@ -61,11 +63,12 @@ def plan(
         for text in commands
     )
     paths = (
-        *(PathAccess("read", path, str(path)) for path in reads),
-        *(PathAccess("write", path, str(path)) for path in writes),
-        *(PathAccess("write", path, str(path), subtree=True) for path in subtree_writes),
+        *(PlannedPathAccess("read", path, str(path)) for path in reads),
+        *(PlannedPathAccess("write", path, str(path)) for path in writes),
+        *(PlannedPathAccess("read", path, str(path), subtree=True) for path in subtree_reads),
+        *(PlannedPathAccess("write", path, str(path), subtree=True) for path in subtree_writes),
     )
-    return CommandPlan(simple, paths, tuple(unresolved), tuple(urls))
+    return CommandPlan(simple, paths, tuple(unresolved), tuple(urls), tuple(hosts))
 
 
 class FakeAnalyzer:

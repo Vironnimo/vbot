@@ -4,9 +4,12 @@ One helper process per ``CommandAnalyzer``, started on first use with the
 PowerShell executable the caller names. It runs ``powershell_analysis.ps1``,
 which vBot hands over on stdin (so no execution policy applies and the script
 ships as a plain resource file in the package), and answers one JSON line per
-request. Requests are serialized; each has a timeout, a failed request is
-retried once with a fresh helper, and the helper restarts after a number of
-requests, above a memory limit and after an idle period. Every failure raises
+request. Requests are serialized, and a wait above a second is logged: one
+helper of about 115 MB answers a typical line in a few milliseconds, far more
+than the Tool calls need, so a second one would cost memory without gain. Each
+request has a timeout, a failed request is retried once with a fresh helper,
+and the helper restarts after a number of requests, above a memory limit and
+after an idle period. Every failure raises
 ``HelperUnavailable``; the analyzer turns that into
 ``CommandAnalysisUnavailable`` so callers fail closed.
 
@@ -32,6 +35,9 @@ from typing import Any, Protocol
 
 from core.permissions.commands._syntax import (
     Binding,
+    CallTarget,
+    CallTargetKind,
+    MemberCall,
     Part,
     Pipeline,
     RawCommand,
@@ -52,6 +58,9 @@ _BOOTSTRAP = (
     "& ([ScriptBlock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($s)))) $r"
 )
 _LINE_LIMIT = 64 * 1024 * 1024
+# One helper serves every analysis in turn (a request takes milliseconds); a
+# wait this long means it is overloaded or stuck and is worth a log line.
+_SLOW_QUEUE_SECONDS = 1.0
 
 
 class HelperUnavailable(Exception):  # noqa: N818 - names the outcome
@@ -103,7 +112,13 @@ class PowerShellHelper:
 
     async def analyze(self, text: str) -> dict[str, Any]:
         """The helper's lowering of *text*; raises ``HelperUnavailable``."""
+        queued = time.monotonic()
         async with self._lock:
+            waited = time.monotonic() - queued
+            if waited >= _SLOW_QUEUE_SECONDS:
+                _LOGGER.warning(
+                    "A PowerShell command analysis waited %.1f s for the helper", waited
+                )
             if self._closed:
                 raise HelperUnavailable("the command analysis is shutting down")
             self._cancel_idle()
@@ -331,7 +346,12 @@ def process_launcher(executable: Path) -> HelperLauncher:
 
 
 def lower(result: dict[str, Any]) -> Script:
-    """The ``Script`` of one helper answer."""
+    """The ``Script`` of one helper answer.
+
+    Commands, .NET method calls and expression strings come in source order:
+    a command at its start, a call at its end, after the commands whose
+    output it uses.
+    """
     errors = result.get("errors") or []
     if errors:
         reason = "PowerShell could not parse the command line"
@@ -343,47 +363,92 @@ def lower(result: dict[str, Any]) -> Script:
         environment_changed=bool(result.get("environment_changed")),
     )
     pipelines: dict[int, int] = {}
-    for entry in result.get("commands") or []:
-        pipeline = None
-        if isinstance(entry.get("pipeline"), dict):
-            identity = pipelines.setdefault(int(entry["pipeline"]["id"]), len(pipelines) + 1)
-            pipeline = Pipeline(identity, int(entry["pipeline"]["index"]))
-        redirects = [
-            Redirect("write", _word(redirect["target"]))
-            for redirect in entry.get("redirects") or []
-        ]
-        if entry.get("expression"):
-            script.commands.append(
-                RawCommand([], str(entry.get("source", "")), redirects, pipeline)
-            )
-            continue
-        binding = None
-        if isinstance(entry.get("binding"), dict):
-            raw = entry["binding"]
-            binding = Binding(
-                bound={
-                    str(name): (None if value is None else _word(value))
-                    for name, value in (raw.get("bound") or {}).items()
-                },
-                unbound=[_word(value) for value in raw.get("unbound") or []],
-                errors=[str(error) for error in raw.get("errors") or []],
-            )
-        script.commands.append(
+
+    def pipeline_of(raw: object) -> Pipeline | None:
+        if not isinstance(raw, dict):
+            return None
+        identity = pipelines.setdefault(int(raw["id"]), len(pipelines) + 1)
+        return Pipeline(identity, int(raw["index"]))
+
+    entries: list[RawCommand] = [
+        _command(entry, pipeline_of(entry.get("pipeline")))
+        for entry in result.get("commands") or []
+    ]
+    for entry in result.get("calls") or []:
+        target = entry.get("target") or {}
+        entries.append(
             RawCommand(
-                [_word(entry["name"]), *(_word(word) for word in entry.get("words") or [])],
+                [],
                 str(entry.get("source", "")),
-                redirects,
-                pipeline,
-                invocation=str(entry.get("invocation") or ""),
-                resolved=entry.get("resolved") or None,
-                binding=binding,
-                script_function=bool(entry.get("script_function")),
-                stop_parsing=bool(entry.get("stop_parsing")),
+                offset=int(entry.get("offset", -1)),
+                call=MemberCall(
+                    member=None if entry.get("member") is None else str(entry["member"]),
+                    static=bool(entry.get("static")),
+                    target=CallTarget(
+                        kind=_TARGET_KINDS.get(str(target.get("kind")), "other"),
+                        type_name=_type_name(target.get("type")),
+                        arguments=tuple(_word(word) for word in target.get("arguments") or []),
+                        offset=None if target.get("offset") is None else int(target["offset"]),
+                        feed=pipeline_of(target.get("feed")),
+                    ),
+                    arguments=tuple(_word(word) for word in entry.get("arguments") or []),
+                ),
             )
         )
+    for entry in result.get("strings") or []:
+        word = _word(entry["word"])
+        entries.append(
+            RawCommand([], word.source, offset=int(entry.get("offset", -1)), expression=word)
+        )
+    entries.sort(key=lambda raw: raw.offset)
+    script.commands = entries
     return script
 
 
+def _command(entry: dict[str, Any], pipeline: Pipeline | None) -> RawCommand:
+    redirects = [
+        Redirect("write", _word(redirect["target"])) for redirect in entry.get("redirects") or []
+    ]
+    offset = int(entry.get("offset", -1))
+    if entry.get("expression"):
+        return RawCommand([], str(entry.get("source", "")), redirects, pipeline, offset=offset)
+    binding = None
+    if isinstance(entry.get("binding"), dict):
+        raw = entry["binding"]
+        binding = Binding(
+            bound={
+                str(name): (None if value is None else _word(value))
+                for name, value in (raw.get("bound") or {}).items()
+            },
+            unbound=[_word(value) for value in raw.get("unbound") or []],
+            errors=[str(error) for error in raw.get("errors") or []],
+        )
+    return RawCommand(
+        [_word(entry["name"]), *(_word(word) for word in entry.get("words") or [])],
+        str(entry.get("source", "")),
+        redirects,
+        pipeline,
+        invocation=str(entry.get("invocation") or ""),
+        resolved=entry.get("resolved") or None,
+        binding=binding,
+        script_function=bool(entry.get("script_function")),
+        stop_parsing=bool(entry.get("stop_parsing")),
+        offset=offset,
+    )
+
+
+def _type_name(name: object) -> str | None:
+    if not isinstance(name, str) or not name:
+        return None
+    return name.lower().removeprefix("system.")
+
+
+_TARGET_KINDS: dict[str, CallTargetKind] = {
+    "type": "type",
+    "new": "new",
+    "command": "command",
+    "item": "item",
+}
 _PART_KINDS = {"s": "text", "v": "variable", "d": "dynamic"}
 
 

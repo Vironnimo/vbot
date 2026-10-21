@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import shutil
 import sys
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
+import pytest_asyncio
 
 from core.permissions import (
     BoundaryContext,
@@ -21,7 +23,7 @@ from core.permissions import (
     PermissionCeiling,
     normalize_permission_rules,
 )
-from core.permissions.commands.commands import CommandAnalyzer
+from core.permissions.commands.commands import CommandAnalyzer, UnresolvedElement
 from tests.core.permissions.command_check_support import (
     UNAVAILABLE,
     FakeAnalyzer,
@@ -157,7 +159,7 @@ async def test_the_analyzer_starts_on_the_first_restricted_check_and_ends_with_t
     failed = await checker.check_line(
         restricted, "ls", shell="bash", cwd=tmp_path, env={}, home=tmp_path
     )
-    assert failed is not None and failed.reason == "unanalyzable"
+    assert failed is not None and failed.reason == "unanalyzable" and failed.retryable
     assert "If the task needs this access" not in failed.message("bash")
 
     await checker.aclose()
@@ -166,6 +168,32 @@ async def test_the_analyzer_starts_on_the_first_restricted_check_and_ends_with_t
         restricted, "ls", shell="bash", cwd=tmp_path, env={}, home=tmp_path
     )
     assert closed is not None and closed.reason == "unanalyzable"
+
+
+@pytest.mark.parametrize("workdir_parameter", [True, False])
+@pytest.mark.asyncio
+async def test_an_unknown_folder_suggests_workdir_only_where_the_tool_takes_it(
+    tmp_path: Path, workdir_parameter: bool
+) -> None:
+    unknown = UnresolvedElement("cwd", "$d", "the folder is computed when it runs")
+    checker = fake_checker(FakeAnalyzer(plan("cd", unresolved=[unknown])))
+
+    refusal = await checker.check_line(
+        boundary(tmp_path, {"read": "work_area", "write": "work_area"}),
+        "cd $d",
+        shell="bash",
+        cwd=tmp_path,
+        env={},
+        home=tmp_path,
+        workdir_parameter=workdir_parameter,
+    )
+
+    assert refusal is not None and not refusal.retryable
+    assert refusal.hint == (
+        "Change into folders by their literal path, or pass the folder as workdir."
+        if workdir_parameter
+        else "Change into folders by their literal path."
+    )
 
 
 @pytest.mark.asyncio
@@ -188,6 +216,14 @@ async def test_a_terminal_program_is_checked_as_one_command(tmp_path: Path) -> N
 _PWSH = shutil.which("pwsh")
 
 
+@pytest_asyncio.fixture(scope="module")
+async def real_analyzer() -> AsyncIterator[CommandAnalyzer]:
+    """One analyzer, and so one PowerShell helper, for this module's real-analysis cases."""
+    analyzer = CommandAnalyzer(powershell_executable=Path(_PWSH) if _PWSH else None)
+    yield analyzer
+    await analyzer.aclose()
+
+
 @pytest.mark.parametrize(
     ("shell", "line", "reason"),
     [
@@ -206,23 +242,18 @@ _PWSH = shutil.which("pwsh")
 )
 @pytest.mark.asyncio
 async def test_real_analysis_reaches_the_same_decisions(
-    tmp_path: Path, shell: str, line: str, reason: str | None
+    real_analyzer: CommandAnalyzer, tmp_path: Path, shell: str, line: str, reason: str | None
 ) -> None:
     work = tmp_path / "work"
     work.mkdir()
-    checker = CommandChecker(
-        lambda: CommandAnalyzer(powershell_executable=Path(_PWSH) if _PWSH else None)
+    checker = CommandChecker(lambda: real_analyzer)
+    refusal = await checker.check_line(
+        boundary(work, {"read": "work_area", "write": "work_area"}),
+        line,
+        shell=shell,  # type: ignore[arg-type]
+        cwd=work,
+        env={},
+        home=tmp_path,
     )
-    try:
-        refusal = await checker.check_line(
-            boundary(work, {"read": "work_area", "write": "work_area"}),
-            line,
-            shell=shell,  # type: ignore[arg-type]
-            cwd=work,
-            env={},
-            home=tmp_path,
-        )
-    finally:
-        await checker.aclose()
 
     assert (refusal.reason if refusal else None) == reason

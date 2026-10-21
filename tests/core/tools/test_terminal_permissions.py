@@ -87,8 +87,7 @@ def work(tmp_path: Path) -> Path:
         pytest.param(
             {"command": "/bin/sh"},
             {},
-            "vBot cannot check the command lines typed at its prompt: it starts without "
-            "vBot's shell integration. Start the terminal without command",
+            "vBot cannot check the lines typed into this shell. Start the terminal without command",
             id="shell-without-integration",
         ),
     ],
