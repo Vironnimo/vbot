@@ -162,9 +162,12 @@ async def run_cases(
             workspace = root / "cases" / str(number)
             workspace.mkdir(parents=True)
             seed(workspace, files)
+            # Shell commands start only for a persisted Session.
+            session = runtime.chat_sessions.create(agent_id).address
             config = ToolExecutionConfig(
                 agent_id=agent_id,
-                session_id=f"tool-lab-{number}",
+                session_id=session.session_id,
+                project_id=session.project_id or None,
                 run_id=f"tool-lab-run-{number}",
                 workspace=workspace,
                 vbot_root=_VBOT_ROOT,
