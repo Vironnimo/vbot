@@ -171,6 +171,15 @@ def test_path_decisions(area: Area, path: str, access: PathAccess, reason: str |
         pytest.param(".", "read", None, (), "deny_rule", id="read-deny-below"),
         pytest.param(".", "read", "*.md", (), None, id="glob-misses-the-denied-folder"),
         pytest.param(".", "read", "s*/key", (), "deny_rule", id="glob-reaches-the-denied-folder"),
+        # Windows matches names case-insensitively, wildcard segments included.
+        pytest.param(
+            ".",
+            "read",
+            "SEC*/key",
+            (),
+            "deny_rule" if WINDOWS else None,
+            id="glob-case-follows-the-platform",
+        ),
         pytest.param(".", "read", None, ("secrets",), None, id="denied-folder-left-out"),
         pytest.param("{data}/..", "read", None, (), "protected_location", id="data-dir-below"),
         pytest.param("{root}", "write", None, (), "protected_location", id="installation-below"),
