@@ -60,7 +60,7 @@ Each loaded Extension reaches Runtime services only through its owner-bound host
 - While its Extension is installed (loaded, failed, disabled or overridden), only the owner removes its Sessions. Owners no longer installed in any root get their live Sessions archived at the next load, before startup handlers run.
 - Owner-scoped capabilities (group titles, Tool result payloads, deferred-call receipts, databases) stay within the calling owner, and a retired registration's host capabilities fail closed.
 - Deferred Tool outcomes are delivered once per receipt through Sessions; recovery never restarts a Run or repeats a mutation.
-- Only Extension Tools attach Tool result payloads, and only inside a Session; elsewhere the Extension returns the data inline.
+- Tool result payloads attach only inside a Session; elsewhere the Extension returns the data inline. An Extension reads back only its own; built-in Tools own theirs as `tool:<name>`.
 
 ## Extension databases
 

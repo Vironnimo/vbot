@@ -4,6 +4,8 @@ What a Tool records for the user's view of a call (`ToolDisplay`, `core/tools/_t
 
 ## Display metadata
 
+A call that shows an Agent widget records `widget_reference` `{id, title}` via `ToolContext.show_display_widget()`; projection turns it into `widget: {id, title, url}` (`tools/show_widget.md`).
+
 `ToolDisplay` is presentation-only per-invocation data: typed facts (counts, line ranges, +/- changes) recorded via `ToolContext.add_display_count()`/`add_display_line_changes()` plus the images, videos and audio the user sees in the call's details - files it read, looked at or produced, and with `source=True` files it started from such as a generation's reference images - recorded via `ToolContext.add_display_media(path, media_type, filename=None, source=False)` (`media_type` a media type or only its kind `image`/`video`/`audio`, other kinds ignored; `filename` for a file whose path does not name it, such as a download; persisted as internal `media_files` of absolute `path`, `kind`, `filename` and optional `role: source`, projected by the server into signed `media` URLs; every Tool uses this one path, so the WebUI shows all Tool media alike).
 
 A display declaring `details=True` or a `detail_builder` gets ordered user-facing detail blocks (payload `details`, present even when empty) that the WebUI shows in place of the raw arguments and result - first the blocks the builder derives from the call's arguments and result (`display_notice()`, `display_text()`, `display_results()`; the builder runs again for every projection, so it sees the final result), then those the handler recorded, in recording order:
