@@ -30,6 +30,7 @@ from cli.formatting import record_fields
 from cli.formatting import string_or_default as _string_or_default
 from cli.rpc_client import rpc_call as _rpc_call
 from cli.server_management import CommandResult, ServerInstance
+from core.permissions import PermissionRulesError, preset_definitions, preset_name
 
 PROJECT_SET_FLAGS = (
     "--cwd",
@@ -405,8 +406,15 @@ def _team_member_line(member: object) -> str:
         line = f"{line} denied_tools={_format_string_list(member.get('denied_tools'))}"
     if "overrides" in member:
         line = f"{line} overrides={_json_or_default(member.get('overrides'))}"
-    if "effective" in member:
-        line = f"{line} effective_sources={_effective_sources(member.get('effective'))}"
+    effective = member.get("effective")
+    if isinstance(effective, dict):
+        rules = effective.get("permission_rules")
+        if isinstance(rules, dict):
+            value = rules.get("value")
+            line += (
+                f" permission_rules={'full-access' if value is None else _json_or_default(value)}"
+            )
+        line = f"{line} effective_sources={_effective_sources(effective)}"
     return line
 
 
@@ -488,7 +496,9 @@ def _coerce_override_value(field: str, raw_value: str) -> object:
             return float(raw_value)
         except ValueError as exc:
             raise ValueError(f"{field} override must be a number") from exc
-    if field in {"compaction_policy", "tool_access", "tool_loading"}:
+    if field == "permission_rules" and not raw_value.lstrip().startswith("{"):
+        return _preset_rules(raw_value)
+    if field in {"compaction_policy", "tool_access", "tool_loading", "permission_rules"}:
         try:
             value = json.loads(raw_value)
         except json.JSONDecodeError as exc:
@@ -497,6 +507,22 @@ def _coerce_override_value(field: str, raw_value: str) -> object:
             raise ValueError(f"{field} override must be a JSON object")
         return value
     return raw_value
+
+
+def _preset_rules(raw_value: str) -> object:
+    """The rule set of a named preset, as an override value."""
+    try:
+        name = preset_name(raw_value)
+    except PermissionRulesError as exc:
+        raise ValueError(str(exc)) from exc
+    rules = preset_definitions()[name]
+    if rules is None:
+        # An override without rules inherits the repository's and the shared default.
+        raise ValueError(
+            "full-access is no override value; clear-override permission_rules removes the "
+            "override, and the agent then follows the repository's rules and the shared default"
+        )
+    return rules
 
 
 def _json_or_default(value: object) -> str:

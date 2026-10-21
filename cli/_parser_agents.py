@@ -18,6 +18,7 @@ from cli._parser_common import (
     _json_object_argument,
 )
 from core.memory import MEMORY_PROMPT_MODES
+from core.permissions import PermissionRulesError, PresetName, preset_name
 from core.providers.reasoning import THINKING_EFFORT_ORDER
 from core.sessions import ARCHIVE_KINDS
 
@@ -219,6 +220,46 @@ def _add_agent_change_arguments(
         ),
     )
     parser.add_argument(
+        "--permissions",
+        type=_permissions_argument,
+        metavar="<preset|json-object>",
+        help=(
+            "Set the agent's own Permission Rules. work-dir: read and change files only in the "
+            "working directory; work-dir-read-only: read there, write only to the "
+            "conversation's scratch folder; full-access: remove the agent's own rules. A preset "
+            "keeps the agent's own allow and deny rules; a JSON object replaces the whole "
+            "rule set. Omit to keep the current rules"
+        ),
+    )
+    parser.add_argument(
+        "--allow-rule",
+        action="append",
+        metavar="<rule>",
+        help=(
+            'Add an allow rule, for example "Read(~/Documents/**)", "Edit({project}/docs/**)", '
+            '"Shell(npm test)" or "Web(docs.python.org)"; repeat for more. The agent\'s own '
+            "allow list then replaces the one it inherits"
+        ),
+    )
+    parser.add_argument(
+        "--deny-rule",
+        action="append",
+        metavar="<rule>",
+        help=(
+            'Add a deny rule, for example "Read({workdir}/secrets/**)" or "Shell(git push *)"; '
+            "repeat for more. The agent's own deny list then replaces the one it inherits"
+        ),
+    )
+    if include_name:
+        parser.add_argument(
+            "--clear-permissions",
+            action="store_true",
+            help=(
+                "Remove the agent's own Permission Rules; it then follows the shared default "
+                "(defaults.agent.permission_rules), full access when none is set"
+            ),
+        )
+    parser.add_argument(
         "--allowed-skills",
         nargs="*",
         help=(
@@ -286,6 +327,16 @@ def _add_agent_change_arguments(
         )
     if include_session:
         parser.add_argument("--current-session-id", help="Switch the agent's current session")
+
+
+def _permissions_argument(raw: str) -> PresetName | dict[str, object]:
+    """``--permissions``: a preset name or a JSON rule set object."""
+    if raw.lstrip().startswith("{"):
+        return _json_object_argument(raw)
+    try:
+        return preset_name(raw)
+    except PermissionRulesError as error:
+        raise argparse.ArgumentTypeError(str(error)) from None
 
 
 def _add_project_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -470,13 +521,17 @@ def _add_project_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
             "compaction_policy",
             "tool_access",
             "tool_loading",
+            "permission_rules",
         ),
         help="Override field",
     )
     set_override_parser.add_argument(
         "value",
         metavar="<value>",
-        help="Field value; compaction_policy, tool_access and tool_loading take a JSON object",
+        help=(
+            "Field value; compaction_policy, tool_access and tool_loading take a JSON object; "
+            "permission_rules takes a JSON object or the preset work-dir or work-dir-read-only"
+        ),
     )
 
     clear_override_parser = _add_command_parser(
@@ -497,6 +552,7 @@ def _add_project_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
             "compaction_policy",
             "tool_access",
             "tool_loading",
+            "permission_rules",
         ),
         help="Override field to clear",
     )

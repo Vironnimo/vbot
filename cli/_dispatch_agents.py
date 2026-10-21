@@ -10,7 +10,7 @@ from typing import Any
 
 from cli import agent_secret_management as secrets
 from cli._input import _read_secret, _read_stdin_utf8
-from cli.agent_management import agent_reorder
+from cli.agent_management import PermissionEdit, agent_reorder
 from cli.archive_management import archive_list, archive_purge, archive_restore, archive_show
 from cli.chat_management import ChatRequest, chat
 from cli.data_store_management import (
@@ -100,6 +100,18 @@ def _agent_tool_access_args_error(args: argparse.Namespace) -> str | None:
         and getattr(args, "always_loaded", None) is not None
     ):
         return "--always-loaded requires --tools-on-demand"
+    permissions = getattr(args, "permissions", None)
+    adds_rules = bool(getattr(args, "allow_rule", None) or getattr(args, "deny_rule", None))
+    if getattr(args, "clear_permissions", False) and (permissions is not None or adds_rules):
+        return (
+            "--clear-permissions removes the agent's own rules; leave out --permissions, "
+            "--allow-rule and --deny-rule, or drop --clear-permissions"
+        )
+    if permissions == "full_access" and adds_rules:
+        return (
+            "--permissions full-access removes the agent's own rules, so it takes no "
+            "--allow-rule or --deny-rule; choose work-dir, work-dir-read-only or a JSON object"
+        )
     return None
 
 
@@ -161,6 +173,9 @@ def _agent_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
         if always_loaded is not None:
             tool_loading["always_loaded"] = list(always_loaded)
         changes["tool_loading"] = tool_loading or None
+    permission_edit = _permission_edit_from_args(args)
+    if permission_edit is not None:
+        changes["permission_rules"] = permission_edit
     if args.allowed_skills is not None:
         changes["allowed_skills"] = list(args.allowed_skills)
     if args.excluded_skills is not None:
@@ -184,6 +199,18 @@ def _agent_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
     if getattr(args, "current_session_id", None) is not None:
         changes["current_session_id"] = args.current_session_id
     return changes
+
+
+def _permission_edit_from_args(args: argparse.Namespace) -> PermissionEdit | None:
+    permissions = getattr(args, "permissions", None)
+    allow = tuple(getattr(args, "allow_rule", None) or ())
+    deny = tuple(getattr(args, "deny_rule", None) or ())
+    clear = bool(getattr(args, "clear_permissions", False))
+    if permissions is None and not (allow or deny or clear):
+        return None
+    if isinstance(permissions, dict):
+        return PermissionEdit(rules=permissions, allow=allow, deny=deny)
+    return PermissionEdit(preset=permissions, allow=allow, deny=deny, clear=clear)
 
 
 def dispatch_project_command(
