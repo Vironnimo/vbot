@@ -23,6 +23,7 @@ from core.sessions import AGENT_DEFAULT_PROJECT, SessionAddress, WorkingProjectC
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    from core.permissions import PermissionCeiling
     from core.runtime.runtime import Runtime
     from core.sessions import ChatSession, ChatSessionManager
 
@@ -68,9 +69,12 @@ def _optional_tool_kwargs(
     restriction: Sequence[str] | None,
     denial_resolver: Callable[[str], str | None] | None,
     max_tool_iterations: int | None,
+    permission_ceiling: PermissionCeiling | None = None,
 ) -> dict[str, Any]:
     """Omit unrestricted defaults so unrelated trigger call shapes stay stable."""
     options: dict[str, Any] = {}
+    if permission_ceiling is not None:
+        options["permission_ceiling"] = permission_ceiling
     if restriction is not None:
         options["tool_restriction"] = restriction
     if denial_resolver is not None:
@@ -218,6 +222,7 @@ class TriggerService:
         contributes_to_agent_activity: bool = True,
         context_note: str | None = None,
         completion_activity: CompletionActivity | None = None,
+        permission_ceiling: PermissionCeiling | None = None,
     ) -> Run:
         """Start a run immediately, or queue it until the target session is idle.
 
@@ -232,11 +237,14 @@ class TriggerService:
         activity, overriding ``contributes_to_agent_activity``.
         With no ``session_id``, ``working_project_id`` and ``actor`` select the
         new Session's working Project and creation attribution, as in Chat.
+        ``permission_ceiling`` bounds the Run by the boundary of the Session
+        that caused it, such as a Cron job's creator (``ChatLoop.start_run``).
         """
         tool_kwargs = _optional_tool_kwargs(
             tool_restriction,
             tool_denial_resolver,
             max_tool_iterations,
+            permission_ceiling,
         )
         run_kwargs = _optional_run_kwargs(
             input_persisted_hook,

@@ -13,6 +13,7 @@ import pytest
 import core.tools.cron as cron_tool_module
 from core.automation.cron import CronDelivery, WatchCheckError
 from core.chat import ReplySurface
+from core.permissions import BoundaryContext, PermissionBoundary, normalize_permission_rules
 from core.projects import (
     AgentResolutionError,
     ResolutionAgentNotFoundError,
@@ -260,6 +261,30 @@ def test_update_changes_only_the_named_fields(tmp_path: Path) -> None:
     )
     assert "schedule: every 4h" in text
     assert "repeat: 3" in text
+
+
+def test_a_restricted_session_bounds_the_jobs_it_creates_or_changes(tmp_path: Path) -> None:
+    tool = cron_tool(tmp_path)
+    boundary = PermissionBoundary.build(
+        normalize_permission_rules({"write": "scratch"}),
+        BoundaryContext(workdir=tmp_path, home=tmp_path, data_dir=tmp_path / "data"),
+    )
+    create = {"action": "create", "prompt": PROMPT, "schedule": "0 9 * * *"}
+
+    bounded, _ = tool.call(create, permissions=boundary)
+    unbounded, _ = tool.call(create)
+
+    def ceiling(envelope: dict[str, Any]) -> Any:
+        return tool.service.get_job(envelope["data"]["id"]).ceiling()
+
+    assert ceiling(bounded) == boundary.ceiling(source="cron")
+    assert ceiling(unbounded) is None
+    # A full-access change keeps the creator's boundary; a restricted one sets its own.
+    tool.call({"action": "update", "id": bounded["data"]["id"], "name": "Renamed"})
+    tool.call(
+        {"action": "update", "id": unbounded["data"]["id"], "name": "Renamed"}, permissions=boundary
+    )
+    assert ceiling(bounded) == ceiling(unbounded) == boundary.ceiling(source="cron")
 
 
 def test_update_with_null_repeat_removes_the_limit(tmp_path: Path) -> None:
