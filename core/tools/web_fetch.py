@@ -88,6 +88,11 @@ _MULTI_PAGE_BUDGET = 2 * DEFAULT_MAX_CHARS
 _MULTI_PAGE_MIN_CHARS = 2_000
 # Conversations whose last read page the handler remembers (Site paths below).
 _REMEMBERED_CONVERSATIONS = 1024
+# The name of a page that stands in for a missing one: not-found and login pages
+# (``page-not-found``, ``seite-nicht-gefunden``, ``404``, ``sign_in``).
+_STAND_IN_PAGE = re.compile(
+    r"(?:^|[-_])(?:404|not[-_]?found|nicht[-_]gefunden)(?:[-_]|$)|^(?:log|sign)[-_]?(?:in|on)$"
+)
 
 WebFetchOutput = Literal["markdown", "text", "raw"]
 
@@ -499,26 +504,43 @@ def _page_address(url: str) -> tuple[str, set[tuple[str, str]]]:
     return path, query
 
 
-def _redirect_note(requested: str, final: str) -> str:
-    """Say when a redirect led to another page, or to the requested page's new address.
+def _page_name(path: str) -> str:
+    """The last segment of a page path without its file extension (``add-order.md``)."""
+    return re.sub(r"\.[a-z0-9]{1,5}$", "", path.rsplit("/", 1)[-1])
 
-    A page whose section moved keeps its last path segment (its name or id); a
-    redirect to the site root, to a parent path or to a page with another last
-    segment means the requested page was not served.
+
+def _redirect_note(requested: str, final: str) -> str:
+    """Say where a redirect led, and that it is another page where that is clear.
+
+    A redirect to the site root, a parent path, a shallower page of another name
+    (a section's or site's index) or a not-found or login page means the requested
+    page was not served. Documentation sites that move a page often rename it or
+    move it deeper too (2026-10-21), so other redirects are only named.
     """
     requested_path, requested_query = _page_address(requested)
     final_path, final_query = _page_address(final)
-    if requested_query <= final_query:
-        if requested_path == final_path:
-            return ""
-        name = requested_path.rsplit("/", 1)[-1]
-        if (
-            name
-            and final_path.rsplit("/", 1)[-1] == name
-            and not requested_path.startswith(final_path + "/")
-        ):
-            return f"The page moved here from {requested}."
-    return f"This is not the requested page: {requested} redirected here."
+    if requested_path == final_path and requested_query <= final_query:
+        return ""
+    requested_name, final_name = _page_name(requested_path), _page_name(final_path)
+    other_page = (
+        # A requested query parameter is missing or changed.
+        requested_path == final_path
+        # The site root or a parent path.
+        or requested_path.startswith(final_path + "/")
+        or (
+            final_name != requested_name
+            and (
+                final_path.count("/") < requested_path.count("/")
+                or (
+                    _STAND_IN_PAGE.search(final_name) is not None
+                    and _STAND_IN_PAGE.search(requested_name) is None
+                )
+            )
+        )
+    )
+    if other_page:
+        return f"This is not the requested page: {requested} redirected here."
+    return f"Redirected here from {requested}."
 
 
 def _is_site_path(url: str) -> bool:
