@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from croniter import CroniterBadDateError, croniter  # type: ignore[import-untyped]
 from tzlocal import get_localzone
 
+from core.automation._cron_notification_model import NOTIFICATION_FIELDS, CronNotification
 from core.automation._cron_timing import _utc_now_iso
 from core.config_validation import (
     JsonConfigValidationError,
@@ -158,6 +159,8 @@ _CRON_JOB_FIELDS = _MUTABLE_FIELDS | {
     "last_result",
     "last_run_id",
     "last_run_silent",
+    "notifications",
+    "last_delivered_at",
 }
 
 CRON_JOBS_FORMAT_VERSION = 1
@@ -173,6 +176,7 @@ CRON_JOB_SHAPE = json_object(
         "delivery": json_object(_DELIVERY_FIELDS),
         "last_result": json_object(_LAST_RESULT_FIELDS),
         "watch": json_object(_WATCH_FIELDS),
+        "notifications": json_list(json_object(NOTIFICATION_FIELDS), key="id"),
     },
 )
 
@@ -437,6 +441,22 @@ def _validate_cron_job_data(diagnostics: list[JsonDiagnostic], item_path: str, i
             warn_unknown_keys(
                 diagnostics, f"{item_path}.{field_name}", value, known, f"{label} field"
             )
+    notifications = item.get("notifications", [])
+    if not isinstance(notifications, list):
+        add_error(diagnostics, f"{item_path}.notifications", "must be a list")
+    else:
+        seen: set[str] = set()
+        for index, raw in enumerate(notifications):
+            try:
+                notification = CronNotification.from_dict(raw)
+                if notification.id in seen:
+                    raise ValueError("duplicate notification id")
+                seen.add(notification.id)
+            except ValueError as error:
+                add_error(diagnostics, f"{item_path}.notifications[{index}]", str(error))
+    validate_optional_string(
+        diagnostics, f"{item_path}.last_delivered_at", item.get("last_delivered_at")
+    )
     silent = item.get("last_run_silent")
     if silent is not None and not isinstance(silent, bool):
         add_error(diagnostics, f"{item_path}.last_run_silent", "must be a boolean")
@@ -558,6 +578,8 @@ class CronJob:
     last_changed_at: str | None = None
     # Why the latest check failed; the next successful check clears it.
     last_check_error: str | None = None
+    notifications: tuple[CronNotification, ...] = ()
+    last_delivered_at: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize one CronJob to a JSON-compatible payload.
@@ -607,7 +629,19 @@ class CronJob:
             value = getattr(self, field_name)
             if value is not None:
                 data[field_name] = value
+        if self.notifications:
+            data["notifications"] = [item.to_dict() for item in self.notifications]
+        if self.last_delivered_at is not None:
+            data["last_delivered_at"] = self.last_delivered_at
         return data
+
+    def delivery_progress(self) -> dict[str, Any]:
+        return {
+            "waiting": len(self.notifications),
+            "uncertain": sum(item.state in {"sending", "uncertain"} for item in self.notifications),
+            "error": next((item.error for item in self.notifications if item.error), None),
+            "last_delivered_at": self.last_delivered_at,
+        }
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> CronJob:
@@ -664,6 +698,10 @@ class CronJob:
             last_checked_at=payload.get("last_checked_at"),
             last_changed_at=payload.get("last_changed_at"),
             last_check_error=payload.get("last_check_error"),
+            notifications=tuple(
+                CronNotification.from_dict(item) for item in payload.get("notifications", [])
+            ),
+            last_delivered_at=payload.get("last_delivered_at"),
         )
 
 

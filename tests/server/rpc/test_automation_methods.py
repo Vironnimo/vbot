@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from core.automation import CronService
-from core.automation.cron import CronDelivery, CronResult, CronWatch, WebhookStatus
+from core.automation.cron import CronDelivery, CronJob, CronResult, CronWatch, WebhookStatus
 from core.projects import (
     AgentResolutionError,
     ResolutionAgentNotFoundError,
@@ -67,7 +67,14 @@ def _cron_state(cron_service: Any | None = None, *, resolver: Any | None = None)
             waiting=0,
             dropped=0,
         )
-        for edit in ("create_job", "update_job", "delete_job", "enable_job", "disable_job"):
+        for edit in (
+            "create_job",
+            "update_job",
+            "delete_job",
+            "enable_job",
+            "disable_job",
+            "retry_delivery",
+        ):
             setattr(cron_service, edit, AsyncMock())
     return SimpleNamespace(
         runtime=SimpleNamespace(cron_service=cron_service, agent_resolver=resolver),
@@ -76,7 +83,7 @@ def _cron_state(cron_service: Any | None = None, *, resolver: Any | None = None)
     )
 
 
-def _cron_job(**changes: Any) -> SimpleNamespace:
+def _cron_job(**changes: Any) -> CronJob:
     fields: JsonObject = {
         "id": "job-123",
         "agent_id": "main",
@@ -111,7 +118,7 @@ def _cron_job(**changes: Any) -> SimpleNamespace:
         "last_check_error": None,
     }
     fields.update(changes)
-    return SimpleNamespace(**fields)
+    return CronJob(**fields)
 
 
 def _bootstrap_job(**changes: Any) -> SimpleNamespace:
@@ -455,6 +462,12 @@ async def test_cron_list_projects_each_job_with_its_next_fire_time() -> None:
                     "run_id": "run-0",
                 },
                 "last_error": None,
+                "delivery_progress": {
+                    "waiting": 0,
+                    "uncertain": 0,
+                    "error": None,
+                    "last_delivered_at": None,
+                },
                 "watch": {"command": "git log -1 --oneline"},
                 "last_checked_at": "2026-05-14T10:00:00+00:00",
                 "last_changed_at": "2026-05-14T09:55:00+00:00",
@@ -549,6 +562,16 @@ async def test_cron_job_actions_address_one_job(
     getattr(state.runtime.cron_service, service_method).assert_called_once_with(
         "job-1", actor="rpc"
     )
+
+
+@pytest.mark.asyncio
+async def test_retry_delivery_only_retries_notifications() -> None:
+    state = _cron_state()
+    state.runtime.cron_service.get_job.return_value = _cron_job(status="completed")
+    result = await rpc_result(state, "cron.retry_delivery", id="job-1")
+    assert result["status"] == "completed"
+    state.runtime.cron_service.retry_delivery.assert_awaited_once_with("job-1")
+    state.runtime.cron_service.enable_job.assert_not_called()
 
 
 @pytest.mark.asyncio

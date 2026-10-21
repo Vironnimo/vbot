@@ -105,6 +105,7 @@ class CronScheduler:
                     _claims.remove(self._owner._once_fire_claims_dir, job_id)
             self._owner._notify_changed()
 
+        self._owner._notifications.start()
         self._owner._webhooks.load_states(
             [job.id for job in self._owner._jobs.values() if job.schedule_type == "webhook"]
         )
@@ -117,6 +118,7 @@ class CronScheduler:
         if not self._owner._started and not self._owner._job_tasks:
             return
 
+        self._owner._notifications.stop()
         for job_id in list(self._owner._job_tasks):
             self._cancel_job_task(job_id, force=True)
         self._owner._pending_restarts.clear()
@@ -131,6 +133,7 @@ class CronScheduler:
         if pending_tasks:
             await asyncio.gather(*pending_tasks, return_exceptions=True)
         await self._owner._watcher.aclose()
+        await self._owner._notifications.aclose()
         if self._owner._crash_saves:
             await asyncio.gather(*self._owner._crash_saves, return_exceptions=True)
 

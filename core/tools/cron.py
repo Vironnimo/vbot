@@ -855,6 +855,8 @@ def _job_fields(cron_service: CronService, job: CronJob, zone: ZoneInfo) -> Json
     if job.session_id:
         data["session"] = job.session_id
     data["deliver"] = _delivery_text(job.delivery)
+    if job.notifications:
+        data["delivery_progress"] = job.delivery_progress()
     if job.schedule_type != "once" and job.remaining_runs is not None:
         data["repeat"] = job.remaining_runs
     if job.watch is not None:

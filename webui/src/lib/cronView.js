@@ -690,6 +690,14 @@ function normalizeCronJob(job, systemTimezone = 'UTC') {
     // The latest answer that was not silent, or null.
     last_result: normalizeLastResult(job?.last_result, systemTimezone),
     last_error: optionalText(job?.last_error),
+    delivery_progress: {
+      waiting: Math.max(0, Number(job?.delivery_progress?.waiting) || 0),
+      uncertain: Math.max(0, Number(job?.delivery_progress?.uncertain) || 0),
+      error: optionalText(job?.delivery_progress?.error),
+      last_delivered_at: optionalText(
+        job?.delivery_progress?.last_delivered_at,
+      ),
+    },
     // The latest check, the latest change whose Run succeeded, and why the
     // latest check failed (null once a check succeeds again).
     last_checked_at: lastCheckedAt,

@@ -273,8 +273,8 @@ async def test_a_run_answer_reaches_the_jobs_chat_unless_it_is_silent(
     assert updated.last_outcome == "success"
     assert updated.last_run_silent is not delivered
     if delivered:
-        [(run, *target)] = chats.relayed
-        assert (run.id, *target) == ("run-1", "tg-main", "chat-42", "7")
+        assert chats.sent == [("tg-main", answer, "chat-42", "7")]
+        assert updated.delivery_progress()["waiting"] == 0
         # The chat's Session learns what was sent, unless the job ran in it.
         [(channel_id, platform_target, note, thread_id, skip_session_id)] = chats.notes
         assert (channel_id, platform_target, thread_id) == ("tg-main", "chat-42", "7")
@@ -360,8 +360,8 @@ async def test_what_reaches_the_user_follows_the_jobs_delivery(
     assert decisions == (reported if delivery == "app" else [False] * len(reported))
     assert in_app == []
     if delivery == "chat":
-        assert [run.id for run, *_ in chats.relayed] == ["run-1"]
-        alerts = [message for _, message, *_ in chats.sent]
+        assert chats.sent[0][1] == "The build is red."
+        alerts = [message for _, message, *_ in chats.sent[1:]]
         assert len(alerts) == 2
         assert "failed twice in a row" in alerts[0] and "model unavailable" in alerts[0]
         assert "stopped after 5 failures in a row" in alerts[1]

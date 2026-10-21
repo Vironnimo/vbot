@@ -594,6 +594,13 @@ export default Object.freeze({
   'cron.card.session': 'Session',
   'cron.card.delivery': 'Answers',
   'cron.detail.lastResult': 'Last result',
+  'cron.delivery.waiting':
+    '{count} notifications awaiting delivery. Unsent messages retry automatically.',
+  'cron.delivery.uncertain':
+    'Delivery could not be confirmed. Check the chat before retrying to avoid a duplicate.',
+  'cron.delivery.checkedRetry': 'Chat checked — retry delivery',
+  'cron.delivery.retry': 'Retry delivery now',
+  'cron.delivery.retryError': 'Could not retry delivery',
   'cron.detail.lastAnswer': 'Last answer',
   'cron.detail.target': 'Target',
   'cron.detail.newSessionEachRun': 'New Session each Run',

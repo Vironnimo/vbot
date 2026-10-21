@@ -633,7 +633,12 @@ export function scheduleRowDetails(
         value: job.session_id || t('cron.detail.newSessionEachRun'),
         mono: Boolean(job.session_id),
       },
-      { label: t('cron.card.delivery'), value: deliverySummary(job) },
+      {
+        label: t('cron.card.delivery'),
+        value: job.delivery_progress?.waiting
+          ? `${deliverySummary(job)} · ${t('cron.delivery.waiting', { count: job.delivery_progress.waiting })}`
+          : deliverySummary(job),
+      },
     ],
     placement: 'right',
   };

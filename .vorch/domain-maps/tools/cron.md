@@ -68,6 +68,8 @@ The definition is 610 estimated tokens (`python -m scripts.tool_lab definitions 
 
 | Text | Reason |
 |---|---|
+| `Waiting webhook requests could not be read; retrying without replacing them.` | The job is waiting for storage recovery, not an empty webhook queue. No sender acceptance or Model Run may overwrite unread acknowledged requests. |
+| `delivery_progress`: waiting and uncertain counts, retained error, last delivered time; `Delivery could not be confirmed. Check the chat before retrying this notification.` | A successful Run does not prove delivery. The result exposes delayed and ambiguous sends so the Agent can report them accurately; the user retries uncertain sends in Schedules after checking the chat. |
 | Description: `Schedule jobs that run an instruction later: once, repeatedly, before, at or after a calendar event, ...` | Names the third kind of job, so an Agent asked for a reminder before an event looks here instead of for calendar reminders. |
 | event_id: `Calendar event to run the job at, for every occurrence.` | Says what the id names and that a repeating event needs one job, not one per occurrence (so `repeat` does not apply). |
 | event_id: `schedule is then start or end, optionally +/- a duration, e.g. 'start - 30m'.` | One canonical form with the sign spelled out; the reminder minutes Models know from Google `reminders.overrides` are accepted as dialects. |
@@ -148,5 +150,3 @@ Reasons for the late-fire System Reminder (`LateFire.notice`, `core/automation/_
 | `vBot did not run the job at those times, for example because the server was off or the computer was asleep.` | Gives the cause, so the Agent does not report a fault or retry. |
 | `Carry out the instruction that follows now, and adapt any part of it that depends on when it runs, ...` | Without it Agents either refuse the stale task or send a "good morning" at noon and report on the wrong period. |
 | `If the instruction no longer makes sense this late, say so instead of carrying it out.` | Without `max_delay`, a late Run whose task has become moot (a wake-up call at noon) must be able to decline it instead of doing it anyway (user decision 2026-10-08). |
-
-| `Waiting webhook requests could not be read; retrying without replacing them.` | The job is waiting for storage recovery, not an empty webhook queue. No sender acceptance or Model Run may overwrite unread acknowledged requests. |

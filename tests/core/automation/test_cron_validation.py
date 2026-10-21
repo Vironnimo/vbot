@@ -64,6 +64,7 @@ def test_validate_cron_jobs_data_checks_delivery_watch_and_last_answer() -> None
                 {**base, "id": "job-4", "last_run_silent": "yes"},
                 {**base, "id": "job-5", "watch": {"command": "ls", "url": "https://a.example"}},
                 {**base, "id": "job-6", "watch": {"url": "file:///etc/hosts"}},
+                {**base, "id": "job-7", "notifications": [None]},
             ],
         }
     )
@@ -83,6 +84,7 @@ def test_validate_cron_jobs_data_checks_delivery_watch_and_last_answer() -> None
             "$.jobs[5].watch",
             "watch.url must be an absolute http or https URL of at most 2048 characters",
         ),
+        ("error", "$.jobs[6].notifications[0]", "notification must be an object"),
     ]
 
 
