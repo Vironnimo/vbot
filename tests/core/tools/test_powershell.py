@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from core.permissions import PermissionBoundary
 from core.sessions import SessionAddress
 from core.tools import _powershell_host
 from core.tools._command_launch import PipeLauncher
@@ -88,6 +89,7 @@ async def _report(
             env=layers.base,
             origin_run_id="run-a",
             formatter=str,
+            permissions=PermissionBoundary.UNRESTRICTED,
             request=request.data if sent is None else sent(request.data),
             not_run_codes=request.not_run_codes,
         )

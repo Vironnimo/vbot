@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from core.permissions import PermissionBoundary
 from core.runs import RunExecutionOwner
 from core.sessions import SessionAddress
 from core.storage.temp_files import TemporaryFileManager
@@ -247,9 +248,11 @@ class Harness:
         command: str = "work",
         description: str | None = None,
         formatter: CommandReportFormatter = format_report,
+        permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED,
         not_run_codes: Mapping[int, NotRunReason] | None = None,
     ) -> tuple[str, FakeProcess]:
-        """Start a foreground command on a fake process."""
+        """Start a foreground command on a fake process, for a full-access Session
+        unless *permissions* say otherwise."""
         handle = await self.manager.launch(
             owner,
             ["shell", "-c", command],
@@ -259,6 +262,7 @@ class Harness:
             env={},
             origin_run_id=run_id,
             formatter=formatter,
+            permissions=permissions,
             execution_owner=execution_owner,
             on_output=on_output,
             not_run_codes=not_run_codes,
