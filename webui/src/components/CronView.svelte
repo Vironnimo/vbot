@@ -769,11 +769,9 @@
                     disabled={Boolean(editor.mutatingJobId)}
                     onClick={() => editor.retryDelivery(editor.selectedJob)}
                   >
-                    {t(
-                      editor.selectedJob.delivery_progress.uncertain
-                        ? 'cron.delivery.checkedRetry'
-                        : 'cron.delivery.retry',
-                    )}
+                    {editor.selectedJob.delivery_progress.uncertain
+                      ? t('cron.delivery.checkedRetry')
+                      : t('cron.delivery.retry')}
                   </Button>
                 </Banner>
               {/if}
