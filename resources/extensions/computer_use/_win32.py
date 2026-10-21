@@ -149,6 +149,7 @@ class _Api:
     kernel32: Any
     advapi32: Any
     dwmapi: Any
+    imm32: Any
     shcore: Any
     version: Any
     enum_proc: Any
@@ -194,6 +195,19 @@ _SIGNATURES: dict[str, dict[str, tuple[list[Any], Any]]] = {
         "ToUnicodeEx": (
             [ct.c_uint, ct.c_uint, _HANDLE, ct.c_wchar_p, _INT, ct.c_uint, _HANDLE],
             _INT,
+        ),
+        "GetKeyState": ([_INT], ct.c_short),
+        "SendMessageTimeoutW": (
+            [
+                _HANDLE,
+                ct.c_uint,
+                ct.c_size_t,
+                ct.c_ssize_t,
+                ct.c_uint,
+                ct.c_uint,
+                ct.POINTER(ct.c_size_t),
+            ],
+            ct.c_ssize_t,
         ),
         "GetCursorPos": ([ct.POINTER(Point)], _INT),
         "SetCursorPos": ([_INT, _INT], _INT),
@@ -267,6 +281,7 @@ _SIGNATURES: dict[str, dict[str, tuple[list[Any], Any]]] = {
         "GetSidSubAuthority": ([_HANDLE, _UINT32], _P_UINT32),
     },
     "dwmapi": {"DwmGetWindowAttribute": ([_HANDLE, _UINT32, _HANDLE, _UINT32], ct.c_long)},
+    "imm32": {"ImmGetDefaultIMEWnd": ([_HANDLE], _HANDLE)},
     "shcore": {
         "GetDpiForMonitor": (
             [_HANDLE, _INT, ct.POINTER(ct.c_uint), ct.POINTER(ct.c_uint)],

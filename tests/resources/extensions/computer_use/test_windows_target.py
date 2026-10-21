@@ -25,6 +25,22 @@ WINDOWS = "C:\\Windows"
 CODE = "C:\\Users\\Ada\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe"
 CALCULATOR = "Microsoft.WindowsCalculator_8wekyb3d8bbwe"
 TERMINAL = "Microsoft.WindowsTerminal_8wekyb3d8bbwe"
+# Blender's Start shortcut starts a launcher, which runs blender.exe beside it.
+BLENDER_LAUNCHER = "C:\\Program Files\\Blender 5.2\\blender-launcher.exe"
+BLENDER = "C:\\Program Files\\Blender 5.2\\blender.exe"
+# ProductName of each executable's version resource.
+PRODUCTS = {
+    path.casefold(): product
+    for product, paths in {
+        "Blender": (BLENDER_LAUNCHER, BLENDER, "D:\\Steam\\Blender\\blender.exe"),
+        "Sysinternals Process Explorer": ("C:\\Tools\\procexp.exe",),
+        "PuTTY suite": ("C:\\Tools\\putty.exe",),
+        "Microsoft Office": ("C:\\Office\\winword.exe", "C:\\Office\\excel.exe",
+                             "C:\\Office\\msaccess.exe"),
+        "Microsoft Windows Operating System": (f"{WINDOWS}\\regedit.exe", f"{WINDOWS}\\hh.exe"),
+    }.items()
+    for path in paths
+}  # fmt: skip
 
 
 def start_rows() -> list[StartRow]:
@@ -41,7 +57,17 @@ def start_rows() -> list[StartRow]:
         StartRow("Website", "https://example.com", "https://example.com"),
         StartRow("Tool", "A.Tool", "C:\\A\\tool.exe"),
         StartRow("Tool", "B.Tool", "C:\\B\\tool.exe"),
+        StartRow("Blender 5.2", "{6D809377}\\Blender 5.2\\blender-launcher.exe", BLENDER_LAUNCHER),
+        StartRow("Blender 4.2", "Steam.Blender", "D:\\Steam\\Blender\\blender.exe"),
+        StartRow("Process Explorer", "Sysinternals.ProcExp", "C:\\Tools\\procexp.exe"),
+        StartRow("Word", "Office.Word", "C:\\Office\\winword.exe"),
+        StartRow("Excel", "Office.Excel", "C:\\Office\\excel.exe"),
+        StartRow("Registry Editor", "Windows.Regedit", f"{WINDOWS}\\regedit.exe"),
     ]
+
+
+def product(path: str) -> str | None:
+    return PRODUCTS.get(path.casefold())
 
 
 def running(name: str, path: str) -> AppInfo:
@@ -117,6 +143,54 @@ def test_typed_text_presses_enter_once_per_line_break_and_tab_for_tabs():
     assert _win_input.text_units("ä😀") == [(0xE4,), (0xD83D, 0xDE00)]
 
 
+class GermanLayout:
+    """Keys of the German layout as VkKeyScanExW and ToUnicodeEx report them (measured)."""
+
+    SCANS = {"a": 0x41, "A": 0x141, "@": 0x651, " ": 0x20, "^": 0xDC, "\x03": 0x243}
+    OUTPUTS = {
+        (0x41, ()): "a",
+        (0x41, ("shift",)): "A",
+        (0x51, ("ctrl", "alt")): "@",  # AltGr+Q
+        (0x20, ()): " ",
+        (0xDC, ()): None,  # ^ is a dead key: it waits for the letter to accent
+        (0x43, ("ctrl",)): "\x03",
+    }
+
+    def __init__(self, caps_lock: bool = False) -> None:
+        self.caps_lock = caps_lock
+
+    def scan(self, char: str) -> int:
+        return self.SCANS.get(char, -1)
+
+    def output(self, vk: int, modifiers: tuple[str, ...]) -> str | None:
+        if self.caps_lock and 0x41 <= vk <= 0x5A and set(modifiers) <= {"shift"}:
+            modifiers = () if modifiers else ("shift",)  # CapsLock inverts Shift for letters
+        return self.OUTPUTS.get((vk, modifiers), "?")
+
+
+Stroke = _win_input.Stroke
+
+
+@pytest.mark.parametrize(
+    "text,caps_lock,plan",
+    [
+        (
+            "aA@ \n",
+            False,
+            [Stroke(0x41), Stroke(0x41, ("shift",)), Stroke(0x51, ("ctrl", "alt")), Stroke(0x20),
+             "enter"],
+        ),
+        # The press that types the letter now: CapsLock inverts Shift.
+        ("aA", True, [Stroke(0x41, ("shift",)), Stroke(0x41)]),
+        # Unicode input for a dead key, a character without a key and a control character,
+        # whose key would be a shortcut (ctrl+c).
+        ("^é\x03", False, [(0x5E,), (0xE9,), (0x03,)]),
+    ],
+)  # fmt: skip
+def test_typed_characters_press_the_layout_key_that_types_them(text, caps_lock, plan):
+    assert _win_input.text_units(text, GermanLayout(caps_lock)) == plan
+
+
 @pytest.mark.parametrize(
     "path,family,keys",
     [
@@ -164,8 +238,9 @@ def test_start_index_lists_each_app_once_under_a_unique_name():
     apps = {app.name: app for app in index.apps}
 
     assert [app.name for app in index.apps] == [
-        "Calculator", "File Explorer", "Services", "Terminal", "Tool", "Tool (2)", "vBot",
-        "Visual Studio Code",
+        "Blender 4.2", "Blender 5.2", "Calculator", "Excel", "File Explorer",
+        "Process Explorer", "Registry Editor", "Services", "Terminal", "Tool", "Tool (2)",
+        "vBot", "Visual Studio Code", "Word",
     ]  # fmt: skip
     assert apps["Visual Studio Code"].keys == {CODE.lower(), "exe:code.exe"}
     assert apps["File Explorer"].app_id == "Microsoft.Windows.Explorer"
@@ -178,24 +253,36 @@ def test_start_index_lists_each_app_once_under_a_unique_name():
 
 
 @pytest.mark.parametrize(
-    "keys,found",
+    "path,family,found",
     [
-        (_win_apps.identity_keys(CODE, None), "Visual Studio Code"),
+        (CODE, None, "Visual Studio Code"),
         # A copy elsewhere is the same app while its executable name is unique.
-        (_win_apps.identity_keys("D:\\Portable\\Code.exe", None), "Visual Studio Code"),
-        (_win_apps.identity_keys("C:\\B\\tool.exe", None), "Tool (2)"),
-        (_win_apps.identity_keys("D:\\tool.exe", None), None),  # which Tool is ambiguous
-        (_win_apps.identity_keys("C:\\Apps\\CalculatorApp.exe", CALCULATOR), "Calculator"),
-        (_win_apps.identity_keys("C:\\Other\\other.exe", None), None),
+        ("D:\\Portable\\Code.exe", None, "Visual Studio Code"),
+        ("C:\\B\\tool.exe", None, "Tool (2)"),
+        ("D:\\tool.exe", None, None),  # which Tool is ambiguous
+        ("C:\\Apps\\CalculatorApp.exe", CALCULATOR, "Calculator"),
+        ("C:\\Other\\other.exe", None, None),
+        # The product beside the launcher a shortcut starts, before another app's exe name.
+        (BLENDER, None, "Blender 5.2"),
+        ("C:\\Tools\\putty.exe", None, None),  # another product beside a shortcut's exe
+        ("C:\\Office\\msaccess.exe", None, None),  # the folder holds two Start apps
+        (f"{WINDOWS}\\hh.exe", None, None),  # system tools are known by their own exe
     ],
 )
-def test_start_index_finds_the_app_of_running_keys(keys, found):
-    app = StartIndex(start_rows(), WINDOWS).lookup(keys)
+def test_start_index_finds_the_app_of_a_running_process(path, family, found):
+    keys = _win_apps.identity_keys(path, family)
+    app = StartIndex(start_rows(), WINDOWS).lookup(keys, path, product)
     assert (app.name if app else None) == found
 
 
 def test_running_apps_merge_into_installed_apps_by_key_then_name():
     index = StartIndex(start_rows(), WINDOWS)
+    versions = {
+        path: _win_apps.FileVersion("Blender", product(path) or "")
+        for path in (BLENDER, BLENDER_LAUNCHER)
+    }
+    resolver = _win_apps.AppResolver(index, versions, own_integrity=0x2000)
+    blender = resolver.app(_win_apps.ProcessFacts(7, BLENDER, None, 0x2000))
     apps = _win_apps.merge_apps(
         index.apps,
         [
@@ -203,6 +290,7 @@ def test_running_apps_merge_into_installed_apps_by_key_then_name():
             running("Python", "C:\\Python314\\python.exe"),
             running("Python", "C:\\Project\\.venv\\Scripts\\python.exe"),
             _win_apps.OWN_APP,
+            blender,
         ],
     )
     by_name = {app.name: app for app in apps}
@@ -210,6 +298,9 @@ def test_running_apps_merge_into_installed_apps_by_key_then_name():
     assert [app.name for app in apps] == sorted(by_name, key=str.casefold)
     assert len(apps) == len(index.apps) + 1
     assert by_name["Visual Studio Code"].running
+    # The app its launcher shortcut started is that Start app, so open finds its window.
+    assert blender.name == "Blender 5.2"
+    assert by_name["Blender 5.2"].running and by_name["Blender 5.2"].matches(blender)
     assert not by_name["Calculator"].running
     assert by_name["Python"].keys == {
         "c:\\python314\\python.exe",

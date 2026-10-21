@@ -24,13 +24,14 @@ if TYPE_CHECKING:
     from core.sessions._types import SessionAddress
 
 
-# A Note that records a Model fallback switch, a goal change or delivered
-# Sub-Agent messages is also a display notice.
+# A Note that records a Model fallback switch, a goal change, delivered
+# Sub-Agent messages or sent widget states is also a display notice.
 _DISPLAY_NOTE = (
     "(e.role = 'note' AND (EXISTS "
     "(SELECT 1 FROM note_model_fallbacks AS f WHERE f.entry_key = e.entry_key) OR EXISTS "
     "(SELECT 1 FROM note_goal_events AS g WHERE g.entry_key = e.entry_key) OR EXISTS "
-    "(SELECT 1 FROM note_subagent_messages AS s WHERE s.entry_key = e.entry_key)))"
+    "(SELECT 1 FROM note_subagent_messages AS s WHERE s.entry_key = e.entry_key) OR EXISTS "
+    "(SELECT 1 FROM note_widget_states AS w WHERE w.entry_key = e.entry_key)))"
 )
 
 

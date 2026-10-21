@@ -266,6 +266,21 @@ def insert_entry(
                 for ordinal, item in enumerate(message.subagent_messages)
             ],
         )
+    if message.role == "note" and message.widget_states:
+        connection.executemany(
+            "INSERT INTO note_widget_states (entry_key, ordinal, widget_id, title, state_json) "
+            "VALUES (?, ?, ?, ?, ?)",
+            [
+                (
+                    entry_key,
+                    ordinal,
+                    item.widget_id,
+                    item.title,
+                    json.dumps(item.state, ensure_ascii=False, separators=(",", ":")),
+                )
+                for ordinal, item in enumerate(message.widget_states)
+            ],
+        )
     _store_attachments.record(connection, entry_key, message.to_dict())
     return entry_key
 
@@ -495,6 +510,7 @@ class EntryBatch:
     model_fallbacks: dict[int, sqlite3.Row] = field(default_factory=dict)
     goal_events: dict[int, sqlite3.Row] = field(default_factory=dict)
     subagent_messages: dict[int, list[sqlite3.Row]] = field(default_factory=dict)
+    widget_states: dict[int, list[sqlite3.Row]] = field(default_factory=dict)
     checkpoints: dict[int, sqlite3.Row] = field(default_factory=dict)
     run_ids: dict[int, str] = field(default_factory=dict)
     run_summaries: dict[int, sqlite3.Row] = field(default_factory=dict)
@@ -586,6 +602,16 @@ class EntryBatch:
                         if row[field_name] is not None
                     }
                     for row in subagent_messages
+                ]
+            widget_states = self.widget_states.get(key)
+            if widget_states:
+                data["widget_states"] = [
+                    {
+                        "widget_id": str(row["widget_id"]),
+                        "title": str(row["title"]),
+                        "state": json.loads(row["state_json"]),
+                    }
+                    for row in widget_states
                 ]
             return ChatMessage.from_dict(data)
         except (json.JSONDecodeError, IndexError, KeyError, TypeError, ValueError) as exc:
@@ -884,6 +910,12 @@ def select_batch(connection: sqlite3.Connection, rows: Sequence[sqlite3.Row]) ->
     batch.subagent_messages = _grouped_rows(
         connection,
         f"SELECT entry_key, {', '.join(_SUBAGENT_MESSAGE_FIELDS)} FROM note_subagent_messages "
+        f"WHERE entry_key {_KEYS} ORDER BY entry_key, ordinal",
+        by_role.get("note", []),
+    )
+    batch.widget_states = _grouped_rows(
+        connection,
+        "SELECT entry_key, widget_id, title, state_json FROM note_widget_states "
         f"WHERE entry_key {_KEYS} ORDER BY entry_key, ordinal",
         by_role.get("note", []),
     )

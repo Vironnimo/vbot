@@ -208,11 +208,21 @@ class ChatLoopDependencies:
     # Blocking: the further names and addresses that reach it on that port when it
     # listens beyond loopback (``BoundaryContext.own_hosts``).
     server_hosts: Callable[[], tuple[str, ...]] | None = None
+    # Whether a Sub-Agent Session has a use for the ``subagent`` Tool (one at the
+    # nesting limit has none); asked only for Sub-Agent Sessions. Blocking.
+    # ``None`` offers the Tool to every Session whose Agent allows it.
+    subagent_tool_usable: Callable[[SessionAddress], bool] | None = None
 
 
 def is_subagent_session(sessions: ChatSessionManager, address: SessionAddress) -> bool:
     """Return whether *address* is linked to a Parent Agent. Blocking."""
     return isinstance(sessions.metadata_value(address, SUBAGENT_PARENT_META_KEY), dict)
+
+
+def withholds_subagent_tool(dependencies: ChatLoopDependencies, address: SessionAddress) -> bool:
+    """Return whether the Sub-Agent Session at *address* is not offered ``subagent``. Blocking."""
+    usable = dependencies.subagent_tool_usable
+    return usable is not None and not usable(address)
 
 
 def has_open_goal(sessions: ChatSessionManager, address: SessionAddress) -> bool:
@@ -347,6 +357,9 @@ class _RunExecutionContext:
     session_snapshot: _SessionSnapshot
     # The Session is linked to a Parent Agent (a Sub-Agent Session).
     subagent_session: bool = False
+    # The Session leaves ``subagent`` out of its Tool list for this Run (a
+    # Sub-Agent at the nesting limit).
+    subagent_tool_withheld: bool = False
     # The Session has an open goal, which grants ``update_goal`` for this Run.
     goal_session: bool = False
     # Every Tool Call of this Run checks its accesses against this boundary.
@@ -588,6 +601,9 @@ class RequestBuildInputs:
     # The Session is linked to a Parent Agent: the System Prompt shows the
     # Sub-Agent role and the Session grants the Sub-Agent's own Tools.
     subagent_session: bool = False
+    # The Session leaves ``subagent`` out of its Tool list (a Sub-Agent at the
+    # nesting limit).
+    subagent_tool_withheld: bool = False
     # The Session has an open goal and grants ``update_goal``.
     goal_session: bool = False
     # The Run's Permission Boundary; a restricted one shows the ``core:permissions``
@@ -643,6 +659,7 @@ class RequestBuildInputs:
             image_budget=context.image_budget,
             temporary_binding=context.request.temporary_binding,
             subagent_session=context.subagent_session,
+            subagent_tool_withheld=context.subagent_tool_withheld,
             goal_session=context.goal_session,
             permissions=context.permissions,
             list_announced_tools=not target.unlisted_tool_calls,
@@ -927,6 +944,9 @@ async def create_run_execution_context(
         subagent_session = await _CHAT_TRANSFORM_WORKERS.run(
             is_subagent_session, dependencies.sessions, session_address
         )
+        subagent_tool_withheld = subagent_session and await _CHAT_TRANSFORM_WORKERS.run(
+            withholds_subagent_tool, dependencies, session_address
+        )
         goal_session = await _CHAT_TRANSFORM_WORKERS.run(
             has_open_goal, dependencies.sessions, session_address
         )
@@ -958,6 +978,7 @@ async def create_run_execution_context(
             prompt_cache_affinity_id=prompt_cache_affinity_id,
             session_snapshot=session_snapshot,
             subagent_session=subagent_session,
+            subagent_tool_withheld=subagent_tool_withheld,
             goal_session=goal_session,
             permissions=permissions.boundary,
             permission_sources=permissions,

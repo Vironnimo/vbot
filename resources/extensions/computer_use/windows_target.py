@@ -72,7 +72,7 @@ class WindowsTarget(WindowsInput):
     def __init__(self) -> None:
         super().__init__()
         self._start = _win_apps.StartApps(windows_dir=_win32.windows_directory())
-        self._descriptions: dict[str, str | None] = {}
+        self._versions: dict[str, _win_apps.FileVersion] = {}
         self._own_integrity: int | None = None
         self._display_names: tuple[tuple[str, ...], dict[str, str]] = ((), {})
         self._overlay = ActivityOverlay()
@@ -265,7 +265,7 @@ class WindowsTarget(WindowsInput):
     def close(self) -> None:
         self._overlay.close()
 
-    def open(self, app: AppInfo) -> None:
+    def open(self, app: AppInfo) -> bool:
         _win32.enter_thread()
         resolver = self._resolver()
         for handle in self._app_windows():
@@ -273,7 +273,7 @@ class WindowsTarget(WindowsInput):
             shell = _win_apps.is_shell_surface(_win32.window_class(handle), facts.executable)
             if not shell and app.matches(window_app):
                 self._activate(handle, app.name)
-                return
+                return False
         target = self._launch_target(app)
         if target is None:
             raise TargetError(
@@ -285,6 +285,7 @@ class WindowsTarget(WindowsInput):
         self._nudge()
         _win32.allow_any_foreground()
         _win_apps.launch(target)
+        return True
 
     # Mechanics
 
@@ -296,7 +297,7 @@ class WindowsTarget(WindowsInput):
         # its Start-menu name from the first call on; later calls never wait for it.
         return _win_apps.AppResolver(
             self._start.index(wait=_FIRST_DISCOVERY_WAIT) if index is None else index,
-            self._descriptions,
+            self._versions,
             self._own_integrity,
         )
 

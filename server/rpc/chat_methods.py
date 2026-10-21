@@ -4,13 +4,16 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from core.chat import ChatLoop, CommandDispatcher, ReplySurface
+from core.chat import ChatLoop, ChatMessage, CommandDispatcher, ReplySurface
 from core.chat.content_blocks import ContentBlock
+from core.chat.messages import WidgetState
+from core.chat.widget_states import widget_state_note
 from core.runs import ActiveRunError, QueuedRunItem, Run, RunCancelledError
 from core.sessions import (
     SessionAddress,
     new_session_id,
 )
+from core.tools import builtin_payload_owner
 from core.tools.command_manager import (
     COMMAND_RECENT_LINES,
     CommandManager,
@@ -18,6 +21,7 @@ from core.tools.command_manager import (
     CommandReport,
     CommandStopError,
 )
+from core.tools.show_widget import SHOW_WIDGET_TOOL_NAME, WIDGET_PAYLOAD_TITLE
 from server.rpc._chat_input import (
     _chat_target,
     _execute_chat_command,
@@ -66,6 +70,7 @@ from server.rpc.validation import (
     _optional_chat_input_origin,
     _optional_file_mentions,
     _optional_string,
+    _optional_widget_states,
     _parse_chat_content,
     _reject_unsupported,
     _required_agent_address,
@@ -103,6 +108,7 @@ async def _submit_chat(
             "input_origin",
             "file_mentions",
             "reply_surface",
+            "widget_states",
         },
         method,
     )
@@ -112,9 +118,17 @@ async def _submit_chat(
     input_origin = _optional_chat_input_origin(params)
     reply_surface = _chat_reply_surface(params)
     file_mentions = _optional_file_mentions(params)
+    widget_states = _optional_widget_states(params)
 
     dispatcher: CommandDispatcher = state.command_dispatcher
     prepared_command = dispatcher.prepare(content)
+    # A new Session shows no widget yet. A command takes no widget values; the
+    # client keeps them for the next message.
+    if widget_states and isinstance(target, _NewSessionTarget):
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "params.widget_states can accompany only a message to an existing Session",
+        )
     if isinstance(target, _NewSessionTarget):
         if prepared_command is not None:
             return await _execute_new_session_chat_command(
@@ -144,6 +158,11 @@ async def _submit_chat(
             reply_surface=reply_surface,
         )
 
+    run_options: JsonObject = {}
+    if input_origin is not None:
+        run_options["input_origin"] = input_origin
+    if widget_states and (note := await _widget_state_note(state, address, widget_states)):
+        run_options["context_note"] = note
     content = await _expand_content_file_mentions(state, address, content, file_mentions)
 
     # A user message makes this session the agent's current one: after a server
@@ -156,42 +175,24 @@ async def _submit_chat(
 
     chat_loop: ChatLoop = state.chat_loop
     try:
-        if input_origin is None:
-            run = await chat_loop.start_run(
-                agent_id,
-                content,
-                session_id=address.session_id,
-                reply_surface=reply_surface,
-                project_id=project_id,
-            )
-        else:
-            run = await chat_loop.start_run(
-                agent_id,
-                content,
-                session_id=address.session_id,
-                input_origin=input_origin,
-                reply_surface=reply_surface,
-                project_id=project_id,
-            )
+        run = await chat_loop.start_run(
+            agent_id,
+            content,
+            session_id=address.session_id,
+            reply_surface=reply_surface,
+            project_id=project_id,
+            **run_options,
+        )
     except ActiveRunError:
         try:
-            if input_origin is None:
-                queued_item = await chat_loop.queue_run(
-                    agent_id,
-                    content,
-                    session_id=address.session_id,
-                    reply_surface=reply_surface,
-                    project_id=project_id,
-                )
-            else:
-                queued_item = await chat_loop.queue_run(
-                    agent_id,
-                    content,
-                    session_id=address.session_id,
-                    input_origin=input_origin,
-                    reply_surface=reply_surface,
-                    project_id=project_id,
-                )
+            queued_item = await chat_loop.queue_run(
+                agent_id,
+                content,
+                session_id=address.session_id,
+                reply_surface=reply_surface,
+                project_id=project_id,
+                **run_options,
+            )
             started_run = _run_started_during_enqueue(queued_item)
         except Exception as exc:
             raise _map_expected_error(exc) from exc
@@ -204,6 +205,27 @@ async def _submit_chat(
         raise _map_expected_error(exc) from exc
 
     return run
+
+
+async def _widget_state_note(
+    state: Any, address: SessionAddress, entries: list[tuple[str, JsonObject]]
+) -> ChatMessage | None:
+    """Return the note that hands *entries* to the Agent with the user's message.
+
+    Only widgets the Session's current view shows count: a widget whose Run an
+    edit removed is no longer part of the conversation, so its values are
+    dropped instead of refusing the message. ``None`` when none is left.
+    """
+    owner_name = builtin_payload_owner(SHOW_WIDGET_TOOL_NAME)
+    widgets: list[WidgetState] = []
+    for widget_id, values in entries:
+        payload = await state.runtime.chat_sessions.tool_result_payload_async(
+            address, widget_id, owner_name=owner_name
+        )
+        title = payload.get(WIDGET_PAYLOAD_TITLE) if isinstance(payload, dict) else None
+        if isinstance(title, str):
+            widgets.append(WidgetState(widget_id, title, values))
+    return widget_state_note(widgets) if widgets else None
 
 
 async def _start_chat_in_new_session(

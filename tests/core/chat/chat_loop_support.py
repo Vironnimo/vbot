@@ -110,6 +110,7 @@ def build_chat_loop(runtime: Any, **kwargs: Any) -> ChatLoop:
         usage_recorder=getattr(runtime, "usage_recorder", None),
         scratch_areas=getattr(runtime, "scratch_areas", None),
         subagent_reply_to_user=getattr(runtime, "subagent_reply_to_user", None),
+        subagent_tool_usable=getattr(runtime, "subagent_tool_usable", None),
     )
     return ChatLoop(dependencies, **kwargs)
 
@@ -943,9 +944,14 @@ class StubStorage:
         else:
             self._compaction_settings = dict(compaction_settings)
         self.data_dir = data_dir or Path("data")
+        # Sub-Agent limits as stored; missing ones take their defaults.
+        self.subagent_settings: JsonObject = {}
 
     def load_compaction_settings(self) -> JsonObject:
         return dict(self._compaction_settings)
+
+    def load_subagent_settings(self) -> JsonObject:
+        return dict(self.subagent_settings)
 
     def load_local_models_settings(self) -> JsonObject:
         return {"context_windows": {}}

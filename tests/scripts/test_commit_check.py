@@ -185,7 +185,7 @@ def test_older_python_checks_target_the_oldest_python_running_the_speech_worker(
         ("webui/prettier.config.js", False, True),
         ("webui/vite.config.js", False, False),
         ("resources/extensions/swarm/web/index.js", False, False),
-        ("tests/e2e/tests/chat.spec.js", False, False),
+        ("scripts/perf_load_suite/ui-probe/ui-probe.mjs", False, False),
     ],
 )
 def test_webui_changes_select_the_checks_they_can_affect(

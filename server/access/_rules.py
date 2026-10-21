@@ -32,6 +32,7 @@ from server.file_delivery import (
     EXTENSION_RUN_URL_PREFIX,
     FILE_URL_PREFIX,
     PREVIEW_URL_PREFIX,
+    WIDGET_URL_PREFIX,
 )
 
 #: Headers a reverse proxy or CDN adds. In ``local`` and ``lan`` any of them
@@ -78,6 +79,7 @@ _CAPABILITY_ROUTES = re.compile(
             rf"{re.escape(PREVIEW_URL_PREFIX)}[^/]+/.*",
             rf"{re.escape(EXTENSION_ASSET_URL_PREFIX)}[^/]+/.*",
             rf"{re.escape(EXTENSION_RUN_URL_PREFIX)}[^/]+/(?:events|timeline)",
+            rf"{re.escape(WIDGET_URL_PREFIX)}[^/]+",
         )
     ),
     re.DOTALL,

@@ -8,7 +8,7 @@ import logging
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
 from contextlib import aclosing, asynccontextmanager
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from core.access.config import AccessConfig, access_config, inferred_access_mode
 from core.extensions.extensions import ExtensionUnavailableError
@@ -41,6 +41,7 @@ from server._app_lifecycle import (
     _unregister_command_status_bridge,
     _unregister_cron_change_bridge,
     _unregister_model_catalog_change_bridge,
+    _unregister_portal_change_bridge,
     _unregister_recall_index_status_bridge,
     _unregister_run_event_bridge,
     _unregister_session_activity_bridge,
@@ -91,6 +92,7 @@ from server._streams import (
 )
 from server._terminal_socket import serve_terminal_socket
 from server._upload_routes import register_upload_routes
+from server._widget_routes import register_widget_routes
 from server.access import (
     AccessGuard,
     AccessService,
@@ -106,10 +108,14 @@ from server.events import (
 )
 from server.file_delivery import FILE_PREVIEW_WORKERS, PREVIEW_URL_PREFIX, FileDelivery
 from server.live.owner import LIVE_SOCKET_CLOSE_UNKNOWN_CALL
+from server.portals import PortalServer
 from server.rpc.errors import RPC_ERROR_INTERNAL, RPC_ERROR_INVALID_REQUEST
 from server.rpc.event_bridge import publish_resource_changed
 from server.rpc.methods import dispatch_rpc
 from server.rpc.model_methods import start_installation_catalog_restore
+
+if TYPE_CHECKING:
+    from server.access.tls import TlsContextHolder
 
 JsonObject = dict[str, Any]
 
@@ -172,13 +178,15 @@ def create_app(
     on_stopped: Callable[[bool], None] | None = None,
     access: AccessConfig | None = None,
     local_access_token: str | None = None,
+    tls: TlsContextHolder | None = None,
 ) -> FastAPIType:
     """Create the FastAPI app and wire runtime services into app state.
 
     ``access`` is the server's access configuration; without one the access
     mode follows the bind host (loopback: ``local``, otherwise ``lan``).
     ``local_access_token`` is this start's local access token, which the
-    access guard accepts only from direct loopback peers.
+    access guard accepts only from direct loopback peers. ``tls`` is the direct
+    TLS certificate the server's listener serves, which Portal listeners serve too.
 
     ``request_shutdown`` receives who asked for the shutdown (a
     ``STOP_INITIATORS`` value or ``unknown``). ``on_ready`` receives the
@@ -233,6 +241,15 @@ def create_app(
             app_runtime.storage.data_dir,
             on_change=lambda: publish_resource_changed(app.state, RESOURCE_KIND_DEVICES),
         )
+        portal_server = PortalServer(
+            registry=app_runtime.portals,
+            access=access_service,
+            file_delivery=file_delivery,
+            listen_host=resolved_server_bind["listen_host"],
+            own_port=resolved_server_bind["listen_port"],
+            tls=tls,
+        )
+        app_runtime.portals.attach(portal_server)
         _publish_secret_changes(app, app_runtime)
         oauth_redirects = getattr(app_runtime, "oauth_redirects", None)
         if oauth_redirects is not None:
@@ -294,6 +311,7 @@ def create_app(
                 _unregister_skill_change_bridge(app.state)
                 _unregister_model_catalog_change_bridge(app.state)
                 _unregister_terminal_change_bridge(app.state)
+                _unregister_portal_change_bridge(app.state)
                 _unregister_command_status_bridge(app.state)
                 _unregister_recall_index_status_bridge(app.state)
                 await _shutdown_log_viewer(app.state.log_viewer, server_logger)
@@ -302,6 +320,8 @@ def create_app(
                     server_logger,
                 )
                 await _shutdown_model_list_refreshes(app_runtime)
+                app_runtime.portals.detach()
+                await portal_server.aclose()
                 await access_service.close()
                 runtime_stopped_cleanly = await _shutdown_runtime(app_runtime)
             finally:
@@ -382,6 +402,7 @@ def create_app(
 
     register_upload_routes(app)
     register_speech_routes(app)
+    register_widget_routes(app)
 
     @app.get("/api/files/{token}")
     async def get_assistant_file(request: Request, token: str, download: bool = False) -> Response:

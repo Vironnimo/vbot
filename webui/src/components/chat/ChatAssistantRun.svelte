@@ -33,6 +33,8 @@
     runFooterDetails,
     runFooterNotice,
     runFooterParts,
+    showWidgetFromTool,
+    portalFromTool,
     speechArtifactFromTool,
     subAgentAgentId,
     subAgentDescription,
@@ -59,6 +61,9 @@
   import ChatTimelineEntry from './ChatTimelineEntry.svelte';
   import ChatCompactionSeparator from './ChatCompactionSeparator.svelte';
   import ChatSubAgentMessage from './ChatSubAgentMessage.svelte';
+  import ChatWidget from './ChatWidget.svelte';
+  import ChatWidgetState from './ChatWidgetState.svelte';
+  import ChatPortal from './ChatPortal.svelte';
   import MarkdownContent from './MarkdownContent.svelte';
   import { timelineViewState } from './timelineViewState.svelte.js';
 
@@ -682,6 +687,14 @@
               />
             {/if}
           {/if}
+          {@const shownWidget = showWidgetFromTool(child)}
+          {#if shownWidget}
+            <ChatWidget widget={shownWidget} />
+          {/if}
+          {@const shownPortal = portalFromTool(child)}
+          {#if shownPortal}
+            <ChatPortal portal={shownPortal} />
+          {/if}
         {/if}
       {:else if child.type === 'user_message'}
         <ChatTimelineEntry
@@ -727,6 +740,8 @@
           {onNavigateToSubAgent}
           {onSubAgentContextMenu}
         />
+      {:else if child.type === 'widget_state'}
+        <ChatWidgetState item={child} />
       {/if}
     {/snippet}
     {#each runDisplayGroups as group (group.id)}

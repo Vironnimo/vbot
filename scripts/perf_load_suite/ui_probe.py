@@ -1,4 +1,4 @@
-"""Launch and read the Playwright WebUI probe (``tests/e2e/perf/ui-probe.mjs``).
+"""Launch and read the Playwright WebUI probe (``ui-probe/ui-probe.mjs``).
 
 The probe measures the load phase (Long Tasks, frame gaps, RPC calls and the
 browser's own counters). With ``scroll_history`` it first measures a separate
@@ -20,11 +20,11 @@ from typing import Any, TextIO
 
 from core.utils.processes import subprocess_creation_flags
 from scripts.perf_load_suite.metrics import distribution
-from scripts.perf_load_suite.stack import PROJECT_ROOT, stop_process_tree
+from scripts.perf_load_suite.stack import stop_process_tree
 
-E2E_ROOT = PROJECT_ROOT / "tests" / "e2e"
-PROBE_SCRIPT = E2E_ROOT / "perf" / "ui-probe.mjs"
-PLAYWRIGHT_PACKAGE = E2E_ROOT / "node_modules" / "@playwright" / "test"
+PROBE_ROOT = Path(__file__).resolve().parent / "ui-probe"
+PROBE_SCRIPT = PROBE_ROOT / "ui-probe.mjs"
+PLAYWRIGHT_PACKAGE = PROBE_ROOT / "node_modules" / "@playwright" / "test"
 READY_TIMEOUT_SECONDS = 90.0
 RESULT_TIMEOUT_SECONDS = 60.0
 SELECT_TIMEOUT_SECONDS = 60.0
@@ -49,7 +49,7 @@ def ui_probe_unavailable_reason() -> str | None:
     if not PROBE_SCRIPT.is_file():
         return f"probe script missing: {PROBE_SCRIPT}"
     if not PLAYWRIGHT_PACKAGE.is_dir():
-        return f"Playwright is not installed; run npm ci in {E2E_ROOT}"
+        return f"Playwright is not installed; run npm ci in {PROBE_ROOT}"
     return None
 
 
@@ -247,7 +247,7 @@ class UiProbe:
         self._log_file = self._log_path.open("w", encoding="utf-8")
         self._process = subprocess.Popen(
             self._argv,
-            cwd=E2E_ROOT,
+            cwd=PROBE_ROOT,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=self._log_file,

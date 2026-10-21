@@ -28,6 +28,7 @@ FILE_SNIFF_BYTES = 65_536
 MAX_FILE_TOKEN_LENGTH = 16_384
 PREVIEW_URL_PREFIX = "/api/preview-assets/"
 EXTENSION_ASSET_URL_PREFIX = "/api/extension-assets/"
+WIDGET_URL_PREFIX = "/api/widgets/"
 EXTENSION_RUN_URL_PREFIX = "/api/extension-runs/"
 EXTENSION_RUN_CAPABILITY_SECONDS = 120
 _CAPABILITY_DOMAINS = {
@@ -35,7 +36,11 @@ _CAPABILITY_DOMAINS = {
     PREVIEW_URL_PREFIX: b"preview:",
     EXTENSION_ASSET_URL_PREFIX: b"extension-page:",
     EXTENSION_RUN_URL_PREFIX: b"extension-run:",
+    WIDGET_URL_PREFIX: b"widget:",
 }
+#: Portal capabilities are no URL of this server: the Portal's own listener checks them.
+_PORTAL_DOMAIN = b"portal:"
+_BARE_TOKEN_DOMAINS = (*_CAPABILITY_DOMAINS.values(), _PORTAL_DOMAIN)
 _CAPABILITY_URL = re.compile(
     "(" + "|".join(re.escape(prefix) for prefix in _CAPABILITY_DOMAINS) + ")"
     r"([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)"
@@ -158,7 +163,7 @@ class FileDelivery:
             return value
 
         def bind(token: str, domain: bytes | None = None) -> str:
-            domains = (domain,) if domain is not None else tuple(_CAPABILITY_DOMAINS.values())
+            domains = (domain,) if domain is not None else _BARE_TOKEN_DOMAINS
             if not any(self._valid_signature(token, candidate) for candidate in domains):
                 return token
             claims: JsonObject = {"capability": token, "actor": actor}
@@ -546,6 +551,64 @@ class FileDelivery:
             "Referrer-Policy": "no-referrer",
         }
 
+    def widget_url(self, widget_id: str) -> str:
+        """Return the capability URL of the Agent widget stored as payload *widget_id*."""
+        payload = _urlsafe_encode(widget_id.encode("utf-8"))
+        signature = _urlsafe_encode(
+            hmac.digest(self._secret, b"widget:" + payload.encode("ascii"), hashlib.sha256)
+        )
+        return f"{WIDGET_URL_PREFIX}{payload}.{signature}"
+
+    def widget_id(self, token: str) -> str | None:
+        """Return the payload id a widget capability names, or ``None`` when invalid."""
+        token = self._inner_token(token)
+        if not self._valid_signature(token, b"widget:"):
+            return None
+        try:
+            widget_id = _urlsafe_decode(token.split(".")[0]).decode("utf-8")
+        except UnicodeError, ValueError, TypeError:
+            return None
+        return widget_id or None
+
+    def portal_token(self, portal_id: str) -> str:
+        """Return the capability that opens Portal *portal_id*; bound per recipient like others."""
+        payload = _urlsafe_encode(portal_id.encode("utf-8"))
+        signature = _urlsafe_encode(
+            hmac.digest(self._secret, _PORTAL_DOMAIN + payload.encode("ascii"), hashlib.sha256)
+        )
+        return f"{payload}.{signature}"
+
+    def portal_claims(self, token: str) -> tuple[str, str | None] | None:
+        """Return the Portal id a capability opens and its bound actor, or ``None``.
+
+        The actor is ``None`` for an unbound capability, which only the Access
+        Modes without sign-in hand out.
+        """
+        envelope = self._access_envelope(token)
+        inner = envelope["capability"] if envelope is not None else token
+        if not self._valid_signature(inner, _PORTAL_DOMAIN):
+            return None
+        try:
+            portal_id = _urlsafe_decode(inner.split(".")[0]).decode("utf-8")
+        except UnicodeError, ValueError, TypeError:
+            return None
+        if not portal_id:
+            return None
+        return portal_id, envelope["actor"] if envelope is not None else None
+
+    @staticmethod
+    def widget_headers() -> dict[str, str]:
+        """Headers of a widget document: scripts run, but nothing reaches the server."""
+        policy = document_csp().replace(
+            "sandbox allow-scripts allow-downloads", "sandbox allow-scripts", 1
+        )
+        return {
+            "Content-Security-Policy": f"{policy}; frame-ancestors 'self'",
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer",
+        }
+
     def _preview_token(self, root: Path) -> str:
         # Domain-separated from single-file capabilities: neither token can be
         # replayed against the other's endpoint to widen its authority.
@@ -731,6 +794,17 @@ class FileDelivery:
                 *self._project_media_files(image_files, legacy_kind="image"),
                 *self._project_media_files(media_files),
             ]
+        widget = projected.pop("widget_reference", None)
+        if (
+            isinstance(widget, dict)
+            and isinstance(widget.get("id"), str)
+            and isinstance(widget.get("title"), str)
+        ):
+            projected["widget"] = {
+                "id": widget["id"],
+                "title": widget["title"],
+                "url": self.widget_url(widget["id"]),
+            }
         content = projected.get("content")
         references = projected.pop("output_files", None)
         if (

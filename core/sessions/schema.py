@@ -461,6 +461,19 @@ CREATE TABLE note_subagent_messages (
   PRIMARY KEY (entry_key, ordinal)
 ) STRICT, WITHOUT ROWID;
 
+-- The show_widget widget states a note delivers with the user's next message,
+-- in the order the user sent them. Chat History shows them as a row in place
+-- of the hidden note, whose text is what the Model reads. widget_id is the
+-- widget's Tool result payload id; state_json the object its frame reported.
+CREATE TABLE note_widget_states (
+  entry_key INTEGER NOT NULL REFERENCES entries (entry_key) ON DELETE CASCADE,
+  ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+  widget_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  state_json TEXT NOT NULL CHECK (json_valid(state_json) AND json_type(state_json) = 'object'),
+  PRIMARY KEY (entry_key, ordinal)
+) STRICT, WITHOUT ROWID;
+
 CREATE TABLE checkpoint_entries (
   entry_key INTEGER PRIMARY KEY REFERENCES entries (entry_key) ON DELETE CASCADE,
   policy TEXT NOT NULL,

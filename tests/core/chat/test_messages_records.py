@@ -25,6 +25,7 @@ from core.chat.messages import (
     ModelFallback,
     SubAgentMessage,
     ToolCallRejection,
+    WidgetState,
     error_kind_llm_visible,
 )
 from core.chat.output_files import AssistantFileReference
@@ -487,6 +488,21 @@ _DISPLAY = {"version": 1, "primary": [{"kind": "path", "value": "src/app.py"}], 
             },
         ),
         (
+            ChatMessage.note(
+                "Widget values for the Model",
+                widget_states=[WidgetState("res_a", "Spacing", {"line_height": 1.6, "on": True})],
+            ),
+            {
+                "widget_states": [
+                    {
+                        "widget_id": "res_a",
+                        "title": "Spacing",
+                        "state": {"line_height": 1.6, "on": True},
+                    }
+                ]
+            },
+        ),
+        (
             replace(
                 ChatMessage.note("Skill activated"),
                 skill_package=SkillPackageRef("agent", "debugging", "owner"),
@@ -505,6 +521,7 @@ _DISPLAY = {"version": 1, "primary": [{"kind": "path", "value": "src/app.py"}], 
         "model-fallback",
         "goal-event",
         "subagent-messages",
+        "widget-states",
         "skill-package",
     ],
 )
@@ -648,6 +665,15 @@ _CHECKPOINT = {
         ),
         (_payload("user", content="Hi", goal_event={"event": "set"}), "goal_event"),
         (_payload("note", content="", goal_event={"event": "turn", "turn": 0}), "turn"),
+        (
+            _payload(
+                "user",
+                content="Hi",
+                widget_states=[{"widget_id": "res_a", "title": "T", "state": {}}],
+            ),
+            "widget_states",
+        ),
+        (_payload("note", content="Values", widget_states=[]), "widget_states"),
     ],
     ids=[
         "unknown-role",
@@ -697,6 +723,8 @@ _CHECKPOINT = {
         "fallback-retry-not-a-timestamp",
         "goal-event-on-user",
         "goal-turn-not-positive",
+        "widget-states-on-user",
+        "widget-states-empty",
     ],
 )
 def test_invalid_persisted_payloads_are_rejected(data: dict[str, Any], match: str | None) -> None:

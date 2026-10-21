@@ -30,6 +30,7 @@ from server.rpc import (
     operations_methods,
     performance_methods,
     permission_methods,
+    portal_methods,
     project_methods,
     provider_usage_methods,
     recall_methods,
@@ -85,6 +86,7 @@ def build_method_handlers() -> dict[str, RpcMethodHandler]:
         client_methods,
         skill_methods,
         terminal_methods,
+        portal_methods,
         activity_methods,
         access_methods,
     ):

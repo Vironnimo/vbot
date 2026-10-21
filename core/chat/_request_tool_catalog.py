@@ -50,7 +50,7 @@ from core.utils.errors import VBotError
 if TYPE_CHECKING:
     from core.chat._run_state import ChatLoopDependencies, _RunExecutionContext
 
-from core.chat._request_epoch import _live_session_tool_grants
+from core.chat._request_epoch import _live_session_tool_grants, _withheld_session_tools
 
 
 class RequestToolCatalog:
@@ -87,6 +87,9 @@ class RequestToolCatalog:
                 capability,
                 subagent_session=context.subagent_session,
                 goal_session=context.goal_session,
+            ),
+            withheld_tools=_withheld_session_tools(
+                subagent_tool_withheld=context.subagent_tool_withheld
             ),
             input_modalities=target.input_modalities,
             wire_media_types=target.wire_media_types,
@@ -222,6 +225,7 @@ class RequestToolCatalog:
         agent: Any,
         *,
         session_tool_grants: Sequence[str],
+        withheld_tools: Collection[str] = (),
         input_modalities: frozenset[str],
         wire_media_types: frozenset[str],
         model_family: str,
@@ -234,12 +238,20 @@ class RequestToolCatalog:
         A route without On-demand Tools (*route_on_demand* false) lists every
         Tool, whatever the Agent's ``tool_loading`` says: its Model calls only
         listed Tools, and listing a loaded one would cost the prompt cache.
+        *withheld_tools* are not usable although the Agent's Tool policy allows
+        them: the Session has no use for them.
         """
         definitions = await self._dependencies.get_system_prompts().provider_tool_definitions_async(
             agent,
             session_tool_grants=session_tool_grants,
             ready_only=False,
         )
+        if withheld_tools:
+            definitions = [
+                definition
+                for definition in definitions
+                if definition.get("name") not in withheld_tools
+            ]
         ready, sources, announce_changes = await _CHAT_TRANSFORM_WORKERS.run(
             self._measure_tool_definitions, definitions
         )

@@ -115,6 +115,26 @@ export {
   isTerminalEvent,
 } from './chatTimelinePresentation/messages.js';
 export {
+  isShowWidgetTool,
+  showWidgetFromTool,
+  widgetStateEntries,
+  widgetStateJson,
+  widgetStatePreview,
+} from './chatTimelinePresentation/widgets.js';
+export {
+  PORTAL_STATUS_CLOSED,
+  PORTAL_STATUS_LOADING,
+  PORTAL_STATUS_RUNNING,
+  PORTAL_STATUS_UNKNOWN,
+  PORTAL_STATUS_WAITING,
+  isLoopbackHostname,
+  isPortalTool,
+  portalFromTool,
+  portalStatus,
+  portalUrl,
+  portalsReachable,
+} from './chatTimelinePresentation/portals.js';
+export {
   toolStatus,
   isToolPreparing,
   toolArguments,

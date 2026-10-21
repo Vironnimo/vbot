@@ -8,6 +8,10 @@ import {
   setPendingAttachments,
 } from '../../lib/composerMemory.js';
 import {
+  reportWidgetState,
+  resetWidgetStates,
+} from '../../lib/widgetStates.svelte.js';
+import {
   FLOATING_HOVER_CLOSE_DELAY_MS,
   HOVER_CARD_SHOW_DELAY_MS,
   TOOLTIP_SHOW_DELAY_MS,
@@ -16,6 +20,7 @@ import {
   buttonLabelled,
   composerInput,
   deferred,
+  flushSync,
   getDraft,
   getHistory,
   pressKey,
@@ -512,6 +517,52 @@ describe('ChatComposer', () => {
         ]);
       },
     );
+
+    it('offers changed widget states as chips and sends the ones not removed', async () => {
+      resetWidgetStates();
+      reportWidgetState('agent::one', 'w1', {
+        title: 'Typography',
+        state: { size: 1 },
+        initial: true,
+      });
+      reportWidgetState('agent::one', 'w1', { state: { size: 2 } });
+      reportWidgetState('agent::one', 'w2', {
+        title: 'Colors',
+        state: { hue: 'red' },
+      });
+      reportWidgetState('agent::two', 'w3', { state: { other: true } });
+      const onSendMessage = vi.fn().mockResolvedValue(true);
+      composer.mount({
+        draftKey: 'agent::one',
+        historyKey: 'agent',
+        onSendMessage,
+      });
+      const chips = () =>
+        Array.from(
+          document.body.querySelectorAll('.composer-widget-state'),
+          (chip) => chip.textContent.replace(/\s+/g, ' ').trim(),
+        );
+
+      expect(chips()).toEqual(['Typography size 2', 'Colors hue red']);
+      Array.from(document.body.querySelectorAll('button'))
+        .find(
+          (button) =>
+            button.getAttribute('aria-label') ===
+            t('chat.widgetState.removeNamed', { name: 'Colors' }),
+        )
+        .click();
+      flushSync();
+      expect(chips()).toEqual(['Typography size 2']);
+
+      typeInComposer('apply');
+      submitComposer();
+      await settle();
+
+      expect(onSendMessage).toHaveBeenCalledWith('apply', {
+        widgetStates: [{ widget_id: 'w1', state: { size: 2 } }],
+      });
+      resetWidgetStates();
+    });
 
     it('keeps the draft and attachments when send admission fails', async () => {
       const onSendMessage = vi.fn().mockResolvedValue(false);

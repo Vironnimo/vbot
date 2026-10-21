@@ -2,18 +2,23 @@
 
 from __future__ import annotations
 
+import bisect
 import re
 from collections.abc import Sequence
 from itertools import islice
 
 from . import _shell_hint_common as _common
 from ._shell_hint_code import (
+    _ARGUMENT_END,
     _COMMAND_WORD,
     _DOUBLE_QUOTES,
     _POWERSHELL_NOT_RECOGNIZED,
     _QUOTES,
+    _RUN_START,
     _SINGLE_QUOTES,
     _powershell_code,
+    _PowerShellCode,
+    _program_name,
     _program_strings,
 )
 from ._shell_hint_common import (
@@ -23,6 +28,7 @@ from ._shell_hint_common import (
     _DEV_NULL_MISSING,
     _DEV_NULL_RESOLVED,
     _ESCAPED_QUOTE_FIX,
+    _exit_codes,
     _Failure,
     _scan_window,
 )
@@ -295,8 +301,9 @@ def _hint_escaped_quote(
     string at the \\", and the rest of the code becomes more arguments, script
     blocks or commands of their own: a quoted title's ``(English)`` ran as a
     command, and the not-installed hint answered it; a SyntaxError and a
-    ScriptBlock error went unexplained when a later statement exited with 0; and
-    the rest of a Select-String -Pattern became an argument the cmdlet refused.
+    ScriptBlock error went unexplained when a later statement exited with 0;
+    the rest of a Select-String -Pattern became an argument the cmdlet refused;
+    and a program such as git failed on a piece of the split argument.
     Only an error the early end explains counts.
     """
     if not _common._POWERSHELL or '\\"' not in command:
@@ -364,7 +371,85 @@ def _hint_escaped_quote(
             return _ESCAPED_QUOTE_HINT
     if "SyntaxError" in window and (exit_code or failed_programs):
         return _ESCAPED_QUOTE_HINT
+    return _hint_split_argument(command, code, window, failed_programs)
+
+
+# A \" can split the argument of each double-quoted string; at most this many are
+# checked, and a piece longer than this is not looked for in the output.
+_SPLIT_STRINGS_CHECKED = 20
+_SPLIT_PIECE_CHARS = 1000
+
+
+def _hint_split_argument(
+    command: str, code: _PowerShellCode, window: str, failed_programs: Sequence[str]
+) -> str | None:
+    """Name a \\" that split a failed program's argument, as the program reported it.
+
+    ``git grep -n "name = \\"value\\"" -- src`` passes git ``name = \\`` and
+    ``value\\`` as separate arguments, and git failed with ``unable to resolve
+    revision: value\\``, which names no quote, so an Agent took git grep for
+    unreliable; rg reports the cut pattern ``name = \\`` instead. Both pieces
+    end in the backslash that was meant as an escape. The program the string
+    belongs to must be among the failed programs, and the output must name a
+    piece as written, so an echo of the string by a cmdlet, another program's
+    failure, or a failure that names no piece does not count.
+    """
+    if not failed_programs:
+        return None
+    starts = [0, *(match.end() for match in _RUN_START.finditer(code.flat))]
+    closings = dict(code.double_strings)
+    openings = {closing: opening for opening, closing in code.double_strings}
+    for closing in code.escaped_ends[:_SPLIT_STRINGS_CHECKED]:
+        opening = openings[closing]
+        start = starts[bisect.bisect_right(starts, opening) - 1]
+        program = _program_name(command, code.flat, start, opening)
+        if program is None or not _exit_codes(failed_programs, program):
+            continue
+        cut = command[opening + 1 : closing]
+        rest = _argument_at(command, closings, closing + 1)
+        if not (_names(window, cut) or _names(window, rest)):
+            continue
+        shown = re.sub(r"\s+", " ", cut)
+        if len(shown) > _STRING_SHOWN_CHARS:
+            shown = "..." + shown[3 - _STRING_SHOWN_CHARS :]
+        first = re.sub(r"\s+", " ", rest)
+        if len(first) > _STRING_SHOWN_CHARS:
+            first = first[: _STRING_SHOWN_CHARS - 3] + "..."
+        starting = f", starting with `{first}`" if first else ""
+        return (
+            f'In PowerShell, \\" does not escape a quote: it ended the string `"{shown}"`, so '
+            f"the rest reached {program} as separate arguments{starting}. {_ESCAPED_QUOTE_FIX}"
+        )
     return None
+
+
+def _argument_at(command: str, closings: dict[int, int], index: int) -> str:
+    """The argument PowerShell builds from the text at *index*, its strings as written.
+
+    A word goes on through the double-quoted strings written directly after it,
+    *closings* maps their openings to their closings: ``value\\""`` is
+    ``value\\``, and ``q\\"r s"`` is ``q\\r s``.
+    """
+    parts: list[str] = []
+    while index < len(command) and command[index] not in _ARGUMENT_END:
+        closing = closings.get(index)
+        if closing is not None:
+            parts.append(command[index + 1 : closing])
+            index = closing + 1
+            continue
+        word = _BARE_WORD.match(command, index)
+        if word is None:
+            break
+        parts.append(word[0])
+        index = word.end()
+    return "".join(parts)
+
+
+def _names(window: str, piece: str) -> bool:
+    """Whether *window* holds *piece* as written, not as part of a longer word."""
+    if len(piece) > _SPLIT_PIECE_CHARS or re.search(r"\w", piece) is None:
+        return False
+    return re.search(rf"(?<![\w\\]){re.escape(piece)}(?!\w)", window) is not None
 
 
 _PYTHON_SOURCE_FLAGS = re.compile(r"[ \t]+(?:(?:-[BEOIPqsuUv]+|-3(?:\.\d+)?)[ \t]+)*-c[ \t]+")

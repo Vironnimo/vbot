@@ -12,7 +12,7 @@ from core.storage.temp_files import (
     TemporaryFileManager,
     artifact_owner,
 )
-from core.tools._web_fetch_find import find_spans
+from core.tools._web_fetch_find import find_spans, looks_like_pattern
 from core.tools.tools import ToolContext, tool_failure, tool_success
 from core.utils.edit_distance import edit_distance
 from core.utils.tokens import estimate_tokens
@@ -358,20 +358,30 @@ def _find_text(
         )
     else:
         searched = f"after character {offset}" if offset else f"in {_VIEW_NAMES[scope]}"
+    # "a|b" not found as written was searched as alternatives; the result names them.
+    queries = found.alternatives or (find,)
+    searched_for = (
+        "any of " + ", ".join(map(_call, found.alternatives)) if found.alternatives else _call(find)
+    )
     if not spans:
         sections = (
             ", including navigation and footers"
             if scope == "page" and snapshot["page"] != snapshot["content"]
             else ""
         )
-        narrower = (
-            "To find differing wording, search for one distinctive word or number from it."
-            if len(find.split()) > 1
-            else "Try another word or spelling."
-        )
+        if looks_like_pattern(find):
+            narrower = (
+                "find takes literal text, not a regular expression; search for one word from it."
+            )
+        elif any(len(query.split()) > 1 for query in queries):
+            narrower = (
+                "To find differing wording, search for one distinctive word or number from it."
+            )
+        else:
+            narrower = "Try another word or spelling."
         return {
             "content": (
-                f"No word-for-word match for {_call(find)} {searched} ({len(text)} "
+                f"No word-for-word match for {searched_for} {searched} ({len(text)} "
                 f"characters{sections}); formatting is ignored. {narrower}"
             )
         }
@@ -380,7 +390,7 @@ def _find_text(
     # in "caused by" is not.
     words = ", ".join(_call(word) for word in found.inside_words)
     words = f", only inside longer words such as {words}" if words else ""
-    data: dict[str, Any] = {"shown": f"{count} matching {_call(find)} {searched}{words}"}
+    data: dict[str, Any] = {"shown": f"{count} matching {searched_for} {searched}{words}"}
     if next_offset is not None:
         data["more"] = (
             "More matches. Continue with "

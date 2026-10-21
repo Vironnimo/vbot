@@ -109,8 +109,11 @@ class DesktopTarget(Protocol):
         """Installed and running windowed applications; cached briefly."""
         ...
 
-    def open(self, app: AppInfo) -> None:
-        """Bring a window of *app* to the front, launching the app if needed."""
+    def open(self, app: AppInfo) -> bool:
+        """Bring a window of *app* to the front, launching the app if it has none.
+
+        ``True`` when the app was launched, ``False`` when an open window came to the front.
+        """
         ...
 
     def cursor(self) -> tuple[int, int]: ...

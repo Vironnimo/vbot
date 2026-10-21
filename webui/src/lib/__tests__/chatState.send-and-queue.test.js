@@ -8,6 +8,12 @@ import {
 import { ApiClientError } from '../api/transport.js';
 import { t } from '../i18n.js';
 import {
+  changedWidgetStates,
+  pendingWidgetStates,
+  reportWidgetState,
+  resetWidgetStates,
+} from '../widgetStates.svelte.js';
+import {
   assistantRun,
   toolItem,
 } from '../../components/__tests__/timelineItems.support.js';
@@ -60,6 +66,57 @@ describe('send and edit admission', () => {
     );
   });
 
+  it('sends changed widget states with a message and settles them only once it is accepted', async () => {
+    resetWidgetStates();
+    const startChatRun = vi
+      .fn()
+      .mockResolvedValueOnce({
+        command_handled: true,
+        output: 'transient',
+        reply: 'Status',
+        data: { command: 'status' },
+      })
+      .mockRejectedValueOnce(
+        new ApiClientError('invalid_request', 'Unknown widget'),
+      )
+      .mockResolvedValueOnce({ run_id: 'run-one', sse_url: '/events/run-one' });
+    const { chatState, controller } = setupController({
+      operationOverrides: { startChatRun },
+    });
+    chatState.availableSkills = [{ name: 'status', type: 'command' }];
+    const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
+    reportWidgetState(sessionState.key, 'w1', {
+      state: { size: 1 },
+      initial: true,
+    });
+    reportWidgetState(sessionState.key, 'w1', { state: { size: 2 } });
+    const widgetStates = pendingWidgetStates(sessionState.key);
+
+    // A command carries no widget states; the server would refuse them.
+    await controller.sendMessage(sessionState, '/status', { widgetStates });
+    expect(startChatRun).toHaveBeenLastCalledWith({
+      agent_id: 'alpha',
+      session_id: 'session-one',
+      content: '/status',
+    });
+    expect(changedWidgetStates(sessionState.key)).toHaveLength(1);
+
+    expect(
+      await controller.sendMessage(sessionState, 'Apply', { widgetStates }),
+    ).toEqual({ kind: 'failed' });
+    expect(changedWidgetStates(sessionState.key)).toHaveLength(1);
+
+    await controller.sendMessage(sessionState, 'Apply', { widgetStates });
+    expect(startChatRun).toHaveBeenLastCalledWith({
+      agent_id: 'alpha',
+      session_id: 'session-one',
+      content: 'Apply',
+      widget_states: [{ widget_id: 'w1', state: { size: 2 } }],
+    });
+    expect(changedWidgetStates(sessionState.key)).toEqual([]);
+    resetWidgetStates();
+  });
+
   it('creates the Session of a draft with its first send and announces it before the Run attaches', async () => {
     const startChatRun = vi
       .fn()
@@ -95,8 +152,11 @@ describe('send and edit admission', () => {
     });
     expect(onSessionCreated).not.toHaveBeenCalled();
 
+    // Widget states belong to an existing Session's widgets: a new one
+    // carries none.
     const outcome = await controller.sendToNewSession(draft, 'Hello', {
       fileMentions: ['notes.md'],
+      widgetStates: [{ widget_id: 'w1', state: { size: 2 } }],
     });
     expect(startChatRun).toHaveBeenLastCalledWith({
       agent_id: 'builder@vbot',

@@ -41,7 +41,8 @@ export const visibleRunChildren = (assistantRun) =>
       child.type === 'compaction_separator' ||
       child.type === 'history_gap' ||
       child.type === 'goal_event' ||
-      child.type === 'subagent_message'
+      child.type === 'subagent_message' ||
+      child.type === 'widget_state'
     ) {
       return true;
     }

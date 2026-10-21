@@ -396,7 +396,12 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   Y.` after the not-found sentence (`_file_changes._elsewhere`, at most 3 files
   named); the change is never applied there. Without candidates the text names
   the `read` call. A first difference for a one-line copy is shown at the closest
-  candidate's line; longer copies are aligned by the lines the file holds.
+  candidate's line, compared from where the copy's start (at least 12 of its
+  first characters) occurs once in that line (`_copy_start`), else from the
+  line's start; longer copies are aligned by the lines the file holds.
+  Evidence: a sentence copied from inside a 500-character paragraph line, with
+  one word changed, was reported as differing at character 1 (Session
+  2026-10-21).
   An `old_string` whose words are all at exactly one place of the file, with
   other whitespace between them (`rewrapped_place`), shows that place (at most 8
   lines) as its candidate, and its first difference starts there. When no
@@ -504,10 +509,19 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   indentation alone stands for the start of a line or a space or tab inside one
   (Swarm 2026-10-13: an indented copy of a passage in a one-line JSON file; a
   start after indentation counts once, from the line's start), at least one
-  break must fall elsewhere, and the old text needs 4 words. It never serves an
+  break must fall elsewhere, and the old text needs 4 words. A match that
+  crosses a line break and starts or ends inside a file line must take a word
+  (`\w`) from that line (`_takes_words_at_edges`, also for `rewrapped_place`):
+  a Markdown table row copied with an extra `| ` matched the previous row's
+  closing `|` with the break read as a space and was written joined to it
+  (Session 2026-10-21, twice in a row). It never serves an
   edit that changes only whitespace, since such an edit is about the breaks the
   old text misstates. It is ambiguous like the others; the replacement is
-  reindented from its first line only (`lines_correspond=False`).
+  reindented from its first line only (`lines_correspond=False`), or, when the
+  match starts inside a file line, from its second line, while its first line
+  continues that file line without indentation of its own (`starts_inside`;
+  Swarm run 2026-10-20: a copy from inside a list item's first line wrote its
+  continuation lines without the item's indentation).
   Ambiguity counts every occurrence, including overlapping ones (repeated
   closing-brace lines) and ones following a filtered partial occurrence, for
   hunks and `@@` anchors alike; `replace_all` still replaces leftmost

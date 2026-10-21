@@ -3,6 +3,9 @@
 ``WindowsInput`` implements the input half of ``DesktopTarget``. It remembers
 every key and button it holds down, checks the stop event between events, and
 releases everything it holds before an interruption or input failure surfaces.
+Typed text goes as the keys of the foreground window's keyboard layout, like a
+real keyboard, so apps that read raw keys receive it; characters the layout has
+no plain key for go as Unicode input.
 """
 
 from __future__ import annotations
@@ -13,6 +16,8 @@ import logging
 import math
 import threading
 import time
+from dataclasses import dataclass
+from typing import Protocol
 
 from . import _win32
 from .target import BUTTONS, InputInterrupted, TargetError
@@ -94,6 +99,10 @@ EXTENDED_KEYS = frozenset(
     | set(range(0xA6, 0xB8))
 )
 _SHIFT_STATE = ((1, "shift"), (2, "ctrl"), (4, "alt"))  # VkKeyScanExW shift-state bits
+_VK_CAPITAL = 0x14
+# Asks an input method window whether it composes typed keys (IMC_GETOPENSTATUS).
+_WM_IME_CONTROL, _IMC_GETOPENSTATUS = 0x283, 0x5
+_SMTO_ABORTIFHUNG, _IME_QUERY_MILLISECONDS = 0x2, 200
 _INPUT_MOUSE, _INPUT_KEYBOARD = 0, 1
 _KEYUP, _EXTENDED, _UNICODE = 0x2, 0x1, 0x4
 _MOVE, _ABSOLUTE_VIRTUAL, _WHEEL, _HWHEEL = 0x1, 0x8000 | 0x4000, 0x800, 0x1000
@@ -175,24 +184,76 @@ def mouse_event(flags: int, dx: int = 0, dy: int = 0, data: int = 0) -> Input:
     )
 
 
-def text_units(text: str) -> list[str | tuple[int, ...]]:
-    """Plan typed text: Enter or Tab key names, else each character's UTF-16 code units.
+class KeyboardLayout(Protocol):
+    """What the keys of a keyboard layout type; probing never changes its state."""
 
-    Windows line endings and lone carriage returns each press Enter once.
+    def scan(self, char: str) -> int:
+        """``VkKeyScanExW``: the virtual key and shift state that type *char*, or -1."""
+        ...
+
+    def output(self, vk: int, modifiers: tuple[str, ...]) -> str | None:
+        """What pressing *vk* with *modifiers* types now; ``None`` for a dead key."""
+        ...
+
+
+@dataclass(frozen=True)
+class Stroke:
+    """One key press that types a character, with the modifiers held for it."""
+
+    vk: int
+    modifiers: tuple[str, ...] = ()
+
+
+def layout_stroke(char: str, layout: KeyboardLayout) -> Stroke | None:
+    """The key press that types exactly *char* on *layout*; ``None`` when no plain one does.
+
+    Control characters never qualify: their keys are shortcuts (U+0003 is ctrl+c).
+    A dead key would only start an accent that changes the next character. The
+    press must type *char* itself; CapsLock inverts Shift for letters, so the other
+    Shift state is tried as well.
     """
-    plan: list[str | tuple[int, ...]] = []
+    if len(char) != 1 or char > "\uffff" or not char.isprintable():
+        return None
+    decoded = decode_key_scan(layout.scan(char))
+    if decoded is None:
+        return None
+    vk, modifiers = decoded
+    # The same modifiers with Shift toggled.
+    toggled = tuple(name for _, name in _SHIFT_STATE if (name in modifiers) != (name == "shift"))
+    for candidate in (modifiers, toggled):
+        typed = layout.output(vk, candidate)
+        if typed is None:
+            return None
+        if typed == char:
+            return Stroke(vk, candidate)
+    return None
+
+
+def text_units(
+    text: str, layout: KeyboardLayout | None = None
+) -> list[str | Stroke | tuple[int, ...]]:
+    """Plan typed text: Enter or Tab key names, a layout key press for each character
+    *layout* types with one, else the character's UTF-16 code units for Unicode input.
+
+    Windows line endings and lone carriage returns each press Enter once. Without a
+    layout every character goes as Unicode input.
+    """
+    plan: list[str | Stroke | tuple[int, ...]] = []
     for char in text.replace("\r\n", "\n").replace("\r", "\n"):
         if char == "\n":
             plan.append("enter")
-        elif char == "\t":
+            continue
+        if char == "\t":
             plan.append("tab")
-        else:
-            encoded = char.encode("utf-16-le")
-            plan.append(
-                tuple(
-                    int.from_bytes(encoded[i : i + 2], "little") for i in range(0, len(encoded), 2)
-                )
-            )
+            continue
+        stroke = layout_stroke(char, layout) if layout is not None else None
+        if stroke is not None:
+            plan.append(stroke)
+            continue
+        encoded = char.encode("utf-16-le")
+        plan.append(
+            tuple(int.from_bytes(encoded[i : i + 2], "little") for i in range(0, len(encoded), 2))
+        )
     return plan
 
 
@@ -316,12 +377,7 @@ class WindowsInput:
         for index in range(repeat):
             if index:
                 self._pause(0.03)
-            try:
-                self._press_keys(keys)
-                self._pause(_KEY_HOLD)
-            finally:
-                self._release_keys(keys)
-            self._pause(_KEY_GAP)
+            self._tap(keys)
 
     def hold(self, chord: list[str], seconds: float) -> None:
         _win32.enter_thread()
@@ -334,9 +390,18 @@ class WindowsInput:
 
     def type_text(self, text: str) -> None:
         _win32.enter_thread()
-        for unit in text_units(text):
+        window = int(_win32.api().user32.GetForegroundWindow() or 0)
+        layout = _foreground_layout(window)
+        # An open input method (Japanese, Chinese, ...) would compose layout keys into
+        # other characters; Unicode input passes it by.
+        probe = None if _input_method_open(window) else _LayoutProbe(layout, _caps_lock_on())
+        for unit in text_units(text, probe):
             if isinstance(unit, str):
                 self.keys([unit], 1)
+                continue
+            if isinstance(unit, Stroke):
+                ordered = [name for name in MODIFIER_KEYS if name in unit.modifiers]
+                self._tap([*(self._named(name, layout) for name in ordered), _key(unit.vk, layout)])
                 continue
             names = [f"text:{index}" for index in range(len(unit))]
             try:
@@ -403,6 +468,15 @@ class WindowsInput:
             if strict:
                 raise TargetError(_BLOCKED, "computer_use_unavailable")
 
+    def _tap(self, keys: list[_Key]) -> None:
+        """Press *keys* in order, hold them, release them in reverse order, then pause."""
+        try:
+            self._press_keys(keys)
+            self._pause(_KEY_HOLD)
+        finally:
+            self._release_keys(keys)
+        self._pause(_KEY_GAP)
+
     def _press_keys(self, keys: list[_Key]) -> None:
         for key in keys:
             self._press(f"key:{key.vk}", key.event(False), key.event(True))
@@ -444,21 +518,15 @@ class WindowsInput:
 
     @staticmethod
     def _character(char: str, layout: int) -> tuple[int, tuple[str, ...]]:
-        user32 = _win32.api().user32
-        decoded = decode_key_scan(int(user32.VkKeyScanExW(char, layout))) if char <= "￿" else None
+        probe = _LayoutProbe(layout)
+        decoded = decode_key_scan(probe.scan(char)) if char <= "\uffff" else None
         if decoded is None:
             raise TargetError(
                 f'The active keyboard layout has no key for "{char}". Use type to enter it.',
                 "invalid_arguments",
             )
         vk, modifiers = decoded
-        state = (ct.c_ubyte * 256)()
-        for modifier in modifiers:
-            state[NAMED_KEYS[modifier]] = 0x80
-        output = ct.create_unicode_buffer(8)
-        scan = user32.MapVirtualKeyExW(vk, 0, layout)
-        # Flag 4 probes without changing the layout's pending dead-key state.
-        if int(user32.ToUnicodeEx(vk, scan, state, output, len(output), 4, layout)) < 0:
+        if probe.output(vk, modifiers) is None:
             raise TargetError(
                 f'"{char}" is a dead key on the active keyboard layout, so pressing it would '
                 "only start an accent. Use type to enter it.",
@@ -501,10 +569,61 @@ def _key(vk: int, layout: int) -> _Key:
     return _Key(vk, code & 0xFF, code >> 8 == 0xE0 or vk in EXTENDED_KEYS)
 
 
-def _foreground_layout() -> int:
+class _LayoutProbe:
+    """A Windows keyboard layout as ``KeyboardLayout``, with the current CapsLock state."""
+
+    def __init__(self, layout: int, caps_lock: bool = False) -> None:
+        self._layout, self._caps_lock = layout, caps_lock
+
+    def scan(self, char: str) -> int:
+        return int(_win32.api().user32.VkKeyScanExW(char, self._layout))
+
+    def output(self, vk: int, modifiers: tuple[str, ...]) -> str | None:
+        user32 = _win32.api().user32
+        state = (ct.c_ubyte * 256)()
+        for modifier in modifiers:
+            state[NAMED_KEYS[modifier]] = 0x80
+        if self._caps_lock:
+            state[_VK_CAPITAL] = 0x01
+        output = ct.create_unicode_buffer(8)
+        scan = user32.MapVirtualKeyExW(vk, 0, self._layout)
+        # Flag 4 probes without changing the layout's pending dead-key state.
+        count = int(user32.ToUnicodeEx(vk, scan, state, output, len(output), 4, self._layout))
+        return None if count < 0 else output.value[:count]
+
+
+def _foreground_layout(window: int | None = None) -> int:
+    """The keyboard layout of *window*'s thread, by default the foreground window's."""
     user32 = _win32.api().user32
-    thread = int(user32.GetWindowThreadProcessId(user32.GetForegroundWindow(), None))
+    if window is None:
+        window = user32.GetForegroundWindow()
+    thread = int(user32.GetWindowThreadProcessId(window, None))
     return int(user32.GetKeyboardLayout(thread) or 0)
+
+
+def _caps_lock_on() -> bool:
+    return bool(_win32.api().user32.GetKeyState(_VK_CAPITAL) & 1)
+
+
+def _input_method_open(window: int) -> bool:
+    """Whether an input method composes the keys typed into *window*.
+
+    ``False`` when the window has no input method window or does not answer quickly.
+    """
+    bound = _win32.api()
+    ime = bound.imm32.ImmGetDefaultIMEWnd(window) if window else None
+    status = ct.c_size_t()
+    if not ime or not bound.user32.SendMessageTimeoutW(
+        ime,
+        _WM_IME_CONTROL,
+        _IMC_GETOPENSTATUS,
+        0,
+        _SMTO_ABORTIFHUNG,
+        _IME_QUERY_MILLISECONDS,
+        ct.byref(status),
+    ):
+        return False
+    return bool(status.value)
 
 
 def _double_click_seconds() -> float:

@@ -411,6 +411,23 @@ def test_goal_rows_stay_in_order_without_splitting_a_run() -> None:
     }
 
 
+def test_widget_values_show_in_the_run_they_were_sent_with() -> None:
+    # The note is stored before the user's message, which stays the Run's input.
+    widgets = [{"widget_id": "res_a", "title": "Spacing", "state": {"line_height": 1.6}}]
+    messages = [
+        message("values", "widget_state", widgets=widgets),
+        message("ask", "user", content="Take it like this"),
+        message("reply", "assistant", content="Done"),
+        message("summary", "run_summary", status="completed"),
+    ]
+    items = history_timeline(messages)
+    assert [item["type"] for item in items] == ["message", "assistant_run"]
+    assert items[0]["message"]["content"] == "Take it like this"
+    children = run_block(items)["items"]
+    assert [child["type"] for child in children] == ["widget_state", "assistant_output"]
+    assert children[0]["widgets"] == widgets
+
+
 @pytest.mark.parametrize("abandoned", ["tool", "compaction"])
 def test_abandoned_provisional_rows_do_not_change_successor_identity_after_reload(
     abandoned: str,

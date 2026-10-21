@@ -26,6 +26,7 @@ from server.events import (
     RESOURCE_KIND_CRON,
     RESOURCE_KIND_EXTENSIONS,
     RESOURCE_KIND_MODELS,
+    RESOURCE_KIND_PORTALS,
     RESOURCE_KIND_SKILLS,
     RESOURCE_KIND_TERMINALS,
     ServerEventBus,
@@ -41,6 +42,7 @@ from server.rpc.event_bridge import (
     publish_session_activity_changed,
     publish_session_changed,
     session_activity_service,
+    session_resource_scope,
 )
 from server.rpc.methods import METHODS
 from server.rpc.statistics_methods import statistics_service
@@ -99,6 +101,7 @@ def _initialize_app_state(
         app.state
     )
     app.state.terminal_change_bridge_unsubscribe = _register_terminal_change_bridge(app.state)
+    app.state.portal_change_bridge_unsubscribe = _register_portal_change_bridge(app.state)
     app.state.command_status_bridge_unsubscribe = _register_command_status_bridge(app.state)
     app.state.activity = ActivityMonitor(
         runtime,
@@ -355,6 +358,21 @@ def _unregister_terminal_change_bridge(state: Any) -> None:
     if unsubscribe is not None:
         unsubscribe()
     state.terminal_change_bridge_unsubscribe = None
+
+
+def _register_portal_change_bridge(state: Any) -> Any:
+    return state.runtime.portals.subscribe(
+        lambda address: publish_resource_changed(
+            state, RESOURCE_KIND_PORTALS, scope=session_resource_scope(address)
+        )
+    )
+
+
+def _unregister_portal_change_bridge(state: Any) -> None:
+    unsubscribe = state.portal_change_bridge_unsubscribe
+    if unsubscribe is not None:
+        unsubscribe()
+    state.portal_change_bridge_unsubscribe = None
 
 
 def _register_command_status_bridge(state: Any) -> Any:

@@ -248,6 +248,48 @@ async def test_find_names_the_longer_words_that_hold_every_match(
         assert data["shown"].count('"') == 2  # only the search text itself is quoted
 
 
+_RULES_PAGE = _FILLER.join(
+    [
+        "<main><p>Every request needs approval first.</p>",
+        "<p>Use mode=read|write for files.</p>",
+        "<p>Rules deny network access.</p></main>",
+    ]
+)
+
+
+@pytest.mark.parametrize(
+    ("find", "places", "alternatives"),
+    [
+        # "|" between words separates alternatives, as in the regular expressions
+        # of search Tools; an Agent sent 7 such finds that all missed (2026-10-21).
+        ("approval|deny", ["needs approval", "deny network"], ["approval", "deny"]),
+        ("absent|missing", [], ["absent", "missing"]),
+        # Text the page holds with its "|" is found as written.
+        ("read|write", ["mode=read|write"], []),
+        # Between spaces, "|" separates table cells.
+        ("approval | deny", [], []),
+    ],
+)
+@pytest.mark.asyncio
+async def test_find_reads_a_pipe_between_words_as_alternatives(
+    tmp_path, monkeypatch, find, places, alternatives
+):
+    install_http_get(monkeypatch, lambda url: make_result(text=_RULES_PAGE, url=url))
+
+    found = await fetch(tmp_path, {"url": "https://example.com/rules", "find": find})
+
+    data = found["data"]
+    if places:
+        assert data["shown"].startswith(f"{len(places)} passage")
+        assert all(place in data["content"] for place in places)
+    else:
+        assert "shown" not in data
+    # The result names each alternative it searched for.
+    named = data.get("shown", data["content"])
+    assert all(f'"{alternative}"' in named for alternative in alternatives)
+    assert (f'"{find}"' in named) == (not alternatives)
+
+
 @pytest.mark.asyncio
 async def test_find_in_plain_text_keeps_its_asterisks_and_pipes(tmp_path, monkeypatch):
     code = "def call(x, **kwargs):\n    return x | kwargs\n"
@@ -353,42 +395,70 @@ def mistyped(ref):
     return "tmp_" + ("b" if ref[4] == "a" else "a") + ref[5:]
 
 
-@pytest.mark.parametrize(
-    ("requested", "final", "redirect"),
-    [
-        ("https://www.example.org/table/element/26/iron", "https://table.example.org/", "other"),
-        ("https://example.com/docs/page?id=26", "https://example.com/docs/page", "other"),
-        ("https://example.com/manual/chapter-3", "https://example.com/tools/overview", "other"),
-        ("https://example.com/docs/guide/install", "https://example.com/docs/guide", "other"),
+# Redirects by what the final page is: another page than the requested one, the
+# requested page at a new address or perhaps another (named only), or the same page.
+_REDIRECTS = {
+    "other": [
+        # The site root, a parent path, a requested parameter dropped.
+        ("https://www.example.org/table/element/26/iron", "https://table.example.org/"),
+        ("https://example.com/docs/guide/install", "https://example.com/docs/guide"),
+        ("https://example.com/docs/page?id=26", "https://example.com/docs/page"),
+        # A shallower page of another name: a section's or site's index.
+        (
+            "https://example.org/history/journal/m11/01launch.html",
+            "https://example.org/history/journals/",
+        ),
+        # A not-found or login page.
+        ("https://example.com/docs/setup", "https://example.com/errors/page-not-found"),
+        ("https://example.com/account/orders", "https://example.com/users/sign_in"),
+    ],
+    "named": [
+        # Moved to another section, renamed around its id, or under another name at
+        # the same or a deeper level, as documentation sites move pages (2026-10-21).
         (
             "https://example.eu/en/getting-started/api-service_en",
             "https://example.eu/en/using-the-tool/api-service_en",
-            "moved",
         ),
-        ("https://shop.example/p/old-name/1283/", "https://shop.example/p/new-name/1283/", "moved"),
-        ("http://example.com/Docs/A%20B/", "https://www.example.com/docs/a b", None),
-        ("https://example.com/docs/", "https://example.com/docs/index.html", None),
-        ("https://example.com/r/x/", "https://example.com/r/x/?rdt=5&utm_source=feed", None),
+        ("https://shop.example/p/old-name/1283/", "https://shop.example/p/new-name/1283/"),
+        (
+            "https://docs.example.com/api/rest/add-order",
+            "https://example.com/reference/add-order.md",
+        ),
+        ("https://docs.example.com/tool/windows", "https://learn.example.com/docs/windows/sandbox"),
+        ("https://example.com/manual/chapter-3", "https://example.com/tools/overview"),
+        ("https://example.com/view.php?id=26", "https://example.com/articles/26-iron"),
     ],
-)
+    "same": [
+        ("http://example.com/Docs/A%20B/", "https://www.example.com/docs/a b"),
+        ("https://example.com/docs/", "https://example.com/docs/index.html"),
+        ("https://example.com/r/x/", "https://example.com/r/x/?rdt=5&utm_source=feed"),
+    ],
+}
+
+
 @pytest.mark.asyncio
-async def test_a_redirect_to_another_page_is_named_with_the_requested_url(
-    tmp_path, monkeypatch, requested, final, redirect
+async def test_a_redirect_names_the_requested_url_and_says_when_it_is_another_page(
+    tmp_path, monkeypatch
 ):
-    install_http_get(monkeypatch, lambda url: make_result(text="Landing page", url=final))
+    finals = {requested: final for cases in _REDIRECTS.values() for requested, final in cases}
+    install_http_get(monkeypatch, lambda url: make_result(text="Landing page", url=finals[url]))
     tool, context = web_fetch_registry(), make_context(tmp_path)
 
-    fetched = await tool.dispatch(context, {"url": requested})
-    saved = await tool.dispatch(context, {"url": requested, "ref": fetched["data"]["ref"]})
+    # One note per kind, naming the requested url; the same page gets none.
+    notes: dict[str, set[str]] = {kind: set() for kind in _REDIRECTS}
+    for kind, cases in _REDIRECTS.items():
+        for requested, final in cases:
+            fetched = await tool.dispatch(context, {"url": requested})
+            saved = await tool.dispatch(context, {"url": requested, "ref": fetched["data"]["ref"]})
+            for data in (fetched["data"], saved["data"]):
+                assert data["url"] == final
+                note = data.get("note", "")
+                assert (requested in note) is (kind != "same"), (requested, note)
+                notes[kind].add(note.replace(requested, "<url>"))
 
-    note = {
-        "other": f"This is not the requested page: {requested} redirected here.",
-        "moved": f"The page moved here from {requested}.",
-        None: None,
-    }[redirect]
-    for data in (fetched["data"], saved["data"]):
-        assert data["url"] == final
-        assert data.get("note") == note
+    assert notes["same"] == {""}
+    assert len(notes["other"]) == len(notes["named"]) == 1
+    assert notes["other"] != notes["named"]
 
 
 @pytest.mark.asyncio

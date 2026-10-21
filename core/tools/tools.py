@@ -44,6 +44,7 @@ from core.tools._tool_context import (
     ToolResultPersistedHook,
     ToolSkillActivationHook,
     ToolTurnEndHook,
+    builtin_payload_owner,
 )
 from core.tools._tool_definitions import (
     DuplicateToolError,
@@ -482,6 +483,10 @@ class ToolRegistry:
             payload["media_files"] = [dict(item) for item in context.presentation_media]
         if context is not None and context.presentation_secret_uses:
             payload["secrets_used"] = list(context.presentation_secret_uses)
+        if context is not None and context.presentation_widget:
+            payload["widget_reference"] = dict(context.presentation_widget)
+        if context is not None and context.presentation_portal:
+            payload["portal"] = dict(context.presentation_portal)
         if "details" in payload:
             payload["details"].extend(_detail_blocks(context, result, payload["details"]))
         return payload
@@ -1037,6 +1042,7 @@ __all__ = [
     "ToolResultPersistedHook",
     "ToolSkillActivationHook",
     "ToolTurnEndHook",
+    "builtin_payload_owner",
     "InvalidToolResultError",
     "ToolDefinitionProfile",
     "ToolDefinitionProfileContext",

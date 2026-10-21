@@ -175,10 +175,28 @@ def subagent_messages(item: JsonObject) -> list[JsonObject]:
     return [entry for entry in entries if isinstance(entry, dict)]
 
 
+def widget_states(item: JsonObject) -> list[JsonObject]:
+    """The widget states of a Run child or a History row the user sent."""
+    message = item.get("message")
+    source: JsonObject = message if isinstance(message, dict) else item
+    entries = source.get("widgets")
+    if not isinstance(entries, list):
+        return []
+    return [entry for entry in entries if isinstance(entry, dict)]
+
+
 def item_text(item: JsonObject) -> str:
     kind = item.get("type")
     if kind == "goal_event":
         return goal_text(item)
+    if kind == "widget_state":
+        return "\n".join(
+            terminal_text(
+                f"{entry.get('title') or 'Widget'}: "
+                + json.dumps(entry.get("state") or {}, ensure_ascii=False)
+            )
+            for entry in widget_states(item)
+        )
     if kind == "subagent_message":
         entries = subagent_messages(item)
         if len(entries) == 1:
@@ -240,6 +258,8 @@ def item_heading(item: JsonObject) -> str | None:
         return None if role in {"user", "assistant"} else role.capitalize()
     if kind == "user_message":
         return "User Steer · delivered"
+    if kind == "widget_state":
+        return "Widget values sent"
     if kind == "subagent_message":
         entries = subagent_messages(item)
         if len(entries) == 1:

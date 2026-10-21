@@ -6,7 +6,9 @@ many different apps) and ``pkg:<package family>`` for packaged apps. A window
 belongs to the app of its process; ApplicationFrameHost windows belong to the
 UWP app they host, WebView2 popups to their owner window's app, the taskbar,
 desktop and Start surfaces to File Explorer, and vBot's own processes to the
-single key ``vbot:self``. Start-menu apps come from the shell's Apps folder.
+single key ``vbot:self``. Start-menu apps come from the shell's Apps folder; a
+process also belongs to the Start app whose shortcut starts a launcher in the
+process's folder when both executables name the same product.
 """
 
 from __future__ import annotations
@@ -136,6 +138,7 @@ class StartApp:
     keys: frozenset[str]
     identity: str  # entries with one identity are one app; the best-ranked name wins
     rank: tuple[int, int, str]
+    target: str = ""  # the executable a shortcut starts, as the shell lists it
 
 
 def start_app(row: StartRow, windows_dir: str) -> StartApp | None:
@@ -156,15 +159,18 @@ def start_app(row: StartRow, windows_dir: str) -> StartApp | None:
     if is_vbot_executable(executable):
         return StartApp(OWN_APP.name, app_id, OWN_APP.keys, OWN_KEY, rank)
     if row.family:
-        keys, identity = identity_keys(None, row.family), app_id.lower()
-    elif executable.endswith(".msc"):  # consoles run in the Management Console
+        return StartApp(name, app_id, identity_keys(None, row.family), app_id.lower(), rank)
+    if executable.endswith(".msc"):  # consoles run in the Management Console
         keys = identity_keys(f"{windows_dir}\\System32\\mmc.exe", None)
-        identity = lowered
-    elif executable.endswith(".exe"):
-        keys, identity = identity_keys(target, None), lowered
-    else:
-        return None
-    return StartApp(name, app_id, keys, identity, rank)
+        return StartApp(name, app_id, keys, lowered, rank)
+    if executable.endswith(".exe"):
+        return StartApp(name, app_id, identity_keys(target, None), lowered, rank, target)
+    return None
+
+
+def _folder(path: str) -> str:
+    """The lowercased folder of an executable path."""
+    return path.replace("/", "\\").lower().rsplit("\\", 1)[0]
 
 
 class StartIndex:
@@ -187,21 +193,50 @@ class StartIndex:
         for app in self.apps:
             for key in app.keys:
                 self._by_key.setdefault(key, []).append(app)
+        # Folders holding the executable of exactly one Start app. The Windows folders
+        # hold many system tools, each identified by its own executable.
+        system = windows_dir.replace("/", "\\").rstrip("\\").lower()
+        folders: dict[str, list[StartApp]] = {}
+        for app in self.apps:
+            folder = _folder(app.target) if app.target else ""
+            if folder and folder != system and not folder.startswith(f"{system}\\"):
+                folders.setdefault(folder, []).append(app)
+        self._by_folder = {folder: found[0] for folder, found in folders.items() if len(found) == 1}
 
-    def lookup(self, keys: frozenset[str]) -> StartApp | None:
-        """The one Start app these keys identify: by path or package, else by unique exe."""
-        for exact in (False, True):
-            found = {
-                app.identity: app
-                for key in keys
-                if key.startswith("exe:") == exact
-                for app in self._by_key.get(key, ())
-            }
-            if len(found) == 1:
-                return next(iter(found.values()))
-            if found:
-                return None
-        return None
+    def lookup(
+        self,
+        keys: frozenset[str],
+        path: str | None = None,
+        product: Callable[[str], str | None] | None = None,
+    ) -> StartApp | None:
+        """The one Start app the keys of a process at *path* identify.
+
+        By executable path or package first, then by the folder of a shortcut's
+        executable, then by a unique executable name. The folder decides when it
+        holds the executable of exactly one Start app and both executables name the
+        same *product* (their version resource's ProductName): a shortcut can start a
+        launcher that runs the app's own executable beside it.
+        """
+        found = self._by_identity(keys, exe=False)
+        if found:
+            return found[0] if len(found) == 1 else None
+        beside = self._by_folder.get(_folder(path)) if path else None
+        if beside is not None and product is not None:
+            name = (product(beside.target) or "").strip().casefold()
+            if name and name == (product(path or "") or "").strip().casefold():
+                return beside
+        found = self._by_identity(keys, exe=True)
+        return found[0] if len(found) == 1 else None
+
+    def _by_identity(self, keys: frozenset[str], *, exe: bool) -> list[StartApp]:
+        """The distinct Start apps of the ``exe:`` keys, or of the other keys."""
+        found = {
+            app.identity: app
+            for key in keys
+            if key.startswith("exe:") == exe
+            for app in self._by_key.get(key, ())
+        }
+        return list(found.values())
 
 
 def merge_apps(start: Sequence[StartApp], running: Sequence[AppInfo]) -> list[AppInfo]:
@@ -391,13 +426,21 @@ def token_integrity(process: int) -> int:
         kernel32.CloseHandle(token)
 
 
-def file_description(path: str) -> str | None:
-    """The FileDescription of an executable's version resource, if it has one."""
+@dataclass(frozen=True)
+class FileVersion:
+    """Names from an executable's version resource; empty where it has none."""
+
+    description: str = ""
+    product: str = ""
+
+
+def file_version(path: str) -> FileVersion:
+    """The FileDescription and ProductName of an executable's version resource."""
     version = _win32.api().version
     size = int(version.GetFileVersionInfoSizeW(path, None))
     data = ct.create_string_buffer(size)
     if not size or not version.GetFileVersionInfoW(path, 0, size, data):
-        return None
+        return FileVersion()
     pointer, length = ct.c_void_p(), ct.c_uint()
     languages = ["040904b0", "040904e4", "000004b0"]
     if (
@@ -408,13 +451,20 @@ def file_description(path: str) -> str | None:
     ):
         words = ct.cast(pointer, ct.POINTER(ct.c_uint16))
         languages.insert(0, f"{words[0]:04x}{words[1]:04x}")
-    for language in languages:
-        key = f"\\StringFileInfo\\{language}\\FileDescription"
-        if version.VerQueryValueW(data, key, ct.byref(pointer), ct.byref(length)) and length.value:
-            text = ct.wstring_at(pointer.value or 0, length.value).rstrip("\0").strip()
-            if text:
-                return text
-    return None
+
+    def text(name: str) -> str:
+        for language in languages:
+            key = f"\\StringFileInfo\\{language}\\{name}"
+            if (
+                version.VerQueryValueW(data, key, ct.byref(pointer), ct.byref(length))
+                and length.value
+            ):
+                found = ct.wstring_at(pointer.value or 0, length.value).rstrip("\0").strip()
+                if found:
+                    return found
+        return ""
+
+    return FileVersion(text("FileDescription"), text("ProductName"))
 
 
 def package_executable(family: str, application: str) -> str | None:
@@ -453,9 +503,9 @@ class AppResolver:
     """Resolves windows to their apps for one enumeration, once per process."""
 
     def __init__(
-        self, index: StartIndex, descriptions: dict[str, str | None], own_integrity: int
+        self, index: StartIndex, versions: dict[str, FileVersion], own_integrity: int
     ) -> None:
-        self._index, self._descriptions = index, descriptions
+        self._index, self._versions = index, versions  # versions: a cache kept by the caller
         self._own_integrity = own_integrity
         self._windows_dir = _win32.windows_directory()
         self._facts: dict[int, ProcessFacts] = {}
@@ -464,6 +514,11 @@ class AppResolver:
         if pid not in self._facts:
             self._facts[pid] = process_facts(pid)
         return self._facts[pid]
+
+    def version(self, path: str) -> FileVersion:
+        if path not in self._versions:
+            self._versions[path] = file_version(path)
+        return self._versions[path]
 
     def elevated(self, facts: ProcessFacts) -> bool:
         """Whether UIPI blocks input to the process (a higher integrity level than vBot)."""
@@ -493,12 +548,14 @@ class AppResolver:
 
     def app(self, facts: ProcessFacts) -> AppInfo:
         keys = identity_keys(facts.path, facts.family)
-        start = self._index.lookup(keys) if keys else None
+        start = (
+            self._index.lookup(keys, facts.path, lambda path: self.version(path).product)
+            if keys
+            else None
+        )
         if start is not None:
             return AppInfo(start.name, keys | start.keys, running=True, launchable=True)
         if not facts.path:
             return AppInfo("Unknown app", keys, running=True, launchable=False)
-        if facts.path not in self._descriptions:
-            self._descriptions[facts.path] = file_description(facts.path)
-        name = self._descriptions[facts.path] or Path(facts.path).stem
+        name = self.version(facts.path).description or Path(facts.path).stem
         return AppInfo(name, keys, running=True, launchable=facts.family is None)

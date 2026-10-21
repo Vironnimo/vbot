@@ -27,6 +27,7 @@ from core.tools import (
     SUBAGENT_SESSION_TOOL_NAMES,
     UPDATE_GOAL_TOOL_NAME,
 )
+from core.tools.model_names import SUBAGENT_TOOL_NAME
 
 
 def _finalize_compaction_checkpoint(
@@ -59,6 +60,15 @@ def _live_session_tool_grants(
     if goal_session:
         grants = (*grants, UPDATE_GOAL_TOOL_NAME)
     return grants
+
+
+def _withheld_session_tools(*, subagent_tool_withheld: bool) -> tuple[str, ...]:
+    """Return the Tools the Session leaves out of its Agent's Tool list now.
+
+    A Sub-Agent Session at the nesting limit has no use for ``subagent``: there
+    it could only start a Sub-Agent, which is refused.
+    """
+    return (SUBAGENT_TOOL_NAME,) if subagent_tool_withheld else ()
 
 
 def _fold_prompt_epoch(
