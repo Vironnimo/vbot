@@ -117,6 +117,15 @@ class HostShellMissingError(Exception):
     """This host has no shell to run commands in; the message names it, without a final period."""
 
 
+def powershell_executable(search_path: str | None) -> Path | None:
+    """The PowerShell 7 (``pwsh``) on *search_path* the Shell Tool runs on Windows; None if none.
+
+    Command analysis for Permission Rules parses with the same executable.
+    """
+    found = shutil.which("pwsh", path=search_path)
+    return None if found is None else Path(found)
+
+
 def host_shell_start(
     command: str, workdir: Path, environment: CommandEnvironment
 ) -> HostShellStart:
@@ -133,10 +142,10 @@ def host_shell_start(
     complete = environment.complete()
     search_path = next((value for name, value in complete.items() if name.upper() == "PATH"), None)
     if sys.platform == "win32":
-        pwsh = shutil.which("pwsh", path=search_path)
+        pwsh = powershell_executable(search_path)
         if pwsh is None:
             raise HostShellMissingError("PowerShell 7 (pwsh) is not installed on this host")
-        argv = [pwsh, "-NoProfile", "-NonInteractive", "-Command", powershell_bootstrap()]
+        argv = [str(pwsh), "-NoProfile", "-NonInteractive", "-Command", powershell_bootstrap()]
         if "" in environment.changes.values():
             request = powershell_request(command, str(workdir), {})
             return HostShellStart(argv, complete, request, warm=False)
