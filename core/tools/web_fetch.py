@@ -414,10 +414,18 @@ async def _direct_fetch(
     )
 
 
-def _refused(refusal: PermissionRefusal) -> JsonObject:
+_PAGE_NOT_FETCHED = "The page was not fetched"
+
+
+def _refused(refusal: PermissionRefusal, outcome: str = _PAGE_NOT_FETCHED) -> JsonObject:
     """The failure of a page the permission rules refuse; a fetch of several
-    pages keeps the others."""
-    return tool_failure("permission_denied", refusal.message(), retryable=False)
+    pages keeps the others.
+
+    ``outcome`` leads the refusal like every Tool's (``web_fetch was not run``)
+    where that is true: an address refused before any request of a one-page
+    call. After a redirect, or beside other pages, only the page was not fetched.
+    """
+    return tool_failure("permission_denied", refusal.message(outcome=outcome), retryable=False)
 
 
 def _shape_success_for_mode(
@@ -739,11 +747,16 @@ def make_web_fetch_handler(
         url: str,
         output: WebFetchOutput,
         view: dict[str, Any],
+        *,
+        only: bool = True,
     ) -> JsonObject:
+        """Fetch one page; ``only`` is false when the call fetches other pages too."""
         permissions = context.permissions
         # Before any request: neither a DNS lookup nor a provider sees a refused address.
         if (refused := permissions.check_url(url)) is not None:
-            return _refused(refused)
+            return _refused(
+                refused, f"{WEB_FETCH_TOOL_NAME} was not run" if only else _PAGE_NOT_FETCHED
+            )
         try:
             # Preflight also protects prefer-service mode; providers never receive
             # a target rejected by the public-URL policy.
@@ -880,7 +893,10 @@ def make_web_fetch_handler(
             )
             view = {**request.view, "max_chars": per_page}
             results = await asyncio.gather(
-                *(fetch_one(context, manager, url, request.output, view) for url in request.urls)
+                *(
+                    fetch_one(context, manager, url, request.output, view, only=False)
+                    for url in request.urls
+                )
             )
             remember(context, list(results))
             return _with_notes(_multi_page_result(request.urls, list(results)), notes)

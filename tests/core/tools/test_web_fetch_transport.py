@@ -676,19 +676,26 @@ async def test_responses_over_the_download_limit_are_refused(
 @pytest.mark.parametrize(
     ("url", "requested", "refused"),
     [
-        ("https://denied.example/page", [], "denied.example,"),
+        ("https://denied.example/page", [], "web_fetch was not run: ... denied.example,"),
         (
             "https://public.example/start",
             ["https://public.example/start"],
-            "https://public.example/start, which leads to denied.example,",
+            "The page was not fetched: ... https://public.example/start, which leads to "
+            "denied.example,",
+        ),
+        # Beside other pages only this page was not fetched.
+        (
+            ["https://denied.example/page", "https://denied.example/other"],
+            [],
+            "The page was not fetched: ... denied.example,",
         ),
     ],
-    ids=["address", "redirect-hop"],
+    ids=["address", "redirect-hop", "several-pages"],
 )
 async def test_the_permission_rules_refuse_an_address_or_redirect_hop_before_it_is_requested(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    url: str,
+    url: str | list[str],
     requested: list[str],
     refused: str,
 ) -> None:
@@ -706,10 +713,11 @@ async def test_the_permission_rules_refuse_an_address_or_redirect_hop_before_it_
     result = await fetch(tmp_path, {"url": url}, permissions=boundary)
 
     error = assert_failure_envelope(result, "permission_denied")
-    assert error["message"].startswith(
-        f"The permission rules refuse fetching {refused} because the rule "
+    outcome, _, target = refused.partition(": ... ")
+    assert (
+        f"{outcome}: the permission rules refuse fetching {target} because the rule "
         "Web(denied.example) denies it."
-    )
+    ) in error["message"]
     assert error["retryable"] is False
     assert fetched == requested
 

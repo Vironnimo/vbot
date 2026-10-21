@@ -136,12 +136,18 @@ class PermissionRefusal:
     below: str | None = None
     retryable: bool = False
 
-    def message(self, tool: str | None = None) -> str:
-        """The Agent-facing refusal; with ``tool``, phrased as that Tool's failure."""
+    def message(self, tool: str | None = None, *, outcome: str | None = None) -> str:
+        """The Agent-facing refusal; with ``tool``, phrased as that Tool's failure.
+
+        ``outcome`` names what did not happen where ``<tool> was not run`` would
+        be false (``The page was not fetched``: a fetch that followed a redirect).
+        """
         action = self._action()
+        if tool and outcome is None:
+            outcome = f"{tool} was not run"
         lead = (
-            f"{tool} was not run: the permission rules refuse {action}"
-            if tool
+            f"{outcome}: the permission rules refuse {action}"
+            if outcome
             else f"The permission rules refuse {action}"
         )
         parts = [f"{lead}, because {self._reason(_AGENT)}."]
