@@ -145,6 +145,7 @@ from core.tools.status import register_status_tool
 from core.tools.subagent import register_subagent_tools
 from core.tools.tools import ToolPromptBlockRegistry, ToolRegistry
 from core.tools.update_goal import register_update_goal_tool
+from core.tools.watch_checks import WatchCheckRunner
 from core.usage import UsageRecorder
 from core.utils.tls import prewarm_outbound_http
 from core.utils.tokens import prewarm_estimation_encoding
@@ -789,6 +790,15 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._channel_service.relay_completion_run
         )
         runtime._goal_service.set_run_relay(runtime._channel_service.relay_completion_run)
+        runtime._cron_service.set_chat_delivery(runtime._channel_service)
+        runtime._cron_service.set_watch_checks(
+            WatchCheckRunner(
+                agents=runtime._agents,
+                projects=runtime._projects,
+                data_root=runtime._storage.data_dir,
+            )
+        )
+        runtime._cron_service.set_webhook_secrets(runtime._storage.secrets)
         runtime._channel_service._notify_tool_registration_changed_hook = (
             runtime._reload_channel_tool_if_started
         )

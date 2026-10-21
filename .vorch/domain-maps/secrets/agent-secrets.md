@@ -2,6 +2,20 @@
 
 Task-gated reference for Agent Secrets (GLOSSARY -> Agent Secret): records and lifetimes, grants and Sub-Agent pass-through, references and sinks, masking, Secret Sources, Secret requests, `/secret`, the `agent_secrets.*` RPCs and events, recent uses and Channel message removal. The domain boundary and the interfaces other code relies on are in `../secrets.md` -> Overview and Interfaces -> Agent Secrets; why each Agent-facing sentence exists: `secrets/agent-facing-text.md`.
 
+## Terms
+
+### Secret reference
+`{{secret:NAME[.field]}}`: what an Agent writes where a value belongs and what masking shows instead of the value; outside a sink it stays literal text.
+
+### Sink
+A class of Tool arguments where vBot substitutes references (`environment`, `terminal`, `files`, `typing`, `external_tools`); each Agent Secret lists its allowed sinks.
+
+### Secret Source
+A password manager an Extension contributes (`SecretSource`) that an Agent Secret can be bound to; it supplies values, never grants. Not an Extension's own credential (`set_secret`).
+
+### Secret request
+An Agent's `secrets` `request`: a form the user answers or declines within 10 minutes.
+
 ## Source
 
 - `core/secrets/agent_secrets.py` (`AgentSecrets`: records, grants, resolution, substitution, shell environment, masker, sources, recent uses), `_agent_secret_model.py` (record model, names, kinds, default sinks, codec), `_references.py` (reference grammar, `SecretMasker`), `_totp.py`, `sources.py` (`SecretSource`), `requests.py` (`SecretRequests`), `commands.py` (`/secret` grammar).

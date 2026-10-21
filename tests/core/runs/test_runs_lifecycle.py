@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import aclosing
+from contextlib import aclosing, nullcontext
 from typing import Any
 
 import pytest
@@ -405,6 +405,70 @@ async def test_every_event_carries_run_metadata_and_replays_to_a_late_subscriber
     assert all(
         event.to_dict().get(RUN_AGENT_ACTIVITY_FIELD, True) is contributes for event in events
     )
+
+
+class _RecordingCompletion:
+    """Session persistence that records the activity flag each completion is stored with."""
+
+    def __init__(self) -> None:
+        self.completions: list[tuple[str, bool]] = []
+
+    async def start_run(self, run: Run) -> None:
+        del run
+
+    async def finish_run(
+        self, run: Run, status: str, payload: dict[str, Any], *, completion_reason: str | None
+    ) -> dict[str, Any]:
+        del payload, completion_reason
+        self.completions.append((status, run.contributes_to_agent_activity))
+        return {}
+
+
+@pytest.mark.parametrize(
+    ("fails", "decision", "contributes"),
+    [
+        (False, True, True),
+        (True, False, False),
+        (False, RuntimeError("decision failed"), False),
+    ],
+    ids=["completed-counts", "failed-stays-quiet", "broken-decision-keeps-admission"],
+)
+async def test_completion_activity_decides_the_finished_runs_activity_before_it_is_recorded(
+    fails: bool, decision: bool | Exception, contributes: bool
+) -> None:
+    seen: list[tuple[RunStatus, Any]] = []
+
+    def decide(status: RunStatus, result: Any) -> bool:
+        seen.append((status, result))
+        if isinstance(decision, Exception):
+            raise decision
+        return decision
+
+    async def execute(_run: Run) -> str:
+        if fails:
+            raise RuntimeError("boom")
+        return "report"
+
+    persistence = _RecordingCompletion()
+    manager = ChatRunManager(persistence=persistence)
+    run = await manager.start(
+        SESSION,
+        execute,
+        admission=RunAdmission(
+            run_kind=RunKind.CRON,
+            contributes_to_agent_activity=False,
+            completion_activity=decide,
+        ),
+    )
+    with pytest.raises(RuntimeError) if fails else nullcontext():
+        await run.wait()
+
+    status = RunStatus.FAILED if fails else RunStatus.COMPLETED
+    assert seen == [(status, None if fails else "report")]
+    assert persistence.completions == [(status.value, contributes)]
+    terminal = run.events[-1].to_dict()
+    assert terminal.get(RUN_AGENT_ACTIVITY_FIELD, True) is contributes
+    await manager.aclose()
 
 
 async def test_active_runs_lists_running_runs_of_every_session_only() -> None:

@@ -41,6 +41,7 @@ from core.compaction.run_coordination import CompactionRunCoordinator
 from core.projects import AgentOverrides
 from core.runs import (
     ActiveRunError,
+    CompletionActivity,
     QueuedRunItem,
     Run,
     RunAdmission,
@@ -202,6 +203,7 @@ class ChatLoop:
         input_persisted_hook: Callable[[], None] | None = None,
         run_kind: RunKind = RunKind.USER,
         contributes_to_agent_activity: bool = True,
+        completion_activity: CompletionActivity | None = None,
         source_session_id: str | None = None,
         context_note: str | ChatMessage | None = None,
     ) -> Run:
@@ -245,6 +247,7 @@ class ChatLoop:
             input_persisted_hook=input_persisted_hook,
             run_kind=run_kind,
             contributes_to_agent_activity=contributes_to_agent_activity,
+            completion_activity=completion_activity,
             source_session_id=source_session_id,
             context_note=context_note,
         )
@@ -290,6 +293,7 @@ class ChatLoop:
         input_persisted_hook: Callable[[], None] | None = None,
         run_kind: RunKind = RunKind.USER,
         contributes_to_agent_activity: bool = True,
+        completion_activity: CompletionActivity | None = None,
         context_note: str | ChatMessage | None = None,
     ) -> Run:
         """Validate a target, create its Session, and start one Run.
@@ -332,6 +336,7 @@ class ChatLoop:
             input_persisted_hook=input_persisted_hook,
             run_kind=run_kind,
             contributes_to_agent_activity=contributes_to_agent_activity,
+            completion_activity=completion_activity,
             context_note=context_note,
         )
 
@@ -353,6 +358,7 @@ class ChatLoop:
         input_persisted_hook: Callable[[], None] | None = None,
         run_kind: RunKind = RunKind.USER,
         contributes_to_agent_activity: bool = True,
+        completion_activity: CompletionActivity | None = None,
         context_note: str | ChatMessage | None = None,
     ) -> QueuedRunItem:
         """Queue one chat run for a busy session or start it immediately when idle.
@@ -399,6 +405,7 @@ class ChatLoop:
                 working_project_id=working_project_id,
                 run_kind=run_kind,
                 contributes_to_agent_activity=contributes_to_agent_activity,
+                completion_activity=completion_activity,
                 expected_session_generation_id=session.generation_id,
             ),
         )
@@ -517,6 +524,7 @@ class ChatLoop:
         input_persisted_hook: Callable[[], None] | None = None,
         run_kind: RunKind = RunKind.USER,
         contributes_to_agent_activity: bool = True,
+        completion_activity: CompletionActivity | None = None,
         edit_message_id: str | None = None,
         source_session_id: str | None = None,
         context_note: str | ChatMessage | None = None,
@@ -601,6 +609,7 @@ class ChatLoop:
                     working_project_id=working_project_id,
                     run_kind=run_kind,
                     contributes_to_agent_activity=contributes_to_agent_activity,
+                    completion_activity=completion_activity,
                     source_session_id=source_session_id,
                     expected_session_generation_id=session.generation_id,
                 ),

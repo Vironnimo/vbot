@@ -7,6 +7,9 @@ export const CRON_SCHEDULE_TYPE_CRON = 'cron';
 export const CRON_SCHEDULE_TYPE_INTERVAL = 'interval';
 export const CRON_SCHEDULE_TYPE_ONCE = 'once';
 export const CRON_SCHEDULE_TYPE_EVENT = 'event';
+// A webhook job runs whenever a request that proves its secret reaches its
+// URL; it keeps no time of its own.
+export const CRON_SCHEDULE_TYPE_WEBHOOK = 'webhook';
 
 // The schedule planner offers readable frequencies instead of raw cron syntax.
 // `once` and `interval` map to their own schedule types; hourly, daily, weekly
@@ -23,6 +26,8 @@ export const CRON_FREQUENCY_CUSTOM = 'custom';
 // A job bound to a calendar event runs at each occurrence; it is not a
 // planner frequency and is only ever loaded, never chosen.
 export const CRON_FREQUENCY_EVENT = 'event';
+// Runs on each webhook request, as its own schedule type.
+export const CRON_FREQUENCY_WEBHOOK = 'webhook';
 
 // Seconds per interval unit, in display order.
 export const CRON_INTERVAL_UNIT_SECONDS = {
@@ -159,6 +164,10 @@ export function updateCronSchedule(formValues, patch) {
   }
   if (frequency === CRON_FREQUENCY_INTERVAL) {
     formValues.schedule_type = CRON_SCHEDULE_TYPE_INTERVAL;
+    return;
+  }
+  if (frequency === CRON_FREQUENCY_WEBHOOK) {
+    formValues.schedule_type = CRON_SCHEDULE_TYPE_WEBHOOK;
     return;
   }
 
@@ -329,6 +338,19 @@ export function describeCronExpression(expression) {
   }
 }
 
+// Where a job delivers each Run's final answer: nowhere, to vBot with a
+// notification, or to a chat of one of the target Agent's Channels.
+export const CRON_DELIVERY_NONE = 'none';
+export const CRON_DELIVERY_APP = 'app';
+export const CRON_DELIVERY_CHAT = 'chat';
+
+// What a repeating job checks before each Run: nothing, a command or a URL.
+// The Run starts only when the check's output changed.
+export const CRON_WATCH_NONE = 'none';
+export const CRON_WATCH_COMMAND = 'command';
+export const CRON_WATCH_URL = 'url';
+const WATCH_KINDS = [CRON_WATCH_COMMAND, CRON_WATCH_URL];
+
 export const CRON_STATUS_ACTIVE = 'active';
 const CRON_STATUS_PAUSED = 'paused';
 export const CRON_STATUS_COMPLETED = 'completed';
@@ -365,6 +387,8 @@ export function createCronFormValues(job = null, systemTimezone = 'UTC') {
       ...eventTimeFields('start', 0),
       repeat: '',
       session_id: '',
+      ...deliveryFormFields({ kind: CRON_DELIVERY_APP }),
+      ...watchFormFields(null),
       original_run_at: '',
       system_timezone: systemTimezone,
     };
@@ -378,6 +402,8 @@ export function createCronFormValues(job = null, systemTimezone = 'UTC') {
     schedule.frequency = CRON_FREQUENCY_INTERVAL;
   } else if (normalized.schedule_type === CRON_SCHEDULE_TYPE_EVENT) {
     schedule.frequency = CRON_FREQUENCY_EVENT;
+  } else if (normalized.schedule_type === CRON_SCHEDULE_TYPE_WEBHOOK) {
+    schedule.frequency = CRON_FREQUENCY_WEBHOOK;
   }
 
   return {
@@ -398,9 +424,69 @@ export function createCronFormValues(job = null, systemTimezone = 'UTC') {
         ? ''
         : String(normalized.remaining_runs),
     session_id: normalized.session_id ?? '',
+    ...deliveryFormFields(normalized.delivery),
+    ...watchFormFields(normalized.watch),
     original_run_at: normalized.run_at ?? '',
     system_timezone: systemTimezone,
   };
+}
+
+function deliveryFormFields(delivery) {
+  return {
+    delivery_kind: delivery?.kind ?? CRON_DELIVERY_NONE,
+    delivery_channel_id: delivery?.channel_id ?? '',
+    delivery_platform_target: delivery?.platform_target ?? '',
+    delivery_thread_id: delivery?.thread_id ?? '',
+  };
+}
+
+// The `delivery` param of `cron.create` and `cron.update` the form describes.
+// Only a chat carries its Channel, chat and optional thread.
+function cronDeliveryPayload(formValues) {
+  const kind = normalizeDeliveryKind(formValues?.delivery_kind);
+  if (kind !== CRON_DELIVERY_CHAT) {
+    return { kind };
+  }
+  const payload = {
+    kind,
+    channel_id: requiredText(formValues?.delivery_channel_id),
+    platform_target: requiredText(formValues?.delivery_platform_target),
+  };
+  const threadId = optionalText(formValues?.delivery_thread_id);
+  if (threadId !== null) {
+    payload.thread_id = threadId;
+  }
+  return payload;
+}
+
+function watchFormFields(watch) {
+  return {
+    watch_kind: watch?.kind ?? CRON_WATCH_NONE,
+    watch_target: watch?.target ?? '',
+  };
+}
+
+// Only cron and interval schedules repeat at times of their own, so only
+// they can check before each Run.
+export function canWatch(scheduleType) {
+  return (
+    scheduleType === CRON_SCHEDULE_TYPE_CRON ||
+    scheduleType === CRON_SCHEDULE_TYPE_INTERVAL
+  );
+}
+
+// The `watch` param of `cron.create` and `cron.update` the form describes:
+// `{command}` or `{url}`, or null for none and for a schedule that cannot
+// watch.
+function cronWatchPayload(formValues) {
+  const kind = formValues?.watch_kind;
+  if (
+    !WATCH_KINDS.includes(kind) ||
+    !canWatch(normalizeScheduleType(formValues?.schedule_type))
+  ) {
+    return null;
+  }
+  return { [kind]: requiredText(formValues?.watch_target) };
 }
 
 export function applyAgentListResponse(state, result) {
@@ -447,6 +533,8 @@ export function cronFormFingerprint(formValues) {
     event_time: eventTimeText(values),
     repeat: repeatFingerprint(values.repeat),
     session_id: requiredText(values.session_id),
+    delivery: cronDeliveryPayload(values),
+    watch: cronWatchPayload(values),
   });
 }
 
@@ -478,7 +566,7 @@ export function buildCreateCronPayload(formValues) {
   } else if (scheduleType === CRON_SCHEDULE_TYPE_EVENT) {
     payload.event_id = requiredText(formValues?.event_id);
     payload.event_time = eventTimeText(formValues);
-  } else {
+  } else if (scheduleType === CRON_SCHEDULE_TYPE_ONCE) {
     payload.run_at = requiredText(formValues?.run_at);
   }
   // The event's occurrences drive an event job's repetition.
@@ -490,6 +578,11 @@ export function buildCreateCronPayload(formValues) {
   const sessionId = optionalText(formValues?.session_id);
   if (sessionId !== null) {
     payload.session_id = sessionId;
+  }
+  payload.delivery = cronDeliveryPayload(formValues);
+  const watch = cronWatchPayload(formValues);
+  if (watch !== null) {
+    payload.watch = watch;
   }
 
   return payload;
@@ -505,6 +598,8 @@ export function buildUpdateCronPayload(formValues) {
     prompt: requiredText(formValues?.prompt),
     schedule_type: scheduleType,
     session_id: optionalText(formValues?.session_id),
+    delivery: cronDeliveryPayload(formValues),
+    watch: cronWatchPayload(formValues),
   };
 
   if (scheduleType === CRON_SCHEDULE_TYPE_CRON) {
@@ -516,7 +611,7 @@ export function buildUpdateCronPayload(formValues) {
     payload.event_time = eventTimeText(formValues);
     // The event's occurrences drive the repetition; a job has no repeat limit.
     return payload;
-  } else {
+  } else if (scheduleType === CRON_SCHEDULE_TYPE_ONCE) {
     payload.run_at = resolveOnceRunAtValue(formValues);
   }
   const repeat = optionalPositiveInteger(formValues?.repeat);
@@ -556,6 +651,8 @@ function normalizeCronJob(job, systemTimezone = 'UTC') {
   const lastAttemptAt = optionalText(job?.last_attempt_at);
   const lastCompletedAt = optionalText(job?.last_completed_at);
   const nextFireAt = optionalText(job?.next_fire_at);
+  const lastCheckedAt = optionalText(job?.last_checked_at);
+  const lastChangedAt = optionalText(job?.last_changed_at);
   return {
     id: asText(job?.id),
     // The form pre-fill and save round-trip key on the full outside address so a
@@ -579,18 +676,32 @@ function normalizeCronJob(job, systemTimezone = 'UTC') {
     event_title: optionalText(job?.event_title),
     remaining_runs: remainingRuns,
     session_id: optionalText(job?.session_id),
+    delivery: normalizeDelivery(job?.delivery),
+    // What the job checks before each Run, or null.
+    watch: normalizeWatch(job?.watch),
     status: normalizeStatus(job?.status),
     last_fired_at: lastFiredAt,
     last_attempt_at: lastAttemptAt,
     last_completed_at: lastCompletedAt,
     last_run_id: optionalText(job?.last_run_id),
     last_outcome: optionalText(job?.last_outcome),
+    // The latest Run succeeded with nothing to report ([SILENT]).
+    last_run_silent: job?.last_run_silent === true,
+    // The latest answer that was not silent, or null.
+    last_result: normalizeLastResult(job?.last_result, systemTimezone),
     last_error: optionalText(job?.last_error),
+    // The latest check, the latest change whose Run succeeded, and why the
+    // latest check failed (null once a check succeeds again).
+    last_checked_at: lastCheckedAt,
+    last_changed_at: lastChangedAt,
+    last_check_error: optionalText(job?.last_check_error),
     consecutive_failures: Number.isInteger(job?.consecutive_failures)
       ? job.consecutive_failures
       : 0,
     next_fire_at: nextFireAt,
     created_at: optionalText(job?.created_at),
+    // A webhook job's URL and requests; null for another schedule.
+    webhook: normalizeWebhook(job?.webhook, systemTimezone),
     schedule_description: deriveScheduleDescription(
       scheduleType,
       cronExpression,
@@ -602,6 +713,77 @@ function normalizeCronJob(job, systemTimezone = 'UTC') {
     last_fired_at_display: formatTimestamp(lastFiredAt, systemTimezone),
     last_completed_at_display: formatTimestamp(lastCompletedAt, systemTimezone),
     next_fire_at_display: formatTimestamp(nextFireAt, systemTimezone),
+    last_checked_at_display: formatTimestamp(lastCheckedAt, systemTimezone),
+    last_changed_at_display: formatTimestamp(lastChangedAt, systemTimezone),
+  };
+}
+
+// `url` is null while the server's address is unknown, then `path` names
+// the route; `reach` says who can call it (internet, network or computer).
+// `waiting` requests wait for the next Run; `dropped` ones were dropped unseen
+// since the last Run started. A normalized webhook stays as it is.
+function normalizeWebhook(webhook, systemTimezone) {
+  if (!webhook || typeof webhook !== 'object') {
+    return null;
+  }
+  const lastReceivedAt = optionalText(webhook.last_received_at);
+  return {
+    url: optionalText(webhook.url),
+    path: asText(webhook.path),
+    reach: optionalText(webhook.reach),
+    last_received_at: lastReceivedAt,
+    last_received_at_display: formatTimestamp(lastReceivedAt, systemTimezone),
+    waiting: Number.isInteger(webhook.waiting) ? webhook.waiting : 0,
+    dropped: Number.isInteger(webhook.dropped) ? webhook.dropped : 0,
+  };
+}
+
+// `{command}` or `{url}` as `{kind, target}`; anything else is no watch.
+// A normalized watch stays as it is, since listed jobs are normalized again.
+function normalizeWatch(watch) {
+  if (WATCH_KINDS.includes(watch?.kind)) {
+    const target = optionalText(watch.target);
+    return target === null ? null : { kind: watch.kind, target };
+  }
+  for (const kind of WATCH_KINDS) {
+    const target = optionalText(watch?.[kind]);
+    if (target !== null) {
+      return { kind, target };
+    }
+  }
+  return null;
+}
+
+function normalizeDelivery(delivery) {
+  const kind = normalizeDeliveryKind(delivery?.kind);
+  if (kind !== CRON_DELIVERY_CHAT) {
+    return { kind };
+  }
+  return {
+    kind,
+    channel_id: asText(delivery.channel_id),
+    platform_target: asText(delivery.platform_target),
+    thread_id: optionalText(delivery.thread_id),
+  };
+}
+
+function normalizeDeliveryKind(value) {
+  return value === CRON_DELIVERY_APP || value === CRON_DELIVERY_CHAT
+    ? value
+    : CRON_DELIVERY_NONE;
+}
+
+function normalizeLastResult(result, systemTimezone) {
+  const text = asText(result?.text);
+  if (!text) {
+    return null;
+  }
+  const at = optionalText(result?.at);
+  return {
+    text,
+    at,
+    run_id: optionalText(result?.run_id),
+    at_display: formatTimestamp(at, systemTimezone),
   };
 }
 
@@ -618,7 +800,10 @@ function deriveScheduleDescription(
   if (scheduleType === CRON_SCHEDULE_TYPE_INTERVAL) {
     return formatInterval(intervalSeconds);
   }
-  if (scheduleType === CRON_SCHEDULE_TYPE_EVENT) {
+  if (
+    scheduleType === CRON_SCHEDULE_TYPE_EVENT ||
+    scheduleType === CRON_SCHEDULE_TYPE_WEBHOOK
+  ) {
     return '';
   }
 
@@ -707,7 +892,8 @@ export {
 function normalizeScheduleType(value) {
   if (
     value === CRON_SCHEDULE_TYPE_INTERVAL ||
-    value === CRON_SCHEDULE_TYPE_EVENT
+    value === CRON_SCHEDULE_TYPE_EVENT ||
+    value === CRON_SCHEDULE_TYPE_WEBHOOK
   ) {
     return value;
   }

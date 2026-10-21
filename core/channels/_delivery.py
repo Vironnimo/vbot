@@ -21,6 +21,7 @@ from core.utils.workers import settle_before_cancelling
 
 if TYPE_CHECKING:
     from core.runs import Run
+    from core.sessions import ChatSessionManager
 
 from core.channels.config import (
     ChannelConfigError,
@@ -125,10 +126,7 @@ async def send(
 ) -> None:
     """Delegate an outbound send to a running channel adapter."""
     normalized_id = _normalize_channel_id(channel_id)
-    if not isinstance(platform_target, str) or not platform_target:
-        raise ChannelConfigError("platform_target must be a non-empty string")
-    if thread_id is not None and (not isinstance(thread_id, str) or not thread_id.strip()):
-        raise ChannelConfigError("thread_id must be a non-empty string when provided")
+    _check_chat_target(platform_target, thread_id)
 
     normalized_message: str | None
     if message is None:
@@ -256,15 +254,88 @@ async def relay_completion_run(
     config = service._storage.get(channel_id)
     if config.agent_id != run.agent_id or config.platform != reply_surface.platform:
         raise ChannelConfigError(f"Session reply surface no longer matches Channel {channel_id}")
-    engine = service._connections.active_engine(channel_id)
-    await engine.relay_run(
+    await _relay(
+        service,
+        run,
+        ReplyPlanFacts(channel_id=channel_id, platform_target=platform_target, thread_id=thread_id),
+    )
+
+
+async def relay_run_to_chat(
+    service: ChannelService,
+    run: Run,
+    channel_id: str,
+    platform_target: str,
+    *,
+    thread_id: str | None = None,
+) -> None:
+    """Relay one Run's answer to a chat of its Agent's Channel, owed durably first.
+
+    Only Runs of Identity Sessions qualify, as only Identity Agents own Channels.
+    Returns once the Run ended and its answer is owed.
+    """
+    normalized_id = _normalize_channel_id(channel_id)
+    _check_chat_target(platform_target, thread_id)
+    if run.project_id is not None:
+        raise ChannelConfigError("Only Runs of an Identity Agent's Session reach a Channel chat")
+    config = await service.get_channel(normalized_id)
+    if config.agent_id != run.agent_id:
+        raise ChannelConfigError(
+            f"Channel {normalized_id} belongs to Agent {config.agent_id}, not {run.agent_id}"
+        )
+    await _relay(
+        service,
         run,
         ReplyPlanFacts(
-            channel_id=channel_id,
-            platform_target=platform_target,
-            thread_id=thread_id,
+            channel_id=normalized_id, platform_target=platform_target, thread_id=thread_id
         ),
     )
+
+
+async def _relay(service: ChannelService, run: Run, reply_plan: ReplyPlanFacts) -> None:
+    engine = service._connections.active_engine(reply_plan.channel_id)
+    await engine.relay_run(run, reply_plan)
+
+
+async def record_outbound_note(
+    service: ChannelService,
+    channel_id: str,
+    platform_target: str,
+    note: str,
+    *,
+    thread_id: str | None = None,
+    skip_session_id: str | None = None,
+) -> bool:
+    """Add *note* to the Session that mirrors one chat, creating that Session.
+
+    Returns False without writing when that Session is *skip_session_id*, the
+    Session the sent message came from.
+    """
+    normalized_id = _normalize_channel_id(channel_id)
+    _check_chat_target(platform_target, thread_id)
+    route = await service._connections.active_adapter(normalized_id).ensure_outbound_session(
+        platform_target, thread_id=thread_id
+    )
+    if route.session_id == skip_session_id:
+        return False
+    chat_sessions = service._chat_sessions
+    target = SessionAddress(project_id=None, agent_id=route.agent_id, session_id=route.session_id)
+    # The lock serializes the note against an open Tool cycle of that Session.
+    # It is task-reentrant, so a Run may write a note into its own Session.
+    async with chat_sessions.write_lock(target):
+        await chat_sessions.run_async(_append_note, chat_sessions, target, note)
+    return True
+
+
+def _append_note(chat_sessions: ChatSessionManager, target: SessionAddress, note: str) -> None:
+    chat_sessions.get_or_create(target).add_note(note)
+
+
+def _check_chat_target(platform_target: str, thread_id: str | None) -> None:
+    if not isinstance(platform_target, str) or not platform_target:
+        raise ChannelConfigError("platform_target must be a non-empty string")
+    if thread_id is not None and (not isinstance(thread_id, str) or not thread_id.strip()):
+        raise ChannelConfigError("thread_id must be a non-empty string when provided")
 
 
 def _bind_run_buttons(

@@ -176,12 +176,30 @@ def _filename_from_url(url: str) -> str:
     return name or "download"
 
 
-def _looks_binary(raw: bytes) -> bool:
+def looks_binary(raw: bytes) -> bool:
     """Return whether the leading bytes contain a NUL, marking the payload binary."""
     return b"\x00" in raw[:_BINARY_DETECTION_BYTES]
 
 
-def _is_textual_content_type(media_type: str) -> bool:
+def is_html_page(media_type: str, body: str) -> bool:
+    """Whether a fetched text body is an HTML page, read through its extracted text.
+
+    A server can label data such as CSV text/html; without any markup near the
+    start it reads as plain text, which keeps its tabs and line breaks.
+    """
+    return ("html" in media_type and bool(_MARKUP.search(body[:4096]))) or bool(
+        media_type in {"", "text/plain", "application/octet-stream"}
+        and re.match(
+            r"(?:(?:<!--[\s\S]*?-->|<\?xml[^>]*\?>)\s*)*"
+            r"<(?:!doctype\s+html|html|head|title|body|article|main|div|p|h[1-6]"
+            r"|nav|section|table|ul|ol|script|meta)(?:\s|>)",
+            body[:4096].lstrip("\ufeff \t\r\n"),
+            re.I,
+        )
+    )
+
+
+def is_textual_content_type(media_type: str) -> bool:
     """Return whether a content-type denotes text that should be returned as-is.
 
     Guards genuinely textual responses (HTML, JSON, XML, plain text, source) from
@@ -204,11 +222,11 @@ def _is_binary_payload(media_type: str, sniffed: str, raw: bytes) -> bool:
     does not classify as text — audio, video, PDF, archives, executables — is
     binary, as is any payload carrying a NUL in its leading bytes.
     """
-    if _is_textual_content_type(media_type):
+    if is_textual_content_type(media_type):
         return False
     if not sniffed.startswith("text/"):
         return True
-    return _looks_binary(raw)
+    return looks_binary(raw)
 
 
 def _fetch_image_result(attachment_store: Any, url: str, raw: bytes) -> JsonObject:
@@ -302,19 +320,7 @@ def _shape_success(
         return _binary_notice(final_url, sniffed, len(result.content))
 
     raw_body = result.text
-    # A server can label data such as CSV text/html; without any markup near the
-    # start it reads as plain text, which keeps its tabs and line breaks.
-    is_html = ("html" in media_type and bool(_MARKUP.search(raw_body[:4096]))) or (
-        media_type in {"", "text/plain", "application/octet-stream"}
-        and re.match(
-            r"(?:(?:<!--[\s\S]*?-->|<\?xml[^>]*\?>)\s*)*"
-            r"<(?:!doctype\s+html|html|head|title|body|article|main|div|p|h[1-6]"
-            r"|nav|section|table|ul|ol|script|meta)(?:\s|>)",
-            raw_body[:4096].lstrip("\ufeff \t\r\n"),
-            re.I,
-        )
-    )
-    if output_mode == "raw" or not is_html:
+    if output_mode == "raw" or not is_html_page(media_type, raw_body):
         if not raw_body.strip():
             return tool_failure(
                 "no_content",

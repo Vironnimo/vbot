@@ -18,16 +18,23 @@ from typing import Any, ClassVar, cast, override
 
 from core.automation.cron import CronJob, CronService
 from core.calendar import CalendarEvent, CalendarService
+from core.chat import ReplySurface
 from core.providers.adapter import tool_result_text
 from core.tools.calendar import CALENDAR_TOOL_NAME, register_calendar_tool
 from core.tools.cron import CRON_TOOL_NAME, register_cron_tool
 from core.tools.tools import ToolContext, ToolRegistry
-from tests.core.automation.cron_test_support import make_service
+from tests.core.automation.cron_test_support import (
+    FakeChats,
+    FakeChecks,
+    make_service,
+    secret_store,
+)
 from tests.core.tools.tools_test_support import dispatch_as_executor
 
 SERVER_ZONE = "Europe/Berlin"
 JOB_PROMPT = "Lint the wiki and report broken links."
 BOTH_TOOLS = (CALENDAR_TOOL_NAME, CRON_TOOL_NAME)
+WEBHOOK_BASE_URL = "https://vbot.example.com"
 
 
 @dataclass
@@ -40,12 +47,27 @@ class _DispatchedTool:
 
     tool_name: ClassVar[str]
 
-    def call(self, arguments: Any, *, project_id: str | None = None) -> tuple[dict[str, Any], str]:
-        """Dispatch like the Tool executor; return the envelope and the text the Model reads."""
-        return asyncio.run(self.call_async(arguments, project_id=project_id))
+    def call(
+        self,
+        arguments: Any,
+        *,
+        project_id: str | None = None,
+        reply_surface: ReplySurface | None = None,
+    ) -> tuple[dict[str, Any], str]:
+        """Dispatch like the Tool executor; return the envelope and the text the Model reads.
+
+        ``reply_surface`` is where the calling Run answers; without it, no chat.
+        """
+        return asyncio.run(
+            self.call_async(arguments, project_id=project_id, reply_surface=reply_surface)
+        )
 
     async def call_async(
-        self, arguments: Any, *, project_id: str | None = None
+        self,
+        arguments: Any,
+        *,
+        project_id: str | None = None,
+        reply_surface: ReplySurface | None = None,
     ) -> tuple[dict[str, Any], str]:
         """:meth:`call` on the running Event Loop."""
         context = ToolContext(
@@ -59,6 +81,7 @@ class _DispatchedTool:
             vbot_root=self.workspace,
             data_root=self.workspace,
             project_id=project_id,
+            reply_surface=reply_surface,
         )
         envelope = await dispatch_as_executor(self.registry, context, arguments, self.offered)
         text = str(tool_result_text(json.dumps(envelope, ensure_ascii=False)))
@@ -76,6 +99,10 @@ class CronTool(_DispatchedTool):
     service: CronService
     trigger: SimpleNamespace
     calendar: CalendarService
+    # The Channels jobs deliver to: tg-main belongs to agent-one, the calling Agent.
+    chats: FakeChats
+    # Watch checks answer from a script; only a started service runs them.
+    checks: FakeChecks
 
     tool_name: ClassVar[str] = CRON_TOOL_NAME
 
@@ -99,10 +126,10 @@ class CronTool(_DispatchedTool):
         text = self.succeeded(arguments)
         return self.only_job(), text
 
-    def refused(self, arguments: Any) -> str:
+    def refused(self, arguments: Any, *, reply_surface: ReplySurface | None = None) -> str:
         """Dispatch a call that must fail without touching any job; return its message."""
         before = [job.to_dict() for job in self.jobs()]
-        envelope, text = self.call(arguments)
+        envelope, text = self.call(arguments, reply_surface=reply_surface)
         assert envelope["ok"] is False, text
         assert envelope["error"]["code"] == "invalid_arguments"
         assert [job.to_dict() for job in self.jobs()] == before
@@ -147,6 +174,12 @@ def scheduling_tools(
     """The calendar and cron Tools over bound services, registered as the Runtime does."""
     calendar = CalendarService(tmp_path, tz=tz)
     cron, trigger = make_service(tmp_path, agent_resolver=agent_resolver, tz=tz, calendar=calendar)
+    chats = FakeChats()
+    cron.set_chat_delivery(chats)
+    checks = FakeChecks()
+    cron.set_watch_checks(checks)
+    cron.set_webhook_secrets(secret_store(tmp_path))
+    cron.bind_webhook_url(WEBHOOK_BASE_URL, "internet")
     registry = ToolRegistry()
     reference_lock = asyncio.Lock()
     register_cron_tool(registry, cron, reference_lock=reference_lock)
@@ -159,7 +192,9 @@ def scheduling_tools(
     }
     return (
         CalendarTool(**shared, service=calendar, cron=cron),
-        CronTool(**shared, service=cron, trigger=trigger, calendar=calendar),
+        CronTool(
+            **shared, service=cron, trigger=trigger, calendar=calendar, chats=chats, checks=checks
+        ),
     )
 
 

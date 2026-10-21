@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from croniter import CroniterBadDateError, croniter  # type: ignore[import-untyped]
@@ -40,7 +42,7 @@ from core.settings import is_valid_agent_id, is_valid_project_id
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
 
-ScheduleType = Literal["cron", "interval", "once", "event"]
+ScheduleType = Literal["cron", "interval", "once", "event", "webhook"]
 
 EventEdge = Literal["start", "end"]
 
@@ -48,7 +50,18 @@ CronJobStatus = Literal["active", "paused", "completed", "failed", "missed"]
 
 CronRunOutcome = Literal["success", "failed", "cancelled", "missed", "unknown"]
 
-_ALLOWED_SCHEDULE_TYPES = frozenset(("cron", "interval", "once", "event"))
+DeliveryKind = Literal["none", "chat", "app"]
+
+WatchKind = Literal["command", "url"]
+
+_ALLOWED_SCHEDULE_TYPES = frozenset(("cron", "interval", "once", "event", "webhook"))
+
+# The schedule types a watch applies to: a check needs a time to repeat at.
+WATCH_SCHEDULE_TYPES = frozenset(("cron", "interval"))
+
+WATCH_COMMAND_MAX_CHARS = 4000
+
+WATCH_URL_MAX_CHARS = 2048
 
 _ALLOWED_EVENT_EDGES = frozenset(("start", "end"))
 
@@ -58,6 +71,11 @@ MAX_EVENT_OFFSET_MINUTES = 31 * 24 * 60
 _ALLOWED_STATUSES = frozenset(("active", "paused", "completed", "failed", "missed"))
 
 _ALLOWED_RUN_OUTCOMES = frozenset(("success", "failed", "cancelled", "missed", "unknown"))
+
+_ALLOWED_DELIVERY_KINDS = frozenset(("none", "chat", "app"))
+
+# How much of a Run's final answer a job keeps for its next Run.
+LAST_RESULT_MAX_CHARS = 2000
 
 _RESTART_FIELDS = frozenset(
     (
@@ -71,6 +89,7 @@ _RESTART_FIELDS = frozenset(
         "event_offset_minutes",
         "remaining_runs",
         "status",
+        "watch",
     )
 )
 
@@ -117,6 +136,8 @@ _MUTABLE_FIELDS = frozenset(
         "session_id",
         "status",
         "project_id",
+        "delivery",
+        "watch",
     )
 )
 
@@ -127,18 +148,32 @@ _CRON_JOB_FIELDS = _MUTABLE_FIELDS | {
     "created_at",
     "id",
     "last_attempt_at",
+    "last_changed_at",
+    "last_check_error",
+    "last_checked_at",
     "last_completed_at",
     "last_error",
     "last_fired_at",
     "last_outcome",
+    "last_result",
     "last_run_id",
+    "last_run_silent",
 }
 
 CRON_JOBS_FORMAT_VERSION = 1
 
 _EVENT_PROGRESS_FIELDS = frozenset(("due_at", "occurrence_ids"))
+_DELIVERY_FIELDS = frozenset(("kind", "channel_id", "platform_target", "thread_id"))
+_LAST_RESULT_FIELDS = frozenset(("text", "at", "run_id"))
+_WATCH_FIELDS = frozenset(("command", "url"))
 CRON_JOB_SHAPE = json_object(
-    _CRON_JOB_FIELDS, {"event_progress": json_object(_EVENT_PROGRESS_FIELDS)}
+    _CRON_JOB_FIELDS,
+    {
+        "event_progress": json_object(_EVENT_PROGRESS_FIELDS),
+        "delivery": json_object(_DELIVERY_FIELDS),
+        "last_result": json_object(_LAST_RESULT_FIELDS),
+        "watch": json_object(_WATCH_FIELDS),
+    },
 )
 
 CRON_JOBS_SHAPE = json_document({"jobs"}, {"jobs": json_list(CRON_JOB_SHAPE, key="id")})
@@ -317,6 +352,9 @@ def _validate_cron_job_data(diagnostics: list[JsonDiagnostic], item_path: str, i
         "last_error",
         "last_run_id",
         "covered_until",
+        "last_checked_at",
+        "last_changed_at",
+        "last_check_error",
     ):
         validate_optional_string(
             diagnostics,
@@ -381,20 +419,27 @@ def _validate_cron_job_data(diagnostics: list[JsonDiagnostic], item_path: str, i
     validate_non_empty_string(
         diagnostics, f"{item_path}.created_at", item.get("created_at"), required=False
     )
-    progress = item.get("event_progress")
-    if progress is not None:
+    nested: tuple[tuple[str, Callable[[Any], object], frozenset[str], str], ...] = (
+        ("event_progress", EventProgress.from_dict, _EVENT_PROGRESS_FIELDS, "event progress"),
+        ("delivery", CronDelivery.from_dict, _DELIVERY_FIELDS, "delivery"),
+        ("last_result", CronResult.from_dict, _LAST_RESULT_FIELDS, "last result"),
+        ("watch", CronWatch.from_dict, _WATCH_FIELDS, "watch"),
+    )
+    for field_name, parse, known, label in nested:
+        value = item.get(field_name)
+        if value is None:
+            continue
         try:
-            EventProgress.from_dict(progress)
+            parse(value)
         except CronJobValidationError as error:
-            add_error(diagnostics, f"{item_path}.event_progress", str(error))
-        if isinstance(progress, dict):
+            add_error(diagnostics, f"{item_path}.{field_name}", str(error))
+        if isinstance(value, dict):
             warn_unknown_keys(
-                diagnostics,
-                f"{item_path}.event_progress",
-                progress,
-                _EVENT_PROGRESS_FIELDS,
-                "event progress field",
+                diagnostics, f"{item_path}.{field_name}", value, known, f"{label} field"
             )
+    silent = item.get("last_run_silent")
+    if silent is not None and not isinstance(silent, bool):
+        add_error(diagnostics, f"{item_path}.last_run_silent", "must be a boolean")
 
 
 def _validate_cron_agent_id(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:
@@ -499,10 +544,28 @@ class CronJob:
     consecutive_failures: int = 0
     covered_until: str | None = None
     event_progress: EventProgress | None = None
+    # Where each Run's final answer goes; None delivers it nowhere.
+    delivery: CronDelivery | None = None
+    # The latest final answer that was not [SILENT], for the next Run's context.
+    last_result: CronResult | None = None
+    # Whether the latest Run succeeded with a [SILENT] (or empty) answer.
+    last_run_silent: bool = False
+    # What the job checks at each due time; its Run starts only when the output changed.
+    watch: CronWatch | None = None
+    # When the watch was last checked, whatever the result.
+    last_checked_at: str | None = None
+    # When the watched output last changed and a Run handled the change.
+    last_changed_at: str | None = None
+    # Why the latest check failed; the next successful check clears it.
+    last_check_error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize one CronJob to a JSON-compatible payload."""
-        return {
+        """Serialize one CronJob to a JSON-compatible payload.
+
+        Delivery, result and watch fields appear only when set, so jobs without
+        them keep the format earlier versions wrote.
+        """
+        data: dict[str, Any] = {
             "id": self.id,
             "agent_id": self.agent_id,
             "name": self.name,
@@ -532,6 +595,19 @@ class CronJob:
                 None if self.event_progress is None else self.event_progress.to_dict()
             ),
         }
+        if self.delivery is not None:
+            data["delivery"] = self.delivery.to_dict()
+        if self.last_result is not None:
+            data["last_result"] = self.last_result.to_dict()
+        if self.last_run_silent:
+            data["last_run_silent"] = True
+        if self.watch is not None:
+            data["watch"] = self.watch.to_dict()
+        for field_name in ("last_checked_at", "last_changed_at", "last_check_error"):
+            value = getattr(self, field_name)
+            if value is not None:
+                data[field_name] = value
+        return data
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> CronJob:
@@ -573,6 +649,21 @@ class CronJob:
                 if payload.get("event_progress") is None
                 else EventProgress.from_dict(payload["event_progress"])
             ),
+            delivery=(
+                None
+                if payload.get("delivery") is None
+                else CronDelivery.from_dict(payload["delivery"]).stored()
+            ),
+            last_result=(
+                None
+                if payload.get("last_result") is None
+                else CronResult.from_dict(payload["last_result"])
+            ),
+            last_run_silent=payload.get("last_run_silent") is True,
+            watch=None if payload.get("watch") is None else CronWatch.from_dict(payload["watch"]),
+            last_checked_at=payload.get("last_checked_at"),
+            last_changed_at=payload.get("last_changed_at"),
+            last_check_error=payload.get("last_check_error"),
         )
 
 
@@ -608,6 +699,161 @@ class EventProgress:
                 "event_progress.occurrence_ids must be a non-empty list of occurrence ids"
             )
         return cls(due_at=due_at, occurrence_ids=tuple(dict.fromkeys(ids)))
+
+
+@dataclass(frozen=True, slots=True)
+class CronDelivery:
+    """Where a job's Run answers and failure alerts go.
+
+    ``chat`` sends them to one chat of a Channel of the job's Identity Agent;
+    ``app`` shows the Run's Session to the user in vBot with a notification;
+    ``none`` delivers nothing (a job stores it as no delivery at all).
+    """
+
+    kind: DeliveryKind
+    channel_id: str | None = None
+    platform_target: str | None = None
+    thread_id: str | None = None
+
+    def stored(self) -> CronDelivery | None:
+        """The value a job keeps: ``none`` is stored as no delivery."""
+        return None if self.kind == "none" else self
+
+    def to_dict(self) -> dict[str, Any]:
+        data: dict[str, Any] = {"kind": self.kind}
+        for field_name in ("channel_id", "platform_target", "thread_id"):
+            value = getattr(self, field_name)
+            if value is not None:
+                data[field_name] = value
+        return data
+
+    @classmethod
+    def from_dict(cls, value: Any) -> CronDelivery:
+        if not isinstance(value, dict):
+            raise CronJobValidationError("delivery must be an object or null")
+        kind = value.get("kind")
+        if kind not in _ALLOWED_DELIVERY_KINDS:
+            raise CronJobValidationError("delivery.kind must be none, chat or app")
+        if kind != "chat":
+            if any(value.get(name) is not None for name in _DELIVERY_FIELDS - {"kind"}):
+                raise CronJobValidationError(
+                    "delivery.channel_id, platform_target and thread_id apply only to kind chat"
+                )
+            return cls(kind=cast(DeliveryKind, kind))
+        texts: dict[str, str | None] = {}
+        for name in ("channel_id", "platform_target", "thread_id"):
+            raw = value.get(name)
+            text = raw.strip() if isinstance(raw, str) else None
+            if (raw is not None or name != "thread_id") and not text:
+                raise CronJobValidationError(f"delivery.{name} must be a non-empty string")
+            texts[name] = text
+        return cls(
+            kind="chat",
+            channel_id=texts["channel_id"],
+            platform_target=texts["platform_target"],
+            thread_id=texts["thread_id"],
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CronResult:
+    """The start of a Run's final answer, kept for the job's next Run."""
+
+    text: str
+    at: str
+    run_id: str | None = None
+
+    @classmethod
+    def excerpt(cls, answer: str, *, at: str, run_id: str | None) -> CronResult:
+        """Keep at most ``LAST_RESULT_MAX_CHARS`` of ``answer``; a cut ends with an ellipsis."""
+        text = answer.strip()
+        if len(text) > LAST_RESULT_MAX_CHARS:
+            text = f"{text[: LAST_RESULT_MAX_CHARS - 1]}…"
+        return cls(text=text, at=at, run_id=run_id)
+
+    @property
+    def cut(self) -> bool:
+        """Whether the answer was longer than the excerpt."""
+        return len(self.text) == LAST_RESULT_MAX_CHARS and self.text.endswith("…")
+
+    def to_dict(self) -> dict[str, Any]:
+        data: dict[str, Any] = {"text": self.text, "at": self.at}
+        if self.run_id is not None:
+            data["run_id"] = self.run_id
+        return data
+
+    @classmethod
+    def from_dict(cls, value: Any) -> CronResult:
+        if not isinstance(value, dict):
+            raise CronJobValidationError("last_result must be an object or null")
+        text, at, run_id = value.get("text"), value.get("at"), value.get("run_id")
+        if not isinstance(text, str) or not text or len(text) > LAST_RESULT_MAX_CHARS:
+            raise CronJobValidationError(
+                f"last_result.text must be a non-empty string of at most "
+                f"{LAST_RESULT_MAX_CHARS} characters"
+            )
+        if not isinstance(at, str):
+            raise CronJobValidationError("last_result.at must be a UTC timestamp")
+        _parse_utc_timestamp(at, field_name="last_result.at")
+        if run_id is not None and (not isinstance(run_id, str) or not run_id):
+            raise CronJobValidationError("last_result.run_id must be a non-empty string")
+        return cls(text=text, at=at, run_id=run_id)
+
+
+@dataclass(frozen=True, slots=True)
+class CronWatch:
+    """What a job checks at each due time before its Run starts.
+
+    ``command`` runs in the host shell (PowerShell on Windows, bash elsewhere)
+    in the job's working directory; ``url`` is an http(s) address read with GET.
+    The Run starts only when the check's output changed (``_cron_watch``).
+    """
+
+    kind: WatchKind
+    target: str
+
+    @classmethod
+    def parse(cls, kind: str, target: object) -> CronWatch:
+        """Validate one watch; surrounding whitespace is dropped."""
+        if kind not in _WATCH_FIELDS:
+            raise CronJobValidationError("watch must name a command or a url")
+        if not isinstance(target, str) or not target.strip():
+            raise CronJobValidationError(f"watch.{kind} must be a non-empty string")
+        text = target.strip()
+        if kind == "command":
+            if len(text) > WATCH_COMMAND_MAX_CHARS:
+                raise CronJobValidationError(
+                    f"watch.command must be at most {WATCH_COMMAND_MAX_CHARS} characters"
+                )
+            return cls(kind="command", target=text)
+        try:
+            parts = urlsplit(text)
+        except ValueError:
+            parts = None
+        if (
+            parts is None
+            or parts.scheme.lower() not in {"http", "https"}
+            or not parts.hostname
+            or any(character.isspace() for character in text)
+            or len(text) > WATCH_URL_MAX_CHARS
+        ):
+            raise CronJobValidationError(
+                f"watch.url must be an absolute http or https URL of at most "
+                f"{WATCH_URL_MAX_CHARS} characters"
+            )
+        return cls(kind="url", target=text)
+
+    def to_dict(self) -> dict[str, str]:
+        return {self.kind: self.target}
+
+    @classmethod
+    def from_dict(cls, value: Any) -> CronWatch:
+        if not isinstance(value, dict):
+            raise CronJobValidationError("watch must be an object or null")
+        kinds = [name for name in sorted(_WATCH_FIELDS) if value.get(name) is not None]
+        if len(kinds) != 1:
+            raise CronJobValidationError("watch must name exactly one of command or url")
+        return cls.parse(kinds[0], value[kinds[0]])
 
 
 def _derive_cron_job_name(prompt: object) -> str:
@@ -711,7 +957,9 @@ def normalize_job_fields(job: CronJob) -> None:
     job.prompt = job.prompt.strip()
 
     if job.schedule_type not in _ALLOWED_SCHEDULE_TYPES:
-        raise CronJobValidationError("schedule_type must be 'cron', 'interval', 'once' or 'event'")
+        raise CronJobValidationError(
+            "schedule_type must be 'cron', 'interval', 'once', 'event' or 'webhook'"
+        )
 
     if job.status not in _ALLOWED_STATUSES:
         raise CronJobValidationError("status must be active, paused, completed, failed, or missed")
@@ -736,7 +984,12 @@ def normalize_job_fields(job: CronJob) -> None:
     _parse_utc_timestamp(job.created_at, field_name="created_at")
     if job.last_fired_at is not None:
         _parse_utc_timestamp(job.last_fired_at, field_name="last_fired_at")
-    for field_name in ("last_attempt_at", "last_completed_at"):
+    for field_name in (
+        "last_attempt_at",
+        "last_completed_at",
+        "last_checked_at",
+        "last_changed_at",
+    ):
         value = getattr(job, field_name)
         if value is not None:
             _parse_utc_timestamp(value, field_name=field_name)
@@ -764,6 +1017,26 @@ def normalize_job_fields(job: CronJob) -> None:
         _parse_utc_timestamp(job.covered_until, field_name="covered_until")
     if job.last_run_id is not None and not isinstance(job.last_run_id, str):
         raise CronJobValidationError("last_run_id must be a string when provided")
+    if job.delivery is not None:
+        if not isinstance(job.delivery, CronDelivery):
+            raise CronJobValidationError("delivery must be a delivery target or null")
+        job.delivery = job.delivery.stored()
+    if job.delivery is not None and job.delivery.kind == "chat" and job.project_id is not None:
+        raise CronJobValidationError(
+            "a job of a Project Agent cannot deliver to a chat: Channels belong to Identity Agents"
+        )
+    if job.last_check_error is not None:
+        if not isinstance(job.last_check_error, str):
+            raise CronJobValidationError("last_check_error must be a string when provided")
+        job.last_check_error = _truncate_error(job.last_check_error)
+    if job.watch is not None:
+        if not isinstance(job.watch, CronWatch):
+            raise CronJobValidationError("watch must be a command or URL to check, or null")
+        if job.schedule_type not in WATCH_SCHEDULE_TYPES:
+            raise CronJobValidationError(
+                "watch applies only to a repeating schedule (a cron expression or an "
+                "interval), not to a one-time, event or webhook schedule"
+            )
 
 
 _SCHEDULE_FIELDS = (

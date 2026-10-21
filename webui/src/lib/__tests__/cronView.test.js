@@ -32,7 +32,117 @@ describe('cron form payloads and history projection', () => {
       schedule_type: 'interval',
       interval_seconds: 7200,
       repeat: 3,
+      delivery: { kind: 'app' },
     });
+  });
+
+  it('delivers a new job to vBot and round-trips a chat delivery and the last answer', () => {
+    // A new job's answers reach vBot unless the form says otherwise.
+    expect(createCronFormValues().delivery_kind).toBe('app');
+
+    const job = {
+      id: 'job-chat',
+      agent_id: 'main',
+      name: 'Inbox check',
+      prompt: 'Check the inbox',
+      schedule_type: 'interval',
+      interval_seconds: 3600,
+      status: 'active',
+      delivery: {
+        kind: 'chat',
+        channel_id: 'tg-main',
+        platform_target: '42',
+        thread_id: '7',
+      },
+      last_outcome: 'success',
+      last_run_silent: true,
+      last_result: {
+        text: 'Two new mails.',
+        at: '2026-07-18T16:00:00+00:00',
+        run_id: 'run-1',
+      },
+    };
+    const [listed] = visibleCronJobs([job], 'Europe/Berlin');
+    expect(listed.last_run_silent).toBe(true);
+    expect(listed.last_result).toMatchObject({
+      text: 'Two new mails.',
+      run_id: 'run-1',
+    });
+    expect(listed.last_result.at_display).toContain('18:00');
+
+    const form = createCronFormValues(job);
+    const saved = cronFormFingerprint(form);
+    expect(buildUpdateCronPayload(form).delivery).toEqual(job.delivery);
+
+    // The thread is optional; only a chat carries Channel and chat.
+    form.delivery_thread_id = ' ';
+    expect(buildUpdateCronPayload(form).delivery).toEqual({
+      kind: 'chat',
+      channel_id: 'tg-main',
+      platform_target: '42',
+    });
+    form.delivery_kind = 'none';
+    expect(cronFormFingerprint(form)).not.toBe(saved);
+    expect(buildUpdateCronPayload(form).delivery).toEqual({ kind: 'none' });
+
+    // A job without delivery, as RPC callers create it, delivers nowhere.
+    const plain = createCronFormValues({ ...job, delivery: undefined });
+    expect(plain.delivery_kind).toBe('none');
+    expect(
+      visibleCronJobs([{ ...job, last_result: null }])[0].last_result,
+    ).toBe(null);
+  });
+
+  it('round-trips a watch and sends none for a schedule that cannot watch', () => {
+    const job = {
+      id: 'job-watch',
+      agent_id: 'main',
+      name: 'Release check',
+      prompt: 'Summarize the new release.',
+      schedule_type: 'interval',
+      interval_seconds: 3600,
+      status: 'active',
+      watch: { url: 'https://example.com/releases' },
+      last_checked_at: '2026-07-18T16:00:00+00:00',
+      last_changed_at: '2026-07-18T15:00:00+00:00',
+      last_check_error: 'The watched URL answered HTTP 503',
+    };
+    const [listed] = visibleCronJobs([job], 'Europe/Berlin');
+    expect(listed.watch).toEqual({
+      kind: 'url',
+      target: 'https://example.com/releases',
+    });
+    expect(listed.last_checked_at_display).toContain('18:00');
+    expect(listed.last_changed_at_display).toContain('17:00');
+    expect(listed.last_check_error).toBe('The watched URL answered HTTP 503');
+    // The view normalizes listed jobs again.
+    expect(visibleCronJobs([listed])[0].watch).toEqual(listed.watch);
+
+    const form = createCronFormValues(job);
+    const saved = cronFormFingerprint(form);
+    expect(buildUpdateCronPayload(form).watch).toEqual(job.watch);
+    form.watch_kind = 'command';
+    form.watch_target = ' git log -1 --oneline ';
+    expect(cronFormFingerprint(form)).not.toBe(saved);
+    expect(buildUpdateCronPayload(form).watch).toEqual({
+      command: 'git log -1 --oneline',
+    });
+    form.watch_kind = 'none';
+    expect(buildUpdateCronPayload(form).watch).toBeNull();
+
+    // A new job watches nothing unless the form says so; a one-time job
+    // cannot watch, so its check is dropped.
+    const draft = createCronFormValues();
+    expect(draft.watch_kind).toBe('none');
+    draft.agent_id = 'main';
+    draft.prompt = 'Check';
+    expect(buildCreateCronPayload(draft)).not.toHaveProperty('watch');
+    draft.watch_kind = 'url';
+    draft.watch_target = 'https://example.com/releases';
+    expect(buildCreateCronPayload(draft).watch).toEqual(job.watch);
+    updateCronSchedule(draft, { frequency: 'once' });
+    expect(buildCreateCronPayload(draft)).not.toHaveProperty('watch');
+    expect(visibleCronJobs([{ ...job, watch: null }])[0].watch).toBe(null);
   });
 
   it('round-trips interval cadence and the repeat limit through the edit form', () => {
@@ -142,10 +252,71 @@ describe('cron form payloads and history projection', () => {
       schedule_type: 'event',
       event_id: 'evt-1',
       event_time: 'end + 2d',
+      delivery: { kind: 'none' },
     });
     // More than 31 days from the event is no event time.
     updateCronSchedule(form, { event_amount: '32' });
     expect(buildUpdateCronPayload(form).event_time).toBe('');
+  });
+
+  it('keeps a webhook job a webhook job and lists its URL and requests', () => {
+    const job = {
+      id: 'job-hook',
+      agent_id: 'main',
+      name: 'Triage issues',
+      prompt: 'Triage the issue',
+      schedule_type: 'webhook',
+      remaining_runs: 5,
+      status: 'active',
+      next_fire_at: null,
+      webhook: {
+        url: 'https://vbot.example.com/api/hooks/job-hook',
+        path: '/api/hooks/job-hook',
+        reach: 'internet',
+        last_received_at: '2026-07-18T16:00:00+00:00',
+        waiting: 2,
+        dropped: 1,
+      },
+    };
+    const [listed] = visibleCronJobs([job], 'Europe/Berlin');
+    expect(listed.schedule_type).toBe('webhook');
+    expect(listed.webhook).toMatchObject({
+      url: 'https://vbot.example.com/api/hooks/job-hook',
+      reach: 'internet',
+      waiting: 2,
+      dropped: 1,
+    });
+    expect(listed.webhook.last_received_at_display).toContain('18:00');
+    expect(visibleCronJobs([listed])[0].webhook.url).toBe(listed.webhook.url);
+    expect(visibleCronJobs([{ ...job, webhook: null }])[0].webhook).toBe(null);
+
+    // Saving keeps the schedule and its run count, with no time and no watch.
+    const form = createCronFormValues(job);
+    expect(form.frequency).toBe('webhook');
+    expect(buildUpdateCronPayload(form)).toEqual({
+      id: 'job-hook',
+      agent_id: 'main',
+      name: 'Triage issues',
+      prompt: 'Triage the issue',
+      schedule_type: 'webhook',
+      session_id: null,
+      delivery: { kind: 'none' },
+      watch: null,
+      repeat: 5,
+    });
+
+    const draft = createCronFormValues();
+    draft.agent_id = 'main';
+    draft.prompt = 'Triage the issue';
+    draft.watch_kind = 'url';
+    draft.watch_target = 'https://example.com/releases';
+    updateCronSchedule(draft, { frequency: 'webhook' });
+    expect(buildCreateCronPayload(draft)).toEqual({
+      agent_id: 'main',
+      prompt: 'Triage the issue',
+      schedule_type: 'webhook',
+      delivery: { kind: 'app' },
+    });
   });
 
   it('uses the prompt as a readable fallback for legacy payloads without a name', () => {

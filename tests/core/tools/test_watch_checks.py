@@ -1,0 +1,209 @@
+"""Tests for Cron watch checks: a command in the host shell, or a GET of a URL."""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, cast
+
+import httpx
+import pytest
+
+from core.automation.cron import WatchCheckError
+from core.tools import watch_checks
+from core.tools._powershell import PowerShellRequest
+from core.tools.shell import HostShellStart
+from core.tools.watch_checks import COMMAND_OUTPUT_MAX_BYTES, WatchCheckRunner
+from tests.core.tools.command_manager_helpers import FakeProcess
+
+_NOT_RUN = 990
+
+
+class _Shell(FakeProcess):
+    """A host shell the test scripts; its kill only records that the check ended it."""
+
+    def __init__(self) -> None:
+        super().__init__(pid=4242)
+        self.requests: list[bytes] = []
+        self.killed = False
+
+    def send(self, request: bytes) -> None:
+        self.requests.append(request)
+
+    def kill(self) -> None:
+        self.killed = True
+
+
+@dataclass
+class _Launches:
+    """Starts a scripted shell per check and records how it was started."""
+
+    script: Callable[[_Shell], None]
+    calls: list[tuple[Sequence[str], Path, bool]] = field(default_factory=list)
+    shells: list[_Shell] = field(default_factory=list)
+
+    async def __call__(
+        self, argv: Sequence[str], cwd: Path, _env: Any, _tracker: Any, *, request_pipe: bool
+    ) -> _Shell:
+        shell = _Shell()
+        self.calls.append((argv, cwd, request_pipe))
+        self.shells.append(shell)
+        self.script(shell)
+        return shell
+
+
+def _runner(tmp_path: Path, launches: _Launches | None = None, **kwargs: Any) -> WatchCheckRunner:
+    project_dir = tmp_path / "project"
+    project_dir.mkdir(exist_ok=True)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(exist_ok=True)
+
+    async def agent(agent_id: str) -> Any:
+        if agent_id == "gone":
+            raise LookupError("Agent not found: gone")
+        return SimpleNamespace(workspace=str(workspace))
+
+    return WatchCheckRunner(
+        agents=SimpleNamespace(get_async=agent),
+        projects=SimpleNamespace(get=lambda _project_id: SimpleNamespace(cwd=str(project_dir))),
+        data_root=tmp_path / "data",
+        launch=cast(Any, launches if launches is not None else _Launches(lambda _shell: None)),
+        tracker=cast(Any, None),
+        **kwargs,
+    )
+
+
+@pytest.fixture(autouse=True)
+def _host_shell(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A PowerShell-like host shell that takes its command as a request."""
+
+    def start(command: str, workdir: Path, _environment: Any) -> HostShellStart:
+        request = PowerShellRequest(
+            f"{workdir}|{command}".encode(),
+            {_NOT_RUN: "request_unreadable", _NOT_RUN + 1: "workdir_unavailable"},
+        )
+        return HostShellStart(["pwsh", "-Command", "bootstrap"], {}, request)
+
+    monkeypatch.setattr(watch_checks, "host_shell_start", start)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("project_id", "directory"),
+    [
+        pytest.param("project-a", "project", id="project"),
+        pytest.param(None, "workspace", id="agent"),
+    ],
+)
+async def test_a_check_command_runs_in_the_jobs_directory_and_keeps_the_start_of_its_output(
+    tmp_path: Path, project_id: str | None, directory: str
+) -> None:
+    def script(shell: _Shell) -> None:
+        shell.write("x" * (COMMAND_OUTPUT_MAX_BYTES - 2) + "äö")
+        shell.write("dropped")
+        shell.exit(0)
+
+    launches = _Launches(script)
+
+    output = await _runner(tmp_path, launches).run_command(
+        "Get-Content status.txt", agent_id="agent-one", project_id=project_id
+    )
+
+    assert output == "x" * (COMMAND_OUTPUT_MAX_BYTES - 2) + "ä"
+    ((_argv, cwd, request_pipe),) = launches.calls
+    assert (cwd, request_pipe) == (tmp_path / directory, True)
+    (shell,) = launches.shells
+    assert shell.requests == [f"{tmp_path / directory}|Get-Content status.txt".encode()]
+    assert shell.killed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("agent_id", "exit_code", "output", "problem"),
+    [
+        pytest.param(
+            "agent-one", 3, "fetching\nboom  \n\n", "exited with code 3: boom", id="exit-code"
+        ),
+        pytest.param(
+            "agent-one", _NOT_RUN + 1, "", "did not run: PowerShell could not enter", id="not-run"
+        ),
+        pytest.param("agent-one", None, "", "timed out after", id="timeout"),
+        pytest.param("gone", 0, "", "did not run: Agent gone is not available", id="no-agent"),
+    ],
+)
+async def test_a_check_command_fails_with_what_went_wrong(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    agent_id: str,
+    exit_code: int | None,
+    output: str,
+    problem: str,
+) -> None:
+    monkeypatch.setattr(watch_checks, "COMMAND_TIMEOUT_SECONDS", 0.01)
+
+    def script(shell: _Shell) -> None:
+        shell.write(output)
+        if exit_code is not None:
+            shell.exit(exit_code)
+
+    launches = _Launches(script)
+
+    with pytest.raises(WatchCheckError, match=problem):
+        await _runner(tmp_path, launches).run_command(
+            "Get-Content status.txt", agent_id=agent_id, project_id=None
+        )
+
+    assert all(shell.killed for shell in launches.shells)
+
+
+def _page(status: int, content_type: str, body: bytes) -> httpx.MockTransport:
+    def answer(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, headers={"content-type": content_type}, content=body)
+
+    return httpx.MockTransport(answer)
+
+
+def _refuse(request: httpx.Request) -> httpx.Response:
+    raise httpx.ConnectError("refused", request=request)
+
+
+@pytest.mark.asyncio
+async def test_a_watched_url_answers_with_its_main_text(tmp_path: Path) -> None:
+    html = (
+        b"<html><head><title>Status</title></head><body><nav><a href='/'>Home</a></nav>"
+        b"<main><h1>Service status</h1><p>All systems are up since this morning.</p></main>"
+        b"<footer>Copyright</footer></body></html>"
+    )
+    page = _runner(tmp_path, transport=_page(200, "text/html; charset=utf-8", html))
+    data = _runner(tmp_path, transport=_page(200, "application/json", b'{"ok": true}'))
+
+    assert await page.fetch_url("https://status.example/") == (
+        "# Service status\n\nAll systems are up since this morning."
+    )
+    assert await data.fetch_url("https://status.example/api") == '{"ok": true}'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("transport", "problem"),
+    [
+        pytest.param(_page(503, "text/plain", b"down"), "answered HTTP 503", id="status"),
+        pytest.param(
+            _page(200, "image/png", b"\x89PNG\r\n\x1a\n\x00"),
+            "answered with image/png, not text",
+            id="binary",
+        ),
+        pytest.param(
+            httpx.MockTransport(_refuse),
+            "could not be fetched: refused",
+            id="unreachable",
+        ),
+    ],
+)
+async def test_a_watched_url_fails_with_what_went_wrong(
+    tmp_path: Path, transport: httpx.MockTransport, problem: str
+) -> None:
+    with pytest.raises(WatchCheckError, match=problem):
+        await _runner(tmp_path, transport=transport).fetch_url("https://status.example/")

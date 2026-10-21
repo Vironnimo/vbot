@@ -7,13 +7,15 @@ schema (``agent_id``, ``schedule_type``, ``cron_expression``, ``run_at``,
 (``cron``, ``recurring``, ``durable``), Hermes ``cronjob`` (``job_id``,
 ``pause``/``resume``/``remove``, ``deliver``), OpenClaw ``cron`` (a ``job``
 with ``schedule`` and ``payload`` objects, ``jobId``), and scheduled-task Tools
-(``cronExpression``, ``fireAt``, ``description``). With an ``event_id``, the
+(``cronExpression``, ``fireAt``, ``description``), Hermes monitor gates
+(``monitor_url``) as ``watch``, and webhook triggers (``type: webhook``, a
+Hermes webhook route's ``secret``). With an ``event_id``, the
 schedule is an event time, which Models also write as reminder offsets
 (``minutes_before: 30``, ``-PT30M``, ``30 minutes before``, ``before_start``).
 This owner maps them onto the canonical fields so a call whose intent is clear
-executes. What vBot cannot honor as written (delivering the reply, choosing a
-Session, firing on demand, several actions in one call, readings with different
-effects) fails before any side effect with the corrected call.
+executes. What vBot cannot honor as written (delivering to another chat, firing
+on demand, a script before the run, several actions in one call, readings with
+different effects) fails before any side effect with the corrected call.
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ from core.tools._cron_call import (
     TIMEZONE_FIELD,
     CronCallRefusedError,
     _Problems,
+    _set_field,
     refusal,
     render_call,
 )
@@ -38,6 +41,7 @@ from core.tools._cron_schedule_arguments import (
     CLOCK_SCHEDULE,
     EVENT_REPEAT_REFUSAL,
     EVENT_TIME_STAND_IN,
+    WEBHOOK_SCHEDULE,
     _names_event_offset,
     _read_event_schedule,
     _read_schedule,
@@ -59,15 +63,41 @@ from core.tools.call_syntax import (
 )
 from core.tools.contracts import ToolContract, ToolContractError
 
-# Accepted so a requested time zone or paused state reaches the handler, which
-# converts, applies or refuses it, and so the handler reports ignored late-start
-# limits. Never advertised.
+CURRENT_SESSION = "current"
+"""The ``session`` that names the calling Session; the handler resolves it."""
+NEW_SESSION = "new"
+"""The ``session`` that starts each run in a new Session."""
+NO_WATCH = "none"
+"""The ``watch`` that stops watching on update; on create it is the default."""
+DELIVER_PLATFORM_FIELD = "deliver_platform"
+"""The platform a ``deliver`` value named; "here" holds only in a chat on it."""
+WEBHOOK_SECRET_FIELD = "webhook_secret_name"
+"""The field a webhook call sent its own secret in; vBot makes the secret, so it has no effect."""
+HERE = "here"
+DELIVERY_CHOICES = (HERE, "app", "none")
+
+# Accepted so a requested time zone, paused state or delivery platform reaches
+# the handler, which converts, applies or refuses it, and so the handler reports
+# ignored late-start limits and webhook secrets. Never advertised.
 UNADVERTISED_PARAMETERS: dict[str, Any] = {
     TIMEZONE_FIELD: {"type": "string", "minLength": 1},
     ENABLED_FIELD: {"type": "boolean"},
     LATE_LIMITS_FIELD: LATE_LIMITS_PARAMETER,
+    DELIVER_PLATFORM_FIELD: {"type": "string", "minLength": 1},
+    WEBHOOK_SECRET_FIELD: {"type": "string", "minLength": 1},
 }
-_CHANGE_FIELDS = ("target", "name", "prompt", "schedule", "event_id", "repeat", ENABLED_FIELD)
+_CHANGE_FIELDS = (
+    "target",
+    "name",
+    "prompt",
+    "schedule",
+    "event_id",
+    "repeat",
+    "session",
+    "deliver",
+    "watch",
+    ENABLED_FIELD,
+)
 _LATE_START = (
     "A fire that vBot missed, for example while the server was off, starts once, late, and "
     "its Run is told how late it is. To have a late Run skip the instruction, say so in "
@@ -182,11 +212,77 @@ _ONE_SHOT_KEYS = frozenset(
     {"onetime", "oneshot", "once", "runonce", "deleteafterrun", "deleteafterfire"}
 )
 _SESSION_KEYS = frozenset({"sessionid", "session", "sessionkey", "sessiontarget"})
-_FRESH_SESSION_WORDS = frozenset({"new", "fresh", "isolated", "auto", "default"})
+_FRESH_SESSION_WORDS = frozenset(
+    {"new", "fresh", "isolated", "auto", "default", "newsession", "separate"}
+)
+# OpenClaw's "main" Session is the conversation the job was made in.
+_CURRENT_SESSION_WORDS = frozenset(
+    {
+        "current",
+        "this",
+        "here",
+        "same",
+        "main",
+        "self",
+        "currentsession",
+        "thissession",
+        "conversation",
+        "thisconversation",
+    }
+)
 _DELIVERY_KEYS = frozenset(
     {"deliver", "delivery", "deliverto", "notify", "notifyoncompletion", "notifyuser", "announce"}
 )
-_NO_DELIVERY_WORDS = frozenset({"local", "none", "off", "silent", "false", "no"})
+_HERE_WORDS = frozenset(
+    {
+        "here",
+        "origin",
+        "chat",
+        "thischat",
+        "this",
+        "current",
+        "same",
+        "reply",
+        "conversation",
+        "source",
+        "last",
+        "announce",
+        "user",
+        "true",
+        "yes",
+        "on",
+    }
+)
+_APP_WORDS = frozenset({"app", "vbot", "desktop", "notification", "webui", "inbox"})
+_NO_DELIVERY_WORDS = frozenset({"none", "local", "off", "silent", "false", "no", "nowhere"})
+_PLATFORM_WORDS = frozenset({"telegram", "discord", "slack", "mattermost", "whatsapp"})
+_DELIVERY_FORMS = (
+    "A job delivers each run's answer to this conversation (here), to vBot (app) or nowhere (none):"
+)
+_WATCH_KEYS = frozenset({"watch", "monitor"})
+_WATCH_URL_KEYS = frozenset({"watchurl", "monitorurl", "checkurl"})
+_WATCH_COMMAND_KEYS = frozenset({"watchcommand", "monitorcommand", "checkcommand", "watchcmd"})
+_NO_WATCH_WORDS = frozenset({"none", "off", "nowatch", "false", "no"})
+# Hermes script gates and script-only jobs; an OpenClaw trigger object carries its script.
+_SCRIPT_KEYS = frozenset({"script", "monitorscript", "watchscript", "triggerscript", "noagent"})
+_SCRIPT_TRIGGER_KEYS = frozenset({"trigger"})
+WATCH_STAND_IN = "<command or URL to check>"
+_URL_SCHEME = re.compile(r"^[a-z][a-z0-9+.-]*://", re.IGNORECASE)
+# Hermes webhook routes filter events and carry their own secret.
+_WEBHOOK_FILTER_KEYS = frozenset(
+    {"events", "eventtypes", "eventfilter", "eventfilters", "filter", "filters"}
+)
+_WEBHOOK_SECRET_KEYS = frozenset(
+    {
+        "secret",
+        "token",
+        "webhooksecret",
+        "hmacsecret",
+        "signingsecret",
+        "webhooktoken",
+        "hooktoken",
+    }
+)
 _DESCRIPTION_KEYS = frozenset({"description", "desc", "summary", "details"})
 # Accepted without effect: vBot jobs always persist, and list always shows every job.
 _IGNORED_KEYS = frozenset({"durable", "persist", "persistent", "includedisabled", "reason"})
@@ -219,6 +315,8 @@ def normalize_cron_arguments(contract: ToolContract, arguments: Any) -> Any:
         return normalized
     if is_placeholder(normalized.get("event_id")):
         normalized.pop("event_id", None)
+    # Before the schedule: an OpenClaw trigger object is no event time.
+    _read_watch(normalized, problems)
     if "event_id" in normalized:
         _read_event_schedule(normalized, problems)
     elif normalized.get("action") == "update" and _names_event_offset(normalized):
@@ -230,6 +328,7 @@ def normalize_cron_arguments(contract: ToolContract, arguments: Any) -> Any:
     _read_recurrence(normalized, problems)
     _read_session(normalized, problems)
     _read_delivery(normalized, problems)
+    _read_webhook(normalized, problems)
     late_limits = take_late_limits(normalized, _LATE_START)
     _read_extras(normalized)
     _omit_placeholders(normalized, problems)
@@ -432,38 +531,170 @@ def _read_recurrence(arguments: dict[str, Any], problems: _Problems) -> None:
 
 
 def _read_session(arguments: dict[str, Any], problems: _Problems) -> None:
+    """Read Session choices as ``current``, ``new`` or a Session id."""
     for key in list(arguments):
         if spelling(key) not in _SESSION_KEYS:
             continue
         item = arguments.pop(key)
-        if is_placeholder(item) or spelling(str(item)) in _FRESH_SESSION_WORDS:
+        if isinstance(item, str) and spelling(item) in _CURRENT_SESSION_WORDS:
+            value = CURRENT_SESSION
+        elif is_placeholder(item):
             continue
-        problems.add(
-            f'every fire starts a fresh Session, so "{key}" cannot choose one; the prompt must '
-            "carry everything the Run needs."
-        )
+        elif isinstance(item, str) and spelling(item) in _FRESH_SESSION_WORDS:
+            value = NEW_SESSION
+        elif isinstance(item, str) and not _TEMPLATE.match(item):
+            value = item.strip()
+        else:
+            problems.add(
+                f'"{key}" takes current for this conversation or a Session id; leave it out to '
+                "start each run in a new Session.",
+                session=OMIT,
+            )
+            continue
+        _set_field(arguments, "session", value, problems)
 
 
 def _read_delivery(arguments: dict[str, Any], problems: _Problems) -> None:
+    """Read delivery requests as ``here``, ``app`` or ``none``."""
     for key in list(arguments):
         if spelling(key) not in _DELIVERY_KEYS:
             continue
-        item = arguments.pop(key)
-        if isinstance(item, dict):
-            mode = next((v for k, v in item.items() if spelling(k) == "mode"), None)
-            if len(item) == 1 and mode is not None and spelling(str(mode)) in _NO_DELIVERY_WORDS:
-                continue
-        elif (
-            is_placeholder(item)
-            or _boolean(item) is False
-            or (isinstance(item, str) and spelling(item) in _NO_DELIVERY_WORDS)
-        ):
+        choice = _delivery_choice(arguments.pop(key), problems)
+        if choice is None:
             continue
-        problems.add(
-            f'a job cannot deliver its reply ("{key}"): each fire runs in a fresh Session and '
-            "nobody is notified. Say in prompt how the result should reach the user, for "
-            "example which Tool to send it with."
+        word, platform = choice
+        _set_field(arguments, "deliver", word, problems)
+        if platform is not None:
+            _set_field(arguments, DELIVER_PLATFORM_FIELD, platform, problems)
+
+
+def _delivery_choice(item: Any, problems: _Problems) -> tuple[str, str | None] | None:
+    """The delivery a value asks for, with the platform it names; None asks for nothing."""
+    request = _json_object(item)
+    if request is not None:
+        # OpenClaw: {"mode": "announce" | "none", "channel": ..., "to": ...}.
+        fields = {spelling(name): value for name, value in request.items()}
+        mode = fields.get("mode")
+        if isinstance(mode, str) and spelling(mode) in _NO_DELIVERY_WORDS:
+            return "none", None
+        chat = next((fields[name] for name in ("to", "target", "chatid") if name in fields), None)
+        if not is_placeholder(chat):
+            _refuse_other_chat(f"{fields.get('channel', '')}:{chat}".lstrip(":"), problems)
+            return None
+        channel = fields.get("channel")
+        item = HERE if is_placeholder(channel) else channel
+    if isinstance(item, bool):
+        return (HERE if item else "none"), None
+    if not isinstance(item, str):
+        if item is not None:
+            _refuse_delivery(str(item), problems)
+        return None
+    word = spelling(item)
+    for choice, words in ((HERE, _HERE_WORDS), ("app", _APP_WORDS), ("none", _NO_DELIVERY_WORDS)):
+        if word in words:
+            return choice, None
+    if word in _PLATFORM_WORDS:
+        return HERE, word
+    if is_placeholder(item):
+        return None
+    platform, separator, _chat = item.partition(":")
+    if separator and spelling(platform) in _PLATFORM_WORDS:
+        _refuse_other_chat(item, problems)
+    else:
+        _refuse_delivery(item, problems)
+    return None
+
+
+def _refuse_other_chat(chat: str, problems: _Problems) -> None:
+    problems.choose(
+        f'deliver "{chat}" names another chat. {_DELIVERY_FORMS}',
+        [{"deliver": HERE}, {"deliver": "app"}],
+    )
+
+
+def _refuse_delivery(item: str, problems: _Problems) -> None:
+    problems.choose(
+        f'deliver "{item}" is not a delivery target. {_DELIVERY_FORMS}',
+        [{"deliver": choice} for choice in DELIVERY_CHOICES],
+    )
+
+
+def _read_watch(arguments: dict[str, Any], problems: _Problems) -> None:
+    """Read what a job checks before each run as one ``watch`` string; refuse script gates."""
+    for key in list(arguments):
+        word = spelling(key)
+        if word in _WATCH_KEYS | _WATCH_URL_KEYS | _WATCH_COMMAND_KEYS:
+            value = _watch_value(key, arguments.pop(key), problems, url=word in _WATCH_URL_KEYS)
+            if value is not None:
+                _set_field(arguments, "watch", value, problems)
+        elif word in _SCRIPT_KEYS or (
+            word in _SCRIPT_TRIGGER_KEYS
+            and "script" in map(spelling, _json_object(arguments[key]) or {})
+        ):
+            item = arguments.pop(key)
+            if is_placeholder(item) or (word == "noagent" and _boolean(item) is not True):
+                continue
+            problems.add(
+                f'"{key}" is not available: a job runs no script of its own and always runs its '
+                "prompt. watch checks a command or URL before each run, and the run starts only "
+                "when the output changed.",
+                watch=WATCH_STAND_IN,
+            )
+
+
+def _watch_value(key: str, item: Any, problems: _Problems, *, url: bool) -> str | None:
+    """The ``watch`` string a value asks for; None asks for nothing."""
+    request = _json_object(item)
+    if request is not None:
+        # The RPC and stored shape: {"command": ...} or {"url": ...}.
+        fields = {spelling(name): value for name, value in request.items()}
+        found = [(name, fields[name]) for name in ("command", "url") if name in fields]
+        if len(found) != 1 or not isinstance(found[0][1], str):
+            problems.add(
+                "watch takes one string: a command, or an http(s) URL.", watch=WATCH_STAND_IN
+            )
+            return None
+        url = found[0][0] == "url"
+        item = found[0][1]
+    if item is False or (isinstance(item, str) and spelling(item) in _NO_WATCH_WORDS):
+        return NO_WATCH
+    if is_placeholder(item):
+        return None
+    if not isinstance(item, str):
+        problems.add("watch takes one string: a command, or an http(s) URL.", watch=WATCH_STAND_IN)
+        return None
+    if _TEMPLATE.match(item):
+        # Dropped, the watch the call was meant to set would be lost; run, it would fail.
+        raise ToolContractError(
+            f'{REFUSAL_PREFIX}{key} "{item.strip()}" is a stand-in. Send the command or '
+            "http(s) URL to check in its place, or leave watch out."
         )
+    text = item.strip()
+    if url and not _URL_SCHEME.match(text) and not any(char.isspace() for char in text):
+        text = "https://" + text
+    return text
+
+
+def _read_webhook(arguments: dict[str, Any], problems: _Problems) -> None:
+    """Settle the event filter and secret a webhook route of another harness brings along."""
+    if arguments.get("schedule") != WEBHOOK_SCHEDULE:
+        return
+    for key in list(arguments):
+        word = spelling(key)
+        if word in _WEBHOOK_FILTER_KEYS:
+            item = arguments.pop(key)
+            if is_placeholder(item) or item in ([], {}):
+                continue
+            # Dropped, the job would run for every event the call meant to filter out.
+            problems.add(
+                f'"{key}" is not available: every request that proves the job\'s secret starts '
+                "a run, and the run sees the request's headers, such as X-GitHub-Event. To act "
+                "on some events only, name them in prompt."
+            )
+        elif word in _WEBHOOK_SECRET_KEYS:
+            item = arguments.pop(key)
+            if not is_placeholder(item):
+                arguments[WEBHOOK_SECRET_FIELD] = key
 
 
 def _read_extras(arguments: dict[str, Any]) -> None:
@@ -674,15 +905,24 @@ def _boolean(value: Any) -> Any:
 
 __all__ = [
     "CLOCK_SCHEDULE",
+    "CURRENT_SESSION",
+    "DELIVERY_CHOICES",
+    "DELIVER_PLATFORM_FIELD",
     "ENABLED_FIELD",
     "EVENT_REPEAT_REFUSAL",
     "EVENT_TIME_STAND_IN",
+    "HERE",
+    "NEW_SESSION",
+    "NO_WATCH",
     "SELF_TARGET",
     "CronCallRefusedError",
     "OMIT",
     "REFUSAL_PREFIX",
     "TIMEZONE_FIELD",
     "UNADVERTISED_PARAMETERS",
+    "WATCH_STAND_IN",
+    "WEBHOOK_SCHEDULE",
+    "WEBHOOK_SECRET_FIELD",
     "ambiguous_event_time",
     "event_time_readings",
     "normalize_cron_arguments",

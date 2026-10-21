@@ -9,6 +9,7 @@ import sys
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from functools import partial
+from pathlib import Path
 from typing import Any
 
 from core.projects import ProjectStore
@@ -101,8 +102,8 @@ _CONSOLE_READS_WAIT = sys.platform == "win32"
 
 
 @dataclass(frozen=True)
-class _ShellStart:
-    """How a call's host shell starts, without input or terminal."""
+class HostShellStart:
+    """How a command's host shell starts, without input or terminal."""
 
     argv: list[str]
     env: dict[str, str]
@@ -112,35 +113,47 @@ class _ShellStart:
     warm: bool = True
 
 
-def _shell_start(call: _ShellCall, environment: CommandEnvironment) -> _ShellStart:
-    """The host shell for *call*, without input or terminal.
+class HostShellMissingError(Exception):
+    """This host has no shell to run commands in; the message names it, without a final period."""
 
-    PowerShell's argv and start environment are the same for every call, so a
-    shell started before the call can serve it: the command, its workdir and
-    the call's layer of the environment travel as the request on stdin. The
-    request cannot carry an empty value, which ``SetEnvironmentVariable``
-    removes on .NET 8 (pwsh 7.4): a call that sets one starts a shell of its
-    own with its whole environment. Raises ``_NotStartedError`` when this host
-    cannot run it.
+
+def host_shell_start(
+    command: str, workdir: Path, environment: CommandEnvironment
+) -> HostShellStart:
+    """The host shell for *command* in *workdir*, without input or terminal; blocking.
+
+    PowerShell 7 on Windows, bash elsewhere. PowerShell's argv and start
+    environment are the same for every call, so a shell started before the call
+    can serve it: the command, its workdir and the call's layer of the
+    environment travel as the request on stdin. The request cannot carry an
+    empty value, which ``SetEnvironmentVariable`` removes on .NET 8 (pwsh 7.4):
+    a call that sets one starts a shell of its own with its whole environment.
+    Raises ``HostShellMissingError`` when this host has no such shell.
     """
     complete = environment.complete()
     search_path = next((value for name, value in complete.items() if name.upper() == "PATH"), None)
     if sys.platform == "win32":
         pwsh = shutil.which("pwsh", path=search_path)
         if pwsh is None:
-            raise _cannot_start(
-                "PowerShell 7 (pwsh) is not installed on this host. Ask the user to install it."
-            )
+            raise HostShellMissingError("PowerShell 7 (pwsh) is not installed on this host")
         argv = [pwsh, "-NoProfile", "-NonInteractive", "-Command", powershell_bootstrap()]
         if "" in environment.changes.values():
-            request = powershell_request(call.command, str(call.workdir), {})
-            return _ShellStart(argv, complete, request, warm=False)
-        request = powershell_request(call.command, str(call.workdir), environment.changes)
-        return _ShellStart(argv, environment.base, request)
+            request = powershell_request(command, str(workdir), {})
+            return HostShellStart(argv, complete, request, warm=False)
+        request = powershell_request(command, str(workdir), environment.changes)
+        return HostShellStart(argv, environment.base, request)
     bash = shutil.which("bash", path=search_path)
     if bash is None:
-        raise _cannot_start("bash is not installed on this host. Ask the user to install it.")
-    return _ShellStart([bash, "-c", call.command], complete)
+        raise HostShellMissingError("bash is not installed on this host")
+    return HostShellStart([bash, "-c", command], complete)
+
+
+def _shell_start(call: _ShellCall, environment: CommandEnvironment) -> HostShellStart:
+    """The host shell for *call*; raises ``_NotStartedError`` when this host cannot run it."""
+    try:
+        return host_shell_start(call.command, call.workdir, environment)
+    except HostShellMissingError as error:
+        raise _cannot_start(f"{error}. Ask the user to install it.") from error
 
 
 def _issue_update_handoff(
@@ -317,7 +330,7 @@ class ShellTool:
                     SessionAddress(context.project_id, context.agent_id, context.session_id)
                 )
 
-        def prepare() -> _ShellStart:
+        def prepare() -> HostShellStart:
             environment = command_environment(
                 RunIdentity(
                     context.agent_id,

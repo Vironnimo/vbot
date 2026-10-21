@@ -33,7 +33,6 @@ from tests.core.channels.channels_test_support import (
     make_service as make_channel_service,
 )
 from tests.core.tools.channel_send_test_support import (
-    OUTBOUND_SESSION,
     channel_send,
     delivered,
     make_channel_config,
@@ -126,7 +125,7 @@ def test_a_checklist_reaches_the_channel_as_its_keyboard(
         expected["run_origin"] = run_origin
     assert tool.sent() == [("tg-main", "Shopping list", "111", expected)]
     # The chat's Session keeps the items, so later messages there have them as context.
-    note = tool.sessions.get_or_create.return_value.add_note.call_args.args[0]
+    note = tool.note()
     assert json.loads(note.split("\n", 1)[1])["checklist"] == [
         {"id": "a1", "label": "200 g Spaghetti", "checked": False},
         {"id": "b2-c3", "label": "Eggs", "checked": True},
@@ -172,7 +171,7 @@ def test_a_failed_delivery_is_a_failure_result(
     envelope = tool.call({"message": "Task finished"})
 
     assert refused(envelope, code) == message
-    tool.service.ensure_outbound_session.assert_not_awaited()
+    tool.service.record_outbound_note.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
@@ -210,15 +209,10 @@ def test_the_chats_session_gets_a_note_of_what_was_sent(
     envelope = tool.call(arguments)
 
     delivered(envelope)
-    tool.service.ensure_outbound_session.assert_awaited_once_with(
-        "tg-main", "111", thread_id=thread
+    note = tool.note()
+    tool.service.record_outbound_note.assert_awaited_once_with(
+        "tg-main", "111", note, thread_id=thread
     )
-    tool.sessions.get_or_create.assert_called_once_with(
-        SessionAddress(project_id=None, agent_id="agent-1", session_id=OUTBOUND_SESSION.session_id)
-    )
-    add_note = tool.sessions.get_or_create.return_value.add_note
-    add_note.assert_called_once()
-    note = add_note.call_args.args[0]
     assert json.loads(note.split("\n", 1)[1]) == {"sender_agent_id": "agent-1", **record}
     assert "</system-reminder>" not in note
     assert tool.sent()[0][1] == arguments.get("message")
@@ -228,7 +222,7 @@ def test_a_note_that_cannot_be_recorded_keeps_the_send_successful(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     tool = channel_send(tmp_path)
-    tool.service.ensure_outbound_session.side_effect = RuntimeError("boom")
+    tool.service.record_outbound_note.side_effect = RuntimeError("boom")
 
     with caplog.at_level(logging.WARNING):
         envelope = tool.call({"message": "Task finished"})
@@ -267,13 +261,13 @@ async def test_a_run_cancel_lets_a_started_send_report_what_happened(
 
     if send_finishes:
         assert delivered(envelope) == {"channel_id": "tg-main", "platform_target": "111"}
-        tool.sessions.get_or_create.return_value.add_note.assert_called_once()
+        tool.service.record_outbound_note.assert_awaited_once()
     else:
         assert refused(envelope, "delivery_unconfirmed") == (
             "It is unknown how much of the message reached the chat: the Run was stopped "
             "while it was being sent. Sending the same message again can show it twice."
         )
-        tool.service.ensure_outbound_session.assert_not_awaited()
+        tool.service.record_outbound_note.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -383,7 +377,7 @@ async def test_a_project_session_never_uses_a_same_named_identity_sessions_chat(
 
 
 @pytest.mark.usefixtures("current_format_data_directory")
-def test_session_reads_and_the_note_run_on_the_session_pool(
+def test_the_reply_target_is_read_on_the_session_pool(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     sessions = ChatSessionManager(tmp_path)
@@ -391,18 +385,12 @@ def test_session_reads_and_the_note_run_on_the_session_pool(
     sessions.set_metadata(caller, _reply_target("111"))
     threads: dict[str, str] = {}
     get_metadata = sessions.get_metadata
-    get_or_create = sessions.get_or_create
 
     def recorded_metadata(address: SessionAddress) -> Any:
         threads["target"] = threading.current_thread().name
         return get_metadata(address)
 
-    def recorded_get_or_create(address: SessionAddress) -> Any:
-        threads["note"] = threading.current_thread().name
-        return get_or_create(address)
-
     monkeypatch.setattr(sessions, "get_metadata", recorded_metadata)
-    monkeypatch.setattr(sessions, "get_or_create", recorded_get_or_create)
     tool = channel_send(
         tmp_path, make_channel_config(allowed_chat_ids=[111, 222]), sessions=sessions
     )
@@ -410,13 +398,7 @@ def test_session_reads_and_the_note_run_on_the_session_pool(
         envelope = tool.call({"message": "Done"})
 
         assert delivered(envelope)["platform_target"] == "111"
-        target = SessionAddress(
-            project_id=None, agent_id="agent-1", session_id=OUTBOUND_SESSION.session_id
-        )
-        assert [entry.role for entry in sessions.get(target).load()] == ["note"]
-        # The Reply Target and the outbound note use the Session database's pool.
         assert threads["target"].startswith("vbot-db-sessions")
-        assert threads["note"].startswith("vbot-db-sessions")
     finally:
         sessions.close()
 

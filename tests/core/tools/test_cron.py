@@ -11,6 +11,8 @@ from unittest.mock import Mock
 import pytest
 
 import core.tools.cron as cron_tool_module
+from core.automation.cron import CronDelivery, WatchCheckError
+from core.chat import ReplySurface
 from core.projects import (
     AgentResolutionError,
     ResolutionAgentNotFoundError,
@@ -18,7 +20,12 @@ from core.projects import (
 )
 from core.tools._cron_arguments import render_call
 from core.tools.cron import CRON_TOOL_NAME, CRON_TOOL_PARAMETERS
-from tests.core.tools.scheduling_tool_support import CronTool, cron_tool, scheduling_tools
+from tests.core.tools.scheduling_tool_support import (
+    WEBHOOK_BASE_URL,
+    CronTool,
+    cron_tool,
+    scheduling_tools,
+)
 
 PROMPT = "Check the nightly build and summarize failures."
 BERLIN_TIME = r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\+0[12]:00"
@@ -41,7 +48,11 @@ def test_schema_advertises_only_the_canonical_fields() -> None:
         "schedule",
         "event_id",
         "repeat",
+        "session",
+        "deliver",
+        "watch",
     ]
+    assert properties["deliver"]["enum"] == ["here", "app", "none"]
     assert properties["action"]["enum"] == [
         "create",
         "list",
@@ -172,6 +183,9 @@ def test_list_shows_every_job_as_a_readable_block(tmp_path: Path) -> None:
         {"action": "create", "name": "Paused", "prompt": PROMPT, "schedule": "every 2h"}
     )
     paused_id = paused["data"]["id"]
+    quiet = next(job for job in tool.jobs() if job.name == "Digest")
+    tool.service._jobs[quiet.id].last_outcome = "success"
+    tool.service._jobs[quiet.id].last_run_silent = True
     tool.call({"action": "disable", "id": paused_id})
     failed = tool.service._jobs[paused_id]
     failed.status = "failed"
@@ -186,6 +200,7 @@ def test_list_shows_every_job_as_a_readable_block(tmp_path: Path) -> None:
     header, digest, stopped = text.split("\n\n")
     assert header == "jobs: 2\ntimezone: Europe/Berlin"
     assert "name: Digest\nstatus: active\nschedule: 0 8 * * *\n" in digest
+    assert "last_outcome: success (answered [SILENT])" in digest
     assert digest.endswith("prompt: Write the digest.\n  Keep it short.")
     assert "status: failed" in stopped
     assert "next_run" not in stopped
@@ -537,6 +552,197 @@ def test_target_choices_wait_for_the_reference_lock(tmp_path: Path, action: str)
 # -- jobs at calendar events -----------------------------------------------------------------
 
 
+def _chat(thread_id: str | None = None) -> ReplySurface:
+    """The calling Run answers chat-42 of agent-one's Telegram Channel tg-main."""
+    return ReplySurface(
+        kind="channel",
+        platform="telegram",
+        platform_display_name="Telegram",
+        channel_id="tg-main",
+        conversation_kind="direct",
+        platform_target="chat-42",
+        thread_id=thread_id,
+    )
+
+
+@pytest.mark.parametrize(
+    ("surface", "fields", "delivery", "shown"),
+    [
+        pytest.param(None, {}, CronDelivery(kind="app"), "app", id="vbot"),
+        pytest.param(
+            _chat(),
+            {},
+            CronDelivery(kind="chat", channel_id="tg-main", platform_target="chat-42"),
+            "chat chat-42 of Channel tg-main",
+            id="chat",
+        ),
+        pytest.param(
+            _chat("7"),
+            {"deliver": "here"},
+            CronDelivery(
+                kind="chat", channel_id="tg-main", platform_target="chat-42", thread_id="7"
+            ),
+            "chat chat-42, thread 7, of Channel tg-main",
+            id="chat-thread",
+        ),
+        # Hermes names the platform of the chat the job was made in.
+        pytest.param(
+            _chat(),
+            {"deliver": "Telegram"},
+            CronDelivery(kind="chat", channel_id="tg-main", platform_target="chat-42"),
+            "chat chat-42 of Channel tg-main",
+            id="this-platform",
+        ),
+        pytest.param(_chat(), {"deliver": "app"}, CronDelivery(kind="app"), "app", id="app"),
+        pytest.param(_chat(), {"deliver": "none"}, None, "none", id="none"),
+        # The chat belongs to the caller's Channel; another Agent's job reports in vBot.
+        pytest.param(
+            _chat(), {"target": "builder"}, CronDelivery(kind="app"), "app", id="other-agent"
+        ),
+    ],
+)
+def test_answers_go_to_the_conversation_the_job_was_made_in_unless_told_otherwise(
+    tmp_path: Path,
+    surface: ReplySurface | None,
+    fields: dict[str, Any],
+    delivery: CronDelivery | None,
+    shown: str,
+) -> None:
+    tool = cron_tool(tmp_path)
+
+    envelope, text = tool.call(
+        {"action": "create", "prompt": PROMPT, "schedule": "0 9 * * *", **fields},
+        reply_surface=surface,
+    )
+
+    assert envelope["ok"] is True, text
+    assert tool.only_job().delivery == delivery
+    assert f"deliver: {shown}" in text
+    assert ("not to builder" in text) == ("target" in fields)
+
+
+@pytest.mark.parametrize(
+    ("fields", "cause"),
+    [
+        pytest.param(
+            {"target": "builder", "deliver": "here"},
+            "this chat belongs to your Channel, so a job of builder cannot deliver here",
+            id="another-agents-job",
+        ),
+        pytest.param(
+            {"deliver": "slack"}, "this conversation is not a slack chat", id="another-platform"
+        ),
+        pytest.param({}, "delivery Channel tg-main is not available", id="channel-gone"),
+    ],
+)
+def test_a_chat_that_cannot_take_the_answers_is_refused_with_vbot_instead(
+    tmp_path: Path, fields: dict[str, Any], cause: str
+) -> None:
+    tool = cron_tool(tmp_path)
+    if not fields:
+        tool.chats.owners.clear()
+
+    message = tool.refused(
+        {"action": "create", "prompt": PROMPT, "schedule": "0 9 * * *", **fields},
+        reply_surface=_chat(),
+    )
+
+    assert cause in message
+    assert message.endswith('"deliver":"app"}')
+
+
+@pytest.mark.asyncio
+async def test_a_watch_is_checked_at_once_and_none_stops_it(tmp_path: Path) -> None:
+    tool = cron_tool(tmp_path)
+    missing = WatchCheckError("The check command exited with code 1: status.txt not found")
+    tool.checks.answers.extend(["Status: up", missing])
+    tool.service.start()
+    try:
+        envelope, created = await tool.call_async(
+            {
+                "action": "create",
+                "prompt": PROMPT,
+                "schedule": "every 1h",
+                "watch": "https://status.example/",
+            }
+        )
+        job_id = envelope["data"]["id"]
+        _envelope, broken = await tool.call_async(
+            {"action": "update", "id": job_id, "watch": "Get-Content status.txt"}
+        )
+        # The same watch is not checked again.
+        _envelope, renamed = await tool.call_async(
+            {"action": "update", "id": job_id, "name": "Status", "watch": "Get-Content status.txt"}
+        )
+        _envelope, stopped = await tool.call_async(
+            {"action": "update", "id": job_id, "watch": "none"}
+        )
+    finally:
+        await tool.service.aclose()
+
+    assert "watch: https://status.example/" in created
+    assert re.search(rf"^last_check: {BERLIN_TIME}$", created, re.MULTILINE)
+    assert "last_check_error" not in created
+    assert "The first check recorded the current output" in created
+    assert "watch: Get-Content status.txt" in broken
+    assert "last_check_error: The check command exited with code 1: status.txt not found" in broken
+    assert "The first check failed" in broken
+    assert "first check" not in renamed
+    assert "watch" not in stopped and "last_check" not in stopped
+    assert tool.only_job().watch is None
+    assert tool.checks.calls == [
+        ("url", "https://status.example/"),
+        ("command", "Get-Content status.txt", "agent-one", ""),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("fields", "cause", "send"),
+    [
+        pytest.param(
+            {"schedule": "in 2h", "watch": "https://status.example/"},
+            'watch needs a repeating schedule (five cron fields or "every <duration>")',
+            '"schedule":"<repeating schedule>","watch":"https://status.example/"} or '
+            f'{{"action":"create","prompt":"{PROMPT}","schedule":"in 2h"}}',
+            id="one-time",
+        ),
+        pytest.param(
+            {"schedule": "every 1h", "watch": "x" * 4001},
+            "a command can have at most 4000",
+            '"watch":"<command or URL to check>"}',
+            id="long-command",
+        ),
+    ],
+)
+def test_a_watch_the_job_cannot_check_is_refused(
+    tmp_path: Path, fields: dict[str, Any], cause: str, send: str
+) -> None:
+    message = cron_tool(tmp_path).refused({"action": "create", "prompt": PROMPT, **fields})
+
+    assert cause in message
+    assert message.endswith(send)
+
+
+def test_session_current_continues_this_conversation_until_new(tmp_path: Path) -> None:
+    tool = cron_tool(tmp_path)
+
+    job, created = tool.created(
+        {"action": "create", "prompt": PROMPT, "schedule": "0 9 * * *", "session": "current"}
+    )
+    refused = tool.refused(
+        {"action": "update", "id": job.id, "target": "builder", "session": "current"}
+    )
+    _envelope, renewed = tool.call({"action": "update", "id": job.id, "session": "new"})
+
+    assert job.session_id == "session-one"
+    assert "session: session-one" in created
+    assert 'session "current" is your conversation, so a job of builder cannot continue it' in (
+        refused
+    )
+    assert tool.only_job().session_id is None
+    assert "session:" not in renewed
+
+
 def _standup(tool: CronTool) -> str:
     """Mondays 09:00-09:15 from 2030-01-07; return its id."""
     return tool.calendar.create_event(
@@ -575,6 +781,7 @@ def test_event_job_runs_before_at_or_after_each_occurrence(
         f"event: Standup ({standup})",
         f"next_run: {next_run}",
         "target: agent-one",
+        "deliver: app",
     ]
 
 
@@ -701,3 +908,36 @@ def test_update_moves_an_event_job_between_times_events_and_schedules(tmp_path: 
     # A schedule of another kind ends the binding.
     tool.succeeded({"action": "update", "id": job_id, "schedule": "every 2h"})
     assert fields() == ("interval", None, None, None)
+
+
+def test_a_webhook_job_shows_its_url_and_hands_out_its_secret_once(tmp_path: Path) -> None:
+    tool = cron_tool(tmp_path)
+    timed_id = tool.add_job()
+
+    envelope, created = tool.call({"action": "create", "prompt": PROMPT, "schedule": "webhook"})
+    job_id = envelope["data"]["id"]
+    secret = asyncio.run(tool.service.webhook_secret(job_id))
+    renamed = tool.succeeded({"action": "update", "id": job_id, "name": "GitHub events"})
+    switched = tool.succeeded({"action": "update", "id": timed_id, "schedule": "webhook"})
+    switched_secret = asyncio.run(tool.service.webhook_secret(timed_id))
+    received = asyncio.run(
+        tool.service.receive_webhook(job_id, [("authorization", f"Bearer {secret}")], b"{}")
+    )
+    listed = tool.succeeded({"action": "list", "id": job_id})
+
+    job = tool.service.get_job(job_id)
+    assert (job.schedule_type, job.cron_expression, job.interval_seconds) == ("webhook", None, None)
+    url = f"url: {WEBHOOK_BASE_URL}/api/hooks/{job_id}"
+    assert f"schedule: webhook\n{url}\nreachable_from: the internet\n" in created
+    assert "next_run" not in created
+    assert f"secret: {secret}" in created
+    assert f'"Authorization: Bearer {secret}"' in created
+    assert "X-Hub-Signature-256" in created
+    # The secret comes with the call that made the webhook, never again.
+    assert secret not in renamed
+    assert f"secret: {switched_secret}" in switched
+    assert received == "accepted"
+    assert url in listed
+    assert "requests_waiting: 1" in listed
+    assert re.search(rf"^last_request: {BERLIN_TIME}$", listed, re.MULTILINE)
+    assert secret not in listed

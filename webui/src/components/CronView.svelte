@@ -1,9 +1,13 @@
 <script>
   import CronTimingSettings from './cron/CronTimingSettings.svelte';
+  import CronDeliverySettings from './cron/CronDeliverySettings.svelte';
+  import CronWatchSettings from './cron/CronWatchSettings.svelte';
+  import CronWebhookSettings from './cron/CronWebhookSettings.svelte';
   import {
     displayValue,
     headerStatusVisible,
     listRowDetail,
+    nextRunText,
     scheduleSummary,
     scheduleTechnicalValue,
     sessionSummary,
@@ -32,6 +36,7 @@
     applyCronListResponse,
     buildCronAgentDropdownOptions,
     buildCronAgentOptions,
+    canWatch,
     createCronViewState,
     visibleCronJobs,
   } from '$lib/cronView.js';
@@ -44,6 +49,7 @@
   import { createStandaloneNavigation } from '$lib/navigation.svelte.js';
   import {
     listAgents,
+    listChannels,
     listCronJobs,
     listProjects,
     showProject,
@@ -111,6 +117,10 @@
     listProjects,
     showProject,
   });
+
+  // The Channels a job can deliver to, from `channel.list`. Loaded with the
+  // view; without them the chat delivery offers no Channel.
+  let channels = $state([]);
 
   let destroyed = false;
   // Set once the first job and agent lists arrived, so the place can be
@@ -253,7 +263,19 @@
   });
 
   async function loadInitialData() {
-    await Promise.all([loadAgents(), loadJobs()]);
+    await Promise.all([loadAgents(), loadJobs(), loadChannels()]);
+  }
+
+  // A failure leaves the chat delivery without Channels to offer; the rest of
+  // the view does not depend on them.
+  async function loadChannels() {
+    try {
+      const result = await listChannels();
+      if (destroyed) return;
+      channels = Array.isArray(result?.channels) ? result.channels : [];
+    } catch {
+      // Nothing to offer; a saved chat delivery still shows its Channel id.
+    }
   }
 
   async function loadAgents() {
@@ -582,7 +604,7 @@
                       {t('cron.detail.nextFire')}
                     </span>
                     <strong class="cron-summary-value">
-                      {displayValue(editor.selectedJob.next_fire_at_display)}
+                      {nextRunText(editor.selectedJob)}
                     </strong>
                     <span class="cron-summary-support">
                       {viewState.systemTimezone}
@@ -610,7 +632,10 @@
                       {t('cron.detail.lastResult')}
                     </span>
                     <strong class="cron-summary-value">
-                      {outcomeLabel(editor.selectedJob.last_outcome)}
+                      {outcomeLabel(
+                        editor.selectedJob.last_outcome,
+                        editor.selectedJob.last_run_silent,
+                      )}
                     </strong>
                     <span class="cron-summary-support">
                       {lastResultSupport(editor.selectedJob)}
@@ -664,6 +689,24 @@
                         {displayValue(editor.selectedJob.last_run_id)}
                       </dd>
                     </div>
+                    {#if editor.selectedJob.watch}
+                      <div>
+                        <dt>{t('cron.detail.lastCheck')}</dt>
+                        <dd>
+                          {displayValue(
+                            editor.selectedJob.last_checked_at_display,
+                          )}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>{t('cron.detail.lastChange')}</dt>
+                        <dd>
+                          {displayValue(
+                            editor.selectedJob.last_changed_at_display,
+                          )}
+                        </dd>
+                      </div>
+                    {/if}
                     <div>
                       <dt>{t('cron.detail.failures')}</dt>
                       <dd>{editor.selectedJob.consecutive_failures}</dd>
@@ -682,11 +725,39 @@
                     </div>
                   </dl>
                 </details>
+
+                <!-- The latest answer that was not silent; a silent Run
+                     keeps the one before it. -->
+                {#if editor.selectedJob.last_result}
+                  <details class="s-disclosure cron-last-answer">
+                    <summary>
+                      {t('cron.detail.lastAnswer')}
+                      {#if editor.selectedJob.last_result.at_display}
+                        <span class="s-disclosure__meta cron-last-answer__time">
+                          {editor.selectedJob.last_result.at_display}
+                        </span>
+                      {/if}
+                    </summary>
+                    <p class="s-disclosure__body cron-last-answer__text">
+                      {editor.selectedJob.last_result.text}
+                    </p>
+                  </details>
+                {/if}
               </div>
 
               {#if editor.selectedJob.last_error}
                 <Banner variant="error" role="status">
                   {editor.selectedJob.last_error}
+                </Banner>
+              {/if}
+              <!-- Cleared by the next successful check. -->
+              {#if editor.selectedJob.watch && editor.selectedJob.last_check_error}
+                <Banner
+                  variant="error"
+                  role="status"
+                  data-testid="cron-check-error"
+                >
+                  {editor.selectedJob.last_check_error}
                 </Banner>
               {/if}
             {/if}
@@ -771,6 +842,17 @@
               systemTimezone={viewState.systemTimezone}
             />
 
+            {#if canWatch(editor.formValues.schedule_type)}
+              <CronWatchSettings {editor} />
+            {/if}
+
+            {#if editor.isWebhookSchedule}
+              <CronWebhookSettings
+                {editor}
+                systemTimezone={viewState.systemTimezone}
+              />
+            {/if}
+
             <section class="s-section" aria-labelledby="cron-section-session">
               <header class="s-section__head">
                 <h3 class="s-section__title" id="cron-section-session">
@@ -806,6 +888,8 @@
                 </div>
               </div>
             </section>
+
+            <CronDeliverySettings {editor} {channels} />
 
             <!-- Identifier and deletion close the page, after everything the
                  user edits. -->
@@ -888,6 +972,16 @@
       confirmLabel={t('common.delete')}
       onConfirm={editor.confirmDeleteJob}
       onCancel={editor.cancelDeleteJob}
+    />
+  {/if}
+
+  {#if editor.showRotateConfirm}
+    <ConfirmDialog
+      title={t('cron.webhook.rotateConfirmTitle')}
+      body={t('cron.webhook.rotateConfirm')}
+      confirmLabel={t('cron.webhook.rotateConfirmLabel')}
+      onConfirm={editor.confirmRotateSecret}
+      onCancel={editor.cancelRotateSecret}
     />
   {/if}
 

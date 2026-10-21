@@ -956,6 +956,42 @@
    }
   },
   {
+   "name": "cron: watch on a one-time schedule is refused with both calls",
+   "tool": "cron",
+   "arguments": {
+    "action": "create",
+    "prompt": "Tell me what changed on the status page.",
+    "schedule": "in 2h",
+    "watch": "https://status.example.com/"
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "invalid_arguments",
+    "contains": [
+     "watch needs a repeating schedule",
+     "\"schedule\":\"<repeating schedule>\""
+    ]
+   }
+  },
+  {
+   "name": "cron: Hermes monitor_script is refused with watch",
+   "tool": "cron",
+   "arguments": {
+    "action": "create",
+    "prompt": "Report the new price.",
+    "schedule": "every 1h",
+    "monitor_script": "check_price.py"
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "invalid_arguments",
+    "contains": [
+     "a job runs no script of its own",
+     "\"watch\":\"<command or URL to check>\""
+    ]
+   }
+  },
+  {
    "name": "classify: canonical question (needs a Decision model)",
    "tool": "classify",
    "arguments": {

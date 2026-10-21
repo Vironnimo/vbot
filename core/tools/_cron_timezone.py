@@ -48,6 +48,9 @@ def zoned_schedule(
     result = dict(arguments)
     name = result.pop(TIMEZONE_FIELD, None)
     schedule = result.get("schedule")
+    if isinstance(schedule, str) and schedule_kind(schedule) == "webhook":
+        # A webhook job keeps no time, so no time zone changes it.
+        return result, None
     clock = CLOCK_SCHEDULE.match(schedule) if isinstance(schedule, str) else None
     if clock is not None:
         return _next_clock_time(result, clock, name, server, now)

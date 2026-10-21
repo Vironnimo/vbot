@@ -138,6 +138,28 @@ export function disableCronJob(id, options = {}) {
   return rpc('cron.disable', { id }, options);
 }
 
+// The secret a webhook job's requests prove, with the job's `webhook`.
+export function getCronWebhookSecret(id, options = {}) {
+  requireNonEmptyString(
+    id,
+    'Cron job id must be a non-empty string',
+    'cron.webhook_secret',
+  );
+
+  return rpc('cron.webhook_secret', { id }, options);
+}
+
+// Replace a webhook job's secret; requests with the old one are refused.
+export function rotateCronWebhookSecret(id, options = {}) {
+  requireNonEmptyString(
+    id,
+    'Cron job id must be a non-empty string',
+    'cron.rotate_webhook_secret',
+  );
+
+  return rpc('cron.rotate_webhook_secret', { id }, options);
+}
+
 export function getCalendarWindow(params = {}, options = {}) {
   requirePlainObject(
     params,

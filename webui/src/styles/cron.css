@@ -280,6 +280,21 @@
   font-size: var(--fs-mono-sm);
 }
 
+/* The latest answer that reached the user, as plain text in its own lines. */
+.cron-view .cron-last-answer__time {
+  margin-left: 8px;
+}
+
+.cron-view .cron-last-answer__text {
+  max-height: 320px;
+  overflow-y: auto;
+  color: var(--text-med);
+  font-size: var(--fs-body-sm);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .cron-view .cron-technical-content {
   display: flex;
   min-width: 0;
@@ -353,6 +368,30 @@
 
 .cron-view .cron-interval-control .cron-dropdown {
   flex: 1;
+}
+
+/* A webhook job's URL and secret read as values to copy; the controls stay
+   on one line beside them and wrap below on narrow panes. */
+.cron-view .cron-webhook-control {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.cron-view .cron-webhook-value {
+  min-width: 0;
+  flex: 1 1 8rem;
+  color: var(--text-hi);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-sm);
+  overflow-wrap: anywhere;
+}
+
+.cron-view .cron-webhook-requests {
+  color: var(--text-med);
+  font-size: var(--fs-body-sm);
 }
 
 /* A one-time run: its date beside its time. */

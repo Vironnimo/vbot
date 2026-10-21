@@ -127,7 +127,7 @@ async def test_each_occurrence_runs_the_prompt_once_with_the_event_as_context(
     calls = services.trigger.trigger_run.await_args_list
     assert [call.args for call in calls] == [("agent-one", _PROMPT, None)] * 2
     assert all(call.kwargs["run_kind"] is RunKind.CRON for call in calls)
-    assert _notes(services)[0] == (
+    assert _notes(services)[0].split("\n\n")[0] == (
         f'Cron job {job.id} is due (start - 30m) for the calendar event "Standup" '
         f"(event {event.id}, occurrence {event.id}_20300107T0900).\n"
         "Event time: 2030-01-07T09:00 to 2030-01-07T09:30 (Europe/Berlin)\n"
