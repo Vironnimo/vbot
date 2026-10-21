@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Final, Literal, TypeGuard, cast, override
 from urllib.parse import urlsplit
 
+from core.permissions._addresses import canonical_host
 from core.permissions._paths import DRIVE_RELATIVE_PATH, split_lexical
 from core.utils.errors import VBotError
 
@@ -354,10 +355,14 @@ def write_within_read(read: ReadBase | None, write: WriteBase) -> WriteBase:
 
 
 def normalize_host(host: str) -> str:
-    """The comparison form of a host an access names: lowercase, IDNA, no brackets."""
+    """The comparison form of a host an access names: lowercase, IDNA, no brackets.
+
+    An IPv4 address in any form the resolver reads (``127.1``, ``2130706433``,
+    ``0x7f000001``) takes its dotted form, so rules and checks compare one form.
+    """
     text = host.strip().lower().rstrip(".")
-    if text.startswith("[") and text.endswith("]"):
-        text = text[1:-1]
+    bracketed = text.startswith("[") and text.endswith("]")
+    text = text[1:-1] if bracketed else canonical_host(text)
     try:
         return ipaddress.ip_address(text).compressed
     except ValueError:
@@ -539,7 +544,8 @@ def _host_pattern(text: str) -> str:
         raise _RuleProblemError("Web needs a host, such as Web(example.com) or Web(*.example.com).")
     if "*" in body:
         raise _RuleProblemError("a * can only start a host, as in Web(*.example.com).")
-    unbracketed = body[1:-1] if body.startswith("[") and body.endswith("]") else body
+    bracketed = body.startswith("[") and body.endswith("]")
+    unbracketed = body[1:-1] if bracketed else canonical_host(body)
     if _is_ip(unbracketed):
         if wildcard:
             raise _RuleProblemError("an IP address cannot have a *. prefix.")

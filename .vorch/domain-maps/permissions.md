@@ -82,7 +82,7 @@ For a path, in this order:
 4. A deny rule of any layer refuses: `Read` deny covers reads and writes, `Edit` deny writes.
 5. Every layer must permit, by its base or an allow rule: an `Edit` allow covers reads too. The Workspace and `readable_dirs` count as readable in every layer.
 
-Hosts and commands: a deny rule of any layer refuses; under `listed` every such layer needs an allow rule. Host patterns: `example.com` covers the host and its subdomains, `*.example.com` only subdomains, `*` every host, IP literals match exactly.
+Hosts and commands: a deny rule of any layer refuses; under `listed` every such layer needs an allow rule. Host patterns: `example.com` covers the host and its subdomains, `*.example.com` only subdomains, `*` every host, IP literals match exactly, an IPv4 address in its dotted form whichever form a rule or access writes (`127.1`, `_addresses.py`).
 
 ## Constraints & Gotchas
 

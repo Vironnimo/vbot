@@ -380,6 +380,11 @@ def test_malformed_ceilings_are_refused(stored: object) -> None:
         pytest.param("github.com", "not_permitted", id="wildcard-excludes-the-domain"),
         pytest.param("10.0.0.5", None, id="ip-literal"),
         pytest.param("10.0.0.50", "not_permitted", id="other-ip"),
+        # Hosts and rules compare IPv4 addresses in their dotted form.
+        pytest.param("10.5", None, id="short-form-of-listed-ip"),
+        pytest.param("167772165", None, id="number-form-of-listed-ip"),
+        pytest.param("127.0.0.1", "deny_rule", id="ip-denied-in-short-form"),
+        pytest.param("0x7f000001", "deny_rule", id="hex-form-of-denied-ip"),
         pytest.param("other.org", "not_permitted", id="unlisted-host"),
     ],
 )
@@ -388,7 +393,7 @@ def test_host_decisions(area: Area, host: str, reason: str | None) -> None:
         {
             "web": "listed",
             "allow": ["Web(example.com)", "Web(*.github.com)", "Web(10.0.0.5)"],
-            "deny": ["Web(bad.example.com)"],
+            "deny": ["Web(bad.example.com)", "Web(127.1)"],
         }
     )
 

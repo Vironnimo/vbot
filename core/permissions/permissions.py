@@ -472,8 +472,7 @@ class PermissionBoundary:
                 "unanalyzable",
                 detail="only http and https URLs with a host and a valid port can be checked",
             )
-        # 127.1 and 2130706433 reach 127.0.0.1 too.
-        host = canonical_host(normalize_host(parts.hostname))
+        host = normalize_host(parts.hostname)
         effective_port = port if port is not None else _DEFAULT_PORTS[scheme]
         if (
             self.loopback_port is not None
