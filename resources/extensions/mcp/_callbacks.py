@@ -202,9 +202,11 @@ class ServerRequests:
         roots = []
         invocation = self._invocation()
         if invocation is not None and self._config().get("roots") == "workspace":
-            roots.append(
-                types.Root.model_validate({"uri": Path(invocation.effective_cwd).as_uri()})
-            )
+            cwd = Path(invocation.effective_cwd)
+            # A hint, not a limit: MCP servers act outside the Permission Rules, but a
+            # restricted Session announces its working directory only where it may read.
+            if invocation.permissions.check_path(cwd, "read") is None:
+                roots.append(types.Root.model_validate({"uri": cwd.as_uri()}))
         return types.ListRootsResult(roots=roots)
 
     async def elicit(self, context: Any, params: Any) -> Any:

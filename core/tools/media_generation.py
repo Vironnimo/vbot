@@ -21,6 +21,7 @@ from core.model_tasks import (
 )
 from core.model_tasks.artifacts import OutputDirectoryError, OutputWriteError
 from core.model_tasks.video import VideoProfile
+from core.permissions import PermissionDenied
 from core.tools._image_inputs import (
     UnusableImageError,
     normalize_generate_music_arguments,
@@ -424,8 +425,14 @@ def _output_dir(context: ToolContext, arguments: JsonObject, *, default_name: st
     value = optional_string(arguments.get("output_dir"), field_name="output_dir")
     if value:
         return context.resolve_path(value, access="write")
-    root = context.workspace if context.project_id is None else context.effective_cwd
-    return root / default_name
+    if context.project_id is None:
+        # The Workspace default is vBot's own folder, which the rules allow.
+        return context.workspace / default_name
+    default = context.effective_cwd / default_name
+    refusal = context.permissions.check_path(default, "write")
+    if refusal is not None:
+        raise PermissionDenied(refusal)
+    return default
 
 
 def _artifact_payload(artifact: Any) -> JsonObject:

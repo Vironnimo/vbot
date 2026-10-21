@@ -1,4 +1,9 @@
-"""Ranked suggestions for a requested path that does not exist."""
+"""Ranked suggestions for a requested path that does not exist.
+
+Every function takes the Run's ``PermissionBoundary``: a restricted Session gets
+only entries it may read, and directories it may not read are never listed or
+checked, so a suggestion never reveals what lies outside its readable area.
+"""
 
 from __future__ import annotations
 
@@ -9,6 +14,7 @@ from itertools import islice
 from pathlib import Path
 from typing import Literal
 
+from core.permissions import PermissionBoundary
 from core.tools.model_names import model_tool_name
 from core.tools.search import display_search_path
 from core.utils.edit_distance import edit_distance
@@ -62,11 +68,21 @@ def _score(requested: Path, candidate: Path) -> tuple[int, float] | None:
     return None
 
 
+def _readable(permissions: PermissionBoundary, path: Path) -> bool:
+    return permissions.check_path(path, "read") is None
+
+
 def similar_entries(
-    missing: Path, *, kind: EntryKind = "any", limit: int = _RESULT_LIMIT
+    missing: Path,
+    *,
+    permissions: PermissionBoundary,
+    kind: EntryKind = "any",
+    limit: int = _RESULT_LIMIT,
 ) -> list[Path]:
     """Return existing entries beside a missing path, best match first."""
     candidates: list[tuple[tuple[int, float], str, Path]] = []
+    if not _readable(permissions, missing.parent):
+        return []
     try:
         for entry in islice(missing.parent.iterdir(), _SCAN_LIMIT):
             try:
@@ -77,7 +93,7 @@ def similar_entries(
             except OSError:
                 continue
             score = _score(missing, entry)
-            if score is not None:
+            if score is not None and _readable(permissions, entry):
                 candidates.append((score, entry.name.casefold(), entry))
     except OSError:
         return []
@@ -85,7 +101,7 @@ def similar_entries(
     return [entry for _, _, entry in candidates[:limit]]
 
 
-def corrected_paths(missing: Path, cwd: Path) -> list[Path]:
+def corrected_paths(missing: Path, cwd: Path, *, permissions: PermissionBoundary) -> list[Path]:
     """Return existing paths that a missing absolute path most likely means.
 
     Covers a relative path that repeats the end of the working directory (such
@@ -103,25 +119,28 @@ def corrected_paths(missing: Path, cwd: Path) -> list[Path]:
     for count in range(1, len(relative)):
         repeated = [part.casefold() for part in relative[:count]]
         candidate = cwd.joinpath(*relative[count:])
-        if repeated == tail[-count:] and candidate.exists():
+        if repeated == tail[-count:] and _readable(permissions, candidate) and candidate.exists():
             suggestions.append(candidate)
-    repaired = _repair_components(missing)
+    repaired = _repair_components(missing, permissions)
     if repaired is not None:
         suggestions.append(repaired)
     # Only a missing name in an existing folder is looked for elsewhere; a
     # missing folder is a misspelling or no path at all (example.com/cat.png).
-    if relative and missing.parent.is_dir():
-        suggestions.extend(_same_name_below(cwd, missing.name))
-    suggestions.extend(similar_entries(missing))
+    if relative and _readable(permissions, missing.parent) and missing.parent.is_dir():
+        suggestions.extend(_same_name_below(cwd, missing.name, permissions))
+    suggestions.extend(similar_entries(missing, permissions=permissions))
     return list(dict.fromkeys(suggestions))[:_RESULT_LIMIT]
 
 
-def _same_name_below(root: Path, name: str) -> list[Path]:
+def _same_name_below(root: Path, name: str, permissions: PermissionBoundary) -> list[Path]:
     """Return entries named ``name`` below ``root``, shallow levels first.
 
     Hidden directories, dependency folders and levels past the bound are not
-    searched; the walk stops after a bounded number of entries.
+    searched; the walk stops after a bounded number of entries. A restricted
+    Session's walk sees only entries it may read.
     """
+    if not _readable(permissions, root):
+        return []
     wanted = name.casefold()
     found: list[Path] = []
     level = [root]
@@ -133,13 +152,14 @@ def _same_name_below(root: Path, name: str) -> list[Path]:
                 return found
             try:
                 with os.scandir(directory) as listing:
-                    entries = sorted(
-                        islice(listing, _TREE_SCAN_LIMIT - scanned),
-                        key=lambda entry: entry.name.casefold(),
-                    )
+                    scan = list(islice(listing, _TREE_SCAN_LIMIT - scanned))
             except OSError:
                 continue
-            scanned += len(entries)
+            scanned += len(scan)
+            entries = sorted(
+                permissions.readable_entries(directory, scan),
+                key=lambda entry: entry.name.casefold(),
+            )
             for entry in entries:
                 if entry.name.casefold() == wanted:
                     found.append(Path(entry.path))
@@ -155,12 +175,12 @@ def _same_name_below(root: Path, name: str) -> list[Path]:
     return found
 
 
-def _repair_components(missing: Path) -> Path | None:
+def _repair_components(missing: Path, permissions: PermissionBoundary) -> Path | None:
     """Replace each missing component with its closest existing sibling."""
     names: list[str] = []
     current = missing
     while not current.exists():
-        if current.parent == current:
+        if current.parent == current or not _readable(permissions, current.parent):
             return None
         names.append(current.name)
         current = current.parent
@@ -169,21 +189,23 @@ def _repair_components(missing: Path) -> Path | None:
         return None
     for position, name in enumerate(reversed(names)):
         kind: EntryKind = "any" if position == len(names) - 1 else "dirs"
-        matches = similar_entries(current / name, kind=kind, limit=1)
+        matches = similar_entries(current / name, permissions=permissions, kind=kind, limit=1)
         if not matches:
             return None
         current = matches[0]
     return current
 
 
-def missing_file_message(missing: Path, cwd: Path, *, elsewhere: str | None = None) -> str:
+def missing_file_message(
+    missing: Path, cwd: Path, *, permissions: PermissionBoundary, elsewhere: str | None = None
+) -> str:
     """Build a not-found error that names paths the next call can use.
 
     ``elsewhere`` is a sentence naming another Tool's call for what the path names
     instead, such as a Swarm Wiki page (``_swarm_references.wiki_page_call``).
     """
     label = display_search_path(missing, cwd=cwd)
-    suggestions = corrected_paths(missing, cwd)
+    suggestions = corrected_paths(missing, cwd, permissions=permissions)
     if suggestions:
         similar = ", ".join(display_search_path(candidate, cwd=cwd) for candidate in suggestions)
         message = f"File not found: {label} (similar: {similar})."
@@ -192,6 +214,8 @@ def missing_file_message(missing: Path, cwd: Path, *, elsewhere: str | None = No
         return f"{label} is not a file. {elsewhere}"
     parent = missing.parent
     shown = display_search_path(parent, cwd=cwd)
+    if not _readable(permissions, parent):
+        return f"File not found: {label}."
     if parent.is_dir():
         call = f"{model_tool_name('read')}(path={json.dumps(shown, ensure_ascii=False)})"
         return f"File not found: {label}. {call} lists its directory."

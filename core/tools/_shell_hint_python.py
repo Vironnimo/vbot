@@ -6,6 +6,7 @@ import re
 from itertools import islice
 from pathlib import Path
 
+from core.permissions import PermissionBoundary
 from core.tools._path_suggestions import similar_entries
 
 from . import _shell_hint_common as _common
@@ -140,7 +141,10 @@ def _hint_script_not_found(failure: _Failure) -> str | None:
             if (directory / name).is_file()
         ] or [
             path
-            for path in similar_entries(missing, kind="files")
+            # Shell hints get no Run boundary yet, so they suggest like full access.
+            for path in similar_entries(
+                missing, permissions=PermissionBoundary.UNRESTRICTED, kind="files"
+            )
             if path.suffix.casefold() == missing.suffix.casefold()
         ]
         found, dots = found[:_SHOWN_PATHS], False

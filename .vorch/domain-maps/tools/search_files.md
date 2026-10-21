@@ -20,6 +20,8 @@ services:
   use it too), translating call dialects into the named fields and `args`.
 - `core/tools/_search_roots.py`: root resolution, path/glob interpretation and
   missing-path diagnostics.
+- `core/tools/_search_confinement.py`: Permission Rules for a restricted Run
+  (Permission Rules, below).
 - `core/tools/_search_definition.py`: the Tool schema, description and help
   reference shared by registration and call reading.
 - `core/tools/_search_query.py`: `interpret` turns the named fields and `args`
@@ -626,6 +628,25 @@ notice about the next page and each warning
   call.`, with an English reason and no scratch path. Sessions in 2026-09 showed
   Windows' German text naming a scratch file.
 
+## Permission Rules
+
+A restricted Run searches only what its rules let it read; full access adds no
+argument and no check.
+
+- Every root, alternative, glob base and directory-glob candidate is checked
+  before its status (`_search_roots.py`); a refused root fails
+  `permission_denied` before anything runs, and suggestions name only readable
+  paths.
+- `--file` and `--ignore-file` values are checked and passed as absolute paths;
+  `-L`/`--follow` is dropped with a note, because ripgrep follows no links
+  then and the checked roots stay the boundary (`confine_flags`).
+- Below a readable root, `refusable_below` patterns become anchored excluding
+  globs after every other glob (`--glob=!/<scope path>/<pattern>`); results,
+  counts, directory listings and diagnostics are filtered again by
+  `check_path`, which also covers patterns that do not translate into globs.
+- Open: ripgrep still reads ignore files of parent directories and the global
+  gitignore; `files_searched` counts can include files the filter removes.
+
 ## Native Dependency and Permissions
 
 `resources/ripgrep.lock.json` pins ripgrep 15.1.0 with PCRE2. It holds a
@@ -689,6 +710,7 @@ blank placeholders, so no sentence has to warn about them.
 | `path_not_found` ending when every missing root came from `args`: `Nothing was searched. Correct the path[s] in args, or remove it [them] to search the working directory.` | The former ending, `Correct path, or omit it ...`, named the `path` field, which such a call did not set (F5). |
 | Warnings for unreadable files: `Could not read <path>: <reason>.` for the first five, then `Could not read 395 more paths.` | Swarm run 2026-10-20: a search beside a browser profile in use failed over its locked files and the Agent switched to a shell listing (one call; Diagnostics). The results stay; the names show where the unread files are, the count says how many without filling every warning slot with paths (F4, F6). |
 | Warning for any other diagnostic of a search that ran: `ripgrep reported: <message>.` | Such a message used to fail the whole search, results included; as a warning it keeps them and marks the result incomplete (F4; Swarm run 2026-10-20, one call). |
+| `-L (--follow) was ignored: under the permission rules, search_files does not follow links.` | The search ran without the flag the Agent sent; the note names the reason, so the Agent neither repeats it nor reads missing linked files as absent (F4). |
 | Unknown refusal: `ripgrep refused the search:` / `<message>` / `Nothing was searched. Correct the call as that message says; {"args": ["--help"]} lists the accepted flags.` | Replaces `<message>` / `Nothing was searched.`, which gave no next step; in the Swarm run of 2026-10-20 its message was a cut path fragment, which read like nothing at all (F5). |
 | Failure without a message: `The search engine failed without giving a reason. Nothing was searched. Retry the call.` | Replaces `search_files could not complete the search: the search engine exited with code 2. Retry the call.` / `Nothing was searched.`, which ran together two endings and named an exit code the Agent cannot act on (F5). |
 
