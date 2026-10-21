@@ -26,11 +26,10 @@ import html
 import socket
 from collections.abc import AsyncIterator, Awaitable, Callable, MutableMapping
 from typing import TYPE_CHECKING, Any
-from urllib.parse import parse_qsl, urlencode, urlsplit
+from urllib.parse import parse_qsl, urlencode
 
 import httpx
 
-from core.access.config import is_loopback_address, parse_ip
 from core.tools.portal_registry import PortalRegistry
 from core.utils.logging import get_logger
 from server.access._service import AccessError, AccessService
@@ -86,7 +85,6 @@ class PortalServer:
         listen_host: str,
         own_port: int,
         tls: TlsContextHolder | None = None,
-        public_host: str | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         """``transport`` carries the forwarded HTTP requests; the default connects to the app."""
@@ -95,7 +93,6 @@ class PortalServer:
         self._file_delivery = file_delivery
         self._listen_host = listen_host
         self._tls = tls
-        self._public_host = public_host
         self.own_ports = frozenset({own_port})
         self._listeners: dict[str, _Listener] = {}
         self._client = httpx.AsyncClient(
@@ -119,24 +116,10 @@ class PortalServer:
         if listener is not None:
             listener.close()
 
-    def address(self, listen_port: int, path: str) -> str:
-        scheme = "https" if self._tls is not None else "http"
-        return f"{scheme}://{self._address_host()}:{listen_port}{path}"
-
     async def aclose(self) -> None:
         for portal_id in list(self._listeners):
             self.close(portal_id)
         await self._client.aclose()
-
-    def _address_host(self) -> str:
-        if self._public_host is not None:
-            return self._public_host
-        address = parse_ip(self._listen_host)
-        if self._listen_host == "localhost" or (
-            address is not None and is_loopback_address(address)
-        ):
-            return "localhost"
-        return socket.gethostname().casefold()
 
 
 class _Listener:
@@ -651,10 +634,3 @@ def _cookie_pairs(scope: Scope) -> list[tuple[str, str]]:
 def _cookie(scope: Scope, name: str) -> str | None:
     values = [value for key, value in _cookie_pairs(scope) if key == name]
     return values[0] if len(values) == 1 and values[0] else None
-
-
-def public_host(public_url: str | None) -> str | None:
-    """The host of the configured public URL, for Portal addresses."""
-    if public_url is None:
-        return None
-    return urlsplit(public_url).hostname

@@ -108,7 +108,7 @@ from server.events import (
 )
 from server.file_delivery import FILE_PREVIEW_WORKERS, PREVIEW_URL_PREFIX, FileDelivery
 from server.live.owner import LIVE_SOCKET_CLOSE_UNKNOWN_CALL
-from server.portals import PortalServer, public_host
+from server.portals import PortalServer
 from server.rpc.errors import RPC_ERROR_INTERNAL, RPC_ERROR_INVALID_REQUEST
 from server.rpc.event_bridge import publish_resource_changed
 from server.rpc.methods import dispatch_rpc
@@ -247,7 +247,6 @@ def create_app(
             listen_host=resolved_server_bind["listen_host"],
             own_port=resolved_server_bind["listen_port"],
             tls=tls,
-            public_host=public_host(access_settings.public_url),
         )
         app_runtime.portals.attach(portal_server)
         _publish_secret_changes(app, app_runtime)

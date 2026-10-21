@@ -73,8 +73,6 @@ class PortalListeners(Protocol):
 
     def close(self, portal_id: str) -> None: ...
 
-    def address(self, listen_port: int, path: str) -> str: ...
-
 
 async def probe_localhost(port: int) -> bool:
     """Whether anything accepts a TCP connection on ``localhost:<port>``, IPv4 or IPv6."""
@@ -138,12 +136,6 @@ class PortalRegistry:
                 self._subscribers.remove(callback)
 
         return unsubscribe
-
-    def address(self, portal: Portal) -> str:
-        """The Portal's URL without a credential, for the Agent."""
-        if self._listeners is None:
-            raise PortalError("unavailable", "Portals are not available")
-        return self._listeners.address(portal.listen_port, portal.path)
 
     # Operations --------------------------------------------------------------
 

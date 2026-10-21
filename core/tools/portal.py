@@ -217,15 +217,13 @@ async def _open(
     except PortalError as exc:
         return tool_failure(exc.code, _open_refusal(exc, port, portals.list(owner)))
     context.show_display_portal(portal.id, portal.title, portal.target_port)
-    address = portals.address(portal)
     if opened:
         text = (
-            f"Opened portal {portal.id} for localhost:{port} at {address}. The user opens it "
-            "from the card in the chat, which carries their access; the address alone answers "
-            '"private".'
+            f"Opened portal {portal.id} for localhost:{port}. The user opens it from the card "
+            "in the chat."
         )
     else:
-        text = f"Portal {portal.id} already shows localhost:{port} at {address}."
+        text = f"Portal {portal.id} already shows localhost:{port}."
     if not portal.listening:
         text += f' Nothing answers on port {port} yet; the card shows "waiting" until the app does.'
     return tool_success({"content": text + _surface_note(context)})
@@ -277,10 +275,7 @@ def _list_text(portals: PortalRegistry, owner: SessionAddress) -> str:
     lines = ["Portals of this Session:"]
     for portal in mine:
         state = "app answers" if portal.listening else "nothing answers yet"
-        lines.append(
-            f'- {portal.id} "{portal.title}": localhost:{portal.target_port}, '
-            f"{portals.address(portal)} ({state})"
-        )
+        lines.append(f'- {portal.id} "{portal.title}": localhost:{portal.target_port} ({state})')
     return "\n".join(lines)
 
 

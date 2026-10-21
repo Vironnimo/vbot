@@ -35,9 +35,6 @@ class _Listeners:
     def close(self, portal_id: str) -> None:
         self.closed.append(portal_id)
 
-    def address(self, listen_port: int, path: str) -> str:
-        return f"http://localhost:{listen_port}{path}"
-
 
 def _setup() -> tuple[ToolRegistry, PortalRegistry, _Listeners]:
     # Only port 5173 has an app listening.
@@ -59,7 +56,7 @@ async def _call(
 
 
 @pytest.mark.asyncio
-async def test_open_shows_a_card_and_tells_the_address_without_the_credential(
+async def test_open_shows_a_card_and_points_the_agent_at_it(
     tmp_path: Path,
 ) -> None:
     tools, portals, _listeners = _setup()
@@ -74,22 +71,17 @@ async def test_open_shows_a_card_and_tells_the_address_without_the_credential(
     [first, second] = portals.list(SessionAddress(None, context.agent_id, context.session_id))
     assert context.presentation_portal == {"id": first.id, "title": "Docs", "port": 5173}
     assert opened["data"]["content"] == (
-        f"Opened portal {first.id} for localhost:5173 at http://localhost:41001/docs. The user "
-        "opens it from the card in the chat, which carries their access; the address alone "
-        'answers "private".'
+        f"Opened portal {first.id} for localhost:5173. The user opens it from the card in the chat."
     )
-    assert again["data"]["content"] == (
-        f"Portal {first.id} already shows localhost:5173 at http://localhost:41001/docs."
-    )
+    assert again["data"]["content"] == f"Portal {first.id} already shows localhost:5173."
     assert waiting["data"]["content"].endswith(
         'Nothing answers on port 3000 yet; the card shows "waiting" until the app does.'
     )
     assert second.title == "localhost:3000" and second.listening is False
     assert listed["data"]["content"] == (
         "Portals of this Session:\n"
-        f'- {first.id} "Docs": localhost:5173, http://localhost:41001/docs (app answers)\n'
-        f'- {second.id} "localhost:3000": localhost:3000, http://localhost:41002/ '
-        "(nothing answers yet)"
+        f'- {first.id} "Docs": localhost:5173 (app answers)\n'
+        f'- {second.id} "localhost:3000": localhost:3000 (nothing answers yet)'
     )
     await portals.aclose()
 
