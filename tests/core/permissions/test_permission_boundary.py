@@ -19,6 +19,7 @@ from core.permissions import (
     PermissionRulesError,
     normalize_permission_rules,
 )
+from tests.directory_links import link_directory
 
 WINDOWS = sys.platform == "win32"
 
@@ -185,6 +186,15 @@ def test_scratch_base_keeps_the_working_directory_read_only(area: Area) -> None:
     assert boundary.allowed_summary("write") == (area.scratch.as_posix(),)
 
 
+def test_confined_reading_confines_writing_too(area: Area) -> None:
+    boundary = area.boundary({"read": "work_area"})
+
+    assert boundary.check_path("a.txt", "write") is None
+    refusal = boundary.check_path(area.path("../outside/z"), "write")
+    assert refusal is not None and refusal.reason == "not_permitted"
+    assert refusal.base == "work_area"
+
+
 def test_a_workspace_working_directory_is_writable_except_agent_json(area: Area) -> None:
     boundary = area.boundary({"write": "work_area"}, workdir=area.workspace)
 
@@ -345,3 +355,53 @@ def test_a_refusal_names_what_the_boundary_allows(area: Area) -> None:
     raised = PermissionDenied(refusal)
     assert raised.refusal is refusal
     assert refusal.target in str(raised)
+
+
+@pytest.mark.parametrize(
+    ("folder", "access", "rules", "expected"),
+    [
+        # Only deny rules and protected locations below a folder can refuse there.
+        pytest.param("{work}", "read", _WORK_AREA_RULES, {"secrets"}, id="deny-below"),
+        pytest.param(
+            "{work}", "write", _WORK_AREA_RULES, {"secrets", "locked.txt"}, id="edit-deny-too"
+        ),
+        pytest.param("{work}/src", "read", _WORK_AREA_RULES, set(), id="nothing-below"),
+        # A wildcard rule above the folder can still match at any depth below it.
+        pytest.param(
+            "{work}/src", "read", {"deny": ["Read({workdir}/**/.env)"]}, {"**/.env"}, id="wildcard"
+        ),
+        # The data directory and the Agent's own configuration are protected below a root.
+        pytest.param(
+            "{root}", "read", {}, {"data", "data/agents/a1/agent.json"}, id="protected-locations"
+        ),
+        pytest.param(
+            "{root}", "write", {}, {"data", "data/agents/a1/agent.json", "install"}, id="installs"
+        ),
+    ],
+)
+def test_refusable_below_names_what_may_be_refused_under_a_folder(
+    area: Area, folder: str, access: PathAccess, rules: object, expected: set[str]
+) -> None:
+    boundary = area.boundary(rules)
+    path = area.path(folder.replace("{root}", str(area.root)))
+
+    found = set(boundary.refusable_below(path, access))
+
+    assert found == {key.casefold() if WINDOWS else key for key in expected}
+    assert PermissionBoundary.UNRESTRICTED.refusable_below(path, access) == ()
+
+
+def test_readable_entries_leave_out_refused_names_and_links_leading_out(area: Area) -> None:
+    (area.work / "notes.txt").write_text("x", encoding="utf-8")
+    link_directory(area.work / "elsewhere", area.outside)
+    denying = area.boundary({"read": "work_area", "deny": ["Read({workdir}/secrets/**)"]})
+    plain = area.boundary({"read": "work_area"})
+
+    def names(boundary: PermissionBoundary) -> set[str]:
+        with os.scandir(area.work) as listing:
+            return {entry.name for entry in boundary.readable_entries(area.work, listing)}
+
+    assert names(denying) == {"notes.txt"}
+    # Without a rule below the folder, only the link needs a check.
+    assert names(plain) == {"notes.txt", "secrets"}
+    assert names(PermissionBoundary.UNRESTRICTED) == {"notes.txt", "secrets", "elsewhere"}

@@ -7,6 +7,7 @@ the generation Tools take local image files only (``resolve_local_images``).
 from __future__ import annotations
 
 import json
+import os
 import re
 import stat
 from difflib import SequenceMatcher
@@ -14,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from core.model_tasks.artifacts import os_error_reason
+from core.permissions import PermissionBoundary
 from core.tools._image_downloads import ImageDownloadError, download_images, image_address
 from core.tools._path_suggestions import corrected_paths
 from core.tools.call_syntax import SpellingAliases, normalize_call_arguments
@@ -243,13 +245,15 @@ def _call(field: str, paths: list[str], single: bool) -> str:
 
 
 def _folder_problem(
-    folder: Path, label: str, field: str, cwd: Path, single: bool
+    folder: Path, label: str, field: str, cwd: Path, single: bool, permissions: PermissionBoundary
 ) -> UnusableImageError:
     try:
+        with os.scandir(folder) as listing:
+            entries = permissions.readable_entries(folder, listing)
         images = sorted(
-            entry
-            for entry in folder.iterdir()
-            if entry.suffix.casefold() in _IMAGE_SUFFIXES and entry.is_file()
+            Path(entry.path)
+            for entry in entries
+            if Path(entry.name).suffix.casefold() in _IMAGE_SUFFIXES and entry.is_file()
         )[:_FOLDER_EXAMPLES]
     except OSError as error:
         return UnusableImageError(
@@ -271,12 +275,12 @@ def _folder_problem(
     )
 
 
-def _similar_images(missing: Path, cwd: Path) -> list[Path]:
+def _similar_images(missing: Path, cwd: Path, permissions: PermissionBoundary) -> list[Path]:
     """Existing files that the missing image most likely means, best first."""
     stem = missing.stem.casefold()
     return [
         item
-        for item in corrected_paths(missing, cwd)
+        for item in corrected_paths(missing, cwd, permissions=permissions)
         if item.is_file()
         and SequenceMatcher(None, stem, item.stem.casefold()).ratio() >= _MIN_STEM_RATIO
     ]
@@ -333,9 +337,9 @@ def _check_local(
                 "Pass a readable copy, or ask the user to restore access.",
             ) from error
         if status is not None and stat.S_ISDIR(status.st_mode):
-            raise _folder_problem(path, items[index], field, cwd, single)
+            raise _folder_problem(path, items[index], field, cwd, single, context.permissions)
         if status is None:
-            missing.append((index, items[index], _similar_images(path, cwd)))
+            missing.append((index, items[index], _similar_images(path, cwd, context.permissions)))
         elif not stat.S_ISREG(status.st_mode):
             raise UnusableImageError(
                 "image_read_error",

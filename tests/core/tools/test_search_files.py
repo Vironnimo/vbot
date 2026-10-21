@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import errno
+import json
 import os
 import re
 import shutil
@@ -17,10 +18,17 @@ from typing import Any
 
 import pytest
 
+from core.permissions import (
+    BoundaryContext,
+    PermissionBoundary,
+    PermissionDenied,
+    normalize_permission_rules,
+)
 from core.tools import _search_execution as execution
 from core.tools._search_execution import MAX_CHILD_MEMORY
 from core.utils.search_binary import require_binary
 from tests.core.tools.search_files_test_support import context, dispatch, search, search_registry
+from tests.directory_links import link_directory
 
 # The flags search_files always passes, in the form a ripgrep command line takes them.
 _RG_DEFAULTS = ["--no-config", "--hidden", "--no-require-git", "--glob-case-insensitive"]
@@ -869,3 +877,80 @@ async def test_the_user_sees_the_results_further_pages_and_warnings(tmp_path: Pa
             f"{tmp_path.as_posix()}).",
         },
     ]
+
+
+_DENYING = {
+    "read": "work_area",
+    "deny": ["Read({workdir}/src/secrets/**)", "Read({workdir}/**/*.key)"],
+}
+
+
+def _restricted_tree(tmp_path: Path) -> tuple[Path, PermissionBoundary]:
+    work = tmp_path / "work"
+    _write(
+        work,
+        {
+            "src/a.txt": "token\n",
+            "src/secrets/k.txt": "token\n",
+            "src/c.key": "token\n",
+            "b.key": "token\n",
+        },
+    )
+    _write(tmp_path / "outside", {"o.txt": "token\n"})
+    link_directory(work / "src" / "linked", tmp_path / "outside")
+    boundary = PermissionBoundary.build(
+        normalize_permission_rules(_DENYING),
+        BoundaryContext(workdir=work, home=tmp_path / "home", data_dir=tmp_path / "data"),
+    )
+    return work, boundary
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"pattern": "token"},
+        {"pattern": "token", "args": ["-l"]},
+        {"pattern": "token", "path": "src"},
+        {"pattern": "token", "args": ["-L"]},
+        {"args": ["--files"]},
+        {"args": ["--dirs", "-L"]},
+    ],
+)
+def test_a_restricted_search_leaves_out_what_the_rules_refuse(
+    tmp_path: Path, arguments: dict[str, Any]
+) -> None:
+    work, boundary = _restricted_tree(tmp_path)
+
+    result = asyncio.run(dispatch(work, arguments, permissions=boundary))
+    full = json.dumps(search(work, **arguments))
+
+    assert result["ok"], result
+    restricted = json.dumps(result["data"])
+    assert "src" in restricted
+    assert "secrets" in full
+    for refused in ("secrets", ".key", "o.txt"):
+        assert refused not in restricted
+    if "-L" in arguments.get("args", []):
+        assert "links" in result["data"]["note"]
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"pattern": "token", "path": "../outside"},
+        {"pattern": "token", "path": "src/secrets"},
+        {"pattern": "token", "path": "src/linked/o.txt"},
+        {"pattern": "token", "path": "{src,../outside}"},
+        {"args": ["-f", "../outside/o.txt"]},
+        {"pattern": "token", "args": ["--ignore-file=src/secrets/k.txt"]},
+    ],
+)
+def test_a_restricted_search_refuses_unreadable_roots_and_path_flags(
+    tmp_path: Path, arguments: dict[str, Any]
+) -> None:
+    work, boundary = _restricted_tree(tmp_path)
+
+    with pytest.raises(PermissionDenied) as refused:
+        asyncio.run(dispatch(work, arguments, permissions=boundary))
+
+    assert refused.value.refusal.access == "read"

@@ -1,4 +1,9 @@
-"""Resolve file-search roots and explain missing or glob-shaped paths."""
+"""Resolve file-search roots and explain missing or glob-shaped paths.
+
+Under Permission Rules, every path is checked for reading before it is touched:
+a refused root refuses the whole call (``PermissionDenied``), and suggestions
+and directory globs consider only readable paths.
+"""
 
 from __future__ import annotations
 
@@ -9,6 +14,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from core.permissions import PermissionBoundary, PermissionDenied
 from core.tools._path_suggestions import corrected_paths
 from core.tools._search_query import (
     SearchArgumentError,
@@ -33,7 +39,7 @@ class _Roots:
     missing: list[tuple[str, Path]] = field(default_factory=list)
 
 
-def _resolve_roots(query: SearchQuery, cwd: Path) -> _Roots:
+def _resolve_roots(query: SearchQuery, cwd: Path, permissions: PermissionBoundary) -> _Roots:
     """Resolve the requested roots; a missing path is reported, never replaced.
 
     A missing path written with glob characters, braces or commas runs as what
@@ -50,11 +56,11 @@ def _resolve_roots(query: SearchQuery, cwd: Path) -> _Roots:
                 f'path must name a file or directory; received "{raw}". Omit path to search '
                 "the working directory."
             )
-        resolved = _absolute(text, cwd)
+        resolved = _checked(_absolute(text, cwd), permissions)
         if _exists(resolved):
             _add(roots.paths, resolved)
             continue
-        alternatives = _existing_alternatives(text, cwd)
+        alternatives = _existing_alternatives(text, cwd, permissions)
         if alternatives:
             for path in alternatives:
                 _add(roots.paths, path)
@@ -68,7 +74,7 @@ def _resolve_roots(query: SearchQuery, cwd: Path) -> _Roots:
             )
             excluded = True
             continue
-        base = _glob_root(text, cwd, query)
+        base = _glob_root(text, cwd, query, permissions)
         if base is not None:
             _add(roots.paths, base)
             continue
@@ -83,16 +89,20 @@ def _missing_warnings(
     roots: _Roots,
     cwd: Path,
     offers: Callable[[str], bool],
+    permissions: PermissionBoundary,
     args: object = None,
 ) -> list[str]:
     """Name each missing root, and how args operands that were meant otherwise work.
 
     *args* is the call's args as sent, for a suggestion that keeps its other items.
     """
-    warnings = [_missing_root_message(raw, path, cwd, query, offers) for raw, path in roots.missing]
+    warnings = [
+        _missing_root_message(raw, path, cwd, query, offers, permissions)
+        for raw, path in roots.missing
+    ]
     missing_operands = [raw for raw, _ in roots.missing if raw in query.operand_roots]
     if missing_operands and query.searches_contents and not query.pattern_operand:
-        warnings.extend(_operand_pattern_warning(roots, query, cwd, args))
+        warnings.extend(_operand_pattern_warning(roots, query, cwd, args, permissions))
     if missing_operands and query.mode == "list_files":
         warnings.append(
             "--files lists files by name, so every args operand is a path. To list the files "
@@ -118,7 +128,7 @@ def _missing_warnings(
 
 
 def _operand_pattern_warning(
-    roots: _Roots, query: SearchQuery, cwd: Path, args: object
+    roots: _Roots, query: SearchQuery, cwd: Path, args: object, permissions: PermissionBoundary
 ) -> list[str]:
     """Say how to search args items that were read as paths as further patterns.
 
@@ -133,7 +143,7 @@ def _operand_pattern_warning(
         if raw in query.operand_roots
         and "/" not in raw
         and "\\" not in raw
-        and not corrected_paths(path, cwd)
+        and not corrected_paths(path, cwd, permissions=permissions)
     ]
     if not words:
         return []
@@ -172,6 +182,14 @@ def _absolute(text: str, cwd: Path) -> Path:
     return Path(os.path.abspath(cwd / Path(text).expanduser()))
 
 
+def _checked(path: Path, permissions: PermissionBoundary) -> Path:
+    """Return ``path``, or refuse the call when the rules refuse reading it."""
+    refusal = permissions.check_path(path, "read")
+    if refusal is not None:
+        raise PermissionDenied(refusal)
+    return path
+
+
 def _exists(path: Path) -> bool:
     try:
         return exists_strict(path, follow_symlinks=False)
@@ -187,7 +205,7 @@ def _add(paths: list[Path], path: Path) -> None:
         paths.append(path)
 
 
-def _existing_alternatives(text: str, cwd: Path) -> list[Path]:
+def _existing_alternatives(text: str, cwd: Path, permissions: PermissionBoundary) -> list[Path]:
     """Return the paths a brace or comma list names, when every one of them exists."""
     if "{" in text:
         alternatives = _expand_brace_alternations(text)
@@ -197,17 +215,19 @@ def _existing_alternatives(text: str, cwd: Path) -> list[Path]:
         return []
     if len(alternatives) < 2 or not all(alternatives):
         return []
-    paths = [_absolute(alternative, cwd) for alternative in alternatives]
+    paths = [_checked(_absolute(alternative, cwd), permissions) for alternative in alternatives]
     return paths if all(_exists(path) for path in paths) else []
 
 
-def _glob_root(text: str, cwd: Path, query: SearchQuery) -> Path | None:
+def _glob_root(
+    text: str, cwd: Path, query: SearchQuery, permissions: PermissionBoundary
+) -> Path | None:
     """Search a path written as a glob, such as src/**/*.py, as its directory and glob."""
     if query.globs or not _GLOB_CHARACTERS.search(text):
         return None
     parts = Path(text).parts
     fixed = next(index for index, part in enumerate(parts) if _GLOB_CHARACTERS.search(part))
-    base = _absolute(str(Path(*parts[:fixed])) if fixed else ".", cwd)
+    base = _checked(_absolute(str(Path(*parts[:fixed])) if fixed else ".", cwd), permissions)
     if not is_dir_strict(base):
         return None
     remainder = "/".join(parts[fixed:])
@@ -227,7 +247,9 @@ _GLOB_SYNTAX = re.compile(r"[*?\[\]{}]")
 _REGEX_SYNTAX = re.compile(r"[.^$*+?()\[\]{}|\\]")
 
 
-def _directory_globs(query: SearchQuery, roots: list[Path], cwd: Path) -> None:
+def _directory_globs(
+    query: SearchQuery, roots: list[Path], cwd: Path, permissions: PermissionBoundary
+) -> None:
     """Also match the files below a directory that a glob names exactly.
 
     ripgrep matches globs against files, so glob "minidb" matched nothing even
@@ -236,7 +258,8 @@ def _directory_globs(query: SearchQuery, roots: list[Path], cwd: Path) -> None:
     """
     if query.mode == "list_dirs":
         return
-    bases = [cwd, *(root for root in roots if root.is_dir())]
+    readable = permissions.check_path(cwd, "read") is None
+    bases = [*([cwd] if readable else []), *(root for root in roots if root.is_dir())]
     globs: list[str] = []
     for glob in query.globs:
         globs.append(glob)
@@ -245,7 +268,10 @@ def _directory_globs(query: SearchQuery, roots: list[Path], cwd: Path) -> None:
         name = glob.replace("\\", "/").removeprefix("./").strip("/")
         if Path(name).is_absolute() or {"", ".", ".."} & set(name.split("/")):
             continue
-        if not any((base / name).is_dir() for base in bases):
+        if not any(
+            permissions.check_path(base / name, "read") is None and (base / name).is_dir()
+            for base in bases
+        ):
             continue
         if glob.startswith("/"):
             globs.append(f"/{name}/**")
@@ -256,14 +282,19 @@ def _directory_globs(query: SearchQuery, roots: list[Path], cwd: Path) -> None:
 
 
 def _missing_root_message(
-    raw: str, root: Path, cwd: Path, query: SearchQuery, offers: Callable[[str], bool]
+    raw: str,
+    root: Path,
+    cwd: Path,
+    query: SearchQuery,
+    offers: Callable[[str], bool],
+    permissions: PermissionBoundary,
 ) -> str:
     # A Swarm Wiki page searched for one plain text reads with the lines holding it.
     patterns = query.patterns
     plain = len(patterns) == 1 and (query.literal or not _REGEX_SYNTAX.search(patterns[0]))
     page = wiki_page_call(root, cwd, offers, fields={"query": patterns[0]} if plain else None)
     message = f"Path not found: {path_label(root, cwd)}"
-    suggestions = corrected_paths(root, cwd)
+    suggestions = corrected_paths(root, cwd, permissions=permissions)
     if suggestions:
         message += f" (similar: {', '.join(path_label(path, cwd) for path in suggestions)})"
     elif page:

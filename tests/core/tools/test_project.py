@@ -11,6 +11,7 @@ from typing import Any, cast
 
 import pytest
 
+from core.permissions import BoundaryContext, PermissionBoundary, normalize_permission_rules
 from core.projects import ProjectStore
 from core.prompts.blocks import INLINE_FILE_MAX_BYTES
 from core.tools import (
@@ -32,6 +33,7 @@ def _context(
     *,
     project_id: str | None = None,
     tool_denial_resolver: Any = None,
+    permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED,
 ) -> ToolContext:
     return ToolContext(
         agent_id="coder",
@@ -45,6 +47,7 @@ def _context(
         data_root=tmp_path,
         project_id=project_id,
         tool_denial_resolver=tool_denial_resolver,
+        permissions=permissions,
     )
 
 
@@ -73,9 +76,10 @@ def _call(
     file_state: FileReadState | None = None,
     skills: list[Any] | None = None,
     project_id: str | None = None,
+    permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED,
 ) -> dict[str, Any]:
     registry = _registry(projects, file_state, skills)
-    context = _context(tmp_path, project_id=project_id)
+    context = _context(tmp_path, project_id=project_id, permissions=permissions)
     return asyncio.run(dispatch_as_executor(registry, context, arguments))
 
 
@@ -416,6 +420,41 @@ def test_project_load_keeps_readable_instructions_and_reports_omissions(
         "project", {"project_id": "vbot"}, result=result
     )["details"]
     assert any(detail.get("level") == "warning" and detail["text"] == note for detail in details)
+
+
+@pytest.mark.parametrize("denied", ["repo", "file"])
+def test_project_load_reads_only_what_the_permission_rules_permit(
+    tmp_path: Path, denied: str
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("GOOD_INSTRUCTIONS", encoding="utf-8")
+    other = repo / "other.md"
+    other.write_text("UNREAD_INSTRUCTIONS", encoding="utf-8")
+    projects = ProjectStore(tmp_path / "data")
+    projects.create("vbot", "vBot", repo, auto_load=["AGENTS.md", "other.md"])
+    pattern = repo if denied == "repo" else other
+    boundary = PermissionBoundary.build(
+        normalize_permission_rules({"deny": [f"Read({pattern.as_posix()})"]}),
+        BoundaryContext(
+            workdir=tmp_path / "workspace", home=tmp_path / "home", data_dir=tmp_path / "data"
+        ),
+    )
+    file_state = FileReadState()
+
+    result = _call(
+        tmp_path, projects, {"project_id": "vbot"}, file_state=file_state, permissions=boundary
+    )
+
+    assert "UNREAD_INSTRUCTIONS" not in str(result)
+    assert file_state.check_stale("session-one", other.resolve()) is StaleReason.NEVER_READ
+    if denied == "repo":
+        assert result["error"]["code"] == "permission_denied"
+        assert "GOOD_INSTRUCTIONS" not in str(result)
+    else:
+        assert "GOOD_INSTRUCTIONS" in result["data"]["content"]
+        assert model_path(other) in result["data"]["note"]
+        assert "permission rules" in result["data"]["note"]
 
 
 @pytest.mark.parametrize(

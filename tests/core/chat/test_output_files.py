@@ -8,6 +8,7 @@ from core.chat.output_files import (
     AssistantFileReference,
     resolve_assistant_file_references,
 )
+from core.permissions import BoundaryContext, PermissionBoundary, normalize_permission_rules
 
 
 def test_resolves_absolute_relative_and_repeated_markers_anywhere_in_a_line(
@@ -87,6 +88,38 @@ def test_paths_with_whitespace_are_not_implicitly_guessed(tmp_path: Path) -> Non
     file_path.write_bytes(b"%PDF")
 
     assert resolve_assistant_file_references(f"file:{file_path}", cwd=tmp_path) is None
+
+
+@pytest.mark.parametrize(
+    ("name", "deny", "kept"),
+    [
+        pytest.param("notes.txt", "Read({workdir}/notes.txt)", False, id="refused-file"),
+        pytest.param("notes.txt", "Read({workdir}/drafts/**)", True, id="permitted-file"),
+        # An HTML preview serves its whole folder, so a refused name below keeps it text ...
+        pytest.param("index.html", "Read({workdir}/drafts/**)", False, id="html-refused-below"),
+        # ... unless the preview never serves that name anyway.
+        pytest.param("index.html", "Read(**/.env)", True, id="html-dot-name-refused"),
+    ],
+)
+def test_references_the_rules_refuse_stay_plain_text(
+    tmp_path: Path, name: str, deny: str, kept: bool
+) -> None:
+    site = tmp_path / "site"
+    (site / "drafts").mkdir(parents=True)
+    file_path = site / name
+    file_path.write_text("content", encoding="utf-8")
+    permissions = PermissionBoundary.build(
+        normalize_permission_rules({"deny": [deny]}),
+        BoundaryContext(workdir=site, home=tmp_path / "home", data_dir=tmp_path / "data"),
+    )
+
+    references = resolve_assistant_file_references(
+        f"See file:{name}", cwd=site, permissions=permissions
+    )
+
+    assert references == (
+        [_reference(f"See file:{name}", 0, f"file:{name}", file_path)] if kept else None
+    )
 
 
 def _reference(

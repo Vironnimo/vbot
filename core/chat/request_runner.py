@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import replace
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from core.chat._boundaries import _finish_visible_boundary
@@ -31,6 +30,7 @@ from core.chat.events import (
     _exception_to_error_kind,
 )
 from core.chat.messages import JsonObject
+from core.chat.output_files import OutputFileScope
 from core.chat.recovery import (
     IncompleteResponseError,
     RecoveryBudget,
@@ -161,7 +161,7 @@ class WireRequestRunner:
         tools: list[JsonObject],
         run: Run,
         prompt_cache_affinity_id: str,
-        output_cwd: Path | None,
+        output_scope: OutputFileScope | None,
         chunk_timeout_seconds: float | None = STREAM_CHUNK_TIMEOUT_SECONDS,
         stream_draft: StreamDraft | None = None,
         *,
@@ -249,7 +249,7 @@ class WireRequestRunner:
                                 chunk_timeout_seconds=chunk_timeout_seconds,
                                 request_context=request_context,
                                 stream_draft=stream_draft,
-                                output_cwd=output_cwd,
+                                output_scope=output_scope,
                                 temperature=temperature,
                                 top_p=top_p,
                                 fallback_follows=budget.patience(response_model).fallback_follows,
@@ -288,7 +288,7 @@ class WireRequestRunner:
                                 step,
                                 message=_with_assistant_output_files(
                                     step.message,
-                                    cwd=output_cwd,
+                                    scope=output_scope,
                                 ),
                             )
                             _emit_assistant_events(run, step.message)
@@ -418,7 +418,7 @@ class WireRequestRunner:
         *,
         public_model: str,
         can_restart: bool,
-        output_cwd: Path | None,
+        output_scope: OutputFileScope | None,
         chunk_timeout_seconds: float | None = STREAM_CHUNK_TIMEOUT_SECONDS,
         request_context: dict[str, Any] | None = None,
         stream_draft: StreamDraft | None = None,
@@ -444,7 +444,7 @@ class WireRequestRunner:
                 accumulator,
                 public_model=public_model,
                 can_restart=can_restart,
-                output_cwd=output_cwd,
+                output_scope=output_scope,
                 chunk_timeout_seconds=chunk_timeout_seconds,
                 request_context=request_context,
                 stream_draft=stream_draft,
