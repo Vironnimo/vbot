@@ -392,12 +392,18 @@ async def test_a_redirect_to_another_page_is_named_with_the_requested_url(
 
 
 @pytest.mark.asyncio
-async def test_refs_are_refused_across_sessions_agents_expiry_and_traversal(tmp_path, monkeypatch):
+async def test_refs_are_refused_across_sessions_agents_projects_expiry_and_traversal(
+    tmp_path, monkeypatch
+):
     install_http_get(monkeypatch, lambda url: make_result(text="A real page", url=url))
     tool, context = web_fetch_registry(), make_context(tmp_path)
     first = await tool.dispatch(context, {"url": "https://example.com/"})
     ref = first["data"]["ref"]
-    for changed in (replace(context, session_id="other"), replace(context, agent_id="other")):
+    for changed in (
+        replace(context, session_id="other"),
+        replace(context, agent_id="other"),
+        replace(context, project_id="other"),
+    ):
         result = await tool.dispatch(changed, {"ref": ref, "find": "real"})
         assert result["error"]["code"] == "invalid_ref"
         # Another conversation's page is never offered or named.
