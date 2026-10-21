@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from core.memory import MemoryPromptMode
-from core.permissions import PermissionCeiling
+from core.permissions import PermissionCeiling, join_ceilings
 from core.settings import validate_temperature, validate_thinking_effort, validate_top_p
 
 if TYPE_CHECKING:
@@ -65,6 +65,12 @@ class RuntimeAgent(Protocol):
       (``PermissionRules.restricts``: no base narrowed, no deny rule), such as a
       temporary Agent's own, one with allow rules only, or an Identity Agent's
       explicit full access while no shared default applies.
+    - ``permission_ceiling`` — a ceiling the Agent itself carries (a temporary
+      Agent's Extension); ``None`` for every other Agent. A Session's inherited
+      ceiling lives in its :class:`AgentOverrides`.
+    - ``rule_files`` — repository files the Agent's rules and settings come from
+      (a Team member's profile and settings files); empty for others. Restricted
+      Sessions never change them.
     """
 
     @property
@@ -108,6 +114,10 @@ class RuntimeAgent(Protocol):
     def tool_loading(self) -> dict[str, Any] | None: ...
     @property
     def permission_rules(self) -> PermissionRules | None: ...
+    @property
+    def permission_ceiling(self) -> PermissionCeiling | None: ...
+    @property
+    def rule_files(self) -> tuple[Path, ...]: ...
 
 
 AGENT_OVERRIDE_FIELDS = ("model", "thinking_effort", "temperature", "top_p")
@@ -125,9 +135,11 @@ class AgentOverrides:
     ``model_defaults``, which an earlier vBot set on Librarian pass Sessions.
 
     ``permission_ceiling`` is no Agent setting: it is the Permission Boundary of
-    the Session that started this Sub-Agent Session, in its stored ceiling form
-    (``PermissionBoundary.to_ceiling_dict``). Every Run of the Session applies it
-    on top of the Agent's own rules; no Session override update changes it.
+    whoever caused this Session's Runs (the Session that started or messages this
+    Sub-Agent Session, the Cron jobs that fire into it), in its stored ceiling
+    form (``PermissionBoundary.to_ceiling_dict``). Every Run of the Session
+    applies it on top of the Agent's own rules. Only :meth:`with_ceiling`
+    changes it, and only narrows it; no Session override update does.
     """
 
     model: str | None = None
@@ -190,6 +202,15 @@ class AgentOverrides:
         if self.permission_ceiling is None:
             return None
         return PermissionCeiling.from_ceiling_dict(self.permission_ceiling)
+
+    def with_ceiling(self, added: PermissionCeiling | None) -> AgentOverrides:
+        """These overrides with *added* joined into the ceiling, which never widens."""
+        from dataclasses import replace
+
+        joined = join_ceilings(self.ceiling(), added)
+        if joined is None:
+            return self
+        return replace(self, permission_ceiling=joined.to_ceiling_dict())
 
     def capture(self, agent: RuntimeAgent) -> AgentOverrides:
         """Keep this Session's Model and effort independently of later Agent edits."""
@@ -289,8 +310,15 @@ class ConfigAgent:
     # Permission Rules resolved per part: the vBot override, then the repository
     # translation, then ``defaults.agent.permission_rules``; ``None`` is full access.
     permission_rules: PermissionRules | None = None
+    # The profile and the repository files its rules come from (``AgentProfile.rule_files``).
+    rule_files: tuple[Path, ...] = ()
     preload_skills: tuple[str, ...] = ()
     model_inherit: bool = False
+
+    @property
+    def permission_ceiling(self) -> PermissionCeiling | None:
+        """A Team member carries no ceiling of its own."""
+        return None
 
 
 class AgentResolutionError(ValueError):

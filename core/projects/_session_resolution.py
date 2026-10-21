@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from core.agents.agents import Agent
+    from core.permissions import PermissionCeiling
     from core.projects.resolver import AgentResolver
     from core.sessions import SessionAddress, SessionWorkingProject, WorkingProjectChoice
 
@@ -185,6 +186,29 @@ class SessionResolution:
 
         _, updated = self._owner._sessions.ensure_metadata(address, capture)
         return AgentOverrides.from_stored(updated.get(AGENT_OVERRIDES_META_KEY))
+
+    def join_session_ceiling(
+        self, address: SessionAddress, ceiling: PermissionCeiling | None
+    ) -> None:
+        """Narrow the Session's stored ceiling by *ceiling*, never widening it.
+
+        Every later Run of the Session applies the joined ceiling, follow-up Runs
+        included. Raises ``ValueError`` when the stored ceiling cannot be read.
+        """
+        if ceiling is None:
+            return
+        if self._owner._sessions is None:
+            raise AgentResolutionError("Session Agent overrides are unavailable")
+
+        def join(metadata: Any) -> None:
+            stored = metadata.get(AGENT_OVERRIDES_META_KEY) or {}
+            joined = AgentOverrides.from_stored(stored).with_ceiling(ceiling)
+            metadata[AGENT_OVERRIDES_META_KEY] = {
+                **stored,
+                "permission_ceiling": dict(joined.permission_ceiling or {}),
+            }
+
+        self._owner._sessions.ensure_metadata(address, join)
 
     def preserve_agent_sessions(self, project_id: str | None, agent_id: str) -> None:
         """Keep existing Sessions' choices before changing their Agent's start values.

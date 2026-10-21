@@ -11,9 +11,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from core.agents import default_workspace_dir
+from core.chat import session_permissions
 from core.permissions import (
-    PermissionCeiling,
     PermissionRules,
     RuleSetCheck,
     check_permission_rules,
@@ -25,7 +24,7 @@ from core.permissions import (
     preset_definitions,
     resolve_rule_set,
 )
-from core.projects import ResolutionAgentNotFoundError
+from core.projects import ResolutionAgentNotFoundError, RuntimeAgent
 from core.sessions import SessionAddress, WorkingProjectChoice
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
@@ -168,67 +167,57 @@ def _session_summary(
     session_id: str | None,
     requested: WorkingProjectChoice,
 ) -> JsonObject:
-    resolver = state.runtime.agent_resolver
-    agent = resolver.resolve_agent(project_id, agent_id, session_id=session_id, require_model=False)
-    rules = getattr(agent, "permission_rules", None)
-    if isinstance(rules, PermissionRules) and not rules.restricts:
-        # Rules that restrict nothing are full access, as in the Run's boundary.
-        rules = None
-    ceilings: list[PermissionCeiling] = []
-    if session_id is not None:
-        inherited = resolver.session_overrides(
-            SessionAddress(project_id, agent_id, session_id)
-        ).ceiling()
-        if inherited is not None:
-            ceilings.append(inherited)
-    extension = getattr(agent, "permission_ceiling", None)
-    if isinstance(extension, PermissionCeiling):
-        ceilings.append(extension)
-    if not isinstance(rules, PermissionRules) and not ceilings:
+    runtime = state.runtime
+    resolver = runtime.agent_resolver
+    agent: RuntimeAgent = resolver.resolve_agent(
+        project_id, agent_id, session_id=session_id, require_model=False
+    )
+    ceiling = (
+        resolver.session_overrides(SessionAddress(project_id, agent_id, session_id)).ceiling()
+        if session_id is not None
+        else None
+    )
+    data_dir = Path(runtime.storage.data_dir)
+    # Composed without the Working Project first: full access resolves no more.
+    permissions = session_permissions(agent, data_dir=data_dir, project_root=None, ceiling=ceiling)
+    if not permissions.restricted:
         return {"restricted": False, "layers": []}
     layers: list[JsonObject] = []
-    if isinstance(rules, PermissionRules):
+    if permissions.rules is not None:
         working = resolver.resolve_working_project(
             project_id, agent, session_id=session_id, requested=requested
         )
-        layers.append(
-            describe_permission_rules(rules, values=_session_values(state, agent, working))
+        permissions = session_permissions(
+            agent,
+            data_dir=data_dir,
+            project_root=_project_root(state, working),
+            ceiling=ceiling,
         )
-    for ceiling in ceilings:
-        layers.extend(describe_layer(layer) for layer in ceiling.layers)
+        assert permissions.rules is not None
+        layers.append(
+            describe_permission_rules(permissions.rules, values=permissions.placeholder_values())
+        )
+    for inherited in permissions.ceilings:
+        layers.extend(describe_layer(layer) for layer in inherited.layers)
     return {"restricted": True, "layers": layers}
 
 
 def _session_values(
-    state: Any, agent: Any, working_project_id: str | None
+    state: Any, agent: RuntimeAgent, working_project_id: str | None
 ) -> dict[str, str | None]:
-    """The placeholder values of a Session working in ``working_project_id``.
+    """The placeholder values of a Session working in ``working_project_id``."""
+    return session_permissions(
+        agent,
+        data_dir=Path(state.runtime.storage.data_dir),
+        project_root=_project_root(state, working_project_id),
+        ceiling=None,
+    ).placeholder_values()
 
-    The working directory follows Tool path resolution: a temporary Agent's own
-    folder, else the Working Project's repository, else the Agent's Workspace.
-    The Scratch Area is per conversation and stays ``{scratch}``.
-    """
-    project_root = (
-        str(Path(state.runtime.projects.get(working_project_id).cwd))
-        if working_project_id is not None
-        else None
-    )
-    workspace = getattr(agent, "workspace", "") or None
-    temporary_cwd = getattr(agent, "cwd", None)
-    if isinstance(temporary_cwd, Path):
-        workdir = str(temporary_cwd)
-    elif project_root is not None:
-        workdir = project_root
-    elif workspace is not None:
-        workdir = str(workspace)
-    else:
-        workdir = str(default_workspace_dir(state.runtime.storage.data_dir, agent.id))
-    return {
-        "workdir": workdir,
-        "project": project_root,
-        "workspace": str(workspace) if workspace is not None else None,
-        "home": str(Path.home()),
-    }
+
+def _project_root(state: Any, working_project_id: str | None) -> Path | None:
+    if working_project_id is None:
+        return None
+    return Path(state.runtime.projects.get(working_project_id).cwd)
 
 
 def _rules_or_none(stored: dict[str, Any] | None) -> PermissionRules | None:

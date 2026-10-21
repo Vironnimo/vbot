@@ -286,7 +286,7 @@ class SubAgentCoordinator:
         if not await sessions.run_async(sessions.exists, link.parent):
             return tool_failure("parent_not_found", MESSAGE_PARENT_PARENT_GONE_MESSAGE)
         parent = link.parent
-        activity = await self._activities.ensure(_caller(context))
+        activity = await self._activities.ensure(_caller(context), parent=parent)
         delivery_id = new_id("subagent-message")
         content = cast(str, arguments["content"]).strip()
         caller = _caller(context)
@@ -590,7 +590,7 @@ class SubAgentCoordinator:
                 assert session.generation_id is not None
                 await _remove_unstarted_session(runtime, address, session.generation_id)
                 raise
-        activity = await self._activities.ensure(address)
+        activity = await self._activities.ensure(address, parent=_caller(context))
         activity_file = self._activities.path(address)
         _LOGGER.info(
             "Sub-agent started (subagent=%s parent_run=%s parent_session=%s child_session=%s "
@@ -818,6 +818,13 @@ class SubAgentCoordinator:
                     await sessions.run_async(
                         runtime.agent_resolver.update_session_overrides, address, overrides
                     )
+                # The Parent's boundary now narrows the stored one: a Parent whose
+                # rules were tightened since the spawn passes that on.
+                ceiling = context.permissions.ceiling(source="parent")
+                if ceiling is not None:
+                    await sessions.run_async(
+                        runtime.agent_resolver.join_session_ceiling, address, ceiling
+                    )
                 # Queued input cannot be steered before its settings commit;
                 # an idle or drained Run waits at the executor gate instead.
                 if not item.future.cancelled() and not item.withdrawn and not item.steering:
@@ -851,7 +858,7 @@ class SubAgentCoordinator:
                 pass
             else:
                 status, note = "steered", SUBAGENT_SEND_STEERED_NOTE
-        await self._activities.ensure(address)
+        await self._activities.ensure(address, parent=_caller(context))
         await _emit(
             context,
             SUBAGENT_SESSION_STARTED_EVENT,

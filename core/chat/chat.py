@@ -235,6 +235,8 @@ class ChatLoop:
 
         ``permission_ceiling`` bounds this Run by the boundary of the Session
         that caused it (a Cron job's creator) on top of the Agent's own rules.
+        It is joined into the Session's stored ceiling, so every later Run of
+        the Session, follow-ups included, stays within it.
         """
         return await self._start_run(
             agent_id,
@@ -401,8 +403,11 @@ class ChatLoop:
             max_tool_iterations=max_tool_iterations,
             input_persisted_hook=input_persisted_hook,
             context_note=context_note,
-            permission_ceiling=permission_ceiling,
         )
+        if permission_ceiling is not None:
+            await self._dependencies.sessions.run_async(
+                resolver.join_session_ceiling, session.address, permission_ceiling
+            )
         return await manager.enqueue(
             SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session.id),
             _QueuedRunExecutor(self, request),
@@ -578,7 +583,9 @@ class ChatLoop:
                 session_id=new_session.session_id,
                 project_id=project_id,
                 actor=new_session.actor,
-                metadata=new_session.agent_overrides.capture(agent).session_metadata(),
+                metadata=new_session.agent_overrides.with_ceiling(permission_ceiling)
+                .capture(agent)
+                .session_metadata(),
                 working_project_id=_stored_working_project(project_id, working_project_id),
             )
         elif session is None:
@@ -593,6 +600,10 @@ class ChatLoop:
             await self._dependencies.sessions.run_async(
                 resolver.capture_session_settings, session.address, agent
             )
+            if permission_ceiling is not None:
+                await self._dependencies.sessions.run_async(
+                    resolver.join_session_ceiling, session.address, permission_ceiling
+                )
         if edit_message_id is not None:
             if internal or not isinstance(content, str):
                 raise ChatError("history edits require visible plain-text content")
@@ -610,7 +621,6 @@ class ChatLoop:
             input_persisted_hook=input_persisted_hook,
             edit_message_id=edit_message_id,
             context_note=context_note,
-            permission_ceiling=permission_ceiling,
         )
         address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session.id)
         try:

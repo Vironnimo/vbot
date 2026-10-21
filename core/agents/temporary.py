@@ -175,6 +175,8 @@ class TemporaryAgent:
     # The owner's rules (``TemporaryAgentConfig.permission_rules``) and ceiling.
     permission_rules: PermissionRules | None = None
     permission_ceiling: PermissionCeiling | None = None
+    # A temporary Agent's rules come from its owner, not from files.
+    rule_files: tuple[Path, ...] = ()
 
 
 class TemporaryAgentRegistry:

@@ -19,7 +19,7 @@ from core.permissions._paths import join_lexical, lexical_text, split_lexical
 from core.permissions._rules import PermissionRule, PermissionRules
 
 if TYPE_CHECKING:
-    from core.permissions.permissions import PermissionLayer
+    from core.permissions._layers import PermissionLayer
 
 type LayerDescription = dict[str, object]
 

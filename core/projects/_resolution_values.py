@@ -176,6 +176,7 @@ def _build_config_agent(
         body=scanned.body,
         source_path=scanned.source_path,
         source=scanned.source,
+        rule_files=tuple(dict.fromkeys((scanned.source_path, *scanned.rule_files))),
         preload_skills=scanned.preload_skills,
         model_inherit=scanned.model == "inherit",
         tool_access=tool_access,

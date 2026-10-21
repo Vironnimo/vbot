@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,6 +11,8 @@ from typing import Any, cast
 import pytest
 
 import core.chat._run_permissions as run_permissions
+from core.chat import session_permissions
+from core.json_documents import document_change
 from core.permissions import (
     BoundaryContext,
     PermissionBoundary,
@@ -47,11 +50,19 @@ class _ScratchFolders:
         )
 
 
-def _runtime(tmp_path: Path, rules: dict[str, Any] | None) -> tuple[Any, list[ToolContext]]:
+def _runtime(
+    tmp_path: Path,
+    rules: dict[str, Any] | None,
+    *,
+    turns: list[Any] | None = None,
+    on_call: Callable[[], None] | None = None,
+) -> tuple[Any, list[ToolContext]]:
     seen: list[ToolContext] = []
 
     def probe(context: ToolContext, _arguments: Any) -> Any:
         seen.append(context)
+        if on_call is not None:
+            on_call()
         return tool_success({})
 
     tools = ToolRegistry()
@@ -68,7 +79,7 @@ def _runtime(tmp_path: Path, rules: dict[str, Any] | None) -> tuple[Any, list[To
     runtime: Any = StubRuntime(
         data_dir=tmp_path / "data",
         agent=agent,
-        adapter=StubAdapter([tool_turn(("call_1", "probe")), final("Done")]),
+        adapter=StubAdapter(turns or [tool_turn(("call_1", "probe")), final("Done")]),
         tools=tools,
     )
     runtime.scratch_areas = _ScratchFolders(tmp_path / "scratch")
@@ -144,7 +155,6 @@ async def test_a_run_without_rules_gets_full_access_without_building_a_boundary(
 
     monkeypatch.setattr(run_permissions, "installation_dirs", unexpected)
     monkeypatch.setattr(run_permissions, "_skill_dirs", unexpected)
-    monkeypatch.setattr(run_permissions, "_agent_config", unexpected)
 
     await build_chat_loop(runtime).send("coder", "Work", session_id="s1")
 
@@ -158,7 +168,16 @@ async def test_a_run_without_rules_gets_full_access_without_building_a_boundary(
 async def test_an_inherited_ceiling_bounds_an_agent_without_rules(
     tmp_path: Path, inherited_from: str
 ) -> None:
-    runtime, seen = _runtime(tmp_path, None)
+    runtime, seen = _runtime(
+        tmp_path,
+        None,
+        turns=[
+            tool_turn(("call_1", "probe")),
+            final("Done"),
+            tool_turn(("call_2", "probe")),
+            final("Done"),
+        ],
+    )
     address = SessionAddress(None, "coder", "s1")
     creator = PermissionBoundary.build(
         normalize_permission_rules({"write": "scratch"}),
@@ -188,11 +207,67 @@ async def test_an_inherited_ceiling_bounds_an_agent_without_rules(
     else:
         run = await loop.start_run("coder", "Work", session_id="s1", permission_ceiling=ceiling)
         await run.wait()
+    # A follow-up Run of the Session, which nobody passes a ceiling, keeps it.
+    await loop.send("coder", "Follow up", session_id="s1")
 
-    [context] = seen
-    assert [layer.source for layer in context.permissions.layers] == [inherited_from]
-    refused = context.permissions.check_path(tmp_path / "workspace" / "notes.md", "write")
-    assert refused is not None and refused.source == inherited_from
+    for context in seen:
+        assert [layer.source for layer in context.permissions.layers] == [inherited_from]
+        refused = context.permissions.check_path(tmp_path / "workspace" / "notes.md", "write")
+        assert refused is not None and refused.source == inherited_from
+    assert len(seen) == 2
+
+
+def test_a_ceiling_only_session_boundary_keeps_the_agents_workspace_and_config(
+    tmp_path: Path,
+) -> None:
+    # A Cron watch check of an Identity Agent without a Project works in its
+    # Workspace inside the data directory, under the job's ceiling alone.
+    data = tmp_path / "data"
+    workspace = data / "agents" / "coder" / "workspace"
+    agent = replace(
+        _agent(workspace), permission_rules=normalize_permission_rules({"web": "listed"})
+    )
+    creator = PermissionBoundary.build(
+        normalize_permission_rules({"read": "work_area", "write": "work_area"}),
+        BoundaryContext(workdir=workspace, home=tmp_path, data_dir=data),
+    )
+    ceiling = creator.ceiling(source="cron")
+
+    composed = session_permissions(agent, data_dir=data, project_root=None, ceiling=ceiling)
+    boundary = composed.without_agent_rules().boundary(data, owner=None)
+
+    assert composed.workdir == workspace
+    assert [layer.source for layer in boundary.layers] == ["cron"]
+    assert boundary.check_path(workspace / "notes.md", "write") is None
+    refused = boundary.check_path(data / "agents" / "coder" / "agent.json", "read")
+    assert refused is not None and refused.location == "agent_config"
+
+
+@pytest.mark.asyncio
+async def test_a_rule_edit_reaches_the_next_tool_round_of_an_active_run(tmp_path: Path) -> None:
+    def tighten() -> None:
+        if len(seen) == 1:
+            agent = runtime.agents._agent
+            runtime.agents._agent = replace(
+                agent, permission_rules=normalize_permission_rules({"write": "scratch"})
+            )
+            # The edit as vBot saves it: a configuration document change.
+            with document_change(tmp_path / "data" / "agents" / "coder" / "agent.json"):
+                pass
+
+    runtime, seen = _runtime(
+        tmp_path,
+        None,
+        turns=[tool_turn(("call_1", "probe")), tool_turn(("call_2", "probe")), final("Done")],
+        on_call=tighten,
+    )
+
+    await build_chat_loop(runtime).send("coder", "Work", session_id="s1")
+
+    first, second = seen
+    assert first.permissions is PermissionBoundary.UNRESTRICTED
+    refused = second.permissions.check_path(tmp_path / "workspace" / "notes.md", "write")
+    assert refused is not None and refused.reason == "not_permitted"
 
 
 @pytest.mark.asyncio

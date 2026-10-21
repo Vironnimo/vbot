@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Literal
 
 from core.memory import (
     DEFAULT_MEMORY_PROMPT_MODE,
     MemoryPromptMode,
 )
-from core.permissions import PermissionRules
+from core.permissions import PermissionCeiling, PermissionRules
 from core.tools.availability import (
     ToolAccess,
 )
@@ -153,6 +154,16 @@ class Agent:
     # What the Agent is for, in one short line the user writes; Sub-Agent catalogs
     # show it so other Agents pick it only for fitting work (written only when set).
     description: str = ""
+
+    @property
+    def permission_ceiling(self) -> PermissionCeiling | None:
+        """An Identity Agent carries no ceiling; a Session's ceiling is in its overrides."""
+        return None
+
+    @property
+    def rule_files(self) -> tuple[Path, ...]:
+        """Its rules live in ``agent.json``, which the Run's boundary protects itself."""
+        return ()
 
 
 def is_builtin_agent(agent: object) -> bool:

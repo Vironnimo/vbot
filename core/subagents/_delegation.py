@@ -175,7 +175,8 @@ def _open_subagent_session(
     together even when storage fails. The Session works in
     :func:`_child_working_project`. A restricted Parent's Permission Boundary is
     stored with the overrides as the Session's ceiling: no Run of the Sub-Agent,
-    also after a later ``send``, gets more access than the Parent had.
+    also after a later ``send``, gets more access than the Parent had. Each
+    ``send`` joins the Parent's boundary at that time into it.
     """
     sessions = runtime.chat_sessions
     stored = dict(overrides)

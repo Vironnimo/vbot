@@ -22,7 +22,6 @@ from pathlib import Path
 from typing import Any, Protocol, cast
 
 from core.permissions import (
-    BoundaryContext,
     PermissionBoundary,
     PermissionCeiling,
     normalize_permission_rules,
@@ -364,9 +363,7 @@ class CommandCheckpoints:
             if body is None and state["pending"]:
                 body = format_command_delivery(
                     report,
-                    permissions=_delivery_boundary(
-                        report.command_id, ceiling, report.workdir, self.store.data_dir
-                    ),
+                    permissions=_delivery_boundary(report, ceiling, self.store.data_dir),
                 )
             entry = _Recovered(
                 report,
@@ -526,39 +523,44 @@ async def _read_unfinished_log(
 
 
 def _delivery_boundary(
-    command_id: str, ceiling: object, workdir: Path, data_dir: Path
+    report: CommandReport, ceiling: object, data_dir: Path
 ) -> PermissionBoundary:
     """The boundary of the command's Session, rebuilt from its stored *ceiling*.
 
-    Only the ceiling's layers, the Agent's own still tagged ``agent``, with the
-    protected locations of a ceiling-only boundary, as a Cron watch check has
-    them: the Session's Workspace, Scratch Area and Skill folders are no
-    readable exceptions in the data directory, and its Agent's configuration
-    file is not named. A ceiling that cannot be read permits reading only
-    vBot's artifact folders, so the hint names no other path.
+    Only the ceiling's layers, the Agent's own still tagged ``agent``, composed
+    without the Agent (``core.chat.SessionPermissions``): the Session's own
+    temporary files stay readable, its Workspace, Scratch Area and Skill
+    folders are no readable exceptions in the data directory. A ceiling that
+    cannot be read permits reading only the Session's temporary files, so the
+    hint names no other path.
     """
     if ceiling is None:
         return PermissionBoundary.UNRESTRICTED
-    from core.chat._run_permissions import artifact_dirs, installation_dirs
+    from core.chat import SessionPermissions
 
-    context = BoundaryContext(
-        workdir=workdir,
-        home=Path.home(),
-        data_dir=data_dir,
-        install_dirs=installation_dirs(),
-        readable_dirs=artifact_dirs(data_dir),
+    composed = SessionPermissions(
+        rules=None,
+        ceilings=(),
+        workdir=report.workdir,
+        project_root=None,
+        workspace=None,
+        agent_config=None,
+        rule_files=(),
+        allowed_skills=None,
     )
     try:
         stored = PermissionCeiling.from_ceiling_dict(ceiling)
     except ValueError:
         _LOGGER.warning(
-            "Unreadable permission rules of a recovered command (command=%s)", command_id
+            "Unreadable permission rules of a recovered command (command=%s)", report.command_id
         )
         rules = normalize_permission_rules(
             {"read": "work_area", "write": "scratch", "deny": ["Read({workdir})"]}
         )
-        return PermissionBoundary.build(rules, context)
-    return PermissionBoundary.build(None, context, ceilings=(stored,))
+        composed = replace(composed, rules=rules)
+    else:
+        composed = replace(composed, ceilings=(stored,))
+    return composed.boundary(data_dir, owner=report.owner)
 
 
 def _started_at(state: dict[str, Any]) -> float | None:

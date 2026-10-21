@@ -227,7 +227,12 @@ async def test_a_job_with_a_permission_ceiling_runs_only_checks_its_rules_allow(
     ceiling = restricted(project, web="listed", allow=["Web(example.com)"]).ceiling(source="cron")
     assert ceiling is not None
 
-    def boundary(stored: PermissionCeiling, workdir: Path) -> PermissionBoundary:
+    def boundary(
+        stored: PermissionCeiling, agent_id: str | None, project_id: str | None
+    ) -> PermissionBoundary:
+        # A command check names the job's Agent and Project; a URL check neither.
+        assert (agent_id, project_id) in {("agent-one", "project-a"), (None, None)}
+        workdir = project if project_id is not None else tmp_path / "data"
         context = BoundaryContext(workdir=workdir, home=project, data_dir=tmp_path / "data")
         return PermissionBoundary.build(None, context, ceilings=(stored,))
 

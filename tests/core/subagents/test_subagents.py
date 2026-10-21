@@ -479,13 +479,22 @@ async def test_a_restricted_parent_bounds_every_run_of_its_subagent_session(
     open_child = harness.subagent_session(unrestricted["id"])
     assert (await harness.resolver.session_overrides_async(open_child)).ceiling() is None
 
-    # A later message, also one that changes the Session's Model, keeps the ceiling.
+    # A later message, also one that changes the Session's Model, keeps the ceiling
+    # and narrows it by the Parent's boundary at that time.
+    tightened = PermissionBoundary.build(
+        normalize_permission_rules({"write": "scratch", "deny": ["Read({workdir}/private)"]}),
+        BoundaryContext(workdir=tmp_path, home=tmp_path, data_dir=tmp_path / "data"),
+    )
     sent = await harness.call(
-        {"action": "send", "id": restricted["id"], "content": "more", "model": "acme/other"}
+        {"action": "send", "id": restricted["id"], "content": "more", "model": "acme/other"},
+        permissions=tightened,
     )
     assert sent["ok"], sent
     stored = await harness.resolver.session_overrides_async(child)
-    assert (stored.model, stored.ceiling()) == ("acme/other", expected)
+    assert expected is not None
+    joined = expected.joined(tightened.ceiling(source="parent"))
+    assert (stored.model, stored.ceiling()) == ("acme/other", joined)
+    assert len(joined.layers) == 2
 
 
 @pytest.mark.parametrize(
@@ -1258,10 +1267,10 @@ async def test_stop_all_includes_a_child_whose_admission_is_in_flight(
     admission_lock = harness.coordinator._admission_lock  # noqa: SLF001
     acquire = admission_lock.acquire
 
-    async def held_activity(address):
+    async def held_activity(address, *, parent):
         admission_entered.set()
         await release_admission.wait()
-        return await ensure_activity(address)
+        return await ensure_activity(address, parent=parent)
 
     async def observed_acquire():
         if admission_lock.locked():

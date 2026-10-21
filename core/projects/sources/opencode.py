@@ -64,6 +64,14 @@ class OpenCodeAdapter:
         return next(iter(self._scan(root, selected)), None)
 
     def _scan(self, root: Path, selected: AgentProfile | None = None) -> list[AgentProfile]:
+        # Every profile reads the shared configuration files, also before they exist.
+        shared = tuple(root / relative for relative in CONFIG_FILES)
+        return [
+            replace(agent, rule_files=(*shared, *agent.rule_files))
+            for agent in self._profiles(root, selected)
+        ]
+
+    def _profiles(self, root: Path, selected: AgentProfile | None) -> list[AgentProfile]:
         result: list[AgentProfile] = []
         global_fields: dict[str, Any] = {}
         definitions: list[tuple[Path, str, dict[str, Any]]] = []
@@ -116,12 +124,15 @@ class OpenCodeAdapter:
                 if problem:
                     raise reading.SourceError(problem)
                 body = reading.string(fields, "prompt")
+                references: tuple[Path, ...] = ()
                 if body.startswith("{file:") and body.endswith("}"):
                     reference = (path.parent / body[6:-1]).resolve()
                     if not reference.is_relative_to(root.resolve()):
                         raise reading.SourceError("Prompt file is outside the repository.")
                     body = reading.read_text(reference)
-                result.append(self._convert(path, name, fields, body, global_fields))
+                    references = (reference,)
+                converted = self._convert(path, name, fields, body, global_fields)
+                result.append(replace(converted, rule_files=references))
             except (OSError, ValueError) as error:
                 result.append(unavailable(self.source, path, name, str(error)))
         # Markdown definitions outrank JSON definitions in this adapter. Keep

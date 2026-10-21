@@ -31,6 +31,14 @@ class CodexAdapter:
         return next(iter(self._scan(root, selected)), None)
 
     def _scan(self, root: Path, selected: AgentProfile | None = None) -> list[AgentProfile]:
+        # Every profile inherits the shared config, also before it exists.
+        shared = (root / ".codex/config.toml",)
+        return [
+            replace(agent, rule_files=(*shared, *agent.rule_files))
+            for agent in self._profiles(root, selected)
+        ]
+
+    def _profiles(self, root: Path, selected: AgentProfile | None) -> list[AgentProfile]:
         paths = (
             reading.files(root / ".codex/agents", ".toml", recursive=True)
             if selected is None

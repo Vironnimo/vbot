@@ -23,8 +23,8 @@ import os
 import re
 import socket
 import sys
-from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass, replace
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from typing import ClassVar, Final, cast
 from urllib.parse import urlsplit
 
@@ -33,6 +33,7 @@ from core.permissions._describe import (
     describe_layer,
     describe_permission_rules,
 )
+from core.permissions._layers import PermissionCeiling, PermissionLayer, join_ceilings
 from core.permissions._paths import (
     LexicalPath,
     NormalizedPath,
@@ -59,7 +60,6 @@ from core.permissions._presets import (
     preset_name,
 )
 from core.permissions._refusal import (
-    LAYER_SOURCES,
     LayerSource,
     PathAccess,
     PermissionAccess,
@@ -91,15 +91,11 @@ from core.permissions._rules import (
     parse_permission_rule,
     permission_rules_to_dict,
     resolve_rule_set,
-    validated_base,
     write_within_read,
 )
 
 type PathLike = str | os.PathLike[str]
 
-_LAYER_FIELDS: Final = frozenset(
-    {"source", "read", "write", "commands", "web", "workdir", "scratch", "allow", "deny"}
-)
 _DEFAULT_PORTS: Final = {"http": 80, "https": 443}
 
 
@@ -114,7 +110,11 @@ class BoundaryContext:
     (vBot-owned folders this Session may read, such as its Skill directories and
     artifact folders); ``agent_config`` (the Agent's ``agent.json``) is never
     readable or writable, ``install_dirs`` (installation and interpreter) never
-    writable. ``loopback_port`` is the vBot server's own port on loopback.
+    writable. ``rule_files`` are the repository files a Team member's rules come
+    from (its profile and the settings files its translation reads, also missing
+    ones): readable where the rules allow, never writable, also under every Run
+    that inherits this boundary as a ceiling. ``loopback_port`` is the vBot
+    server's own port on loopback.
     """
 
     workdir: PathLike
@@ -124,78 +124,11 @@ class BoundaryContext:
     scratch_root: PathLike | None = None
     workspace: PathLike | None = None
     agent_config: PathLike | None = None
+    rule_files: tuple[PathLike, ...] = ()
     install_dirs: tuple[PathLike, ...] = ()
     readable_dirs: tuple[PathLike, ...] = ()
     loopback_port: int | None = None
     platform: str = sys.platform
-
-
-@dataclass(frozen=True, slots=True)
-class PermissionLayer:
-    """One placeholder-free rule set that a Run's accesses must satisfy.
-
-    Bases are always set (defaults filled). ``workdir`` and ``scratch`` are the
-    layer's Work Area; path patterns of its rules are absolute.
-    """
-
-    source: LayerSource
-    read: ReadBase
-    write: WriteBase
-    commands: CommandsBase
-    web: WebBase
-    workdir: str
-    scratch: str | None
-    allow: tuple[PermissionRule, ...]
-    deny: tuple[PermissionRule, ...]
-
-    @property
-    def shell_allow(self) -> tuple[str, ...]:
-        return tuple(rule.pattern for rule in self.allow if rule.kind == "Shell")
-
-    @property
-    def shell_deny(self) -> tuple[str, ...]:
-        return tuple(rule.pattern for rule in self.deny if rule.kind == "Shell")
-
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "source": self.source,
-            "read": self.read,
-            "write": self.write,
-            "commands": self.commands,
-            "web": self.web,
-            "workdir": self.workdir,
-            "scratch": self.scratch,
-            "allow": [rule.text for rule in self.allow],
-            "deny": [rule.text for rule in self.deny],
-        }
-
-
-@dataclass(frozen=True, slots=True)
-class PermissionCeiling:
-    """Layers inherited from whoever caused a Run, in their JSON-safe stored form."""
-
-    layers: tuple[PermissionLayer, ...]
-
-    def to_ceiling_dict(self) -> dict[str, object]:
-        return {"layers": [layer.to_dict() for layer in self.layers]}
-
-    @classmethod
-    def from_ceiling_dict(cls, value: object, *, platform: str = sys.platform) -> PermissionCeiling:
-        """Read a stored ceiling strictly; raises :class:`PermissionRulesError`."""
-        if not isinstance(value, Mapping) or set(value) != {"layers"}:
-            raise PermissionRulesError(
-                'A permission ceiling must be an object with exactly the field "layers".'
-            )
-        layers = value["layers"]
-        if not isinstance(layers, list) or not layers:
-            raise PermissionRulesError("permission_ceiling.layers must be a non-empty list.")
-        windows = platform == "win32"
-        return cls(
-            tuple(
-                _layer_from_dict(item, f"permission_ceiling.layers[{index}]", windows=windows)
-                for index, item in enumerate(layers)
-            )
-        )
 
 
 class PermissionBoundary:
@@ -219,6 +152,7 @@ class PermissionBoundary:
         "_workdir_area",
         "_readable",
         "_agent_config",
+        "_rule_files",
         "_install_dirs",
     )
 
@@ -246,6 +180,10 @@ class PermissionBoundary:
             _Area.of(os.fspath(folder), windows=windows) for folder in context.readable_dirs
         )
         self._agent_config = _Area.optional(context.agent_config, windows=windows)
+        self._rule_files = _Area.union(
+            (*context.rule_files, *(file for layer in layers for file in layer.rule_files)),
+            windows=windows,
+        )
         self._install_dirs = tuple(
             _Area.of(os.fspath(folder), windows=windows) for folder in context.install_dirs
         )
@@ -305,7 +243,7 @@ class PermissionBoundary:
             return None
         return PermissionCeiling(
             tuple(
-                _retagged(layer, source) if layer.source == "agent" else layer
+                layer.retagged(source) if layer.source == "agent" else layer
                 for layer in self._layers
             )
         )
@@ -380,6 +318,7 @@ class PermissionBoundary:
             ("data_dir", self._data_dirs),
         ]
         if access == "write":
+            protected.append(("agent_config", self._rule_files))
             protected.extend(("installation", area) for area in self._install_dirs)
         for location, area in protected:
             if area is not None and any(
@@ -425,7 +364,8 @@ class PermissionBoundary:
         for layer in self._compiled:
             rules = layer.read_deny + layer.edit_deny if access == "write" else layer.read_deny
             keys.extend(key for rule in rules for key in rule.keys)
-        for area in (self._agent_config, *(self._install_dirs if access == "write" else ())):
+        writes = (self._rule_files, *self._install_dirs) if access == "write" else ()
+        for area in (self._agent_config, *writes):
             keys.extend(area.keys if area is not None else ())
         if not all(self._data_dir_allowed(key, access) for key in folders):
             keys.extend(self._data_dirs.keys)
@@ -617,6 +557,8 @@ class PermissionBoundary:
         for key in keys:
             if self._agent_config is not None and self._agent_config.contains(key):
                 return "agent_config"
+            if access == "write" and self._rule_files.contains(key):
+                return "agent_config"
             if access == "write" and any(area.contains(key) for area in self._install_dirs):
                 return "installation"
             if self._data_dirs.contains(key) and not self._data_dir_allowed(key, access):
@@ -673,6 +615,12 @@ class _Area:
     @classmethod
     def optional(cls, path: PathLike | None, *, windows: bool) -> _Area | None:
         return None if path is None else cls.of(os.fspath(path), windows=windows)
+
+    @classmethod
+    def union(cls, paths: Iterable[PathLike], *, windows: bool) -> _Area:
+        """One area of several paths; empty (containing nothing) without any."""
+        keys = (key for path in paths for key in cls.of(os.fspath(path), windows=windows).keys)
+        return cls(tuple(dict.fromkeys(keys)))
 
     def contains(self, key: str) -> bool:
         return any(is_inside(key, folder) for folder in self.keys)
@@ -823,6 +771,11 @@ def _expand(rules: PermissionRules, context: BoundaryContext) -> PermissionLayer
         scratch=values["scratch"],
         allow=expanded(rules.allow),
         deny=expanded(rules.deny),
+        rule_files=tuple(
+            dict.fromkeys(
+                lexical_text(os.fspath(file), windows=windows) for file in context.rule_files
+            )
+        ),
     )
 
 
@@ -843,10 +796,6 @@ def _expand_pattern(pattern: str, values: dict[str, str | None], *, windows: boo
 
 def _optional_text(path: PathLike | None, *, windows: bool) -> str | None:
     return None if path is None else lexical_text(os.fspath(path), windows=windows)
-
-
-def _retagged(layer: PermissionLayer, source: LayerSource) -> PermissionLayer:
-    return replace(layer, source=source)
 
 
 def is_own_host(host: str) -> bool:
@@ -904,76 +853,6 @@ def _segment_pattern(segment: str) -> re.Pattern[str]:
     )
 
 
-def _layer_from_dict(value: object, where: str, *, windows: bool) -> PermissionLayer:
-    if not isinstance(value, Mapping):
-        raise PermissionRulesError(f"{where} must be an object.")
-    unknown = sorted(str(key) for key in value if key not in _LAYER_FIELDS)
-    if unknown:
-        raise PermissionRulesError(f"{where} has no field {unknown[0]!r}.")
-    missing = sorted(_LAYER_FIELDS - {"scratch"} - set(value))
-    if missing:
-        raise PermissionRulesError(f"{where} needs the field {missing[0]!r}.")
-    source = value["source"]
-    if source not in LAYER_SOURCES:
-        raise PermissionRulesError(
-            f"{where}.source must be one of {', '.join(LAYER_SOURCES)}; received {source!r}."
-        )
-    try:
-        bases = {
-            part: validated_base(part, value[part]) for part in ("read", "write", "commands", "web")
-        }
-    except PermissionRulesError as error:
-        raise PermissionRulesError(f"{where}.{error}") from None
-    workdir = _absolute_folder(value["workdir"], f"{where}.workdir", windows=windows)
-    scratch_value = value.get("scratch")
-    scratch = (
-        None
-        if scratch_value is None
-        else _absolute_folder(scratch_value, f"{where}.scratch", windows=windows)
-    )
-    platform = "win32" if windows else "linux"
-    rules: dict[str, tuple[PermissionRule, ...]] = {}
-    for part in ("allow", "deny"):
-        listed = value[part]
-        if not isinstance(listed, list):
-            raise PermissionRulesError(f"{where}.{part} must be a list of rule strings.")
-        parsed: list[PermissionRule] = []
-        for index, text in enumerate(listed):
-            if not isinstance(text, str):
-                raise PermissionRulesError(f"{where}.{part}[{index}] must be a rule string.")
-            rule = parse_permission_rule(text, platform=platform)
-            if rule.kind in ("Read", "Edit") and (
-                rule.pattern.startswith(("{", "~"))
-                or not split_lexical(rule.pattern, windows=windows).absolute
-            ):
-                raise PermissionRulesError(
-                    f"{where}.{part}[{index}] {rule.text} must name an absolute path "
-                    "without placeholders."
-                )
-            parsed.append(rule)
-        rules[part] = tuple(parsed)
-    return PermissionLayer(
-        source=cast(LayerSource, source),
-        read=cast(ReadBase, bases["read"]),
-        write=write_within_read(cast(ReadBase, bases["read"]), cast(WriteBase, bases["write"])),
-        commands=cast(CommandsBase, bases["commands"]),
-        web=cast(WebBase, bases["web"]),
-        workdir=workdir,
-        scratch=scratch,
-        allow=rules["allow"],
-        deny=rules["deny"],
-    )
-
-
-def _absolute_folder(value: object, where: str, *, windows: bool) -> str:
-    if not isinstance(value, str):
-        raise PermissionRulesError(f"{where} must be an absolute path.")
-    lexical = split_lexical(value, windows=windows)
-    if not lexical.absolute or lexical.unsafe is not None:
-        raise PermissionRulesError(f"{where} must be an absolute path; received {value!r}.")
-    return lexical.text
-
-
 __all__ = [
     "CUSTOM_PRESET",
     "PERMISSION_PRESETS",
@@ -1011,6 +890,7 @@ __all__ = [
     "describe_layer",
     "describe_permission_rules",
     "is_own_host",
+    "join_ceilings",
     "matching_preset",
     "normalize_path",
     "normalize_permission_rule",

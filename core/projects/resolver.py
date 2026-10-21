@@ -467,6 +467,12 @@ class AgentResolver:
         """Fill uncaptured Model settings once, preserving concurrent explicit choices."""
         return self._session_resolution.capture_session_settings(address, agent)
 
+    def join_session_ceiling(
+        self, address: SessionAddress, ceiling: PermissionCeiling | None
+    ) -> None:
+        """Narrow the Session's stored permission ceiling by *ceiling*. Blocking."""
+        self._session_resolution.join_session_ceiling(address, ceiling)
+
     def preserve_agent_sessions(self, project_id: str | None, agent_id: str) -> None:
         """Keep existing Sessions' choices before changing their Agent's start values.
 

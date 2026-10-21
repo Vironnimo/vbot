@@ -20,7 +20,6 @@ A restricted Session's terminal is checked where vBot can see what runs:
 
 from __future__ import annotations
 
-import json
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -83,13 +82,7 @@ def permission_scope(boundary: PermissionBoundary) -> frozenset[str] | None:
     """
     if not boundary.restricted:
         return None
-    return frozenset(
-        json.dumps(
-            {key: value for key, value in layer.to_dict().items() if key != "source"},
-            sort_keys=True,
-        )
-        for layer in boundary.layers
-    )
+    return frozenset(layer.fingerprint for layer in boundary.layers)
 
 
 def may_attach(boundary: PermissionBoundary, info: TerminalInfo) -> bool:

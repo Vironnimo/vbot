@@ -19,6 +19,7 @@ from core.chat._queued_input import (
     rebuild_after_steering,
 )
 from core.chat._request_history import _prepare_tool_context
+from core.chat._run_state import refresh_run_permissions
 from core.chat._step_outcomes import (
     MAX_IDENTICAL_FAILED_TOOL_CALLS,
     MAX_TOOL_FINALIZATION_VIOLATIONS,
@@ -198,6 +199,9 @@ class AgenticProgression:
                 tools = state.tools
                 evaluated_tool_key = None
             run.raise_if_cancelled()
+            # A rule edit since the last round applies to this round's Tool Calls;
+            # steered input may have narrowed the Session's stored ceiling.
+            await refresh_run_permissions(self._dependencies, context, force=delivered)
             # Tool changes are measured once per Run, after steering, and when
             # the Tool registry changed; the notes announcing them join this
             # request's boundary below, so the Tool list itself stays pinned.

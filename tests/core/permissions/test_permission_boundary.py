@@ -250,6 +250,25 @@ def test_a_workspace_working_directory_is_writable_except_agent_json(area: Area)
     assert refusal is not None and refusal.location == "agent_config"
 
 
+def test_the_files_rules_come_from_stay_readable_but_unwritable(area: Area) -> None:
+    profile = area.work / ".claude" / "agents" / "reviewer.md"
+    missing = area.work / ".claude" / "settings.local.json"
+    boundary = area.boundary(
+        {"write": "work_area"}, agent_config=None, rule_files=(profile, missing)
+    )
+    ceiling = PermissionCeiling.from_ceiling_dict(boundary.to_ceiling_dict(source="parent"))
+    # A Sub-Agent working elsewhere under that ceiling may not rewrite them either.
+    child = PermissionBoundary.build(None, area.context(workdir=area.outside), ceilings=[ceiling])
+
+    for checked in (boundary, child):
+        assert checked.check_path(str(profile), "read") is None
+        for path in (profile, missing):
+            refusal = checked.check_path(str(path), "write")
+            assert refusal is not None and refusal.location == "agent_config"
+        assert checked.check_path(area.path("{work}/.claude"), "write", subtree=True) is not None
+    assert boundary.check_path(area.path("{work}/.claude/notes.md"), "write") is None
+
+
 def test_rules_whose_placeholder_has_no_value_are_dropped(area: Area) -> None:
     rules = {"write": "scratch", "allow": ["Edit({project}/**)"]}
     project = area.root / "project"

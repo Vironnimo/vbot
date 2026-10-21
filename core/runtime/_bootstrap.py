@@ -56,7 +56,6 @@ from core.model_tasks.decisions import DecisionService
 from core.model_tasks.live import LiveVoiceService, backend_instructions
 from core.models.models import ModelRegistry
 from core.permissions import (
-    BoundaryContext,
     CommandChecker,
     PermissionBoundary,
     PermissionCeiling,
@@ -950,24 +949,42 @@ def bootstrap(runtime: Runtime) -> None:
 
 
 def _watch_boundary(
-    runtime: Runtime, data_dir: Path, ceiling: PermissionCeiling, workdir: Path
+    runtime: Runtime,
+    data_dir: Path,
+    ceiling: PermissionCeiling,
+    agent_id: str | None,
+    project_id: str | None,
 ) -> PermissionBoundary:
-    """The boundary a Cron watch check of a job with *ceiling* runs under in *workdir*.
+    """The boundary a Cron watch check of a job with *ceiling* runs under. Blocking.
 
-    Only the ceiling's layers: a check runs no Agent. The protected locations
-    are those of a Run (``core.chat._run_permissions``).
+    Only the ceiling's layers: a check runs no Agent. A command check (with the
+    job's ``agent_id``) is composed like a Session of that Agent
+    (``core.chat.session_permissions``): it works where the Agent works, its
+    Workspace stays reachable and the Agent's configuration stays protected. A
+    URL check needs no folders.
     """
-    from core.chat._run_permissions import artifact_dirs, installation_dirs
+    from core.chat import SessionPermissions, session_permissions
 
-    context = BoundaryContext(
-        workdir=workdir,
-        home=Path.home(),
-        data_dir=data_dir,
-        install_dirs=installation_dirs(),
-        readable_dirs=artifact_dirs(data_dir),
-        loopback_port=runtime._server_port,
-    )
-    return PermissionBoundary.build(None, context, ceilings=(ceiling,))
+    if agent_id is None:
+        permissions = SessionPermissions(
+            rules=None,
+            ceilings=(ceiling,),
+            workdir=data_dir,
+            project_root=None,
+            workspace=None,
+            agent_config=None,
+            rule_files=(),
+            allowed_skills=None,
+        )
+    else:
+        agent = runtime.agent_resolver.resolve_agent(project_id, agent_id, require_model=False)
+        project_root = (
+            Path(runtime.projects.get(project_id).cwd) if project_id is not None else None
+        )
+        permissions = session_permissions(
+            agent, data_dir=data_dir, project_root=project_root, ceiling=ceiling
+        ).without_agent_rules()
+    return permissions.boundary(data_dir, owner=None, loopback_port=runtime._server_port)
 
 
 def _command_analyzer() -> CommandAnalyzer:

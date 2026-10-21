@@ -62,6 +62,10 @@ _GEMINI_TOOLS = {
 }
 
 
+# The repository settings a Claude profile's permissions come from, in merge order.
+CLAUDE_SETTINGS_FILES = (".claude/settings.json", ".claude/settings.local.json")
+
+
 class MarkdownAdapter:
     def __init__(self, source: str, folder: str, *, suffix: str = ".md") -> None:
         self.source = source
@@ -72,23 +76,32 @@ class MarkdownAdapter:
         paths = reading.files(root / self.folder, self.suffix, recursive=True)
         settings, problem = self._settings(root)
         return [
-            agent for path in paths if (agent := self._read(path, settings, problem)) is not None
+            self._with_rule_files(root, agent)
+            for path in paths
+            if (agent := self._read(path, settings, problem)) is not None
         ]
 
     def read(self, root: Path, selected: AgentProfile) -> AgentProfile | None:
         if not reading.is_source_file(root / self.folder, selected.source_path):
             return None
         settings, problem = self._settings(root)
-        return self._read(
+        agent = self._read(
             selected.source_path, settings, problem, unavailable_name=selected.display_name
         )
+        return None if agent is None else self._with_rule_files(root, agent)
+
+    def _with_rule_files(self, root: Path, agent: AgentProfile) -> AgentProfile:
+        """Name the settings files Claude profiles read, also those not created yet."""
+        if self.source != "claude":
+            return agent
+        return replace(agent, rule_files=tuple(root / name for name in CLAUDE_SETTINGS_FILES))
 
     def _settings(self, root: Path) -> tuple[dict[str, Any], str | None]:
         settings: dict[str, Any] = {"other": []}
         problem = None
         if self.source == "claude":
             try:
-                for relative in (".claude/settings.json", ".claude/settings.local.json"):
+                for relative in CLAUDE_SETTINGS_FILES:
                     path = root / relative
                     if reading.is_file_strict(path):
                         # Permissions compose; a local deny must retain a shared deny.

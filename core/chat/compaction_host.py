@@ -270,12 +270,9 @@ class ChatCompactionHost:
                 self._dependencies,
                 run,
                 agent,
-                cron_ceiling=None,
                 address=session.address,
-                project_cwd=project_cwd,
-                prompt_project=prompt_project,
+                project_root=Path(prompt_project.cwd) if prompt_project is not None else None,
                 skill_registry=skill_registry,
-                subagent_session=subagent_session,
             )
             inputs = RequestBuildInputs(
                 replay_policy=adapter.reasoning_replay_policy(model_id),
@@ -301,7 +298,7 @@ class ChatCompactionHost:
                 goal_session=await self.run_transform(
                     has_open_goal, self._dependencies.sessions, session.address
                 ),
-                permissions=permissions,
+                permissions=permissions.boundary,
                 list_announced_tools=adapter.list_announced_tools(model_id),
                 tool_route_on_demand_tools=adapter.on_demand_tools(model_id),
             )

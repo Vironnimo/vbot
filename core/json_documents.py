@@ -34,6 +34,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+from threading import Lock
 from types import MappingProxyType
 from typing import Any, Literal
 
@@ -445,6 +446,20 @@ def write_json_document(
         atomic_write_text(path, text, data_dir=data_dir, mode=mode, owner_only=owner_only)
 
 
+# Changes of snapshot documents this process ended (:func:`documents_written`).
+_CHANGES_LOCK = Lock()
+_changes = 0
+
+
+def documents_written() -> int:
+    """How many snapshot document changes this process ended, failed ones included.
+
+    A cheap, I/O-free sign that some configuration document may have changed:
+    a caller compares two counts; equal counts mean vBot wrote none in between.
+    """
+    return _changes
+
+
 @contextmanager
 def document_change(path: Path, *, wait: bool = True) -> Iterator[None]:
     """Admit one change of the snapshot documents at or below ``path``.
@@ -461,10 +476,15 @@ def document_change(path: Path, *, wait: bool = True) -> Iterator[None]:
     with waiting and repeats its work.
     """
 
-    with ExitStack() as stack:
-        for data_dir in _document_data_dirs(Path(path)):
-            stack.enter_context(member_change(data_dir, wait=wait))
-        yield
+    global _changes
+    try:
+        with ExitStack() as stack:
+            for data_dir in _document_data_dirs(Path(path)):
+                stack.enter_context(member_change(data_dir, wait=wait))
+            yield
+    finally:
+        with _CHANGES_LOCK:
+            _changes += 1
 
 
 def render_json_document(

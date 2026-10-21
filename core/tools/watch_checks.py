@@ -89,8 +89,9 @@ _WORKERS = BoundedWorkerPool(name="watch-checks", max_workers=2)
 _LOGGER = get_logger("tools.watch_checks")
 
 Launch = Callable[..., Awaitable[PipeCommandProcess]]
-# The boundary of a job's ceiling for a check in a working directory.
-CeilingBoundary = Callable[[PermissionCeiling, Path], PermissionBoundary]
+# The boundary of a job's ceiling for a check of the job's Agent and Project
+# (no Agent: a URL check); blocking.
+CeilingBoundary = Callable[[PermissionCeiling, str | None, str | None], PermissionBoundary]
 
 
 class _Agents(Protocol):
@@ -140,13 +141,14 @@ class WatchCheckRunner:
         """
         if ceiling is None:
             return None
-        if watch.kind == "url":
-            return self._boundary(ceiling, self._data_root).check_url(watch.target)
         try:
+            if watch.kind == "url":
+                return (await self._boundary(ceiling, None, None)).check_url(watch.target)
             workdir = await self._workdir(agent_id, project_id)
+            boundary = await self._boundary(ceiling, agent_id, project_id)
         except WatchCheckError:
             return None
-        return await self._command_refusal(watch.target, workdir, ceiling)
+        return await self._command_refusal(watch.target, workdir, boundary)
 
     async def run_command(
         self,
@@ -159,7 +161,8 @@ class WatchCheckRunner:
         """Run ``command`` in the job's working directory; its output."""
         workdir = await self._workdir(agent_id, project_id)
         if ceiling is not None:
-            refused = await self._command_refusal(command, workdir, ceiling)
+            boundary = await self._boundary(ceiling, agent_id, project_id)
+            refused = await self._command_refusal(command, workdir, boundary)
             if refused is not None:
                 raise WatchCheckError(_refused(refused))
         try:
@@ -202,7 +205,7 @@ class WatchCheckRunner:
     async def fetch_url(self, url: str, *, ceiling: PermissionCeiling | None = None) -> str:
         """GET ``url``; its main text for an HTML page, else the decoded body."""
         if ceiling is not None:
-            return await self._fetch_guarded(url, self._boundary(ceiling, self._data_root))
+            return await self._fetch_guarded(url, await self._boundary(ceiling, None, None))
         try:
             async with (
                 asyncio.timeout(URL_TIMEOUT_SECONDS),
@@ -253,17 +256,24 @@ class WatchCheckRunner:
         content_type = response.headers.get("content-type", "")
         return await _WORKERS.run(_page_text, body, content_type, response.url)
 
-    def _boundary(self, ceiling: PermissionCeiling, workdir: Path) -> PermissionBoundary:
+    async def _boundary(
+        self, ceiling: PermissionCeiling, agent_id: str | None, project_id: str | None
+    ) -> PermissionBoundary:
         if self._ceiling_boundary is None:
             raise WatchCheckError(
                 "The check did not run: this vBot cannot apply the job's permission rules"
             )
-        return self._ceiling_boundary(ceiling, workdir)
+        try:
+            return await _WORKERS.run(self._ceiling_boundary, ceiling, agent_id, project_id)
+        except Exception as error:
+            owner = f"Project {project_id}" if project_id is not None else f"Agent {agent_id}"
+            raise WatchCheckError(
+                f"The check did not run: {owner} is not available: {error}"
+            ) from error
 
     async def _command_refusal(
-        self, command: str, workdir: Path, ceiling: PermissionCeiling
+        self, command: str, workdir: Path, boundary: PermissionBoundary
     ) -> PermissionRefusal | None:
-        boundary = self._boundary(ceiling, workdir)
         if self._checker is None:
             return boundary.refusal(
                 "command",

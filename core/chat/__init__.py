@@ -17,6 +17,7 @@ if TYPE_CHECKING:
         reply_surface_from_note,
     )
     from core.chat._output_speed import output_measurements
+    from core.chat._run_permissions import SessionPermissions, session_permissions
     from core.chat._run_state import (
         ChatLoopDependencies,
         RequestState,
@@ -130,6 +131,8 @@ _EXPORT_MODULES = {
     "ToolIterationLimitError": "core.chat.errors",
     "aggregate_session_usage": "core.chat.usage",
     "latest_session_context_usage": "core.chat.usage",
+    "SessionPermissions": "core.chat._run_permissions",
+    "session_permissions": "core.chat._run_permissions",
 }
 
 __all__ = [
@@ -184,6 +187,8 @@ __all__ = [
     "ToolIterationLimitError",
     "aggregate_session_usage",
     "latest_session_context_usage",
+    "SessionPermissions",
+    "session_permissions",
 ]
 
 
