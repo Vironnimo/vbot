@@ -13,7 +13,7 @@ import re
 import sys
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Final, Literal, cast, override
+from typing import Final, Literal, TypeGuard, cast, override
 from urllib.parse import urlsplit
 
 from core.permissions._paths import DRIVE_RELATIVE_PATH, split_lexical
@@ -111,6 +111,33 @@ class RuleNormalization:
     error: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class RuleSetProblem:
+    """One reason a submitted rule set does not normalize, for an editor to place.
+
+    ``part`` names the part (``None`` when the value itself is no object),
+    ``index`` and ``rule`` the rule string of an ``allow`` or ``deny`` list.
+    ``message`` is the normalizer's sentence, which names part, value and reason.
+    """
+
+    part: str | None
+    message: str
+    index: int | None = None
+    rule: str | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        return {"part": self.part, "index": self.index, "rule": self.rule, "message": self.message}
+
+
+@dataclass(frozen=True, slots=True)
+class RuleSetCheck:
+    """Every problem of a submitted rule set, or its normalized form when there is none."""
+
+    rules: PermissionRules | None
+    notes: tuple[str, ...]
+    problems: tuple[RuleSetProblem, ...]
+
+
 class _RuleProblemError(Exception):
     pass
 
@@ -130,16 +157,10 @@ def normalize_permission_rules(
     if isinstance(value, PermissionRules):
         return value
     if not isinstance(value, Mapping):
-        raise PermissionRulesError(
-            "permission_rules must be an object with the parts read, write, commands, "
-            f"web, allow and deny; received {_kind_of(value)}."
-        )
+        raise PermissionRulesError(_not_an_object(value))
     unknown = [key for key in value if key not in PARTS]
     if unknown:
-        raise PermissionRulesError(
-            f"permission_rules has no part {_quote(unknown[0])}. "
-            "Use read, write, commands, web, allow or deny."
-        )
+        raise PermissionRulesError(_unknown_part(unknown[0]))
     bases = {part: _base(part, value.get(part)) for part in _BASES}
     lists = {
         part: _rule_list(part, value.get(part), notes=notes, windows=platform == "win32")
@@ -153,6 +174,52 @@ def normalize_permission_rules(
         allow=lists["allow"],
         deny=lists["deny"],
     )
+
+
+def check_permission_rules(value: object, *, platform: str = sys.platform) -> RuleSetCheck:
+    """Validate a submitted rule set like :func:`normalize_permission_rules`, finding every problem.
+
+    An editor shows each problem beside its part or rule string instead of only
+    the first one; ``rules`` is the normalized set once nothing is wrong.
+    """
+    if isinstance(value, PermissionRules):
+        return RuleSetCheck(value, (), ())
+    if not isinstance(value, Mapping):
+        return RuleSetCheck(None, (), (RuleSetProblem(None, _not_an_object(value)),))
+    mapping = cast("Mapping[object, object]", value)
+    problems = [RuleSetProblem(str(key), _unknown_part(key)) for key in mapping if key not in PARTS]
+    for part in _BASES:
+        try:
+            _base(part, mapping.get(part))
+        except PermissionRulesError as error:
+            problems.append(RuleSetProblem(part, str(error)))
+    notes: list[str] = []
+    for part in ("allow", "deny"):
+        listed = mapping.get(part)
+        if listed is None:
+            continue
+        if not _is_rule_list(listed):
+            try:
+                _rule_list(part, listed, notes=None, windows=platform == "win32")
+            except PermissionRulesError as error:
+                problems.append(RuleSetProblem(part, str(error)))
+            continue
+        for index, item in enumerate(listed):
+            try:
+                _rule_list(part, [item], notes=notes, windows=platform == "win32")
+            except PermissionRulesError as error:
+                message = str(error).replace(f"{part}[0]", f"{part}[{index}]", 1)
+                problems.append(
+                    RuleSetProblem(
+                        part,
+                        message,
+                        index=index,
+                        rule=item if isinstance(item, str) else None,
+                    )
+                )
+    if problems:
+        return RuleSetCheck(None, tuple(notes), tuple(problems))
+    return RuleSetCheck(normalize_permission_rules(value, platform=platform), tuple(notes), ())
 
 
 def normalize_permission_rule(text: object, *, platform: str = sys.platform) -> RuleNormalization:
@@ -272,7 +339,7 @@ def _rule_list(
 ) -> tuple[PermissionRule, ...] | None:
     if value is None:
         return None
-    if isinstance(value, str) or not isinstance(value, Iterable) or isinstance(value, Mapping):
+    if not _is_rule_list(value):
         raise PermissionRulesError(
             f"permission_rules.{part} must be a list of rule strings such as "
             f'"Read({{workdir}}/docs/**)"; received {_kind_of(value)}.'
@@ -295,6 +362,10 @@ def _rule_list(
         if rule not in rules:
             rules.append(rule)
     return tuple(rules)
+
+
+def _is_rule_list(value: object) -> TypeGuard[Iterable[object]]:
+    return isinstance(value, Iterable) and not isinstance(value, str | Mapping)
 
 
 def _parse_rule(text: str, *, windows: bool) -> tuple[PermissionRule, str | None]:
@@ -424,6 +495,20 @@ def _is_ip(text: str) -> bool:
     except ValueError:
         return False
     return True
+
+
+def _not_an_object(value: object) -> str:
+    return (
+        "permission_rules must be an object with the parts read, write, commands, "
+        f"web, allow and deny; received {_kind_of(value)}."
+    )
+
+
+def _unknown_part(key: object) -> str:
+    return (
+        f"permission_rules has no part {_quote(str(key))}. "
+        "Use read, write, commands, web, allow or deny."
+    )
 
 
 def _unknown_placeholder(name: str) -> str:

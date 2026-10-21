@@ -1,4 +1,4 @@
-"""Contract tests of the Permission Rules language: normalization and resolution."""
+"""Contract tests of the Permission Rules language: normalization, resolution, presets."""
 
 from __future__ import annotations
 
@@ -8,9 +8,14 @@ from core.permissions import (
     PermissionRule,
     PermissionRules,
     PermissionRulesError,
+    apply_preset,
+    check_permission_rules,
+    describe_permission_rules,
+    matching_preset,
     normalize_permission_rule,
     normalize_permission_rules,
     permission_rules_to_dict,
+    preset_name,
     resolve_rule_set,
 )
 
@@ -116,7 +121,25 @@ def test_invalid_rule_sets_are_refused_naming_the_part(value: object, named: str
     with pytest.raises(PermissionRulesError) as raised:
         normalize_permission_rules(value)
 
+    # The editors' check reports the same problem without raising.
+    check = check_permission_rules(value)
     assert named in str(raised.value)
+    assert check.rules is None
+    assert [problem.message for problem in check.problems] == [str(raised.value)]
+
+
+def test_the_check_reports_every_problem_of_a_rule_set() -> None:
+    check = check_permission_rules(
+        {"read": "somewhere", "allow": ["Copy(x)", "Read(docs)", 3], "deny": "Read(docs)"}
+    )
+
+    assert [(problem.part, problem.index, problem.rule) for problem in check.problems] == [
+        ("read", None, None),
+        ("allow", 0, "Copy(x)"),
+        ("allow", 2, None),
+        ("deny", None, None),
+    ]
+    assert "allow[2]" in check.problems[2].message
 
 
 def test_the_stored_form_round_trips_and_reports_rewritten_rules() -> None:
@@ -172,3 +195,46 @@ def test_rule_sets_resolve_per_part(
     levels: tuple[PermissionRules | None, ...], expected: PermissionRules | None
 ) -> None:
     assert resolve_rule_set(*levels) == expected
+
+
+@pytest.mark.parametrize("written", ["work-dir", "work_dir", " Work dir "])
+def test_a_preset_sets_the_bases_and_keeps_the_rules(written: str) -> None:
+    custom = _rules(commands="listed", allow=["Shell(npm test)"], deny=["Read(**/.env)"])
+
+    applied = apply_preset(preset_name(written), custom)
+
+    assert applied == PermissionRules(
+        read="work_area", write="work_area", allow=custom.allow, deny=custom.deny
+    )
+    assert (matching_preset(applied), matching_preset(custom)) == ("work_dir", "custom")
+    assert apply_preset("full_access", custom) is None
+    with pytest.raises(PermissionRulesError, match="full-access, work-dir or work-dir-read-only"):
+        preset_name("everything")
+
+
+def test_a_description_expands_placeholders_and_lists_inactive_rules() -> None:
+    rules = _rules(
+        read="work_area",
+        write="scratch",
+        allow=["Edit(build/**)", "Read({project}/docs)", "Shell(npm test)"],
+        deny=["Read(~/.ssh/**)"],
+    )
+
+    described = describe_permission_rules(
+        rules,
+        values={"workdir": "/srv/agent", "project": None, "home": "/home/me"},
+        platform="linux",
+    )
+
+    assert described == {
+        "source": "agent",
+        "bases": {"read": "work_area", "write": "scratch", "commands": "any", "web": "any"},
+        "workdir": "/srv/agent",
+        "read": ["/srv/agent", "{scratch}", "/srv/agent/build/**"],
+        "write": ["{scratch}", "/srv/agent/build/**"],
+        "commands": None,
+        "web": None,
+        "deny": ["Read(/home/me/.ssh/**)"],
+        # Without a Working Project, ``{project}`` has no value and the rule is dropped.
+        "inactive": ["Read({project}/docs)"],
+    }

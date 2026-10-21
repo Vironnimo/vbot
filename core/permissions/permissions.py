@@ -26,6 +26,11 @@ from dataclasses import dataclass
 from typing import ClassVar, Final, cast
 from urllib.parse import urlsplit
 
+from core.permissions._describe import (
+    LayerDescription,
+    describe_layer,
+    describe_permission_rules,
+)
 from core.permissions._paths import (
     LexicalPath,
     NormalizedPath,
@@ -39,6 +44,16 @@ from core.permissions._paths import (
     path_key,
     resolve_text,
     split_lexical,
+)
+from core.permissions._presets import (
+    CUSTOM_PRESET,
+    PERMISSION_PRESETS,
+    PresetMatch,
+    PresetName,
+    apply_preset,
+    matching_preset,
+    preset_definitions,
+    preset_name,
 )
 from core.permissions._refusal import (
     LAYER_SOURCES,
@@ -60,8 +75,11 @@ from core.permissions._rules import (
     ReadBase,
     RuleKind,
     RuleNormalization,
+    RuleSetCheck,
+    RuleSetProblem,
     WebBase,
     WriteBase,
+    check_permission_rules,
     host_matches,
     normalize_host,
     normalize_permission_rule,
@@ -806,10 +824,13 @@ def _absolute_folder(value: object, where: str, *, windows: bool) -> str:
 
 
 __all__ = [
+    "CUSTOM_PRESET",
+    "PERMISSION_PRESETS",
     "PLACEHOLDERS",
     "RULE_KINDS",
     "BoundaryContext",
     "CommandsBase",
+    "LayerDescription",
     "LayerSource",
     "NormalizedPath",
     "PathAccess",
@@ -822,17 +843,28 @@ __all__ = [
     "PermissionRule",
     "PermissionRules",
     "PermissionRulesError",
+    "PresetMatch",
+    "PresetName",
     "ProtectedLocation",
     "ReadBase",
     "RefusalReason",
     "RuleKind",
     "RuleNormalization",
+    "RuleSetCheck",
+    "RuleSetProblem",
     "WebBase",
     "WriteBase",
+    "apply_preset",
+    "check_permission_rules",
+    "describe_layer",
+    "describe_permission_rules",
+    "matching_preset",
     "normalize_path",
     "normalize_permission_rule",
     "normalize_permission_rules",
     "parse_permission_rule",
     "permission_rules_to_dict",
+    "preset_definitions",
+    "preset_name",
     "resolve_rule_set",
 ]
