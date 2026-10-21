@@ -9,6 +9,11 @@ export const toolStatus = (tool) => {
   if (tool.status === 'cancelled') {
     return 'cancelled';
   }
+  // The Agent's Permission Rules refused the call: the user's limit, not a
+  // fault.
+  if (tool.status === 'refused') {
+    return 'refused';
+  }
   if (tool.status === 'interrupted') {
     return 'interrupted';
   }
@@ -27,6 +32,7 @@ const EXECUTION_STATE_TITLES = {
   partial: () => t('chat.toolState.partial'),
   failed: () => t('chat.toolState.failed'),
   cancelled: () => t('chat.toolState.cancelled'),
+  refused: () => t('chat.toolState.refused'),
   interrupted: () => t('chat.toolState.interrupted'),
   ended: () => t('chat.toolState.ended'),
 };

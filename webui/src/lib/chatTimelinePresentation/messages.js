@@ -6,6 +6,7 @@ import { toolNameForRunTool } from './toolFacts.js';
 import { timestampToMs, formatDurationMs } from './time.js';
 import { getAttachmentUrl, isSpeechPlaybackUrl } from '$lib/api.js';
 import { toolDisplayRecordsError } from '$lib/chatToolDetails.js';
+import { isPermissionDeniedResult } from '$lib/permissionRules.js';
 // Rendering a cancelled Tool result uses the server's stable failure code.
 function toolResultCancelledByUser(result) {
   if (typeof result === 'string') {
@@ -685,7 +686,11 @@ function hasErrorResult(result) {
 }
 
 export function hasToolResultError(event) {
-  if (hasToolResultCancellation(event)) {
+  // A cancelled call and one the Permission Rules refused are not errors.
+  if (
+    hasToolResultCancellation(event) ||
+    isPermissionDeniedResult(toolResultValueForEvent(event))
+  ) {
     return false;
   }
   if (event.payload?.error) {
