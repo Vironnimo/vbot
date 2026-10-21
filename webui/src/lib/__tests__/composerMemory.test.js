@@ -116,6 +116,35 @@ describe('composerMemory history', () => {
   });
 });
 
+describe('composerMemory /secret text', () => {
+  it.each(['/secret GITHUB_TOKEN ghp_value', '  /SECRET API --once s3cr3t'])(
+    'never keeps %j as a draft or in the send history',
+    (text) => {
+      setDraft('agent::one', '/secret');
+      setDraft('agent::one', text);
+      pushHistory('agent', text);
+      flushComposerMemory();
+
+      expect(getDraft('agent::one')).toBe('');
+      expect(getHistory('agent')).toEqual([]);
+      for (const key of [
+        'vbot.composer.drafts.v1',
+        'vbot.composer.history.v1',
+      ]) {
+        expect(localStorage.getItem(key) ?? '').not.toContain('secret');
+      }
+    },
+  );
+
+  it('keeps other commands and a bare /secret', () => {
+    setDraft('agent::one', '/secret');
+    pushHistory('agent', '/secrets list');
+
+    expect(getDraft('agent::one')).toBe('/secret');
+    expect(getHistory('agent')).toEqual(['/secrets list']);
+  });
+});
+
 describe('composerMemory attachments', () => {
   it('keeps uploaded attachments isolated to their session', () => {
     setPendingAttachments('agent-one::session-one', [

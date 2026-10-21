@@ -153,6 +153,7 @@ def test_allowed_resource_kinds_lock_the_documented_wire_contract() -> None:
         "extensions",
         "archive",
         "devices",
+        "agent_secrets",
     } == ALLOWED_RESOURCE_KINDS
 
 

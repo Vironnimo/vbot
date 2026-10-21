@@ -48,6 +48,7 @@ from core.providers.reasoning import (
     ReasoningReplayPolicy,
 )
 from core.runs import Run, RunStatus
+from core.secrets.agent_secrets import EMPTY_MASKER
 from core.sessions import (
     SESSION_GOAL_META_KEY,
     SESSION_GOAL_OPEN_STATUSES,
@@ -77,6 +78,7 @@ if TYPE_CHECKING:
     from core.providers.providers import ProviderRegistry
     from core.runs import ChatRunManager
     from core.runtime.interfaces import ProviderCredentialResolverProtocol
+    from core.secrets.agent_secrets import AgentSecrets, SecretMasker
     from core.sessions import ChatSessionManager
     from core.skills.skills import SkillRegistry
     from core.storage import StorageManager
@@ -188,6 +190,14 @@ class ChatLoopDependencies:
     get_command_manager: Callable[[], CommandManager | None]
     usage_recorder: UsageRecorder | None = None
     scratch_areas: ScratchAreas | None = None
+    # Agent Secrets: masking of results, input and requests.
+    secrets: AgentSecrets | None = None
+
+    @property
+    def secret_masker(self) -> SecretMasker:
+        """Masks every known Secret value; empty without Agent Secrets."""
+        return self.secrets.masker if self.secrets is not None else EMPTY_MASKER
+
     # Called when a persisted user input switches a Sub-Agent's answer destination.
     subagent_reply_to_user: Callable[[SessionAddress, str], None] | None = None
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +30,9 @@ from core.extensions.settings_schema import parse_settings_fields
 
 # A Tool name (the Tools-domain name rule), optionally ending in ``*`` for a prefix.
 _REQUIRED_TOOL_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}\*?$")
+
+
+_SOURCE_NAME = re.compile(r"[a-z][a-z0-9-]{0,39}")
 
 
 class ExtensionAPI:
@@ -125,6 +128,7 @@ class ExtensionAPI:
         argument_normalizer: Callable[[Any], Any] | None = None,
         family: str | None = None,
         announce_changes: Sequence[str] = (),
+        secret_sinks: Mapping[str, str] | None = None,
     ) -> None:
         """Declare an agent tool, mirroring ``ToolRegistry.register``.
 
@@ -148,6 +152,10 @@ class ExtensionAPI:
         names the parts of the definition (``description``, ``parameters`` or
         ``parameters.<name>``) whose change reaches a Session that already
         knows the Tool; any other change waits for its next prompt epoch.
+        ``secret_sinks`` maps top-level argument names to a sink class
+        (``external_tools``, ``typing``, ``files``, ``terminal``): there, Secret
+        references the Agent may use become their values before the handler runs
+        (since API version 17).
         """
         self._declarations.tools.append(
             ToolDeclaration(
@@ -169,6 +177,7 @@ class ExtensionAPI:
                 argument_normalizer=argument_normalizer,
                 family=family,
                 announce_changes=tuple(announce_changes),
+                secret_sinks=dict(secret_sinks) if secret_sinks else None,
             )
         )
 
@@ -303,6 +312,27 @@ class ExtensionAPI:
         self._declarations.recall_backends.append(
             RecallBackendDeclaration(name=name, factory=factory)
         )
+
+    def register_secret_source(self, source: Any) -> None:
+        """Declare a Secret Source (a ``core.secrets.sources.SecretSource``), API 17.
+
+        A source supplies the values of Agent Secrets bound to its entries, such
+        as a password manager. Construct it without I/O; vBot calls its methods
+        from worker threads. A ``name`` another loaded Extension already uses is
+        skipped and diagnosed on this Extension's record.
+        """
+        name = getattr(source, "name", None)
+        if not isinstance(name, str) or not _SOURCE_NAME.fullmatch(name):
+            raise ValueError("secret source name must be lowercase letters, digits or hyphens")
+        for attribute in ("label", "unlock_fields", "capabilities"):
+            if not hasattr(source, attribute):
+                raise ValueError(f"secret source {name!r} has no {attribute}")
+        for method in ("status", "containers", "entries", "resolve", "unlock", "lock", "store"):
+            if not callable(getattr(source, method, None)):
+                raise ValueError(f"secret source {name!r} has no {method}()")
+        if any(item.name == name for item in self._declarations.secret_sources):
+            raise ValueError(f"secret source already declared: {name}")
+        self._declarations.secret_sources.append(source)
 
     def register_interaction_handler(self, prefix: str, handler: Callable[..., Any]) -> None:
         """Declare a channel-interaction (button-tap) handler for *prefix*.

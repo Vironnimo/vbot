@@ -122,6 +122,34 @@ async def test_run_starts_a_linked_subagent_in_the_background(
     assert harness.triggers.notices == []
 
 
+async def test_run_passes_only_named_secrets_the_parent_can_use(
+    harness: SubAgentHarness,
+) -> None:
+    harness.secrets.create(
+        name="API",
+        kind="token",
+        values={"value": "sk-parent-session-key"},
+        actor="user",
+        lifetime="session",
+        session_id=harness.parent.session_id,
+    )
+    harness.loop.hold("review")
+
+    refused = await harness.call(
+        {"description": "Do review", "content": "review", "secrets": ["API", "GITLAB"]}
+    )
+    data = await harness.spawn("review", agent_id="worker", secrets=["api"])
+
+    assert not refused["ok"] and "GITLAB" in refused["error"]["message"]
+    child = harness.subagent_session(data["id"])
+    assert [item.name for item in harness.secrets.usable("worker", child.session_id)] == ["API"]
+    notes = [
+        message.content for message in harness.sessions.get(child).load() if message.role == "note"
+    ]
+    assert any("{{secret:API}}" in str(note) for note in notes)
+    assert all("sk-parent-session-key" not in str(note) for note in notes)
+
+
 async def test_run_without_description_keeps_the_task_for_correction(
     harness: SubAgentHarness,
 ) -> None:

@@ -171,8 +171,37 @@ export const toolRowPresentation = (tool) => {
   const facts = Array.isArray(display?.facts)
     ? display.facts.map(toolFactPresentation).filter(Boolean)
     : [];
-  return { primary, facts };
+  return { primary, facts, secretsUsed: toolSecretsUsed(tool) };
 };
+
+// The Secrets a call's arguments used, from the display its result carries
+// (`secrets_used`: `NAME.field (sink)`), as `{ reference, sink }` without
+// repeats. The started call's display cannot know them yet, so every display
+// the row holds counts.
+const SECRET_USE = /^(.+?) \(([a-z_]+)\)$/;
+
+function toolSecretsUsed(tool) {
+  const displays = [
+    tool?.resultEvent?.payload?.display,
+    tool?.resultEvent?.payload?.message?.tool_display,
+    tool?.display,
+    tool?.toolCall?.display,
+  ];
+  const labels = [];
+  for (const display of displays) {
+    if (!Array.isArray(display?.secrets_used)) continue;
+    for (const label of display.secrets_used) {
+      const text = trimmedString(label);
+      if (text && !labels.includes(text)) labels.push(text);
+    }
+  }
+  return labels.map((label) => {
+    const match = SECRET_USE.exec(label);
+    return match
+      ? { reference: match[1], sink: match[2] }
+      : { reference: label, sink: '' };
+  });
+}
 
 // Value kinds shown in the mono face inside tooltips and cards; a quoted
 // query is prose (a web search), an unquoted one a pattern.

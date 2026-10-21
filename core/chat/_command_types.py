@@ -52,6 +52,9 @@ class CommandSpec:
     new_session_mode: CommandNewSessionMode = "needs_session"
     # False refuses the command in group conversations of every surface.
     group_conversations: bool = True
+    # The argument can carry a Secret value: accessors keep no copy of the command
+    # text, and a Channel removes the user's message where the platform allows.
+    secret_argument: bool = False
 
 
 @dataclass(frozen=True)
@@ -65,6 +68,7 @@ class PreparedCommand:
     # The command as the user wrote it, which a command-started Run shows as the
     # user's message; empty means ``/<name> [argument]``.
     text: str = ""
+    secret_argument: bool = False
 
 
 @dataclass(frozen=True)

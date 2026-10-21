@@ -367,6 +367,16 @@ class TelegramTransport:
         """Expose the Telegram caption for engine-side gating checks."""
         return _extract_caption(raw_message)
 
+    async def delete_message(self, platform_target: str, message_id: str) -> bool:
+        """Bots may delete incoming messages in private chats, and in groups as admins."""
+        bot = self._require_bot()
+        with _telegram_error_boundary(self._channel_id):
+            return bool(
+                await bot.delete_message(
+                    chat_id=_parse_platform_target(platform_target), message_id=int(message_id)
+                )
+            )
+
     def activity_indicator(
         self,
         platform_target: str,

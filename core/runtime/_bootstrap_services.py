@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from functools import partial
 from typing import TYPE_CHECKING, Any, cast
 
@@ -166,6 +167,13 @@ def _archive_services(runtime: Runtime) -> ArchiveServices:
         resolver.invalidate_team_cache(project_id)
         runtime.invalidate_project_skills(project_id)
 
+    async def remove_session_secrets(addresses: Sequence[SessionAddress]) -> None:
+        secrets = runtime._agent_secrets
+        if secrets is None:
+            return
+        for address in addresses:
+            await asyncio.to_thread(secrets.remove_session, address.session_id)
+
     async def close_session_transports(addresses: Sequence[SessionAddress]) -> None:
         await runtime.close_session_transports(
             (address.agent_id, address.session_id) for address in addresses
@@ -199,6 +207,7 @@ def _archive_services(runtime: Runtime) -> ArchiveServices:
         invalidate_project=invalidate_project,
         retention_days=retention_days,
         close_session_transports=close_session_transports,
+        remove_session_secrets=remove_session_secrets,
     )
 
 

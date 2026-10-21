@@ -28,7 +28,7 @@ from core.sessions import (
     ChatSession,
     SessionAddress,
 )
-from core.tools import ToolRegistry, tool_success
+from core.tools import ToolContext, ToolRegistry, tool_success
 from core.tools.availability import MESSAGE_PARENT_TOOL_NAME, TOOL_ACTIVATION_SESSION_GRANT
 from tests.core.chat.chat_loop_support import (
     StubAdapter,
@@ -72,11 +72,17 @@ def _answers(count: int) -> list[Any]:
 
 def _runtime(tmp_path: Path, adapter: StubAdapter) -> Any:
     tools = ToolRegistry()
+    calls: list[ToolContext] = []
+
+    def message_parent(context: ToolContext, _arguments: Any) -> Any:
+        calls.append(context)
+        return tool_success({"status": "sent"})
+
     tools.register(
         MESSAGE_PARENT_TOOL_NAME,
         "Message the Parent Agent.",
         {"type": "object", "properties": {"content": {"type": "string"}}},
-        lambda _context, _arguments: tool_success({"status": "sent"}),
+        message_parent,
         open_input_schema=True,
         catalog_visible=False,
         session_scoped=True,
@@ -85,6 +91,7 @@ def _runtime(tmp_path: Path, adapter: StubAdapter) -> Any:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=[])
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
     runtime.user_reply_switches = []
+    runtime.tool_calls = calls
     runtime.subagent_reply_to_user = lambda address, _message_id: (
         runtime.user_reply_switches.append(address)
     )
@@ -236,7 +243,8 @@ async def test_a_run_cancelled_as_its_user_input_commits_keeps_the_answer_destin
 
 
 async def test_message_parent_is_offered_only_in_a_subagent_session(tmp_path: Path) -> None:
-    adapter = StubAdapter(_answers(2))
+    call = {"id": "call_parent", "name": MESSAGE_PARENT_TOOL_NAME, "arguments": {"content": "x"}}
+    adapter = StubAdapter([{"content": None, "tool_calls": [call]}, *_answers(2)])
     runtime = _runtime(tmp_path, adapter)
     _create(runtime, "linked", linked=True)
     plain = _create(runtime, "plain", linked=False)
@@ -254,7 +262,9 @@ async def test_message_parent_is_offered_only_in_a_subagent_session(tmp_path: Pa
         for message in request["messages"]
     )
     assert MESSAGE_PARENT_TOOL_NAME in offered[0]
-    assert MESSAGE_PARENT_TOOL_NAME not in offered[1]
+    assert MESSAGE_PARENT_TOOL_NAME not in offered[2]
+    # Its Tool calls know the Session is a Sub-Agent Session (for Secrets).
+    assert [context.subagent_session for context in runtime.tool_calls] == [True]
     # A user message in an ordinary Session does not change Sub-Agent routing.
     assert runtime.chat_sessions.metadata_value(plain, SUBAGENT_REPLY_TARGET_META_KEY) is None
     assert len(runtime.user_reply_switches) == 1

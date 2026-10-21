@@ -83,7 +83,7 @@ def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
-async def _keep_session_transports(_sessions: Sequence[SessionAddress]) -> None:
+async def _release_nothing(_sessions: Sequence[SessionAddress]) -> None:
     return None
 
 
@@ -105,7 +105,8 @@ class ArchiveServices:
     :class:`ArchiveRetentionUnknownError` when it cannot be read reliably;
     ``clock`` is the current UTC time retention compares with;
     ``close_session_transports`` closes the Provider transports (such as a Codex
-    WebSocket) kept open for archived Sessions.
+    WebSocket) kept open for archived Sessions; ``remove_session_secrets``
+    deletes the Agent Secrets bound to them, which a restore does not bring back.
     """
 
     data_dir: Path
@@ -128,8 +129,9 @@ class ArchiveServices:
     retention_days: Callable[[], int | None] = default_retention_days
     clock: Callable[[], datetime] = _utc_now
     close_session_transports: Callable[[Sequence[SessionAddress]], Awaitable[None]] = (
-        _keep_session_transports
+        _release_nothing
     )
+    remove_session_secrets: Callable[[Sequence[SessionAddress]], Awaitable[None]] = _release_nothing
 
 
 class ArchiveService:
@@ -315,6 +317,10 @@ class ArchiveService:
             await self._services.close_session_transports(addresses)
         except Exception:
             _LOGGER.exception("Could not close archived Sessions' Provider transports")
+        try:
+            await self._services.remove_session_secrets(addresses)
+        except Exception:
+            _LOGGER.exception("Could not remove archived Sessions' Secrets")
 
     async def _finish_scope_archive(
         self, entry_id: str, scope: ArchiveScope, prepared: Sequence[SessionAddress]

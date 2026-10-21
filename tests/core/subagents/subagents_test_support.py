@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -30,6 +31,8 @@ from core.projects import (
     ResolutionAgentNotFoundError,
 )
 from core.runs import ChatRunManager, Run, RunAdmission, RunKind, RunStatus
+from core.secrets import KeyFileProtection, SecretStore
+from core.secrets.agent_secrets import AgentSecrets
 from core.sessions import SessionAddress
 from core.storage import TemporaryFileManager
 from core.subagents import SubAgentCoordinator
@@ -275,7 +278,19 @@ class SubAgentHarness:
             command_manager=None,
         )
         self.triggers = RecordingTriggerService()
-        self.coordinator = SubAgentCoordinator(cast(Any, self.runtime), self.triggers)
+        self.secrets = AgentSecrets(
+            SecretStore(
+                data_dir,
+                protections=(
+                    KeyFileProtection(directories=(data_dir.parent / f"{data_dir.name}-keys",)),
+                ),
+            ),
+            clock=lambda: datetime.now(UTC),
+        )
+        self.secrets.reload()
+        self.coordinator = SubAgentCoordinator(
+            cast(Any, self.runtime), self.triggers, secrets=self.secrets
+        )
         self.coordinator.install(self.manager)
         self.registry = self._registry(CommandManager())
         self.parent = self.sessions.create("parent").address

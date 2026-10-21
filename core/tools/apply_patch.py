@@ -226,6 +226,7 @@ def register_apply_patch_tool(registry: ToolRegistry, *, file_state: FileReadSta
         open_input_schema=True,
         argument_normalizer=_normalize_call,
         unadvertised_parameters=PATCH_HIDDEN_PARAMETERS,
+        secret_sinks={"patch": "files"},
         result_schema={"type": "object", "required": ["content"]},
         display=ToolDisplay(
             parts_builder=_display_parts, hidden_argument_keys=_HIDDEN_ARGUMENT_KEYS, details=True

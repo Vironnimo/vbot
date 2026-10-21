@@ -12,7 +12,7 @@ The manager's `render_soul(agent)`, `render_memory_files(agent)` and `render_wor
 
 ## Dynamic block catalogs
 
-`render_dynamic_blocks` also fills two side channels: `block_order` receives the full resolved layout order; `read_paths` receives files read while capturing a snapshot. A renderer returns `str` or `RenderedBlock(text, catalog)`: a `BlockCatalog(title, entries, frame)` names the block's keyed entries (`(key, line)` pairs) and the rest of its content (`frame`), so a change can be told per entry. Built-in catalogs: `tool:subagent` (one entry per target id, frame = execution guidance) and `core:channels` (title `Your configured channels`, one entry per enabled Channel id with its block line, frame = the block's unexpanded override or default text).
+`render_dynamic_blocks` also fills two side channels: `block_order` receives the full resolved layout order; `read_paths` receives files read while capturing a snapshot. A renderer returns `str` or `RenderedBlock(text, catalog)`: a `BlockCatalog(title, entries, frame)` names the block's keyed entries (`(key, line)` pairs) and the rest of its content (`frame`), so a change can be told per entry. Built-in catalogs: `tool:subagent` (one entry per target id, frame = execution guidance), `tool:secrets` (title `Secrets`, one entry per Secret name with its Secret line, frame = the block head) and `core:channels` (title `Your configured channels`, one entry per enabled Channel id with its block line, frame = the block's unexpanded override or default text).
 
 ## Steps for a new pinned input
 

@@ -20,7 +20,7 @@ from core.json_documents import (
     warn_unknown_fields,
 )
 
-Section = Literal["credentials", "oauth_tokens", "webhook_secrets"]
+Section = Literal["credentials", "oauth_tokens", "webhook_secrets", "agent_secrets"]
 
 SECRET_STORE_FILE_NAME = "secrets.json"
 
@@ -35,7 +35,11 @@ OAUTH_TOKENS: Final = "oauth_tokens"
 #: The secrets of Cron webhook jobs by job id (``core.automation``).
 WEBHOOK_SECRETS: Final = "webhook_secrets"
 
-SECTIONS: tuple[Section, ...] = (CREDENTIALS, OAUTH_TOKENS, WEBHOOK_SECRETS)
+#: Agent Secrets by Secret id; each value is one sealed JSON record
+#: (``core.secrets.agent_secrets``) holding metadata and field values together.
+AGENT_SECRETS: Final = "agent_secrets"
+
+SECTIONS: tuple[Section, ...] = (CREDENTIALS, OAUTH_TOKENS, WEBHOOK_SECRETS, AGENT_SECRETS)
 
 #: The record of an import of plaintext credential files (``core.secrets.plaintext``).
 PLAINTEXT_IMPORT_FIELD = "plaintext_import"
@@ -53,12 +57,21 @@ _IMPORT_SHAPE = json_object(
 )
 
 SECRET_STORE_SHAPE = json_document(
-    {"store_id", "key", CREDENTIALS, OAUTH_TOKENS, WEBHOOK_SECRETS, PLAINTEXT_IMPORT_FIELD},
+    {
+        "store_id",
+        "key",
+        CREDENTIALS,
+        OAUTH_TOKENS,
+        WEBHOOK_SECRETS,
+        AGENT_SECRETS,
+        PLAINTEXT_IMPORT_FIELD,
+    },
     {
         "key": _KEY_SHAPE,
         CREDENTIALS: json_map(),
         OAUTH_TOKENS: json_map(),
         WEBHOOK_SECRETS: json_map(),
+        AGENT_SECRETS: json_map(),
         PLAINTEXT_IMPORT_FIELD: _IMPORT_SHAPE,
     },
 )

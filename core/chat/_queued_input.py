@@ -16,7 +16,7 @@ from core.chat._run_state import (
 )
 from core.chat._skill_activation import _activate_triggered_skills
 from core.chat._workers import _CHAT_TRANSFORM_WORKERS
-from core.chat.content_blocks import ContentBlock
+from core.chat.content_blocks import ContentBlock, masked_content
 from core.chat.errors import ChatError
 from core.chat.events import _visible_message_payload
 from core.chat.messages import (
@@ -102,7 +102,10 @@ async def persist_steering_input(
         else STEERING_SYSTEM_REMINDER
     )
     message = ChatMessage.user(
-        _assign_session_image_references(content, context.session_snapshot.active_messages),
+        _assign_session_image_references(
+            masked_content(content, dependencies.secret_masker),
+            context.session_snapshot.active_messages,
+        ),
         input_origin=request.input_origin,
     )
     # The answer destination commits with the input, even if cancellation races.

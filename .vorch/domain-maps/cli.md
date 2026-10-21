@@ -4,7 +4,7 @@ Command-line accessor for local server lifecycle, RPC-backed management of a loc
 
 ## Overview
 
-Used by human users and agents. Local commands are server lifecycle (`server start|stop|restart|status`), `home`, the `desktop` GUI launch, `doctor`, the documented local data-store maintenance paths, and the packaged installation's `application`, `update`, `uninstall`/data reset and `autostart` (`cli/application/`; a development checkout refuses them). Every other command, including `chat`, calls the running server's RPC contract rather than reading or mutating runtime files directly. `tui` opens the interactive Textual accessor (`cli/tui.md`). Ordinary commands are automation-safe: they never open the browser, print explicit status/output, and exit non-zero for failed operations. `tui` requires terminal stdin and stdout.
+Used by human users and agents. Local commands are server lifecycle (`server start|stop|restart|status`), `home`, the `desktop` GUI launch, `doctor`, the documented local data-store maintenance paths, and the packaged installation's `application`, `update`, `uninstall`/data reset and `autostart` (`cli/application/`; a development checkout refuses them). Every other command, including `chat`, calls the running server's RPC contract rather than reading or mutating runtime files directly. `tui` opens the interactive Textual accessor (`cli/tui.md`). Ordinary commands are automation-safe: they never open the browser and print explicit status/output. `tui` requires terminal stdin and stdout.
 
 ## Terms
 
@@ -44,7 +44,7 @@ A Git checkout running vBot from source for development and tests (`pip install 
 
 - The CLI is an accessor, not a second control plane. Do not add management commands that write `settings.json`, Agent configs, Channel configs, prompt fragments, logs, model catalogs, or other runtime files directly; route them through server RPC unless the command is explicitly local lifecycle/home/desktop-launch/doctor/update/uninstall/autostart behavior or a documented data-store maintenance path.
 - **Health outcomes.** Lifecycle decisions go through `classify_server` on top of `probe_health_patiently`, never one quick probe: a stalled Event Loop or, on Windows, a refused connection both surface as a timeout, so a timeout alone never proves a listener absent. States: `running` (the control record's exact process lives and the target answers as vBot), `unresponsive` (it lives but does not answer: busy, starting or stopping; the record exists before the listener), `foreign` (another process or another data directory's vBot holds or answers the target), `absent` (no live recorded process and no listener). `start` spawns only on `absent`. `stop` terminates only a verified local target whose current control record (PID plus process creation time; PID alone is never trusted) identifies the exact server process, never a non-vBot occupant; it asks for cooperative shutdown first and kills a process that has not exited `DEFAULT_SHUTDOWN_TIMEOUT_SECONDS` (30 s) after the request. Probe budgets and the command outcomes: `cli/server-lifecycle.md`.
-- Secrets never reach output or logs. Channel tokens, `data-store secrets set` values and secret Extension operation input come only from stdin or a hidden prompt, never argv. `provider set-key <id> <api-key>` accepts a direct value because agents configure local instances through the CLI, and `extensions set` takes a secret field's value positionally or with `--stdin`; such a value goes only to its RPC and is never printed.
+- Secrets never reach output or logs. Channel tokens, `data-store secrets set` and `agent-secrets` values and secret Extension operation input come only from stdin or a hidden prompt, never argv. `provider set-key <id> <api-key>` accepts a direct value because agents configure local instances through the CLI, and `extensions set` takes a secret field's value positionally or with `--stdin`; such a value goes only to its RPC and is never printed.
 
 ## Agent-facing text
 
@@ -57,6 +57,7 @@ Read these only when your task matches - not by default.
 - Changing `server start|stop|restart|status` without an installation, health probes and classification, stop and kill behavior, lifecycle logging, `home` or `desktop` -> `cli/server-lifecycle.md`
 - Changing port resolution or `--url` targets, what `cli/server_client.py` attaches, Device sign-ins, or `vbot devices` (approve, pair, logout) -> `cli/server-access.md`
 - Changing `vbot data-store` (status, snapshots, incidents, unregister, config backups, secrets) -> `cli/data-store.md`
+- Changing `vbot agent-secrets` -> `cli/agent-secrets.md`
 - Changing `vbot chat`, its Run following or its output -> `cli/chat.md`
 - Changing `vbot archive` or what deleting commands (`agent delete`, `project rm`, `session delete`) print -> `cli/archive-commands.md`
 - Changing the `agent`, `project`, `session`, `cron`, `bootstrap`, `memory`, `skill` or `librarian` commands -> `cli/agent-commands.md`

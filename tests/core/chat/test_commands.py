@@ -15,6 +15,7 @@ from core.chat.commands import (
     parse_agent_argument,
     parse_handoff_argument,
 )
+from core.chat.content_blocks import MediaBlock, TextBlock
 from core.chat.status_report import STATUS_PLACEHOLDER
 from core.projects import AgentOverrides, AgentResolver, ModelConfigurationError, ProjectStore
 from core.runs import ChatRunManager, Run, RunCancelledError
@@ -82,6 +83,7 @@ def test_built_in_commands_declare_their_argument_result_kind_and_new_session_mo
         "new": ("none", "state_change", "session_less"),
         "reflect": ("optional", "state_change", "needs_session"),
         "rename": ("optional", "notice", "needs_session"),
+        "secret": ("optional", "notice", "create_session"),
         "status": ("none", "detail", "session_less"),
         "stop": ("optional", "notice", "needs_session"),
     }
@@ -118,6 +120,8 @@ def test_prepare_recognizes_the_command_catalog(message: str, expected: bool) ->
         ("/model reset", "model", "reset"),
         ("/compact keep the API design", "compact", "keep the API design"),
         ("/rename", "rename", None),
+        # Any whitespace ends the command name, a line break too.
+        ("/rename\nRelease planning", "rename", "Release planning"),
         ("/new", "new", None),
     ],
 )
@@ -642,3 +646,89 @@ async def test_rename_writes_the_session_title(
     assert result.facts == {"session_id": "session-one", "title": title}
     assert result.feedback is not None
     assert result.feedback.kind == "notice"
+
+
+class _RecordingNotes:
+    """Sessions stub that records the notes a command adds."""
+
+    def __init__(self) -> None:
+        self.notes: list[str] = []
+
+    def write_lock(self, address: SessionAddress) -> Any:
+        import contextlib
+
+        return contextlib.AsyncExitStack()
+
+    async def get_async(self, address: SessionAddress) -> Any:
+        async def add_note_async(text: str) -> None:
+            self.notes.append(text)
+
+        return SimpleNamespace(add_note_async=add_note_async)
+
+    def metadata_value(self, address: SessionAddress, key: str) -> Any:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_secret_stores_the_value_and_tells_the_agent_only_its_reference(
+    tmp_path: Any,
+) -> None:
+    from datetime import UTC, datetime
+
+    from core.secrets.agent_secrets import AgentSecrets
+    from core.secrets.requests import SecretRequests
+    from tests.core.secrets.secrets_test_support import data_directory, open_store
+
+    clock = lambda: datetime(2026, 10, 21, 12, tzinfo=UTC)  # noqa: E731
+    secrets = AgentSecrets(open_store(tmp_path, data_directory(tmp_path)), clock=clock)
+    secrets.reload()
+    requests = SecretRequests(secrets, clock=clock)
+    sessions = _RecordingNotes()
+    dispatcher = CommandDispatcher(
+        ChatRunManager(),
+        sessions=cast(Any, sessions),
+        secrets=secrets,
+        secret_requests=requests,
+    )
+    value = "sk-abc1234567890"
+
+    stored = await _execute(dispatcher, f"/secret openai-key {value}")
+    waiting = asyncio.create_task(
+        requests.request(
+            agent_id="coder",
+            session_id="session-one",
+            project_id=None,
+            name="GITHUB",
+            kind="login",
+            description="",
+            lifetime="session",
+        )
+    )
+    await asyncio.sleep(0)
+    answered = await _execute(
+        dispatcher, "/secret github --permanent --user julian hunter2-very-secret"
+    )
+    outcome = await waiting
+    usage = await _execute(dispatcher, "/secret")
+
+    prepared = dispatcher.prepare(f"/secret openai-key {value}")
+    assert prepared is not None and prepared.secret_argument
+    # With an attachment /secret is still the command, so the value never
+    # reaches the Agent; other commands with attachments stay messages.
+    attachment = MediaBlock(
+        type="media", attachment_id="att_1", filename="shot.png", media_type="image/png"
+    )
+    with_attachment = dispatcher.prepare(
+        [TextBlock(type="text", text=f"/secret openai-key {value}"), attachment]
+    )
+    assert with_attachment is not None and with_attachment.argument == f"openai-key {value}"
+    assert dispatcher.prepare([TextBlock(type="text", text="/rename Plans"), attachment]) is None
+    assert stored.feedback is not None and value not in stored.feedback.text
+    assert "{{secret:OPENAI_KEY}}" in stored.feedback.text
+    assert secrets.substitute("coder", "session-one", "{{secret:OPENAI_KEY}}", "files")[0] == value
+    # The waiting request's Tool result tells the Agent; only the first Secret needed a note.
+    assert len(sessions.notes) == 1 and "{{secret:OPENAI_KEY}}" in sessions.notes[0]
+    assert value not in sessions.notes[0]
+    assert outcome.status == "stored" and outcome.secret is not None
+    assert outcome.secret.lifetime == "permanent" and answered.feedback is not None
+    assert usage.feedback is not None and usage.feedback.text.startswith("/secret NAME VALUE")

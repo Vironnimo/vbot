@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from core.chat._step_outcomes import _RegisteredNames, tool_result_facts
+from core.chat.content_blocks import masked_content
 from core.chat.errors import ChatError
 from core.chat.events import _emit_message_event
 from core.chat.messages import (
@@ -128,7 +129,10 @@ class ExternalRun:
     async def record_user(self, text: str) -> None:
         """Store what the user said."""
         if text.strip():
-            message = ChatMessage.user(text, input_origin=INPUT_ORIGIN_SPEECH_TRANSCRIPTION)
+            message = ChatMessage.user(
+                masked_content(text, self._dependencies.secret_masker),
+                input_origin=INPUT_ORIGIN_SPEECH_TRANSCRIPTION,
+            )
             if await self._append([message]):
                 _emit_message_event(self._require_run(), USER_MESSAGE_EVENT, message)
 

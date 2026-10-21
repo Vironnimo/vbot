@@ -67,6 +67,9 @@ class ConversationTransport(Protocol):
     def caption_text(self, raw_message: Any) -> str | None:
         """Extract caption text from one raw platform message for gating checks."""
 
+    async def delete_message(self, platform_target: str, message_id: str) -> bool:
+        """Remove one inbound message; False where the platform does not let the bot."""
+
 
 @dataclass(slots=True)
 class _PendingItem:

@@ -35,6 +35,7 @@ from core.chat.wire_shaping import (
     model_facing_request,
 )
 from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD, tool_result_text
+from core.secrets.agent_secrets import SecretMasker
 from core.sessions import TOOL_CHANGE_NOTE_PREFIX
 from core.skills.policy import SkillPackageRef
 from core.tools import read_media_artifact, tool_success
@@ -449,6 +450,47 @@ def test_only_kernel_reminders_reach_the_model_with_real_reminder_tags(tag: str)
     assert tool["content"] == messages[5]["content"]
     assert tool_result_text(tool["content"]) == neutral
     assert model_facing_request(projected, [])[0] == projected
+
+
+def test_known_secret_values_reach_the_model_only_as_references() -> None:
+    value = "hunter2-very-secret"
+    masker = SecretMasker({value: "{{secret:GITHUB.password}}"})
+    arguments = {"text": f"echo {value}"}
+    clean = {"role": "user", "content": "nothing secret"}
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": f"Prompt {value}"},
+        clean,
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": value},
+                {"type": "media", "media_type": "image/png", "base64": "aW1n"},
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": value,
+            "reasoning": value,
+            "tool_calls": [{"id": "call_one", "name": "probe", "arguments": arguments}],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_one",
+            "name": "probe",
+            "content": json.dumps(tool_success({"content": value})),
+            TOOL_RESULT_CONTENT_BLOCKS_FIELD: [{"type": "text", "text": value}],
+        },
+    ]
+    before = json.dumps(messages)
+
+    projected, _ = model_facing_request(messages, [], masker)
+
+    assert json.dumps(messages) == before
+    assert value not in json.dumps(projected)
+    assert projected[1] is clean
+    assert projected[2]["content"][1] == messages[2]["content"][1]
+    assert projected[3]["tool_calls"][0]["arguments"] == {"text": "echo {{secret:GITHUB.password}}"}
+    assert tool_result_text(projected[4]["content"]) == "{{secret:GITHUB.password}}"
 
 
 @pytest.mark.asyncio

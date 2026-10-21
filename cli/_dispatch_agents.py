@@ -1,11 +1,14 @@
-"""CLI argument translation for Agents, Projects, Sessions, and chat."""
+"""CLI argument translation for Agents, Projects, Sessions, chat, the data store and
+Agent Secrets."""
 
 from __future__ import annotations
 
 import argparse
 from collections.abc import Callable, Sequence
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from cli import agent_secret_management as secrets
 from cli._input import _read_secret, _read_stdin_utf8
 from cli.agent_management import agent_reorder
 from cli.archive_management import archive_list, archive_purge, archive_restore, archive_show
@@ -502,3 +505,88 @@ def dispatch_data_store_command(
         if args.secrets_command == "reset":
             return secrets_reset_fn(instance, args.yes)
     raise ValueError(f"Unsupported data-store command: {args.command}")
+
+
+def dispatch_agent_secrets_command(
+    args: argparse.Namespace, instance: ServerInstance
+) -> CommandResult:
+    """Dispatch the Agent Secret commands; an expiry becomes one point in time here."""
+    if args.command == "list":
+        return secrets.agent_secrets_list(instance)
+    if args.command == "add":
+        return secrets.agent_secrets_add(
+            instance,
+            args.name,
+            kind=args.kind,
+            user=args.user,
+            agents=args.agents,
+            sinks=args.sinks,
+            description=args.description,
+            expires_at=_secret_expiry(args),
+            value_stdin=args.value_stdin,
+        )
+    if args.command == "update":
+        changes = (
+            args.agents,
+            args.sinks,
+            args.description,
+            args.duration,
+            args.until,
+            args.user,
+        )
+        if all(item is None for item in changes) and not (args.permanent or args.value_stdin):
+            return CommandResult(
+                ok=False,
+                message=(
+                    "agent-secrets update needs at least one change: --agent, --sink, "
+                    "--description, --for, --until, --permanent, --user or --value-stdin. "
+                    "Nothing was changed."
+                ),
+                instance=instance,
+            )
+        return secrets.agent_secrets_update(
+            instance,
+            args.secret,
+            agents=args.agents,
+            sinks=args.sinks,
+            description=args.description,
+            expires_at=_secret_expiry(args),
+            permanent=args.permanent,
+            user=args.user,
+            value_stdin=args.value_stdin,
+        )
+    if args.command == "delete":
+        return secrets.agent_secrets_delete(instance, args.secret)
+    if args.command == "reveal":
+        return secrets.agent_secrets_reveal(instance, args.secret, args.field)
+    if args.command == "answer":
+        return secrets.agent_secrets_answer(
+            instance,
+            args.request,
+            user=args.user,
+            permanent=args.permanent,
+            expires_at=_secret_expiry(args),
+            value_stdin=args.value_stdin,
+        )
+    if args.command == "decline":
+        return secrets.agent_secrets_decline(instance, args.request)
+    if args.command == "source":
+        if args.source_command == "list":
+            return secrets.agent_secrets_sources(instance)
+        if args.source_command == "unlock":
+            return secrets.agent_secrets_source_unlock(
+                instance, args.source, value_stdin=args.value_stdin
+            )
+        if args.source_command == "lock":
+            return secrets.agent_secrets_source_lock(instance, args.source)
+        if args.source_command == "entries":
+            return secrets.agent_secrets_source_entries(
+                instance, args.source, container=args.container, query=args.query
+            )
+    raise ValueError(f"Unsupported agent-secrets command: {args.command}")
+
+
+def _secret_expiry(args: argparse.Namespace) -> datetime | None:
+    duration: timedelta | None = args.duration
+    until: datetime | None = args.until
+    return datetime.now(UTC) + duration if duration is not None else until

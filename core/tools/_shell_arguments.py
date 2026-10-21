@@ -24,6 +24,7 @@ from pathlib import Path, PurePath
 from typing import Any
 
 from core.projects import ProjectStore
+from core.secrets.agent_secrets import REFERENCE_PATTERN, has_reference
 from core.tools._path_suggestions import similar_entries
 from core.tools._powershell import (
     powershell_literal,
@@ -415,15 +416,18 @@ def resolve_timeout(
 
 def split_env_object(
     env: Mapping[str, Any] | None, granted: frozenset[str]
-) -> tuple[dict[str, str], list[str]]:
-    """Split an env object into plain variables and granted credential names.
+) -> tuple[dict[str, str], list[str], dict[str, str]]:
+    """Split an env object into plain variables, credential names and Secret references.
 
     A granted credential named with an empty value or a reference to itself
-    becomes a credential request; any credential value written in the call is
-    refused, so a secret never travels through Tool arguments into a process.
+    becomes a credential request; a value that is exactly a Secret reference
+    (``{{secret:DB.password}}``) becomes that Secret's value; any credential
+    value written in the call is refused, so a secret never travels through
+    Tool arguments into a process.
     """
     variables: dict[str, str] = {}
     credentials: list[str] = []
+    secret_references: dict[str, str] = {}
     for name, raw in (env or {}).items():
         if not isinstance(name, str) or not name or "=" in name or "\x00" in name:
             raise ValueError(_not_run(f"env has an invalid variable name: {name!r}."))
@@ -444,6 +448,11 @@ def split_env_object(
                     "instead."
                 )
             )
+        if REFERENCE_PATTERN.fullmatch(value.strip()):
+            secret_references[name] = value.strip()
+            continue
+        if has_reference(value):
+            raise ValueError(_secret_in_text_message(f"env value for {name}"))
         if _references(value, name):
             if name in granted:
                 credentials.append(name)
@@ -454,7 +463,16 @@ def split_env_object(
         if name in granted or _credential_name(name):
             raise ValueError(_literal_credential_message(name, granted))
         variables[name] = value
-    return variables, credentials
+    return variables, credentials, secret_references
+
+
+def _secret_in_text_message(place: str) -> str:
+    return _not_run(
+        f"{place} contains a Secret reference, and vBot puts Secret values only into a "
+        'command environment. Pass the Secret name in env_keys (env_keys: ["NAME"]) and use '
+        "its variable in the command, or set an env variable to the reference alone "
+        '(env: {"VARIABLE": "{{secret:NAME.field}}"}).'
+    )
 
 
 def _references(value: str, name: str) -> bool:
@@ -558,6 +576,9 @@ class _ShellCall:
     variables: dict[str, str]
     credential_names: tuple[str, ...]
     notes: tuple[str, ...]
+    # Agent Secrets: names from env_keys, and env variables set to a reference.
+    secret_keys: tuple[str, ...] = ()
+    secret_variables: tuple[tuple[str, str], ...] = ()
 
 
 def _call_error(problem: str) -> ToolContractError:
@@ -570,11 +591,16 @@ def _parse_call(
     projects: ProjectStore | None,
     *,
     terminal_available: bool,
+    secret_names: frozenset[str] = frozenset(),
 ) -> _ShellCall:
+    """*secret_names* are the names ``env_keys`` accepts for the caller's Agent Secrets."""
     notes: list[str] = []
     command = arguments.get("command")
     if not isinstance(command, str) or not command.strip():
         raise _call_error("command is required; pass the command line to run as a string.")
+    if has_reference(command):
+        # Command lines reach process listings and shell history.
+        raise ToolContractError(_secret_in_text_message("command"))
     description = optional_string(arguments.get("description"), field_name="description")
     background = arguments.get("run_in_background") is True
     timeout, note = resolve_timeout(
@@ -615,7 +641,7 @@ def _parse_call(
     if env is not None and not isinstance(env, dict):
         raise _call_error("env must be an object of variable names and values.")
     try:
-        variables, env_credentials = split_env_object(env, granted)
+        variables, env_credentials, secret_references = split_env_object(env, granted)
     except ValueError as error:
         raise ToolContractError(str(error)) from error
     raw_keys = arguments.get("env_keys")
@@ -623,7 +649,13 @@ def _parse_call(
         requested = normalize_env_keys(raw_keys, field_name="env_keys") if raw_keys else []
     except ValueError as error:
         raise _call_error(f"env_keys is invalid: {error}") from error
-    credential_names = list(dict.fromkeys([*requested, *env_credentials]))
+    # A granted credential keeps its name; Secret names never collide with one.
+    secret_keys = [
+        name for name in requested if name not in granted and name.upper() in secret_names
+    ]
+    credential_names = [
+        name for name in dict.fromkeys([*requested, *env_credentials]) if name not in secret_keys
+    ]
     ungranted = [name for name in credential_names if name not in granted]
     if ungranted:
         unknown = [name for name in ungranted if inherited_value(name) is None]
@@ -640,6 +672,8 @@ def _parse_call(
         variables=variables,
         credential_names=tuple(name for name in credential_names if name in granted),
         notes=tuple(notes),
+        secret_keys=tuple(secret_keys),
+        secret_variables=tuple(secret_references.items()),
     )
 
 

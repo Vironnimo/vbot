@@ -21,7 +21,7 @@ _LOGGER = get_logger("extensions")
 
 # Public extension API version. Bumped when the extension contract changes in a
 # way third-party extensions can detect via their manifest ``api_version``.
-API_VERSION = 16
+API_VERSION = 17
 HookHandler = Callable[..., Any]
 LifecycleHandler = Callable[[], Any]
 CommandHandler = Callable[..., Any]
@@ -159,6 +159,8 @@ class ToolDeclaration:
     family: str | None = None
     # Definition parts whose change reaches a Session that already knows the Tool.
     announce_changes: tuple[str, ...] = ()
+    # Arguments where Secret references become values, by sink class.
+    secret_sinks: dict[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -324,6 +326,8 @@ class ExtensionDeclarations:
     commands: list[CommandDeclaration] = field(default_factory=list)
     pages: list[PageDeclaration] = field(default_factory=list)
     recall_backends: list[RecallBackendDeclaration] = field(default_factory=list)
+    # ``core.secrets.sources.SecretSource`` objects, kept loosely typed.
+    secret_sources: list[Any] = field(default_factory=list)
     prompt_blocks: list[PromptBlockDeclaration] = field(default_factory=list)
     session_prompt_blocks: list[SessionPromptBlockDeclaration] = field(default_factory=list)
     session_runtime: SessionRuntimeDeclaration | None = None

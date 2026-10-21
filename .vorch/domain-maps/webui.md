@@ -66,6 +66,6 @@ Read these only when your task matches - not by default.
 - Finding the owning file/component/controller/style/test -> `webui/source-map.md`
 - App startup, the access gate and browser pairing, navigation, connection/reconnect, global events, invalidation, transport contracts -> `webui/app-shell.md`
 - Chat selection/Sessions/history/streaming/Queue/timeline/composer/attachments/speech -> `webui/chat.md`
-- Settings, Providers and Model pickers, Extensions, Skills view, Agents, onboarding, appearance, logs, channels, Desktop Voice, Access & devices, named credentials, credential texts -> `webui/settings.md`
+- Settings, Providers and Model pickers, Extensions, Skills view, Agents, onboarding, appearance, logs, channels, Desktop Voice, Access & devices, named credentials, credential texts, Agent Secrets -> `webui/settings.md`
 - Projects management view/discovery/scans/Team rows/overrides -> `webui/projects.md`
 - The Settings Archive page (retention, archived items, entry sub-pages) or the delete dialogs' permanent option -> `webui/archive.md`

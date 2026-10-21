@@ -31,7 +31,7 @@ COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("Choose Model and thinking effort", "model", "F4"),
     ("Show Sub-Agents and background work", "activity", "F5"),
     ("Open the Queue", "queue", "F6"),
-    ("Answer Extension requests", "requests", "F7"),
+    ("Answer Secret and Extension requests", "requests", "F7"),
     ("Attach, mention or download files", "files", "F8"),
     ("Complete a Command or Skill", "commands", "F9"),
     ("Complete from the draft at the cursor", "complete", "Ctrl+Space"),

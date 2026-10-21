@@ -83,6 +83,8 @@ RESOURCE_KIND_EXTENSIONS = "extensions"
 RESOURCE_KIND_ARCHIVE = "archive"
 #: Paired Devices or pairing decisions changed (``access`` domain).
 RESOURCE_KIND_DEVICES = "devices"
+#: Agent Secrets, Secret Sources or pending Secret requests changed (``secrets`` domain).
+RESOURCE_KIND_AGENT_SECRETS = "agent_secrets"
 
 ALLOWED_RESOURCE_KINDS = frozenset(
     {
@@ -105,6 +107,7 @@ ALLOWED_RESOURCE_KINDS = frozenset(
         RESOURCE_KIND_EXTENSIONS,
         RESOURCE_KIND_ARCHIVE,
         RESOURCE_KIND_DEVICES,
+        RESOURCE_KIND_AGENT_SECRETS,
     }
 )
 

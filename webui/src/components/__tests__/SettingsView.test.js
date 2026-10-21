@@ -288,6 +288,7 @@ describe('SettingsView', () => {
         ['providers', unavailable],
         ['tools', unavailable],
         ['integrations', unavailable],
+        ['secrets', unavailable],
       ]);
 
       props.secretStore = {
@@ -326,6 +327,7 @@ describe('SettingsView', () => {
         'Memory',
         'Tools',
         'Integrations',
+        'Secrets',
         'Archive',
         'System',
       ]);
@@ -351,6 +353,7 @@ describe('SettingsView', () => {
           'subagents',
         ],
         integrations: ['channels', 'extensions', 'credentials'],
+        secrets: ['agent_secrets'],
         archive: ['archive_retention', 'archive_entries'],
         system: ['server', 'access', 'debug'],
       };

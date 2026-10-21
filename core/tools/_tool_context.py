@@ -142,6 +142,9 @@ class ToolContext:
     # Kind of the Run that dispatched this call, or ``None`` outside Runs (direct
     # callers). ``core.runs.is_unattended_run_kind`` tells background Runs apart.
     run_kind: RunKind | None = None
+    # The Session is linked to a Parent Agent (a Sub-Agent Session): it uses only
+    # the Secrets bound to or passed into it, none granted to its Agent.
+    subagent_session: bool = False
     # The admitted Run's reply destination, unaffected by another chat using the
     # same Session. Runtime-only; never supplied by Model arguments.
     reply_surface: ReplySurface | None = None
@@ -222,6 +225,8 @@ class ToolContext:
     # User-facing detail blocks in the order recorded, for Tools whose display
     # declares ``details``.
     presentation_details: list[JsonObject] = field(default_factory=list, repr=False, compare=False)
+    # The Secrets this call used, as ``NAME.field (sink)``, shown with every display.
+    presentation_secret_uses: list[str] = field(default_factory=list, repr=False, compare=False)
     # Request-only media: never included in result envelopes or lifecycle events.
     result_media: list[JsonObject] = field(default_factory=list, repr=False, compare=False)
     # Session-scoped file-content tracker for git-style change statistics.
@@ -357,6 +362,12 @@ class ToolContext:
     def add_display_notice(self, level: str, text: str, *, subject: str | None = None) -> None:
         """Record one notice detail block (``info``, ``warning`` or ``error``) for the user."""
         self.presentation_details.append(display_notice(level, text, subject=subject))
+
+    def record_secret_uses(self, uses: Sequence[str]) -> None:
+        """Name Secrets this call used (``GITHUB.password (terminal)``), never their values."""
+        for use in uses:
+            if use not in self.presentation_secret_uses:
+                self.presentation_secret_uses.append(use)
 
     def add_display_text(self, label: str, text: str) -> None:
         """Record one labelled text detail block, such as output the result does not hold."""
@@ -592,6 +603,8 @@ class ToolExecutionConfig:
     skill_agent_id: str | None = None
     # Kind of the owning Run; see ``ToolContext.run_kind``.
     run_kind: RunKind | None = None
+    # See ``ToolContext.subagent_session``.
+    subagent_session: bool = False
     reply_surface: ReplySurface | None = None
     allowed_tools: Sequence[str] | None = None
     emit_hook: ToolEmitHook | None = None

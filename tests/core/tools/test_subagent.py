@@ -52,6 +52,7 @@ async def test_tool_definitions_are_flat_open_contracts(harness: SubAgentHarness
         "id",
         "model",
         "thinking_effort",
+        "secrets",
     ]
     assert all(schema.get("description") for schema in properties.values())
     assert properties["action"]["enum"] == ["run", "send"]

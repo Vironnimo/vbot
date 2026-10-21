@@ -481,7 +481,26 @@ describe('Tool row presentation', () => {
         name: 'extension_private_probe',
         arguments: { token: 'do-not-render', operation: 'inspect' },
       }),
-    ).toEqual({ primary: [], facts: [] });
+    ).toEqual({ primary: [], facts: [], secretsUsed: [] });
+  });
+
+  it('names the Secrets a call used from its result display, once each', () => {
+    const used = ['GITHUB.password (terminal)', 'API_KEY (environment)'];
+    expect(
+      toolRowPresentation({
+        name: 'bash',
+        display: { version: 1, primary: [], facts: [] },
+        resultEvent: {
+          payload: {
+            display: { secrets_used: used },
+            message: { tool_display: { secrets_used: [used[0]] } },
+          },
+        },
+      }).secretsUsed,
+    ).toEqual([
+      { reference: 'GITHUB.password', sink: 'terminal' },
+      { reference: 'API_KEY', sink: 'environment' },
+    ]);
   });
 
   it('truncates a long description while keeping structured facts intact', () => {

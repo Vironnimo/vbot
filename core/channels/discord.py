@@ -218,6 +218,15 @@ class DiscordChannelAdapter(ChannelAdapter):
         """Expose Discord message content as the media caption for gating."""
         return _message_content(raw_message)
 
+    async def delete_message(self, platform_target: str, message_id: str) -> bool:
+        """Bots can delete others' messages only in servers, with Manage Messages."""
+        target = await self._resolve_target(platform_target)
+        if getattr(target, "guild", None) is None:
+            return False
+        message = await target.fetch_message(int(message_id))
+        await message.delete()
+        return True
+
     async def build_media_blocks(self, raw_message: Any) -> list[ContentBlock]:
         """Convert Discord attachments into canonical content blocks."""
         blocks: list[ContentBlock] = []

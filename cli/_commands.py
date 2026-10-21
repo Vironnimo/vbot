@@ -13,6 +13,7 @@ from cli._dispatch_agents import (
     _project_add_fields_from_args,
     _project_set_changes_from_args,
     dispatch_agent_command,
+    dispatch_agent_secrets_command,
     dispatch_archive_command,
     dispatch_chat_command,
     dispatch_data_store_command,
@@ -318,6 +319,11 @@ def run(
 
     if args.area == "data-store":
         result = dispatch_data_store_command(args, instance)
+        print_management_command_result(result)
+        return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
+
+    if args.area == "agent-secrets":
+        result = dispatch_agent_secrets_command(args, instance)
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 

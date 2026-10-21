@@ -13,6 +13,7 @@
   import CollapseRail from './CollapseRail.svelte';
   import ToolDetails from './ToolDetails.svelte';
   import ToolPrimaryLine from './ToolPrimaryLine.svelte';
+  import ToolSecretsUsed from './ToolSecretsUsed.svelte';
   import {
     backgroundCommandRowState,
     backgroundCommandStatusDetails,
@@ -579,6 +580,7 @@
                 <ToolPrimaryLine primary={rowPresentation.primary} />
               {/if}
               {@render toolFacts(rowPresentation.facts)}
+              <ToolSecretsUsed uses={rowPresentation.secretsUsed} />
               {#if rowTimeLabel}
                 <span
                   class="te-time"

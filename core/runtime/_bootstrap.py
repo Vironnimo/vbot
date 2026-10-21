@@ -95,6 +95,8 @@ from core.runtime._shutdown import clean_up_failed_startup
 from core.runtime.databases import RETIRED_CANONICAL_DATABASES
 from core.runtime.keep_awake import KeepAwakeController
 from core.secrets import settle_plaintext_credentials
+from core.secrets.agent_secrets import AgentSecrets
+from core.secrets.requests import SecretRequests
 from core.sessions import ChatSession, ChatSessionManager
 from core.sessions.titles import SessionTitleService
 from core.settings.paths import (
@@ -138,6 +140,7 @@ from core.tools.command_manager import CommandManager
 from core.tools.cron import register_cron_tool
 from core.tools.live import LIVE_TOOL_FAMILY, LiveToolHosts, register_live_tools
 from core.tools.load_tools import register_load_tools_tool
+from core.tools.secrets import register_secrets_tool
 from core.tools.status import register_status_tool
 from core.tools.subagent import register_subagent_tools
 from core.tools.tools import ToolPromptBlockRegistry, ToolRegistry
@@ -234,6 +237,17 @@ def bootstrap(runtime: Runtime) -> None:
             tolerate_invalid=True,
         )
         runtime._token_store = TokenStore(runtime._storage.secrets)
+        runtime._agent_secrets = AgentSecrets(
+            runtime._storage.secrets,
+            clock=lambda: datetime.now(UTC),
+            credential_names=lambda: tuple(runtime._fallback_environment),
+        )
+        runtime._agent_secrets.reload()
+        runtime._agent_secrets.sweep()
+        runtime._agent_secrets.set_system_values(data_dir_credentials)
+        runtime._secret_requests = SecretRequests(
+            runtime._agent_secrets, clock=lambda: datetime.now(UTC)
+        )
         runtime._provider_credentials = ProviderCredentialResolver(
             runtime._providers,
             fallback_credentials=data_dir_credentials,
@@ -359,6 +373,7 @@ def bootstrap(runtime: Runtime) -> None:
         runtime._update_handoffs = UpdateHandoffs(runtime._storage.data_dir)
         runtime._update_handoffs.remove_expired_files()
         runtime._tools = ToolRegistry()
+        runtime._tools.set_secrets(runtime._agent_secrets)
         # Tool-owned System Prompt block declarations (D6): the tool side of the
         # unified contributor path. Project and Sub-Agent contribute their dynamic
         # catalogs/guidance here; the runtime hands declarations to the prompt
@@ -460,7 +475,9 @@ def bootstrap(runtime: Runtime) -> None:
             logger=runtime.logger,
             make_host=runtime._extension_host,
             archive_uninstalled_groups=runtime._archive_uninstalled_extension_groups,
+            refresh_secret_sources=runtime._refresh_secret_sources,
         )
+        runtime._refresh_secret_sources()
         # Skills load after extensions: a loaded extension may bundle its own skills
         # under ``<extension>/skills/``, which ``_global_roots`` folds into the
         # global pool, so the extension layer must be in place first.
@@ -585,8 +602,11 @@ def bootstrap(runtime: Runtime) -> None:
             raise RuntimeError("Attachment store not available")
         resolver = ContentBlockResolver(runtime._attachment_store, transcriber=runtime._speech)
         assert runtime._models is not None
+        agent_secrets = runtime._agent_secrets
         compaction_service = CompactionService(
-            pricing_lookup=runtime._models.pricing_for, usage_recorder=runtime._usage_recorder
+            pricing_lookup=runtime._models.pricing_for,
+            usage_recorder=runtime._usage_recorder,
+            secret_masker=lambda: agent_secrets.masker,
         )
 
         # The reflection service starts review runs through the runtime's
@@ -653,6 +673,7 @@ def bootstrap(runtime: Runtime) -> None:
             file_read_state=runtime._file_state,
             change_tracker=runtime._change_tracker,
             scratch_areas=runtime._scratch_areas,
+            secrets=runtime._agent_secrets,
             storage=runtime._storage,
             get_extension_registry=lambda: runtime.extensions,
             get_system_prompts=lambda: runtime.system_prompts,
@@ -750,6 +771,8 @@ def bootstrap(runtime: Runtime) -> None:
             snapshot_barrier=runtime._snapshot_barrier,
             stop_all=lambda address: runtime.subagents.stop_tree(address),
             goals=runtime._goal_service,
+            secrets=runtime._agent_secrets,
+            secret_requests=runtime._secret_requests,
         )
         if runtime._extensions is not None:
             runtime._extensions.apply_commands(runtime._command_dispatcher)
@@ -808,8 +831,11 @@ def bootstrap(runtime: Runtime) -> None:
             update_handoffs=runtime._update_handoffs,
             projects=runtime._projects,
             scratch_areas=runtime._scratch_areas,
+            secrets=runtime._agent_secrets,
         )
-        runtime._subagent_coordinator = SubAgentCoordinator(runtime, runtime._trigger_service)
+        runtime._subagent_coordinator = SubAgentCoordinator(
+            runtime, runtime._trigger_service, secrets=runtime._agent_secrets
+        )
         runtime._subagent_coordinator.install(runtime._chat_run_manager)
         register_subagent_tools(
             runtime._tools,
@@ -817,6 +843,12 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._tool_prompt_blocks,
         )
         register_update_goal_tool(runtime._tools, runtime._goal_service)
+        register_secrets_tool(
+            runtime._tools,
+            runtime._agent_secrets,
+            runtime._secret_requests,
+            runtime._tool_prompt_blocks,
+        )
         register_background_tasks_tool(
             runtime._tools,
             runtime._command_manager,

@@ -33,7 +33,7 @@ Split an oversized source file into focused internal units behind the owning mod
 
 **Tools:** Execute a call whose intended effect is clear even when it does not match the schema; refuse only genuinely ambiguous calls, before side effects, with the corrected call. Similarity alone is not intent for a mutation or an explicit target. Schemas, argument normalization/validation, concurrency: `tools.md`. Agent-facing design and review: the `vbot-agent-tools` Skill.
 
-**Extensions:** API 16 (`core/extensions/_declarations.API_VERSION`; what each version added: `extensions/management.md` -> API versions). Canonical Sessions own binding, receipt and Run identity; Extension databases own domain state. The app provides a generic page bridge; Extensions own domain UI (`extensions.md`).
+**Extensions:** API 17 (`core/extensions/_declarations.API_VERSION`; what each version added: `extensions/management.md` -> API versions). Canonical Sessions own binding, receipt and Run identity; Extension databases own domain state. The app provides a generic page bridge; Extensions own domain UI (`extensions.md`).
 
 **Configuration:** Data directory `~/.vbot` owns `settings.json` and `secrets.json`, the encrypted Secret Store for data-directory credentials, OAuth tokens and Cron webhook secrets (`secrets.md`). Process environment takes precedence; vBot never rewrites `os.environ`. Owning domains validate every user-editable JSON file before runtime use; public accessors configure Settings only through cataloged paths (`settings.md`, `storage.md`; Custom Provider credentials: `providers/connections.md`).
 
@@ -67,7 +67,7 @@ How to read the maps: `AGENTS.md` -> Load context for the task.
 | subagents.md | `core/subagents/` | Sub-Agent tree, answer forwarding, tree control, reply targets |
 | tools.md | `core/tools/` | Tool contracts and policy; index to per-tool maps |
 | storage.md | `core/storage/` | Data-directory layout, temp-file lifecycle, persistence |
-| secrets.md | `core/secrets/` | Secret Store, key protection, plaintext conversion |
+| secrets.md | `core/secrets/` | Secret Store, key protection, plaintext conversion, Agent Secrets |
 | skills.md | `core/skills/` | Skill loading/validation, scopes, authoring, history and archive, Prompt-Epoch Catalog |
 | automation.md | `core/automation/` | Cron/Bootstrap triggering, queue semantics, Reflection, Librarian passes |
 | calendar.md | `core/calendar/` | Local events, recurrence, occurrence changes, Cron projection, calendar Tool |

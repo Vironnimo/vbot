@@ -28,7 +28,7 @@ For a question about a past conversation, use `session_search` first; read `refe
 | Provider keys/OAuth/limits, Models, voices, specialized Task Models, and image, video or music generation settings such as quality, image count or video length | `references/providers.md` |
 | Settings, System Prompt blocks, Extension settings and enabling or disabling an Extension | `references/configuration.md` |
 | Write or change an Extension: its Tools, hooks, Commands, settings | `references/extensions.md`; for a page or its own Sessions, then `references/extension-pages.md` |
-| Use bundled Swarm or Computer Use | `references/extension-usage.md` |
+| Use bundled Swarm or Computer Use, or connect KeePassXC or 1Password as a source for Agent Secrets | `references/extension-usage.md` |
 | MCP installation, Tool access, discovery and application operations | `references/mcp.md` |
 | Channels (Telegram, Discord, Slack, Mattermost, WhatsApp): first setup, tokens, allowed chats, group access | `references/channels.md` |
 | Recurring or one-time scheduled Runs | `references/cron.md` |
@@ -38,6 +38,7 @@ For a question about a past conversation, use `session_search` first; read `refe
 | Logs, Provider traces, Session usage statistics and server performance | `references/diagnostics.md` |
 | Server start/stop/restart, update, uninstall, Autostart, Desktop, Doctor, access mode and paired devices, reaching another vBot server and signing in to it | `references/server.md` |
 | Named credentials and the Secret Store, database health, data snapshots, configuration backups and recovery | `references/data-store.md` |
+| Agent Secrets that Agents use as `{{secret:NAME}}`: which Agents may use them and where, waiting Secret requests, Secret Sources such as password managers | `references/agent-secrets.md` |
 | Filesystem investigation, data location, backups or manual repair | `references/system-layout.md` |
 
 When no row fits, or the reference you read lacks the answer, search the `references` folder for the command, flag or term with `search_files`, its `path` set to that folder inside the directory the `skill` Tool reported when it loaded this Skill. Then read the file that matches.
@@ -45,5 +46,5 @@ When no row fits, or the reference you read lacks the answer, search the `refere
 ## Inputs, credentials and failures
 
 - Pass multiline content with `--file` and JSON arrays or objects as one argument; when the shell breaks the quoting, pipe the value to the command's stdin option. Edit vBot's files by hand only when no command can make the change, then run `vbot doctor config`.
-- Pass a credential only on the stdin of the command made for it; vBot keeps it in its encrypted Secret Store and ignores `.env` files. Never put a credential in an argument, a file or a reply. When the user has not given you the value, give them `vbot data-store secrets set <NAME>` or the area's stdin command to run in their terminal; never ask for the value or offer to take it in the chat, because the chat history keeps it.
+- Pass a credential only on the stdin of the command made for it; vBot keeps it in its encrypted Secret Store and ignores `.env` files. Never put a credential in an argument, a file or a reply. When the user has not given you the value, give them `vbot data-store secrets set <NAME>` or the area's stdin command to run in their terminal; never ask for the value or offer to take it in the chat, because the chat history keeps it. A value you use yourself in a task, such as a password or an API key for a script, is an Agent Secret instead (`references/agent-secrets.md`).
 - On `[ERROR]`, the output explains the failure and prints `Next:` commands to inspect or recover; vBot never runs them itself. Inspect the target before you repeat a change, because earlier steps of a failed command can already be saved.

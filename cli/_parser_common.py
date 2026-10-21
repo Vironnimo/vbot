@@ -96,6 +96,12 @@ TASK_TYPES = tuple(sorted(SUPPORTED_TASK_TYPES))
 MODEL_TASK_TYPES = tuple(MODEL_TASK_ORDER)
 
 
+# Mirrors core.secrets SECRET_KINDS and SINK_CLASSES (guarded by a test): importing
+# core.secrets would load the Secret Store and the database kernel for every help call.
+AGENT_SECRET_KINDS = ("token", "login", "text")
+AGENT_SECRET_SINKS = ("environment", "terminal", "files", "typing", "external_tools")
+
+
 AREA_HELP = {
     "server": "Start, stop, restart, and inspect the local server",
     "desktop": "Open the desktop window pointed at a local or remote server",
@@ -114,6 +120,10 @@ AREA_HELP = {
     "data-store": (
         "Inspect, snapshot, verify, recover, and release the canonical SQLite databases, "
         "restore configuration backups, and manage the Secret Store"
+    ),
+    "agent-secrets": (
+        "Manage Agent Secrets, the passwords and keys Agents use by reference without "
+        "seeing them, their requests and the Secret Sources they come from"
     ),
     "channel": "Inspect and manage channel configs",
     "tool": "Inspect public tool catalog",
@@ -201,8 +211,40 @@ DATA_STORE_HELP = {
     "incident": "Manage durable database recovery incidents",
     "unregister": "Release the database of a removed Extension (files move to quarantine)",
     "secrets": (
-        "List, set and unset the credentials in the encrypted Secret Store, or inspect, "
-        "convert or replace the store"
+        "List, set and unset the credentials vBot itself uses in the encrypted Secret "
+        "Store, or inspect, convert or replace the store. Values Agents use by reference "
+        "are Agent Secrets: vbot agent-secrets"
+    ),
+}
+
+
+AGENT_SECRETS_HELP = {
+    "list": (
+        "List the Agent Secrets with kind, lifetime, granted Agents, allowed uses and "
+        "source state, and the Secret requests waiting for the user; never a concealed value"
+    ),
+    "add": (
+        "Store a new Agent Secret; its value comes from a hidden prompt or from stdin, "
+        "never from the command line"
+    ),
+    "update": "Change an Agent Secret's granted Agents, allowed uses, description, expiry or value",
+    "delete": "Delete an Agent Secret; its stored value cannot be restored",
+    "reveal": "Print the value of one field of an Agent Secret for the user",
+    "answer": "Answer a waiting Secret request with its value from a hidden prompt or stdin",
+    "decline": "Decline a waiting Secret request; the Agent continues without the Secret",
+    "source": (
+        "List, unlock and lock the Secret Sources (password managers) that Extensions "
+        "provide, and list their entries"
+    ),
+}
+
+
+AGENT_SECRETS_SOURCE_HELP = {
+    "list": "List the Secret Sources with their state and the fields that unlock them",
+    "unlock": "Unlock a Secret Source; its unlock fields come from hidden prompts or from stdin",
+    "lock": "Lock a Secret Source",
+    "entries": (
+        "List the entries of a Secret Source with their visible fields; never a concealed value"
     ),
 }
 

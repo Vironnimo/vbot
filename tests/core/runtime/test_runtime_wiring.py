@@ -55,6 +55,7 @@ CANONICAL_BUILTIN_TOOLS = [
     "project",
     "read",
     "search_files",
+    "secrets",
     "session_search",
     "skill",
     "skill_manage",

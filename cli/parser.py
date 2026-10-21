@@ -8,6 +8,7 @@ from collections.abc import Mapping, Sequence
 from difflib import get_close_matches
 from typing import NoReturn, override
 
+from cli._parser_agent_secrets import _add_agent_secrets_parsers
 from cli._parser_agents import (
     _add_agent_parsers,
     _add_archive_parsers,
@@ -74,6 +75,7 @@ AREA_ALIASES = {
     "extension": "extensions",
     "device": "devices",
     "perf": "performance",
+    "agent-secret": "agent-secrets",
 }
 
 
@@ -188,6 +190,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_chat_parser(subparsers)
     _add_tui_parser(subparsers)
     _add_data_store_parsers(subparsers)
+    _add_agent_secrets_parsers(subparsers)
     _add_channel_parsers(subparsers)
     _add_tool_parsers(subparsers)
     _add_prompt_parsers(subparsers)

@@ -18,6 +18,8 @@
   import ComposerGoal from './chat/ComposerGoal.svelte';
   import ComposerSessionSettings from './chat/ComposerSessionSettings.svelte';
   import ComputerUseControl from './ComputerUseControl.svelte';
+  import SecretGiveForm from './chat/SecretGiveForm.svelte';
+  import SecretRequests from './chat/SecretRequests.svelte';
   import ChatActivityPanel from './chat/ChatActivityPanel.svelte';
   import { reflectionTaskRows } from '../lib/chatTimelinePresentation.js';
   import { untrack } from 'svelte';
@@ -110,6 +112,9 @@
     // controller re-applies the whole map.
     commandStatuses = {},
     terminalsRefreshToken = 0,
+    // Bumped when Agent Secrets or Secret requests change; the displayed
+    // Session's pending requests are read again.
+    agentSecretsRefreshToken = 0,
     connectionSnapshot = null,
     // Bumped by App when Session-list continuity is uncertain (replay gap or
     // server restart): activity, the drawer, and the Parent Session link
@@ -516,6 +521,25 @@
       return await actions.sendStream(agent, sessionState, content, options);
     };
   });
+  // The Secret form a bare `/secret` opened, for the Agent and Session (or
+  // draft) displayed then: `{ agentId, projectId, sessionId, send }`.
+  let secretForm = $state(null);
+  function openSecretForm() {
+    const sessionState = target.activeSessionState;
+    const draft = sessionState ? null : target.activeDraft();
+    const address = sessionState?.agentId ?? draft?.agentAddress ?? '';
+    if (!address) return;
+    const { agentId, projectId } = parseAgentAddress(address);
+    secretForm = {
+      agentId,
+      projectId,
+      sessionId: sessionState?.sessionId ?? '',
+      send: sessionState ? null : composerSendMessage,
+    };
+  }
+  let displayedSecretAddress = $derived(
+    parseAgentAddress(target.activeSessionState?.agentId ?? ''),
+  );
   let composerListFiles = $derived.by(() => {
     const agentId =
       target.activeSessionState?.agentId ??
@@ -864,6 +888,11 @@
             </Banner>
           {/if}
           <div class="chat-view__measure">
+            <SecretRequests
+              agentId={displayedSecretAddress.agentId}
+              sessionId={target.activeSessionState?.sessionId ?? ''}
+              refreshToken={agentSecretsRefreshToken}
+            />
             <QueuedMessages
               queuedMessages={target.activeSessionState?.queue ?? []}
               onRemoveQueuedMessage={actions.handleRemoveQueuedMessage}
@@ -958,6 +987,7 @@
                 onTranscriptionError={actions.handleTranscriptionError}
                 onListFiles={composerListFiles}
                 onLoadModelCatalog={composerLoadModelCatalog}
+                onOpenSecretForm={composerSendMessage ? openSecretForm : null}
               >
                 {#snippet computerControl()}
                   <ComputerUseControl
@@ -989,6 +1019,16 @@
                   {t('split.sameSession')}
                 </p>
               </Banner>
+            {/if}
+            {#if secretForm}
+              <SecretGiveForm
+                agentId={secretForm.agentId}
+                projectId={secretForm.projectId}
+                sessionId={secretForm.sessionId}
+                onSendCommand={secretForm.send}
+                onGiven={actions.showChatToast}
+                onClose={() => (secretForm = null)}
+              />
             {/if}
           </div>
         </div>

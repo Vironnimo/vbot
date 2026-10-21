@@ -370,6 +370,10 @@ class ExtensionRegistry:
     def apply_recall_backends(self, recall_registry: RecallBackendRegistry) -> None:
         self._capabilities.apply_recall_backends(recall_registry)
 
+    def secret_sources(self) -> list[Any]:
+        """Secret Sources the loaded Extensions declared (``core.secrets.sources``)."""
+        return self._capabilities.secret_sources()
+
     def session_capability(
         self,
         binding: Any,

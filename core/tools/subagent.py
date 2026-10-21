@@ -120,6 +120,14 @@ SUBAGENT_TOOL_PARAMETERS: JsonObject = {
                 "to keep the current choice."
             ),
         },
+        "secrets": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                'For run, names of your Secrets to pass, such as ["GITHUB"]. A Sub-Agent has '
+                "only the Secrets you pass."
+            ),
+        },
     },
     "required": [],
 }

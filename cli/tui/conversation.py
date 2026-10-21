@@ -16,8 +16,9 @@ from textual.screen import ModalScreen
 from textual.widgets import TextArea
 from textual.worker import Worker
 
+from cli.tui import agent_secrets
 from cli.tui.dialogs import Picker
-from cli.tui.drafts import readdress_saved_inputs
+from cli.tui.drafts import kept_draft, readdress_saved_inputs
 from cli.tui.state import Conversation, JsonObject, TimelineGapError
 from cli.tui.transport import ClientError
 
@@ -108,7 +109,7 @@ class ConversationController:
 
     def save_view(self) -> None:
         if self.app.conversation is not None:
-            self.app.conversation.draft = self.app.query_one("#composer", TextArea).text
+            self.app.conversation.draft = kept_draft(self.app.query_one("#composer", TextArea).text)
             if self.app.transcript.view is self.app.conversation:
                 self.app.transcript.remember_position()
             self.cache_history(self.app.conversation)
@@ -353,6 +354,7 @@ class ConversationController:
                         self.app._start(
                             self.app._load_requests, group="requests-read", exclusive=True
                         )
+                        self.load_secret_requests()
                     elif kind == "resource_changed":
                         resource = event.get("payload") or {}
                         if resource.get("kind") in {"agents", "projects", "settings", "models"} or (
@@ -364,6 +366,8 @@ class ConversationController:
                             self.app._start(
                                 self.app._load_requests, group="requests-read", exclusive=True
                             )
+                        if resource.get("kind") == "agent_secrets":
+                            self.load_secret_requests()
                     elif kind in {
                         "run_started",
                         "run_completed",
@@ -398,6 +402,14 @@ class ConversationController:
             self.app._header()
             await _sleep(max(delay, retry_after))
             delay = min(10, delay * 2)
+
+    def load_secret_requests(self) -> None:
+        """Read the pending Secret requests again; the latest read wins."""
+        self.app._start(
+            lambda: agent_secrets.load_requests(self.app),
+            group="secret-requests-read",
+            exclusive=True,
+        )
 
     def event_targets_view(self, payload: JsonObject) -> bool:
         view = self.app.conversation

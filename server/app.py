@@ -97,7 +97,11 @@ from server.access import (
     scope_principal,
 )
 from server.access._rules import host_policy
-from server.events import RESOURCE_KIND_DEVICES, SERVER_STOPPING_EVENT
+from server.events import (
+    RESOURCE_KIND_AGENT_SECRETS,
+    RESOURCE_KIND_DEVICES,
+    SERVER_STOPPING_EVENT,
+)
 from server.file_delivery import FILE_PREVIEW_WORKERS, PREVIEW_URL_PREFIX, FileDelivery
 from server.live.owner import LIVE_SOCKET_CLOSE_UNKNOWN_CALL
 from server.rpc.errors import RPC_ERROR_INTERNAL, RPC_ERROR_INVALID_REQUEST
@@ -226,6 +230,7 @@ def create_app(
             app_runtime.storage.data_dir,
             on_change=lambda: publish_resource_changed(app.state, RESOURCE_KIND_DEVICES),
         )
+        _publish_secret_changes(app, app_runtime)
         oauth_redirects = getattr(app_runtime, "oauth_redirects", None)
         if oauth_redirects is not None:
             oauth_redirects.bind(_oauth_callback_url(access_settings, resolved_server_bind))
@@ -812,6 +817,21 @@ def _bind_webhook_url(runtime: Any, access: AccessConfig, server_bind: ServerBin
     except AttributeError, RuntimeError:
         return
     cron_service.bind_webhook_url(*webhook_base_url(access, server_bind))
+
+
+def _publish_secret_changes(app: Any, app_runtime: Any) -> None:
+    """Clients reload Agent Secrets when a Secret or a pending Secret request changes."""
+    try:
+        secrets = app_runtime.agent_secrets
+        requests = app_runtime.secret_requests
+    except AttributeError, RuntimeError:  # a Runtime without Agent Secrets
+        return
+    secrets.add_change_listener(
+        lambda _change: publish_resource_changed(app.state, RESOURCE_KIND_AGENT_SECRETS)
+    )
+    requests.set_change_listener(
+        lambda _request_id: publish_resource_changed(app.state, RESOURCE_KIND_AGENT_SECRETS)
+    )
 
 
 def _oauth_callback_url(access: AccessConfig, server_bind: ServerBindState) -> str | None:

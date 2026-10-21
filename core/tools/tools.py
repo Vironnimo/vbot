@@ -6,10 +6,20 @@ import copy
 import inspect
 import json
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from difflib import SequenceMatcher
 from typing import Any, cast
 
+from core.secrets.agent_secrets import (
+    EMPTY_MASKER,
+    AgentSecrets,
+    SecretMasker,
+    SecretUse,
+    SecretUseError,
+    SinkClass,
+    describe_uses,
+    has_reference,
+)
 from core.tools._tool_context import (
     TOOL_ALLOWLIST_WILDCARD,
     ToolCall,
@@ -296,6 +306,17 @@ class ToolRegistry:
         # Compiled definition profiles by Tool name, then profile key, so
         # removing a Tool drops its entries without iterating the cache.
         self._definition_profiles: dict[str, dict[str, tuple[str, ToolContract]]] = {}
+        # Resolves ``{{secret:NAME}}`` references in declared sink arguments.
+        self._secrets: AgentSecrets | None = None
+
+    def set_secrets(self, secrets: AgentSecrets | None) -> None:
+        """Use ``secrets`` to substitute references in the sink arguments of every Tool."""
+        self._secrets = secrets
+
+    @property
+    def secret_masker(self) -> SecretMasker:
+        """Masks known Secret values in what Tools return (Chat applies it)."""
+        return self._secrets.masker if self._secrets is not None else EMPTY_MASKER
 
     def register(
         self,
@@ -329,6 +350,7 @@ class ToolRegistry:
         argument_normalizer: Callable[[Any], Any] | None = None,
         definition_profile_resolver: ToolDefinitionProfileResolver | None = None,
         announce_changes: Sequence[str] = (),
+        secret_sinks: Mapping[str, str] | None = None,
     ) -> Tool:
         """Register a tool and return its immutable definition.
 
@@ -397,6 +419,7 @@ class ToolRegistry:
             definition_profile_resolver=definition_profile_resolver,
             # Tool validates and normalizes the entries into a tuple.
             announce_changes=cast(tuple[str, ...], announce_changes),
+            secret_sinks=dict(secret_sinks or {}),
         )
         self._tools = {**self._tools, name: tool}
         self.revision += 1
@@ -456,6 +479,8 @@ class ToolRegistry:
         )
         if context is not None and context.presentation_media:
             payload["media_files"] = [dict(item) for item in context.presentation_media]
+        if context is not None and context.presentation_secret_uses:
+            payload["secrets_used"] = list(context.presentation_secret_uses)
         if "details" in payload:
             payload["details"].extend(_detail_blocks(context, result, payload["details"]))
         return payload
@@ -724,6 +749,15 @@ class ToolRegistry:
             tool, context.input_contract or tool.contract, arguments
         )
         note = ignored_fields_note(context.tool_name, ignored) if ignored else None
+        if tool.secret_sinks and self._secrets is not None:
+            try:
+                normalized_arguments = await self._substitute_secrets(
+                    context, tool, normalized_arguments
+                )
+            except SecretUseError as error:
+                return tool_failure(
+                    "secret_unavailable", f"{model_tool_name(tool.name)} was not run: {error}"
+                )
         # From here on the handler runs: only a ToolContractError it raises
         # still means nothing happened; any other exception leaves the call's
         # effects unknown (``tool_failure_for_exception``).
@@ -749,6 +783,46 @@ class ToolRegistry:
             raise ToolContractError(f"{error}\n{note}") from error
         result = self.validate_result(context.tool_name, result, contract=tool.contract)
         return result if note is None else with_call_note(result, note)
+
+    async def _substitute_secrets(
+        self, context: ToolContext, tool: Tool, arguments: JsonObject
+    ) -> JsonObject:
+        """The handler's copy of ``arguments`` with sink references replaced by values.
+
+        Only declared sink arguments change; the persisted call, its events and
+        its display keep the references. A refusal leaves nothing done.
+        """
+        secrets = self._secrets
+        sinks = {
+            name: cast(SinkClass, sink)
+            for name, sink in tool.secret_sinks.items()
+            if name in arguments and has_reference(arguments[name])
+        }
+        if secrets is None or not sinks:
+            return arguments
+
+        def substitute() -> tuple[JsonObject, list[SecretUse]]:
+            changed = dict(arguments)
+            uses: list[SecretUse] = []
+            for name, sink in sinks.items():
+                changed[name], found = secrets.substitute(
+                    context.agent_id,
+                    context.session_id,
+                    arguments[name],
+                    sink,
+                    passed_only=context.subagent_session,
+                    consume=False,
+                )
+                uses.extend(use for use in found if use not in uses)
+            secrets.consume(
+                context.agent_id, context.session_id, uses, passed_only=context.subagent_session
+            )
+            return changed, uses
+
+        changed, uses = await run_tool_worker(substitute)
+        if uses:
+            context.record_secret_uses(describe_uses(uses))
+        return changed
 
     def _unknown_tool_message(
         self, context: ToolContext, allowed_tools: Sequence[str] | None, arguments: Any

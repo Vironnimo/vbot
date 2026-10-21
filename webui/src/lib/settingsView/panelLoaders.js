@@ -19,6 +19,8 @@ const loadSettingsChannelsPanel = () =>
   import('../../components/settings/SettingsChannelsPanel.svelte');
 const loadSettingsCredentialsPanel = () =>
   import('../../components/settings/SettingsCredentialsPanel.svelte');
+const loadSettingsAgentSecretsPanel = () =>
+  import('../../components/settings/SettingsAgentSecretsPanel.svelte');
 const loadSettingsDebugPanel = () =>
   import('../../components/settings/SettingsDebugPanel.svelte');
 const loadSettingsArchivePanel = () =>
@@ -58,6 +60,7 @@ export const settingsPanelLoaders = {
   channels: loadSettingsChannelsPanel,
   extensions: loadSettingsExtensionsPanel,
   credentials: loadSettingsCredentialsPanel,
+  agent_secrets: loadSettingsAgentSecretsPanel,
   live_voice_model: loadSettingsLiveVoicePanel,
   speech_models: loadSettingsSpecializedModelsPanel,
   media_models: loadSettingsSpecializedModelsPanel,

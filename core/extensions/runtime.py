@@ -45,6 +45,7 @@ class ExtensionRuntime:
         logger: Any,
         make_host: Callable[[], ExtensionHost] | None = None,
         archive_uninstalled_groups: Callable[[frozenset[str]], Awaitable[None]] | None = None,
+        refresh_secret_sources: Callable[[], None] = lambda: None,
     ) -> None:
         self._storage = storage
         self._resources_path = resources_path
@@ -63,6 +64,7 @@ class ExtensionRuntime:
         self._logger = logger
         self._make_host = make_host
         self._archive_uninstalled_groups = archive_uninstalled_groups
+        self._refresh_secret_sources = refresh_secret_sources
         self._mutation_lock = asyncio.Lock()
         self._closing = False
 
@@ -115,6 +117,7 @@ class ExtensionRuntime:
             new_registry.apply_commands(dispatcher)
         self._reload_recall(settings)
         self._refresh_prompts()
+        self._refresh_secret_sources()
         await self._reload_skills()
         await self._release_uninstalled_owners(new_registry)
         if self._make_host is not None:
@@ -148,6 +151,7 @@ class ExtensionRuntime:
         for name in newly_disabled:
             await registry.deactivate(name, self._tools, dispatcher)
         self._refresh_prompts()
+        self._refresh_secret_sources()
         await self._reload_skills()
         settings = await _SETTINGS_WORKERS.run(self._storage.load_settings)
         self._recover_recall(removed_backends, settings)

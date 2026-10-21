@@ -27,6 +27,7 @@ from core.runs import (
     Run,
     RunNotFoundError,
 )
+from core.secrets.agent_secrets import SecretUseError
 from core.sessions import (
     SessionAddress,
     SessionNotFoundError,
@@ -56,6 +57,7 @@ from core.subagents._constants import (
     SUBAGENT_NOT_DIRECT_CHILD_MESSAGE_TEMPLATE,
     SUBAGENT_NOT_DIRECT_CHILD_STOP_TEMPLATE,
     SUBAGENT_NOT_FOUND_MESSAGE_TEMPLATE,
+    SUBAGENT_SECRETS_NOTE_TEMPLATE,
     SUBAGENT_SEND_APP_LIMIT_MESSAGE_TEMPLATE,
     SUBAGENT_SEND_LIMIT_MESSAGE_TEMPLATE,
     SUBAGENT_SEND_QUEUED_NOTE,
@@ -121,6 +123,7 @@ from core.subagents.links import (
 )
 from core.tools.background_tasks import BACKGROUND_TASKS_TOOL_NAME
 from core.tools.contracts import ToolContractError
+from core.tools.secrets import secret_line
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -133,10 +136,25 @@ from core.utils.workers import finish_despite_cancel
 
 if TYPE_CHECKING:
     from core.runtime.interfaces import RuntimeServices
+    from core.secrets.agent_secrets import AgentSecrets
     from core.sessions.session import ChatSession
 
 
 _LOGGER = get_logger("subagents")
+
+
+def _passed_secret_names(value: Any) -> list[str] | JsonObject:
+    """The Secret names a ``run`` passes: a list, or one comma-separated string."""
+    if value is None or value == "" or value == []:
+        return []
+    if isinstance(value, str):
+        value = value.split(",")
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        return tool_failure(
+            "invalid_arguments",
+            'Nothing was started. secrets takes Secret names, such as ["GITHUB"].',
+        )
+    return [item.strip() for item in value if item.strip()]
 
 
 def _subagent_count(count: int) -> str:
@@ -146,8 +164,15 @@ def _subagent_count(count: int) -> str:
 class SubAgentCoordinator:
     """Run the Sub-Agent Tools and forward Sub-Agent answers to their Parents."""
 
-    def __init__(self, runtime: RuntimeServices, trigger_service: Any) -> None:
+    def __init__(
+        self,
+        runtime: RuntimeServices,
+        trigger_service: Any,
+        *,
+        secrets: AgentSecrets | None = None,
+    ) -> None:
         self._runtime = runtime
+        self._secrets = secrets
         self._trigger_service = trigger_service
         self._activities = SubAgentActivities(runtime)
         self._forwarding = SubAgentForwarding(runtime, trigger_service, self._activities)
@@ -380,6 +405,23 @@ class SubAgentCoordinator:
         if description is None:
             return tool_failure("invalid_arguments", SUBAGENT_MISSING_DESCRIPTION_MESSAGE)
 
+        passed = _passed_secret_names(arguments.get("secrets"))
+        if isinstance(passed, dict):
+            return passed
+        if passed:
+            if self._secrets is None:
+                return tool_failure(
+                    "secret_unavailable", "Nothing was started. Secrets are not available here."
+                )
+            try:
+                self._secrets.passable(
+                    context.agent_id,
+                    context.session_id,
+                    passed,
+                    passed_only=context.subagent_session,
+                )
+            except SecretUseError as unavailable:
+                return tool_failure("secret_unavailable", f"Nothing was started. {unavailable}")
         if arguments.get("background") is False:
             notes.append(SUBAGENT_BACKGROUND_IGNORED_NOTE)
         agent_address = optional_text(arguments, "agent_id")
@@ -453,6 +495,7 @@ class SubAgentCoordinator:
                     overrides=overrides,
                     temporary_parent=temporary_parent,
                     notes=notes,
+                    secrets=passed,
                 )
             )
 
@@ -467,6 +510,7 @@ class SubAgentCoordinator:
         overrides: dict[str, Any],
         temporary_parent: TemporarySessionBinding | None,
         notes: list[str],
+        secrets: list[str] | None = None,
     ) -> JsonObject:
         """Create the Sub-Agent Session, start its Run and return the ``run`` result.
 
@@ -508,6 +552,8 @@ class SubAgentCoordinator:
                 content, parent_agent_input=True, temporary_parent_binding=temporary_parent
             )
             try:
+                if secrets and self._secrets is not None:
+                    await self._pass_secrets(context, session, secrets)
                 run = await runtime.chat_run_manager.start(
                     address,
                     executor,
@@ -552,6 +598,22 @@ class SubAgentCoordinator:
         if activity is not None and activity_file is not None:
             result["activity_note"] = SUBAGENT_ACTIVITY_NOTE_TEMPLATE.format(path=activity_file)
         return tool_success(result)
+
+    async def _pass_secrets(
+        self, context: ToolContext, session: ChatSession, names: list[str]
+    ) -> None:
+        """Grant the Sub-Agent's Session the named Secrets and tell it which they are."""
+        assert self._secrets is not None
+        granted = await asyncio.to_thread(
+            self._secrets.pass_to_session,
+            context.agent_id,
+            context.session_id,
+            names,
+            session.address.session_id,
+            passed_only=context.subagent_session,
+        )
+        lines = "\n".join(secret_line(secret) for secret in granted)
+        await session.add_note_async(SUBAGENT_SECRETS_NOTE_TEMPLATE.format(secrets=lines))
 
     # send
 

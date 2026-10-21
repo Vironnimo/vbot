@@ -229,6 +229,7 @@ class ExtensionCapabilityInstaller:
                 session_scoped=declaration.session_scoped,
                 activation=declaration.activation,
                 announce_changes=declaration.announce_changes,
+                secret_sinks=declaration.secret_sinks,
             )
         except Exception as exc:
             _diagnose_capability(record, f"tool {name!r} registration failed: {exc}")
@@ -350,6 +351,21 @@ class ExtensionCapabilityInstaller:
                     _diagnose_capability(
                         record, f"recall backend {declaration.name!r} skipped: {exc}"
                     )
+
+    def secret_sources(self) -> list[Any]:
+        """The Secret Sources of every loaded Extension, first declarer winning a name."""
+        sources: dict[str, Any] = {}
+        for record in self._records:
+            if record.status != "loaded":
+                continue
+            for source in record.declarations.secret_sources:
+                if source.name in sources:
+                    _diagnose_capability(
+                        record, f"secret source {source.name!r} skipped: already declared"
+                    )
+                    continue
+                sources[source.name] = source
+        return list(sources.values())
 
     def _unregister_extension_tools(
         self, tool_registry: ToolRegistry, tools: list[ToolDeclaration]

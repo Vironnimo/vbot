@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
 
 import core.channels.engine as engine_module
-from core.chat import CommandDispatcher, CommandFeedback, ExtensionCommandContext
+from core.chat import (
+    CommandDispatcher,
+    CommandFeedback,
+    CommandUnavailability,
+    ExtensionCommandContext,
+    PreparedCommand,
+)
 from core.chat.commands import CommandNavigation, CommandOutcome, CommandRun
 from core.runs import COMPACTION_COMPLETED_EVENT, ChatRunManager, Run, RunKind
 from core.sessions import SessionAddress
@@ -367,3 +374,65 @@ async def test_stop_is_dispatched_at_once_past_a_busy_worker_and_a_full_queue(
         runs.release()
         await drain(engine, 12345)
         await engine.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("kind", "can_delete", "reply"),
+    [
+        ("direct", True, "Stored."),
+        (
+            "direct",
+            False,
+            "Stored. Telegram keeps your message with the value in this chat, and vBot cannot "
+            "remove it there: delete it yourself.",
+        ),
+        (
+            "group",
+            True,
+            "The /workflow command is not available in group chats. vBot removed your "
+            "message; change the value if someone may have read it.",
+        ),
+        (
+            "group",
+            False,
+            "The /workflow command is not available in group chats. Everyone in this chat can "
+            "read the value you sent: delete the message and change the value.",
+        ),
+    ],
+)
+async def test_a_command_whose_argument_can_hold_a_secret_removes_the_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str, can_delete: bool, reply: str
+) -> None:
+    def handler(context: ExtensionCommandContext, argument: str | None) -> CommandOutcome:
+        return CommandOutcome(command="workflow", feedback=CommandFeedback("notice", "Stored."))
+
+    dispatcher = _workflow_dispatcher(handler, execution_mode="immediate")
+    prepare = dispatcher.prepare
+
+    def prepare_secret(content: str) -> PreparedCommand:
+        prepared = prepare(content)
+        assert prepared is not None
+        return replace(prepared, secret_argument=True)
+
+    monkeypatch.setattr(dispatcher, "prepare", prepare_secret)
+    if kind == "group":
+        refusal = CommandUnavailability(
+            command="/workflow", surface="channel", conversation="group"
+        )
+        monkeypatch.setattr(dispatcher, "unavailability", lambda *_: refusal)
+    engine, _sessions, _trigger, transport = make_engine(
+        tmp_path, command_dispatcher=dispatcher, admin_user_ids=["50"]
+    )
+    transport.can_delete = can_delete
+
+    await engine.handle_inbound_text(
+        make_conversation(kind=kind, message_id="77"), "/workflow API_KEY sk-value"
+    )
+
+    assert transport.deleted == [("12345", "77")]
+    assert transport.sent_texts == [reply]
+    # A reply never references a message that is gone.
+    expected_reference = "77" if kind == "group" and not can_delete else None
+    assert transport.sent_reply_targets == [expected_reference]
+    await engine.stop()

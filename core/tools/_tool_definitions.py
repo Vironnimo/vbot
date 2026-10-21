@@ -6,10 +6,12 @@ import copy
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any
 
 from jsonschema import Draft202012Validator
 
+from core.secrets.agent_secrets import SINK_CLASSES
 from core.tools._tool_context import ToolHandler
 from core.tools._tool_display import ToolDisplay
 from core.tools.availability import (
@@ -197,6 +199,10 @@ class Tool:
     # Chat keeps a Session's Tool list unchanged until Compaction; a change of
     # any part not named here reaches the Model only with the next prompt epoch.
     announce_changes: tuple[str, ...] = ()
+    # Root arguments that are secret sinks, mapped to their sink class: the
+    # registry replaces ``{{secret:NAME}}`` references in them (also nested
+    # strings) with values on the handler's copy only (``core.secrets``).
+    secret_sinks: Mapping[str, str] = field(default_factory=dict, compare=False)
 
     def __post_init__(self) -> None:
         if self.summary is not None:
@@ -210,6 +216,13 @@ class Tool:
             object.__setattr__(self, "summary", summary)
         if self.argument_normalizer is not None and not callable(self.argument_normalizer):
             raise ValueError("argument_normalizer must be callable")
+        sinks = dict(self.secret_sinks)
+        if any(
+            not isinstance(name, str) or not name or sink not in SINK_CLASSES
+            for name, sink in sinks.items()
+        ):
+            raise ValueError(f"secret_sinks must map argument names to {', '.join(SINK_CLASSES)}")
+        object.__setattr__(self, "secret_sinks", MappingProxyType(sinks))
         object.__setattr__(
             self, "announce_changes", _checked_announce_changes(self.announce_changes)
         )

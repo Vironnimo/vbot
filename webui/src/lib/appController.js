@@ -12,6 +12,7 @@ import {
   disconnect,
 } from './connectionState.js';
 import {
+  RESOURCE_TOKEN_AGENT_SECRETS,
   RESOURCE_TOKEN_AGENTS,
   RESOURCE_TOKEN_MEMORIES,
   RESOURCE_TOKEN_ARCHIVE,
@@ -106,6 +107,8 @@ export function createAppControllerState() {
     secretStore: null,
     // Saved credentials changed (Settings -> Credentials).
     credentialsRefreshToken: 0,
+    // Agent Secrets, Secret requests or their Sources changed.
+    agentSecretsRefreshToken: 0,
     // The server serves a newer WebUI build than this page runs.
     webuiOutdated: false,
     skillsRefreshToken: 0,
@@ -224,6 +227,7 @@ export function createAppController({
         state.devicesRefreshToken += 1;
         state.channelsRefreshToken += 1;
         state.credentialsRefreshToken += 1;
+        state.agentSecretsRefreshToken += 1;
         state.cronRefreshToken += 1;
         state.calendarRefreshToken += 1;
         state.commandsRefreshToken += 1;
@@ -351,6 +355,9 @@ export function createAppController({
     }
     if (tokenKeys.includes(RESOURCE_TOKEN_CREDENTIALS)) {
       state.credentialsRefreshToken += 1;
+    }
+    if (tokenKeys.includes(RESOURCE_TOKEN_AGENT_SECRETS)) {
+      state.agentSecretsRefreshToken += 1;
     }
     if (tokenKeys.includes(RESOURCE_TOKEN_CRON)) {
       state.cronRefreshToken += 1;

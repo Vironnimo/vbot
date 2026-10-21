@@ -34,6 +34,7 @@ from core.chat._scratch_context import (
 from core.chat._skill_activation import _activate_triggered_skills
 from core.chat._step_outcomes import OUTPUT_INTEGRITY_RECOVERY_NOTE
 from core.chat._workers import _CHAT_TRANSFORM_WORKERS
+from core.chat.content_blocks import masked_content
 from core.chat.errors import (
     ChatError,
     ImageBudgetExceededError,
@@ -372,7 +373,7 @@ class RunExecution:
                         )
                         user_message = ChatMessage.user(
                             _assign_session_image_references(
-                                user_content,
+                                masked_content(user_content, self._dependencies.secret_masker),
                                 context.session_snapshot.active_messages,
                             ),
                             sender=request.sender,

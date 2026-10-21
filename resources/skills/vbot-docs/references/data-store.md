@@ -24,7 +24,7 @@ vbot data-store unregister ext.<extension-id>.<name> --yes
 
 ## Credentials
 
-Credentials live encrypted in the data directory's Secret Store, `secrets.json`; a variable of the same name in the server's process environment takes precedence. vBot ignores a `.env` file and `oauth/` token files in the data directory until `secrets convert` imports them. Set Provider keys with `provider key set`, Channel tokens with `channel token set` and Extension secrets with `extensions set <name> <field> --stdin`; set any other named credential, such as a token a Skill requires, here:
+Credentials live encrypted in the data directory's Secret Store, `secrets.json`; a variable of the same name in the server's process environment takes precedence. vBot ignores a `.env` file and `oauth/` token files in the data directory until `secrets convert` imports them. Set Provider keys with `provider key set`, Channel tokens with `channel token set` and Extension secrets with `extensions set <name> <field> --stdin`; set any other named credential, such as a token a Skill requires, here. Values Agents use by reference as `{{secret:NAME}}` are Agent Secrets instead (`references/agent-secrets.md`).
 
 ```bash
 vbot data-store secrets list

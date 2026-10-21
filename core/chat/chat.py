@@ -641,6 +641,10 @@ class ChatLoop:
                 exc_info=True,
             )
 
+    def mask_user_input(self, content: str) -> str:
+        """``content`` with every known Secret value replaced by its reference."""
+        return self._dependencies.secret_masker.mask(content)
+
     async def start_temporary_run(
         self,
         binding: TemporarySessionBinding,

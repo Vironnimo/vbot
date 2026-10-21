@@ -51,6 +51,8 @@
     onTranscriptionError,
     onListFiles = null,
     onLoadModelCatalog = null,
+    // Opens the Secret form; a bare `/secret` calls it instead of sending.
+    onOpenSecretForm = null,
     computerControl,
     // A row under the input box (the Session settings pickers).
     footer,
@@ -140,6 +142,9 @@
     },
     get onSendMessage() {
       return onSendMessage;
+    },
+    get onOpenSecretForm() {
+      return onOpenSecretForm;
     },
     resetInputHistory() {
       historyCursor = -1;

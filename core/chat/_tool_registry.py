@@ -23,6 +23,7 @@ from core.chat.messages import JsonObject, ToolCallRejection
 from core.extensions import ExtensionRegistry, HookContext
 from core.performance import measure, session_track
 from core.runs import TOOL_CALL_RESULT_EVENT, TOOL_CALL_STARTED_EVENT, Run
+from core.secrets.agent_secrets import EMPTY_MASKER, SecretMasker
 from core.tools import (
     ToolContext,
     ToolContract,
@@ -94,6 +95,10 @@ class _EmittingToolRegistry(ToolRegistry):
         self._tool_displays: dict[str, JsonObject] = {}
         self._tool_media: dict[str, list[JsonObject]] = {}
         self._extension_hook_lock = asyncio.Lock()
+
+    def _secret_masker(self) -> SecretMasker:
+        masker = getattr(self._registry, "secret_masker", None)
+        return masker if isinstance(masker, SecretMasker) else EMPTY_MASKER
 
     def _hook_context(self) -> HookContext:
         return HookContext(
@@ -305,6 +310,10 @@ class _EmittingToolRegistry(ToolRegistry):
                 result = await self._finish_result_hooks(
                     context, effective_arguments, result, result_contract
                 )
+            # No Secret value leaves the call: not to the Model, the events or
+            # the persisted Tool Result.
+            masker = self._secret_masker()
+            result = masker.mask_value(result)
 
             if result.get("ok") is True:
                 context._commit_owned_effects()
@@ -316,12 +325,14 @@ class _EmittingToolRegistry(ToolRegistry):
                 self._tool_media[context.tool_call_id] = context.result_media
             timing = _timing_payload(started_at, started_perf)
             self._tool_timings[context.tool_call_id] = timing
-            completed_display = _tool_display_payload(
-                self._registry,
-                context.tool_name,
-                effective_arguments,
-                context=context,
-                result=result,
+            completed_display = masker.mask_value(
+                _tool_display_payload(
+                    self._registry,
+                    context.tool_name,
+                    effective_arguments,
+                    context=context,
+                    result=result,
+                )
             )
             self._tool_displays[context.tool_call_id] = completed_display
             error = result.get("error")
@@ -459,10 +470,17 @@ class _EmittingToolRegistry(ToolRegistry):
         started_perf: float,
     ) -> JsonObject:
         """Finish the lifecycle of a call whose hooks or bookkeeping raised."""
-        result = tool_failure_for_exception(context.tool_name, error)
+        masker = self._secret_masker()
+        result = masker.mask_value(tool_failure_for_exception(context.tool_name, error))
         try:
-            display = _tool_display_payload(
-                self._registry, context.tool_name, events.arguments, context=context, result=result
+            display = masker.mask_value(
+                _tool_display_payload(
+                    self._registry,
+                    context.tool_name,
+                    events.arguments,
+                    context=context,
+                    result=result,
+                )
             )
         except Exception:
             display = _empty_tool_display_payload()

@@ -45,9 +45,13 @@ if TYPE_CHECKING:
     from core.models.models import ModelRegistry
     from core.projects import AgentResolver, ProjectStore, RuntimeAgent
     from core.providers.providers import ProviderRegistry
+    from core.secrets.agent_secrets import AgentSecrets
+    from core.secrets.requests import SecretRequests
     from core.sessions import ChatSessionManager
     from core.tools.command_manager import CommandManager
 else:
+    AgentSecrets = Any
+    SecretRequests = Any
     AgentResolver = Any
     AgentStore = Any
     AutomationReferences = Any
@@ -255,6 +259,17 @@ class CommandDispatcher:
             catalog_result="notice",
             execution_mode="serialized",
         ),
+        "secret": CommandSpec(
+            "secret",
+            "Give the agent a password or key it uses without seeing it.",
+            argument="optional",
+            catalog_result="notice",
+            # Immediate: the Run may be waiting in a secrets request this answers.
+            execution_mode="immediate",
+            new_session_mode="create_session",
+            group_conversations=False,
+            secret_argument=True,
+        ),
         "status": CommandSpec(
             "status",
             "Show current session and runtime status.",
@@ -295,8 +310,10 @@ class CommandDispatcher:
         snapshot_barrier: SnapshotBarrier | None = None,
         stop_all: Callable[[SessionAddress], Awaitable[int]] | None = None,
         goals: GoalService | None = None,
+        secrets: AgentSecrets | None = None,
+        secret_requests: SecretRequests | None = None,
     ) -> None:
-        from core.chat import _command_builtin, _command_status
+        from core.chat import _command_builtin, _command_secret, _command_status
 
         self._chat_runs = chat_runs
         self._agent_resolver = agent_resolver
@@ -359,6 +376,12 @@ class CommandDispatcher:
                 reflection_service=reflection_service,
             ),
             "rename": partial(_command_builtin._execute_rename, sessions=sessions),
+            "secret": partial(
+                _command_secret.execute_secret,
+                secrets=secrets,
+                requests=secret_requests,
+                sessions=sessions,
+            ),
             "status": partial(
                 _command_status._execute_status,
                 agent_resolver=agent_resolver,
@@ -458,12 +481,17 @@ class CommandDispatcher:
         """Recognize and parse one command-eligible Chat content value."""
         if isinstance(content, str):
             command_text = content
-        elif len(content) == 1 and isinstance(content[0], TextBlock):
-            command_text = content[0].text
         else:
-            return None
+            texts = [block.text for block in content if isinstance(block, TextBlock)]
+            if len(texts) != 1:
+                return None
+            command_text = texts[0]
         matched = self._match_command(command_text)
         if matched is None:
+            return None
+        # With attachments only a command that can carry a Secret value counts,
+        # so the value never reaches the Agent; the command ignores them.
+        if not isinstance(content, str) and len(content) != 1 and not matched[0].secret_argument:
             return None
         spec, argument, registration_id = matched
         execution_mode = (
@@ -477,6 +505,7 @@ class CommandDispatcher:
             execution_mode=execution_mode,
             registration_id=registration_id,
             text=command_text.strip(),
+            secret_argument=spec.secret_argument,
         )
 
     def unavailability(
@@ -649,7 +678,8 @@ class CommandDispatcher:
         stripped_text = message_text.strip()
         if not stripped_text.startswith("/"):
             return None
-        first_token, _, remainder = stripped_text.partition(" ")
+        first_token, *rest = stripped_text.split(maxsplit=1)
+        remainder = rest[0] if rest else ""
         name = first_token[1:].lower()
         spec = self.BUILT_IN_COMMANDS.get(name)
         registered = self._extension_commands.get(name)

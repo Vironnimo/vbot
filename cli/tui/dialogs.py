@@ -1,4 +1,4 @@
-"""Keyboard-first search, text and Extension request dialogs.
+"""Keyboard-first search, text, Extension request and Secret dialogs.
 
 Every dialog is one quiet box: its title sits in the frame, the keys that act
 on it in the frame's lower edge, and the fields inside carry no frames of
@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, override
 
-from textual import on
+from textual import events, on
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.content import Content
@@ -532,3 +534,315 @@ class ExtensionDialog(ModalScreen[JsonObject | None]):
             self.form_values = form_values
             response["content"] = content
         self.dismiss(response)
+
+
+#: The fields each Secret kind starts with, as (name, concealed, optional). They
+#: mirror the server's kinds (`core/secrets/_agent_secret_model.py`); an Agent's
+#: request names its own fields.
+SECRET_KIND_FIELDS: dict[str, tuple[tuple[str, bool, bool], ...]] = {
+    "token": (("value", True, False),),
+    "login": (
+        ("username", False, True),
+        ("password", True, False),
+        ("url", False, True),
+        ("totp", True, True),
+    ),
+    "text": (("value", True, False),),
+}
+_SECRET_KINDS = (
+    ("Token or API key", "token"),
+    ("Login: username and password", "login"),
+    ("Text of several lines", "text"),
+)
+_SECRET_LIFETIMES = (
+    ("For this Session", "session"),
+    ("Permanently", "permanent"),
+    ("For a duration", "until"),
+    ("For one use", "once"),
+)
+_SECRET_FIELD_LABELS = {
+    "value": "Value",
+    "username": "Username",
+    "password": "Password",
+    "url": "Address (URL)",
+    "totp": "TOTP seed for one-time codes",
+}
+# The durations `/secret --for` takes.
+_DURATION = re.compile(r"(\d+)\s*([mhdw])", re.IGNORECASE)
+_DURATION_UNITS = {"m": "minutes", "h": "hours", "d": "days", "w": "weeks"}
+
+
+class SecretInput(Input):
+    """A masked field; a multi-line one keeps every line of a paste."""
+
+    def __init__(self, *, multiline: bool = False, **options: Any) -> None:
+        super().__init__(password=True, **options)
+        self.multiline = multiline
+
+    def on_paste(self, event: events.Paste) -> None:
+        # Input keeps only the first line of a paste; a key or certificate needs all.
+        if not self.multiline or not event.text:
+            return
+        text = event.text.replace("\r\n", "\n").replace("\r", "\n")
+        if self.selection.is_empty:
+            self.insert_text_at_cursor(text)
+        else:
+            self.replace(text, *self.selection)
+        event.prevent_default()
+        event.stop()
+
+
+class _FormError(ValueError):
+    def __init__(self, message: str, widget: Any = None) -> None:
+        super().__init__(message)
+        self.widget = widget
+
+
+class SecretDialog(ModalScreen[JsonObject | None]):
+    """Ask for a Secret's values in masked fields; they leave only as the result.
+
+    With ``request`` it answers an Agent's request, which names the Secret and
+    its fields, and Decline is offered. Without one the operator names the
+    Secret and picks its kind (a bare `/secret`). ``values`` refills the form
+    after a refusal; the dialog keeps them in memory only. Results:
+    ``{"action": "store", ...}``, ``{"action": "decline"}``,
+    ``{"action": "withdrawn"}`` (the request went away) or None.
+    """
+
+    BINDINGS = [("escape", "dismiss(None)", "Close"), ("ctrl+s", "store", "Store")]
+    DEFAULT_CSS = f"""
+    SecretDialog {{ align: center middle; }}
+    SecretDialog > Vertical {{
+        width: 86%; max-width: 96; height: auto; max-height: 95%; {_BOX}
+    }}
+    SecretDialog.request > Vertical {{ border: round $warning; border-title-color: $warning; }}
+    SecretDialog {{ {_FIELDS} }}
+    SecretDialog VerticalScroll {{ height: auto; max-height: 1fr; }}
+    SecretDialog #secret-actions {{ dock: bottom; height: auto; }}
+    SecretDialog .kind-fields {{ height: auto; }}
+    SecretDialog Label {{ height: auto; text-style: bold; }}
+    SecretDialog Select {{ margin-bottom: 1; }}
+    SecretDialog .note {{ color: $text-muted; height: auto; margin-bottom: 1; }}
+    SecretDialog #problem {{ color: $error; height: auto; }}
+    """
+
+    def __init__(
+        self,
+        *,
+        request: JsonObject | None = None,
+        values: JsonObject | None = None,
+        problem: str = "",
+        outcome_unknown: bool = False,
+    ) -> None:
+        super().__init__(classes="request" if request is not None else "")
+        self.request = request
+        self.form = dict(values or {})
+        self.problem = problem
+        self.outcome_unknown = outcome_unknown
+        if request is not None:
+            kind = str(request.get("kind") or "token")
+            fields = tuple(
+                (str(item["name"]), bool(item.get("concealed")), bool(item.get("optional")))
+                for item in request.get("fields") or []
+                if isinstance(item, dict) and item.get("name")
+            )
+            self.kinds = {kind: fields or SECRET_KIND_FIELDS.get(kind, ())}
+        else:
+            self.kinds = dict(SECRET_KIND_FIELDS)
+
+    @property
+    def request_id(self) -> str | None:
+        return None if self.request is None else str(self.request.get("id"))
+
+    @override
+    def compose(self) -> ComposeResult:
+        request = self.request
+        form_values: JsonObject = self.form.get("values") or {}
+        kind = str(self.form.get("kind") or next(iter(self.kinds)))
+        with Vertical(id="secret-dialog-body") as box:
+            if request is not None:
+                box.border_title = terminal_text(f"Secret request · {request.get('name', '')}")
+                box.border_subtitle = "Enter store · Esc return without answering"
+            else:
+                box.border_title = "Give the Agent a Secret"
+                box.border_subtitle = "Enter store · Esc close"
+            with VerticalScroll():
+                if request is not None:
+                    if request.get("description"):
+                        yield Static(
+                            terminal_text(str(request["description"])),
+                            classes="note",
+                            markup=False,
+                        )
+                    note = (
+                        "The Agent waits for your answer. It uses the value by reference "
+                        "and never sees it."
+                    )
+                    if request.get("replaces"):
+                        note += " Storing replaces the value it has under this name."
+                    yield Static(note, classes="note", markup=False)
+                else:
+                    yield Label("Name", markup=False)
+                    yield Input(
+                        value=str(self.form.get("name") or ""),
+                        placeholder="GITHUB_TOKEN",
+                        id="secret-name",
+                        compact=True,
+                    )
+                    yield Label("Kind", markup=False)
+                    yield Select(
+                        _SECRET_KINDS, value=kind, allow_blank=False, id="secret-kind", compact=True
+                    )
+                for group, fields in self.kinds.items():
+                    with Vertical(id=f"kind-{group}", classes="kind-fields") as container:
+                        container.display = group == kind
+                        for name, concealed, optional in fields:
+                            label = _SECRET_FIELD_LABELS.get(name, name.replace("_", " ").title())
+                            yield Label(label + (" (optional)" if optional else ""), markup=False)
+                            value = str(form_values.get(name, "")) if group == kind else ""
+                            identifier = f"field-{group}-{name}"
+                            if concealed:
+                                yield SecretInput(
+                                    multiline=group == "text",
+                                    value=value,
+                                    id=identifier,
+                                    compact=True,
+                                )
+                            else:
+                                yield Input(value=value, id=identifier, compact=True)
+                        if group == "text":
+                            yield Static(
+                                "Paste the text: every line is kept, and it stays masked.",
+                                classes="note",
+                                markup=False,
+                            )
+                if request is None or not request.get("replaces"):
+                    lifetime = str(
+                        self.form.get("lifetime") or (request or {}).get("lifetime") or "session"
+                    )
+                    if lifetime not in {value for _, value in _SECRET_LIFETIMES}:
+                        lifetime = "session"
+                    yield Label("Lifetime", markup=False)
+                    yield Select(
+                        _SECRET_LIFETIMES,
+                        value=lifetime,
+                        allow_blank=False,
+                        id="secret-lifetime",
+                        compact=True,
+                    )
+                    duration = Input(
+                        value=str(self.form.get("duration") or ""),
+                        placeholder="Duration: 30m, 2h, 7d or 2w",
+                        id="secret-duration",
+                        compact=True,
+                    )
+                    duration.display = lifetime == "until"
+                    yield duration
+                if request is None:
+                    yield Label("Description (optional)", markup=False)
+                    yield Input(
+                        value=str(self.form.get("description") or ""),
+                        placeholder="What the Agent uses it for",
+                        id="secret-description",
+                        compact=True,
+                    )
+            with Vertical(id="secret-actions"):
+                yield Static(self.problem, id="problem", markup=False)
+                with Horizontal():
+                    yield Button(
+                        "Store again" if self.outcome_unknown else "Store",
+                        id="store",
+                        variant="primary",
+                        compact=True,
+                    )
+                    if request is not None:
+                        yield Button("Decline", id="decline", compact=True)
+                    yield Button("Close", id="close", compact=True)
+
+    def on_mount(self) -> None:
+        if self.request is None and not self.form.get("name"):
+            self.query_one("#secret-name", Input).focus()
+            return
+        kind = self._kind()
+        fields = self.kinds.get(kind, ())
+        if fields:
+            self.query_one(f"#field-{kind}-{fields[0][0]}", Input).focus()
+
+    def _kind(self) -> str:
+        if self.request is not None:
+            return next(iter(self.kinds))
+        return str(self.query_one("#secret-kind", Select).value)
+
+    @on(Select.Changed, "#secret-kind")
+    def kind_changed(self, event: Select.Changed) -> None:
+        for group in self.kinds:
+            self.query_one(f"#kind-{group}", Vertical).display = group == event.value
+
+    @on(Select.Changed, "#secret-lifetime")
+    def lifetime_changed(self, event: Select.Changed) -> None:
+        self.query_one("#secret-duration", Input).display = event.value == "until"
+
+    @on(Input.Submitted)
+    def field_submitted(self) -> None:
+        self.action_store()
+
+    @on(Button.Pressed)
+    def button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "store":
+            self.action_store()
+        elif event.button.id == "decline":
+            self.dismiss({"action": "decline"})
+        else:
+            self.dismiss(None)
+
+    def withdraw(self) -> None:
+        """Close the form of a request that went away; nothing was sent."""
+        self.dismiss({"action": "withdrawn"})
+
+    def action_store(self) -> None:
+        try:
+            result = self._collect()
+        except _FormError as problem:
+            self.problem = str(problem)
+            self.query_one("#problem", Static).update(self.problem)
+            if problem.widget is not None:
+                problem.widget.focus()
+            return
+        self.dismiss(result)
+
+    def _collect(self) -> JsonObject:
+        kind = self._kind()
+        result: JsonObject = {"action": "store", "kind": kind}
+        if self.request is None:
+            name_input = self.query_one("#secret-name", Input)
+            name = name_input.value.strip()
+            if not name:
+                raise _FormError("Name the Secret, for example GITHUB_TOKEN.", name_input)
+            result["name"] = name
+            result["description"] = self.query_one("#secret-description", Input).value.strip()
+        values: dict[str, str] = {}
+        for name, concealed, optional in self.kinds.get(kind, ()):
+            widget = self.query_one(f"#field-{kind}-{name}", Input)
+            # A concealed value is kept exactly as typed or pasted.
+            value = widget.value if concealed else widget.value.strip()
+            if not value.strip():
+                if optional:
+                    continue
+                label = _SECRET_FIELD_LABELS.get(name, name)
+                raise _FormError(f"{label} is required.", widget)
+            values[name] = value
+        result["values"] = values
+        if self.request is not None and self.request.get("replaces"):
+            return result
+        lifetime = str(self.query_one("#secret-lifetime", Select).value)
+        result["lifetime"] = lifetime
+        if lifetime == "until":
+            duration_input = self.query_one("#secret-duration", Input)
+            duration = duration_input.value.strip()
+            match = _DURATION.fullmatch(duration)
+            if match is None or int(match.group(1)) <= 0:
+                raise _FormError("Write the duration as 30m, 2h, 7d or 2w.", duration_input)
+            delta = timedelta(**{_DURATION_UNITS[match.group(2).lower()]: int(match.group(1))})
+            result["duration"] = duration
+            result["expires_at"] = (datetime.now(UTC) + delta).isoformat()
+        return result

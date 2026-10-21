@@ -54,6 +54,7 @@ from core.compaction.errors import (
 from core.models.pricing import TokenPricing, price_usage
 from core.providers.adapter import request_input_budget
 from core.providers.providers import RequestInput
+from core.secrets.agent_secrets import EMPTY_MASKER, SecretMasker
 from core.sessions import (
     SessionAddress,
     current_skill_activation_contents,
@@ -338,9 +339,12 @@ class CompactionService:
         *,
         pricing_lookup: Callable[[str], TokenPricing | None] | None = None,
         usage_recorder: UsageRecorder | None = None,
+        secret_masker: Callable[[], SecretMasker] | None = None,
     ) -> None:
         self._pricing_lookup = pricing_lookup
         self._usage_recorder = usage_recorder
+        # Masks known Secret values in every Compaction request.
+        self._secret_masker = secret_masker or (lambda: EMPTY_MASKER)
         if strategies is None:
             resolved_strategies: tuple[CompactionStrategy, ...] = (
                 SummarizationStrategy(),
@@ -507,6 +511,7 @@ class CompactionService:
                     plan,
                     active_tools,
                     strip_reasoning=not same_target,
+                    masker=self._secret_masker(),
                 )
                 model_messages, effort_options = route_effort(
                     active_effort if same_target else None,
@@ -634,6 +639,7 @@ def _prepare_compaction_model_request(
     tools: Sequence[JsonObject] | None,
     *,
     strip_reasoning: bool,
+    masker: SecretMasker,
 ) -> tuple[list[JsonObject], list[JsonObject]]:
     """Return the Model-facing messages and Tools of one Compaction request."""
     if plan.model_messages is None:
@@ -641,7 +647,7 @@ def _prepare_compaction_model_request(
     model_messages = [dict(message) for message in plan.model_messages]
     if strip_reasoning:
         _strip_assistant_reasoning_fields(model_messages)
-    return model_facing_request(model_messages, list(tools or []))
+    return model_facing_request(model_messages, list(tools or []), masker)
 
 
 def _finalize_compaction(

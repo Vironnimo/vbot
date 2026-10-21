@@ -134,7 +134,8 @@ class Conversation:
             result["working_project_id"] = self.project
         return result
 
-    def submission(self, text: str) -> JsonObject:
+    def submission(self, text: str, *, attachments: bool = True) -> JsonObject:
+        """The `chat.stream` request; ``attachments=False`` leaves the uploads in the draft."""
         result = self.params()
         result["reply_surface"] = "tui"
         if self.session is None:
@@ -145,7 +146,7 @@ class Conversation:
                 result["new_session"]["working_project_id"] = self.project
             if self.overrides:
                 result["new_session"]["agent_overrides"] = dict(self.overrides)
-        if self.attachments:
+        if attachments and self.attachments:
             blocks = [{"type": "text", "text": text}] if text else []
             for attachment in self.attachments:
                 media_type = attachment.get("media_type", "application/octet-stream")
