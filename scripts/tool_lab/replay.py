@@ -178,8 +178,9 @@ class Dispatcher:
             normalized, _ignored = _checked_arguments(
                 self._tools.get(tool), self._contracts[tool], rewritten
             )
+            # A scope check only: the dispatched Tool resolves and checks its own access.
             for call_target in _call_targets(tool, normalized):
-                _contained_path(context.resolve_path(call_target), workspace)
+                _contained_path(context.resolve_path(call_target, access="display"), workspace)
         except (ToolContractError, _PatchError) as error:
             return Dispatched(False, "failed", "invalid_arguments", str(error), {})
         except (OSError, ValueError) as error:
