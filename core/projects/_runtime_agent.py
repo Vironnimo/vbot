@@ -7,12 +7,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from core.memory import MemoryPromptMode
+from core.permissions import PermissionCeiling, join_ceilings
 from core.settings import validate_temperature, validate_thinking_effort, validate_top_p
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
     from typing import Any
 
+    from core.permissions import PermissionRules
     from core.tools.availability import ToolAccess
 
 _CONFIG_AGENT_WORKSPACE = ""
@@ -58,6 +60,17 @@ class RuntimeAgent(Protocol):
     - ``created_at`` / ``updated_at`` — persisted timestamps (empty for config).
     - ``tool_loading`` — the On-demand Tools setting (``core.tools.on_demand``);
       ``None`` leaves them off (for a config agent, the Project override).
+    - ``permission_rules`` — the resolved Permission Rules (``core.permissions``);
+      ``None`` is full access, and so is a set that restricts nothing
+      (``PermissionRules.restricts``: no base narrowed, no deny rule), such as a
+      temporary Agent's own, one with allow rules only, or an Identity Agent's
+      explicit full access while no shared default applies.
+    - ``permission_ceiling`` — a ceiling the Agent itself carries (a temporary
+      Agent's Extension); ``None`` for every other Agent. A Session's inherited
+      ceiling lives in its :class:`AgentOverrides`.
+    - ``rule_files`` — repository files the Agent's rules and settings come from
+      (a Team member's profile and settings files); empty for others. Restricted
+      Sessions never change them.
     """
 
     @property
@@ -99,6 +112,12 @@ class RuntimeAgent(Protocol):
     def compaction_policy(self) -> dict[str, Any] | None: ...
     @property
     def tool_loading(self) -> dict[str, Any] | None: ...
+    @property
+    def permission_rules(self) -> PermissionRules | None: ...
+    @property
+    def permission_ceiling(self) -> PermissionCeiling | None: ...
+    @property
+    def rule_files(self) -> tuple[Path, ...]: ...
 
 
 AGENT_OVERRIDE_FIELDS = ("model", "thinking_effort", "temperature", "top_p")
@@ -114,6 +133,13 @@ class AgentOverrides:
     one object in its metadata (``agent_overrides``); :meth:`from_stored` reads
     it, ignoring fields it does not know: those a newer vBot may have added and
     ``model_defaults``, which an earlier vBot set on Librarian pass Sessions.
+
+    ``permission_ceiling`` is no Agent setting: it is the Permission Boundary of
+    whoever caused this Session's Runs (the Session that started or messages this
+    Sub-Agent Session, the Cron jobs that fire into it), in its stored ceiling
+    form (``PermissionBoundary.to_ceiling_dict``). Every Run of the Session
+    applies it on top of the Agent's own rules. Only :meth:`with_ceiling`
+    changes it, and only narrows it; no Session override update does.
     """
 
     model: str | None = None
@@ -123,8 +149,12 @@ class AgentOverrides:
     # An additive stored flag distinguishes a captured Provider default from
     # an omitted effort, which continues to inherit the Agent's setting.
     thinking_effort_default: bool = False
+    permission_ceiling: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
+        if self.permission_ceiling is not None:
+            # Strict: an unreadable stored ceiling stops the Session's Runs.
+            PermissionCeiling.from_ceiling_dict(self.permission_ceiling)
         if not isinstance(self.thinking_effort_default, bool):
             raise ValueError("thinking_effort_default must be a boolean")
         if self.thinking_effort_default and self.thinking_effort is not None:
@@ -164,7 +194,23 @@ class AgentOverrides:
                 if value.get("thinking_effort") is None
                 else False
             ),
+            permission_ceiling=value.get("permission_ceiling"),
         )
+
+    def ceiling(self) -> PermissionCeiling | None:
+        """The inherited Permission Boundary every Run of this Session applies, if any."""
+        if self.permission_ceiling is None:
+            return None
+        return PermissionCeiling.from_ceiling_dict(self.permission_ceiling)
+
+    def with_ceiling(self, added: PermissionCeiling | None) -> AgentOverrides:
+        """These overrides with *added* joined into the ceiling, which never widens."""
+        from dataclasses import replace
+
+        joined = join_ceilings(self.ceiling(), added)
+        if joined is None:
+            return self
+        return replace(self, permission_ceiling=joined.to_ceiling_dict())
 
     def capture(self, agent: RuntimeAgent) -> AgentOverrides:
         """Keep this Session's Model and effort independently of later Agent edits."""
@@ -182,13 +228,19 @@ class AgentOverrides:
 
     @property
     def is_empty(self) -> bool:
-        """Return whether this value replaces no Agent setting."""
-        return not self.thinking_effort_default and all(
-            getattr(self, name) is None for name in AGENT_OVERRIDE_FIELDS
+        """Return whether this value replaces no Agent setting and carries no ceiling."""
+        return (
+            not self.thinking_effort_default
+            and self.permission_ceiling is None
+            and all(getattr(self, name) is None for name in AGENT_OVERRIDE_FIELDS)
         )
 
     def as_dict(self) -> dict[str, Any]:
-        """Return only the replaced settings as stored, keyed by field name."""
+        """Return only the replaced settings as stored, keyed by field name.
+
+        The ``permission_ceiling`` is no setting and stays out; :meth:`session_metadata`
+        stores it.
+        """
         values = {
             name: getattr(self, name)
             for name in AGENT_OVERRIDE_FIELDS
@@ -207,7 +259,12 @@ class AgentOverrides:
 
     def session_metadata(self) -> dict[str, Any]:
         """Return the Session metadata that stores these overrides (empty for none)."""
-        return {} if self.is_empty else {AGENT_OVERRIDES_META_KEY: self.as_dict()}
+        if self.is_empty:
+            return {}
+        stored = self.as_dict()
+        if self.permission_ceiling is not None:
+            stored["permission_ceiling"] = dict(self.permission_ceiling)
+        return {AGENT_OVERRIDES_META_KEY: stored}
 
 
 @dataclass(frozen=True)
@@ -250,8 +307,18 @@ class ConfigAgent:
     compaction_policy: dict[str, Any] | None = None
     # On-demand Tools from the Project's override; ``None`` leaves them off.
     tool_loading: dict[str, Any] | None = None
+    # Permission Rules resolved per part: the vBot override, then the repository
+    # translation, then ``defaults.agent.permission_rules``; ``None`` is full access.
+    permission_rules: PermissionRules | None = None
+    # The profile and the repository files its rules come from (``AgentProfile.rule_files``).
+    rule_files: tuple[Path, ...] = ()
     preload_skills: tuple[str, ...] = ()
     model_inherit: bool = False
+
+    @property
+    def permission_ceiling(self) -> PermissionCeiling | None:
+        """A Team member carries no ceiling of its own."""
+        return None
 
 
 class AgentResolutionError(ValueError):

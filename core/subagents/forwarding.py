@@ -20,6 +20,7 @@ from core.runs import (
     RunInterruptedError,
 )
 from core.sessions import SessionAddress
+from core.storage.temp_files import artifact_owner
 from core.subagents._constants import (
     FACTS_NO_SIBLINGS_PENDING_TEXT,
     FACTS_NOTHING_RUNNING_TEXT,
@@ -69,8 +70,13 @@ class SubAgentActivities:
         self._files: dict[SessionAddress, SubAgentActivity | None] = {}
         self._creating: dict[SessionAddress, asyncio.Task[SubAgentActivity | None]] = {}
 
-    async def ensure(self, address: SessionAddress) -> SubAgentActivity | None:
-        """Return the Session's activity file, creating it on first use."""
+    async def ensure(
+        self, address: SessionAddress, *, parent: SessionAddress
+    ) -> SubAgentActivity | None:
+        """Return the Session's activity file, creating it on first use.
+
+        The file lies in the temporary-file folder of *parent*, which reads it.
+        """
         if address in self._files:
             return self._files[address]
         task = self._creating.get(address)
@@ -80,6 +86,7 @@ class SubAgentActivities:
                     self._runtime.storage.temporary_files,
                     agent_id=address.agent_id,
                     session_id=address.session_id,
+                    owner=artifact_owner(parent.project_id, parent.agent_id, parent.session_id),
                 )
             )
             self._creating[address] = task
@@ -184,7 +191,7 @@ class SubAgentForwarding:
         link = await self._read_link(address)
         if link is None:
             return
-        activity = await self._activities.ensure(address)
+        activity = await self._activities.ensure(address, parent=link.parent)
         if activity is not None:
             activity.follow(run)
         result = await _turn_outcome(self._runtime, run)

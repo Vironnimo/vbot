@@ -8,7 +8,7 @@ from collections.abc import Awaitable
 from pathlib import Path
 from typing import Any
 
-from core.agents.temporary import TemporaryRunInput
+from core.agents.temporary_execution import TemporaryRunInput
 from core.chat import CommandFeedback, CommandNavigation, CommandOutcome, ExtensionCommandContext
 from core.extensions import (
     ExtensionAPI,

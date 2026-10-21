@@ -19,6 +19,7 @@ from core.chat._queued_input import (
     rebuild_after_steering,
 )
 from core.chat._request_history import _prepare_tool_context
+from core.chat._run_state import refresh_run_permissions
 from core.chat._step_outcomes import (
     MAX_IDENTICAL_FAILED_TOOL_CALLS,
     MAX_TOOL_FINALIZATION_VIOLATIONS,
@@ -46,6 +47,7 @@ from core.chat.messages import (
     JsonObject,
     _new_message_id,
 )
+from core.chat.output_files import OutputFileScope
 from core.chat.tool_dispatch import (
     ToolRound,
     _fail_tool_calls_without_dispatch,
@@ -197,6 +199,9 @@ class AgenticProgression:
                 tools = state.tools
                 evaluated_tool_key = None
             run.raise_if_cancelled()
+            # A rule edit since the last round applies to this round's Tool Calls;
+            # steered input may have narrowed the Session's stored ceiling.
+            await refresh_run_permissions(self._dependencies, context, force=delivered)
             # Tool changes are measured once per Run, after steering, and when
             # the Tool registry changed; the notes announcing them join this
             # request's boundary below, so the Tool list itself stays pinned.
@@ -401,12 +406,13 @@ class AgenticProgression:
                 args=run_args,
             )
             workspace = getattr(agent, "workspace", None)
-            output_cwd = (
+            output_scope = OutputFileScope(
                 context.project_cwd
                 if context.project_cwd is not None
                 else Path(workspace)
                 if workspace
-                else None
+                else None,
+                context.permissions,
             )
             tool_dispatch_context = self._model_step.tool_context(
                 context, target, state, removed_tool_names
@@ -488,7 +494,7 @@ class AgenticProgression:
                             prompt_cache_affinity_id=context.prompt_cache_affinity_id,
                             chunk_timeout_seconds=target.chunk_timeout_seconds,
                             stream_draft=context.stream_draft,
-                            output_cwd=output_cwd,
+                            output_scope=output_scope,
                             public_model=target.public_model,
                             provider_id=target.provider_id,
                             recovery=context.recovery,
@@ -519,7 +525,7 @@ class AgenticProgression:
                 except RunInterruptedError as exc:
                     if exc.result is None and interruption_chain:
                         exc.result = _combined_interrupted_result(
-                            interruption_chain, output_cwd=output_cwd
+                            interruption_chain, output_scope=output_scope
                         )
                     raise
                 break
@@ -567,7 +573,7 @@ class AgenticProgression:
                     assistant_message,
                     terminal_outcome=terminal_outcome,
                     messages_for_request=messages_for_request,
-                    output_cwd=output_cwd,
+                    output_scope=output_scope,
                     request_context_usage=request_context_usage,
                     request_estimate=request_estimate,
                     request_tools=tools,
@@ -661,7 +667,7 @@ class AgenticProgression:
                             assistant_message.interruption_cause or "internal",
                             result=_combined_interrupted_result(
                                 interruption_chain,
-                                output_cwd=output_cwd,
+                                output_scope=output_scope,
                             ),
                         )
                     if recovery == "continue":
@@ -670,7 +676,7 @@ class AgenticProgression:
                             raise context.recovery.exhausted(
                                 result=_combined_interrupted_result(
                                     interruption_chain,
-                                    output_cwd=output_cwd,
+                                    output_scope=output_scope,
                                 ),
                             ) from context.recovery.last_error
                         await session.add_note_async(recovery_note or STREAM_RECOVERY_NOTE)

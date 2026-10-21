@@ -9,7 +9,9 @@ import pytest
 
 from core.agents.temporary import TemporaryAgent, TemporaryAgentConfig, TemporaryAgentRegistry
 from core.database import DatabaseUnavailableError
+from core.permissions import normalize_permission_rules
 from core.projects import AgentOverrides, AgentResolutionError, ModelConfigurationError
+from core.projects.projects import ProjectError
 from core.projects.resolver import AgentResolver
 from core.sessions import ChatSessionManager, SessionAddress
 from core.tools.availability import ToolAccess, resolve_tool_access
@@ -234,7 +236,7 @@ async def test_async_temporary_resolution_reads_the_binding_on_the_session_pool(
     )
     threads: dict[str, str] = {}
     resolve_binding = registry.resolve
-    require_project = resolver._require_temporary_project
+    require_project = resolver._temporary_resolution._require_project
 
     def recording_resolve(*args: Any, **kwargs: Any) -> Any:
         threads["binding"] = threading.current_thread().name
@@ -245,7 +247,7 @@ async def test_async_temporary_resolution_reads_the_binding_on_the_session_pool(
         return require_project(*args)
 
     monkeypatch.setattr(registry, "resolve", recording_resolve)
-    monkeypatch.setattr(resolver, "_require_temporary_project", recording_project)
+    monkeypatch.setattr(resolver._temporary_resolution, "_require_project", recording_project)
     try:
         resolved = await resolver.resolve_temporary_agent_async(
             binding.address, generation_id=binding.generation_id
@@ -382,6 +384,55 @@ def test_tool_loading_override_inherits_each_part_it_does_not_set(
     assert inherited == default
     assert switched_off == {"on_demand": False, "always_loaded": ["read"]}
     assert resolver.inherited_tool_loading() == default
+
+
+def test_permission_rules_resolve_each_part_from_override_then_repository_then_default(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    # The repository's own restriction (OpenCode external_directory: deny) applies
+    # without a vBot setting; the override and the defaults fill the other parts.
+    _write_agent(
+        repo, "builder.md", model="openai/gpt-5.2", permission={"external_directory": "deny"}
+    )
+    _project(projects, repo)
+    default = {"write": "anywhere", "commands": "listed", "deny": ["Read({home}/.ssh/**)"]}
+    resolver = _resolver(agents, projects, _openai_configured(), global_permission_rules=default)
+    repository = {"read": "work_area", "write": "work_area"}
+
+    assert resolver.resolve_agent("vbot", "builder").permission_rules == (
+        normalize_permission_rules({**default, **repository})
+    )
+    assert resolver.effective_config("vbot", "builder")["permission_rules"]["source"] == (
+        "repository"
+    )
+    with pytest.raises(ProjectError, match="permission_rules.write"):
+        projects.set_override("vbot", "builder", "permission_rules", {"write": "nowhere"})
+
+    projects.set_override("vbot", "builder", "permission_rules", {"write": "scratch"})
+
+    assert resolver.resolve_agent("vbot", "builder").permission_rules == (
+        normalize_permission_rules({**default, **repository, "write": "scratch"})
+    )
+    effective = resolver.effective_config("vbot", "builder")["permission_rules"]
+    assert effective["source"] == "override"
+    assert effective["parts"] == {
+        "read": "repository",
+        "write": "override",
+        "commands": "global_default",
+        "deny": "global_default",
+    }
+
+    # The Full access preset as an override lifts the repository's and the default's limits.
+    projects.set_override(
+        "vbot",
+        "builder",
+        "permission_rules",
+        {"read": "anywhere", "write": "anywhere", "commands": "any", "web": "any",
+         "allow": [], "deny": []},
+    )  # fmt: skip
+
+    assert resolver.resolve_agent("vbot", "builder").permission_rules is None
+    assert resolver.effective_config("vbot", "builder")["permission_rules"]["value"] is None
 
 
 @pytest.mark.parametrize(

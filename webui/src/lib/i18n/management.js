@@ -811,6 +811,8 @@ export default Object.freeze({
   'projects.team.fromSource': 'from {source}',
   'projects.team.sourceOverride': 'override',
   'projects.team.sourceAgentFile': 'agent file (repo)',
+  'projects.team.sourceRepository': 'repository settings',
+  'projects.team.permissionsFrom': 'Rules from {source}',
   'projects.team.sourceProjectDefault': 'project default',
   'projects.team.sourceGlobalDefault': 'global default',
   'projects.team.overridesTitle': 'Overrides',

@@ -6,6 +6,7 @@ import re
 from itertools import islice
 from pathlib import Path
 
+from core.permissions import PermissionBoundary
 from core.tools._path_suggestions import similar_entries
 
 from . import _shell_hint_common as _common
@@ -49,10 +50,11 @@ def _hint_module_not_found(failure: _Failure) -> str | None:
                 f"package, so it has no submodules. Import '{leaf}' from the module "
                 "that defines it."
             )
-        return _missing_submodule(name, failure.workdir)
+        return _missing_submodule(name, failure.workdir, failure.permissions)
     workdir = failure.workdir
-    if workdir is None or not _in_workdir(name, workdir):
-        below = [] if workdir is None else _in_subdirectories(name, workdir)
+    permissions = failure.permissions
+    if workdir is None or not _in_workdir(name, workdir, permissions):
+        below = [] if workdir is None else _in_subdirectories(name, workdir, permissions)
         if below:
             directory = below[0][1]
             setting = (
@@ -131,16 +133,22 @@ def _hint_script_not_found(failure: _Failure) -> str | None:
     name = missing.name
     parts = name.removesuffix(".py").split(".")
     dotted = missing.parent.joinpath(*parts[:-1], f"{parts[-1]}.py")
-    if name.endswith(".py") and len(parts) > 1 and dotted.is_file():
+    permissions = failure.permissions
+    if (
+        name.endswith(".py")
+        and len(parts) > 1
+        and dotted.is_file()
+        and _readable(dotted, permissions)
+    ):
         found, dots = [dotted], True
     else:
         found = [
             directory / name
             for directory in _subdirectories(missing.parent)
-            if (directory / name).is_file()
+            if (directory / name).is_file() and _readable(directory / name, permissions)
         ] or [
             path
-            for path in similar_entries(missing, kind="files")
+            for path in similar_entries(missing, permissions=permissions, kind="files")
             if path.suffix.casefold() == missing.suffix.casefold()
         ]
         found, dots = found[:_SHOWN_PATHS], False
@@ -183,7 +191,7 @@ def _call_with_script(command: str, missing: Path, workdir: Path, script: str) -
     return None
 
 
-def _missing_submodule(name: str, workdir: Path | None) -> str:
+def _missing_submodule(name: str, workdir: Path | None, permissions: PermissionBoundary) -> str:
     """The hint for a package that has no module of the imported name.
 
     "Create the module" fired when tests imported a teammate's module that had
@@ -201,7 +209,10 @@ def _missing_submodule(name: str, workdir: Path | None) -> str:
             (
                 path
                 for path in (package / f"{leaf}.py", package / leaf)
-                if (workdir / path).is_file() or (path.name == leaf and (workdir / path).is_dir())
+                if _readable(workdir / path, permissions)
+                and (
+                    (workdir / path).is_file() or (path.name == leaf and (workdir / path).is_dir())
+                )
             ),
             None,
         )
@@ -219,7 +230,7 @@ def _missing_submodule(name: str, workdir: Path | None) -> str:
                 f"active import path. Check sys.path and the loaded {parent} package's __file__ "
                 "and __path__; correct import-path entries that select another package."
             )
-        if (workdir / package).is_dir():
+        if (workdir / package).is_dir() and _readable(workdir / package, permissions):
             return (
                 f"Python imported the package '{parent}', but it has no module '{leaf}', and "
                 f"the working directory has no {package.as_posix()}/{leaf}.py. Check the name "
@@ -246,8 +257,16 @@ def _imported_elsewhere(failure: _Failure, error_at: int) -> bool:
     return bool(frames) and frames[-1] in ("<string>", "<stdin>")
 
 
-def _in_workdir(module: str, workdir: Path) -> bool:
-    return (workdir / module).is_dir() or (workdir / f"{module}.py").is_file()
+def _in_workdir(module: str, workdir: Path, permissions: PermissionBoundary) -> bool:
+    package, script = workdir / module, workdir / f"{module}.py"
+    return (package.is_dir() and _readable(package, permissions)) or (
+        script.is_file() and _readable(script, permissions)
+    )
+
+
+def _readable(path: Path, permissions: PermissionBoundary) -> bool:
+    """Whether the Session may read *path*: a hint names no other path."""
+    return permissions.check_path(path, "read") is None
 
 
 # Directory entries of the working directory looked at for a module or script below it.
@@ -271,7 +290,9 @@ def _subdirectories(workdir: Path) -> list[Path]:
     return found
 
 
-def _in_subdirectories(module: str, workdir: Path) -> list[tuple[str, str]]:
+def _in_subdirectories(
+    module: str, workdir: Path, permissions: PermissionBoundary
+) -> list[tuple[str, str]]:
     """A module's file or package directly in subdirectories of *workdir*.
 
     Each as (path shown, its subdirectory), relative to *workdir*. A script piped
@@ -280,9 +301,13 @@ def _in_subdirectories(module: str, workdir: Path) -> list[tuple[str, str]]:
     """
     found: list[tuple[str, str]] = []
     for directory in _subdirectories(workdir):
-        if (directory / f"{module}.py").is_file():
+        if (directory / f"{module}.py").is_file() and _readable(
+            directory / f"{module}.py", permissions
+        ):
             found.append((f"{directory.name}/{module}.py", directory.name))
-        elif (directory / module / "__init__.py").is_file():
+        elif (directory / module / "__init__.py").is_file() and _readable(
+            directory / module, permissions
+        ):
             found.append((f"{directory.name}/{module}/", directory.name))
         if len(found) == _SHOWN_PATHS:
             break

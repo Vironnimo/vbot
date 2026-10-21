@@ -27,6 +27,7 @@ from core.automation._cron_watch import (
     remove_baseline,
     write_baseline,
 )
+from core.permissions import PermissionRulesError
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool, cancel_and_wait
 
@@ -232,11 +233,20 @@ class CronWatcher:
         if checks is None:
             raise WatchCheckError("vBot cannot run watch checks in this process")
         try:
+            ceiling = job.ceiling()
+        except PermissionRulesError as error:
+            raise WatchCheckError(
+                f"The check did not run: the job's permission rules cannot be read ({error})"
+            ) from error
+        try:
             if watch.kind == "command":
                 return await checks.run_command(
-                    watch.target, agent_id=job.agent_id, project_id=job.project_id
+                    watch.target,
+                    agent_id=job.agent_id,
+                    project_id=job.project_id,
+                    ceiling=ceiling,
                 )
-            return await checks.fetch_url(watch.target)
+            return await checks.fetch_url(watch.target, ceiling=ceiling)
         except WatchCheckError:
             raise
         except Exception as error:

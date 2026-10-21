@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, tzinfo
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,7 +19,9 @@ from typing import Any, ClassVar, cast, override
 from core.automation.cron import CronJob, CronService
 from core.calendar import CalendarEvent, CalendarService
 from core.chat import ReplySurface
+from core.permissions import PermissionBoundary
 from core.providers.adapter import tool_result_text
+from core.sessions import SessionAddress
 from core.tools.calendar import CALENDAR_TOOL_NAME, register_calendar_tool
 from core.tools.cron import CRON_TOOL_NAME, register_cron_tool
 from core.tools.tools import ToolContext, ToolRegistry
@@ -53,13 +55,20 @@ class _DispatchedTool:
         *,
         project_id: str | None = None,
         reply_surface: ReplySurface | None = None,
+        permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED,
     ) -> tuple[dict[str, Any], str]:
         """Dispatch like the Tool executor; return the envelope and the text the Model reads.
 
         ``reply_surface`` is where the calling Run answers; without it, no chat.
+        ``permissions`` is the calling Run's boundary.
         """
         return asyncio.run(
-            self.call_async(arguments, project_id=project_id, reply_surface=reply_surface)
+            self.call_async(
+                arguments,
+                project_id=project_id,
+                reply_surface=reply_surface,
+                permissions=permissions,
+            )
         )
 
     async def call_async(
@@ -68,6 +77,7 @@ class _DispatchedTool:
         *,
         project_id: str | None = None,
         reply_surface: ReplySurface | None = None,
+        permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED,
     ) -> tuple[dict[str, Any], str]:
         """:meth:`call` on the running Event Loop."""
         context = ToolContext(
@@ -82,6 +92,7 @@ class _DispatchedTool:
             data_root=self.workspace,
             project_id=project_id,
             reply_surface=reply_surface,
+            permissions=permissions,
         )
         envelope = await dispatch_as_executor(self.registry, context, arguments, self.offered)
         text = str(tool_result_text(json.dumps(envelope, ensure_ascii=False)))
@@ -103,6 +114,8 @@ class CronTool(_DispatchedTool):
     chats: FakeChats
     # Watch checks answer from a script; only a started service runs them.
     checks: FakeChecks
+    # The Parent Sessions of each Sub-Agent Session, nearest first.
+    parents: dict[SessionAddress, list[SessionAddress]] = field(default_factory=dict)
 
     tool_name: ClassVar[str] = CRON_TOOL_NAME
 
@@ -182,7 +195,12 @@ def scheduling_tools(
     cron.bind_webhook_url(WEBHOOK_BASE_URL, "internet")
     registry = ToolRegistry()
     reference_lock = asyncio.Lock()
-    register_cron_tool(registry, cron, reference_lock=reference_lock)
+    parents: dict[SessionAddress, list[SessionAddress]] = {}
+
+    async def ancestors(address: SessionAddress) -> list[SessionAddress]:
+        return parents.get(address, [])
+
+    register_cron_tool(registry, cron, reference_lock=reference_lock, session_ancestors=ancestors)
     register_calendar_tool(registry, calendar, reference_lock=reference_lock, cron_service=cron)
     shared: dict[str, Any] = {
         "registry": registry,
@@ -193,7 +211,13 @@ def scheduling_tools(
     return (
         CalendarTool(**shared, service=calendar, cron=cron),
         CronTool(
-            **shared, service=cron, trigger=trigger, calendar=calendar, chats=chats, checks=checks
+            **shared,
+            service=cron,
+            trigger=trigger,
+            calendar=calendar,
+            chats=chats,
+            checks=checks,
+            parents=parents,
         ),
     )
 

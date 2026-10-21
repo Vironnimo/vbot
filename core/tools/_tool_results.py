@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from core.permissions import PermissionDenied
 from core.tools._tool_definitions import (
     InvalidToolResultError,
     SessionToolUnavailableError,
@@ -103,9 +104,12 @@ def tool_failure_for_exception(tool_name: str, error: Exception) -> JsonObject:
     The error code follows what the exception says about the call's state:
     ``ToolContractError`` refused the call before it had any effect
     (``invalid_arguments``); the registry errors refused it before it ran; an
-    ``InvalidToolResultError`` rejects what a finished handler returned. Every
-    other exception escaped a running handler, so the call's effects are
-    unknown (``tool_execution_error``); it is logged with its traceback.
+    ``InvalidToolResultError`` rejects what a finished handler returned;
+    ``PermissionDenied`` is a Permission Rules refusal raised before any effect
+    (``permission_denied``, retryable only when the check itself failed). Every
+    other exception escaped a running handler, so the call's effects are unknown
+    (``tool_execution_error``);
+    it is logged with its traceback.
     Building the envelope never raises, even for an exception without a message.
     """
     name = model_tool_name(tool_name)
@@ -123,6 +127,12 @@ def tool_failure_for_exception(tool_name: str, error: Exception) -> JsonObject:
         )
     if isinstance(error, ToolNotAllowedError):
         return tool_failure("tool_not_allowed", _error_text(error) or f"Tool not allowed: {name}.")
+    if isinstance(error, PermissionDenied):
+        return tool_failure(
+            "permission_denied",
+            error.refusal.message(tool=name),
+            retryable=error.refusal.retryable,
+        )
     if isinstance(error, InvalidToolResultError):
         return tool_failure(
             "invalid_tool_result",

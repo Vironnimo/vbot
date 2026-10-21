@@ -2,8 +2,11 @@
 
 Shell integration makes a shell mark its prompt (OSC 133 A) and, where the
 shell can, the start of each command line it runs (OSC 133 C), the standard
-marks terminals use to tell a working shell from one waiting for input. The
-Terminal Session reads them as declared signals (``terminal_emulator``).
+marks terminals use to tell a working shell from one waiting for input. Before
+each prompt it reports its working folder (OSC 9;9 from PowerShell and cmd,
+OSC 633 P ``Cwd=`` from bash, zsh and fish). The Terminal Session reads the
+marks as declared signals (``terminal_emulator``) and, for Permission Rules,
+the prompt and folder (``_terminal_shell_state``).
 
 A manual Terminal with a launch command must behave like a normal terminal:
 the shell starts as usual (profile, rc files, PATH), runs the program, and
@@ -43,6 +46,7 @@ import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from core.tools.terminal_backend import (
     WINDOWS_COMMAND_PROCESSOR_OPTIONS,
@@ -50,6 +54,9 @@ from core.tools.terminal_backend import (
     windows_command_processor_line,
     windows_program,
 )
+
+if TYPE_CHECKING:
+    from core.permissions.commands.commands import ShellKind
 
 _POWERSHELL_SHELLS = frozenset({"pwsh", "powershell"})
 _POSIX_RC_SHELLS = frozenset({"bash", "zsh"})
@@ -96,7 +103,9 @@ function global:prompt {
             $line
         }
     }
-    $mark = [string][char]27 + ']133;A' + [char]7
+    $vbotFolder = if ($PWD.Provider.Name -eq 'FileSystem') { $PWD.ProviderPath } else { '' }
+    $mark = [string][char]27 + ']9;9;"' + $vbotFolder + '"' + [char]7
+    $mark += [string][char]27 + ']133;A' + [char]7
     if (-not $global:__vbot_prompt) { return $mark + 'PS ' + $PWD + '> ' }
     $global:LASTEXITCODE = $vbotExitCode
     if ($vbotFailed) { Write-Error 'failure' -ErrorAction Ignore }
@@ -104,21 +113,26 @@ function global:prompt {
 }
 """
 # cmd's PROMPT codes: $e is the escape character.
-_CMD_PROMPT_MARK = "$e]133;A$e\\"
+_CMD_PROMPT_MARK = "$e]9;9;$P$e\\$e]133;A$e\\"
 _BASH_INTEGRATION = """\
-__vbot_prompt_mark() { local __vbot_status=$?; printf '\\033]133;A\\007'; return "$__vbot_status"; }
+__vbot_prompt_mark() {
+    local __vbot_status=$?
+    printf '\\033]633;P;Cwd=%s\\007\\033]133;A\\007' "$PWD"
+    return "$__vbot_status"
+}
 PROMPT_COMMAND="__vbot_prompt_mark${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
 PS0="${PS0}"$'\\033]133;C\\007'
 """
 _ZSH_INTEGRATION = """\
 autoload -Uz add-zsh-hook
-__vbot_prompt_mark() { print -n -- $'\\e]133;A\\a' }
+__vbot_prompt_mark() { print -n -- $'\\e]633;P;Cwd='"$PWD"$'\\a\\e]133;A\\a' }
 __vbot_command_mark() { print -n -- $'\\e]133;C\\a' }
 add-zsh-hook precmd __vbot_prompt_mark
 add-zsh-hook preexec __vbot_command_mark
 """
 _FISH_INTEGRATION = (
-    "function __vbot_prompt_mark --on-event fish_prompt; printf '\\e]133;A\\a'; end; "
+    "function __vbot_prompt_mark --on-event fish_prompt; "
+    "printf '\\e]633;P;Cwd=%s\\a\\e]133;A\\a' \"$PWD\"; end; "
     "function __vbot_command_mark --on-event fish_preexec; printf '\\e]133;C\\a'; end"
 )
 
@@ -173,6 +187,53 @@ def interactive_shell(argv: Sequence[str], *, environment: Mapping[str, str]) ->
     except BaseException:
         shutil.rmtree(scratch, ignore_errors=True)
         raise
+
+
+def integrated_shell_kind(argv: Sequence[str]) -> ShellKind | None:
+    """The command language of *argv* when it starts with vBot's shell integration.
+
+    None for a program, a shell started as given (options beyond plain
+    interactive flags, or bash and zsh on Windows), or fish, whose lines
+    Permission Rules cannot analyze.
+    """
+    if not argv:
+        return None
+    name = _shell_name(argv[0])
+    plain = _PLAIN_SHELL_OPTIONS.get(name)
+    if plain is None or any(option.lower() not in plain for option in argv[1:]):
+        return None
+    if name in _POWERSHELL_SHELLS:
+        return "powershell"
+    if name == "cmd":
+        return "cmd"
+    if os.name == "nt" or name == "fish":
+        return None
+    return "bash"
+
+
+# Shells whose prompt reads command lines; ``starts_shell_prompt``.
+_PROMPT_SHELLS = frozenset(
+    {"sh", "dash", "ash", "ksh", "mksh", "tcsh", "csh", "nu", "elvish", "xonsh", "wsl"}
+)
+_PLAIN_OTHER_SHELL_OPTIONS = frozenset({"-i", "-l", "--login", "--interactive"})
+
+
+def starts_shell_prompt(argv: Sequence[str]) -> bool:
+    """Whether *argv* starts a shell that waits at its prompt for command lines.
+
+    True for a known shell with no options beyond plain interactive flags, with
+    or without vBot's integration (``integrated_shell_kind``); a shell given a
+    command or a script runs that instead.
+    """
+    if not argv:
+        return False
+    name = _shell_name(argv[0])
+    plain = _PLAIN_SHELL_OPTIONS.get(name)
+    if plain is None:
+        if name not in _PROMPT_SHELLS:
+            return False
+        plain = _PLAIN_OTHER_SHELL_OPTIONS
+    return all(option.lower() in plain for option in argv[1:])
 
 
 def shell_launch(

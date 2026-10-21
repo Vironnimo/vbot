@@ -7,6 +7,7 @@
   import InfoHint from '../ui/InfoHint.svelte';
   import Modal from '../ui/Modal.svelte';
   import TextField from '../ui/TextField.svelte';
+  import PermissionRulesEditor from '../permissions/PermissionRulesEditor.svelte';
   import { createAgent } from '$lib/api.js';
   import {
     AGENT_DESCRIPTION_MAX_LENGTH,
@@ -315,6 +316,27 @@
             onValueChange={(selectedValue) => {
               formValues.thinking_effort = selectedValue;
             }}
+          />
+        </FormField>
+
+        <FormField
+          controlId="agent-create-permissions-preset"
+          help={t('permissions.createHelp')}
+        >
+          {#snippet labelContent()}
+            {t('permissions.title')}
+            <InfoHint text={t('permissions.agentDescription')} />
+          {/snippet}
+          <!-- The new Agent's own rules start from a preset; the bases and
+               rules are refined in the Agent editor. -->
+          <PermissionRulesEditor
+            value={formValues.permission_rules}
+            inherited={agentDefaults?.permission_rules ?? null}
+            newAgent
+            compact
+            disabled={isSaving}
+            idPrefix="agent-create-permissions"
+            onChange={(next) => (formValues.permission_rules = next)}
           />
         </FormField>
 

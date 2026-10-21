@@ -19,15 +19,26 @@ from __future__ import annotations
 import copy
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from core.config_validation import JsonDiagnostic
 from core.utils.errors import StorageError
 
+if TYPE_CHECKING:
+    from core.permissions import PermissionRules
+
 # Only literal enumeration of the defaults.agent field names. Every consumer
 # imports this; none may repeat the set.
 AGENT_DEFAULT_FIELDS = frozenset(
-    {"model", "fallback_models", "temperature", "top_p", "thinking_effort", "tool_loading"}
+    {
+        "model",
+        "fallback_models",
+        "temperature",
+        "top_p",
+        "thinking_effort",
+        "tool_loading",
+        "permission_rules",
+    }
 )
 
 # Stable catalog order (matches the historical Settings-path listing).
@@ -38,6 +49,7 @@ AGENT_DEFAULT_FIELD_ORDER = (
     "top_p",
     "thinking_effort",
     "tool_loading",
+    "permission_rules",
 )
 
 # Sampling bounds, shared with the canonical validators in ``settings.py``.
@@ -53,6 +65,13 @@ KIND_MODEL_BINDING_LIST = "model_binding_list"
 KIND_NULLABLE_NUMBER = "nullable_number"
 KIND_NULLABLE_ENUM = "nullable_enum"
 KIND_TOOL_LOADING = "tool_loading"
+KIND_PERMISSION_RULES = "permission_rules"
+
+# Runtime-only stand-in for a stored ``defaults.agent.permission_rules`` that is
+# invalid: the runtime Settings loader keeps it in place of the value, so Agents
+# that inherit the default refuse to run instead of running with full access.
+# No write path accepts it (the stored form is an object).
+INVALID_PERMISSION_RULES = "invalid"
 
 type AgentDefaultValue = str | list[str] | float | dict[str, Any] | None
 
@@ -140,6 +159,16 @@ def _parse_tool_loading(value: Any, label: str) -> dict[str, Any] | None:
     return normalized or None
 
 
+def _parse_permission_rules(value: Any, label: str) -> dict[str, Any]:
+    from core.permissions import normalize_permission_rules, permission_rules_to_dict
+    from core.settings.settings import SettingsValidationError
+
+    try:
+        return permission_rules_to_dict(normalize_permission_rules(value))
+    except ValueError as error:
+        raise SettingsValidationError(f"{label}: {error}") from error
+
+
 def _diagnose_model_binding(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:
     from core.config_validation import add_error
 
@@ -187,6 +216,19 @@ def _diagnose_tool_loading(diagnostics: list[JsonDiagnostic], path: str, value: 
     warn_unknown_fields(diagnostics, path, value, shape, label="tool_loading field")
     try:
         normalize_tool_loading(strip_unknown_fields(value, shape))
+    except ValueError as error:
+        add_error(diagnostics, path, str(error))
+
+
+def _diagnose_permission_rules(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:
+    from core.config_validation import add_error
+    from core.permissions import normalize_permission_rules
+
+    if value is None:
+        return
+    try:
+        # A part this vBot does not know is an error too: it may restrict.
+        normalize_permission_rules(value)
     except ValueError as error:
         add_error(diagnostics, path, str(error))
 
@@ -251,6 +293,17 @@ def _normalize_tool_loading(value: Any) -> dict[str, Any] | None:
     return normalized or None
 
 
+def _normalize_permission_rules(value: Any) -> dict[str, Any] | str:
+    from core.permissions import normalize_permission_rules, permission_rules_to_dict
+
+    if value == INVALID_PERMISSION_RULES:
+        return INVALID_PERMISSION_RULES
+    try:
+        return permission_rules_to_dict(normalize_permission_rules(value))
+    except ValueError as error:
+        raise StorageError(f"Agent default {error}") from error
+
+
 _AGENT_DEFAULT_SPECS: dict[str, AgentDefaultSpec] = {
     "model": AgentDefaultSpec(
         name="model",
@@ -310,6 +363,18 @@ _AGENT_DEFAULT_SPECS: dict[str, AgentDefaultSpec] = {
         parse=_parse_tool_loading,
         diagnose=_diagnose_tool_loading,
         normalize=_normalize_tool_loading,
+    ),
+    "permission_rules": AgentDefaultSpec(
+        name="permission_rules",
+        kind=KIND_PERMISSION_RULES,
+        value_type="object",
+        description=(
+            "Default Permission Rules {read, write, commands, web, allow, deny}; an Agent "
+            "inherits each part it does not set itself. Unset gives full access."
+        ),
+        parse=_parse_permission_rules,
+        diagnose=_diagnose_permission_rules,
+        normalize=_normalize_permission_rules,
     ),
 }
 
@@ -397,6 +462,8 @@ class AgentDefaults:
     top_p: float | None = None
     thinking_effort: str | None = None
     tool_loading: dict[str, Any] | None = None
+    # Stored form, or ``INVALID_PERMISSION_RULES`` when the stored value is invalid.
+    permission_rules: dict[str, Any] | str | None = None
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any] | None) -> AgentDefaults:
@@ -405,6 +472,7 @@ class AgentDefaults:
             return cls()
         fallback_models = data.get("fallback_models")
         tool_loading = data.get("tool_loading")
+        permission_rules = data.get("permission_rules")
         return cls(
             model=data.get("model"),
             fallback_models=list(fallback_models) if fallback_models is not None else None,
@@ -412,6 +480,11 @@ class AgentDefaults:
             top_p=data.get("top_p"),
             thinking_effort=data.get("thinking_effort"),
             tool_loading=copy.deepcopy(dict(tool_loading)) if tool_loading is not None else None,
+            permission_rules=(
+                copy.deepcopy(permission_rules)
+                if isinstance(permission_rules, dict | str)
+                else None
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -429,7 +502,33 @@ class AgentDefaults:
             result["thinking_effort"] = self.thinking_effort
         if self.tool_loading is not None:
             result["tool_loading"] = copy.deepcopy(self.tool_loading)
+        if self.permission_rules is not None:
+            result["permission_rules"] = copy.deepcopy(self.permission_rules)
         return result
+
+    def resolved_permission_rules(self) -> PermissionRules | None:
+        """The default rule set; raises :class:`InvalidPermissionRulesDefaultError` if unusable."""
+        if self.permission_rules is None:
+            return None
+        if self.permission_rules == INVALID_PERMISSION_RULES:
+            raise InvalidPermissionRulesDefaultError()
+        from core.permissions import normalize_permission_rules
+
+        try:
+            # Also refuses a part this vBot does not know, such as one a newer vBot added.
+            return normalize_permission_rules(self.permission_rules)
+        except (TypeError, ValueError) as error:
+            raise InvalidPermissionRulesDefaultError() from error
+
+
+class InvalidPermissionRulesDefaultError(StorageError):
+    """``defaults.agent.permission_rules`` is stored but invalid; inheriting Agents cannot run."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "defaults.agent.permission_rules in settings.json is invalid, so Agents that "
+            "inherit it do not run until it is fixed; `vbot doctor config` names the problem"
+        )
 
 
 def bake_agent_defaults(
@@ -441,6 +540,7 @@ def bake_agent_defaults(
     thinking_effort: str | None,
     tool_loading: Mapping[str, Any] | None,
     defaults: AgentDefaults,
+    permission_rules: PermissionRules | None = None,
 ) -> dict[str, Any]:
     """Compute the fields changed by baking global defaults into one agent.
 
@@ -471,4 +571,17 @@ def bake_agent_defaults(
         inherited = inherit_tool_loading(tool_loading, default_tool_loading)
         if inherited != tool_loading:
             changes["tool_loading"] = inherited
+    if isinstance(defaults.permission_rules, dict):
+        # An invalid default is refused where a Run resolves its Agent
+        # (``ProjectResolver``), so an Agent listing still shows every Agent.
+        from core.permissions import resolve_rule_set
+
+        try:
+            default_rules = defaults.resolved_permission_rules()
+        except InvalidPermissionRulesDefaultError:
+            default_rules = None
+        if default_rules is not None:
+            inherited_rules = resolve_rule_set(permission_rules, default_rules)
+            if inherited_rules != permission_rules:
+                changes["permission_rules"] = inherited_rules
     return changes

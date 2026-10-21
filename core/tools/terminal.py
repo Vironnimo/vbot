@@ -7,9 +7,11 @@ import contextlib
 import json
 from collections.abc import Awaitable, Mapping, Sequence
 from copy import deepcopy
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from core.permissions import CommandChecker, PermissionDenied
 from core.projects import ProjectStore
 from core.sessions import SessionAddress
 from core.tools._terminal_arguments import (
@@ -79,6 +81,15 @@ from ._terminal_definition import (
     TERMINAL_ACTIONS as TERMINAL_ACTIONS,
 )
 from ._terminal_display import _terminal_detail_blocks, _terminal_display_parts
+from ._terminal_permissions import (
+    UnfollowableInput,
+    attach_refused_message,
+    check_input,
+    check_start,
+    may_attach,
+    permission_scope,
+    screen_hidden_note,
+)
 from ._terminal_results import (
     _DELIVERIES_TEXT,
     _PAUSED_TEXT,
@@ -140,12 +151,19 @@ def make_terminal_handler(
     subagents: SubAgentTree | None = None,
     *,
     scratch_areas: ScratchAreas | None = None,
+    command_checker: CommandChecker | None = None,
 ):
     """Create a terminal Tool handler bound to one Terminal Manager."""
 
     async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
         return await _handle_terminal(
-            terminal_manager, projects, subagents, context, arguments, scratch_areas
+            terminal_manager,
+            projects,
+            subagents,
+            context,
+            arguments,
+            scratch_areas,
+            command_checker,
         )
 
     return handler
@@ -158,6 +176,7 @@ async def _handle_terminal(
     context: ToolContext,
     arguments: JsonObject,
     scratch_areas: ScratchAreas | None,
+    command_checker: CommandChecker | None,
 ) -> JsonObject:
     action = arguments["action"]
     terminal_id = arguments.get("terminal_id")
@@ -179,7 +198,7 @@ async def _handle_terminal(
     try:
         if action == "start":
             return await _handle_start(
-                terminal_manager, projects, context, arguments, scratch_areas
+                terminal_manager, projects, context, arguments, scratch_areas, command_checker
             )
         if action == "list":
             return await _handle_list(terminal_manager, subagents, context)
@@ -192,7 +211,7 @@ async def _handle_terminal(
         if action == "wait":
             return await _handle_wait(terminal_manager, context, arguments)
         if action == "input":
-            return await _handle_input(terminal_manager, context, arguments)
+            return await _handle_input(terminal_manager, context, arguments, command_checker)
         if action == "resize":
             return await _handle_resize(terminal_manager, context, arguments)
         return await _handle_kill(terminal_manager, context, arguments)
@@ -283,6 +302,7 @@ async def _handle_start(
     context: ToolContext,
     arguments: JsonObject,
     scratch_areas: ScratchAreas | None,
+    command_checker: CommandChecker | None,
 ) -> JsonObject:
     notes: list[str] = []
     requested_id = arguments.get("terminal_id")
@@ -364,6 +384,14 @@ async def _handle_start(
             pass
         else:
             overlay = scratch_environment(folder)
+    scope = permission_scope(context.permissions)
+    if scope is not None:
+        confined = await asyncio.to_thread(partial(terminal_environment, overlay, confined=True))
+        refused = await check_start(
+            command_checker, context.permissions, argv, cwd=workdir, env=confined
+        )
+        if refused is not None:
+            raise PermissionDenied(refused)
     try:
         started = await terminal_manager.spawn(
             owner,
@@ -374,6 +402,7 @@ async def _handle_start(
             rows=rows,
             origin_run_id=context.run_id,
             execution_owner=context.execution_owner,
+            permission_scope=scope,
         )
     except TerminalLaunchError as error:
         cause = error.__cause__
@@ -467,6 +496,10 @@ def _handle_attach(
 ) -> JsonObject:
     terminal_id = required_string(arguments.get("terminal_id"), field_name="terminal_id")
     owner = _owner(context)
+    if not may_attach(context.permissions, _terminal_info(terminal_manager, terminal_id)):
+        return tool_failure(
+            "permission_denied", attach_refused_message(terminal_id), retryable=False
+        )
     info, changed = terminal_manager.attach(
         terminal_id,
         owner,
@@ -515,6 +548,10 @@ async def _handle_status(
     )
     owner = _owner(context)
     info = _terminal_info(terminal_manager, terminal_id)
+    if not may_attach(context.permissions, info):
+        holders = await _subagent_holders(subagents, owner, [info])
+        facts = {**_terminal_facts(info, owner), **_attachment_fields(info, owner, holders)}
+        return tool_success({**facts, "note": screen_hidden_note()})
     snapshot = await terminal_manager.read(terminal_id, lines=lines, start_line=start_line)
     attached_here = info.attachment == owner
     if attached_here and start_line is None:
@@ -626,6 +663,7 @@ async def _handle_input(
     terminal_manager: TerminalManager,
     context: ToolContext,
     arguments: JsonObject,
+    command_checker: CommandChecker | None,
 ) -> JsonObject:
     terminal_id = required_string(arguments.get("terminal_id"), field_name="terminal_id")
     raw_data = arguments.get("data")
@@ -667,6 +705,17 @@ async def _handle_input(
     info = terminal_manager.terminal(terminal_id, owner)
     prior_attention_revision = info.attention_revision if info.attention is not None else None
     revision_before_input = info.attention_revision
+    checked = await check_input(
+        command_checker,
+        context.permissions,
+        terminal_manager.shell_state(terminal_id, owner),
+        info.shell,
+        data=raw_data,
+        text=text,
+        key=key,
+    )
+    if isinstance(checked, UnfollowableInput):
+        return tool_failure("permission_denied", checked.message(), retryable=False)
     sent = await terminal_manager.send_input(
         terminal_id,
         owner,
@@ -677,6 +726,8 @@ async def _handle_input(
         origin_run_id=context.run_id,
         execution_owner=context.execution_owner,
     )
+    if checked is not None:
+        checked.sent(pasted=bool(sent.get("pasted")))
     if not sent["characters_sent"]:
         return tool_success(
             {
@@ -875,7 +926,7 @@ def _resolve_workdir(
         return context.effective_cwd.resolve()
     if is_project_workdir(workdir_value):
         return project_workdir(projects, workdir_value)
-    return context.resolve_path(workdir_value)
+    return context.resolve_path(workdir_value, access="start_dir")
 
 
 def _owner(context: ToolContext) -> TerminalOwner:
@@ -889,18 +940,26 @@ def register_terminal_tool(
     *,
     subagents: SubAgentTree | None = None,
     scratch_areas: ScratchAreas | None = None,
+    command_checker: CommandChecker | None = None,
 ) -> None:
     """Register the Agent-facing terminal Tool.
 
     *subagents* tells which Sessions descend from the caller, so ``list`` and
     ``status`` name the Sub-Agent that holds a terminal; without it such a
-    terminal shows as attached to another Session.
+    terminal shows as attached to another Session. *command_checker* checks
+    a restricted Session's programs and shell lines (``_terminal_permissions``).
     """
     registry.register(
         TERMINAL_TOOL_NAME,
         TERMINAL_TOOL_DESCRIPTION,
         TERMINAL_TOOL_PARAMETERS,
-        make_terminal_handler(terminal_manager, projects, subagents, scratch_areas=scratch_areas),
+        make_terminal_handler(
+            terminal_manager,
+            projects,
+            subagents,
+            scratch_areas=scratch_areas,
+            command_checker=command_checker,
+        ),
         summary="Drive interactive programs such as REPLs and coding-agent CLIs.",
         family="execution",
         open_input_schema=True,

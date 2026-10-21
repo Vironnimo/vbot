@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest_asyncio
 
+from core.permissions import CommandChecker, PermissionBoundary
 from core.projects import ProjectStore
 from core.storage.temp_files import TemporaryFileManager
 from core.subagents import SubAgentTree
@@ -47,6 +48,7 @@ def make_context(
     session_id: str = "session-a",
     result_persisted_hook: Callable[[Callable[[], None]], None] | None = None,
     offered_tools: Collection[str] | None = None,
+    permissions: PermissionBoundary | None = None,
 ) -> ToolContext:
     """A terminal call's context; *offered_tools* are the Tools the Model was shown."""
     return ToolContext(
@@ -63,6 +65,7 @@ def make_context(
         project_id="project-a",
         result_persisted_hook=result_persisted_hook,
         offered_tools=offered_tools,
+        permissions=PermissionBoundary.UNRESTRICTED if permissions is None else permissions,
     )
 
 
@@ -74,6 +77,7 @@ async def call(
     *,
     subagents: SubAgentTree | None = None,
     scratch_areas: ScratchAreas | None = None,
+    command_checker: CommandChecker | None = None,
 ) -> JsonObject:
     """Run one Agent call the way the Tool executor does.
 
@@ -90,6 +94,7 @@ async def call(
         projects if projects is not None else ProjectStore(context.data_root),
         subagents=subagents,
         scratch_areas=scratch_areas,
+        command_checker=command_checker,
     )
     allowed = sorted({TERMINAL_TOOL_NAME, *(context.offered_tools or ())})
     try:

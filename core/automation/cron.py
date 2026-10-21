@@ -79,6 +79,7 @@ from core.automation._cron_webhooks import (
 from core.calendar import BoundJob, CalendarProjection, CalendarStorageError
 from core.config_validation import JsonDiagnostic
 from core.json_documents import JsonDocumentWriteError, write_json_document
+from core.permissions import PermissionCeiling, PermissionRefusal
 from core.projects import (
     AgentResolutionError,
     ResolutionAgentNotFoundError,
@@ -375,6 +376,7 @@ class CronService:
         project_id: str | None = None,
         delivery: CronDelivery | None = None,
         watch: CronWatch | None = None,
+        permission_ceiling: dict[str, Any] | None = None,
         actor: str = _DEFAULT_ACTOR,
     ) -> CronJob:
         """Create and persist a new cron job.
@@ -386,6 +388,9 @@ class CronService:
         chat must belong to a Channel of the job's Identity Agent. ``watch``
         makes a recurring job run only when the output of its check changed;
         an active job checks it at once (:meth:`await_first_check`).
+        ``permission_ceiling`` is the creating Session's boundary
+        (``PermissionBoundary.to_ceiling_dict(source="cron")``); every fire
+        runs under it.
         """
         if schedule_type != "event" and (
             event_id is not None or event_edge is not None or event_offset_minutes is not None
@@ -420,6 +425,7 @@ class CronService:
                 project_id=project_id,
                 delivery=delivery,
                 watch=watch,
+                permission_ceiling=permission_ceiling,
             )
             self._validate_job(job, validate_references=False)
             self._check_watch_available(job)
@@ -452,13 +458,14 @@ class CronService:
             await settle_before_cancelling(save())
 
         _LOGGER.info(
-            "Cron job created (job=%s agent=%s%s schedule_type=%s status=%s actor=%s)",
+            "Cron job created (job=%s agent=%s%s schedule_type=%s status=%s actor=%s%s)",
             job.id,
             job.agent_id,
             f" project={job.project_id}" if job.project_id else "",
             job.schedule_type,
             job.status,
             actor,
+            " restricted=true" if job.permission_ceiling is not None else "",
         )
         return self._clone_job(job)
 
@@ -740,6 +747,28 @@ class CronService:
         await self._watcher.remove_baseline(job.id)
         if self._started and job.status == "active" and job.watch is not None:
             self._watcher.start_first_check(job.id)
+
+    async def watch_refusal(
+        self,
+        watch: CronWatch,
+        *,
+        agent_id: str,
+        project_id: str | None,
+        permission_ceiling: dict[str, Any] | None,
+    ) -> PermissionRefusal | None:
+        """Whether a job's stored-form *permission_ceiling* refuses *watch*.
+
+        None when it allows it, when there is no ceiling, or when this process
+        runs no checks (``set_watch_checks``), so a check would not run anyway.
+        """
+        if permission_ceiling is None or self._watch_checks is None:
+            return None
+        return await self._watch_checks.permission_refusal(
+            watch,
+            agent_id=agent_id,
+            project_id=project_id,
+            ceiling=PermissionCeiling.from_ceiling_dict(permission_ceiling),
+        )
 
     async def await_first_check(self, job_id: str) -> bool:
         """Wait for the first check of a watch just set on the job to record its outcome.

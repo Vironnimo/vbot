@@ -21,6 +21,7 @@ from core.model_tasks import (
 )
 from core.model_tasks.artifacts import OutputDirectoryError, OutputWriteError
 from core.model_tasks.video import VideoProfile
+from core.permissions import PermissionDenied
 from core.tools._image_inputs import (
     UnusableImageError,
     normalize_generate_music_arguments,
@@ -423,9 +424,14 @@ def _video_frame_paths(context: ToolContext, arguments: JsonObject) -> dict[str,
 def _output_dir(context: ToolContext, arguments: JsonObject, *, default_name: str) -> Path:
     value = optional_string(arguments.get("output_dir"), field_name="output_dir")
     if value:
-        return context.resolve_path(value)
-    root = context.workspace if context.project_id is None else context.effective_cwd
-    return root / default_name
+        return context.resolve_path(value, access="write")
+    # The default is checked like an explicit folder (``image.py``).
+    base = context.workspace if context.project_id is None else context.effective_cwd
+    default = base / default_name
+    refusal = context.permissions.check_path(default, "write")
+    if refusal is not None:
+        raise PermissionDenied(refusal)
+    return default
 
 
 def _artifact_payload(artifact: Any) -> JsonObject:

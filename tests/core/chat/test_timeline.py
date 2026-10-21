@@ -215,6 +215,7 @@ def test_durable_summary_settles_pending_calls_without_changing_completed_result
         ("bash", {"ok": True, "data": {"status": "stopped"}}, None, "cancelled"),
         ("terminal", {"ok": True, "data": {"status": "stopped"}}, None, "success"),
         ("read", {"ok": False, "error": {"code": "missing"}}, None, "failed"),
+        ("read", {"ok": False, "error": {"code": "permission_denied"}}, None, "refused"),
         (
             "apply_patch",
             {"ok": True, "data": {}},

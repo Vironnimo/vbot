@@ -283,6 +283,7 @@ export default Object.freeze({
   'chat.toolStillRunning': 'processes still running',
   'chat.subAgentCommandsRunning': 'commands still running',
   'chat.toolPartial': 'partial',
+  'chat.toolRefused': 'refused by Permission Rules',
   'chat.toolInterrupted': 'interrupted',
   'chat.toolState.preparing': 'Preparing',
   'chat.toolState.preparingHint': 'The Model is still writing this Tool call.',
@@ -293,6 +294,9 @@ export default Object.freeze({
     'Some of its operations failed; the result lists which.',
   'chat.toolState.failed': 'Failed',
   'chat.toolState.cancelled': 'Cancelled',
+  'chat.toolState.refused': 'Refused by Permission Rules',
+  'chat.toolState.refusedHint':
+    'The Agent’s Permission Rules do not allow this call; the result says which limit applied.',
   'chat.toolState.interrupted': 'Interrupted',
   'chat.toolState.interruptedHint':
     'The Run ended before this call returned a result.',

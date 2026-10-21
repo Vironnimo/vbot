@@ -20,6 +20,7 @@ from core.chat import (
 from core.chat._run_state import RequestBuildInputs
 from core.database import write_bootstrap_marker
 from core.model_tasks import TASK_IMAGE_UNDERSTANDING
+from core.permissions import PermissionCeiling, PermissionRules
 from core.projects import (
     AgentOverrides,
     AgentResolutionError,
@@ -175,6 +176,9 @@ class StubAgent:
     workspace: Path | None = None
     root_project_id: str | None = None
     tool_loading: dict[str, Any] | None = None
+    permission_rules: PermissionRules | None = None
+    permission_ceiling: PermissionCeiling | None = None
+    rule_files: tuple[Path, ...] = ()
 
     @property
     def tool_access(self) -> ToolAccess:
@@ -330,8 +334,15 @@ class StubAgentResolver:
 
     def capture_session_settings(self, address: SessionAddress, agent: Any) -> AgentOverrides:
         captured = self.session_overrides(address).capture(agent)
-        self._session_overrides[address] = captured.as_dict()
+        # Like the real resolver, capturing keeps a stored permission ceiling.
+        self._session_overrides[address] = captured.session_metadata().get("agent_overrides", {})
         return captured
+
+    def join_session_ceiling(
+        self, address: SessionAddress, ceiling: PermissionCeiling | None
+    ) -> None:
+        joined = self.session_overrides(address).with_ceiling(ceiling)
+        self._session_overrides[address] = joined.session_metadata().get("agent_overrides", {})
 
     def update_session_overrides(
         self, address: SessionAddress, changes: dict[str, Any]

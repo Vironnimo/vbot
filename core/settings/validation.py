@@ -86,6 +86,7 @@ from core.settings._raw_sections import (
     validate_thinking_effort_diagnostic,
     validate_top_p_diagnostic,
 )
+from core.settings.agent_defaults import INVALID_PERMISSION_RULES
 from core.settings.settings import SettingsValidationError
 
 SettingsDiagnostic = JsonDiagnostic
@@ -181,7 +182,57 @@ def load_runtime_settings_json(
     )
     invalid_keys = {_settings_top_level_key(diagnostic.path) for diagnostic in errors}
     usable = {key: value for key, value in data.items() if key not in invalid_keys}
+    if "defaults" in invalid_keys:
+        defaults = _usable_defaults(data.get("defaults"), errors)
+        if defaults is not None:
+            usable["defaults"] = defaults
     return _settings_fields(usable), errors
+
+
+_PERMISSION_RULES_KEY = "permission_rules"
+
+
+def unusable_settings_fallback(settings_path: str | Path) -> JsonObject:
+    """The Settings a runtime reader uses when ``settings.json`` cannot be used at all.
+
+    Every section falls back to its default except ``defaults.agent.permission_rules``:
+    a file that cannot be read, or whose text names that key, may hold default
+    Permission Rules, and dropping them would give every inheriting Agent full
+    access. They become ``INVALID_PERMISSION_RULES`` instead, so those Agents
+    refuse to run until the file is repaired, while Agents whose own rules set
+    every part keep running.
+    """
+    try:
+        raw: bytes | None = Path(settings_path).read_bytes()
+    except FileNotFoundError:
+        return {}
+    except OSError:
+        raw = None
+    if raw is not None and not any(
+        _PERMISSION_RULES_KEY.encode(encoding) in raw
+        for encoding in ("utf-8", "utf-16-le", "utf-16-be")
+    ):
+        return {}
+    return {"defaults": {"agent": {_PERMISSION_RULES_KEY: INVALID_PERMISSION_RULES}}}
+
+
+def _usable_defaults(defaults: Any, errors: tuple[JsonDiagnostic, ...]) -> JsonObject | None:
+    """Keep the default Permission Rules of an invalid ``defaults`` section.
+
+    The section is left out as a whole, except ``defaults.agent.permission_rules``:
+    dropping it would give inheriting Agents full access. A valid value stays; an
+    invalid one becomes ``INVALID_PERMISSION_RULES``, so those Agents refuse to run.
+    """
+    agent = defaults.get("agent") if isinstance(defaults, dict) else None
+    if not isinstance(agent, dict) or agent.get("permission_rules") is None:
+        return None
+    field_path = "$.defaults.agent.permission_rules"
+    failed = any(
+        item.path == field_path or item.path.startswith((f"{field_path}.", f"{field_path}["))
+        for item in errors
+    )
+    rules = INVALID_PERMISSION_RULES if failed else agent["permission_rules"]
+    return {"agent": {"permission_rules": rules}}
 
 
 def _settings_fields(data: JsonObject) -> JsonObject:

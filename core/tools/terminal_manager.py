@@ -59,6 +59,7 @@ from ._terminal_session import (
     TerminalSession,
     TerminalSessionServices,
 )
+from ._terminal_shell_state import ShellState
 from ._terminal_spawning import TerminalSessionFactory
 from ._terminal_state import (
     TERMINAL_ACTIVITY_QUIET_SECONDS,
@@ -345,9 +346,14 @@ class TerminalManager:
         origin_run_id: str,
         group_id: str | None = None,
         execution_owner: RunExecutionOwner | None = None,
+        permission_scope: frozenset[str] | None = None,
     ) -> TerminalInfo:
         """Start one Agent-owned program behind PTY/ConPTY with its exact argv; an
-        interactive shell also gets shell integration (``_terminal_launch``)."""
+        interactive shell also gets shell integration (``_terminal_launch``).
+
+        *permission_scope*: the Permission Rules layers of a restricted Session,
+        kept on the terminal; its environment is confined.
+        """
         _validate_owner(owner)
         if not argv or not argv[0]:
             raise ValueError("Terminal command must not be empty")
@@ -356,7 +362,12 @@ class TerminalManager:
         session = await self._spawn(
             owner,
             argv,
-            launch=TerminalLaunch(command=argv[0], arguments=tuple(argv[1:]), cwd=cwd),
+            launch=TerminalLaunch(
+                command=argv[0],
+                arguments=tuple(argv[1:]),
+                cwd=cwd,
+                permission_scope=permission_scope,
+            ),
             env=env,
             columns=columns,
             rows=rows,
@@ -538,6 +549,10 @@ class TerminalManager:
     def terminal(self, terminal_id: str, owner: TerminalOwner) -> TerminalInfo:
         """Return a Terminal Session attached to the exact vBot Session."""
         return self._attached(terminal_id, owner).info()
+
+    def shell_state(self, terminal_id: str, owner: TerminalOwner) -> ShellState | None:
+        """The live prompt state of an attached terminal's integrated shell, else None."""
+        return self._attached(terminal_id, owner).shell_state
 
     def attach(
         self,

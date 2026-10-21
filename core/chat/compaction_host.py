@@ -13,6 +13,7 @@ from core.chat._request_builder import (
 )
 from core.chat._request_epoch import _finalize_compaction_checkpoint
 from core.chat._request_targets import _resolve_request_image_limit, _resolved_model_reference
+from core.chat._run_permissions import run_permission_boundary
 from core.chat._run_state import (
     ChatLoopDependencies,
     RequestBuildInputs,
@@ -268,6 +269,15 @@ class ChatCompactionHost:
             subagent_tool_withheld = subagent_session and await self.run_transform(
                 withholds_subagent_tool, self._dependencies, session.address
             )
+            # The next epoch's pin shows the boundary this Session's Runs have.
+            permissions = await run_permission_boundary(
+                self._dependencies,
+                run,
+                agent,
+                address=session.address,
+                project_root=Path(prompt_project.cwd) if prompt_project is not None else None,
+                skill_registry=skill_registry,
+            )
             inputs = RequestBuildInputs(
                 replay_policy=adapter.reasoning_replay_policy(model_id),
                 reasoning_scope_model=model_reference,
@@ -293,6 +303,7 @@ class ChatCompactionHost:
                 goal_session=await self.run_transform(
                     has_open_goal, self._dependencies.sessions, session.address
                 ),
+                permissions=permissions.boundary,
                 list_announced_tools=adapter.list_announced_tools(model_id),
                 tool_route_on_demand_tools=adapter.on_demand_tools(model_id),
             )

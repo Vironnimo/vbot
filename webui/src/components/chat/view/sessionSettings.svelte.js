@@ -180,6 +180,8 @@ export function createSessionSettings(context) {
     const { projectId: teamProjectId } = parseAgentAddress(shown.agentAddress);
     const base = {
       kind: shown.kind,
+      agentAddress: shown.agentAddress,
+      sessionId: shown.sessionId,
       catalog,
       catalogFailed,
       defaultModel: defaults.model,

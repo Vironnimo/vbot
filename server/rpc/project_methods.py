@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any
 
 from core.archive import ArchiveSubjectInUseError
+from core.permissions import normalize_permission_rules, permission_rules_to_dict
 from core.projects import (
     Project,
     cwd_exists,
@@ -594,6 +595,11 @@ def _validate_override_value(
             return normalize_tool_loading(value)
         except ValueError as exc:
             raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+    if field == "permission_rules":
+        try:
+            return permission_rules_to_dict(normalize_permission_rules(value))
+        except ValueError as exc:
+            raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.value: {exc}") from exc
     try:
         return validate_thinking_effort(value, label="params.value", allow_none=False)
     except SettingsValidationError as exc:
@@ -1023,6 +1029,10 @@ def _team_member_response(resolver: Any, member: AgentProfile, project: Project)
         # The On-demand Tools setting the agent inherits for each part its
         # ``tool_loading`` override does not set, both parts complete.
         "tool_loading_default": resolver.inherited_tool_loading(),
+        # The Permission Rules the agent inherits for each part its
+        # ``permission_rules`` override does not set: the repository's, then the
+        # shared default; null for full access.
+        "permission_rules_default": resolver.inherited_permission_rules(member),
         # Per run field, the effective value + winning tier (override / agent /
         # project_default / global_default / null), computed from the already-scanned
         # member so the team listing never re-scans per member.

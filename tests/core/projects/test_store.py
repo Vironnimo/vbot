@@ -614,16 +614,33 @@ def test_clearing_the_last_known_override_field_keeps_unknown_fields(
     assert store.get("vbot").overrides == {"builder": {}}
 
 
-def test_project_written_by_a_newer_vbot_is_never_overwritten(data_dir: Path, repo: Path) -> None:
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        pytest.param({"format_version": 2}, "written by a newer vBot", id="newer-format"),
+        # A rule part this vBot does not know may restrict: the Team member never
+        # runs on the rest without it, and no write drops it.
+        pytest.param(
+            {"overrides": {"builder": {"permission_rules": {"read": "work_area", "mcp": "on"}}}},
+            'permission_rules has no part "mcp"',
+            id="unknown-permission-rule-part",
+        ),
+    ],
+)
+def test_project_written_by_a_newer_vbot_is_never_overwritten(
+    data_dir: Path, repo: Path, changes: dict[str, object], message: str
+) -> None:
     store = ProjectStore(data_dir)
     store.create("vbot", "vBot", repo)
     config_path = data_dir / "projects" / "vbot" / "project.json"
     payload = json.loads(config_path.read_text("utf-8"))
-    payload["format_version"] = 2
+    payload.update(changes)
     original = json.dumps(payload)
     config_path.write_text(original, encoding="utf-8")
 
-    with pytest.raises(ProjectError, match="written by a newer vBot"):
+    with pytest.raises(ProjectError, match=message):
+        store.get("vbot")
+    with pytest.raises(ProjectError, match=message):
         store.set_override("vbot", "builder", "model", "openai/gpt-5")
 
     assert config_path.read_text(encoding="utf-8") == original

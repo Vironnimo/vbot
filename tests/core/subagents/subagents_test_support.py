@@ -24,6 +24,7 @@ from core.agents import AgentNotFoundError
 from core.chat import ChatMessage, ChatSessionManager
 from core.chat.messages import SubAgentMessage
 from core.database import write_bootstrap_marker
+from core.permissions import PermissionBoundary, PermissionCeiling
 from core.projects import (
     AgentOverrides,
     AgentResolver,
@@ -189,6 +190,11 @@ class FakeAgentResolver:
     async def session_working_project_async(self, target: SessionAddress) -> str | None:
         return await self._overrides.session_working_project_async(target)
 
+    def join_session_ceiling(
+        self, target: SessionAddress, ceiling: PermissionCeiling | None
+    ) -> None:
+        self._overrides.join_session_ceiling(target, ceiling)
+
 
 @dataclass
 class Turn:
@@ -320,6 +326,7 @@ class SubAgentHarness:
         delegation_bindings: dict[str, str | int] | None = None,
         agent_model: str | None = None,
         agent_thinking_effort: str | None = None,
+        permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED,
     ) -> ToolContext:
         session = session or self.parent
         # Chat grants message_parent to Sub-Agent Sessions; the Tool itself checks the link.
@@ -339,6 +346,7 @@ class SubAgentHarness:
             working_project_id=working_project_id,
             agent_model=agent_model,
             agent_thinking_effort=agent_thinking_effort,
+            permissions=permissions,
             session_tool_grants=grants,
             emit_hook=self._record_event,
             cancellation_hook=cancellation_hook,

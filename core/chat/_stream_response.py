@@ -6,7 +6,6 @@ import asyncio
 import time
 from collections.abc import Callable
 from dataclasses import replace
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from core.chat._output_speed import STREAM_TIMING_FIELD
@@ -24,6 +23,7 @@ from core.chat.events import (
     _exception_to_error_kind,
 )
 from core.chat.messages import InterruptionCause, JsonObject
+from core.chat.output_files import OutputFileScope
 from core.chat.recovery import (
     IncompleteResponseError,
     normalize_interruption_cause,
@@ -134,7 +134,7 @@ async def consume_stream_response(
     *,
     public_model: str,
     can_restart: bool,
-    output_cwd: Path | None,
+    output_scope: OutputFileScope,
     chunk_timeout_seconds: float | None,
     request_context: dict[str, Any] | None,
     stream_draft: StreamDraft | None,
@@ -272,7 +272,7 @@ async def consume_stream_response(
                 accumulator,
                 run,
                 message_id=message_id,
-                output_cwd=output_cwd,
+                output_scope=output_scope,
             )
             if action is StreamRecoveryAction.FAIL:
                 return replace(step, failure=exc)
@@ -301,7 +301,7 @@ async def consume_stream_response(
                 interruption_cause=interruption_cause,
                 recovery="continue",
                 recovery_error=exc,
-                output_cwd=output_cwd,
+                output_scope=output_scope,
                 message_id=message_id,
             )
         elif action is StreamRecoveryAction.INTERRUPT:
@@ -323,7 +323,7 @@ async def consume_stream_response(
                     run,
                     interruption_cause=interruption_cause,
                     recovery="interrupt",
-                    output_cwd=output_cwd,
+                    output_scope=output_scope,
                     message_id=message_id,
                 )
             raise RunInterruptedError(interruption_cause) from exc
@@ -338,7 +338,7 @@ async def consume_stream_response(
                         accumulator,
                         run,
                         interruption_cause=normalize_interruption_cause(exc),
-                        output_cwd=output_cwd,
+                        output_scope=output_scope,
                         message_id=message_id,
                     ),
                     failure=exc,
@@ -370,7 +370,7 @@ async def consume_stream_response(
                 accumulator,
                 run,
                 interruption_cause=("user" if run.cancel_reason == "user" else "internal"),
-                output_cwd=output_cwd,
+                output_scope=output_scope,
                 message_id=message_id,
             )
         else:
@@ -397,7 +397,7 @@ async def consume_stream_response(
             accumulator,
             run,
             message_id=message_id,
-            output_cwd=output_cwd,
+            output_scope=output_scope,
         )
         return replace(step, failure=exc)
     except BaseException:
@@ -431,10 +431,10 @@ async def consume_stream_response(
             ),
             recovery="none" if run.cancel_requested else "continue",
             recovery_note=OUTPUT_INTEGRITY_RECOVERY_NOTE,
-            output_cwd=output_cwd,
+            output_scope=output_scope,
             message_id=message_id,
         )
-    assistant_message = _with_assistant_output_files(assistant_message, cwd=output_cwd)
+    assistant_message = _with_assistant_output_files(assistant_message, scope=output_scope)
     output_timing = accumulator.output_timing
     if output_timing is not None:
         # Only a complete response has a speed; the step's preparation turns
@@ -459,7 +459,7 @@ def _finalize_after_started_tools(
     run: Run,
     *,
     message_id: str | None,
-    output_cwd: Path | None,
+    output_scope: OutputFileScope,
 ) -> _AssistantStep:
     """Keep a stream that broke after some of its Tool Calls started.
 
@@ -477,7 +477,7 @@ def _finalize_after_started_tools(
         reasoning_timing=fields.reasoning_timing,
         message_id=message_id,
     )
-    assistant_message = _with_assistant_output_files(assistant_message, cwd=output_cwd)
+    assistant_message = _with_assistant_output_files(assistant_message, scope=output_scope)
     _emit_streaming_assistant_events(run, assistant_message)
     return _AssistantStep(
         message=assistant_message,
@@ -492,7 +492,7 @@ def _finalize_interrupted_partial(
     run: Run,
     *,
     interruption_cause: InterruptionCause,
-    output_cwd: Path | None,
+    output_scope: OutputFileScope,
     recovery: Literal["none", "continue", "interrupt"] = "none",
     recovery_note: str | None = None,
     recovery_error: Exception | None = None,
@@ -526,7 +526,7 @@ def _finalize_interrupted_partial(
         interruption_cause=interruption_cause,
         message_id=message_id,
     )
-    assistant_message = _with_assistant_output_files(assistant_message, cwd=output_cwd)
+    assistant_message = _with_assistant_output_files(assistant_message, scope=output_scope)
     _emit_streaming_assistant_events(run, assistant_message, allow_after_cancel=True)
     return _AssistantStep(
         message=assistant_message,

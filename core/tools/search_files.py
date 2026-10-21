@@ -14,12 +14,14 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
+from core.permissions import PermissionBoundary
 from core.tools._search_arguments import (
     interpret_search_call as interpret_search_call,
 )
 from core.tools._search_arguments import (
     normalize_search_arguments as normalize_search_arguments,
 )
+from core.tools._search_confinement import CONFINED_NOTE, confine_flags
 from core.tools._search_definition import (
     HELP_EXAMPLES as HELP_EXAMPLES,
 )
@@ -297,7 +299,9 @@ def _list_directories(
     bases = [root for root in roots if root.is_dir()]
     directories: dict[str, Path] = {}
     for root in bases:
-        for path in _walk_directories(root, skipped, depth, follow, execution.budget):
+        for path in _walk_directories(
+            root, skipped, depth, follow, execution.budget, execution.permissions
+        ):
             key = os.path.normcase(path)
             if holding is None or key in holding:
                 directories.setdefault(key, path)
@@ -344,13 +348,19 @@ def _matching_names(execution: SearchExecution, query: SearchQuery, names: list[
 
 
 def _walk_directories(
-    root: Path, skipped: set[str], depth: int | None, follow: bool, budget: SearchBudget
+    root: Path,
+    skipped: set[str],
+    depth: int | None,
+    follow: bool,
+    budget: SearchBudget,
+    permissions: PermissionBoundary,
 ) -> Iterator[Path]:
     """Yield the directories below root that ripgrep's walker enters.
 
     Links, Windows junctions included, are entered only with --follow, as by
     ripgrep; a link back to a directory being walked is not entered again.
-    Unreadable directories are left out, since ripgrep already warned about them.
+    Unreadable directories are left out, since ripgrep already warned about them,
+    and so are those the permission rules refuse to read.
     """
     pending = [(root, 0, frozenset({_identity(root)}))]
     while pending and budget.keep_going():
@@ -359,7 +369,11 @@ def _walk_directories(
             continue
         try:
             with os.scandir(directory) as entries:
-                children = sorted(entries, key=lambda entry: entry.name, reverse=True)
+                children = sorted(
+                    permissions.readable_entries(directory, entries),
+                    key=lambda entry: entry.name,
+                    reverse=True,
+                )
         except OSError:
             continue
         for child in children:
@@ -750,8 +764,9 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
         if query.mode == "reference":
             text = execution.reference_text(query.reference_args)
             return tool_success({"content": text})
+        confine_flags(query, cwd, context.permissions)
         try:
-            roots = _resolve_roots(query, cwd)
+            roots = _resolve_roots(query, cwd, context.permissions)
         except OSError as error:
             target = path_label(Path(error.filename), cwd) if error.filename else "the search paths"
             return tool_failure(
@@ -760,11 +775,15 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
                 "Check access to this path and retry.",
             )
         context.record_worked_paths(*roots.paths)
-        missing = _missing_warnings(query, roots, cwd, context.offers, arguments.get("args"))
+        missing = _missing_warnings(
+            query, roots, cwd, context.offers, context.permissions, arguments.get("args")
+        )
         if not roots.paths:
             return tool_failure("path_not_found", _nothing_searched(missing, roots, query))
-        _directory_globs(query, roots.paths, cwd)
+        _directory_globs(query, roots.paths, cwd, context.permissions)
         outcome = _search(execution, query, roots.paths)
+        if execution.confined:
+            query.notes.append(CONFINED_NOTE)
     except (SearchArgumentError, ToolContractError, ValueError) as error:
         return tool_failure("invalid_arguments", str(error))
     except SearchRefusedError as error:

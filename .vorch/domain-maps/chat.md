@@ -58,7 +58,7 @@ A Session is the persisted conversation container; a Run is one active execution
 
 ## Agent-facing text
 
-This domain owns the Compaction checkpoint guidance (`core/chat/messages.py::COMPACTION_CHECKPOINT_GUIDANCE`), the steering reminder and interruption texts of Run execution, the reply-surface reminders and the Command texts. Before you change, add or delete a sentence of them, read `chat/agent-facing-text.md`: it records why each sentence exists or names the supplement that does. Update its row for every sentence you change and add one for every sentence you add.
+This domain owns the Compaction checkpoint guidance, the steering reminder and interruption texts of Run execution, the reply-surface reminders and the Command texts; permission texts: `permissions/agent-facing-text.md`. Before you change, add or delete a sentence of them, read `chat/agent-facing-text.md`: it records why each sentence exists or names the supplement that does. Update its row for every sentence you change and add one for every sentence you add.
 
 ## References
 

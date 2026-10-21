@@ -18,6 +18,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 from core.storage.layout import DataDirectoryLayout
+from core.storage.temp_files import artifact_owner
 from core.tools import ToolContext
 from core.utils.ids import write_id_file
 
@@ -249,11 +250,16 @@ def resized(image: Image.Image, size: tuple[int, int]) -> Image.Image:
 
 
 def publish_image(context: ToolContext, image: Image.Image) -> Path:
-    """Attach *image* to the Tool Result for the Model and show it to the user."""
+    """Attach *image* to the Tool Result for the Model and show it to the user.
+
+    The file lies in the calling Session's own temporary-file folder, which a
+    restricted Session may read.
+    """
     stream = io.BytesIO()
     image.save(stream, format="PNG", compress_level=_PNG_COMPRESS_LEVEL)
     raw = stream.getvalue()
-    directory = DataDirectoryLayout(context.data_root).temporary / IMAGE_CATEGORY
+    owner = artifact_owner(context.project_id, context.agent_id, context.session_id)
+    directory = DataDirectoryLayout(context.data_root).temporary / IMAGE_CATEGORY / owner
     path = write_id_file(directory, "shot", ".png", raw)
     context.result_media.append(
         {

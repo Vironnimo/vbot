@@ -462,7 +462,7 @@ async def test_launch_failure_is_reported_and_releases_capacity(
         if (
             factory.failing
             and failure_phase == "log"
-            and path.parent == logs
+            and logs in path.parents
             and mode.startswith("a")
         ):
             raise launch_error
@@ -487,10 +487,10 @@ async def test_launch_failure_is_reported_and_releases_capacity(
             assert result == tool_failure(code, message, retryable=False)
         assert terminal_manager.list_terminals() == []
         assert factory.adapters == []
-        for path in logs.iterdir():
+        for path in logs.rglob("*"):
             os.utime(path, (0, 0))
         temporary_files.sweep()
-        assert list(logs.iterdir()) == []
+        assert [path for path in logs.rglob("*") if path.is_file()] == []
 
         factory.failing = False
         recovered = await call(terminal_manager, context, arguments)

@@ -37,11 +37,8 @@ def _received_post_ids(data: dict[str, Any]) -> set[str]:
 
 async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str, Any]:
     """Probe actual registered Swarm contracts and canonical receipt effects in isolation."""
-    from core.agents.temporary import (
-        TemporaryAgentConfig,
-        TemporaryAgentRegistry,
-        TemporaryExecutionGroups,
-    )
+    from core.agents.temporary import TemporaryAgentConfig, TemporaryAgentRegistry
+    from core.agents.temporary_execution import TemporaryExecutionGroups
     from core.chat import ChatMessage
     from core.database import write_bootstrap_marker
     from core.extensions import ExtensionRegistrationIdentity, ExtensionRegistry

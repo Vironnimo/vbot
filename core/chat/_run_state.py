@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from core.chat._effort_epoch import EffortState
 from core.chat._prompt_block_epoch import PromptBlockPin
+from core.chat._run_permissions import RunPermissions, run_permission_boundary
 from core.chat._step_outcomes import _ToolProgress
 from core.chat._stream_draft import StreamDraft
 from core.chat._tool_epoch import ToolChange, ToolEpochView
@@ -27,6 +28,7 @@ from core.chat.messages import (
 from core.chat.recovery import RecoveryBudget
 from core.chat.usage import RequestContextUsage
 from core.chat.wire_shaping import RequestImageBudget
+from core.permissions import PermissionBoundary
 from core.projects import (
     FolderInstructions,
     resolve_prompt_project,
@@ -200,6 +202,12 @@ class ChatLoopDependencies:
 
     # Called when a persisted user input switches a Sub-Agent's answer destination.
     subagent_reply_to_user: Callable[[SessionAddress, str], None] | None = None
+    # The vBot server's own port, which restricted Runs may not reach on loopback;
+    # ``None`` outside a server.
+    server_port: Callable[[], int | None] | None = None
+    # Blocking: the further names and addresses that reach it on that port when it
+    # listens beyond loopback (``BoundaryContext.own_hosts``).
+    server_hosts: Callable[[], tuple[str, ...]] | None = None
     # Whether a Sub-Agent Session has a use for the ``subagent`` Tool (one at the
     # nesting limit has none); asked only for Sub-Agent Sessions. Blocking.
     # ``None`` offers the Tool to every Session whose Agent allows it.
@@ -354,6 +362,10 @@ class _RunExecutionContext:
     subagent_tool_withheld: bool = False
     # The Session has an open goal, which grants ``update_goal`` for this Run.
     goal_session: bool = False
+    # Every Tool Call of this Run checks its accesses against this boundary.
+    permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED
+    # What ``permissions`` was built from; ``None`` keeps it for the whole Run.
+    permission_sources: RunPermissions | None = None
     request_state: _RequestState | None = None
     # Finds the folder instruction files of the Working Project's subfolders;
     # ``None`` without a Working Project or with its folder instructions off.
@@ -594,6 +606,9 @@ class RequestBuildInputs:
     subagent_tool_withheld: bool = False
     # The Session has an open goal and grants ``update_goal``.
     goal_session: bool = False
+    # The Run's Permission Boundary; a restricted one shows the ``core:permissions``
+    # block, pinned per prompt epoch like the temporary Session blocks.
+    permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED
     # Start a new prompt epoch's Tool pin and dynamic block pin from the current
     # Tools and blocks instead of reading the Session's pins; the caller persists
     # them (Compaction commit).
@@ -646,6 +661,7 @@ class RequestBuildInputs:
             subagent_session=context.subagent_session,
             subagent_tool_withheld=context.subagent_tool_withheld,
             goal_session=context.goal_session,
+            permissions=context.permissions,
             list_announced_tools=not target.unlisted_tool_calls,
             list_all_tools=target is not context.primary_target,
         )
@@ -712,6 +728,31 @@ def _resolve_working_project(
     """Read the Working Project's cwd and prompt Project. Blocking."""
     project_cwd = requests.resolve_project_cwd(working_project_id) if resolve_cwd else None
     return project_cwd, resolve_prompt_project(dependencies.projects, working_project_id)
+
+
+async def refresh_run_permissions(
+    dependencies: ChatLoopDependencies, context: _RunExecutionContext, *, force: bool = False
+) -> None:
+    """Rebuild the Run's boundary when one of its rule sources changed, or on *force*.
+
+    Called before each Tool round, so a rule edit applies to the next Tool
+    Calls; the ``core:permissions`` block follows at the next Run as a
+    ``[prompt-block-change]`` note. A rebuild that fails ends the Run.
+    """
+    current = context.permission_sources
+    if current is None or not (force or await current.changed()):
+        return
+    agent = await resolve_run_agent(dependencies, context.run, context.request)
+    rebuilt = await run_permission_boundary(
+        dependencies,
+        context.run,
+        agent,
+        address=current.address,
+        project_root=current.project_root,
+        skill_registry=context.skill_registry,
+    )
+    context.permission_sources = rebuilt
+    context.permissions = rebuilt.boundary
 
 
 async def resolve_run_agent(
@@ -909,6 +950,14 @@ async def create_run_execution_context(
         goal_session = await _CHAT_TRANSFORM_WORKERS.run(
             has_open_goal, dependencies.sessions, session_address
         )
+        permissions = await run_permission_boundary(
+            dependencies,
+            run,
+            agent,
+            address=session_address,
+            project_root=Path(prompt_project.cwd) if prompt_project is not None else None,
+            skill_registry=skill_registry,
+        )
         session.activated_skill_contents(session_snapshot.active_messages)
         context = _RunExecutionContext(
             run=run,
@@ -931,6 +980,8 @@ async def create_run_execution_context(
             subagent_session=subagent_session,
             subagent_tool_withheld=subagent_tool_withheld,
             goal_session=goal_session,
+            permissions=permissions.boundary,
+            permission_sources=permissions,
             folder_instructions=folder_instructions,
             # The Session's newest measurement still anchors this Run's Context.
             context_usage=RequestContextUsage.resume(

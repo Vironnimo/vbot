@@ -17,11 +17,12 @@ import os
 import re
 import tempfile
 import unicodedata
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
+from core.tools._search_confinement import Confinement, permitted, scope_confinement
 from core.tools._search_query import SearchQuery
 from core.tools.file_state import os_error_reason
 
@@ -198,7 +199,12 @@ _PATTERN_ERRORS = ("regex parse error", "PCRE2: error compiling pattern")
 _NOT_FOUND = frozenset({2, 3}) if os.name == "nt" else frozenset({errno.ENOENT})
 
 
-def _judge(outcome: NativeOutcome, scope: Scope, cwd: Path) -> ScanResult:
+def _judge(
+    outcome: NativeOutcome,
+    scope: Scope,
+    cwd: Path,
+    shown: Callable[[str], bool] = lambda _path: True,
+) -> ScanResult:
     """Turn ripgrep's exit status and diagnostics into a refusal or warnings.
 
     ripgrep refuses a query before it searches: it fails, prints nothing and
@@ -207,6 +213,7 @@ def _judge(outcome: NativeOutcome, scope: Scope, cwd: Path) -> ScanResult:
     could not read are counted and named in English (``unreadable``), and every
     other diagnostic becomes a warning, so a search with results never fails
     over them. ripgrep exits with 2 after any such diagnostic, matches or not.
+    A diagnostic about a path ``shown`` refuses is left out.
     """
     result = ScanResult(interrupted=outcome.interrupted)
     if outcome.interrupted:
@@ -222,6 +229,8 @@ def _judge(outcome: NativeOutcome, scope: Scope, cwd: Path) -> ScanResult:
         text = message.removeprefix("rg: ")
         match = _IO_ERROR.match(message)
         if match is not None:
+            if not shown(match["path"]):
+                continue
             code = int(match["code"])
             if code in _NOT_FOUND and not os.path.lexists(scope.cwd / match["path"]):
                 # Deleted after the walk listed it, such as a SQLite journal: nothing to read.
@@ -236,6 +245,8 @@ def _judge(outcome: NativeOutcome, scope: Scope, cwd: Path) -> ScanResult:
         # Other problems with one path, such as an invalid line in an ignore file,
         # name that path first; a refused query names none.
         path, separator, problem = text.partition(": ")
+        if separator and path and not shown(path):
+            continue
         if separator and path and os.path.lexists(scope.cwd / path):
             reason = problem.splitlines()[0].rstrip(".") if problem else "unknown problem"
             result.warnings.append(f"ripgrep reported for {_label(path, scope, cwd)}: {reason}.")
@@ -498,6 +509,47 @@ class SearchExecution:
         self.context = context
         self.budget = budget
         self.cwd = cwd
+        self.permissions = context.permissions
+        self._confinements: dict[tuple[Path, tuple[str, ...]], Confinement] = {}
+        # Whether the permission rules left something below a searched folder out.
+        self.confined = False
+
+    def _confinement(self, scope: Scope) -> Confinement:
+        """The excluding globs and path filter of ``scope`` under the Run's rules."""
+        key = (scope.cwd, tuple(scope.paths))
+        if key not in self._confinements:
+            self._confinements[key] = scope_confinement(scope, self.permissions)
+            self.confined = self.confined or self._confinements[key].filtered
+        return self._confinements[key]
+
+    def _judged(self, outcome: NativeOutcome, scope: Scope) -> ScanResult:
+        """Judge one run; a confined run reports only paths the rules permit to read."""
+        if not self._confinement(scope).filtered:
+            return _judge(outcome, scope, self.cwd)
+        return _judge(
+            outcome, scope, self.cwd, lambda path: permitted(self.permissions, scope, path)
+        )
+
+    def _readable(self, paths: list[Path], scope: Scope) -> list[Path]:
+        if not self._confinement(scope).filtered:
+            return paths
+        return [path for path in paths if self.permissions.check_path(path, "read") is None]
+
+    def _filtered(self, result: ScanResult, scope: Scope) -> ScanResult:
+        """Leave out the entries and ignored paths of ``result`` the rules refuse to read.
+
+        The count of searched files leaves out the refused files ripgrep searched.
+        """
+        if self._confinement(scope).filtered:
+            kept = [
+                entry for entry in result.entries if permitted(self.permissions, scope, entry[0])
+            ]
+            if result.files_searched is not None:
+                removed = len(result.entries) - len(kept)
+                result.files_searched = max(0, result.files_searched - removed)
+            result.entries = kept
+            result.ignored = self._readable(result.ignored, scope)
+        return result
 
     def _collect(
         self, arguments: list[str], scope: Scope, terminator: bytes
@@ -558,19 +610,20 @@ class SearchExecution:
         # and ignored_scan walks for them then.
         arguments = [
             *_base_arguments(query, scope),
+            *self._confinement(scope).globs,
             *selector,
             *_pattern_arguments(patterns),
             "--",
             *scope.paths,
         ]
         data, outcome, stopped_by = self._collect(arguments, scope, terminator)
-        result = _judge(outcome, scope, self.cwd)
+        result = self._judged(outcome, scope)
         result.stopped_by = stopped_by
         if query.mode == "files_without_match":
             result.entries = [(path, 0) for path in data.split(b"\0")[:-1] if path]
         else:
             result.entries, result.files_searched = _parse_counts(data)
-        return result
+        return self._filtered(result, scope)
 
     def list_scan(
         self, query: SearchQuery, scope: Scope, *, directories: bool = False
@@ -596,9 +649,10 @@ class SearchExecution:
             # the listing; with types, ignored_scan walks once more without them instead.
             report = _without_file_types(selection) == selection
         debug = ["--debug"] if report else []
-        arguments = [*selection, *debug, "--files", "--null", "--", *scope.paths]
+        confined = self._confinement(scope).globs
+        arguments = [*selection, *confined, *debug, "--files", "--null", "--", *scope.paths]
         data, outcome, stopped_by = self._collect(arguments, scope, b"\0")
-        result = _judge(outcome, scope, self.cwd)
+        result = self._judged(outcome, scope)
         result.stopped_by = stopped_by
         result.entries = [(path, 0) for path in data.split(b"\0")[:-1] if path]
         if report:
@@ -606,7 +660,7 @@ class SearchExecution:
             result.ignored = _walk_paths(outcome.ignored, scope)
         else:
             result.ignored = self.ignored_scan(query, scope)
-        return result
+        return self._filtered(result, scope)
 
     def ignored_scan(self, query: SearchQuery, scope: Scope) -> list[Path]:
         """Return the paths ignore files exclude from the walk of the query's files.
@@ -617,7 +671,10 @@ class SearchExecution:
         directories and apply after ignore files, so the walk leaves them out and
         skips the same paths. Its output is bounded like a listing's.
         """
-        selection = _without_file_types(_base_arguments(query, scope))
+        selection = [
+            *_without_file_types(_base_arguments(query, scope)),
+            *self._confinement(scope).globs,
+        ]
         arguments = [*selection, "--debug", "--files", "--null", "--", *scope.paths]
         outcome = NativeOutcome()
         records = native_lines(
@@ -636,7 +693,7 @@ class SearchExecution:
                 size += len(record)
                 if listed > MAX_ENTRIES or size > MAX_SCAN_BYTES:
                     break
-        return _walk_paths(outcome.ignored, scope)
+        return self._readable(_walk_paths(outcome.ignored, scope), scope)
 
     def match_names(self, query: SearchQuery, patterns: list[str], names: list[str]) -> set[str]:
         """Return the names the patterns match, by ripgrep and with the query's matching flags.
@@ -729,7 +786,7 @@ class SearchExecution:
                     raise
                 path = Path(os.path.normpath(scope.cwd / os.fsdecode(current_path)))
                 raise SearchBoundError("record", path) from None
-            judged = _judge(outcome, scope, self.cwd)
+            judged = self._judged(outcome, scope)
             problems.warnings.extend(judged.warnings)
             problems.unreadable.extend(judged.unreadable)
             problems.unreadable_unnamed += judged.unreadable_unnamed

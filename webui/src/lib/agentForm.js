@@ -6,6 +6,10 @@ import {
 } from './agentTargetOptions.js';
 import { parseAgentAddress } from './agentAddress.js';
 import { normalizeToolAccess, normalizeToolLoading } from './toolAccess.js';
+import {
+  normalizePermissionRules,
+  permissionRulesComplete,
+} from './permissionRules.js';
 import { asText, isPlainObject } from './values.js';
 
 export const AGENT_FORM_MODE_CREATE = 'create';
@@ -63,6 +67,7 @@ const EDITABLE_AGENT_FIELDS = Object.freeze([
   'compaction_policy',
   'librarian_enabled',
   'tool_loading',
+  'permission_rules',
 ]);
 
 const AGENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
@@ -104,6 +109,8 @@ export function createAgentFormValues(agent = {}) {
     // The Agent's own On-demand Tools parts (raw, like the run fields); null
     // while it inherits both.
     tool_loading: normalizeToolLoading(raw.tool_loading),
+    // The Agent's own Permission Rules (raw); null while it has none.
+    permission_rules: normalizePermissionRules(raw.permission_rules),
   };
 }
 
@@ -138,6 +145,10 @@ export function normalizeAgentForm(values, options = {}) {
   if (normalized.description.length > AGENT_DESCRIPTION_MAX_LENGTH) {
     errors.description = 'too_long';
   }
+  // A rule still being typed has no pattern; the server would refuse it.
+  if (!permissionRulesComplete(normalized.permission_rules)) {
+    errors.permission_rules = 'incomplete';
+  }
 
   const sampling = {};
   for (const field of Object.keys(SAMPLING_RANGES)) {
@@ -155,6 +166,8 @@ export function normalizeAgentForm(values, options = {}) {
     includeEmptySampling: mode === AGENT_FORM_MODE_EDIT,
     // An edit sends null to turn On-demand Tools off; a new Agent omits it.
     includeEmptyToolLoading: mode === AGENT_FORM_MODE_EDIT,
+    // An edit sends null to remove the own Permission Rules.
+    includeEmptyPermissionRules: mode === AGENT_FORM_MODE_EDIT,
   };
   let payload = buildAgentPayload(normalized, sampling, payloadOptions);
 
@@ -292,6 +305,7 @@ function normalizeValues(values = {}) {
       : null,
     librarian_enabled: values.librarian_enabled !== false,
     tool_loading: normalizeToolLoading(values.tool_loading),
+    permission_rules: normalizePermissionRules(values.permission_rules),
   };
 }
 
@@ -357,6 +371,13 @@ function buildAgentPayload(normalized, sampling, options = {}) {
 
   if (normalized.tool_loading !== null || options.includeEmptyToolLoading) {
     payload.tool_loading = normalized.tool_loading;
+  }
+
+  if (
+    normalized.permission_rules !== null ||
+    options.includeEmptyPermissionRules
+  ) {
+    payload.permission_rules = normalized.permission_rules;
   }
 
   if (normalized.name || options.includeEmptyName) {

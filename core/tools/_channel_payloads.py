@@ -13,6 +13,7 @@ from core.channels import (
 )
 from core.channels.adapter import FileData
 from core.extensions import InteractionButton
+from core.permissions import PermissionBoundary
 from core.tools._channel_send_arguments import (
     REFUSAL_PREFIX,
 )
@@ -59,14 +60,16 @@ def _build_file_data(
                 "computer. Send the file's local path, or put the link in message."
             )
         path_text = local_path
-        resolved_path = context.resolve_path(path_text)
+        resolved_path = context.resolve_path(path_text, access="read")
         if resolved_path.is_dir():
             raise ChannelSendRefusedError(
                 f'{REFUSAL_PREFIX}file_paths "{path_text}" is a folder; list the files in it '
                 "one by one."
             )
         if not resolved_path.is_file():
-            raise ChannelSendRefusedError(_missing_file(path_text, resolved_path))
+            raise ChannelSendRefusedError(
+                _missing_file(path_text, resolved_path, context.permissions)
+            )
 
         # Reject oversize files by their on-disk size before reading, so a large
         # file never gets loaded into memory just to be turned away.
@@ -95,9 +98,9 @@ def _build_file_data(
     return files
 
 
-def _missing_file(path_text: str, resolved_path: Path) -> str:
+def _missing_file(path_text: str, resolved_path: Path, permissions: PermissionBoundary) -> str:
     text = f'{REFUSAL_PREFIX}file_paths "{path_text}" does not exist ({resolved_path}).'
-    similar = similar_entries(resolved_path, kind="files", limit=3)
+    similar = similar_entries(resolved_path, permissions=permissions, kind="files", limit=3)
     if similar:
         base = Path(path_text).parent
         names = ", ".join(f'"{(base / entry.name).as_posix()}"' for entry in similar)

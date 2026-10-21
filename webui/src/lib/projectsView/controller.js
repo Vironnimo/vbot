@@ -16,6 +16,10 @@ import {
 import { scheduleAutosave } from '../autosave.js';
 import { t } from '../i18n.js';
 import { shouldApplyReloadNow } from '../resourceInvalidation.js';
+import {
+  normalizePermissionRules,
+  permissionRulesComplete,
+} from '../permissionRules.js';
 import { normalizeToolAccess, normalizeToolLoading } from '../toolAccess.js';
 import {
   emptyScanSkills,
@@ -705,6 +709,7 @@ export function createProjectsController({
         compaction_policy: null,
         tool_access: { mode: 'all' },
         tool_loading: null,
+        permission_rules: null,
       }
     );
   }
@@ -716,7 +721,12 @@ export function createProjectsController({
       ...state.overrideDrafts,
       [agentId]: {
         ...overrideDraft(agentId),
-        [field]: field === 'tool_loading' ? normalizeToolLoading(value) : value,
+        [field]:
+          field === 'tool_loading'
+            ? normalizeToolLoading(value)
+            : field === 'permission_rules'
+              ? normalizePermissionRules(value)
+              : value,
       },
     };
     state.editError = '';
@@ -765,6 +775,9 @@ export function createProjectsController({
     if (field === 'tool_loading') {
       return normalizeToolLoading(draft.tool_loading);
     }
+    if (field === 'permission_rules') {
+      return normalizePermissionRules(draft.permission_rules);
+    }
     return draft.thinking_effort;
   }
 
@@ -788,6 +801,9 @@ export function createProjectsController({
     if (field === 'tool_loading') {
       return normalizeToolLoading(draft.tool_loading) !== null;
     }
+    if (field === 'permission_rules') {
+      return normalizePermissionRules(draft.permission_rules) !== null;
+    }
     return typeof draft.thinking_effort === 'string';
   }
 
@@ -798,6 +814,12 @@ export function createProjectsController({
       const saved = seedTeamOverrideDraft(member);
       return Object.keys(saved).flatMap((field) => {
         if (JSON.stringify(draft[field]) === JSON.stringify(saved[field]))
+          return [];
+        // A rule still being typed has no pattern; it waits until it does.
+        if (
+          field === 'permission_rules' &&
+          !permissionRulesComplete(draft[field])
+        )
           return [];
         return [
           {
@@ -856,6 +878,10 @@ export function createProjectsController({
     const draft = overrideDraft(agentId);
     if (field === 'tool_loading') {
       return normalizeToolLoading(draft.tool_loading) === null;
+    }
+    // No own rules: the member inherits every part again.
+    if (field === 'permission_rules') {
+      return normalizePermissionRules(draft.permission_rules) === null;
     }
     return (
       (field === 'temperature' || field === 'top_p') &&

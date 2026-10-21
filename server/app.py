@@ -231,6 +231,7 @@ def create_app(
             app,
             app_runtime,
             server_bind=resolved_server_bind,
+            server_hosts=access_service.server_hosts,
             log_viewer=await build_log_viewer(app_runtime.storage.data_dir),
             file_delivery=file_delivery,
         )

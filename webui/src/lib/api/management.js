@@ -82,6 +82,62 @@ export function updateAgent(params = {}, options = {}) {
   return rpc('agent.update', params, options);
 }
 
+// Normalizes a candidate Permission Rules set without saving it: its problems,
+// the preset it matches, what it inherits and a preview. `agentId` (an Agent
+// address, `agent@project` for a Team member) previews for that Agent's new
+// Sessions; `newAgent` is the rule set of an Agent being created, which
+// inherits the shared default; without either it is the shared default.
+export function validatePermissionRules(
+  permissionRules,
+  { agentId = '', newAgent = false } = {},
+  options = {},
+) {
+  const params = { permission_rules: permissionRules ?? null };
+  if (agentId) params.agent_id = agentId;
+  else if (newAgent) params.new_agent = true;
+  return rpc('permissions.validate', params, options);
+}
+
+// The limits the Runs of a Session work under; `{restricted: false}` for full
+// access. Without `sessionId` it describes a new Session of `agentId` working
+// in `workingProjectId` (undefined: the Agent's default Project; null: its
+// Workspace).
+export function getSessionPermissions(
+  { agentId, sessionId = '', workingProjectId } = {},
+  options = {},
+) {
+  requireNonEmptyString(
+    agentId,
+    'Agent id must be a non-empty string',
+    'permissions.session',
+  );
+  const params = { agent_id: agentId };
+  if (sessionId) params.session_id = sessionId;
+  else if (workingProjectId !== undefined)
+    params.working_project_id = workingProjectId;
+  return rpc('permissions.session', params, options);
+}
+
+// Remove the limits a Session inherited from the Session that started it or a
+// scheduled job; its later Runs work under the Agent's own rules only.
+export function clearSessionCeiling({ agentId, sessionId } = {}, options = {}) {
+  requireNonEmptyString(
+    agentId,
+    'Agent id must be a non-empty string',
+    'permissions.clear_session_ceiling',
+  );
+  requireNonEmptyString(
+    sessionId,
+    'Session id must be a non-empty string',
+    'permissions.clear_session_ceiling',
+  );
+  return rpc(
+    'permissions.clear_session_ceiling',
+    { agent_id: agentId, session_id: sessionId },
+    options,
+  );
+}
+
 export function renameAgent(id, newId, options = {}) {
   requireNonEmptyString(
     id,

@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+from core.permissions import PermissionDenied, PermissionRefusal
 from core.tools import (
     ToolCall,
     ToolContext,
@@ -59,7 +60,7 @@ async def test_tool_paths_expand_home_without_retargeting_literal_names(tmp_path
     seen = []
 
     def probe(context: ToolContext, arguments: JsonObject) -> JsonObject:
-        seen.append(context.resolve_path(spelling))
+        seen.append(context.resolve_path(spelling, access="display"))
         return tool_success({})
 
     registry.register("probe", "Probe paths.", {"type": "object"}, probe)
@@ -91,7 +92,7 @@ async def test_handler_context_carries_the_run_configuration(tmp_path: Path) -> 
         context.on_cancel(lambda: None)
         seen.update(
             effective_cwd=context.effective_cwd,
-            resolved=context.resolve_path("src/main.py"),
+            resolved=context.resolve_path("src/main.py", access="display"),
             run_cancelled=context.is_cancelled(),
             call_cancelled=context.was_cancelled_by_user(),
         )
@@ -423,6 +424,15 @@ async def test_exact_provider_contract_flows_to_dispatch_validation() -> None:
 # --- Handler outcomes -----------------------------------------------------------
 
 
+_REFUSAL = PermissionRefusal(
+    access="read",
+    target="/outside/a.txt",
+    reason="not_permitted",
+    base="work_area",
+    allowed=("/project",),
+)
+
+
 def _unknown_state(cause: str) -> str:
     return (
         f"probe failed while running: {cause} It is unknown how much of the call took effect. "
@@ -465,6 +475,13 @@ def _unknown_state(cause: str) -> str:
             tool_failure("tool_not_allowed", "Tool not allowed: probe."),
             False,
             id="registry-refusal-without-message",
+        ),
+        pytest.param(
+            "handler",
+            PermissionDenied(_REFUSAL),
+            tool_failure("permission_denied", _REFUSAL.message(tool="probe"), retryable=False),
+            False,
+            id="permission-refusal",
         ),
         pytest.param(
             "handler",

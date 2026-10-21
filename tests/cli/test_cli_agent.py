@@ -25,7 +25,12 @@ def agent_payload(agent_id: str = "coder") -> dict[str, Any]:
         "librarian_enabled": True,
         "tool_access": {"mode": "all"},
         "tool_loading": {"on_demand": True, "always_loaded": ["read"]},
-        "config": {"tool_loading": {"always_loaded": ["read"]}},
+        "config": {
+            "tool_loading": {"always_loaded": ["read"]},
+            "permission_rules": {"deny": ["Read(.env)"]},
+        },
+        "permission_rules": {"read": "work_area", "write": "work_area", "deny": ["Read(.env)"]},
+        "permission_rules_default": {"read": "work_area", "write": "work_area"},
         "allowed_skills": ["debugging"],
         "excluded_skills": ["pdf"],
         "current_session_id": "session-one",
@@ -75,6 +80,10 @@ def test_agent_show_prints_every_agent_field(rpc: FakeRpc, run_cli: RunCli) -> N
         'tool_access: {"mode":"all"}',
         'tool_loading: {"always_loaded":["read"],"on_demand":true}',
         'tool_loading_own: {"always_loaded":["read"]}',
+        "permissions: work-dir (own rules over the shared default)",
+        'permission_rules: {"deny":["Read(.env)"],"read":"work_area","write":"work_area"}',
+        'permission_rules_own: {"deny":["Read(.env)"]}',
+        'permission_rules_default: {"read":"work_area","write":"work_area"}',
         "allowed_skills: debugging",
         "excluded_skills: pdf",
         "current_session_id: session-one",
@@ -96,6 +105,8 @@ def test_agent_show_prints_every_agent_field(rpc: FakeRpc, run_cli: RunCli) -> N
 
 def test_agent_create_sends_the_given_fields(rpc: FakeRpc, run_cli: RunCli) -> None:
     rpc.reply("agent.create", {"id": "writer"})
+    note = "Bash(git push:*) was saved as Shell(git push *)."
+    rpc.reply("permissions.validate", {"notes": [note]})
 
     code, out, _err = run_cli(
         "agent", "create", "writer", "Writer",
@@ -104,9 +115,14 @@ def test_agent_create_sends_the_given_fields(rpc: FakeRpc, run_cli: RunCli) -> N
         "--tool-access-mode", "selected",
         "--tool-allow", "read_file",
         "--allowed-skills", "debugging",
+        "--permissions", "work-dir-read-only",
+        "--deny-rule", "Bash(git push:*)",
     )  # fmt: skip
 
     assert code == 0
+    rules = {"read": "work_area", "write": "scratch", "deny": ["Bash(git push:*)"]}
+    # A new agent has no rules to keep, so nothing is read first; the saved rules are
+    # checked afterwards for what the server rewrote.
     assert rpc.calls == [
         (
             "agent.create",
@@ -116,11 +132,15 @@ def test_agent_create_sends_the_given_fields(rpc: FakeRpc, run_cli: RunCli) -> N
                 "description": "Drafts texts",
                 "model": "openai/gpt-5.2",
                 "tool_access": {"mode": "selected", "allowed": ["read_file"]},
+                "permission_rules": rules,
                 "allowed_skills": ["debugging"],
             },
-        )
+        ),
+        ("permissions.validate", {"permission_rules": rules, "agent_id": "writer"}),
     ]
-    assert "writer" in out
+    lines = out.splitlines()
+    assert "writer" in lines[0]
+    assert lines[1] == f"Note: {note}"
 
 
 LIBRARIAN = {
@@ -285,17 +305,41 @@ def test_agent_create_confirms_the_saved_agent(
             {"tool_loading": None},
             id="tools-on-demand-removed",
         ),
+        # A JSON rule set replaces the own rules, so nothing is read first.
+        pytest.param(
+            ("--permissions", '{"web":"listed"}', "--allow-rule", "Web(docs.python.org)"),
+            {"permission_rules": {"web": "listed", "allow": ["Web(docs.python.org)"]}},
+            id="permission-rules-json",
+        ),
+        # Full access is the explicit full set: it overrides a restrictive shared default.
+        pytest.param(
+            ("--permissions", "full-access"),
+            {"permission_rules": {
+                "read": "anywhere", "write": "anywhere", "commands": "any", "web": "any",
+                "allow": [], "deny": [],
+            }},
+            id="permissions-full-access",
+        ),
+        pytest.param(
+            ("--clear-permissions",),
+            {"permission_rules": None},
+            id="permissions-cleared",
+        ),
     ],
 )  # fmt: skip
 def test_agent_update_sends_only_the_given_changes(
     rpc: FakeRpc, run_cli: RunCli, options: tuple[str, ...], changes: dict[str, Any]
 ) -> None:
     rpc.reply("agent.update", {"id": "coder"})
+    rpc.reply("permissions.validate", {"notes": []})
 
     code, out, _err = run_cli("agent", "update", "coder", *options)
 
     assert code == 0
-    assert rpc.calls == [("agent.update", {"id": "coder", **changes})]
+    assert rpc.calls[0] == ("agent.update", {"id": "coder", **changes})
+    # Only rule strings can be rewritten: a preset alone needs no check afterwards.
+    rules = changes.get("permission_rules") or {}
+    assert rpc.methods[1:] == (["permissions.validate"] if rules.get("allow") else [])
     assert "coder" in out
 
 
@@ -336,6 +380,16 @@ def test_agent_update_sends_only_the_given_changes(
             ("--always-loaded",),
             ("--always-loaded requires --tools-on-demand",),
             id="always-loaded-without-switch",
+        ),
+        pytest.param(
+            ("--clear-permissions", "--allow-rule", "Read(docs)"),
+            ("--clear-permissions", "--allow-rule"),
+            id="clear-with-rules",
+        ),
+        pytest.param(
+            ("--permissions", "full-access", "--deny-rule", "Read(.env)"),
+            ("work-dir", "JSON object"),
+            id="full-access-with-rules",
         ),
     ],
 )
@@ -473,3 +527,39 @@ def test_agent_reorder_suggests_a_close_match_for_an_unknown_id(
         "available agents: assistant, researcher",
     ):
         assert text in out
+
+
+def test_a_preset_and_added_rules_keep_the_agents_own_rules(rpc: FakeRpc, run_cli: RunCli) -> None:
+    own = {"commands": "listed", "allow": ["Shell(npm test)"], "deny": ["Read(.env)"]}
+    rpc.reply("agent.get", agent_payload() | {"config": {"permission_rules": own}})
+    rpc.reply("agent.update", {"id": "coder"})
+    rpc.reply("permissions.validate", {"notes": []})
+
+    code, _out, _err = run_cli(
+        "agent", "update", "coder",
+        "--permissions", "work_dir",
+        "--allow-rule", "Shell(npm run lint)",
+        "--deny-rule", "Read(secrets/**)",
+    )  # fmt: skip
+
+    assert code == 0
+    assert rpc.params("agent.update") == {
+        "id": "coder",
+        "permission_rules": {
+            "read": "work_area",
+            "write": "work_area",
+            "allow": ["Shell(npm test)", "Shell(npm run lint)"],
+            "deny": ["Read(.env)", "Read(secrets/**)"],
+        },
+    }
+
+
+def test_an_unknown_permission_preset_is_a_usage_error(
+    rpc: FakeRpc, run_cli: RunCli, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit) as done:
+        run_cli("agent", "update", "coder", "--permissions", "everything")
+
+    assert done.value.code == 2
+    assert rpc.calls == []
+    assert "Use full-access, work-dir or work-dir-read-only" in capsys.readouterr().err

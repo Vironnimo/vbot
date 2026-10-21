@@ -8,8 +8,9 @@ import os
 from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
+from core.permissions import PermissionBoundary, PermissionDenied
 from core.runs import RunExecutionOwner, RunKind
 from core.skills.policy import SkillPackageRef
 from core.tools._display_diff import (
@@ -96,6 +97,8 @@ ToolWorkedPathsHook = Callable[[str, Sequence[Path]], None]
 # (tool_call_id, tool_name, payload) -> payload_id. Chat stages the payload and
 # persists it with this call's Tool Result in the same Session transaction.
 ToolResultPayloadHook = Callable[[str, str, Any], str]
+# What a Tool does with a path it resolves; see ``ToolContext.resolve_path``.
+type PathResolveAccess = Literal["read", "write", "start_dir", "display"]
 ToolHandler = Callable[["ToolContext", JsonObject], JsonObject | Awaitable[JsonObject]]
 
 
@@ -153,6 +156,12 @@ class ToolContext:
     # The Session is linked to a Parent Agent (a Sub-Agent Session): it uses only
     # the Secrets bound to or passed into it, none granted to its Agent.
     subagent_session: bool = False
+    # The Run's Permission Boundary (``core.permissions``): every access a Tool
+    # makes for the Agent is checked against it before any effect. Callers
+    # outside Runs keep full access.
+    permissions: PermissionBoundary = field(
+        default=PermissionBoundary.UNRESTRICTED, repr=False, compare=False
+    )
     # The admitted Run's reply destination, unaffected by another chat using the
     # same Session. Runtime-only; never supplied by Model arguments.
     reply_surface: ReplySurface | None = None
@@ -265,8 +274,20 @@ class ToolContext:
         """
         return self.cwd if self.cwd is not None else self.workspace
 
-    def resolve_path(self, path: str | Path, *, follow_final_link: bool = True) -> Path:
+    def resolve_path(
+        self,
+        path: str | Path,
+        *,
+        access: PathResolveAccess,
+        follow_final_link: bool = True,
+    ) -> Path:
         """Resolve one user-supplied path against this call's working directory.
+
+        ``access`` says what the call does with the path: ``read``, ``write`` or
+        ``start_dir`` (a process starts there) are checked against
+        :attr:`permissions` and raise :class:`~core.permissions.PermissionDenied`
+        before anything touches the target; ``display`` (a path only shown, or one
+        whose access another check covers) is never checked.
 
         ``follow_final_link=False`` resolves only the parent directory, so a final
         symbolic link or junction names the link entry itself (as Delete or Move
@@ -287,6 +308,10 @@ class ToolContext:
         if str(spelling).startswith("~") and (os.name != "nt" or candidate.parts[0] == "~"):
             candidate = candidate.expanduser()
         target = candidate if candidate.is_absolute() else self.effective_cwd / candidate
+        if access != "display" and self.permissions.restricted:
+            refusal = self.permissions.check_path(target, access, base=self.effective_cwd)
+            if refusal is not None:
+                raise PermissionDenied(refusal)
         if follow_final_link or target.name in {"", ".", ".."}:
             return target.resolve()
         return target.parent.resolve() / target.name
@@ -638,6 +663,10 @@ class ToolExecutionConfig:
     run_kind: RunKind | None = None
     # See ``ToolContext.subagent_session``.
     subagent_session: bool = False
+    # See ``ToolContext.permissions``.
+    permissions: PermissionBoundary = field(
+        default=PermissionBoundary.UNRESTRICTED, repr=False, compare=False
+    )
     reply_surface: ReplySurface | None = None
     allowed_tools: Sequence[str] | None = None
     emit_hook: ToolEmitHook | None = None

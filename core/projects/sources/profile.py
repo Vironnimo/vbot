@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Literal
 
+from core.permissions import PermissionRules
+
 type TranslationStatus = Literal["applied", "translated", "not_supported", "overridden"]
 
 
@@ -53,6 +55,14 @@ class AgentProfile:
     skill_rules: tuple[AgentTargetRule, ...] = ()
     translations: tuple[Translation, ...] = ()
     unavailable_reason: str | None = None
+    # Permission Rules translated from the repository's own permission settings;
+    # ``None`` when the source names none (a vBot override or the defaults apply).
+    permission_rules: PermissionRules | None = None
+    # Repository files besides ``source_path`` this profile is read from (shared
+    # settings, a referenced prompt file), also candidates that do not exist
+    # yet such as ``.claude/settings.local.json``: a restricted Session of the
+    # member may read them where its rules allow but never change them.
+    rule_files: tuple[Path, ...] = ()
 
     @property
     def status(self) -> str:

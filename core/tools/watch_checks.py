@@ -22,6 +22,16 @@ address is allowed, local services included: the check runs what the user's
 Agent set up, as its shell commands do. An HTML page is reduced to its main
 text as web_fetch extracts it; other text is decoded as a browser would. A
 status outside 2xx and content that is not text fail the check.
+
+Permission Rules. A job a restricted Session created or changed keeps that
+Session's boundary as its ceiling (``CronJob.permission_ceiling``), and every
+check applies it: the command is checked as a host-shell line in the job's
+working directory (``CommandChecker``) and runs in the confined environment;
+the URL is fetched through the public-HTTP guard (``fetch_public``: public
+addresses only, every redirect hop revalidated and checked with ``check_url``)
+instead of the open GET above. A refused check fails with the refusal as its
+error. ``permission_refusal`` gives the same verdict to the ``cron`` Tool before
+it saves a watch.
 """
 
 from __future__ import annotations
@@ -29,17 +39,30 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import Awaitable, Callable, Sequence
+from functools import partial
 from pathlib import Path
 from typing import Any, Protocol
 
 import httpx
 
 from core.agents import default_workspace_dir
-from core.automation.cron import WatchCheckError
+from core.automation.cron import CronWatch, WatchCheckError
+from core.permissions import (
+    CommandChecker,
+    PermissionBoundary,
+    PermissionCeiling,
+    PermissionDenied,
+    PermissionRefusal,
+)
 from core.tools._command_launch import PipeCommandProcess, launch_pipe_process
-from core.tools._public_http import _decoded
+from core.tools._public_http import PublicFetchError, _decoded, fetch_public
 from core.tools.process_tree import ProcessTreeTracker, track_process_tree
-from core.tools.shell import HostShellMissingError, HostShellStart, host_shell_start
+from core.tools.shell import (
+    HOST_SHELL_KIND,
+    HostShellMissingError,
+    HostShellStart,
+    host_shell_start,
+)
 from core.tools.shell_environment import unattended_command_environment
 from core.tools.web_fetch import is_html_page, is_textual_content_type, looks_binary
 from core.utils.logging import get_logger
@@ -66,6 +89,9 @@ _WORKERS = BoundedWorkerPool(name="watch-checks", max_workers=2)
 _LOGGER = get_logger("tools.watch_checks")
 
 Launch = Callable[..., Awaitable[PipeCommandProcess]]
+# The boundary of a job's ceiling for a check of the job's Agent and Project
+# (no Agent: a URL check); blocking.
+CeilingBoundary = Callable[[PermissionCeiling, str | None, str | None], PermissionBoundary]
 
 
 class _Agents(Protocol):
@@ -88,6 +114,8 @@ class WatchCheckRunner:
         launch: Launch = launch_pipe_process,
         tracker: ProcessTreeTracker = track_process_tree,
         transport: httpx.AsyncBaseTransport | None = None,
+        command_checker: CommandChecker | None = None,
+        ceiling_boundary: CeilingBoundary | None = None,
     ) -> None:
         self._agents = agents
         self._projects = projects
@@ -95,12 +123,50 @@ class WatchCheckRunner:
         self._launch = launch
         self._tracker = tracker
         self._transport = transport
+        self._checker = command_checker
+        self._ceiling_boundary = ceiling_boundary
 
-    async def run_command(self, command: str, *, agent_id: str, project_id: str | None) -> str:
+    async def permission_refusal(
+        self,
+        watch: CronWatch,
+        *,
+        agent_id: str,
+        project_id: str | None,
+        ceiling: PermissionCeiling | None,
+    ) -> PermissionRefusal | None:
+        """The refusal of *watch* under a job's *ceiling*, or None (also without one).
+
+        A command whose working directory is not available yet is left to its
+        first check, which reports that.
+        """
+        if ceiling is None:
+            return None
+        try:
+            if watch.kind == "url":
+                return (await self._boundary(ceiling, None, None)).check_url(watch.target)
+            workdir = await self._workdir(agent_id, project_id)
+            boundary = await self._boundary(ceiling, agent_id, project_id)
+        except WatchCheckError:
+            return None
+        return await self._command_refusal(watch.target, workdir, boundary)
+
+    async def run_command(
+        self,
+        command: str,
+        *,
+        agent_id: str,
+        project_id: str | None,
+        ceiling: PermissionCeiling | None = None,
+    ) -> str:
         """Run ``command`` in the job's working directory; its output."""
         workdir = await self._workdir(agent_id, project_id)
+        if ceiling is not None:
+            boundary = await self._boundary(ceiling, agent_id, project_id)
+            refused = await self._command_refusal(command, workdir, boundary)
+            if refused is not None:
+                raise WatchCheckError(_refused(refused))
         try:
-            start = await _WORKERS.run(_shell_start, command, workdir)
+            start = await _WORKERS.run(_shell_start, command, workdir, ceiling is not None)
         except HostShellMissingError as error:
             raise WatchCheckError(f"The check command did not run: {error}") from error
         try:
@@ -136,8 +202,10 @@ class WatchCheckRunner:
             raise WatchCheckError(_exit_problem(code, start, workdir, text))
         return text
 
-    async def fetch_url(self, url: str) -> str:
+    async def fetch_url(self, url: str, *, ceiling: PermissionCeiling | None = None) -> str:
         """GET ``url``; its main text for an HTML page, else the decoded body."""
+        if ceiling is not None:
+            return await self._fetch_guarded(url, await self._boundary(ceiling, None, None))
         try:
             async with (
                 asyncio.timeout(URL_TIMEOUT_SECONDS),
@@ -169,6 +237,60 @@ class WatchCheckRunner:
             ) from error
         return await _WORKERS.run(_page_text, bytes(body), content_type, final_url)
 
+    async def _fetch_guarded(self, url: str, boundary: PermissionBoundary) -> str:
+        """GET ``url`` for a job with a ceiling: public addresses its rules allow."""
+        try:
+            async with asyncio.timeout(URL_TIMEOUT_SECONDS):
+                response = await fetch_public(url, accept=_HEADERS["Accept"], permissions=boundary)
+        except TimeoutError:
+            raise WatchCheckError(
+                f"The watched URL did not answer within {URL_TIMEOUT_SECONDS} seconds"
+            ) from None
+        except PermissionDenied as error:
+            raise WatchCheckError(_refused(error.refusal)) from error
+        except PublicFetchError as error:
+            raise WatchCheckError(
+                f"The watched URL could not be fetched: {str(error).rstrip('.')}"
+            ) from error
+        body = response.content[:URL_MAX_BYTES]
+        content_type = response.headers.get("content-type", "")
+        return await _WORKERS.run(_page_text, body, content_type, response.url)
+
+    async def _boundary(
+        self, ceiling: PermissionCeiling, agent_id: str | None, project_id: str | None
+    ) -> PermissionBoundary:
+        if self._ceiling_boundary is None:
+            raise WatchCheckError(
+                "The check did not run: this vBot cannot apply the job's permission rules"
+            )
+        try:
+            return await _WORKERS.run(self._ceiling_boundary, ceiling, agent_id, project_id)
+        except Exception as error:
+            owner = f"Project {project_id}" if project_id is not None else f"Agent {agent_id}"
+            raise WatchCheckError(
+                f"The check did not run: {owner} is not available: {error}"
+            ) from error
+
+    async def _command_refusal(
+        self, command: str, workdir: Path, boundary: PermissionBoundary
+    ) -> PermissionRefusal | None:
+        if self._checker is None:
+            return boundary.refusal(
+                "command",
+                command,
+                "unanalyzable",
+                detail="this vBot cannot analyze commands to check them",
+            )
+        environment = await _WORKERS.run(partial(unattended_command_environment, confined=True))
+        return await self._checker.check_line(
+            boundary,
+            command,
+            shell=HOST_SHELL_KIND,
+            cwd=workdir,
+            env=environment.complete(),
+            home=Path.home(),
+        )
+
     async def _workdir(self, agent_id: str, project_id: str | None) -> Path:
         """The Project's directory for a Project Agent, else the Agent's Workspace."""
         try:
@@ -195,9 +317,14 @@ class WatchCheckRunner:
         return path
 
 
-def _shell_start(command: str, workdir: Path) -> HostShellStart:
+def _shell_start(command: str, workdir: Path, confined: bool) -> HostShellStart:
     """The host shell for a check; blocking: the environment reads the registry on Windows."""
-    return host_shell_start(command, workdir, unattended_command_environment())
+    return host_shell_start(command, workdir, unattended_command_environment(confined=confined))
+
+
+def _refused(refusal: PermissionRefusal) -> str:
+    """A refused check's error, for the user's alert as for the Agent reading the job."""
+    return f"The check did not run: {refusal.watch_message()}".rstrip(".")
 
 
 class _CappedOutput:

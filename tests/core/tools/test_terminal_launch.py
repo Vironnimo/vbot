@@ -17,7 +17,14 @@ from types import SimpleNamespace
 import pytest
 
 import core.tools._terminal_launch as terminal_launch
-from core.tools._terminal_launch import ShellLaunch, interactive_shell, shell_launch
+from core.tools._terminal_launch import (
+    ShellLaunch,
+    integrated_shell_kind,
+    interactive_shell,
+    shell_launch,
+    starts_shell_prompt,
+)
+from core.tools._terminal_shell_state import ShellState
 from core.tools.terminal_backend import (
     TerminalAdapter,
     spawn_terminal_adapter,
@@ -116,8 +123,11 @@ def test_cmd_runs_an_exact_command_line_with_escaped_metacharacters() -> None:
     # An argument cmd could act on is quoted even without whitespace, since a
     # batch program hands it to cmd once more; a percent sign stands between quotes.
     assert launch.command_line == r'''/d /s /k "codex "a ""b"" c" "100"%"" "x&y|z" "it's""'''
-    # The shell integration is the prompt: its mark, then the default prompt.
-    assert (launch.environment, launch.scratch) == ({"PROMPT": r"$e]133;A$e\$P$G"}, None)
+    # The shell integration is the prompt: its folder and mark, then the default prompt.
+    assert (launch.environment, launch.scratch) == (
+        {"PROMPT": r"$e]9;9;$P$e\$e]133;A$e\$P$G"},
+        None,
+    )
 
 
 @pytest.mark.usefixtures("posix_host")
@@ -239,30 +249,52 @@ def test_an_empty_command_or_argument_is_rejected(command: str, arguments: list[
 
 
 @pytest.mark.parametrize(
-    ("os_name", "argv", "integrated"),
+    ("os_name", "argv", "integrated", "kind", "prompt"),
     [
-        ("nt", ["pwsh.exe", "-NoLogo"], ["pwsh.exe", "-NoLogo", "-NoExit", "-EncodedCommand"]),
-        ("nt", ["pwsh.exe", "-NoExit"], ["pwsh.exe", "-NoExit", "-EncodedCommand"]),
-        ("nt", ["cmd.exe", "/d"], ["cmd.exe", "/d"]),
-        ("posix", ["/usr/bin/fish", "-l"], ["/usr/bin/fish", "-l", "-C"]),
-        ("posix", ["/bin/bash"], ["/bin/bash", "--rcfile"]),
-        ("posix", ["/bin/zsh", "-i"], ["/bin/zsh", "-i"]),
+        (
+            "nt",
+            ["pwsh.exe", "-NoLogo"],
+            ["pwsh.exe", "-NoLogo", "-NoExit", "-EncodedCommand"],
+            "powershell",
+            True,
+        ),
+        (
+            "nt",
+            ["pwsh.exe", "-NoExit"],
+            ["pwsh.exe", "-NoExit", "-EncodedCommand"],
+            "powershell",
+            True,
+        ),
+        ("nt", ["cmd.exe", "/d"], ["cmd.exe", "/d"], "cmd", True),
+        # fish lines are not analyzed (Permission Rules): no kind.
+        ("posix", ["/usr/bin/fish", "-l"], ["/usr/bin/fish", "-l", "-C"], None, True),
+        ("posix", ["/bin/bash"], ["/bin/bash", "--rcfile"], "bash", True),
+        ("posix", ["/bin/zsh", "-i"], ["/bin/zsh", "-i"], "bash", True),
         # Options beyond plain interactive flags: the shell starts as given.
-        ("nt", ["pwsh.exe", "-Command", "Get-Date"], None),
-        ("nt", ["cmd.exe", "/c", "dir"], None),
-        ("posix", ["/bin/bash", "--norc"], None),
+        ("nt", ["pwsh.exe", "-Command", "Get-Date"], None, None, False),
+        ("nt", ["cmd.exe", "/c", "dir"], None, None, False),
+        ("posix", ["/bin/bash", "--norc"], None, None, False),
         # bash on Windows (Git Bash, MSYS) and programs other than shells.
-        ("nt", ["C:\\Program Files\\Git\\bin\\bash.exe"], None),
-        ("posix", ["python3"], None),
+        ("nt", ["C:\\Program Files\\Git\\bin\\bash.exe"], None, None, True),
+        ("posix", ["/bin/sh"], None, None, True),
+        ("posix", ["python3"], None, None, False),
     ],
 )
 def test_only_a_plain_interactive_shell_starts_with_shell_integration(
-    monkeypatch: pytest.MonkeyPatch, os_name: str, argv: list[str], integrated: list[str] | None
+    monkeypatch: pytest.MonkeyPatch,
+    os_name: str,
+    argv: list[str],
+    integrated: list[str] | None,
+    kind: str | None,
+    prompt: bool,
 ) -> None:
     monkeypatch.setattr(terminal_launch, "os", SimpleNamespace(name=os_name))
 
     launch = interactive_shell(argv, environment={"PROMPT": "$N$G"})
 
+    # What Permission Rules check in such a terminal (``_terminal_permissions``).
+    assert integrated_shell_kind(argv) == kind
+    assert starts_shell_prompt(argv) is prompt
     if integrated is None:
         assert launch is None
         return
@@ -270,8 +302,8 @@ def test_only_a_plain_interactive_shell_starts_with_shell_integration(
     try:
         assert launch.argv[: len(integrated)] == integrated
         if Path(argv[0]).name == "cmd.exe":
-            # cmd keeps the user's own prompt after the mark.
-            assert launch.environment == {"PROMPT": r"$e]133;A$e\$N$G"}
+            # cmd keeps the user's own prompt after the marks.
+            assert launch.environment == {"PROMPT": r"$e]9;9;$P$e\$e]133;A$e\$N$G"}
     finally:
         launch.remove_scratch()
 
@@ -283,7 +315,8 @@ def test_real_integrated_shell_declares_its_prompt_and_command_start(
     shell: str, tmp_path: Path
 ) -> None:
     """In a terminal, an integrated shell marks every prompt and, except cmd, the
-    start of every command line it runs; the emulator reads them as signals."""
+    start of every command line it runs; the emulator reads them as signals. Before
+    each prompt it reports its folder, which Permission Rules check lines in."""
     executable = _shell_available(shell)
     environment = {key: value for key, value in os.environ.items() if key != "ZDOTDIR"}
     launch = interactive_shell([executable], environment=environment)
@@ -297,10 +330,15 @@ def test_real_integrated_shell_declares_its_prompt_and_command_start(
         command_line=launch.command_line,
     )
     emulator = TerminalEmulator(80, 24, scrollback_lines=100)
+    state = ShellState()
     try:
-        _read_signals_until_prompt(adapter, emulator)
-        adapter.write("echo vbot\r")
-        signals = _read_signals_until_prompt(adapter, emulator, after_command=shell != "cmd.exe")
+        _read_signals_until_prompt(adapter, emulator, state)
+        folder = tmp_path / "next"
+        folder.mkdir()
+        adapter.write(f"cd {folder.name}\r")
+        signals = _read_signals_until_prompt(
+            adapter, emulator, state, after_command=shell != "cmd.exe"
+        )
     finally:
         adapter.terminate()
         adapter.close()
@@ -309,10 +347,16 @@ def test_real_integrated_shell_declares_its_prompt_and_command_start(
     assert signals[-1] == "prompt"
     if shell != "cmd.exe":
         assert "command" in signals
+    assert state.at_prompt
+    assert state.cwd is not None and Path(state.cwd).resolve() == folder.resolve()
 
 
 def _read_signals_until_prompt(
-    adapter: TerminalAdapter, emulator: TerminalEmulator, *, after_command: bool = False
+    adapter: TerminalAdapter,
+    emulator: TerminalEmulator,
+    state: ShellState,
+    *,
+    after_command: bool = False,
 ) -> list[str]:
     """Read through the next prompt, after a command start when requested."""
     signals: list[str] = []
@@ -326,6 +370,7 @@ def _read_signals_until_prompt(
         except TimeoutError:
             continue
         update = emulator.feed(chunk)
+        state.feed(chunk)
         if update.responses:
             # ConPTY holds output until its device query is answered.
             adapter.write(update.responses)

@@ -1,6 +1,7 @@
 <script>
   import { t } from '$lib/i18n.js';
   import ToolAccessEditor from '../tools/ToolAccessEditor.svelte';
+  import PermissionRulesEditor from '../permissions/PermissionRulesEditor.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
   import TextField from '../ui/TextField.svelte';
   import ContextMenu from '../ui/ContextMenu.svelte';
@@ -27,6 +28,12 @@
     toolLoadingEditable = true,
     // What the Agent inherits for each On-demand Tools part it does not set.
     toolLoadingDefault = null,
+    // Non-built-in Agents edit their Permission Rules here; the inherited
+    // value applies to each part the Agent does not set. A new Agent
+    // (`permissionRulesNewAgent`) is checked against the shared default.
+    permissionRulesEditable = false,
+    permissionRulesDefault = null,
+    permissionRulesNewAgent = false,
     navigateToExtensions,
     onToast = () => {},
     // Reloads `skillCatalog` after a Skill write.
@@ -258,6 +265,27 @@
       />
     </div>
   </section>
+
+  {#if permissionRulesEditable}
+    <section class="s-section" aria-labelledby="agent-section-permissions">
+      <header class="s-section__head">
+        <h3 class="s-section__title" id="agent-section-permissions">
+          {t('permissions.title')}
+        </h3>
+      </header>
+      <p class="s-section__desc">{t('permissions.agentDescription')}</p>
+      <div class="s-section__body">
+        <PermissionRulesEditor
+          value={formValues.permission_rules}
+          inherited={permissionRulesDefault}
+          agentId={permissionRulesNewAgent ? '' : formValues.id}
+          newAgent={permissionRulesNewAgent}
+          idPrefix="agent-permission-rules"
+          onChange={(next) => (formValues.permission_rules = next)}
+        />
+      </div>
+    </section>
+  {/if}
 
   <section class="s-section" aria-labelledby="agent-section-skills">
     <header class="s-section__head">

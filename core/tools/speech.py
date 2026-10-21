@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import shutil
+from pathlib import Path
 from typing import Any
 
 from core.model_tasks import (
@@ -15,6 +18,8 @@ from core.model_tasks import (
 )
 from core.model_tasks.speech_playback import SpeechPlayback
 from core.model_tasks.speech_types import SpeechAudioChunk
+from core.storage.layout import DataDirectoryLayout
+from core.storage.temp_files import artifact_owner
 from core.tools._media_failures import provider_failure_message, unavailable_message
 from core.tools.call_syntax import SpellingAliases, normalize_call_arguments
 from core.tools.contracts import compile_tool_contract
@@ -53,6 +58,8 @@ _GENERATE_SPEECH_CONTRACT = compile_tool_contract(
 # Names other speech Tools use for the text to speak (OpenAI's speech API uses input).
 _FIELD_ALIASES = SpellingAliases({"text": ("input", "content", "transcript")})
 _SETTING = "Text to speech"
+# The temporary-file category of the audio a restricted Session receives.
+_SESSION_CATEGORY = "speech"
 
 
 def _normalize_generate_speech_arguments(arguments: Any) -> Any:
@@ -136,13 +143,38 @@ def make_generate_speech_handler(speech_service: Any):
         # can deliver it outside the web chat (e.g. channel_send); the UI-facing
         # artifacts payload stays path-free — the WebUI renders from `url`.
         artifact_payload = artifact.to_dict()
-        file_path = model_path(artifact.file_path)
+        audio = Path(artifact.file_path)
+        if context.permissions.restricted:
+            # The shared audio store is no place a restricted Session may read.
+            owner = artifact_owner(context.project_id, context.agent_id, context.session_id)
+            audio = await asyncio.to_thread(_session_audio, audio, context.data_root, owner)
+        file_path = model_path(audio)
         return tool_success(
             {"artifact": {**artifact_payload, "path": file_path}},
             artifacts=[artifact_payload],
         )
 
     return handler
+
+
+def _session_audio(audio: Path, data_root: Path, owner: str) -> Path:
+    """Blocking: *audio* in the Session's own temporary-file folder, linked or copied.
+
+    The folder keeps the file for the ``speech`` retention; the shared audio
+    store keeps its own. Where neither a link nor a copy can be made, the
+    original path is returned.
+    """
+    target = DataDirectoryLayout(data_root).temporary / _SESSION_CATEGORY / owner / audio.name
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if not target.exists():
+            try:
+                os.link(audio, target)
+            except OSError:
+                shutil.copyfile(audio, target)
+    except OSError:
+        return audio
+    return target
 
 
 def register_generate_speech_tool(registry: ToolRegistry, speech_service: Any) -> None:

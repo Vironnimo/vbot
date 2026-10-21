@@ -68,6 +68,7 @@ from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
 
+from core.permissions import PermissionBoundary
 from core.runs import RunExecutionOwner
 from core.sessions import SessionAddress
 from core.storage.temp_files import TemporaryFileLease, TemporaryFileManager
@@ -374,6 +375,7 @@ class CommandManager:
         env: Mapping[str, str],
         origin_run_id: str,
         formatter: CommandReportFormatter,
+        permissions: PermissionBoundary,
         execution_owner: RunExecutionOwner | None = None,
         on_output: OutputCallback | None = None,
         request: bytes | None = None,
@@ -392,7 +394,9 @@ class CommandManager:
         nothing of the command, and why: the report names the reason
         (``CommandReport.not_run``) once the shell exited with one of them.
         *formatter* builds the body of the result delivery from the final
-        report. *on_output* receives the newest
+        report. *permissions* is the boundary of the Session the command runs
+        for: its checkpoint keeps it, so a delivery that restart recovery
+        formats applies the same rules. *on_output* receives the newest
         ``COMMAND_PROGRESS_LINES`` clean lines at most every
         ``COMMAND_PROGRESS_SECONDS`` while output arrives and the command is in
         the foreground.
@@ -422,6 +426,7 @@ class CommandManager:
                 env=dict(env),
                 origin_run_id=origin_run_id,
                 formatter=formatter,
+                permissions=permissions,
                 execution_owner=execution_owner,
                 on_output=on_output,
                 request=request,
@@ -783,6 +788,7 @@ class CommandManager:
         env: dict[str, str],
         origin_run_id: str,
         formatter: CommandReportFormatter,
+        permissions: PermissionBoundary,
         execution_owner: RunExecutionOwner | None,
         on_output: OutputCallback | None,
         request: bytes | None,
@@ -806,7 +812,7 @@ class CommandManager:
             if not directory:
                 raise CommandLaunchError(f"The workdir is not a directory: {model_path(cwd)}")
             if self._temporary_files is not None:
-                lease, log_fd = await self._run_blocking(open_log, self._temporary_files)
+                lease, log_fd = await self._run_blocking(open_log, self._temporary_files, owner)
             # Starts an output worker for this command when one more may run.
             await self._run_blocking(self._output_host.prepare)
             try:
@@ -831,7 +837,7 @@ class CommandManager:
             raise
         command_id = new_id("cmd", claim=lambda candidate: candidate not in self._records)
         if self._checkpoints is not None and generation_id is not None:
-            self._checkpoints.bind(command_id, generation_id)
+            self._checkpoints.bind(command_id, generation_id, permissions=permissions)
         record = CommandRecord(
             command_id,
             owner=owner,

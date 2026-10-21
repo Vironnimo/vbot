@@ -200,7 +200,13 @@ SETTINGS_SHAPE: JsonShape = json_document(
             DEFAULTS_SECTIONS,
             {
                 "agent": json_object(
-                    AGENT_DEFAULT_FIELDS, {"tool_loading": json_object(TOOL_LOADING_FIELDS)}
+                    AGENT_DEFAULT_FIELDS,
+                    {
+                        "tool_loading": json_object(TOOL_LOADING_FIELDS),
+                        # An unknown part makes the default invalid instead of
+                        # being left out, so the owner writes the whole set.
+                        "permission_rules": OPAQUE,
+                    },
                 )
             },
         ),

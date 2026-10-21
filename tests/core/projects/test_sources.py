@@ -1,12 +1,14 @@
 """Repository translation contracts at the public scan and runtime boundaries."""
 
 import json
+import sys
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from core.agents import TemporaryAgentConfig, TemporaryAgentRegistry
+from core.permissions import permission_rules_to_dict
 from core.projects._resolution_values import profile_tool_access
 from core.projects.scan_report import FindingType
 from core.projects.sources import SourceSelection, read_profile, scan_project
@@ -130,6 +132,15 @@ NO_SHELL = ALL_TOOLS - {"bash", "terminal"}
             "---\npermission:\n  bash:\n    '*': allow\n    'git push*': deny\n"
             "  edit: ask\n  todowrite: deny\n---\nReview.",
             ALL_TOOLS,
+            # vBot does not ask before edits, so the report flags the dropped approval.
+            "limited",
+        ),
+        # Deny patterns alone keep everything else the shell may run.
+        (
+            "opencode",
+            ".opencode/agents/reviewer.md",
+            "---\npermission:\n  shell:\n    'git push*': deny\n---\nReview.",
+            ALL_TOOLS,
             "ready",
         ),
         (
@@ -152,7 +163,8 @@ NO_SHELL = ALL_TOOLS - {"bash", "terminal"}
             ".codex/agents/reviewer.toml",
             'name="reviewer"\ndescription="Review"\ndeveloper_instructions="Review."\n'
             'sandbox_mode="read-only"\napproval_policy="on-request"',
-            ALL_TOOLS - {"apply_patch"},
+            # The sandbox becomes Permission Rules (write: scratch), not a lost Tool.
+            ALL_TOOLS,
             "ready",
         ),
         (
@@ -203,6 +215,205 @@ def test_imports_grant_the_tools_an_agent_may_use(repo, source, path, document, 
     assert set(actual.allowed_tools) == expected | (
         {"message_parent"} if status != "needs_attention" else set()
     )
+
+
+_DRIVE_DATA = "C:/data/**" if sys.platform == "win32" else "/c/data/**"
+
+
+@pytest.mark.parametrize(
+    ("files", "source", "expected", "untranslated"),
+    [
+        pytest.param(
+            {
+                ".claude/settings.json": json.dumps(
+                    {
+                        "permissions": {
+                            "deny": [
+                                "Read(./.env)",
+                                "Read(secrets/**)",
+                                "Edit(/src/gen/**)",
+                                "Read(~/.ssh/**)",
+                                "Read(//c/data/**)",
+                                "WebFetch(domain:evil.com)",
+                                "Bash",
+                                "Read(!keep.env)",
+                            ],
+                            "ask": ["Bash(git push *)"],
+                            "additionalDirectories": ["../shared"],
+                        }
+                    }
+                ),
+                ".claude/agents/reviewer.md": "---\ndisallowedTools: Bash(rm *)\n---\nReview.",
+            },
+            "claude",
+            {
+                # Claude Code anchors: ./ and bare names at any depth below the
+                # working directory, /path at the project, //path absolute.
+                "allow": ["Edit({workdir}/../shared/**)"],
+                "deny": [
+                    "Read({workdir}/**/.env)",
+                    "Read({workdir}/**/secrets/**)",
+                    "Edit({project}/src/gen/**)",
+                    "Read(~/.ssh/**)",
+                    f"Read({_DRIVE_DATA})",
+                    "Web(evil.com)",
+                    "Shell(rm *)",
+                ],
+            },
+            {"permissions.deny.Read(!keep.env)", "permissions.ask"},
+            id="claude-deny",
+        ),
+        pytest.param(
+            {
+                ".claude/settings.json": json.dumps(
+                    {
+                        "permissions": {
+                            "defaultMode": "dontAsk",
+                            "allow": [
+                                "Bash(git status)",
+                                "Edit(src/**)",
+                                "WebFetch(domain:docs.python.org)",
+                            ],
+                            "additionalDirectories": ["~/shared"],
+                        }
+                    }
+                ),
+                ".claude/agents/reviewer.md": "---\nname: reviewer\n---\nReview.",
+            },
+            "claude",
+            {
+                "read": "work_area",
+                "write": "scratch",
+                "commands": "listed",
+                "web": "listed",
+                "allow": [
+                    "Shell(git status)",
+                    "Edit({workdir}/src/**)",
+                    "Web(docs.python.org)",
+                    "Read(~/shared/**)",
+                ],
+            },
+            set(),
+            id="claude-dont-ask",
+        ),
+        pytest.param(
+            {
+                ".claude/settings.json": json.dumps(
+                    {
+                        "permissions": {
+                            "allow": ["Bash(git status)"],
+                            "additionalDirectories": ["/x"],
+                        }
+                    }
+                ),
+                ".claude/agents/reviewer.md": "---\nname: reviewer\n---\nReview.",
+            },
+            "claude",
+            None,
+            set(),
+            id="claude-allow-only",
+        ),
+        pytest.param(
+            {
+                "opencode.json": json.dumps(
+                    {
+                        "permission": {
+                            "bash": {"*": "deny", "git *": "allow", "git push *": "ask"},
+                            "read": {"*.env": "deny", "*.env.example": "allow"},
+                            "external_directory": "deny",
+                        },
+                        "agent": {
+                            "reviewer": {
+                                "prompt": "Review.",
+                                "permission": {
+                                    "edit": {"*": "deny", "src/**": "allow"},
+                                    "webfetch": {"https://evil.com/*": "deny"},
+                                },
+                            }
+                        },
+                    }
+                )
+            },
+            "opencode",
+            {
+                "read": "work_area",
+                "write": "scratch",
+                "commands": "listed",
+                "allow": ["Edit({workdir}/src/**)", "Shell(git *)", "Shell(git push *)"],
+                "deny": ["Read({workdir}/**/*.env)", "Web(evil.com)"],
+            },
+            {"permission.bash"},
+            id="opencode",
+        ),
+        pytest.param(
+            {
+                "opencode.json": json.dumps(
+                    {"agent": {"reviewer": {"prompt": "R.", "permission": {"bash": "allow"}}}}
+                )
+            },
+            "opencode",
+            None,
+            set(),
+            id="opencode-allow-only",
+        ),
+        pytest.param(
+            {
+                ".codex/config.toml": 'sandbox_mode = "workspace-write"\n'
+                "[sandbox_workspace_write]\n"
+                'writable_roots = ["/var/cache/app"]\nnetwork_access = false\n'
+                '[agents.reviewer]\ndescription = "Review"\n'
+            },
+            "codex",
+            {"write": "work_area", "allow": ["Edit(/var/cache/app/**)"]},
+            {"sandbox_workspace_write.network_access"},
+            id="codex-workspace-write",
+        ),
+        pytest.param(
+            {
+                ".codex/agents/reviewer.toml": 'name = "reviewer"\ndefault_permissions = "team"\n'
+                '[permissions.team]\nextends = ":read-only"\n'
+                '[permissions.team.filesystem]\n"/srv/out" = "write"\n'
+                '[permissions.team.filesystem.":workspace_roots"]\n".env" = "deny"\n'
+            },
+            "codex",
+            {
+                "write": "scratch",
+                "allow": ["Edit(/srv/out)"],
+                "deny": ["Read({workdir}/.env)"],
+            },
+            set(),
+            id="codex-permission-profile",
+        ),
+        pytest.param(
+            {
+                ".codex/agents/reviewer.toml": 'name = "reviewer"\n'
+                'sandbox_mode = "danger-full-access"\n'
+            },
+            "codex",
+            None,
+            set(),
+            id="codex-full-access",
+        ),
+    ],
+)
+def test_repository_permission_settings_translate_to_permission_rules(
+    repo, files, source, expected, untranslated
+):
+    # A repository restricts its Agent only where its own settings restrict;
+    # what vBot cannot translate is reported, never silently dropped.
+    for path, content in files.items():
+        write(repo, path, content)
+    sources = [SourceSelection(f"{source}.agents")]
+    profile = scan_project(repo, sources=sources).team[0]
+    assert read_profile(repo, sources, profile.agent_id, selected=profile) == profile
+
+    rules = profile.permission_rules
+    assert (None if rules is None else permission_rules_to_dict(rules)) == expected
+    assert {
+        item.setting
+        for item in profile.translations
+        if item.status == "not_supported" and item.setting.startswith(("perm", "sandbox"))
+    } == untranslated
 
 
 @pytest.mark.parametrize("global_denial", [False, True])

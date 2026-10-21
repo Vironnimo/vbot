@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from core.chat import ChatMessage
+from core.permissions import BoundaryContext, PermissionBoundary, normalize_permission_rules
 from core.recall import (
     CanonicalSessionRecallBackend,
     RecallBackendContext,
@@ -79,6 +80,27 @@ async def test_other_agent_same_session_id_remains_searchable(tmp_path: Path) ->
     other = success(await search(tmp_path, {"query": "needle", "agent_id": "reviewer"}, backend))
     assert own["items"] == []
     assert other["items"][0]["agent_id"] == "reviewer"
+
+
+async def test_a_restricted_session_searches_only_its_own_agent(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    for agent in ("coder", "reviewer"):
+        sessions.create(agent, session_id="past").append(ChatMessage.user("needle"))
+    backend = CanonicalSessionRecallBackend(sessions)
+    restricted = PermissionBoundary.build(
+        normalize_permission_rules({"read": "work_area"}),
+        BoundaryContext(workdir=tmp_path / "work", home=tmp_path / "home", data_dir=tmp_path),
+    )
+
+    own = await search(
+        tmp_path, {"query": "needle", "agent_id": "coder"}, backend, permissions=restricted
+    )
+    other = await search(
+        tmp_path, {"query": "needle", "agent_id": "reviewer"}, backend, permissions=restricted
+    )
+
+    assert [item["agent_id"] for item in success(own)["items"]] == ["coder"]
+    assert "Omit agent_id" in failure(other, "permission_denied")["message"]
 
 
 async def test_search_can_restrict_query_to_one_past_session(tmp_path: Path) -> None:

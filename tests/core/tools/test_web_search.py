@@ -20,6 +20,7 @@ from core.tools.web_search import (
     WEB_SEARCH_TOOL_PARAMETERS,
     register_web_search_tool,
 )
+from tests.core.permissions.command_check_support import restricted
 from tests.core.tools.web_search_test_support import (
     BRAVE_ENDPOINT,
     EXA_ENDPOINT,
@@ -30,6 +31,7 @@ from tests.core.tools.web_search_test_support import (
     assert_success_envelope,
     make_context,
     request_json,
+    result_urls,
     search,
     web_search_registry,
 )
@@ -319,6 +321,35 @@ async def test_site_restrictions_in_any_form_filter_the_results(
         assert "note" not in shown
     else:
         assert read_as in shown["note"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("rules", "kept", "note"),
+    [
+        (
+            {"deny": ["Web(reddit.com)"]},
+            ["https://docs.python.org/3/", "https://example.com/news"],
+            "1 result was left out because the permission rules refuse fetching from "
+            "www.reddit.com.",
+        ),
+        (
+            {"web": "listed", "allow": ["Web(docs.python.org)"]},
+            ["https://docs.python.org/3/"],
+            "2 results were left out because the permission rules refuse fetching from "
+            "www.reddit.com, example.com.",
+        ),
+    ],
+    ids=["deny-rule", "listed-hosts"],
+)
+async def test_results_the_permission_rules_refuse_to_fetch_are_left_out_with_a_count(
+    tmp_path: Path, brave: Any, rules: dict[str, Any], kept: list[str], note: str
+) -> None:
+    result = await search(tmp_path, {"query": "asyncio"}, permissions=restricted(tmp_path, **rules))
+
+    shown = assert_success_envelope(result)
+    assert result_urls(shown) == kept
+    assert shown["note"] == note
 
 
 @pytest.mark.asyncio

@@ -128,6 +128,14 @@ def test_validate_agent_data_accepts_a_document_that_names_only_its_id(
                 'cannot contain "*"; set allowed_skills to [] to allow no Skills',
             ),
         ),
+        (
+            {"permission_rules": {"deny": ["Read({nope}/x)"]}},
+            (
+                "$.permission_rules",
+                'permission_rules.deny[0] "Read({nope}/x)": unknown placeholder {nope}. '
+                "Use {workdir}, {project}, {scratch}, {workspace}, {home} or ~.",
+            ),
+        ),
     ],
     ids=[
         "missing-id",
@@ -145,6 +153,7 @@ def test_validate_agent_data_accepts_a_document_that_names_only_its_id(
         "fallback-length",
         "excluded-skill-entry",
         "excluded-skills-wildcard",
+        "permission-rule",
     ],
 )
 def test_validate_agent_data_reports_one_error_per_invalid_field(

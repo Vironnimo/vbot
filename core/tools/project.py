@@ -12,6 +12,7 @@ from difflib import get_close_matches
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
+from core.permissions import PermissionDenied
 from core.projects import (
     InvalidProjectIdError,
     Project,
@@ -62,6 +63,7 @@ PROJECT_TOOL_PARAMETERS: JsonObject = {
     "required": ["project_id"],
 }
 _NO_LOAD = "No new Project Context was loaded."
+_REFUSED_FILE = "is refused by the permission rules. If the task needs it, tell the user."
 _FIELD_ALIASES = SpellingAliases({"project_id": ("project", "id", "name", "project_name")})
 _PROJECT_CONTRACT = compile_tool_contract(
     name=PROJECT_TOOL_NAME, input_schema=PROJECT_TOOL_PARAMETERS, require_closed_input=False
@@ -112,6 +114,10 @@ def make_project_handler(
         from core.prompts import ProjectPromptContext
 
         project_path = model_path(project.cwd)
+        # Loading reads the Project's files, so the rules must permit reading its folder.
+        refusal = context.permissions.check_path(project.cwd, "read")
+        if refusal is not None:
+            raise PermissionDenied(refusal)
         status = stat_or_none(project.cwd)
         if status is None:
             return tool_failure(
@@ -133,9 +139,17 @@ def make_project_handler(
         renderer = get_renderer()
         read_paths: list[Path] = []
         issues: list[PromptFileIssue] = []
+        refused: list[str] = []
+        permitted: list[str] = []
+        for name in project.instruction_files:
+            path = Path(project.cwd) / name
+            if context.permissions.check_path(path, "read") is None:
+                permitted.append(name)
+            else:
+                refused.append(f"Not included: {model_path(path)} {_REFUSED_FILE}")
         rendered_files = renderer.render_project_files(
             ProjectPromptContext.from_project(
-                project.project_id, project.display_name, project.cwd, project.instruction_files
+                project.project_id, project.display_name, project.cwd, permitted
             ),
             tool_available=context.can_call,
             on_read=read_paths.append,
@@ -160,8 +174,11 @@ def make_project_handler(
             "project_path": project_path,
             "content": content,
         }
-        if issues:
-            notices = [_file_issue_text(issue) for issue in issues if issue.reason != "too_large"]
+        if issues or refused:
+            notices = [
+                *refused,
+                *(_file_issue_text(issue) for issue in issues if issue.reason != "too_large"),
+            ]
             # Oversized files already carry their size and reading hint in content.
             data["note"] = "Some Project instruction files were not included." + (
                 "\n" + "\n".join(notices) if notices else " See the file notices below."
@@ -195,6 +212,9 @@ def make_project_handler(
             project = projects.get(project_id)
             subject += f" at {model_path(project.cwd)}"
             return load(context, project)
+        except PermissionDenied:
+            # Tool execution reports the refusal as permission_denied.
+            raise
         except InvalidProjectIdError, ProjectNotFoundError:
             return tool_failure(
                 "project_not_found",

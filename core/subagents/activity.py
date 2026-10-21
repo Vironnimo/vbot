@@ -111,12 +111,14 @@ class SubAgentActivity:
         *,
         agent_id: str,
         session_id: str,
+        owner: str | None = None,
     ) -> SubAgentActivity | None:
         """Allocate the file and write non-sensitive identity metadata.
 
         The file is created on the writer thread and stays protected until its
         first followed Run ends; ``None`` means it is unavailable, which affects
-        observability only.
+        observability only. ``owner`` (``core.storage.temp_files.artifact_owner``)
+        names the Session that reads the file: its Parent's.
         """
         header = (
             "# Sub-Agent activity\n\n"
@@ -127,7 +129,7 @@ class SubAgentActivity:
         created: list[SubAgentActivity] = []
 
         def allocate() -> None:
-            activity = cls._allocate(temporary_files, header, agent_id, session_id)
+            activity = cls._allocate(temporary_files, header, agent_id, session_id, owner)
             if activity is not None:
                 created.append(activity)
 
@@ -147,10 +149,11 @@ class SubAgentActivity:
         header: str,
         agent_id: str,
         session_id: str,
+        owner: str | None,
     ) -> SubAgentActivity | None:
         lease: TemporaryFileLease | None = None
         try:
-            lease = temporary_files.create("subagents", ".md")
+            lease = temporary_files.create("subagents", ".md", owner=owner)
             path = lease.path.resolve()
             path.write_text(header, encoding="utf-8", newline="")
         except OSError as error:

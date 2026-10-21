@@ -7,6 +7,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Protocol
 
 from core.agents import SKILL_AGENT_CREATED_AT_KEY
+from core.permissions import PermissionCeiling
 from core.projects._model_configuration import (
     ConnectionRestrictedModel,
     CredentialProbe,
@@ -21,7 +22,6 @@ from core.projects._project_context import runtime_agent_body as runtime_agent_b
 from core.projects._resolution_context import (
     _RESOLUTION_WORKERS,
     _require_one_override_source,
-    _require_temporary_binding,
     _session_address,
     _skill_binding_key,
 )
@@ -35,11 +35,15 @@ from core.projects._resolution_values import (
     _identity_string_list_source,
     _identity_string_source,
     _overridden_model,
+    _override_permission_rules,
     _project_agent_tool_access,
     _project_agent_tools,
     _resolve_sampling,
     _resolve_thinking_effort,
     effective_project_allowed_skills,
+    inherited_permission_rules,
+    permission_rules_source,
+    resolve_permission_rules,
 )
 from core.projects._runtime_agent import (
     AGENT_OVERRIDE_FIELDS,
@@ -60,6 +64,7 @@ from core.projects._session_resolution import (
     SessionResolution,
 )
 from core.projects._team_resolution import TeamResolution, _profile_skill_allowed
+from core.projects._temporary_resolution import TemporaryResolution
 from core.projects.projects import ProjectError, ProjectNotFoundError
 from core.projects.sources import AgentAdapter, AgentProfile, ScanResult
 from core.sessions import AGENT_DEFAULT_PROJECT
@@ -205,6 +210,7 @@ class AgentResolver:
         self._team_cache: dict[str, tuple[Hashable, ScanResult]] = {}
         self._session_resolution = SessionResolution(self)
         self._team_resolution = TeamResolution(self)
+        self._temporary_resolution = TemporaryResolution(self)
 
     def resolve_agent(
         self,
@@ -274,15 +280,9 @@ class AgentResolver:
         generation_id: str,
         session: SessionAddress | None = None,
     ) -> RuntimeAgent:
-        """Resolve only an exact canonical temporary Session generation.
-
-        ``session`` names the Session whose Agent overrides apply, usually
-        ``address`` itself; omit it for the binding's own configuration.
-        """
-        binding = self._temporary_registry().resolve(address, generation_id=generation_id)
-        overrides = AgentOverrides() if session is None else self.session_overrides(session)
-        return self._apply_temporary_address(
-            _require_temporary_binding(binding), address, overrides
+        """Resolve only an exact canonical temporary Session generation (`TemporaryResolution`)."""
+        return self._temporary_resolution.resolve(
+            address, generation_id=generation_id, session=session
         )
 
     async def resolve_agent_async(
@@ -363,23 +363,9 @@ class AgentResolver:
         generation_id: str,
         session: SessionAddress | None = None,
     ) -> RuntimeAgent:
-        """Event-Loop-safe :meth:`resolve_temporary_agent`.
-
-        The binding and override reads run on the Session database's pool; the
-        Project check and the overrides' Model check, which read Project and Model
-        configuration, run on the ``agent-resolution`` pool.
-        """
-        registry = self._temporary_registry()
-        agent = _require_temporary_binding(
-            await registry.resolve_async(address, generation_id=generation_id)
-        )
-        overrides = (
-            AgentOverrides() if session is None else await self.session_overrides_async(session)
-        )
-        if getattr(address, "project_id", None) is None and overrides.is_empty:
-            return agent
-        return await _RESOLUTION_WORKERS.run(
-            self._apply_temporary_address, agent, address, overrides
+        """Event-Loop-safe :meth:`resolve_temporary_agent`."""
+        return await self._temporary_resolution.resolve_async(
+            address, generation_id=generation_id, session=session
         )
 
     def resolve_working_project(
@@ -462,6 +448,16 @@ class AgentResolver:
         """Fill uncaptured Model settings once, preserving concurrent explicit choices."""
         return self._session_resolution.capture_session_settings(address, agent)
 
+    def join_session_ceiling(
+        self, address: SessionAddress, ceiling: PermissionCeiling | None
+    ) -> None:
+        """Narrow the Session's stored permission ceiling by *ceiling*. Blocking."""
+        self._session_resolution.join_session_ceiling(address, ceiling)
+
+    def clear_session_ceiling(self, address: SessionAddress) -> bool:
+        """Remove the Session's stored permission ceiling; whether it had one. Blocking."""
+        return self._session_resolution.clear_session_ceiling(address)
+
     def preserve_agent_sessions(self, project_id: str | None, agent_id: str) -> None:
         """Keep existing Sessions' choices before changing their Agent's start values.
 
@@ -504,130 +500,29 @@ class AgentResolver:
         self, config: TemporaryAgentConfig, project_id: str | None
     ) -> TemporaryAgentConfig:
         """Resolve a repository Profile within the owner's selection, for a snapshot."""
-        if config.repository_profile is None:
-            return config
-        if project_id is None:
-            raise AgentResolutionError("A repository profile requires a Project.")
-        project = self._load_project(project_id)
-        profile = self._team_resolution._read_agent_fresh(project, config.repository_profile)
-        owner_tools = (
-            config.tool_access.allowed
-            if config.tool_access.mode == "selected"
-            else (self._tool_names() if config.tool_access.mode == "all" else ())
-        )
-        owner_tools = tuple(name for name in owner_tools if name not in config.tool_access.denied)
-        # Team and temporary Agents use the same translation; the ceiling belongs
-        # to the Project for a Team member and to its owner for a participant.
-        access = _project_agent_tool_access(
-            replace(project, allowed_tools=list(owner_tools)), profile
-        )
-        access = replace(
-            access,
-            allowed=tuple(name for name in access.allowed if name not in config.tool_access.denied),
-            denied=tuple(sorted(set(access.denied) | set(config.tool_access.denied))),
-            granted=tuple(name for name in config.tool_access.granted if name in access.allowed),
-            fixed=access.fixed or config.tool_access.fixed or config.tool_access.mode == "none",
-        )
-        selected_skills = (
-            sorted(self._skill_pool_names(project_id))
-            if "*" in config.allowed_skills and profile.skill_rules
-            else config.allowed_skills
-        )
-        skills = [name for name in selected_skills if _profile_skill_allowed(profile, name)]
-        profile = self._team_resolution._preload_profile(project_id, profile, skills)
-        overrides = project.overrides.get(profile.agent_id, {})
-        override_model = overrides.get("model")
-        if override_model and self.is_model_configured(override_model):
-            model = override_model
-        elif profile.model in {"", "inherit"}:
-            model = config.model
-        else:
-            try:
-                model = self._resolve_model_or_raise(
-                    profile, project, AgentDefaults.from_dict(self._global_agent_defaults())
-                )
-            except AgentResolutionError:
-                # The participant's own Model stands in for an unusable wish.
-                model = config.model
-        self.require_model_configured(model)
-        return replace(
-            config,
-            model=model,
-            tool_access=access,
-            allowed_skills=skills,
-            instructions="\n\n".join(part for part in (profile.body, config.instructions) if part),
-            temperature=overrides.get(
-                "temperature",
-                profile.temperature if profile.temperature is not None else config.temperature,
-            ),
-            top_p=overrides.get(
-                "top_p", profile.top_p if profile.top_p is not None else config.top_p
-            ),
-            thinking_effort=overrides.get(
-                "thinking_effort",
-                profile.thinking_effort
-                if profile.thinking_effort is not None
-                else config.thinking_effort,
-            ),
-        )
+        return self._temporary_resolution.prepare_config(config, project_id)
 
     def preview_temporary_agent(
         self, config: TemporaryAgentConfig, project_id: str | None = None
     ) -> TemporaryAgent:
         """Resolve editor configuration like a started one, without creating a Session."""
-        from core.agents.temporary import TemporaryAgent
-
-        config = self.prepare_temporary_config(config, project_id)
-        agent = TemporaryAgent(
-            id="preview",
-            name=config.name,
-            model=config.model,
-            cwd=config.cwd,
-            tool_access=config.tool_access,
-            allowed_skills=config.allowed_skills,
-            tools=config.tools,
-            fallback_models=config.fallback_models or [],
-            instructions=config.instructions,
-            prompt_blocks=config.prompt_blocks,
-            temperature=config.temperature,
-            top_p=config.top_p,
-            thinking_effort=config.thinking_effort,
-            compaction_policy=config.compaction_policy,
-        )
-        self._require_temporary_project(project_id)
-        return agent
-
-    def _temporary_registry(self) -> Any:
-        if self._temporary_agents is None:
-            raise AgentResolutionError("temporary Session is unavailable")
-        return self._temporary_agents
-
-    def _apply_temporary_address(
-        self,
-        agent: TemporaryAgent,
-        address: Any,
-        overrides: AgentOverrides,
-    ) -> RuntimeAgent:
-        """Check the address's Project, then apply the Session's overrides."""
-        self._require_temporary_project(getattr(address, "project_id", None))
-        return self._session_resolution._apply_overrides(agent, overrides)
-
-    def _require_temporary_project(self, project_id: str | None) -> None:
-        # A temporary Agent keeps its owner's Tool and Skill selection: like an
-        # Identity Session working in a Project it uses the Project's directory,
-        # Skills and context, not the Tool and Skill whitelists that bound the
-        # Project's Team.
-        if project_id is not None:
-            self._load_project(project_id)
+        return self._temporary_resolution.preview(config, project_id)
 
     def _resolve_identity_agent(self, agent_id: str) -> Agent:
         """Resolve one persisted Identity Agent."""
         from core.agents.agents import AgentError
 
         try:
-            return self._agents.get(agent_id)
+            agent = self._agents.get(agent_id)
         except AgentError as error:
             raise _identity_resolution_error(error) from error
+        if agent.builtin is None:
+            # The store baked a valid default; an invalid one refuses the Agent
+            # unless its own rules set every part.
+            resolve_permission_rules(
+                (agent.permission_rules,), AgentDefaults.from_dict(self._global_agent_defaults())
+            )
+        return agent
 
     def _resolve_config_agent(
         self,
@@ -696,6 +591,10 @@ class AgentResolver:
                 project.overrides.get(agent_id, {}).get("tool_loading"),
                 global_defaults.tool_loading,
             ),
+            permission_rules=resolve_permission_rules(
+                (_override_permission_rules(project, agent_id), scanned.permission_rules),
+                global_defaults,
+            ),
         )
         return replace(
             result,
@@ -755,6 +654,21 @@ class AgentResolver:
             AgentDefaults.from_dict(self._global_agent_defaults()).tool_loading
         )
 
+    def inherited_permission_rules(
+        self, member: AgentProfile | None = None
+    ) -> dict[str, Any] | None:
+        """Return the Permission Rules an Agent inherits for each part it does not set itself.
+
+        An Identity Agent inherits ``defaults.agent.permission_rules``; a Team
+        *member*'s vBot override inherits the repository's rules, then that
+        default. ``None`` when nothing is inherited (full access) or the stored
+        default is invalid; editors show the value as the default.
+        """
+        levels = (member.permission_rules,) if member is not None else ()
+        return inherited_permission_rules(
+            levels, AgentDefaults.from_dict(self._global_agent_defaults())
+        )
+
     def effective_tools_for_member(self, project: Project, member: AgentProfile) -> dict[str, Any]:
         """Project repository-owned Tool settings for one current Team member."""
         tool_access = _project_agent_tool_access(project, member)
@@ -795,6 +709,12 @@ class AgentResolver:
             "thinking_effort": _identity_optional_source(
                 raw.thinking_effort, defaults.thinking_effort
             ),
+            # Built-in Agents keep full access whatever is stored or inherited.
+            "permission_rules": (
+                {"value": None, "source": None, "parts": {}}
+                if raw.builtin is not None
+                else permission_rules_source((("agent", raw.permission_rules),), defaults)
+            ),
         }
 
     def _config_effective_config(self, project_id: str, agent_id: str) -> dict[str, dict[str, Any]]:
@@ -819,6 +739,13 @@ class AgentResolver:
             "top_p": _config_sampling_source("top_p", project, scanned, global_defaults),
             "thinking_effort": _config_thinking_effort_source(project, scanned, global_defaults),
             "tool_access": _config_tool_access_source(project, scanned),
+            "permission_rules": permission_rules_source(
+                (
+                    ("override", _override_permission_rules(project, scanned.agent_id)),
+                    ("repository", scanned.permission_rules),
+                ),
+                global_defaults,
+            ),
         }
 
     def _config_model_source(

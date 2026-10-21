@@ -29,6 +29,7 @@ from mcp.server.subscriptions import InMemorySubscriptionBus, ListenHandler, Res
 from mcp.shared.exceptions import MCPDeprecationWarning
 
 from core.extensions.operations import PENDING_INPUTS_RESOURCE
+from core.permissions import BoundaryContext, PermissionBoundary, normalize_permission_rules
 from core.utils.timestamps import parse_canonical_timestamp
 from resources.extensions.mcp import _protocol as mcp_protocol
 from resources.extensions.mcp import _tasks
@@ -998,18 +999,20 @@ async def test_unanswered_server_requests_expire_but_a_sign_in_keeps_its_own_dea
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "transport, keys, expected",
+    "transport, keys, expected, refused",
     [
         # The transport carries each call into its server requests.
-        pytest.param("memory", ["a", "b"], {"a": ["a"], "b": ["b"]}, id="carried"),
+        pytest.param("memory", ["a", "b"], {"a": ["a"], "b": ["b"]}, "", id="carried"),
         # A stream does not; a server request belongs to the only call in flight ...
-        pytest.param("stream", ["a"], {"a": ["a"]}, id="only-call"),
+        pytest.param("stream", ["a"], {"a": ["a"]}, "", id="only-call"),
         # ... and to no Agent while several run.
-        pytest.param("stream", ["a", "b"], {"a": [], "b": []}, id="several-calls"),
+        pytest.param("stream", ["a", "b"], {"a": [], "b": []}, "", id="several-calls"),
+        # A Session whose rules refuse reading its working directory announces none.
+        pytest.param("memory", ["a", "b"], {"a": ["a"], "b": []}, "b", id="refused-cwd"),
     ],
 )
 async def test_calls_run_concurrently_and_server_requests_belong_to_their_call(
-    host, tmp_path, monkeypatch, recwarn, transport, keys, expected
+    host, tmp_path, monkeypatch, recwarn, transport, keys, expected, refused
 ):
     entered = {key: asyncio.Event() for key in keys}
     release = asyncio.Event()
@@ -1045,12 +1048,18 @@ async def test_calls_run_concurrently_and_server_requests_belong_to_their_call(
     )
     # The legacy protocol, where servers send requests of their own.
     runner.config["transport"] = "sse"
+    permissions = PermissionBoundary.UNRESTRICTED
+    if refused:
+        permissions = PermissionBoundary.build(
+            normalize_permission_rules({"deny": [f"Read({(tmp_path / refused).as_posix()})"]}),
+            BoundaryContext(workdir=tmp_path, home=tmp_path / "home", data_dir=tmp_path / "data"),
+        )
     calls = {
         key: asyncio.create_task(
             runner.invoke(
                 "tools/call",
                 {"name": "roots", "arguments": {"key": key}},
-                replace(context(host), cwd=tmp_path / key),
+                replace(context(host), cwd=tmp_path / key, permissions=permissions),
             )
         )
         for key in keys

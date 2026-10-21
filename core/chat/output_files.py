@@ -1,4 +1,11 @@
-"""Recognition of server-local files intentionally named in Assistant replies."""
+"""Recognition of server-local files intentionally named in Assistant replies.
+
+A restricted Run's references follow its Permission Rules: a file the rules
+refuse to read is never checked and stays plain text. An HTML reference opens
+as a website preview that serves the file's whole folder, so an HTML file stays
+plain text too unless the rules permit reading everything the preview can serve
+there (``_previewable``).
+"""
 
 from __future__ import annotations
 
@@ -8,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from core.chat.errors import ChatMessageValidationError
+from core.permissions import PermissionBoundary
 
 JsonObject = dict[str, Any]
 
@@ -19,6 +27,15 @@ _FILE_MARKER_PATTERN = re.compile(
     r"(?P<marker>file:(?P<path>\S+))"
 )
 _TRAILING_PROSE_DELIMITERS = frozenset('.,;!?)]}"`')
+_PREVIEWED_SUFFIXES = frozenset({".html", ".htm"})
+
+
+@dataclass(frozen=True)
+class OutputFileScope:
+    """Where one Run's Assistant file markers resolve, and what its rules let it read."""
+
+    cwd: Path | None
+    permissions: PermissionBoundary
 
 
 @dataclass(frozen=True)
@@ -79,8 +96,12 @@ def resolve_assistant_file_references(
     content: str | None,
     *,
     cwd: Path | None,
+    permissions: PermissionBoundary,
 ) -> list[AssistantFileReference] | None:
-    """Resolve explicit ``file:<path>`` tokens without reading or copying file bytes."""
+    """Resolve explicit ``file:<path>`` tokens without reading or copying file bytes.
+
+    Only files ``permissions`` permit to read are recognized.
+    """
     if not content:
         return None
 
@@ -109,10 +130,13 @@ def resolve_assistant_file_references(
                 match.group("path"),
                 wrapper=wrapper,
                 cwd=cwd,
+                permissions=permissions,
             )
             if resolved_marker is None:
                 continue
             resolved, path_length, closing_wrapper_length = resolved_marker
+            if not _previewable(resolved, permissions):
+                continue
             start_index = match.start() if closing_wrapper_length else match.start("marker")
             end_index = match.start("path") + path_length + closing_wrapper_length
             references.append(
@@ -131,17 +155,22 @@ def _resolve_marked_path(
     *,
     wrapper: str | None,
     cwd: Path | None,
+    permissions: PermissionBoundary,
 ) -> tuple[Path, int, int] | None:
     """Resolve one whitespace-bounded token while preserving adjacent prose punctuation."""
     if wrapper is not None:
-        wrapped = _resolve_wrapped_marked_path(candidate, wrapper=wrapper, cwd=cwd)
+        wrapped = _resolve_wrapped_marked_path(
+            candidate, wrapper=wrapper, cwd=cwd, permissions=permissions
+        )
         if wrapped is not None:
             resolved, path_length = wrapped
             return resolved, path_length, len(wrapper)
 
     end_index = len(candidate)
     while end_index:
-        unwrapped_path = _resolve_regular_file(candidate[:end_index], cwd=cwd)
+        unwrapped_path = _resolve_regular_file(
+            candidate[:end_index], cwd=cwd, permissions=permissions
+        )
         if unwrapped_path is not None:
             return unwrapped_path, end_index, 0
         if candidate[end_index - 1] not in _TRAILING_PROSE_DELIMITERS:
@@ -155,6 +184,7 @@ def _resolve_wrapped_marked_path(
     *,
     wrapper: str,
     cwd: Path | None,
+    permissions: PermissionBoundary,
 ) -> tuple[Path, int] | None:
     """Resolve a marker whose matching Markdown wrapper may precede prose punctuation."""
     end_index = len(candidate)
@@ -162,7 +192,9 @@ def _resolve_wrapped_marked_path(
         wrapped_candidate = candidate[:end_index]
         if wrapped_candidate.endswith(wrapper):
             path_length = end_index - len(wrapper)
-            resolved = _resolve_regular_file(candidate[:path_length], cwd=cwd)
+            resolved = _resolve_regular_file(
+                candidate[:path_length], cwd=cwd, permissions=permissions
+            )
             if resolved is not None:
                 return resolved, path_length
         if candidate[end_index - 1] not in _TRAILING_PROSE_DELIMITERS:
@@ -171,7 +203,9 @@ def _resolve_wrapped_marked_path(
     return None
 
 
-def _resolve_regular_file(candidate: str, *, cwd: Path | None) -> Path | None:
+def _resolve_regular_file(
+    candidate: str, *, cwd: Path | None, permissions: PermissionBoundary
+) -> Path | None:
     try:
         path = Path(candidate).expanduser()
         if not path.is_absolute() and cwd is None:
@@ -179,7 +213,28 @@ def _resolve_regular_file(candidate: str, *, cwd: Path | None) -> Path | None:
         if not path.is_absolute():
             assert cwd is not None
             path = cwd / path
+        if permissions.check_path(path, "read") is not None:
+            return None
         resolved = path.resolve()
         return resolved if resolved.is_file() else None
     except OSError, RuntimeError, ValueError:
         return None
+
+
+def _previewable(resolved: Path, permissions: PermissionBoundary) -> bool:
+    """Whether a referenced file may open as the server presents it.
+
+    The server opens an HTML file as a website preview of its folder
+    (``FileDelivery.open_preview``), which never serves names starting with a
+    dot. So the rules must permit reading that folder and refuse nothing below
+    it but such names.
+    """
+    if not permissions.restricted or resolved.suffix.lower() not in _PREVIEWED_SUFFIXES:
+        return True
+    folder = resolved.parent
+    if permissions.check_path(folder, "read") is not None:
+        return False
+    return all(
+        any(segment.startswith(".") for segment in pattern.split("/"))
+        for pattern in permissions.refusable_below(folder, "read")
+    )

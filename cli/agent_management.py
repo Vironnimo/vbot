@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from difflib import get_close_matches
 from typing import Any
 
@@ -17,8 +18,16 @@ from cli.formatting import format_string_list as _format_string_list
 from cli.formatting import record_fields
 from cli.formatting import string_or_default as _string_or_default
 from cli.formatting import value_text as _value_text
+from cli.permission_notes import permission_notes, with_notes
 from cli.rpc_client import rpc_call as _rpc_call
 from cli.server_management import CommandResult, ServerInstance
+from core.permissions import (
+    PermissionRulesError,
+    PresetName,
+    apply_preset,
+    matching_preset,
+    normalize_permission_rules,
+)
 
 AGENT_UPDATE_FLAGS = (
     "--name",
@@ -41,6 +50,10 @@ AGENT_UPDATE_FLAGS = (
     "--allowed-skills",
     "--excluded-skills",
     "--subagent-allow",
+    "--permissions",
+    "--allow-rule",
+    "--deny-rule",
+    "--clear-permissions",
     "--compaction-policy",
     "--clear-compaction-policy",
     "--workspace",
@@ -50,6 +63,62 @@ AGENT_UPDATE_FLAGS = (
     "--clear-project",
     "--current-session-id",
 )
+
+
+@dataclass(frozen=True)
+class PermissionEdit:
+    """What the permission flags of ``agent create`` and ``agent update`` ask for.
+
+    ``rules`` replaces the agent's own rule set and ``preset`` applies a preset
+    (``full_access`` stores the explicit full set, which overrides a restrictive
+    shared default); ``allow`` and ``deny`` add rules; ``clear`` removes the own
+    rule set, so the agent follows the shared default. Unless ``rules``,
+    ``clear`` or full access replaces everything, the edit starts from the
+    agent's current own rules.
+    """
+
+    rules: Mapping[str, Any] | None = None
+    preset: PresetName | None = None
+    allow: tuple[str, ...] = ()
+    deny: tuple[str, ...] = ()
+    clear: bool = False
+
+    @property
+    def keeps_current(self) -> bool:
+        return not self.clear and self.rules is None and self.preset != "full_access"
+
+    def apply(self, current: Mapping[str, Any] | None) -> dict[str, Any] | None:
+        """The own rule set after this edit, starting from ``current``."""
+        if self.clear:
+            return None
+        result = dict(self.rules if self.rules is not None else current or {})
+        if self.preset is not None:
+            result = apply_preset(self.preset, result)
+        for part, added in (("allow", self.allow), ("deny", self.deny)):
+            if added:
+                listed = result.get(part)
+                result[part] = [*(listed if isinstance(listed, list) else []), *added]
+        return result
+
+
+def _with_permission_rules(
+    instance: ServerInstance, agent_id: str | None, changes: Mapping[str, Any]
+) -> dict[str, Any] | CommandResult:
+    """``changes`` with a :class:`PermissionEdit` turned into ``permission_rules``.
+
+    An edit that keeps the current rules of an existing agent reads them first.
+    """
+    edit = changes.get("permission_rules")
+    if not isinstance(edit, PermissionEdit):
+        return dict(changes)
+    current: Mapping[str, Any] | None = None
+    if agent_id is not None and edit.keeps_current:
+        payload = _rpc_call(instance, "agent.get", {"id": agent_id})
+        if not payload.ok:
+            return payload.to_command_result()
+        own = _own_config(payload.data).get("permission_rules")
+        current = own if isinstance(own, dict) else None
+    return {**changes, "permission_rules": edit.apply(current)}
 
 
 def agent_list(instance: ServerInstance) -> CommandResult:
@@ -86,13 +155,21 @@ def agent_create(
 ) -> CommandResult:
     """Create an agent via `agent.create` RPC."""
 
-    params = {"id": agent_id, "name": name, **dict(changes)}
+    resolved = _with_permission_rules(instance, None, changes)
+    if isinstance(resolved, CommandResult):
+        return resolved
+    params = {"id": agent_id, "name": name, **resolved}
     payload = _rpc_call(instance, "agent.create", params)
     if not payload.ok:
         return payload.to_command_result()
+    notes = permission_notes(
+        instance,
+        resolved.get("permission_rules"),
+        agent_id=_string_or_default(payload.data.get("id"), agent_id),
+    )
     return CommandResult(
         ok=True,
-        message=_format_agent_operation("created", payload.data, agent_id),
+        message=with_notes(_format_agent_operation("created", payload.data, agent_id), notes),
         instance=instance,
         attention=_agent_attention(payload.data),
     )
@@ -117,13 +194,17 @@ def agent_update(
             message=f"no agent fields provided; use one of: {', '.join(AGENT_UPDATE_FLAGS)}",
             instance=instance,
         )
-    params = {"id": agent_id, **dict(changes)}
+    resolved = _with_permission_rules(instance, agent_id, changes)
+    if isinstance(resolved, CommandResult):
+        return resolved
+    params = {"id": agent_id, **resolved}
     payload = _rpc_call(instance, "agent.update", params)
     if not payload.ok:
         return payload.to_command_result()
+    notes = permission_notes(instance, resolved.get("permission_rules"), agent_id=agent_id)
     return CommandResult(
         ok=True,
-        message=_format_agent_operation("updated", payload.data, agent_id),
+        message=with_notes(_format_agent_operation("updated", payload.data, agent_id), notes),
         instance=instance,
         attention=_agent_attention(payload.data),
     )
@@ -333,6 +414,7 @@ def _format_agent_detail(agent: Mapping[str, Any]) -> str:
         f"tool_access: {_json_text(agent.get('tool_access'))}",
         f"tool_loading: {_json_text(agent.get('tool_loading'))}",
         f"tool_loading_own: {_json_text(_own_config(agent).get('tool_loading'))}",
+        *_permission_lines(agent),
         f"allowed_skills: {_format_string_list(agent.get('allowed_skills'))}",
         f"current_session_id: {_string_or_default(agent.get('current_session_id'), '-')}",
         f"context_window: {_value_text(agent.get('context_window'))}",
@@ -405,6 +487,36 @@ def _subagent_allowed_agents(value: object) -> str:
     if not isinstance(subagent, dict):
         return "-"
     return _format_string_list(subagent.get("allowed_agents"))
+
+
+def _permission_lines(agent: Mapping[str, Any]) -> list[str]:
+    """The agent's Permission Rules: the preset they match, then the rules and their origin."""
+    if "permission_rules" not in agent:
+        return []
+    effective = agent.get("permission_rules")
+    own = _own_config(agent).get("permission_rules")
+    default = agent.get("permission_rules_default")
+    if effective is None:
+        # Own rules that restrict nothing (the full-access preset) override the default.
+        summary = "full-access (own rules)" if own is not None else "full-access"
+    else:
+        try:
+            preset: str = matching_preset(normalize_permission_rules(effective))
+        except PermissionRulesError:
+            preset = "custom"
+        if own is not None and default is not None:
+            origin = "own rules over the shared default"
+        elif own is not None:
+            origin = "own rules"
+        else:
+            origin = "shared default"
+        summary = f"{preset.replace('_', '-')} ({origin})"
+    return [
+        f"permissions: {summary}",
+        f"permission_rules: {_json_text(effective)}",
+        f"permission_rules_own: {_json_text(own)}",
+        f"permission_rules_default: {_json_text(default)}",
+    ]
 
 
 def _own_config(agent: Mapping[str, Any]) -> Mapping[str, Any]:

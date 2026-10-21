@@ -25,6 +25,7 @@ from core.automation.cron import (
     CronJobInPastError,
     CronStorageError,
 )
+from core.permissions import BoundaryContext, PermissionBoundary, normalize_permission_rules
 from core.projects import (
     AgentResolutionError,
     ResolutionAgentNotFoundError,
@@ -172,14 +173,19 @@ async def test_run_once_job_fires_in_its_project_and_marks_completed(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    # Arrange
+    # Arrange: a restricted Session created the job, so each fire runs under its boundary.
     service, trigger_service = make_service(tmp_path)
+    creator = PermissionBoundary.build(
+        normalize_permission_rules({"write": "scratch"}),
+        BoundaryContext(workdir=tmp_path, home=tmp_path, data_dir=tmp_path / "data"),
+    )
     job = await service.create_job(
         agent_id="agent-one",
         prompt="Once prompt",
         schedule_type="once",
         run_at=(datetime.now(UTC) + timedelta(minutes=15)).isoformat(),
         project_id="vbot",
+        permission_ceiling=creator.to_ceiling_dict(source="cron"),
     )
     monkeypatch.setattr(cron_timing, "_sleep_until_utc", AsyncMock())
 
@@ -197,6 +203,7 @@ async def test_run_once_job_fires_in_its_project_and_marks_completed(
         contributes_to_agent_activity=False,
         context_note=ANY,
         completion_activity=ANY,
+        permission_ceiling=creator.ceiling(source="cron"),
     )
     fired_line = next(
         record.getMessage()

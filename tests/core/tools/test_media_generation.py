@@ -16,6 +16,12 @@ from core.model_tasks import (
     VideoRefusedError,
 )
 from core.model_tasks.video import VideoProfile
+from core.permissions import (
+    BoundaryContext,
+    PermissionBoundary,
+    PermissionDenied,
+    normalize_permission_rules,
+)
 from core.providers.errors import ProviderRateLimitError
 from core.tools.media_generation import (
     GENERATE_MUSIC_TOOL_NAME,
@@ -114,6 +120,43 @@ async def test_video_tool_resolves_frames_and_caller_owned_default(tmp_path: Pat
     assert service.call_options == {"duration": 8}
     assert service.frame_paths == {"first_frame": (tmp_path / "start.png").resolve()}
     assert service.output_dir == tmp_path / "video-gen"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("arguments", "project"),
+    [
+        ({"output_dir": "../outside"}, False),
+        # The default folder is checked too: in the Project and in the Workspace.
+        ({}, True),
+        ({}, False),
+        ({"first_frame": "../outside/start.png"}, False),
+    ],
+)
+async def test_media_paths_the_rules_refuse_are_refused_before_generating(
+    tmp_path: Path, arguments: dict[str, str], project: bool
+) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+    write_image(tmp_path / "outside" / "start.png")
+    boundary = PermissionBoundary.build(
+        normalize_permission_rules({"read": "work_area", "write": "scratch"}),
+        BoundaryContext(workdir=work, home=tmp_path / "home", data_dir=tmp_path / "data"),
+    )
+    service = _VideoService(tmp_path / "video.mp4", _profile("first_frame"))
+    registry = ToolRegistry()
+    register_generate_video_tool(registry, service)
+    context = make_context(
+        work,
+        GENERATE_VIDEO_TOOL_NAME,
+        permissions=boundary,
+        **({"project_id": "p1", "cwd": work} if project else {}),
+    )
+
+    with pytest.raises(PermissionDenied):
+        await registry.dispatch(context, {"prompt": "A river at dawn", **arguments})
+
+    assert service.output_dir is None
 
 
 def test_music_profile_hides_reference_images_for_text_only_model(tmp_path: Path) -> None:

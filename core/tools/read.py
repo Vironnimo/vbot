@@ -14,6 +14,7 @@ from typing import Any
 
 from core.attachments import AttachmentError, sniff_media_type
 from core.model_tasks import SpeechError
+from core.permissions import PermissionBoundary
 from core.storage.layout import DataDirectoryLayout
 from core.tools._path_suggestions import missing_file_message
 from core.tools._read_arguments import (
@@ -203,7 +204,7 @@ def make_read_handler(
                 )
             arguments = {**arguments, "encoding": encoding}
         try:
-            resolved = context.resolve_path(arguments["path"])
+            resolved = context.resolve_path(arguments["path"], access="read")
         except RuntimeError as error:
             return tool_failure("invalid_path", str(error))
         cwd = _call_cwd(context)
@@ -223,7 +224,10 @@ def make_read_handler(
             }
             page = wiki_page_call(resolved, cwd, context.offers, positions=positions)
             return tool_failure(
-                "file_not_found", missing_file_message(resolved, cwd, elsewhere=page)
+                "file_not_found",
+                missing_file_message(
+                    resolved, cwd, permissions=context.permissions, elsewhere=page
+                ),
             )
         context.record_worked_paths(resolved)
         if stat.S_ISDIR(status.st_mode):
@@ -231,7 +235,7 @@ def make_read_handler(
                 return tool_failure(
                     "invalid_arguments", _directory_search_message(arguments, label)
                 )
-            return _list_directory(resolved, arguments, label)
+            return _list_directory(resolved, arguments, label, context.permissions)
         if not stat.S_ISREG(status.st_mode):
             return tool_failure("not_a_file", f"{label} is neither a file nor a directory.")
 
@@ -519,17 +523,30 @@ def _read_video(label: str, media_type: str) -> JsonObject:
     )
 
 
-def _list_directory(resolved: Path, arguments: JsonObject, label: str) -> JsonObject:
-    """List a directory's entries; reading a directory never counts as reading a file."""
+def _list_directory(
+    resolved: Path, arguments: JsonObject, label: str, permissions: PermissionBoundary
+) -> JsonObject:
+    """List a directory's entries; reading a directory never counts as reading a file.
+
+    Entries the permission rules refuse to read are left out and counted.
+    """
     try:
         with os.scandir(resolved) as scan:
             entries = list(scan)
     except OSError as error:
         return tool_failure("file_read_error", f"Could not list {label}: {os_error_reason(error)}.")
+    readable = permissions.readable_entries(resolved, entries)
     try:
-        return tool_success(render_directory_listing(entries, arguments, label).data())
+        page = render_directory_listing(readable, arguments, label)
     except ValueError as error:
         return tool_failure("invalid_arguments", str(error))
+    hidden = len(entries) - len(readable)
+    if hidden:
+        noun = "entry is" if hidden == 1 else "entries are"
+        note = f"[{hidden} {noun} not listed: the permission rules refuse reading them.]"
+        content = "\n".join((page.content, note)) if readable else note
+        page = replace(page, content=content)
+    return tool_success(page.data())
 
 
 def _directory_search_message(arguments: JsonObject, label: str) -> str:

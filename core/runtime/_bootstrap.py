@@ -8,6 +8,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import partial
+from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, cast
 from uuid import uuid4
 
@@ -54,6 +55,11 @@ from core.model_tasks import (
 from core.model_tasks.decisions import DecisionService
 from core.model_tasks.live import LiveVoiceService, backend_instructions
 from core.models.models import ModelRegistry
+from core.permissions import (
+    CommandChecker,
+    PermissionBoundary,
+    PermissionCeiling,
+)
 from core.projects import ProjectStore, build_agent_resolver
 from core.prompts import (
     PromptAgentStore,
@@ -98,7 +104,7 @@ from core.runtime.keep_awake import KeepAwakeController
 from core.secrets import settle_plaintext_credentials
 from core.secrets.agent_secrets import AgentSecrets
 from core.secrets.requests import SecretRequests
-from core.sessions import ChatSession, ChatSessionManager
+from core.sessions import ChatSession, ChatSessionManager, SessionAddress
 from core.sessions.titles import SessionTitleService
 from core.settings.paths import (
     DEFAULT_ATTACHMENT_MAX_SIZE_BYTES,
@@ -111,6 +117,7 @@ from core.skills.runtime import SkillRuntime, load_global_skill_registry
 from core.statistics import StatisticsIndex
 from core.storage.storage import StorageManager
 from core.subagents import SubAgentCoordinator
+from core.subagents.links import ancestors
 from core.tools import (
     ChangeTracker,
     FileReadState,
@@ -138,12 +145,14 @@ from core.tools import (
 from core.tools.calendar import register_calendar_tool
 from core.tools.classify import register_classify_tool
 from core.tools.command_manager import CommandManager
-from core.tools.cron import register_cron_tool
+from core.tools.cron import SessionAncestors, register_cron_tool
 from core.tools.live import LIVE_TOOL_FAMILY, LiveToolHosts, register_live_tools
 from core.tools.load_tools import register_load_tools_tool
 from core.tools.portal import register_portal_tool
 from core.tools.portal_registry import PortalRegistry
 from core.tools.secrets import register_secrets_tool
+from core.tools.shell import powershell_executable
+from core.tools.shell_environment import inherited_value
 from core.tools.show_widget import register_show_widget_tool
 from core.tools.status import register_status_tool
 from core.tools.subagent import register_subagent_tools
@@ -156,6 +165,7 @@ from core.utils.tokens import prewarm_estimation_encoding
 from core.utils.version import detect_build_identity
 
 if TYPE_CHECKING:
+    from core.permissions.commands.commands import CommandAnalyzer
     from core.runtime.runtime import Runtime
 
 
@@ -698,6 +708,8 @@ def bootstrap(runtime: Runtime) -> None:
                 if runtime._subagent_coordinator is not None
                 else None
             ),
+            server_port=lambda: runtime._server_port,
+            server_hosts=runtime._own_server_hosts,
             subagent_tool_usable=lambda address: (
                 runtime._subagent_coordinator is None
                 or runtime._subagent_coordinator.subagent_tool_usable(address)
@@ -718,6 +730,8 @@ def bootstrap(runtime: Runtime) -> None:
         )
         runtime._trigger_service.set_owned_completion_starter(runtime._start_owned_completion)
         runtime._trigger_service.set_owned_completion_validator(runtime._validate_owned_completion)
+        # Analyzes restricted Sessions' commands; its analyzer starts on first use.
+        runtime._command_checker = CommandChecker(_command_analyzer)
         runtime._terminal_manager = _build_terminal_manager(runtime)
         if runtime._operational_producers == "enabled":
             runtime._start_terminal_manager()
@@ -809,6 +823,8 @@ def bootstrap(runtime: Runtime) -> None:
                 agents=runtime._agents,
                 projects=runtime._projects,
                 data_root=runtime._storage.data_dir,
+                command_checker=runtime._command_checker,
+                ceiling_boundary=partial(_watch_boundary, runtime, Path(runtime._storage.data_dir)),
             )
         )
         runtime._cron_service.set_webhook_secrets(runtime._storage.secrets)
@@ -829,6 +845,7 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._tools,
             runtime._cron_service,
             reference_lock=runtime._automation_references.lock,
+            session_ancestors=_session_ancestors(runtime),
         )
         register_calendar_tool(
             runtime._tools,
@@ -845,6 +862,7 @@ def bootstrap(runtime: Runtime) -> None:
             projects=runtime._projects,
             scratch_areas=runtime._scratch_areas,
             secrets=runtime._agent_secrets,
+            command_checker=runtime._command_checker,
         )
         runtime._subagent_coordinator = SubAgentCoordinator(
             runtime, runtime._trigger_service, secrets=runtime._agent_secrets
@@ -879,6 +897,7 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._projects,
             subagents=runtime._subagent_coordinator,
             scratch_areas=runtime._scratch_areas,
+            command_checker=runtime._command_checker,
         )
         register_status_tool(
             runtime._tools,
@@ -941,6 +960,69 @@ def bootstrap(runtime: Runtime) -> None:
     # startup traceback as its context.
     clean_up_failed_startup(runtime)
     raise startup_error
+
+
+def _watch_boundary(
+    runtime: Runtime,
+    data_dir: Path,
+    ceiling: PermissionCeiling,
+    agent_id: str | None,
+    project_id: str | None,
+) -> PermissionBoundary:
+    """The boundary a Cron watch check of a job with *ceiling* runs under. Blocking.
+
+    Only the ceiling's layers: a check runs no Agent. A command check (with the
+    job's ``agent_id``) is composed like a Session of that Agent
+    (``core.chat.session_permissions``): it works where the Agent works, its
+    Workspace stays reachable and the Agent's configuration stays protected. A
+    URL check needs no folders.
+    """
+    from core.chat import SessionPermissions, session_permissions
+
+    if agent_id is None:
+        permissions = SessionPermissions(
+            rules=None,
+            ceilings=(ceiling,),
+            workdir=data_dir,
+            project_root=None,
+            workspace=None,
+            agent_config=None,
+            rule_files=(),
+            allowed_skills=None,
+        )
+    else:
+        agent = runtime.agent_resolver.resolve_agent(project_id, agent_id, require_model=False)
+        project_root = (
+            Path(runtime.projects.get(project_id).cwd) if project_id is not None else None
+        )
+        permissions = session_permissions(
+            agent, data_dir=data_dir, project_root=project_root, ceiling=ceiling
+        ).without_agent_rules()
+    return permissions.boundary(
+        data_dir,
+        owner=None,
+        loopback_port=runtime._server_port,
+        own_hosts=runtime._own_server_hosts,
+    )
+
+
+def _command_analyzer() -> CommandAnalyzer:
+    """The command analyzer of restricted Sessions, parsing with the shell's own PowerShell."""
+    from core.permissions.commands.commands import CommandAnalyzer
+
+    return CommandAnalyzer(powershell_executable=powershell_executable(inherited_value("PATH")))
+
+
+def _session_ancestors(runtime: Runtime) -> SessionAncestors | None:
+    """The Parent Sessions of a Sub-Agent Session, read on the Session database's pool."""
+    sessions = runtime._chat_sessions
+    if sessions is None:
+        return None
+
+    async def parents(address: SessionAddress) -> list[SessionAddress]:
+        return await sessions.run_async(ancestors, sessions, address)
+
+    return parents
 
 
 def _log_startup_failure(runtime: Runtime) -> None:

@@ -13,11 +13,8 @@ from typing import Any, cast
 import pytest
 import pytest_asyncio
 
-from core.agents.temporary import (
-    TemporaryAgentConfig,
-    TemporaryAgentRegistry,
-    TemporaryExecutionGroups,
-)
+from core.agents.temporary import TemporaryAgentConfig, TemporaryAgentRegistry
+from core.agents.temporary_execution import TemporaryExecutionGroups
 from core.database import open_database
 from core.extensions import (
     ExtensionAPI,

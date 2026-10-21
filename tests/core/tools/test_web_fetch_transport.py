@@ -26,6 +26,7 @@ from curl_cffi.requests.exceptions import ConnectionError as CurlConnectionError
 import core.tools._public_http as public_http
 from core.tools._public_http import PublicResponse
 from core.utils.retry import MAX_RETRIES
+from tests.core.permissions.command_check_support import LAN_ADDRESS, PORT, restricted
 from tests.core.tools.web_fetch_test_support import (
     IPV6_ADDRESS,
     IPV6_HOST,
@@ -74,6 +75,8 @@ async def test_addresses_that_are_not_web_urls_are_refused_without_fetching(
     [
         ("http://127.0.0.1/private", "private or local network address"),
         ("http://10.0.0.1/internal", "private or local network address"),
+        # This machine's LAN address with the vBot port: the server's own API.
+        ("http://192.168.1.20:8765/api/rpc", "private or local network address"),
         ("http://100.64.0.1/internal", "private or local network address"),
         ("http://100.127.255.254/internal", "private or local network address"),
         ("http://[::ffff:100.64.0.1]/internal", "private or local network address"),
@@ -667,3 +670,71 @@ async def test_responses_over_the_download_limit_are_refused(
         "file or another source."
     )
     assert error["retryable"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("url", "requested", "refused"),
+    [
+        ("https://denied.example/page", [], "web_fetch was not run: ... denied.example,"),
+        (
+            "https://public.example/start",
+            ["https://public.example/start"],
+            "The page was not fetched: ... https://public.example/start, which leads to "
+            "denied.example,",
+        ),
+        # Beside other pages only this page was not fetched.
+        (
+            ["https://denied.example/page", "https://denied.example/other"],
+            [],
+            "The page was not fetched: ... denied.example,",
+        ),
+    ],
+    ids=["address", "redirect-hop", "several-pages"],
+)
+async def test_the_permission_rules_refuse_an_address_or_redirect_hop_before_it_is_requested(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    url: str | list[str],
+    requested: list[str],
+    refused: str,
+) -> None:
+    fetched: list[str] = []
+
+    def responder(request_url: str) -> PublicResponse:
+        fetched.append(request_url)
+        return make_result(
+            status_code=302, headers={"Location": "https://denied.example/page"}, url=request_url
+        )
+
+    install_http_get(monkeypatch, responder)
+    boundary = restricted(tmp_path, deny=["Web(denied.example)"])
+
+    result = await fetch(tmp_path, {"url": url}, permissions=boundary)
+
+    error = assert_failure_envelope(result, "permission_denied")
+    outcome, _, target = refused.partition(": ... ")
+    assert (
+        f"{outcome}: the permission rules refuse fetching {target} because the rule "
+        "Web(denied.example) denies it."
+    ) in error["message"]
+    assert error["retryable"] is False
+    assert fetched == requested
+
+
+@pytest.mark.asyncio
+async def test_a_restricted_fetch_cannot_reach_the_vbot_server_through_a_lan_address(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    network = AsyncMock()
+    monkeypatch.setattr(public_http, "_http_get", network)
+
+    result = await fetch(
+        tmp_path,
+        {"url": f"http://{LAN_ADDRESS}:{PORT}/api/rpc"},
+        permissions=restricted(tmp_path),
+    )
+
+    error = assert_failure_envelope(result, "permission_denied")
+    assert "it is the vBot server itself" in error["message"]
+    network.assert_not_awaited()

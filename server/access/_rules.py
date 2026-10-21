@@ -1,4 +1,8 @@
-"""Peer, transport and route rules of the access guard: pure functions of one request."""
+"""Peer, transport and route rules of the access guard: pure functions of one request.
+
+Also :class:`ServerHosts`, the names and addresses that reach this server, which
+the Permission Rules keep restricted Agents away from.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +10,8 @@ import dataclasses
 import functools
 import re
 import socket
-from collections.abc import Iterable, Mapping
+import time
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -129,6 +134,76 @@ def host_policy(config: AccessConfig, *, bind_host: str | None) -> HostPolicy:
     if bind is not None:
         names.add(bind)
     return HostPolicy(frozenset(names))
+
+
+class ServerHosts:
+    """The names and addresses beyond loopback that reach this server on its port.
+
+    Restricted Agents may not reach vBot's own API (``BoundaryContext.own_hosts``).
+    While the server listens on loopback only, nothing else reaches it and the
+    set is empty. Otherwise it holds the names the server answers to
+    (:class:`HostPolicy`) and every address of this machine's interfaces, read
+    again at most once a minute so a changed LAN address is known soon. Calling
+    it blocks on the first call and after each refresh interval.
+    """
+
+    REFRESH_SECONDS = 60.0
+
+    def __init__(
+        self,
+        policy: HostPolicy,
+        *,
+        bind_host: str | None,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._beyond_loopback = _listens_beyond_loopback(bind_host)
+        self._names = tuple(sorted(policy.names))
+        self._clock = clock
+        self._read_at: float | None = None
+        self._hosts: tuple[str, ...] = ()
+
+    def __call__(self) -> tuple[str, ...]:
+        if not self._beyond_loopback:
+            return ()
+        now = self._clock()
+        if self._read_at is None or now - self._read_at >= self.REFRESH_SECONDS:
+            self._hosts = (*self._names, *interface_addresses())
+            self._read_at = now
+        return self._hosts
+
+
+def _listens_beyond_loopback(bind_host: str | None) -> bool:
+    if not bind_host:
+        return False
+    address = parse_ip(bind_host)
+    if address is not None:
+        return not is_loopback_address(address)
+    return normalize_host_name(bind_host) != "localhost"
+
+
+def interface_addresses() -> tuple[str, ...]:
+    """Every IPv4 and IPv6 address of this machine's interfaces and host name. Blocking."""
+    import psutil  # type: ignore[import-untyped]
+
+    found: dict[str, None] = {}
+    try:
+        for entries in psutil.net_if_addrs().values():
+            for entry in entries:
+                if entry.family in (socket.AF_INET, socket.AF_INET6):
+                    address = parse_ip(entry.address)
+                    if address is not None:
+                        found[str(address)] = None
+    except OSError:
+        pass
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None):
+            if info[0] in (socket.AF_INET, socket.AF_INET6):
+                address = parse_ip(str(info[4][0]))
+                if address is not None:
+                    found[str(address)] = None
+    except OSError:
+        pass
+    return tuple(found)
 
 
 @functools.cache

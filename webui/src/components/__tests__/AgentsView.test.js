@@ -37,6 +37,7 @@ import {
   usableConnection,
   baseAgent,
   waitForCondition,
+  PERMISSION_PRESETS,
 } from './AgentsView.support.js';
 
 vi.mock('svelte', async () => {
@@ -541,6 +542,64 @@ describe('AgentsView', () => {
     // Showing the created Agent is a step to its place.
     expect(navigation.place).toEqual(['bravo']);
     await waitForCondition(() => textInputValue('agent-id') === 'bravo', 100);
+  });
+
+  it('creates an Agent with full access over a restrictive shared default', async () => {
+    const restrictive = { read: 'work_area', write: 'work_area' };
+    rpcMock.mockImplementation(
+      createAgentsRpcMock({
+        permissionRulesDefault: restrictive,
+        permissionRulesDefaultPreset: 'work_dir',
+        settingsDefaults: { permission_rules: restrictive },
+        agentUpdate: (params) => ({ ...baseAgent(), ...params }),
+      }),
+    );
+
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+    await waitForCondition(() => listedAgentIds().includes('alpha'), 100);
+
+    getButtonByAriaLabel('Create agent').click();
+    flushSync();
+    await flushAsyncUpdates();
+
+    const modal = getDialog(t('agents.create'));
+    const preset = 'agent-create-permissions-preset';
+    // Without a choice the new Agent uses the shared default.
+    await waitForCondition(
+      () =>
+        triggerTextContent(getSimpleRoot(preset)) ===
+        t('permissions.preset.useDefault', {
+          preset: t('permissions.preset.work_dir'),
+        }),
+      100,
+    );
+
+    openSimpleDropdown(preset);
+    selectSimpleOption(preset, t('permissions.preset.full_access'));
+    await flushAsyncUpdates();
+    expect(modal.textContent).toContain(t('permissions.preset.ignoresDefault'));
+
+    setTextInputValueWithin(modal, 0, 'bravo');
+    modal
+      .querySelector('form')
+      .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await waitForCondition(
+      () => rpcMock.mock.calls.some((call) => call[0] === 'agent.create'),
+      100,
+    );
+
+    const createCall = rpcMock.mock.calls.find(
+      (call) => call[0] === 'agent.create',
+    );
+    expect(createCall[1].permission_rules).toEqual(
+      PERMISSION_PRESETS.full_access,
+    );
+    // The dialog checks the rules of an Agent that does not exist yet.
+    expect(rpcMock).toHaveBeenCalledWith('permissions.validate', {
+      permission_rules: null,
+      new_agent: true,
+    });
   });
 
   it('keeps the current Agent selected while the Add modal is open and after cancelling it', async () => {

@@ -39,6 +39,7 @@ from core.settings import (
     SettingsValidationError,
     load_runtime_settings_json,
     load_validated_settings_json,
+    unusable_settings_fallback,
 )
 from core.settings.normalizers import (
     SUPPORTED_APPEARANCE_LANGUAGES,
@@ -236,7 +237,9 @@ class StorageManager:
         Read paths must not make one malformed global setting fatal to the app.
         Valid siblings remain live when a schema error can be isolated. The
         original file stays untouched and write transactions still use the strict
-        loader so a later save can never overwrite invalid user data.
+        loader so a later save can never overwrite invalid user data. Falling
+        back to defaults never drops default Permission Rules silently: see
+        ``unusable_settings_fallback``.
 
         An unchanged file version is served from memory: its stat stamp (taken
         before reading) matches and the file is older than the racy window.
@@ -254,7 +257,10 @@ class StorageManager:
             settings = self._load_usable_settings()
             if settings is None:
                 last = self._settings_last_loaded
-                return {} if last is None else cast(dict[str, Any], json.loads(last))
+                if last is None:
+                    # Nothing was loaded yet, so default Permission Rules may be unknown.
+                    return unusable_settings_fallback(self.settings_path)
+                return cast(dict[str, Any], json.loads(last))
             encoded = json.dumps(settings)
             self._settings_last_loaded = encoded
             self._settings_cache = None
@@ -284,12 +290,19 @@ class StorageManager:
                     exc,
                 )
                 return None
+            fallback = unusable_settings_fallback(self.settings_path)
             self._warn_settings_degradation(
                 (str(exc),),
-                "Ignoring invalid settings file %s and using defaults: %s",
+                "Ignoring invalid settings file %s and using defaults"
+                + (
+                    "; Agents that inherit default Permission Rules do not run until it is repaired"
+                    if fallback
+                    else ""
+                )
+                + ": %s",
                 exc,
             )
-            return {}
+            return fallback
         if ignored:
             details = "; ".join(
                 f"{diagnostic.path}: {diagnostic.message}" for diagnostic in ignored

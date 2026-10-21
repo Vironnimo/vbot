@@ -307,6 +307,18 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
         agent_id: agentId,
         field,
       }),
+    validatePermissionRules: (
+      permissionRules,
+      { agentId = '', newAgent = false } = {},
+    ) =>
+      call('permissions.validate', {
+        permission_rules: permissionRules ?? null,
+        ...(agentId
+          ? { agent_id: agentId }
+          : newAgent
+            ? { new_agent: true }
+            : {}),
+      }),
     debugStatus: () => call('debug.status'),
     debugTraceList: () => call('debug.trace_list'),
     debugTraceGet: (traceId) => call('debug.trace_get', { trace_id: traceId }),

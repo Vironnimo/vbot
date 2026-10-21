@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Sequence
 
+from core.permissions import PermissionBoundary
+
 from . import _shell_hint_common as _common
 from ._shell_hint_code import (
     _COMMAND_WORD,
@@ -292,7 +294,11 @@ def _hint_waiting_for_background(command: str) -> str | None:
 
 
 def _hint_hidden_failure(
-    command: str, exit_code: int | None, output: str, offers: Callable[[str], bool]
+    command: str,
+    exit_code: int | None,
+    output: str,
+    offers: Callable[[str], bool],
+    permissions: PermissionBoundary,
 ) -> str | None:
     """Name a statement PowerShell could not run behind exit code 0.
 
@@ -310,7 +316,7 @@ def _hint_hidden_failure(
     if missing is not None and _calls(command, missing[1]):
         # The hint names the statement or the pipeline part that did not run.
         hint = _hint_powershell_command_not_found(
-            _Failure(command, window, None, offers), exit_zero=True
+            _Failure(command, window, None, offers, permissions=permissions), exit_zero=True
         )
         if hint is not None:
             return hint

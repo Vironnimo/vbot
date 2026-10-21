@@ -7,13 +7,22 @@ from dataclasses import replace
 from fnmatch import fnmatchcase
 from typing import TYPE_CHECKING, Any, Literal
 
+from core.permissions import (
+    PERMISSION_RULE_PARTS,
+    PermissionRules,
+    normalize_permission_rules,
+    permission_rules_to_dict,
+    resolve_rule_set,
+)
 from core.projects._runtime_agent import (
+    AgentResolutionError,
     ConfigAgent,
 )
 from core.projects.sources import (
     AgentProfile,
 )
 from core.settings import AgentDefaults
+from core.settings.agent_defaults import InvalidPermissionRulesDefaultError
 from core.skills import WILDCARD_ALLOWLIST
 
 if TYPE_CHECKING:
@@ -154,6 +163,7 @@ def _build_config_agent(
     project_id: str | None = None,
     resolved_top_p: float | None = None,
     tool_loading: Any = None,
+    permission_rules: PermissionRules | None = None,
 ) -> ConfigAgent:
     return ConfigAgent(
         id=scanned.agent_id,
@@ -166,6 +176,7 @@ def _build_config_agent(
         body=scanned.body,
         source_path=scanned.source_path,
         source=scanned.source,
+        rule_files=tuple(dict.fromkeys((scanned.source_path, *scanned.rule_files))),
         preload_skills=scanned.preload_skills,
         model_inherit=scanned.model == "inherit",
         tool_access=tool_access,
@@ -175,6 +186,7 @@ def _build_config_agent(
             dict(compaction_policy) if isinstance(compaction_policy, dict) else None
         ),
         tool_loading=copy.deepcopy(tool_loading) if isinstance(tool_loading, dict) else None,
+        permission_rules=permission_rules,
     )
 
 
@@ -332,6 +344,85 @@ def _config_tool_access_source(project: Project, scanned: AgentProfile) -> dict[
         }
     policy = _project_agent_tool_access(project, scanned)
     return {"value": policy.to_dict(), "source": "agent"}
+
+
+def _override_permission_rules(project: Project, agent_id: str) -> PermissionRules | None:
+    """The Team member's vBot override rule set; the Project store validated it."""
+    raw = project.overrides.get(agent_id, {}).get("permission_rules")
+    return normalize_permission_rules(raw) if raw is not None else None
+
+
+def resolve_permission_rules(
+    levels: tuple[PermissionRules | None, ...], defaults: AgentDefaults
+) -> PermissionRules | None:
+    """Resolve rule sets per part over ``levels`` (most specific first), then the defaults.
+
+    The defaults are read only for a part no level sets; an invalid stored
+    default then refuses the Agent (:class:`AgentResolutionError`) instead of
+    giving it full access.
+    """
+    if all(
+        any(level is not None and getattr(level, part) is not None for level in levels)
+        for part in PERMISSION_RULE_PARTS
+    ):
+        return resolve_rule_set(*levels)
+    try:
+        default = defaults.resolved_permission_rules()
+    except InvalidPermissionRulesDefaultError as error:
+        raise AgentResolutionError(str(error)) from error
+    return resolve_rule_set(*levels, default)
+
+
+def permission_rules_source(
+    levels: tuple[tuple[str, PermissionRules | None], ...], defaults: AgentDefaults
+) -> dict[str, Any]:
+    """The effective rule set and, per part, the level that supplied it.
+
+    ``levels`` pairs each source name (``override``, ``repository``, ``agent``) with its rule set,
+    most specific first; ``global_default`` follows. ``value`` is ``None`` for
+    full access; ``source`` names the most specific level that set anything.
+    """
+    try:
+        default = defaults.resolved_permission_rules()
+    except InvalidPermissionRulesDefaultError as error:
+        default = None
+        invalid: str | None = str(error)
+    else:
+        invalid = None
+    named = (*levels, ("global_default", default))
+    effective = resolve_rule_set(*(rules for _name, rules in named))
+    parts: dict[str, str] = {}
+    for part in PERMISSION_RULE_PARTS:
+        for name, rules in named:
+            if rules is not None and getattr(rules, part) is not None:
+                parts[part] = name
+                break
+    result: dict[str, Any] = {
+        "value": permission_rules_to_dict(effective) if effective is not None else None,
+        "source": next((name for name, rules in named if rules is not None), None),
+        "parts": parts,
+    }
+    if invalid is not None:
+        result["error"] = invalid
+    return result
+
+
+def inherited_permission_rules(
+    levels: tuple[PermissionRules | None, ...], defaults: AgentDefaults
+) -> dict[str, Any] | None:
+    """The stored form of what an editable level inherits for the parts it leaves unset.
+
+    ``levels`` are the levels below the edited one (a Team member's repository
+    rules), most specific first, then the shared default. ``None`` while nothing
+    is inherited, or while the stored default is invalid, which
+    :func:`permission_rules_source` reports as ``error``.
+    """
+    try:
+        default = defaults.resolved_permission_rules()
+    except InvalidPermissionRulesDefaultError:
+        default = None
+    inherited = resolve_rule_set(*levels, default)
+    return permission_rules_to_dict(inherited) if inherited is not None else None
 
 
 def _overridden_model(project: Project, agent_id: str) -> str:

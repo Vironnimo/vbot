@@ -5,7 +5,9 @@ from types import SimpleNamespace
 from typing import Any
 
 from core.database import DatabaseUnavailableError
+from core.permissions import normalize_permission_rules
 from core.projects import WorkingProjectMissingError
+from core.projects.resolver import AgentResolver
 from core.sessions import (
     AGENT_DEFAULT_PROJECT,
     ARCHIVE_KIND_PROJECT,
@@ -13,6 +15,7 @@ from core.sessions import (
     ChatSessionManager,
     SessionAddress,
 )
+from core.settings.agent_defaults import INVALID_PERMISSION_RULES
 
 from .resolver_test_support import (
     AgentResolutionError,
@@ -576,3 +579,55 @@ def test_resolve_skill_scope(
     project = None if prompt_project is None else _stub_project(prompt_project)
 
     assert resolve_skill_scope(project_id, project, agent) == scope
+
+
+def test_identity_permission_rules_inherit_unset_parts_and_refuse_an_invalid_default(
+    data_dir: Path, template_dir: Path, projects: ProjectStore
+) -> None:
+    defaults: dict[str, Any] = {"permission_rules": {"read": "work_area"}}
+    store = AgentStore(data_dir, template_dir=template_dir, defaults_provider=lambda: defaults)
+    store.create("coder", "Coder", model="openai/gpt-5.2", permission_rules={"write": "scratch"})
+    every_part = {
+        "read": "work_area",
+        "write": "scratch",
+        "commands": "listed",
+        "web": "listed",
+        "allow": [],
+        "deny": [],
+    }
+    store.create("sealed", "Sealed", model="openai/gpt-5.2", permission_rules=every_part)
+    # The Full access preset: every part set, nothing restricted.
+    full_access = {
+        "read": "anywhere",
+        "write": "anywhere",
+        "commands": "any",
+        "web": "any",
+        "allow": [],
+        "deny": [],
+    }
+    store.create("free", "Free", model="openai/gpt-5.2", permission_rules=full_access)
+    resolver = AgentResolver(
+        store, projects, _openai_configured(), lambda: defaults, sessions=store._session_manager()
+    )
+
+    resolved = resolver.resolve_agent(None, "coder").permission_rules
+    effective = resolver.effective_config(None, "coder")["permission_rules"]
+
+    assert resolved == normalize_permission_rules({"read": "work_area", "write": "scratch"})
+    assert effective["parts"] == {"read": "global_default", "write": "agent"}
+    # Explicit full access overrides every part of the restrictive default.
+    assert resolver.resolve_agent(None, "free").permission_rules is None
+    assert resolver.effective_config(None, "free")["permission_rules"]["value"] is None
+
+    # An unreadable default never means full access: Agents that need it refuse to run.
+    defaults["permission_rules"] = INVALID_PERMISSION_RULES
+    with pytest.raises(AgentResolutionError, match="vbot doctor config"):
+        resolver.resolve_agent(None, "coder")
+    assert "error" in resolver.effective_config(None, "coder")["permission_rules"]
+    assert [agent.id for agent in store.list()] == ["coder", "sealed", "free"]
+    assert resolver.resolve_agent(None, "sealed").permission_rules == (
+        normalize_permission_rules(every_part)
+    )
+    # Its own rules set every part, so it runs; they restrict nothing.
+    unbaked = resolver.resolve_agent(None, "free").permission_rules
+    assert unbaked is not None and not unbaked.restricts

@@ -13,11 +13,13 @@ import pytest
 import core.tools.cron as cron_tool_module
 from core.automation.cron import CronDelivery, WatchCheckError
 from core.chat import ReplySurface
+from core.permissions import BoundaryContext, PermissionBoundary, normalize_permission_rules
 from core.projects import (
     AgentResolutionError,
     ResolutionAgentNotFoundError,
     ResolutionProjectNotFoundError,
 )
+from core.sessions import SessionAddress
 from core.tools._cron_arguments import render_call
 from core.tools.cron import CRON_TOOL_NAME, CRON_TOOL_PARAMETERS
 from tests.core.tools.scheduling_tool_support import (
@@ -260,6 +262,103 @@ def test_update_changes_only_the_named_fields(tmp_path: Path) -> None:
     )
     assert "schedule: every 4h" in text
     assert "repeat: 3" in text
+
+
+def test_a_restricted_session_bounds_the_jobs_it_creates_or_changes(tmp_path: Path) -> None:
+    tool = cron_tool(tmp_path)
+    boundary = PermissionBoundary.build(
+        normalize_permission_rules({"write": "scratch"}),
+        BoundaryContext(workdir=tmp_path, home=tmp_path, data_dir=tmp_path / "data"),
+    )
+    create = {"action": "create", "prompt": PROMPT, "schedule": "0 9 * * *"}
+
+    bounded, _ = tool.call(create, permissions=boundary)
+    unbounded, _ = tool.call(create)
+
+    def ceiling(envelope: dict[str, Any]) -> Any:
+        return tool.service.get_job(envelope["data"]["id"]).ceiling()
+
+    assert ceiling(bounded) == boundary.ceiling(source="cron")
+    assert ceiling(unbounded) is None
+    # A full-access change keeps the creator's boundary; a restricted one adds its own.
+    tool.call({"action": "update", "id": bounded["data"]["id"], "name": "Renamed"})
+    tool.call(
+        {"action": "update", "id": unbounded["data"]["id"], "name": "Renamed"}, permissions=boundary
+    )
+    assert ceiling(bounded) == ceiling(unbounded) == boundary.ceiling(source="cron")
+    # Another restricted Session's change never widens the job: both boundaries apply.
+    other = PermissionBoundary.build(
+        normalize_permission_rules({"web": "listed", "allow": ["Web(example.com)"]}),
+        BoundaryContext(workdir=tmp_path, home=tmp_path, data_dir=tmp_path / "data"),
+    )
+    tool.call({"action": "update", "id": bounded["data"]["id"], "name": "Again"}, permissions=other)
+    both = ceiling(bounded)
+    first, second = boundary.ceiling(source="cron"), other.ceiling(source="cron")
+    assert both is not None and first is not None and second is not None
+    assert both.layers == (*first.layers, *second.layers)
+    # A watch the job's boundary refuses is refused before the job changes.
+    tool.checks.refusal = boundary.refusal(
+        "web", "intranet.example", "not_permitted", base="listed"
+    )
+    refused, _ = tool.call(
+        {"action": "update", "id": bounded["data"]["id"], "watch": "https://intranet.example/"},
+        permissions=boundary,
+    )
+    assert refused["error"]["code"] == "permission_denied"
+    assert tool.service.get_job(bounded["data"]["id"]).watch is None
+
+
+def test_a_restricted_session_pins_jobs_only_to_its_own_session_tree(tmp_path: Path) -> None:
+    tool = cron_tool(tmp_path)
+    boundary = PermissionBoundary.build(
+        normalize_permission_rules({"write": "scratch"}),
+        BoundaryContext(workdir=tmp_path, home=tmp_path, data_dir=tmp_path / "data"),
+    )
+    own = SessionAddress(None, "agent-one", "session-one")
+    tool.parents[SessionAddress(None, "agent-one", "child")] = [own]
+    tool.parents[SessionAddress(None, "agent-one", "grandchild")] = [
+        SessionAddress(None, "agent-one", "child"),
+        own,
+    ]
+    create = {"action": "create", "prompt": PROMPT, "schedule": "0 9 * * *"}
+
+    pinned = {
+        session: tool.call({**create, "session": session}, permissions=boundary)[0]
+        for session in ("current", "session-one", "new", "child", "grandchild", "main-chat")
+    }
+    users_job, _ = tool.call({**create, "session": "main-chat"})
+    changed, _ = tool.call(
+        {"action": "update", "id": users_job["data"]["id"], "name": "Mine"}, permissions=boundary
+    )
+
+    assert {session: envelope["ok"] for session, envelope in pinned.items()} == {
+        "current": True,
+        "session-one": True,
+        "new": True,
+        "child": True,
+        "grandchild": True,
+        "main-chat": False,
+    }
+    reason = (
+        'Session "main-chat": the job runs under your permission rules, and that Session would '
+        "keep them for all its later Runs."
+    )
+    assert pinned["main-chat"]["error"] == {
+        "code": "permission_denied",
+        "message": f"cron was not run: the permission rules refuse running a job in {reason} "
+        'Pin a job only to this conversation ("current") or a Session of your Sub-Agents. '
+        f"Send: {render_call({**create, 'session': 'new'})}",
+        "retryable": False,
+    }
+    # Changing the user's job pinned elsewhere would restrict that Session too.
+    assert changed["error"]["code"] == "permission_denied"
+    assert changed["error"]["message"] == (
+        f"cron was not run: the permission rules refuse changing a job that runs in {reason} "
+        "If the task needs this change, tell the user."
+    )
+    job = tool.service.get_job(users_job["data"]["id"])
+    assert job.name != "Mine" and job.ceiling() is None
+    assert len(tool.jobs()) == 6
 
 
 def test_update_with_null_repeat_removes_the_limit(tmp_path: Path) -> None:

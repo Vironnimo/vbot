@@ -575,6 +575,7 @@
                 class:done={rowDotStatus === 'success'}
                 class:error={rowDotStatus === 'failed'}
                 class:partial={rowDotStatus === 'partial'}
+                class:refused={rowDotStatus === 'refused'}
                 class:cancelled={rowDotStatus === 'cancelled'}
                 class:interrupted={rowDotStatus === 'interrupted'}
                 class:ended={rowDotStatus === 'ended'}
@@ -595,6 +596,7 @@
                   class:cancelled={rowDotStatus === 'cancelled'}
                   class:interrupted={rowDotStatus === 'interrupted'}
                   class:partial={rowDotStatus === 'partial'}
+                  class:refused={rowDotStatus === 'refused'}
                   use:tooltip={rowStatusDetails}
                 >
                   {rowTimeLabel}

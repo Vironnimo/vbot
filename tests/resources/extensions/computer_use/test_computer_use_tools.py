@@ -16,6 +16,7 @@ from PIL import Image, ImageDraw
 
 from core.extensions.extensions import ExtensionAPI, ExtensionDeclarations
 from core.extensions.operations import ExtensionHost
+from core.storage.temp_files import artifact_owner
 from core.tools import ToolContext
 from core.tools.availability import ToolAccess
 from resources.extensions.computer_use import extension as computer_use
@@ -137,7 +138,10 @@ async def test_screenshot_coordinates_use_returned_pixels_and_keep_the_display(
     assert [image.size for image in images(context)] == [(1280, 720)]
     # Images are temporary files that the storage retention sweep removes.
     saved = Path(context.result_media[0]["path"])
-    assert saved.parent == computer.context.data_root / "artifacts" / "temp" / "computer_use"
+    # The image lies in the Session's own folder, which a restricted Session may read.
+    context = computer.context
+    owner = artifact_owner(context.project_id, context.agent_id, context.session_id)
+    assert saved.parent == context.data_root / "artifacts" / "temp" / "computer_use" / owner
     assert saved.is_file()
 
     context = computer.context_for("computer")

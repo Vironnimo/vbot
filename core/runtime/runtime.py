@@ -117,6 +117,9 @@ class Runtime(RuntimeServiceGraph):
         self._extension_change_publisher: Callable[[str, str, Sequence[str], int], None] | None = (
             None
         )
+        # The serving port, which restricted Runs may not reach on loopback.
+        self._server_port: int | None = None
+        self._server_hosts: Callable[[], tuple[str, ...]] | None = None
         self._close_task: asyncio.Task[None] | None = None
         # Lives as long as the Runtime: a restart keeps coordinating with a
         # data snapshot that is still copying.
@@ -220,6 +223,21 @@ class Runtime(RuntimeServiceGraph):
     ) -> None:
         """Install the server-owned generic resource invalidation publisher."""
         self._extension_change_publisher = publisher
+
+    def set_server_port(
+        self, port: int | None, *, own_hosts: Callable[[], tuple[str, ...]] | None = None
+    ) -> None:
+        """Record the port the vBot server listens on (``None`` outside a server).
+
+        ``own_hosts`` returns the further names and addresses that reach it on that
+        port (blocking; empty while it listens on loopback only).
+        """
+        self._server_port = port
+        self._server_hosts = own_hosts
+
+    def _own_server_hosts(self) -> tuple[str, ...]:
+        """Blocking: what reaches the server besides loopback, for restricted boundaries."""
+        return self._server_hosts() if self._server_hosts is not None else ()
 
     def _extension_cwd(self, project_id: str | None, agent_id: str) -> Path:
         # No Session is at hand: the Agent works where its new Sessions would.

@@ -238,6 +238,41 @@ export function textInputValue(controlId) {
   return document.getElementById(controlId)?.value;
 }
 
+// The server's presets (`permissions.validate`), each the change it makes.
+export const PERMISSION_PRESETS = Object.freeze({
+  full_access: {
+    read: 'anywhere',
+    write: 'anywhere',
+    commands: 'any',
+    web: 'any',
+    allow: [],
+    deny: [],
+  },
+  work_dir: {
+    read: 'work_area',
+    write: 'work_area',
+    commands: null,
+    web: null,
+  },
+  work_dir_read_only: {
+    read: 'work_area',
+    write: 'scratch',
+    commands: null,
+    web: null,
+  },
+});
+
+function permissionRulesRestrict(rules) {
+  const unrestricted = ['anywhere', 'any', undefined];
+  return (
+    ['read', 'write', 'commands', 'web'].some(
+      (part) => !unrestricted.includes(rules[part]),
+    ) ||
+    (rules.allow ?? []).length > 0 ||
+    (rules.deny ?? []).length > 0
+  );
+}
+
 export function createAgentsRpcMock(options = {}) {
   const models = options.models ?? [openaiModel(), anthropicModel()];
   const agents = options.agents ?? [baseAgent()];
@@ -397,6 +432,31 @@ export function createAgentsRpcMock(options = {}) {
       }
       const source = agents.find((agent) => agent.id === params.id) ?? {};
       return { ...source, id: params.new_id };
+    }
+
+    // The Permissions section checks the Agent's rules as it shows them.
+    // A new Agent inherits `permissionRulesDefault` (named by its preset).
+    if (method === 'permissions.validate') {
+      const own = params.permission_rules ?? null;
+      const inherited = params.new_agent
+        ? (options.permissionRulesDefault ?? null)
+        : null;
+      const effective = own ?? inherited;
+      const free = effective === null || !permissionRulesRestrict(effective);
+      return {
+        valid: true,
+        permission_rules: own,
+        notes: [],
+        errors: [],
+        preset: free ? 'full_access' : 'custom',
+        presets: PERMISSION_PRESETS,
+        inherited_preset: inherited
+          ? (options.permissionRulesDefaultPreset ?? 'custom')
+          : 'full_access',
+        inherited,
+        effective: free ? null : effective,
+        preview: null,
+      };
     }
 
     throw new Error(`Unexpected RPC method: ${method}`);

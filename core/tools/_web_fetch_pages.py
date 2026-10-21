@@ -7,7 +7,11 @@ import re
 import time
 from typing import Any
 
-from core.storage.temp_files import TEMPORARY_FILE_RETENTION, TemporaryFileManager
+from core.storage.temp_files import (
+    TEMPORARY_FILE_RETENTION,
+    TemporaryFileManager,
+    artifact_owner,
+)
 from core.tools._web_fetch_find import find_spans, looks_like_pattern
 from core.tools.tools import ToolContext, tool_failure, tool_success
 from core.utils.edit_distance import edit_distance
@@ -134,7 +138,7 @@ def save_page(
                 warnings.append(_PARTIAL_WARNING)
     if warnings:
         snapshot["warnings"] = warnings
-    snapshot["owner"] = [context.session_id, context.agent_id]
+    snapshot["owner"] = page_owner(context)
     snapshot["fetched_at"] = time.time()
     lease = manager.create(_CATEGORY, ".json")
     try:
@@ -143,6 +147,11 @@ def save_page(
     finally:
         lease.finish()
     return snapshot
+
+
+def page_owner(context: ToolContext) -> str:
+    """The Session a snapshot belongs to: its full address, as for other temporary files."""
+    return artifact_owner(context.project_id, context.agent_id, context.session_id)
 
 
 def _snapshot(manager: TemporaryFileManager, identifier: str) -> dict[str, Any]:
@@ -167,7 +176,7 @@ def load_page(context: ToolContext, manager: TemporaryFileManager, ref: str) -> 
     """Resolve only this Agent's snapshots in this Session, including expiry."""
     identifier, _, _ = _decode_ref(ref)
     snapshot = _snapshot(manager, identifier)
-    if snapshot.get("owner") != [context.session_id, context.agent_id]:
+    if snapshot.get("owner") != page_owner(context):
         raise SavedPageError(
             "invalid_ref",
             "foreign",

@@ -38,6 +38,7 @@ from core.chat.model_resolution import (
 )
 from core.chat.request_runner import WireRequestRunner
 from core.compaction.run_coordination import CompactionRunCoordinator
+from core.permissions import PermissionCeiling
 from core.projects import AgentOverrides
 from core.runs import (
     ActiveRunError,
@@ -206,6 +207,7 @@ class ChatLoop:
         completion_activity: CompletionActivity | None = None,
         source_session_id: str | None = None,
         context_note: str | ChatMessage | None = None,
+        permission_ceiling: PermissionCeiling | None = None,
     ) -> Run:
         """Start one chat run against an existing session for server-facing callers.
 
@@ -230,6 +232,11 @@ class ChatLoop:
         the Model reads with it, such as what happened since the previous Run;
         a prepared note keeps its display record, and an internal Run stores it
         before its input note too.
+
+        ``permission_ceiling`` bounds this Run by the boundary of the Session
+        that caused it (a Cron job's creator) on top of the Agent's own rules.
+        It is joined into the Session's stored ceiling, so every later Run of
+        the Session, follow-ups included, stays within it.
         """
         return await self._start_run(
             agent_id,
@@ -250,6 +257,7 @@ class ChatLoop:
             completion_activity=completion_activity,
             source_session_id=source_session_id,
             context_note=context_note,
+            permission_ceiling=permission_ceiling,
         )
 
     async def edit_run(
@@ -295,6 +303,7 @@ class ChatLoop:
         contributes_to_agent_activity: bool = True,
         completion_activity: CompletionActivity | None = None,
         context_note: str | ChatMessage | None = None,
+        permission_ceiling: PermissionCeiling | None = None,
     ) -> Run:
         """Validate a target, create its Session, and start one Run.
 
@@ -338,6 +347,7 @@ class ChatLoop:
             contributes_to_agent_activity=contributes_to_agent_activity,
             completion_activity=completion_activity,
             context_note=context_note,
+            permission_ceiling=permission_ceiling,
         )
 
     async def queue_run(
@@ -360,6 +370,7 @@ class ChatLoop:
         contributes_to_agent_activity: bool = True,
         completion_activity: CompletionActivity | None = None,
         context_note: str | ChatMessage | None = None,
+        permission_ceiling: PermissionCeiling | None = None,
     ) -> QueuedRunItem:
         """Queue one chat run for a busy session or start it immediately when idle.
 
@@ -393,6 +404,10 @@ class ChatLoop:
             input_persisted_hook=input_persisted_hook,
             context_note=context_note,
         )
+        if permission_ceiling is not None:
+            await self._dependencies.sessions.run_async(
+                resolver.join_session_ceiling, session.address, permission_ceiling
+            )
         return await manager.enqueue(
             SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session.id),
             _QueuedRunExecutor(self, request),
@@ -528,6 +543,7 @@ class ChatLoop:
         edit_message_id: str | None = None,
         source_session_id: str | None = None,
         context_note: str | ChatMessage | None = None,
+        permission_ceiling: PermissionCeiling | None = None,
     ) -> Run:
         _validate_run_tool_iteration_limit(max_tool_iterations)
         if session_id is None and create_missing and new_session is None:
@@ -567,7 +583,9 @@ class ChatLoop:
                 session_id=new_session.session_id,
                 project_id=project_id,
                 actor=new_session.actor,
-                metadata=new_session.agent_overrides.capture(agent).session_metadata(),
+                metadata=new_session.agent_overrides.with_ceiling(permission_ceiling)
+                .capture(agent)
+                .session_metadata(),
                 working_project_id=_stored_working_project(project_id, working_project_id),
             )
         elif session is None:
@@ -582,6 +600,10 @@ class ChatLoop:
             await self._dependencies.sessions.run_async(
                 resolver.capture_session_settings, session.address, agent
             )
+            if permission_ceiling is not None:
+                await self._dependencies.sessions.run_async(
+                    resolver.join_session_ceiling, session.address, permission_ceiling
+                )
         if edit_message_id is not None:
             if internal or not isinstance(content, str):
                 raise ChatError("history edits require visible plain-text content")

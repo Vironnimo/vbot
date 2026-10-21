@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -38,6 +39,7 @@ from core.json_documents import (
     strip_unknown_fields,
     validate_collection_root,
 )
+from core.permissions import PermissionCeiling, PermissionRulesError
 from core.projects import ResolutionAgentNotFoundError, ResolutionProjectNotFoundError
 from core.settings import is_valid_agent_id, is_valid_project_id
 from core.utils.errors import VBotError
@@ -139,6 +141,7 @@ _MUTABLE_FIELDS = frozenset(
         "project_id",
         "delivery",
         "watch",
+        "permission_ceiling",
     )
 )
 
@@ -460,6 +463,12 @@ def _validate_cron_job_data(diagnostics: list[JsonDiagnostic], item_path: str, i
     silent = item.get("last_run_silent")
     if silent is not None and not isinstance(silent, bool):
         add_error(diagnostics, f"{item_path}.last_run_silent", "must be a boolean")
+    ceiling = item.get("permission_ceiling")
+    if ceiling is not None:
+        try:
+            PermissionCeiling.from_ceiling_dict(ceiling)
+        except PermissionRulesError as error:
+            add_error(diagnostics, f"{item_path}.permission_ceiling", str(error))
 
 
 def _validate_cron_agent_id(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:
@@ -580,6 +589,16 @@ class CronJob:
     last_check_error: str | None = None
     notifications: tuple[CronNotification, ...] = ()
     last_delivered_at: str | None = None
+    # The boundary of the restricted Session that created or last changed the job
+    # through the ``cron`` Tool, in its stored ceiling form; every fire applies it.
+    # ``None``: the job was set up by the user or a full-access Session.
+    permission_ceiling: dict[str, Any] | None = None
+
+    def ceiling(self) -> PermissionCeiling | None:
+        """The stored creator boundary every fire of this job runs under."""
+        if self.permission_ceiling is None:
+            return None
+        return PermissionCeiling.from_ceiling_dict(self.permission_ceiling)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize one CronJob to a JSON-compatible payload.
@@ -633,6 +652,8 @@ class CronJob:
             data["notifications"] = [item.to_dict() for item in self.notifications]
         if self.last_delivered_at is not None:
             data["last_delivered_at"] = self.last_delivered_at
+        if self.permission_ceiling is not None:
+            data["permission_ceiling"] = deepcopy(self.permission_ceiling)
         return data
 
     def delivery_progress(self) -> dict[str, Any]:
@@ -702,6 +723,11 @@ class CronJob:
                 CronNotification.from_dict(item) for item in payload.get("notifications", [])
             ),
             last_delivered_at=payload.get("last_delivered_at"),
+            permission_ceiling=(
+                None
+                if payload.get("permission_ceiling") is None
+                else deepcopy(dict(payload["permission_ceiling"]))
+            ),
         )
 
 
@@ -1001,6 +1027,12 @@ def normalize_job_fields(job: CronJob) -> None:
 
     if job.status not in _ALLOWED_STATUSES:
         raise CronJobValidationError("status must be active, paused, completed, failed, or missed")
+
+    if job.permission_ceiling is not None:
+        try:
+            job.ceiling()
+        except PermissionRulesError as error:
+            raise CronJobValidationError(f"permission_ceiling: {error}") from error
 
     if job.session_id is not None and not isinstance(job.session_id, str):
         raise CronJobValidationError("session_id must be a string when provided")

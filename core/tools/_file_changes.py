@@ -21,6 +21,7 @@ from contextlib import ExitStack
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from core.permissions import PermissionBoundary
 from core.sessions import SessionAddress
 from core.tools._edit_engine import apply_hunks, clean_additions, line_ending
 from core.tools._patch_entries import (
@@ -223,6 +224,8 @@ class ChangeBatch:
     shown: Callable[[Path], str]
     cwd: Path
     templates: Mapping[str, str] = field(default_factory=dict)
+    # The Run's Permission Rules: a file's current text is shown only where they permit reading.
+    permissions: PermissionBoundary = field(kw_only=True)
     # Whether the Model request offered a Tool (``ToolContext.offers``).
     offers: Callable[[str], bool] = field(default=lambda _name: False)
     # Actual observations and completed mutations only; never a speculative final plan.
@@ -254,6 +257,7 @@ def change_batch(context: ToolContext, templates: Mapping[str, str] | None = Non
         shown=lambda path: display_search_path(path, cwd=cwd),
         cwd=cwd,
         templates=templates or {},
+        permissions=context.permissions,
         offers=context.offers,
     )
 
@@ -306,7 +310,9 @@ def _error_data(error: _PatchError | OSError, batch: ChangeBatch) -> JsonObject:
         data["path_label"] = batch.shown(path)
         if error.code == "file_not_found":
             page = wiki_page_call(path, batch.cwd, batch.offers, change=True)
-            data["message"] = missing_file_message(path, batch.cwd, elsewhere=page)
+            data["message"] = missing_file_message(
+                path, batch.cwd, permissions=batch.permissions, elsewhere=page
+            )
     label = error.values.get("label")
     if isinstance(label, str) and label:
         data["label"] = label
@@ -525,7 +531,7 @@ def _elsewhere(
         return None
     holding: list[str] = []
     for path in state.recent_files(context.session_id, _ELSEWHERE_FILES + 1):
-        if path == source:
+        if path == source or batch.permissions.check_path(path, "read") is not None:
             continue
         try:
             if path.stat().st_size > _ELSEWHERE_MAX_BYTES:
@@ -743,7 +749,7 @@ def run_operations(
         for name in (operation.path, operation.destination):
             if name is not None and name not in resolved and name not in resolution_errors:
                 try:
-                    resolved[name] = _resolve(context, name)
+                    resolved[name] = _resolve(context, name, access="write")
                 except _PatchError as error:
                     resolution_errors[name] = _error_data(error, batch)
     # Delete and Move act on the named entry: a final link itself, not its target.
@@ -841,7 +847,7 @@ def _current_path(
     A Delete or Move earlier in the patch can remove or rename a link, so a later
     Add at that name creates a file there instead of writing to the old target.
     """
-    path = _resolve(context, name)
+    path = _resolve(context, name, access="write")
     if entry:
         path = _entry_path(context, name, path, destination=destination)
     if path not in locked:

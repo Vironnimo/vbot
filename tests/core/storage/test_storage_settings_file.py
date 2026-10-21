@@ -310,6 +310,11 @@ def test_settings_written_by_a_newer_vbot_are_not_used_or_overwritten(tmp_path: 
     [
         pytest.param("[]", {}, id="non-object"),
         pytest.param("{", {}, id="invalid-json"),
+        pytest.param(
+            '{"defaults": {"agent": {"permission_rules": {"read": "work_area"}}}',
+            {"defaults": {"agent": {"permission_rules": "invalid"}}},
+            id="invalid-json-with-permission-rules",
+        ),
         pytest.param(b'{"appearance":{"language":"\xff"}}', {}, id="non-utf8"),
         pytest.param(
             '{"format_version": 1, "server_port": 8500, "compaction": {"enabled": "yes"}}',
@@ -459,14 +464,14 @@ def test_settings_changes_are_read_after_every_kind_of_write(tmp_path: Path) -> 
 def test_a_settings_file_that_cannot_be_read_keeps_the_last_loaded_settings(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A passing read failure is no file version: it never turns into cached defaults."""
+    """A passing read failure is no file version: it never turns into cached defaults.
+
+    Before the first load, defaults hold but default Permission Rules are unknown.
+    """
     storage = StorageManager(tmp_path)
     path = storage.settings_path
     _write_raw(storage, '{"format_version": 1, "port": 8421}')
     _age(path, seconds=120)
-    assert storage.load_settings() == {"port": 8421}
-    _write_raw(storage, '{"format_version": 1, "port": 8422}')
-    _age(path)
     real_open = io.open
 
     def held_by_another_program(file: Any, mode: str = "r", *args: Any, **kwargs: Any) -> Any:
@@ -474,6 +479,13 @@ def test_a_settings_file_that_cannot_be_read_keeps_the_last_loaded_settings(
         if isinstance(file, (str, os.PathLike)) and Path(file) == path and "r" in mode:
             raise PermissionError(errno.EACCES, "The file is used by another process", file)
         return real_open(file, mode, *args, **kwargs)
+
+    monkeypatch.setattr(io, "open", held_by_another_program)
+    assert storage.load_settings() == {"defaults": {"agent": {"permission_rules": "invalid"}}}
+    monkeypatch.undo()
+    assert storage.load_settings() == {"port": 8421}
+    _write_raw(storage, '{"format_version": 1, "port": 8422}')
+    _age(path)
 
     monkeypatch.setattr(io, "open", held_by_another_program)
     assert storage.load_settings() == {"port": 8421}

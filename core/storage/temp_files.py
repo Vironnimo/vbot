@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import re
 import stat
@@ -24,16 +25,44 @@ _LOGGER = get_logger("storage.temp_files")
 TEMPORARY_FILE_RETENTION: Mapping[str, timedelta] = {
     "commands": timedelta(hours=72),
     "computer_use": timedelta(hours=72),
+    "speech": timedelta(hours=72),
     "subagents": timedelta(hours=24),
     "terminals": timedelta(hours=72),
     "web_fetch": timedelta(hours=72),
 }
+# Categories whose files vBot hands to one Session: each such file lies in the
+# folder of the Session it belongs to (``<category>/<owner>/``), so a restricted
+# Session may read its own files and no other Session's (``session_artifact_dirs``).
+SESSION_ARTIFACT_CATEGORIES: tuple[str, ...] = tuple(TEMPORARY_FILE_RETENTION)
 TEMPORARY_FILE_SWEEP_INTERVAL_SECONDS = 60.0
 _SUFFIX_PATTERN = re.compile(r"^\.[A-Za-z0-9][A-Za-z0-9._-]*$")
 _CATEGORY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+_OWNER_PATTERN = re.compile(r"^s[0-9a-f]{31}$")
 # A sweep lists every retained file (more than ten thousand on a busy install),
 # so background sweeps never run on the Event Loop.
 _SWEEP_WORKERS = BoundedWorkerPool(name="temporary-files", max_workers=1)
+
+
+def artifact_owner(project_id: str | None, agent_id: str, session_id: str) -> str:
+    """The folder name of one Session's temporary files, the same in every category.
+
+    Derived from the full Session address, so Sessions of different Agents or
+    Projects that share a Session id never share a folder.
+    """
+    address = "\0".join((project_id or "", agent_id, session_id))
+    return "s" + hashlib.sha256(address.encode("utf-8")).hexdigest()[:31]
+
+
+def session_artifact_dirs(data_dir: str | Path, owner: str) -> tuple[Path, ...]:
+    """Every folder holding temporary files vBot handed to the Session ``owner`` names."""
+    _require_owner(owner)
+    temporary = DataDirectoryLayout(data_dir).temporary
+    return tuple(temporary / category / owner for category in SESSION_ARTIFACT_CATEGORIES)
+
+
+def _require_owner(owner: str) -> None:
+    if not _OWNER_PATTERN.fullmatch(owner):
+        raise ValueError(f"Invalid temporary-file owner: {owner!r}")
 
 
 @dataclass(slots=True)
@@ -83,17 +112,25 @@ class TemporaryFileManager:
         # Set by ``stop`` so an in-flight background sweep ends between files.
         self._stopping = Event()
 
-    def create(self, category: str, suffix: str) -> TemporaryFileLease:
-        """Create and protect one uniquely named file in a fixed category."""
+    def create(self, category: str, suffix: str, *, owner: str | None = None) -> TemporaryFileLease:
+        """Create and protect one uniquely named file in a fixed category.
+
+        ``owner`` (:func:`artifact_owner`) puts the file in the folder of the
+        Session it belongs to; without one it lies in the category folder itself.
+        """
         if category not in self._retention:
             raise ValueError(f"Unknown temporary-file category: {category}")
         if not _SUFFIX_PATTERN.fullmatch(suffix):
             raise ValueError(f"Invalid temporary-file suffix: {suffix!r}")
+        directory = self.root / category
+        if owner is not None:
+            _require_owner(owner)
+            directory = directory / owner
 
-        category_dir = self.root / category
-        path = write_id_file(category_dir, "tmp", suffix, b"")
-
+        # Under the lock a sweep cannot remove the owner folder between its
+        # creation and the file's.
         with self._lock:
+            path = write_id_file(directory, "tmp", suffix, b"")
             self._active.add(path)
         return TemporaryFileLease(path=path, _manager=self)
 
@@ -104,7 +141,10 @@ class TemporaryFileManager:
         its lease after each period and reopens it for the next, so retention
         counts from the end of the latest period. Blocking.
         """
-        if path.parent.parent != self.root or path.parent.name not in self._retention:
+        category = path.parent
+        if category.parent != self.root and _OWNER_PATTERN.fullmatch(category.name):
+            category = category.parent
+        if category.parent != self.root or category.name not in self._retention:
             raise ValueError(f"Not a temporary file of this manager: {path}")
         with self._lock:
             self._active.add(path)
@@ -187,34 +227,80 @@ class TemporaryFileManager:
                 continue
 
             expires_before = cutoff_epoch - retention.total_seconds()
+            if not self._sweep_files(entries, active, expires_before, stopping):
+                return
             for entry in entries:
                 if stopping is not None and stopping.is_set():
                     return
-                if os.path.normcase(entry.path) in active:
+                if not _OWNER_PATTERN.fullmatch(entry.name):
                     continue
-                try:
-                    # Listing data preselects without a per-file system call on
-                    # Windows (one stat elsewhere); it can lag behind a file
-                    # still open elsewhere, so a fresh stat confirms each removal.
-                    if (
-                        not entry.is_file(follow_symlinks=False)
-                        or entry.stat(follow_symlinks=False).st_mtime >= expires_before
-                    ):
-                        continue
-                    candidate = Path(entry.path)
-                    current = candidate.stat(follow_symlinks=False)
-                    if (
-                        not is_link_status(current)
-                        and stat.S_ISREG(current.st_mode)
-                        and current.st_mtime < expires_before
-                    ):
-                        candidate.unlink()
-                except OSError as error:
-                    _LOGGER.warning(
-                        "Temporary-file cleanup failed path=%s: %s",
-                        entry.path,
-                        error,
-                    )
+                self._sweep_owner(Path(entry.path), active, expires_before, stopping)
+
+    def _sweep_owner(
+        self, folder: Path, active: set[str], expires_before: float, stopping: Event | None
+    ) -> None:
+        """Sweep one Session's folder of a category; remove it once empty and expired."""
+        try:
+            status = folder.stat(follow_symlinks=False)
+            if is_link_status(status) or not stat.S_ISDIR(status.st_mode):
+                return
+            with os.scandir(folder) as listing:
+                entries = list(listing)
+        except FileNotFoundError:
+            return
+        except OSError as error:
+            _LOGGER.warning("Temporary-file folder unavailable path=%s: %s", folder, error)
+            return
+        if not self._sweep_files(entries, active, expires_before, stopping):
+            return
+        try:
+            with self._lock:
+                if folder.stat(follow_symlinks=False).st_mtime < expires_before:
+                    # Fails while a file is left, which a create may just have added.
+                    folder.rmdir()
+        except FileNotFoundError:
+            return
+        except OSError:
+            # Not empty: a later sweep removes it after its last file.
+            return
+
+    def _sweep_files(
+        self,
+        entries: list[os.DirEntry[str]],
+        active: set[str],
+        expires_before: float,
+        stopping: Event | None,
+    ) -> bool:
+        """Remove the expired inactive regular files listed; False once stopping."""
+        for entry in entries:
+            if stopping is not None and stopping.is_set():
+                return False
+            if os.path.normcase(entry.path) in active:
+                continue
+            try:
+                # Listing data preselects without a per-file system call on
+                # Windows (one stat elsewhere); it can lag behind a file
+                # still open elsewhere, so a fresh stat confirms each removal.
+                if (
+                    not entry.is_file(follow_symlinks=False)
+                    or entry.stat(follow_symlinks=False).st_mtime >= expires_before
+                ):
+                    continue
+                candidate = Path(entry.path)
+                current = candidate.stat(follow_symlinks=False)
+                if (
+                    not is_link_status(current)
+                    and stat.S_ISREG(current.st_mode)
+                    and current.st_mtime < expires_before
+                ):
+                    candidate.unlink()
+            except OSError as error:
+                _LOGGER.warning(
+                    "Temporary-file cleanup failed path=%s: %s",
+                    entry.path,
+                    error,
+                )
+        return True
 
     def _finish(self, path: Path) -> None:
         try:
@@ -237,8 +323,11 @@ class TemporaryFileManager:
 
 
 __all__ = [
+    "SESSION_ARTIFACT_CATEGORIES",
     "TEMPORARY_FILE_RETENTION",
     "TEMPORARY_FILE_SWEEP_INTERVAL_SECONDS",
     "TemporaryFileLease",
     "TemporaryFileManager",
+    "artifact_owner",
+    "session_artifact_dirs",
 ]

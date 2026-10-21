@@ -6,7 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from core.agents.temporary import TemporaryAgentConfig, TemporaryExecutionGroups
+from core.agents.temporary import TemporaryAgentConfig
+from core.agents.temporary_execution import TemporaryExecutionGroups
 from core.chat import ChatMessage
 from core.extensions import ExtensionRegistrationIdentity
 from core.sessions import SessionAddress

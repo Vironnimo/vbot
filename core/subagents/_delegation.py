@@ -174,10 +174,17 @@ def _open_subagent_session(
 
     Blocking. One creation transaction keeps title, Parent link and settings
     together even when storage fails. The Session works in
-    :func:`_child_working_project`.
+    :func:`_child_working_project`. A restricted Parent's Permission Boundary is
+    stored with the overrides as the Session's ceiling: no Run of the Sub-Agent,
+    also after a later ``send``, gets more access than the Parent had. Each
+    ``send`` joins the Parent's boundary at that time into it.
     """
     sessions = runtime.chat_sessions
-    metadata = AgentOverrides.from_stored(overrides).session_metadata()
+    stored = dict(overrides)
+    ceiling = context.permissions.to_ceiling_dict(source="parent")
+    if ceiling is not None:
+        stored["permission_ceiling"] = ceiling
+    metadata = AgentOverrides.from_stored(stored).session_metadata()
     metadata.update(
         _link_metadata(
             subagent_id=subagent_id,

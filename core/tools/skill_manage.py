@@ -123,6 +123,19 @@ SKILL_MANAGE_PUBLISH_CONFLICT = (
     "A global Skill named '{name}' already exists; nothing changed. Tell the user, who can "
     "compare the two Skills in the Skill controls."
 )
+# Permission Rules that limit where the Agent can change files also keep it from
+# changing Skills other Agents use: global Skills and Skills of other Agents.
+_RULES_LIMIT_FILES = (
+    "because they limit where you can change files. If the task needs this change, tell the user."
+)
+SKILL_MANAGE_NOT_OWN_REFUSAL = (
+    f"Skill '{{name}}' is not one of your own Skills; nothing changed. The permission rules "
+    f"let you change only your own Skills, {_RULES_LIMIT_FILES}"
+)
+SKILL_MANAGE_PUBLISH_LIMITED_REFUSAL = (
+    f"Skill '{{name}}' stays one of your own Skills; nothing changed. The permission rules "
+    f"keep you from making Skills global, {_RULES_LIMIT_FILES}"
+)
 SKILL_MANAGE_GLOBAL_CREATE = (
     "create adds one of your own Skills; nothing changed. Omit scope to create it, and use "
     "action publish to make one of your own Skills global."
@@ -313,6 +326,13 @@ def make_skill_manage_handler(
                     raise _RefusalError(
                         "skill_not_found", _unknown_skill_message(call.name, own_root)
                     )
+            if context.permissions.limits_writes and (target != "own" or call.action == "publish"):
+                refusal = (
+                    SKILL_MANAGE_PUBLISH_LIMITED_REFUSAL
+                    if call.action == "publish"
+                    else SKILL_MANAGE_NOT_OWN_REFUSAL
+                )
+                raise _RefusalError("permission_denied", refusal.format(name=call.name))
             # Checks and write run under one Skill write lock, so a change that
             # lands after a check cannot be overwritten by this write.
             hints: list[str] = []

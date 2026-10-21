@@ -1,6 +1,6 @@
 # Tools Agent-facing text
 
-Why each sentence of the shared dispatch texts the Tools domain owns exists: the unknown-Tool, argument-validation and no-arguments refusals, the `tool_execution_error` message, the unknown-field note and the per-code fallback sentences (`core/tools/tools.py`, `contracts.py`, `_tool_results.py`). Mechanics and exact conditions: `tools/call-repair.md` and `tools/registry-dispatch.md` -> Failure codes. Rules for this file: `.vorch/workflows/domain-map-workflow.md` -> Agent-facing text; failure modes F1-F6: `tools.md` -> Terms.
+Why each sentence of the shared dispatch texts the Tools domain owns exists: the unknown-Tool, argument-validation and no-arguments refusals, the `tool_execution_error` message, the unknown-field note, and the per-code fallback sentences (`core/tools/tools.py`, `contracts.py`, `_tool_results.py`). The `permission_denied` refusal and its reasons are in `permissions/agent-facing-text.md`. Mechanics and exact conditions: `tools/call-repair.md` and `tools/registry-dispatch.md` -> Failure codes. Rules for this file: `.vorch/workflows/domain-map-workflow.md` -> Agent-facing text; failure modes F1-F6: `tools.md` -> Terms.
 
 | Text | Reason |
 |---|---|

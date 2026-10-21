@@ -10,15 +10,13 @@ from typing import Any
 from core.projects.sources import _reading as reading
 from core.projects.sources._translation import (
     SHELL_TOOLS,
+    RuleDraft,
     profile,
     restrict,
     unavailable,
     unsupported,
 )
 from core.projects.sources.profile import AgentProfile, Translation
-
-# Permission profiles that keep the Agent from editing files at all.
-_READ_ONLY = frozenset({"read-only", ":read-only"})
 
 
 class CodexAdapter:
@@ -33,6 +31,14 @@ class CodexAdapter:
         return next(iter(self._scan(root, selected)), None)
 
     def _scan(self, root: Path, selected: AgentProfile | None = None) -> list[AgentProfile]:
+        # Every profile inherits the shared config, also before it exists.
+        shared = (root / ".codex/config.toml",)
+        return [
+            replace(agent, rule_files=(*shared, *agent.rule_files))
+            for agent in self._profiles(root, selected)
+        ]
+
+    def _profiles(self, root: Path, selected: AgentProfile | None) -> list[AgentProfile]:
         paths = (
             reading.files(root / ".codex/agents", ".toml", recursive=True)
             if selected is None
@@ -132,6 +138,7 @@ class CodexAdapter:
                         "developer_instructions",
                         "model_reasoning_effort",
                         "sandbox_mode",
+                        "sandbox_workspace_write",
                         "approval_policy",
                         "default_permissions",
                         "permissions",
@@ -153,17 +160,13 @@ class CodexAdapter:
 
 
 def _restrictions(agent: AgentProfile, fields: dict[str, Any]) -> AgentProfile:
-    """Remove only capabilities the Codex Agent lacks entirely.
+    """Translate the sandbox into Permission Rules; remove only missing capabilities.
 
-    vBot has no sandbox and asks no approvals: an Agent that may do something,
-    even confined or after approval, keeps the vBot Tool for it.
+    vBot asks no approvals: an Agent that may do something after approval keeps
+    the vBot Tool for it. A sandbox limits where the Agent writes, which
+    Permission Rules express; its network limit has no vBot equivalent.
     """
-    for setting in ("sandbox_mode", "default_permissions"):
-        value = fields.get(setting)
-        if value in _READ_ONLY:
-            agent = restrict(agent, setting, frozenset({"apply_patch"}), "File edits are disabled.")
-        elif value is not None:
-            agent = _translated(agent, setting, "vBot has no sandbox; the Agent keeps its Tools.")
+    agent = _sandbox_rules(agent, fields)
     if "approval_policy" in fields:
         agent = _translated(
             agent, "approval_policy", "vBot asks no approvals; the Agent keeps its Tools."
@@ -176,6 +179,132 @@ def _restrictions(agent: AgentProfile, fields: dict[str, Any]) -> AgentProfile:
     if isinstance(features, dict) and features.get("shell_tool") is False:
         agent = restrict(agent, "features.shell_tool", SHELL_TOOLS, "The shell is disabled.")
     return agent
+
+
+_NETWORK_DETAIL = "Not translated: vBot does not control the network access of shell commands."
+_SANDBOX_BASES = {
+    "read-only": ("scratch", "Writes are limited to the Scratch Area (write: scratch)."),
+    "workspace-write": (
+        "work_area",
+        "Writes are limited to the Work Area and the writable roots (write: work_area).",
+    ),
+}
+
+
+def _sandbox_rules(agent: AgentProfile, fields: dict[str, Any]) -> AgentProfile:
+    """``sandbox_mode`` or a permission profile as Permission Rules (developers.openai.com/codex).
+
+    ``read-only`` writes only to the Scratch Area, ``workspace-write`` to the Work
+    Area plus ``sandbox_workspace_write.writable_roots``; ``danger-full-access``
+    adds nothing. A named profile translates its ``extends`` chain and its
+    filesystem entries: ``write`` to Edit allow rules, ``deny`` to Read deny rules.
+    """
+    draft = RuleDraft()
+    mode = fields.get("sandbox_mode")
+    if mode in _SANDBOX_BASES:
+        base, detail = _SANDBOX_BASES[mode]
+        draft.narrow(
+            "write", base, "sandbox_mode", f"{detail} Its network limit is not translated."
+        )
+    elif mode == "danger-full-access":
+        draft.report("sandbox_mode", "translated", "Full access: no Permission Rules.")
+    elif mode is not None:
+        raise reading.SourceError("Unknown sandbox_mode.")
+    workspace = fields.get("sandbox_workspace_write")
+    if workspace is not None:
+        if not isinstance(workspace, dict):
+            raise reading.SourceError("sandbox_workspace_write must be a table.")
+        for key, value in workspace.items():
+            setting = f"sandbox_workspace_write.{key}"
+            if key == "writable_roots" and mode == "workspace-write":
+                for root in reading.names(value):
+                    draft.rule("allow", f"Edit({root.rstrip('/')}/**)", f"{setting}.{root}")
+            elif key == "network_access":
+                draft.report(setting, "not_supported", _NETWORK_DETAIL)
+            elif key in {"exclude_tmpdir_env_var", "exclude_slash_tmp"}:
+                draft.report(
+                    setting,
+                    "translated",
+                    "vBot adds no temporary folders; the Agent writes temporary files to its "
+                    "Scratch Area.",
+                )
+            else:
+                draft.report(setting, "not_supported", "Applies only to workspace-write.")
+    profile_name = fields.get("default_permissions")
+    if profile_name is not None:
+        _permission_profile(draft, profile_name, fields.get("permissions", {}))
+    return draft.apply(agent)
+
+
+def _permission_profile(draft: RuleDraft, name: object, profiles: object) -> None:
+    if not isinstance(name, str) or not isinstance(profiles, dict):
+        raise reading.SourceError("default_permissions must name a permission profile.")
+    chain: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    current: str | None = name
+    while current is not None and current not in {":read-only", ":workspace", "read-only"}:
+        if current == ":danger-full-access":
+            draft.report("default_permissions", "translated", "Full access: no Permission Rules.")
+            return
+        profile = profiles.get(current)
+        if current in seen or not isinstance(profile, dict):
+            raise reading.SourceError(f"Unknown or cyclic permission profile {current}.")
+        seen.add(current)
+        chain.insert(0, profile)
+        parent = profile.get("extends")
+        if parent is not None and not isinstance(parent, str):
+            raise reading.SourceError("extends must name a permission profile.")
+        current = parent
+    # A profile without a built-in parent writes only where its entries say.
+    base = "work_area" if current == ":workspace" else "scratch"
+    draft.narrow(
+        "write",
+        base,
+        "default_permissions",
+        f"Writes are limited to {'the Work Area' if base == 'work_area' else 'the Scratch Area'} "
+        f"and the profile's write entries (write: {base}).",
+    )
+    for profile in chain:
+        for key in profile:
+            if key not in {"description", "extends", "filesystem"}:
+                draft.report(
+                    f"permissions.{name}.{key}",
+                    "not_supported",
+                    _NETWORK_DETAIL if key == "network" else "This setting has no vBot equivalent.",
+                )
+        filesystem = profile.get("filesystem", {})
+        if not isinstance(filesystem, dict):
+            raise reading.SourceError("filesystem must be a table.")
+        for path, access in filesystem.items():
+            if path == ":workspace_roots" and isinstance(access, dict):
+                for sub, nested in access.items():
+                    target = "{workdir}" if sub == "." else "{workdir}/" + sub.removeprefix("./")
+                    _filesystem_entry(draft, f"{name}.filesystem.{path}.{sub}", target, nested)
+            elif path.startswith(":") or path == "glob_scan_max_depth":
+                if path != "glob_scan_max_depth":
+                    draft.report(
+                        f"permissions.{name}.filesystem.{path}",
+                        "not_supported",
+                        "Not translated: vBot has no such folder set.",
+                    )
+            elif isinstance(access, dict):
+                for sub, nested in access.items():
+                    target = path.rstrip("/") + ("" if sub == "." else "/" + sub)
+                    _filesystem_entry(draft, f"{name}.filesystem.{path}.{sub}", target, nested)
+            else:
+                _filesystem_entry(draft, f"{name}.filesystem.{path}", path, access)
+
+
+def _filesystem_entry(draft: RuleDraft, setting: str, path: str, access: object) -> None:
+    setting = f"permissions.{setting}"
+    if access == "write":
+        draft.rule("allow", f"Edit({path})", setting)
+    elif access == "deny":
+        draft.rule("deny", f"Read({path})", setting)
+    elif access == "read":
+        draft.report(setting, "translated", "Needs no rule: reading is not limited.")
+    else:
+        raise reading.SourceError("Filesystem access must be read, write or deny.")
 
 
 def _translated(agent: AgentProfile, setting: str, detail: str) -> AgentProfile:

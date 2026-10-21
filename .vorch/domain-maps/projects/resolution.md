@@ -58,6 +58,19 @@ per-Agent override -> repository Agent -> Project default -> global default -> P
 
 Compaction policy and `tool_loading` (On-demand Tools) are supported per-Agent Project overrides passed into the synthesized `ConfigAgent` (`test_resolver_config_agent.py`; `tool_loading` with each missing part filled from `defaults.agent.tool_loading`, `inherit_tool_loading`), but they are not among the fields in the current effective-config provenance result. Do not imply provenance coverage until that contract is deliberately extended end to end.
 
+### Permission Rules
+
+`RuntimeAgent.permission_rules` resolves per part with `resolve_rule_set` (`../permissions.md`), most specific level first, then `defaults.agent.permission_rules` (`resolve_permission_rules`, `_resolution_values.py`):
+
+```text
+Identity Agent:   agent.json -> global default
+Team member:      Project override -> repository profile (translation) -> global default
+Temporary Agent:  its owner's TemporaryAgentConfig rules (+ permission_ceiling)
+Temporary member: owner's rules -> Project override -> repository profile -> global default
+```
+
+The defaults are read only for a part no level sets; an invalid stored default then raises `AgentResolutionError` instead of granting full access. A resolved set that restricts nothing is `None` (full access), so a level storing the Full access preset (every part set) lifts the limits of every level below it. A Project chosen for an Identity Agent's Session confines nothing: Identity Agents never take Project overrides. Built-in Agents always get `None`. `effective_config(...)["permission_rules"]` is `{value, source, parts, error?}`: the effective stored-form rules (`None` = full access, also when they restrict nothing), the most specific level that set anything (`agent` for `agent.json`, `override`, `repository` for a repository profile's translation, `global_default`), the level of each set part, and the invalid-default message. Coverage: `test_resolver_config_agent.py::test_permission_rules_resolve_each_part_from_override_then_repository_then_default`, `test_resolver_scan_identity.py`.
+
 ## Effective Capabilities
 
 Project capability configuration is a ceiling, not another fallback chain.
@@ -129,7 +142,7 @@ and `tests/core/runtime/test_runtime_extension_host.py`.
 
 ## Source & Tests
 
-- Resolution orchestration: `core/projects/resolver.py`; Session overrides and Working Project binding: `_session_resolution.py`; Team freshness and translation: `_team_resolution.py`; prompt/Skill scopes: `_project_context.py`
+- Resolution orchestration: `core/projects/resolver.py`; Session overrides and Working Project binding: `_session_resolution.py`; Team freshness and translation: `_team_resolution.py`; temporary Agents: `_temporary_resolution.py`; prompt/Skill scopes: `_project_context.py`
 - Resolved Agent contracts and Session Agent overrides: `core/projects/_runtime_agent.py`
 - Capability ceilings, scalar fallback and effective provenance: `core/projects/_resolution_values.py`
 - Model usability and Connection gating: `ModelConfigurationChecker` in `core/projects/_model_configuration.py` (public imports remain available through `core.projects` and `resolver.py`)

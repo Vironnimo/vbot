@@ -72,7 +72,8 @@ A finished review row with an `outcome` adds one quiet line (user requirement: b
 
 ## Timeline and Queue
 
-- A `cancelled_by_user` Tool Result is cancelled in both canonical Run rows and legacy event/message rows; it contributes no failure indicator.
+- A `cancelled_by_user` Tool Result is cancelled in both canonical Run rows and legacy event/message rows; it contributes no failure indicator. A `permission_denied` result (server status `refused`, or detected in an event row) is `refused`: an amber dot and the label `refused by Permission Rules`, never a failure.
+- The composer footer shows `SessionPermissionsBadge` (`Restricted`) when `permissions.session` reports a restricted Session or draft (a draft passes its chosen Working Project); its hover card lists each layer's folders, commands, sites and deny rules, then the honest limits (`permissions.limits`, with `permissions.limitsHelp` behind an `InfoHint`; `permissions.md` -> Requirements). The Agent's own layer keeps `{scratch}` (the Scratch Area has no folder before a Run): the card shows that item as `the conversation's scratch area` and explains a rule still naming the placeholder below the rows. When the Session stores inherited limits (`stored_ceiling`), the card offers `Remove inherited limits`, which asks for confirmation (`ConfirmDialog`), calls `permissions.clear_session_ceiling` and reloads the summary. Full access and a failed request show nothing (`SessionPermissionsBadge.test.js`).
 
 - A delayed Sub-Agent inspection cannot change a concrete terminal Run back to running or queued, or replace its terminal duration and Tool facts. The inspection can still establish the Sub-Agent-to-Run mapping (`chatState.child-work.test.js`).
 - A persisted error stays a separate timeline row while the following Run Summary sets its preceding Run group's status and timing. A new canonical Run or another visible message ends that association (`ChatTimeline.test.js`).

@@ -23,6 +23,7 @@
   import SamplingSettings from '../sampling/SamplingSettings.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
   import ToolAccessEditor from '../tools/ToolAccessEditor.svelte';
+  import PermissionRulesEditor from '../permissions/PermissionRulesEditor.svelte';
   import ProjectSourceList from './ProjectSourceList.svelte';
   import ProjectModelMappings from './ProjectModelMappings.svelte';
   import {
@@ -106,6 +107,7 @@
           mono: true,
         },
         ...EFFECTIVE_FIELDS.map(effectiveRow),
+        permissionsRow(member),
         {
           label: t('projects.team.sourceFileLabel'),
           value: member.source_path,
@@ -113,6 +115,33 @@
         },
       ],
     };
+  }
+
+  // Whether Permission Rules limit the member, and the most specific level
+  // that set them.
+  function permissionsRow(member) {
+    const entry = member?.effective?.permission_rules ?? {};
+    const value =
+      entry.value === null || entry.value === undefined
+        ? t('permissions.preset.full_access')
+        : t('permissions.session.badge');
+    const source = sourceLabel(entry.source);
+    return {
+      label: t('permissions.title'),
+      value: source
+        ? t('projects.team.valueWithSource', { value, source })
+        : value,
+    };
+  }
+
+  function permissionsSourceText(member) {
+    const entry = member?.effective?.permission_rules ?? {};
+    if (entry.value === null || entry.value === undefined) {
+      return t('permissions.preset.full_access');
+    }
+    return t('projects.team.permissionsFrom', {
+      source: sourceLabel(entry.source),
+    });
   }
 
   function toggleMember(agentId) {
@@ -175,6 +204,8 @@
         return t('projects.team.sourceOverride');
       case 'agent':
         return t('projects.team.sourceAgentFile');
+      case 'repository':
+        return t('projects.team.sourceRepository');
       case 'project_default':
         return t('projects.team.sourceProjectDefault');
       case 'global_default':
@@ -646,6 +677,53 @@
                       onReset={() =>
                         applyClearOverride(member.agent_id, 'tool_access')}
                       onOpenExtensions={navigateToExtensions}
+                    />
+                  </div>
+
+                  <div class="projects-member-block">
+                    <div class="s-subhead projects-member-subhead">
+                      <div class="projects-member-subhead__copy">
+                        <h4 class="s-subhead__title">
+                          {t('permissions.title')}
+                        </h4>
+                        <p class="s-subhead__desc">
+                          {t('permissions.overrideDescription')}
+                        </p>
+                      </div>
+                      <StatusChip
+                        variant={memberFieldIsOverridden(
+                          member,
+                          'permission_rules',
+                        )
+                          ? 'info'
+                          : 'neutral'}
+                      >
+                        {permissionsSourceText(member)}
+                      </StatusChip>
+                    </div>
+                    {#if member.effective?.permission_rules?.error}
+                      <p class="s-row-error">
+                        {member.effective.permission_rules.error}
+                      </p>
+                    {/if}
+                    <PermissionRulesEditor
+                      value={overrideDraft(member.agent_id).permission_rules}
+                      inherited={member.permission_rules_default ?? null}
+                      level="override"
+                      agentId={projectsState.selectedProjectId
+                        ? `${member.agent_id}@${projectsState.selectedProjectId}`
+                        : ''}
+                      disabled={isOverrideBusy(
+                        member.agent_id,
+                        'permission_rules',
+                      )}
+                      idPrefix={`project-permission-rules-${member.agent_id}`}
+                      onChange={(value) =>
+                        updateOverrideDraft(
+                          member.agent_id,
+                          'permission_rules',
+                          value,
+                        )}
                     />
                   </div>
 

@@ -21,7 +21,7 @@ import itertools
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 from zoneinfo import ZoneInfo
 
 from core.automation._cron_delivery import _local, _record
@@ -34,6 +34,9 @@ from core.automation._cron_jobs import (
 from core.secrets._references import EMPTY_MASKER, SecretMasker
 from core.utils.atomic import atomic_write_text
 from core.utils.logging import get_logger
+
+if TYPE_CHECKING:
+    from core.permissions import PermissionCeiling, PermissionRefusal
 
 WATCH_STATE_DIR_NAME = "watch-state"
 
@@ -62,13 +65,32 @@ class WatchCheckError(Exception):
 class WatchChecks(Protocol):
     """What Cron needs to run a watch check; the Runtime wires the implementation.
 
-    Both return the check's output as text and raise ``WatchCheckError`` when
-    there is none to compare.
+    Both checks return the output as text and raise ``WatchCheckError`` when
+    there is none to compare. *ceiling* is the job's stored permission ceiling,
+    which every check applies.
     """
 
-    async def run_command(self, command: str, *, agent_id: str, project_id: str | None) -> str: ...
+    async def run_command(
+        self,
+        command: str,
+        *,
+        agent_id: str,
+        project_id: str | None,
+        ceiling: PermissionCeiling | None = None,
+    ) -> str: ...
 
-    async def fetch_url(self, url: str) -> str: ...
+    async def fetch_url(self, url: str, *, ceiling: PermissionCeiling | None = None) -> str: ...
+
+    async def permission_refusal(
+        self,
+        watch: CronWatch,
+        *,
+        agent_id: str,
+        project_id: str | None,
+        ceiling: PermissionCeiling | None,
+    ) -> PermissionRefusal | None:
+        """Whether a job's *ceiling* refuses *watch*; None when it allows it or has none."""
+        ...
 
 
 @dataclass(frozen=True, slots=True)

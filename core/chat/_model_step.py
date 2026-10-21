@@ -23,6 +23,7 @@ from core.chat.messages import (
     JsonObject,
     ToolCall,
 )
+from core.chat.output_files import OutputFileScope
 from core.chat.tool_dispatch import ToolDispatchContext
 from core.chat.usage import (
     RequestContextEstimate,
@@ -150,7 +151,7 @@ class ModelStepBoundary:
         *,
         terminal_outcome: TerminalOutcome | None,
         messages_for_request: list[JsonObject],
-        output_cwd: Path | None,
+        output_scope: OutputFileScope,
         request_context_usage: JsonObject,
         request_estimate: RequestContextEstimate,
         request_tools: list[JsonObject],
@@ -185,7 +186,7 @@ class ModelStepBoundary:
             _prepare_completed_assistant,
             assistant_message,
             messages_for_request,
-            output_cwd,
+            output_scope,
             int(request_context_usage["tokens"]),
             self._dependencies.models.pricing_for(target.model_reference),
         )
@@ -245,6 +246,7 @@ class ModelStepBoundary:
             skill_registry=context.skill_registry,
             reply_surface=context.request.reply_surface,
             subagent_session=context.subagent_session,
+            permissions=context.permissions,
             tool_restriction=context.request.tool_restriction,
             tool_denial_resolver=context.request.tool_denial_resolver,
             base_allowed_tools=state.allowed_tool_names,
