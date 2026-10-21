@@ -279,12 +279,32 @@ def test_a_restricted_session_bounds_the_jobs_it_creates_or_changes(tmp_path: Pa
 
     assert ceiling(bounded) == boundary.ceiling(source="cron")
     assert ceiling(unbounded) is None
-    # A full-access change keeps the creator's boundary; a restricted one sets its own.
+    # A full-access change keeps the creator's boundary; a restricted one adds its own.
     tool.call({"action": "update", "id": bounded["data"]["id"], "name": "Renamed"})
     tool.call(
         {"action": "update", "id": unbounded["data"]["id"], "name": "Renamed"}, permissions=boundary
     )
     assert ceiling(bounded) == ceiling(unbounded) == boundary.ceiling(source="cron")
+    # Another restricted Session's change never widens the job: both boundaries apply.
+    other = PermissionBoundary.build(
+        normalize_permission_rules({"web": "listed", "allow": ["Web(example.com)"]}),
+        BoundaryContext(workdir=tmp_path, home=tmp_path, data_dir=tmp_path / "data"),
+    )
+    tool.call({"action": "update", "id": bounded["data"]["id"], "name": "Again"}, permissions=other)
+    both = ceiling(bounded)
+    first, second = boundary.ceiling(source="cron"), other.ceiling(source="cron")
+    assert both is not None and first is not None and second is not None
+    assert both.layers == (*first.layers, *second.layers)
+    # A watch the job's boundary refuses is refused before the job changes.
+    tool.checks.refusal = boundary.refusal(
+        "web", "intranet.example", "not_permitted", base="listed"
+    )
+    refused, _ = tool.call(
+        {"action": "update", "id": bounded["data"]["id"], "watch": "https://intranet.example/"},
+        permissions=boundary,
+    )
+    assert refused["error"]["code"] == "permission_denied"
+    assert tool.service.get_job(bounded["data"]["id"]).watch is None
 
 
 def test_update_with_null_repeat_removes_the_limit(tmp_path: Path) -> None:

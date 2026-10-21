@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import re
 from contextlib import suppress
 from datetime import UTC, datetime
 from functools import cache
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from zoneinfo import ZoneInfo
 
 from core.automation.cron import (
@@ -23,6 +24,7 @@ from core.automation.cron import (
     CronTargetUnavailableError,
     CronWatch,
 )
+from core.permissions import PermissionDenied
 from core.projects import InvalidAgentAddressError, format_agent_address, parse_agent_address
 from core.tools._cron_arguments import (
     CURRENT_SESSION,
@@ -385,6 +387,9 @@ async def _handle_create(
     )
     delivery, delivery_note = _delivery(context, arguments, agent_id, project_id)
     watch = _watch(arguments)
+    # A restricted Session's job never runs with more access than it has.
+    ceiling = context.permissions.to_ceiling_dict(source="cron")
+    await _check_watch(cron_service, watch, agent_id, project_id, ceiling)
     job = await cron_service.create_job(
         agent_id=agent_id,
         name=arguments.get("name"),
@@ -403,8 +408,7 @@ async def _handle_create(
         project_id=project_id,
         delivery=delivery.stored(),
         watch=watch,
-        # A restricted Session's job never runs with more access than it has.
-        permission_ceiling=context.permissions.to_ceiling_dict(source="cron"),
+        permission_ceiling=ceiling,
         actor="tool",
     )
     notes = [note] if note else []
@@ -490,9 +494,20 @@ async def _handle_update(
         updates["watch"] = _watch(arguments)
     if ENABLED_FIELD in arguments:
         updates["status"] = "active" if arguments[ENABLED_FIELD] else "paused"
+    current = cron_service.get_job(job_id)
+    ceiling = current.permission_ceiling
     if context.permissions.restricted:
-        # The job now runs under the boundary of the restricted Session that changed it.
-        updates["permission_ceiling"] = context.permissions.to_ceiling_dict(source="cron")
+        # The job now also runs under the boundary of the restricted Session
+        # that changed it, never wider than before.
+        ceiling = _joined_ceiling(ceiling, context.permissions.to_ceiling_dict(source="cron"))
+        updates["permission_ceiling"] = ceiling
+    await _check_watch(
+        cron_service,
+        updates.get("watch", current.watch),
+        updates.get("agent_id", current.agent_id),
+        updates["project_id"] if "agent_id" in updates else current.project_id,
+        ceiling,
+    )
     job = await cron_service.update_job(job_id, actor="tool", **updates)
     notes = [note] if note else []
     # A job that just became a webhook job got its secret with this call.
@@ -626,6 +641,37 @@ def _watch(arguments: JsonObject) -> CronWatch | None:
             "most 4000. Save the check as a script file and watch the command that runs it."
         )
         raise CronCallRefusedError(refusal(problem, arguments, watch=WATCH_STAND_IN)) from error
+
+
+async def _check_watch(
+    cron_service: CronService,
+    watch: CronWatch | None,
+    agent_id: str,
+    project_id: str | None,
+    ceiling: dict[str, Any] | None,
+) -> None:
+    """Refuse a watch the job's permission ceiling would refuse at every check."""
+    if watch is None:
+        return
+    refused = await cron_service.watch_refusal(
+        watch, agent_id=agent_id, project_id=project_id, permission_ceiling=ceiling
+    )
+    if refused is not None:
+        raise PermissionDenied(refused)
+
+
+def _joined_ceiling(
+    stored: dict[str, Any] | None, added: dict[str, object] | None
+) -> dict[str, Any] | None:
+    """A job's stored ceiling with the layers of *added*: every layer limits the job."""
+    if stored is None or added is None:
+        return stored if added is None else dict(added)
+    layers = list(stored["layers"])
+    seen = {json.dumps(layer, sort_keys=True) for layer in layers}
+    for layer in cast(list[dict[str, Any]], added["layers"]):
+        if json.dumps(layer, sort_keys=True) not in seen:
+            layers.append(layer)
+    return {"layers": layers}
 
 
 def _stored_watch(cron_service: CronService, arguments: JsonObject) -> CronWatch | None:

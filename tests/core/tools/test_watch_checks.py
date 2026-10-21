@@ -11,11 +11,18 @@ from typing import Any, cast
 import httpx
 import pytest
 
-from core.automation.cron import WatchCheckError
+from core.automation.cron import CronWatch, WatchCheckError
+from core.permissions import BoundaryContext, PermissionBoundary, PermissionCeiling
 from core.tools import watch_checks
 from core.tools._powershell import PowerShellRequest
 from core.tools.shell import HostShellStart
 from core.tools.watch_checks import COMMAND_OUTPUT_MAX_BYTES, WatchCheckRunner
+from tests.core.permissions.command_check_support import (
+    FakeAnalyzer,
+    fake_checker,
+    plan,
+    restricted,
+)
 from tests.core.tools.command_manager_helpers import FakeProcess
 
 _NOT_RUN = 990
@@ -207,3 +214,52 @@ async def test_a_watched_url_fails_with_what_went_wrong(
 ) -> None:
     with pytest.raises(WatchCheckError, match=problem):
         await _runner(tmp_path, transport=transport).fetch_url("https://status.example/")
+
+
+@pytest.mark.asyncio
+async def test_a_job_with_a_permission_ceiling_runs_only_checks_its_rules_allow(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("VBOT_DATA_DIR", str(tmp_path / "data"))
+    project = tmp_path / "project"
+    analyzer = FakeAnalyzer(plan("Remove-Item", subtree_writes=[tmp_path / "elsewhere"]))
+    launches = _Launches(lambda shell: shell.exit(0))
+    ceiling = restricted(project, web="listed", allow=["Web(example.com)"]).ceiling(source="cron")
+    assert ceiling is not None
+
+    def boundary(stored: PermissionCeiling, workdir: Path) -> PermissionBoundary:
+        context = BoundaryContext(workdir=workdir, home=project, data_dir=tmp_path / "data")
+        return PermissionBoundary.build(None, context, ceilings=(stored,))
+
+    runner = _runner(
+        tmp_path, launches, command_checker=fake_checker(analyzer), ceiling_boundary=boundary
+    )
+
+    with pytest.raises(WatchCheckError, match="The check did not run: The permission rules refuse"):
+        await runner.run_command(
+            "Remove-Item -Recurse ../elsewhere",
+            agent_id="agent-one",
+            project_id="project-a",
+            ceiling=ceiling,
+        )
+    refused_url = await runner.permission_refusal(
+        CronWatch.parse("url", "https://intranet.example/"),
+        agent_id="agent-one",
+        project_id="project-a",
+        ceiling=ceiling,
+    )
+    with pytest.raises(WatchCheckError, match="refuse fetching intranet.example"):
+        await runner.fetch_url("https://intranet.example/", ceiling=ceiling)
+
+    assert launches.calls == []
+    assert refused_url is not None and refused_url.target == "intranet.example"
+    # Checked in the job's directory with the confined environment, then run.
+    analyzer.result = plan("Get-Content", reads=[project / "status.txt"])
+    output = await runner.run_command(
+        "Get-Content status.txt", agent_id="agent-one", project_id="project-a", ceiling=ceiling
+    )
+    assert output == ""
+    line, _shell, cwd, environment = analyzer.lines[-1]
+    assert (line, cwd) == ("Get-Content status.txt", project)
+    assert "VBOT_DATA_DIR" not in environment
+    assert len(launches.calls) == 1

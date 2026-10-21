@@ -12,9 +12,11 @@ from zoneinfo import ZoneInfo
 
 from core.automation.cron import (
     CronService,
+    CronWatch,
 )
 from core.calendar import CalendarService
 from core.channels import ChannelNotFoundError
+from core.permissions import PermissionCeiling, PermissionRefusal
 from core.runs import RunStatus
 from core.secrets import KeyFileProtection, SecretStore
 from core.secrets._references import EMPTY_MASKER, SecretMasker
@@ -120,14 +122,36 @@ class FakeChecks:
 
     answers: list[str | Exception] = field(default_factory=list)
     calls: list[tuple[str, ...]] = field(default_factory=list)
+    # The permission ceiling of each check, and the refusal ``permission_refusal`` gives.
+    ceilings: list[PermissionCeiling | None] = field(default_factory=list)
+    refusal: PermissionRefusal | None = None
 
-    async def run_command(self, command: str, *, agent_id: str, project_id: str | None) -> str:
+    async def run_command(
+        self,
+        command: str,
+        *,
+        agent_id: str,
+        project_id: str | None,
+        ceiling: PermissionCeiling | None = None,
+    ) -> str:
         self.calls.append(("command", command, agent_id, project_id or ""))
+        self.ceilings.append(ceiling)
         return self._answer()
 
-    async def fetch_url(self, url: str) -> str:
+    async def fetch_url(self, url: str, *, ceiling: PermissionCeiling | None = None) -> str:
         self.calls.append(("url", url))
+        self.ceilings.append(ceiling)
         return self._answer()
+
+    async def permission_refusal(
+        self,
+        watch: CronWatch,
+        *,
+        agent_id: str,
+        project_id: str | None,
+        ceiling: PermissionCeiling | None,
+    ) -> PermissionRefusal | None:
+        return self.refusal if ceiling is not None else None
 
     def _answer(self) -> str:
         answer = self.answers.pop(0)

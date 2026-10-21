@@ -8,6 +8,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import partial
+from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, cast
 from uuid import uuid4
 
@@ -54,7 +55,12 @@ from core.model_tasks import (
 from core.model_tasks.decisions import DecisionService
 from core.model_tasks.live import LiveVoiceService, backend_instructions
 from core.models.models import ModelRegistry
-from core.permissions import CommandChecker
+from core.permissions import (
+    BoundaryContext,
+    CommandChecker,
+    PermissionBoundary,
+    PermissionCeiling,
+)
 from core.projects import ProjectStore, build_agent_resolver
 from core.prompts import (
     PromptAgentStore,
@@ -805,6 +811,8 @@ def bootstrap(runtime: Runtime) -> None:
                 agents=runtime._agents,
                 projects=runtime._projects,
                 data_root=runtime._storage.data_dir,
+                command_checker=runtime._command_checker,
+                ceiling_boundary=partial(_watch_boundary, runtime, Path(runtime._storage.data_dir)),
             )
         )
         runtime._cron_service.set_webhook_secrets(runtime._storage.secrets)
@@ -939,6 +947,27 @@ def bootstrap(runtime: Runtime) -> None:
     # startup traceback as its context.
     clean_up_failed_startup(runtime)
     raise startup_error
+
+
+def _watch_boundary(
+    runtime: Runtime, data_dir: Path, ceiling: PermissionCeiling, workdir: Path
+) -> PermissionBoundary:
+    """The boundary a Cron watch check of a job with *ceiling* runs under in *workdir*.
+
+    Only the ceiling's layers: a check runs no Agent. The protected locations
+    are those of a Run (``core.chat._run_permissions``).
+    """
+    from core.chat._run_permissions import artifact_dirs, installation_dirs
+
+    context = BoundaryContext(
+        workdir=workdir,
+        home=Path.home(),
+        data_dir=data_dir,
+        install_dirs=installation_dirs(),
+        readable_dirs=artifact_dirs(data_dir),
+        loopback_port=runtime._server_port,
+    )
+    return PermissionBoundary.build(None, context, ceilings=(ceiling,))
 
 
 def _command_analyzer() -> CommandAnalyzer:

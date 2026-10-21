@@ -5,7 +5,9 @@ guard is the same for every caller and is safety, not permission: only http(s)
 URLs without credentials, only public addresses (the resolved address is pinned
 for the connection, so DNS rebinding cannot swap in a private one), every
 redirect hop revalidated, a bounded body and bounded retries. Failures carry
-precise codes and wording that say what went wrong and what to try next.
+precise codes and wording that say what went wrong and what to try next. A
+restricted caller passes its Permission Boundary: every hop is checked against
+it too (``check_url``) and a refused one raises ``PermissionDenied``.
 
 curl_cffi loads with the first request: importing it costs about 0.1 s, which
 every process that imports the Tools would otherwise pay.
@@ -22,10 +24,11 @@ import socket
 from collections import Counter
 from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal
 from urllib.parse import urljoin, urlparse
 
+from core.permissions import PermissionBoundary, PermissionDenied
 from core.tools.tools import JsonObject, tool_failure
 from core.utils.http_status import is_retryable_status, parse_retry_after
 from core.utils.logging import get_logger
@@ -606,8 +609,9 @@ async def _fetch_with_retry(
     max_bytes: int = MAX_RESPONSE_BYTES,
     what: str = "page",
     hosts: HostSlots | None = None,
+    permissions: PermissionBoundary | None = None,
 ) -> PublicResponse:
-    """Fetch a URL, validating each redirect hop against SSRF rules.
+    """Fetch a URL, validating each redirect hop against SSRF rules and *permissions*.
 
     Each hop's host is pinned to the IP that just cleared validation via curl's
     ``RESOLVE`` map, so the session connects to exactly the address that was
@@ -633,6 +637,8 @@ async def _fetch_with_retry(
                 "the cookies it sets. Try another source."
             )
         visited[current_url] = cookies
+        if permissions is not None:
+            _check_hop(permissions, url, current_url)
         try:
             scheme, host, port = _url_parts(current_url)
             normalized_host, pinned_ip = await _validate_public_target(scheme, host, port)
@@ -692,6 +698,17 @@ async def _fetch_with_retry(
         current_url = urljoin(current_url, location)
 
     raise RuntimeError("unreachable retry loop state")
+
+
+def _check_hop(permissions: PermissionBoundary, url: str, hop: str) -> None:
+    """Raise ``PermissionDenied`` when *permissions* refuse *hop* of a fetch of *url*."""
+    refused = permissions.check_url(hop)
+    if refused is None:
+        return
+    if hop != url:
+        # A redirect: the refusal names the address asked for and where it led.
+        refused = replace(refused, target=url, resolved=refused.target)
+    raise PermissionDenied(refused)
 
 
 def _cookie_state(session: AsyncSession) -> frozenset[tuple[str, str, str, str | None]]:
@@ -894,24 +911,29 @@ async def fetch_public(
     max_bytes: int = MAX_RESPONSE_BYTES,
     what: str = "page",
     hosts: HostSlots | None = None,
+    permissions: PermissionBoundary | None = None,
 ) -> PublicResponse:
     """GET a public address and return its successful response.
 
     ``what`` names the expected content in failure messages ("page", "image").
     ``hosts`` bounds the requests running at once against each host, shared with
-    the caller's other fetches; ``None`` leaves them unbounded.
-    Every failure, including an HTTP error status, raises ``PublicFetchError``.
+    the caller's other fetches; ``None`` leaves them unbounded. ``permissions``
+    are checked for the address and every redirect hop before it is requested
+    (``PermissionDenied``). Every other failure, including an HTTP error status,
+    raises ``PublicFetchError``.
     """
     from curl_cffi.requests.exceptions import RequestException
 
     try:
         async with _make_session(accept) as session:
-            result = await _fetch_with_retry(session, url, {}, max_bytes, what, hosts)
+            result = await _fetch_with_retry(session, url, {}, max_bytes, what, hosts, permissions)
         if result.status_code == 406:
             # The site serves none of the formats asked for; a browser's own
             # request is what sites answer most (a page refused text/markdown).
             async with _make_session(None) as session:
-                result = await _fetch_with_retry(session, url, {}, max_bytes, what, hosts)
+                result = await _fetch_with_retry(
+                    session, url, {}, max_bytes, what, hosts, permissions
+                )
     except _RedirectTargetBlockedError as error:
         raise PublicFetchError("blocked_url", str(error)) from error
     except _RedirectTargetUnreachableError as error:

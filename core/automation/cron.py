@@ -79,6 +79,7 @@ from core.automation._cron_webhooks import (
 from core.calendar import BoundJob, CalendarProjection, CalendarStorageError
 from core.config_validation import JsonDiagnostic
 from core.json_documents import JsonDocumentWriteError, write_json_document
+from core.permissions import PermissionCeiling, PermissionRefusal
 from core.projects import (
     AgentResolutionError,
     ResolutionAgentNotFoundError,
@@ -746,6 +747,28 @@ class CronService:
         await self._watcher.remove_baseline(job.id)
         if self._started and job.status == "active" and job.watch is not None:
             self._watcher.start_first_check(job.id)
+
+    async def watch_refusal(
+        self,
+        watch: CronWatch,
+        *,
+        agent_id: str,
+        project_id: str | None,
+        permission_ceiling: dict[str, Any] | None,
+    ) -> PermissionRefusal | None:
+        """Whether a job's stored-form *permission_ceiling* refuses *watch*.
+
+        None when it allows it, when there is no ceiling, or when this process
+        runs no checks (``set_watch_checks``), so a check would not run anyway.
+        """
+        if permission_ceiling is None or self._watch_checks is None:
+            return None
+        return await self._watch_checks.permission_refusal(
+            watch,
+            agent_id=agent_id,
+            project_id=project_id,
+            ceiling=PermissionCeiling.from_ceiling_dict(permission_ceiling),
+        )
 
     async def await_first_check(self, job_id: str) -> bool:
         """Wait for the first check of a watch just set on the job to record its outcome.
