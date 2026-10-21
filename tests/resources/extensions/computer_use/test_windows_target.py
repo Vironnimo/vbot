@@ -143,6 +143,54 @@ def test_typed_text_presses_enter_once_per_line_break_and_tab_for_tabs():
     assert _win_input.text_units("ä😀") == [(0xE4,), (0xD83D, 0xDE00)]
 
 
+class GermanLayout:
+    """Keys of the German layout as VkKeyScanExW and ToUnicodeEx report them (measured)."""
+
+    SCANS = {"a": 0x41, "A": 0x141, "@": 0x651, " ": 0x20, "^": 0xDC, "\x03": 0x243}
+    OUTPUTS = {
+        (0x41, ()): "a",
+        (0x41, ("shift",)): "A",
+        (0x51, ("ctrl", "alt")): "@",  # AltGr+Q
+        (0x20, ()): " ",
+        (0xDC, ()): None,  # ^ is a dead key: it waits for the letter to accent
+        (0x43, ("ctrl",)): "\x03",
+    }
+
+    def __init__(self, caps_lock: bool = False) -> None:
+        self.caps_lock = caps_lock
+
+    def scan(self, char: str) -> int:
+        return self.SCANS.get(char, -1)
+
+    def output(self, vk: int, modifiers: tuple[str, ...]) -> str | None:
+        if self.caps_lock and 0x41 <= vk <= 0x5A and set(modifiers) <= {"shift"}:
+            modifiers = () if modifiers else ("shift",)  # CapsLock inverts Shift for letters
+        return self.OUTPUTS.get((vk, modifiers), "?")
+
+
+Stroke = _win_input.Stroke
+
+
+@pytest.mark.parametrize(
+    "text,caps_lock,plan",
+    [
+        (
+            "aA@ \n",
+            False,
+            [Stroke(0x41), Stroke(0x41, ("shift",)), Stroke(0x51, ("ctrl", "alt")), Stroke(0x20),
+             "enter"],
+        ),
+        # The press that types the letter now: CapsLock inverts Shift.
+        ("aA", True, [Stroke(0x41, ("shift",)), Stroke(0x41)]),
+        # Unicode input for a dead key, a character without a key and a control character,
+        # whose key would be a shortcut (ctrl+c).
+        ("^é\x03", False, [(0x5E,), (0xE9,), (0x03,)]),
+    ],
+)  # fmt: skip
+def test_typed_characters_press_the_layout_key_that_types_them(text, caps_lock, plan):
+    assert _win_input.text_units(text, GermanLayout(caps_lock)) == plan
+
+
 @pytest.mark.parametrize(
     "path,family,keys",
     [
