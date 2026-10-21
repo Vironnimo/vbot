@@ -142,7 +142,7 @@ and `tests/core/runtime/test_runtime_extension_host.py`.
 
 ## Source & Tests
 
-- Resolution orchestration: `core/projects/resolver.py`; Session overrides and Working Project binding: `_session_resolution.py`; Team freshness and translation: `_team_resolution.py`; prompt/Skill scopes: `_project_context.py`
+- Resolution orchestration: `core/projects/resolver.py`; Session overrides and Working Project binding: `_session_resolution.py`; Team freshness and translation: `_team_resolution.py`; temporary Agents: `_temporary_resolution.py`; prompt/Skill scopes: `_project_context.py`
 - Resolved Agent contracts and Session Agent overrides: `core/projects/_runtime_agent.py`
 - Capability ceilings, scalar fallback and effective provenance: `core/projects/_resolution_values.py`
 - Model usability and Connection gating: `ModelConfigurationChecker` in `core/projects/_model_configuration.py` (public imports remain available through `core.projects` and `resolver.py`)
