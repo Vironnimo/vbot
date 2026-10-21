@@ -190,6 +190,13 @@
   opacity: 1;
 }
 
+/* The shades are taller than short content: in a box that fits its content
+   they would reach past its end and make it scroll by a pixel. */
+.teb-scroll:not([data-overflowing])::before,
+.teb-scroll:not([data-overflowing])::after {
+  display: none;
+}
+
 .teb-scroll.tool-diff-file__body::before,
 .teb-scroll.tool-diff-file__body::after {
   margin-right: 0;
