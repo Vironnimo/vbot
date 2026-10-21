@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 from fnmatch import fnmatchcase
 from pathlib import Path
@@ -9,7 +10,9 @@ from typing import Any
 
 from core.projects.sources import _reading as reading
 from core.projects.sources._translation import (
+    ASK_DETAIL,
     SHELL_TOOLS,
+    RuleDraft,
     permission_rules,
     profile,
     unavailable,
@@ -188,7 +191,7 @@ class OpenCodeAdapter:
                 if pattern == "*":
                     default_access = enabled
                 for foreign in states:
-                    if fnmatchcase(foreign, pattern):
+                    if fnmatchcase(foreign, _capability(pattern)):
                         states[foreign] = enabled
                 reports.append(
                     Translation(
@@ -218,23 +221,30 @@ class OpenCodeAdapter:
                         )
                     )
                     continue
-                matches = [foreign for foreign in states if fnmatchcase(foreign, pattern)]
+                matches = [
+                    foreign for foreign in states if fnmatchcase(foreign, _capability(pattern))
+                ]
                 if pattern == "edit":
                     matches = ["edit", "write", "apply_patch"]
                 if pattern == "*":
-                    default_access = usable
+                    default_access = _usable_after(default_access, rules)
                 for foreign in matches:
-                    states[foreign] = usable
+                    states[foreign] = _usable_after(states[foreign], rules)
                     # A broad permission also supplies the default for named
                     # task/skill exceptions that follow, across both layers.
                     if foreign == "task":
-                        target_rules.append(AgentTargetRule("*", usable))
+                        target_rules.append(AgentTargetRule("*", states[foreign]))
                     elif foreign == "skill":
-                        skill_rules.append(AgentTargetRule("*", usable))
+                        skill_rules.append(AgentTargetRule("*", states[foreign]))
+                if pattern == "external_directory":
+                    continue  # A path guard, not a capability: Permission Rules report it.
                 if not matches:
                     detail = "vBot has no such capability."
-                elif scoped and usable:
-                    detail = "Granted as the whole vBot Tool; command and path rules do not apply."
+                elif scoped and any(states[foreign] for foreign in matches):
+                    detail = (
+                        "Granted as the whole vBot Tool; its patterns become Permission Rules "
+                        "where vBot has an equivalent."
+                    )
                 else:
                     detail = "Applied to matching capabilities."
                 reports.append(Translation(f"permission.{pattern}", "translated", detail))
@@ -259,6 +269,7 @@ class OpenCodeAdapter:
             skill_rules=tuple(skill_rules),
             translations=tuple(reports),
         )
+        agent = _permission_rules(agent, (global_fields, fields))
         if "mode" in fields:
             agent = replace(
                 agent,
@@ -289,9 +300,156 @@ class OpenCodeAdapter:
         )
 
 
+# OpenCode permissions with a Permission Rule kind, by the permission names that
+# address them (``shell`` is the current name, ``bash`` the earlier one).
+_RULE_PERMISSIONS: dict[str, tuple[str | None, tuple[str, ...]]] = {
+    "read": ("Read", ("read",)),
+    "edit": ("Edit", ("edit", "write", "apply_patch")),
+    "shell": ("Shell", ("shell", "bash")),
+    "webfetch": ("Web", ("webfetch",)),
+    "external_directory": (None, ("external_directory",)),
+}
+# What a wildcard denial with later allow exceptions narrows, per permission.
+_LISTED: dict[str, tuple[tuple[str, str, str], ...]] = {
+    "read": (("read", "work_area", "Reads are limited to the Work Area and the allow patterns"),),
+    "edit": (("write", "scratch", "File changes are limited to the allow patterns"),),
+    "shell": (("commands", "listed", "Commands are limited to the allow patterns"),),
+    "webfetch": (("web", "listed", "Web access is limited to the allow patterns"),),
+    "external_directory": (
+        ("read", "work_area", "Reads outside the Work Area are limited to the allow patterns"),
+        ("write", "work_area", "Changes outside the Work Area are limited to the allow patterns"),
+    ),
+}
+_ABSOLUTE = re.compile(r"(?:[A-Za-z]:)?[/\\]")
+
+
+def _permission_rules(agent: AgentProfile, layers: tuple[dict[str, Any], ...]) -> AgentProfile:
+    """Translate OpenCode ``permission`` patterns into Permission Rules.
+
+    The rules of each permission apply in order, global before the Agent's own,
+    and the last matching one wins (https://opencode.ai/docs/permissions/). After
+    the last ``"*"`` rule, deny patterns become deny rules; a ``"*"`` denial with
+    later allow exceptions narrows the base to those exceptions (commands or hosts
+    listed, writes to the Scratch Area plus the exceptions, reads to the Work
+    Area plus the exceptions). ``external_directory: deny`` keeps the Agent in its
+    Work Area. ``ask`` counts as allowed: vBot asks no approvals.
+    """
+    draft = RuleDraft()
+    for name, (kind, keys) in _RULE_PERMISSIONS.items():
+        ordered: list[tuple[str, str]] = []
+        written: list[str] = []
+        for layer in layers:
+            permissions = layer.get("permission", {})
+            if isinstance(permissions, str):
+                permissions = {"*": permissions}
+            for key, value in permissions.items():
+                if any(fnmatchcase(candidate, key) for candidate in keys):
+                    entries = {"*": value} if isinstance(value, str) else value
+                    ordered.extend(entries.items())
+                    if key != "*" and key not in written:
+                        written.append(key)
+        if not ordered:
+            continue
+        # Rows carry the name the repository wrote (``bash`` or ``shell``).
+        label = written[0] if written else name
+        if any(action == "ask" for _pattern, action in ordered):
+            draft.report(f"permission.{label}", "not_supported", ASK_DETAIL)
+        last_any = max(
+            (index for index, (pattern, _action) in enumerate(ordered) if pattern == "*"),
+            default=-1,
+        )
+        denied_by_default = last_any >= 0 and ordered[last_any][1] == "deny"
+        tail = ordered[last_any + 1 :]
+        exceptions = [pattern for pattern, action in tail if action != "deny"]
+        if denied_by_default and (exceptions or kind is None):
+            for part, value, detail in _LISTED[name]:
+                draft.narrow(part, value, f"permission.{label}", f"{detail} ({part}: {value}).")
+            for pattern in exceptions:
+                _rule(draft, "allow", label, kind or "Edit", pattern)
+        for pattern, action in tail:
+            if action == "deny":
+                _rule(draft, "deny", label, kind or "Read", pattern)
+        first_denial = next(
+            (index for index, (_pattern, action) in enumerate(tail) if action == "deny"), None
+        )
+        if first_denial is not None and any(
+            action != "deny" for _pattern, action in tail[first_denial + 1 :]
+        ):
+            draft.report(
+                f"permission.{label}",
+                "translated",
+                "A vBot deny rule always wins, so an allow pattern after a deny pattern "
+                "does not reopen what the deny covers.",
+            )
+    return draft.apply(agent)
+
+
+def _rule(draft: RuleDraft, effect: str, name: str, kind: str, pattern: str) -> None:
+    setting = f"permission.{name}.{pattern}"
+    detail = ""
+    if kind == "Shell":
+        translated = pattern
+    elif kind == "Web":
+        # OpenCode matches the URL; a vBot host rule names its host.
+        address = pattern.split("://", 1)[1] if "://" in pattern else pattern
+        translated, _, path = address.partition("/")
+        if path.strip("*"):
+            detail = "It covers the whole host."
+    else:
+        translated = _path(pattern)
+    draft.rule(effect, f"{kind}({translated})", setting, detail=detail)
+
+
+def _path(pattern: str) -> str:
+    """An OpenCode path pattern in vBot's form.
+
+    OpenCode's ``*`` also matches across folders, so a segment with a ``*``
+    matches at any depth below the part before it. A relative pattern names
+    paths in the working directory; ``~`` and ``$HOME`` start in the home folder.
+    """
+    text = pattern.strip().replace("\\", "/")
+    if text.startswith("$HOME"):
+        text = "~" + text[len("$HOME") :]
+    if text == "~" or text.startswith("~/"):
+        anchor, rest = "~", text[1:].lstrip("/")
+    elif _ABSOLUTE.match(text):
+        anchor, _, rest = text.partition("/")
+    else:
+        anchor, rest = "{workdir}", text.removeprefix("./")
+    segments: list[str] = []
+    for segment in rest.split("/"):
+        if segment == "*":
+            segment = "**"
+        elif "*" in segment and segment != "**" and segments[-1:] != ["**"]:
+            segments.append("**")
+        segments.append(segment)
+    return "/".join([anchor, *segments]).rstrip("/") or "/"
+
+
+def _capability(pattern: str) -> str:
+    """OpenCode now names the shell ``shell``; ``bash`` is its earlier name."""
+    return "bash" if pattern == "shell" else pattern
+
+
+def _usable_after(previous: bool, rules: tuple[AgentTargetRule, ...]) -> bool:
+    """Whether a capability may still do something after these ordered rules.
+
+    The last matching rule wins: after a ``"*"`` rule only it and later allow (or
+    ask) exceptions count; rules for named patterns alone keep what was usable
+    and can add to it, since everything else keeps its earlier action.
+    """
+    last_any = max((index for index, rule in enumerate(rules) if rule.pattern == "*"), default=-1)
+    if last_any < 0:
+        return previous or any(rule.allowed for rule in rules)
+    return any(rule.allowed for rule in rules[last_any:])
+
+
 def _mapped(pattern: str) -> frozenset[str]:
     if pattern == "*":
         return frozenset({"*"})
     return frozenset(
-        tool for name, mapped in _MAPPING.items() if fnmatchcase(name, pattern) for tool in mapped
+        tool
+        for name, mapped in _MAPPING.items()
+        if fnmatchcase(name, _capability(pattern))
+        for tool in mapped
     )

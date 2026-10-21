@@ -386,16 +386,24 @@ def test_tool_loading_override_inherits_each_part_it_does_not_set(
     assert resolver.inherited_tool_loading() == default
 
 
-def test_permission_rules_resolve_each_part_from_override_then_default(
+def test_permission_rules_resolve_each_part_from_override_then_repository_then_default(
     agents: AgentStore, projects: ProjectStore, repo: Path
 ) -> None:
-    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
+    # The repository's own restriction (OpenCode external_directory: deny) applies
+    # without a vBot setting; the override and the defaults fill the other parts.
+    _write_agent(
+        repo, "builder.md", model="openai/gpt-5.2", permission={"external_directory": "deny"}
+    )
     _project(projects, repo)
-    default = {"read": "work_area", "write": "work_area", "deny": ["Read({home}/.ssh/**)"]}
+    default = {"write": "anywhere", "commands": "listed", "deny": ["Read({home}/.ssh/**)"]}
     resolver = _resolver(agents, projects, _openai_configured(), global_permission_rules=default)
+    repository = {"read": "work_area", "write": "work_area"}
 
     assert resolver.resolve_agent("vbot", "builder").permission_rules == (
-        normalize_permission_rules(default)
+        normalize_permission_rules({**default, **repository})
+    )
+    assert resolver.effective_config("vbot", "builder")["permission_rules"]["source"] == (
+        "repository"
     )
     with pytest.raises(ProjectError, match="permission_rules.write"):
         projects.set_override("vbot", "builder", "permission_rules", {"write": "nowhere"})
@@ -403,13 +411,14 @@ def test_permission_rules_resolve_each_part_from_override_then_default(
     projects.set_override("vbot", "builder", "permission_rules", {"write": "scratch"})
 
     assert resolver.resolve_agent("vbot", "builder").permission_rules == (
-        normalize_permission_rules({**default, "write": "scratch"})
+        normalize_permission_rules({**default, **repository, "write": "scratch"})
     )
     effective = resolver.effective_config("vbot", "builder")["permission_rules"]
     assert effective["source"] == "override"
     assert effective["parts"] == {
-        "read": "global_default",
+        "read": "repository",
         "write": "override",
+        "commands": "global_default",
         "deny": "global_default",
     }
 
