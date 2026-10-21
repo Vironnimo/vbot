@@ -43,6 +43,8 @@ export {
   buildAgentDefaultsPayload,
   normalizeToolLoadingDefaultSettings,
   buildToolLoadingDefaultPayload,
+  normalizePermissionRulesDefaultSettings,
+  buildPermissionRulesDefaultPayload,
   normalizeSessionTitleSettings,
   buildSessionTitleSettingsPayload,
   normalizeSubAgentSettings,

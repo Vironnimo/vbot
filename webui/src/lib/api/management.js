@@ -82,6 +82,40 @@ export function updateAgent(params = {}, options = {}) {
   return rpc('agent.update', params, options);
 }
 
+// Normalizes a candidate Permission Rules set without saving it: its problems,
+// the preset it matches, what it inherits and a preview. `agentId` (an Agent
+// address, `agent@project` for a Team member) previews for that Agent's new
+// Sessions; without it the rule set is the shared default.
+export function validatePermissionRules(
+  permissionRules,
+  agentId = '',
+  options = {},
+) {
+  const params = { permission_rules: permissionRules ?? null };
+  if (agentId) params.agent_id = agentId;
+  return rpc('permissions.validate', params, options);
+}
+
+// The limits the Runs of a Session work under; `{restricted: false}` for full
+// access. Without `sessionId` it describes a new Session of `agentId` working
+// in `workingProjectId` (undefined: the Agent's default Project; null: its
+// Workspace).
+export function getSessionPermissions(
+  { agentId, sessionId = '', workingProjectId } = {},
+  options = {},
+) {
+  requireNonEmptyString(
+    agentId,
+    'Agent id must be a non-empty string',
+    'permissions.session',
+  );
+  const params = { agent_id: agentId };
+  if (sessionId) params.session_id = sessionId;
+  else if (workingProjectId !== undefined)
+    params.working_project_id = workingProjectId;
+  return rpc('permissions.session', params, options);
+}
+
 export function renameAgent(id, newId, options = {}) {
   requireNonEmptyString(
     id,

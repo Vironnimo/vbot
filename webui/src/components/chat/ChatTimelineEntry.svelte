@@ -530,6 +530,7 @@
             <span
               class:error={toolStatus(eventToolRow) === 'failed'}
               class:partial={toolStatus(eventToolRow) === 'partial'}
+              class:refused={toolStatus(eventToolRow) === 'refused'}
               class:running={toolStatus(eventToolRow) === 'running'}
               class:done={toolStatus(eventToolRow) === 'success'}
               class="te-dot"

@@ -28,6 +28,11 @@ from dataclasses import dataclass
 from typing import ClassVar, Final, cast
 from urllib.parse import urlsplit
 
+from core.permissions._describe import (
+    LayerDescription,
+    describe_layer,
+    describe_permission_rules,
+)
 from core.permissions._paths import (
     LexicalPath,
     NormalizedPath,
@@ -42,6 +47,16 @@ from core.permissions._paths import (
     patterns_below,
     resolve_text,
     split_lexical,
+)
+from core.permissions._presets import (
+    CUSTOM_PRESET,
+    PERMISSION_PRESETS,
+    PresetMatch,
+    PresetName,
+    apply_preset,
+    matching_preset,
+    preset_definitions,
+    preset_name,
 )
 from core.permissions._refusal import (
     LAYER_SOURCES,
@@ -63,8 +78,11 @@ from core.permissions._rules import (
     ReadBase,
     RuleKind,
     RuleNormalization,
+    RuleSetCheck,
+    RuleSetProblem,
     WebBase,
     WriteBase,
+    check_permission_rules,
     host_matches,
     normalize_host,
     normalize_permission_rule,
@@ -73,6 +91,7 @@ from core.permissions._rules import (
     permission_rules_to_dict,
     resolve_rule_set,
     validated_base,
+    write_within_read,
 )
 
 type PathLike = str | os.PathLike[str]
@@ -791,10 +810,11 @@ def _expand(rules: PermissionRules, context: BoundaryContext) -> PermissionLayer
                 result.append(rule)
         return tuple(result)
 
+    read = rules.read or "anywhere"
     return PermissionLayer(
         source="agent",
-        read=rules.read or "anywhere",
-        write=rules.write or "anywhere",
+        read=read,
+        write=write_within_read(read, rules.write or "anywhere"),
         commands=rules.commands or "any",
         web=rules.web or "any",
         workdir=workdir,
@@ -943,7 +963,7 @@ def _layer_from_dict(value: object, where: str, *, windows: bool) -> PermissionL
     return PermissionLayer(
         source=cast(LayerSource, source),
         read=cast(ReadBase, bases["read"]),
-        write=cast(WriteBase, bases["write"]),
+        write=write_within_read(cast(ReadBase, bases["read"]), cast(WriteBase, bases["write"])),
         commands=cast(CommandsBase, bases["commands"]),
         web=cast(WebBase, bases["web"]),
         workdir=workdir,
@@ -963,10 +983,13 @@ def _absolute_folder(value: object, where: str, *, windows: bool) -> str:
 
 
 __all__ = [
+    "CUSTOM_PRESET",
+    "PERMISSION_PRESETS",
     "PLACEHOLDERS",
     "RULE_KINDS",
     "BoundaryContext",
     "CommandsBase",
+    "LayerDescription",
     "LayerSource",
     "NormalizedPath",
     "PathAccess",
@@ -979,18 +1002,29 @@ __all__ = [
     "PermissionRule",
     "PermissionRules",
     "PermissionRulesError",
+    "PresetMatch",
+    "PresetName",
     "ProtectedLocation",
     "ReadBase",
     "RefusalReason",
     "RuleKind",
     "RuleNormalization",
+    "RuleSetCheck",
+    "RuleSetProblem",
     "WebBase",
     "WriteBase",
+    "apply_preset",
+    "check_permission_rules",
+    "describe_layer",
+    "describe_permission_rules",
     "is_own_host",
+    "matching_preset",
     "normalize_path",
     "normalize_permission_rule",
     "normalize_permission_rules",
     "parse_permission_rule",
     "permission_rules_to_dict",
+    "preset_definitions",
+    "preset_name",
     "resolve_rule_set",
 ]

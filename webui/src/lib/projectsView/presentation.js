@@ -1,5 +1,6 @@
 import { asText, isPlainObject } from '../values.js';
 import { normalizeCompactionPolicy } from '../compactionPolicy.js';
+import { normalizePermissionRules } from '../permissionRules.js';
 import {
   normalizeToolAccess,
   normalizeToolLoading,
@@ -655,6 +656,15 @@ export function projectTeam(scan) {
     // or null when the agent has no override. Read shape-only here — the row derives
     // whether a field is overridden from `effective[field].source === 'override'`.
     overrides: normalizeOverrides(member?.overrides),
+    // What the member inherits for each part its own override does not set:
+    // the On-demand Tools setting (both parts complete) and the Permission
+    // Rules (the repository's, then the shared default; null for none).
+    tool_loading_default: isPlainObject(member?.tool_loading_default)
+      ? member.tool_loading_default
+      : null,
+    permission_rules_default: normalizePermissionRules(
+      member?.permission_rules_default,
+    ),
     // The provenance-aware resolved values, one entry per run field:
     // `{ value, source }`. A null value means "not configured" (model) or
     // "provider default" (sampling/thinking); a null source means no tier won.
@@ -716,6 +726,10 @@ function normalizeOverrides(overrides) {
   if (toolLoading !== null) {
     normalized.tool_loading = toolLoading;
   }
+  const permissionRules = normalizePermissionRules(overrides.permission_rules);
+  if (permissionRules !== null) {
+    normalized.permission_rules = permissionRules;
+  }
   return Object.keys(normalized).length > 0 ? normalized : null;
 }
 
@@ -740,6 +754,18 @@ function normalizeEffective(effective) {
     value: normalizeToolAccess(toolAccessEntry.value),
     source: stringOrNull(toolAccessEntry.source),
   };
+  // `source` is the most specific level that set any part (override,
+  // repository, global_default; null for full access); `error` reports a
+  // shared default that cannot apply.
+  const rulesEntry = isPlainObject(source.permission_rules)
+    ? source.permission_rules
+    : {};
+  normalized.permission_rules = {
+    value: normalizePermissionRules(rulesEntry.value),
+    source: stringOrNull(rulesEntry.source),
+    parts: isPlainObject(rulesEntry.parts) ? rulesEntry.parts : {},
+    error: stringOrNull(rulesEntry.error),
+  };
   return normalized;
 }
 
@@ -750,7 +776,11 @@ export function memberFieldIsOverridden(member, field) {
   if (field === 'compaction_policy') {
     return isPlainObject(member?.overrides?.compaction_policy);
   }
-  if (field === 'tool_access' || field === 'tool_loading') {
+  if (
+    field === 'tool_access' ||
+    field === 'tool_loading' ||
+    field === 'permission_rules'
+  ) {
     return isPlainObject(member?.overrides?.[field]);
   }
   return member?.effective?.[field]?.source === EFFECTIVE_SOURCE_OVERRIDE;
@@ -789,6 +819,8 @@ export function seedTeamOverrideDraft(member) {
       : normalizeToolAccess(effective.tool_access?.value),
     // Like the Agent's own value: null while off without an explicit list.
     tool_loading: normalizeToolLoading(overrides.tool_loading),
+    // The override's own rules; null while the member inherits every part.
+    permission_rules: normalizePermissionRules(overrides.permission_rules),
   };
 }
 

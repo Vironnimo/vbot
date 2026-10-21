@@ -28,6 +28,7 @@
   import SettingsDefaultsPanel from './settings/SettingsDefaultsPanel.svelte';
   import SettingsCompactionPanel from './settings/SettingsCompactionPanel.svelte';
   import SettingsToolLoadingPanel from './settings/SettingsToolLoadingPanel.svelte';
+  import SettingsPermissionRulesPanel from './settings/SettingsPermissionRulesPanel.svelte';
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
@@ -38,7 +39,7 @@
   // The shared defaults place. Agent ids are letters, digits, hyphens and
   // underscores, so it never names an Agent.
   const DEFAULTS_PLACE = '~defaults';
-  const DEFAULTS_SECTIONS = ['tool_loading', 'compaction'];
+  const DEFAULTS_SECTIONS = ['tool_loading', 'permission_rules', 'compaction'];
   const autosaveContext = useAutosaveContext();
   const modelCatalogLoader = createModelCatalogLoader({
     listModels,
@@ -46,8 +47,8 @@
   });
   let {
     // The place is the shown Agent (`[agentId]`) or the shared defaults
-    // (`['~defaults']`, `['~defaults', 'compaction']` or
-    // `['~defaults', 'tool_loading']` for that section); an
+    // (`['~defaults']`, or `['~defaults', <section>]` for its
+    // `compaction`, `tool_loading` or `permission_rules` section); an
     // empty place shows the shared selected Agent.
     navigation = createStandaloneNavigation(),
     // Seeds the empty place; the place decides what the view shows.
@@ -754,6 +755,11 @@
               >
               <Button
                 variant="tertiary"
+                onClick={() => jumpToDefaultsSection('permission_rules')}
+                >{t('permissions.defaultsTitle')}</Button
+              >
+              <Button
+                variant="tertiary"
                 onClick={() => jumpToDefaultsSection('compaction')}
                 >{t('settings.compaction.title')}</Button
               >
@@ -812,6 +818,31 @@
                 <SettingsToolLoadingPanel
                   settings={sharedSettings}
                   tools={availableTools}
+                  onCommit={commitSharedSettings}
+                  onError={sharedSettingsFailure}
+                />
+              </div>
+            </section>
+
+            <section
+              class="s-section"
+              data-settings-section="permission_rules"
+              aria-labelledby="agent-shared-permissions-title"
+            >
+              <header class="s-section__head">
+                <h3
+                  class="s-section__title"
+                  id="agent-shared-permissions-title"
+                >
+                  {t('permissions.defaultsTitle')}
+                </h3>
+              </header>
+              <p class="s-section__desc">
+                {t('permissions.defaultsDescription')}
+              </p>
+              <div class="s-section__body">
+                <SettingsPermissionRulesPanel
+                  settings={sharedSettings}
                   onCommit={commitSharedSettings}
                   onError={sharedSettingsFailure}
                 />

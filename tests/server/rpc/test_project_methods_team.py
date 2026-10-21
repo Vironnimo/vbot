@@ -110,6 +110,28 @@ async def test_set_override_is_the_winning_tier_until_cleared(
 
 
 @pytest.mark.asyncio
+async def test_a_permission_rules_override_is_saved_normalized_over_what_it_inherits(
+    tmp_path: Path,
+) -> None:
+    state = await _vbot_state(tmp_path)
+    override = {"project_id": "vbot", "agent_id": "builder", "field": "permission_rules"}
+
+    refused = await rpc_error(
+        state, "project.set_override", **override, value={"allow": ["Copy(x)"]}
+    )
+    overridden = await rpc_result(
+        state, "project.set_override", **override, value={"allow": ["Write(docs/**)"]}
+    )
+
+    assert "permission_rules.allow[0]" in refused["message"]
+    member = _member(overridden)
+    assert member["overrides"] == {"permission_rules": {"allow": ["Edit(docs/**)"]}}
+    # Neither the repository nor the shared default restricts this agent.
+    assert member["permission_rules_default"] is None
+    assert member["effective"]["permission_rules"]["value"] == {"allow": ["Edit(docs/**)"]}
+
+
+@pytest.mark.asyncio
 async def test_tool_access_override_replaces_the_repository_policy_until_cleared(
     tmp_path: Path,
 ) -> None:

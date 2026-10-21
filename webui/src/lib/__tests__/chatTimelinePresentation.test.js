@@ -681,13 +681,17 @@ describe('Tool row presentation', () => {
     ]);
   });
 
-  it.each(['result', 'message'])(
-    'labels a user-cancelled Tool result from %s as cancelled',
-    (source) => {
-      const result = {
-        ok: false,
-        error: { code: 'cancelled_by_user', message: 'Stopped.' },
-      };
+  // Neither a call the user stopped nor one the Agent's Permission Rules
+  // refused is a failure.
+  it.each([
+    ['result', 'cancelled_by_user', 'cancelled', 'chat.toolCancelled'],
+    ['message', 'cancelled_by_user', 'cancelled', 'chat.toolCancelled'],
+    ['result', 'permission_denied', 'refused', 'chat.toolRefused'],
+    ['message', 'permission_denied', 'refused', 'chat.toolRefused'],
+  ])(
+    'labels a Tool result from %s with %s as %s',
+    (source, code, status, label) => {
+      const result = { ok: false, error: { code, message: 'Stopped.' } };
       const event = {
         type: 'tool_call_result',
         payload: {
@@ -698,8 +702,8 @@ describe('Tool row presentation', () => {
         },
       };
       const tool = toolRowFromEvent(event);
-      expect(toolStatus(tool)).toBe('cancelled');
-      expect(toolStatusLabel(tool)).toBe(t('chat.toolCancelled'));
+      expect(toolStatus(tool)).toBe(status);
+      expect(toolStatusLabel(tool)).toBe(t(label));
       expect(isFailedToolEvent(event)).toBe(false);
     },
   );

@@ -15,6 +15,7 @@ from typing import Any, cast
 
 from core.archive import ArchiveSubjectInUseError
 from core.memory import MEMORY_PROMPT_MODES
+from core.permissions import PermissionRulesError, normalize_permission_rules
 from core.prompts import load_bundled_default_layout
 from core.runs import RunAdmissionBlockedError
 from core.settings import (
@@ -398,6 +399,7 @@ def _agent_changes(params: JsonObject, *, blocked: set[str], for_create: bool) -
         "compaction_policy",
         "tool_loading",
         "librarian_enabled",
+        "permission_rules",
     }
     if not for_create:
         public_fields.add("current_session_id")
@@ -577,6 +579,15 @@ def _validate_agent_field(key: str, value: Any) -> Any:
             return normalize_tool_loading(value)
         except ValueError as exc:
             raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+    if key == "permission_rules":
+        # ``null`` removes the Agent's own rules: it inherits the shared default,
+        # else it has full access.
+        if value is None:
+            return None
+        try:
+            return normalize_permission_rules(value)
+        except PermissionRulesError as exc:
+            raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{exc}") from exc
     raise RpcError(RPC_ERROR_INVALID_REQUEST, f"unsupported agent field: {key}")
 
 

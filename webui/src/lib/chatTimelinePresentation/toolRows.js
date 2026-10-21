@@ -4,7 +4,9 @@ import {
   hasToolResultError,
   hasToolResultPartial,
   hasToolResultCancellation,
+  toolResultValueForEvent,
 } from './messages.js';
+import { isPermissionDeniedResult } from '$lib/permissionRules.js';
 import {
   toolDisplayFromEvent,
   toolStatus,
@@ -74,11 +76,13 @@ export const toolRowFromEvent = (event) => {
     status: resultEvent
       ? hasToolResultCancellation(event)
         ? 'cancelled'
-        : hasToolResultError(event)
-          ? 'failed'
-          : hasToolResultPartial(event)
-            ? 'partial'
-            : 'success'
+        : isPermissionDeniedResult(toolResultValueForEvent(event))
+          ? 'refused'
+          : hasToolResultError(event)
+            ? 'failed'
+            : hasToolResultPartial(event)
+              ? 'partial'
+              : 'success'
       : 'running',
   };
 };
@@ -90,6 +94,9 @@ export const toolStatusLabel = (tool, nowMs = Date.now()) => {
   }
   if (toolStatus(tool) === 'interrupted') {
     return t('chat.toolInterrupted');
+  }
+  if (toolStatus(tool) === 'refused') {
+    return t('chat.toolRefused');
   }
   if (toolStatus(tool) === 'running') {
     if (isToolPreparing(tool)) {
@@ -127,7 +134,9 @@ export const toolStatusDetails = (tool, nowMs = Date.now()) => {
         ? t('chat.toolState.partialHint')
         : status === 'interrupted'
           ? t('chat.toolState.interruptedHint')
-          : '',
+          : status === 'refused'
+            ? t('chat.toolState.refusedHint')
+            : '',
     rows: executionDetailRows({
       startedAt,
       finishedAt:

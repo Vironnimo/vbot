@@ -1029,6 +1029,10 @@ def _team_member_response(resolver: Any, member: AgentProfile, project: Project)
         # The On-demand Tools setting the agent inherits for each part its
         # ``tool_loading`` override does not set, both parts complete.
         "tool_loading_default": resolver.inherited_tool_loading(),
+        # The Permission Rules the agent inherits for each part its
+        # ``permission_rules`` override does not set: the repository's, then the
+        # shared default; null for full access.
+        "permission_rules_default": resolver.inherited_permission_rules(member),
         # Per run field, the effective value + winning tier (override / agent /
         # project_default / global_default / null), computed from the already-scanned
         # member so the team listing never re-scans per member.

@@ -399,6 +399,26 @@ export function createAgentsRpcMock(options = {}) {
       return { ...source, id: params.new_id };
     }
 
+    // The Permissions section checks the Agent's rules as it shows them.
+    if (method === 'permissions.validate') {
+      return {
+        valid: true,
+        permission_rules: params.permission_rules ?? null,
+        notes: [],
+        errors: [],
+        preset: params.permission_rules ? 'custom' : 'full_access',
+        presets: {
+          full_access: null,
+          work_dir: { read: 'work_area', write: 'work_area' },
+          work_dir_read_only: { read: 'work_area', write: 'scratch' },
+        },
+        inherited_preset: 'full_access',
+        inherited: null,
+        effective: params.permission_rules ?? null,
+        preview: null,
+      };
+    }
+
     throw new Error(`Unexpected RPC method: ${method}`);
   };
 }

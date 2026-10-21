@@ -129,6 +129,8 @@ export {
   suggestAgentDescription,
   createAgent,
   updateAgent,
+  validatePermissionRules,
+  getSessionPermissions,
   renameAgent,
   deleteAgent,
   listModels,

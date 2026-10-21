@@ -675,6 +675,9 @@ def _tool_status(result: Any, name: str, display: Any, error: Any) -> str:
     failure = result.get("error") or {}
     if isinstance(failure, dict) and failure.get("code") == "cancelled_by_user":
         return "cancelled"
+    # The Agent's Permission Rules refused the call: the user's limit, not a fault.
+    if isinstance(failure, dict) and failure.get("code") == "permission_denied":
+        return "refused"
     result_data = result.get("data")
     if (
         name == "bash"
