@@ -7,8 +7,10 @@ import logging
 from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 from contextlib import aclosing
+from datetime import datetime
 from typing import Any
 
+from core.activity import FinishedWork, SessionActivity, SessionActivityState, WaitingFor
 from core.runs import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
     ASSISTANT_OUTPUT_EVENT,
@@ -40,12 +42,14 @@ from core.runs import (
     QueuedRunItem,
     Run,
     RunEvent,
+    RunStatus,
 )
 from core.sessions import SessionAddress
 from core.subagents import (
     SUBAGENT_SESSION_STARTED_EVENT,
     SUBAGENT_STATUS_CHANGED_EVENT,
 )
+from core.utils.timestamps import format_canonical_timestamp
 from server.events import (
     ALLOWED_RESOURCE_KINDS,
     COMMAND_STATUS_CHANGED_EVENT,
@@ -60,6 +64,7 @@ from server.events import (
     RUN_INTERRUPTED_SERVER_EVENT,
     RUN_OUTPUT_SERVER_EVENT,
     RUN_STARTED_SERVER_EVENT,
+    SESSION_ACTIVITY_CHANGED_EVENT,
 )
 from server.rpc.payloads import (
     remove_opaque_provider_metadata,
@@ -69,6 +74,9 @@ from server.rpc.payloads import (
 JsonObject = dict[str, Any]
 _LOGGER = logging.getLogger("vbot.server.rpc.event_bridge")
 DEFAULT_BRIDGED_RUN_RETENTION_LIMIT = 1024
+# Bounds how long a Session activity change waits for the bridged Run events
+# that precede it; a stalled bridge never holds activity back for longer.
+SESSION_ACTIVITY_ORDER_TIMEOUT_SECONDS = 5.0
 
 # Public payload field carrying the Session a background review fork reviews.
 RUN_SOURCE_SESSION_FIELD = "source_session_id"
@@ -86,6 +94,25 @@ def _bridge_run_to_event_bus(state: Any, run: Run) -> None:
         name=f"run-event-bridge:{run.id}",
     )
     task.add_done_callback(_on_run_event_bridge_done)
+    _track_run_event_bridge(state, run, task)
+
+
+def _track_run_event_bridge(state: Any, run: Run, task: asyncio.Task[None]) -> None:
+    """Keep each Session's running bridges until they end, for activity ordering."""
+    bridges = getattr(state, "run_event_bridges", None)
+    if bridges is None:
+        return
+    address = SessionAddress(run.project_id, run.agent_id, run.session_id)
+    bridges.setdefault(address, {})[run.id] = (run, task)
+
+    def forget(_task: asyncio.Task[None]) -> None:
+        runs = bridges.get(address)
+        if runs is not None:
+            runs.pop(run.id, None)
+            if not runs:
+                bridges.pop(address, None)
+
+    task.add_done_callback(forget)
 
 
 def bridge_run_to_event_bus(state: Any, run: Run) -> None:
@@ -181,6 +208,110 @@ def publish_command_status_changed(
             "still_running": still_running,
         },
     )
+
+
+def session_activity_service(state: Any) -> SessionActivity | None:
+    """The Runtime's Session activity; None for a Runtime without one, or one stopping."""
+    try:
+        return state.runtime.session_activity  # type: ignore[no-any-return]
+    except AttributeError, RuntimeError:
+        return None
+
+
+def waiting_for_payload(waiting_for: WaitingFor) -> JsonObject:
+    return {
+        "subagents": waiting_for.subagents,
+        "commands": waiting_for.commands,
+        "results": waiting_for.results,
+    }
+
+
+def session_activity_payload(
+    address: SessionAddress,
+    activity: SessionActivityState,
+    finished: FinishedWork | None = None,
+) -> JsonObject:
+    """One Session's activity as accessors read it.
+
+    ``state`` is ``working``, ``waiting`` or ``idle``; ``work_started_at`` is when
+    the current work span began (canonical UTC, ``None`` while idle);
+    ``waiting_for`` counts what a waiting Session waits for (all zero otherwise).
+    ``contributes_to_agent_activity`` appears, as ``false``, only while every
+    active and queued Run of a working Session is excluded from Agent activity.
+    ``finished_work`` comes only with a move to ``idle``: the span it ended.
+    """
+    payload: JsonObject = {
+        "project_id": address.project_id,
+        "agent_id": address.agent_id,
+        "session_id": address.session_id,
+        "state": activity.state,
+        "work_started_at": _timestamp(activity.work_started_at),
+        "waiting_for": waiting_for_payload(activity.waiting_for),
+    }
+    if not activity.contributes_to_agent_activity:
+        payload["contributes_to_agent_activity"] = False
+    if finished is not None:
+        payload["finished_work"] = {
+            "started_at": format_canonical_timestamp(finished.started_at),
+            "finished_at": format_canonical_timestamp(finished.finished_at),
+            "duration_ms": finished.duration_ms,
+        }
+    return payload
+
+
+def publish_session_activity_changed(
+    state: Any,
+    address: SessionAddress,
+    activity: SessionActivityState,
+    finished: FinishedWork | None = None,
+) -> None:
+    """Publish ``session_activity_changed`` after the Run events that caused it.
+
+    A change waits until the bridges of this Session's finished Runs have
+    published their terminal events (at most
+    ``SESSION_ACTIVITY_ORDER_TIMEOUT_SECONDS``); changes of one Session keep
+    their order. Without anything to wait for it is published at once.
+    """
+    payload = session_activity_payload(address, activity, finished)
+    publications: dict[SessionAddress, asyncio.Task[None]] | None = getattr(
+        state, "session_activity_publications", None
+    )
+    bridges = getattr(state, "run_event_bridges", None) or {}
+    finishing = [
+        task
+        for run, task in bridges.get(address, {}).values()
+        if run.status != RunStatus.RUNNING and not task.done()
+    ]
+    previous = publications.get(address) if publications is not None else None
+    if previous is not None and previous.done():
+        previous = None
+    if publications is None or (previous is None and not finishing):
+        state.event_bus.publish(SESSION_ACTIVITY_CHANGED_EVENT, payload)
+        return
+
+    async def publish_in_order() -> None:
+        if previous is not None:
+            await asyncio.wait({previous})
+        if finishing:
+            await asyncio.wait(finishing, timeout=SESSION_ACTIVITY_ORDER_TIMEOUT_SECONDS)
+        state.event_bus.publish(SESSION_ACTIVITY_CHANGED_EVENT, payload)
+
+    task = asyncio.create_task(
+        publish_in_order(), name=f"session-activity-event:{address.agent_id}"
+    )
+    publications[address] = task
+
+    def forget(done: asyncio.Task[None]) -> None:
+        if publications.get(address) is done:
+            publications.pop(address, None)
+        if not done.cancelled() and done.exception() is not None:
+            _LOGGER.warning("Session activity event failed", exc_info=done.exception())
+
+    task.add_done_callback(forget)
+
+
+def _timestamp(value: datetime | None) -> str | None:
+    return None if value is None else format_canonical_timestamp(value)
 
 
 def publish_recall_index_status(state: Any, status: Any) -> None:

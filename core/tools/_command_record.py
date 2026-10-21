@@ -83,6 +83,8 @@ class CommandServices:
     run_blocking: BlockingRunner
     # A background command's status may have changed.
     changed: Callable[[str], None]
+    # Only whether it will still wake its Session may have changed: nothing to save.
+    announce: Callable[[str], None]
     checkpoint: Callable[[str], None]
     flush: Callable[[], Awaitable[None]]
 
@@ -141,6 +143,12 @@ class CommandRecord:
         self._output_at: float | None = None
         self._background = False
         self._deliver = False
+        # A process of the command listens on a TCP port: it serves and wakes
+        # nobody by itself. Sticky once found.
+        self._service = False
+        # Set while a submitted result is on its way to the sink: from the
+        # submission until the sink holds it, or the submission ends without.
+        self._handoff: object | None = None
         self._exit_code: int | None = None
         self._stop_reason: StopReason | None = None
         # An ``agent`` stop failed once its kill was sent: its call showed no
@@ -215,6 +223,35 @@ class CommandRecord:
     @property
     def delivery_pending(self) -> bool:
         return self._delivering
+
+    @property
+    def awaits_wake(self) -> bool:
+        """Whether the command's end will wake its Session and the sink does not
+        hold that result yet: a background command with an armed delivery that
+        still runs, or whose result is on its way to the sink. A service never
+        counts."""
+        if not self._background or not self._delivering or self._service:
+            return False
+        return not self.ended or self._handoff is not None
+
+    @property
+    def service(self) -> bool:
+        return self._service
+
+    def mark_service(self) -> None:
+        """A process of the command listens on a TCP port: it is a service."""
+        if self._service:
+            return
+        self._service = True
+        _LOGGER.info(
+            "Command %s serves on a TCP port; its result no longer keeps its Session waiting",
+            self.command_id,
+        )
+        self._announce()
+
+    def process_ids(self) -> frozenset[int]:
+        """The ids of the command's processes running now. Blocks."""
+        return frozenset(process.pid for process in self._tree.facts().running)
 
     @property
     def delivery_body(self) -> str | None:
@@ -420,6 +457,7 @@ class CommandRecord:
         self._deliver = False
         self._withdraw_submitted()
         self._services.checkpoint(self.command_id)
+        self._announce()
 
     async def kill_and_release(self) -> bool:
         """Kill every process off the Event Loop, withdraw the delivery and release
@@ -833,19 +871,20 @@ class CommandRecord:
         """Submit the result *body* to the command's Session."""
         self._delivered_body = body
         self._services.checkpoint(self.command_id)
+        handoff = self._handoff = object()
 
         async def submit() -> None:
-            # Persist the end before handing it over. A crash after Session
-            # persistence but before acknowledgement is deduplicated on restart.
-            await self._services.flush()
-            if not self._delivering:
-                return
-            # A Session move can finish while the checkpoint is being saved.
-            # Withdrawal must name the exact address that receives the notice.
-            target = self.owner
-            self._delivered_to = target
-            await self._await_delivery(
-                sink.submit_completion(
+            try:
+                # Persist the end before handing it over. A crash after Session
+                # persistence but before acknowledgement is deduplicated on restart.
+                await self._services.flush()
+                if not self._delivering:
+                    return
+                # A Session move can finish while the checkpoint is being saved.
+                # Withdrawal must name the exact address that receives the notice.
+                target = self.owner
+                self._delivered_to = target
+                delivery = sink.submit_completion(
                     target,
                     notice_id=self.notice_id,
                     origin_run_id=self.origin_run_id,
@@ -853,9 +892,19 @@ class CommandRecord:
                     execution_owner=self.execution_owner,
                     wake=True,
                 )
-            )
+            finally:
+                # The sink holds the result now, or this submission ended without.
+                self._end_handoff(handoff)
+            await self._await_delivery(delivery)
 
         self._delivery_task = self._task(submit(), "delivery")
+        # A submission cancelled before it began ends its handoff as well.
+        self._delivery_task.add_done_callback(lambda _task: self._end_handoff(handoff))
+
+    def _end_handoff(self, handoff: object) -> None:
+        if self._handoff is handoff:
+            self._handoff = None
+            self._announce()
 
     def _withdraw_submitted(self) -> bool:
         """Withdraw a submitted result not yet delivered; whether one was withdrawn.
@@ -917,6 +966,10 @@ class CommandRecord:
     def _changed(self) -> None:
         if self._background:
             self._services.changed(self.command_id)
+
+    def _announce(self) -> None:
+        if self._background:
+            self._services.announce(self.command_id)
 
     async def _wait_or_sleep(self, event: asyncio.Event, seconds: float) -> None:
         """Wait until *event* is set or *seconds* pass on the manager's clock."""

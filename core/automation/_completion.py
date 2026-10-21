@@ -52,6 +52,9 @@ _sleep = asyncio.sleep
 
 
 OwnedCompletionValidator = Callable[[SessionAddress, RunExecutionOwner], None]
+# Called with a Session address whose held notices changed: one was added,
+# consumed, withdrawn or failed, or stopped waking it.
+CompletionChangedCallback = Callable[[SessionAddress], None]
 
 
 @dataclass
@@ -82,9 +85,16 @@ class _CompletionNotice:
         run, count = self.boundary_run, self.read_after
         return run is not None and count is not None and run.iteration_count > count
 
+    @property
+    def wakes(self) -> bool:
+        """Whether the notice will still wake its Session: waking, not
+        suppressed and not yet answered by the Model."""
+        return self.wake and not self.suppress_run and not self.read
+
 
 @dataclass
 class _CompletionBucket:
+    address: SessionAddress
     notices: dict[str, _CompletionNotice] = field(default_factory=dict)
     delivery_task: asyncio.Task[None] | None = None
 
@@ -107,6 +117,7 @@ class _CompletionDeliveryCoordinator:
         self._closed = False
         self._owned_run_starter: Callable[..., Awaitable[Run]] | None = None
         self._owned_completion_validator: OwnedCompletionValidator | None = None
+        self._changed_callbacks: list[CompletionChangedCallback] = []
 
     def set_run_relay(
         self,
@@ -128,6 +139,35 @@ class _CompletionDeliveryCoordinator:
             for notice in bucket.notices.values()
         )
 
+    def pending_wakes(self, address: SessionAddress) -> int:
+        """How many held notices will still wake the Session at *address*."""
+        bucket = self._buckets.get(address)
+        if bucket is None:
+            return 0
+        return sum(1 for notice in bucket.notices.values() if notice.wakes)
+
+    def add_changed_callback(self, callback: CompletionChangedCallback) -> Callable[[], None]:
+        """Call *callback* with a Session address whenever its held notices change."""
+        self._changed_callbacks.append(callback)
+
+        def remove() -> None:
+            if callback in self._changed_callbacks:
+                self._changed_callbacks.remove(callback)
+
+        return remove
+
+    def _changed(self, address: SessionAddress) -> None:
+        for callback in list(self._changed_callbacks):
+            try:
+                callback(address)
+            except Exception:
+                _LOGGER.warning(
+                    "A completion change callback failed (agent=%s session=%s)",
+                    address.agent_id,
+                    address.session_id,
+                    exc_info=True,
+                )
+
     def submit(
         self,
         address: SessionAddress,
@@ -148,7 +188,9 @@ class _CompletionDeliveryCoordinator:
             delivered: asyncio.Future[None] = asyncio.get_running_loop().create_future()
             delivered.cancel()
             return delivered
-        bucket = self._buckets.setdefault(address, _CompletionBucket())
+        bucket = self._buckets.get(address)
+        if bucket is None:
+            bucket = self._buckets[address] = _CompletionBucket(address)
         existing = bucket.notices.get(notice_id)
         if existing is not None:
             return existing.delivered
@@ -177,6 +219,7 @@ class _CompletionDeliveryCoordinator:
                 self._deliver(address, bucket),
                 name=f"completion-delivery:{address.agent_id}",
             )
+        self._changed(address)
         return delivered
 
     def cancel(
@@ -199,6 +242,7 @@ class _CompletionDeliveryCoordinator:
         bucket.notices.pop(notice_id, None)
         if not notice.delivered.done():
             notice.delivered.cancel()
+        self._changed(address)
         return True
 
     async def deliver_to_request(self, run: Run, session: ChatSession) -> ChatMessage | None:
@@ -278,6 +322,7 @@ class _CompletionDeliveryCoordinator:
                             if notice.boundary_run is not boundary_run:
                                 continue
                             notice.suppress_run = True
+                        self._changed(address)
                     pending = self._drop_read(
                         bucket,
                         [
@@ -407,10 +452,7 @@ class _CompletionDeliveryCoordinator:
                     if owner is not None:
                         # An owned delivery must never bypass closed admission by
                         # falling back to an arbitrary Session write.
-                        for notice in self._still_pending(bucket, pending):
-                            bucket.notices.pop(notice.id, None)
-                            if not notice.delivered.done():
-                                notice.delivered.set_exception(error)
+                        self._fail(bucket, self._still_pending(bucket, pending), error)
                         continue
                     # Starting a follow-up Run is only the wake-up mechanism.
                     # The durable delivery boundary is the Session note, so a
@@ -459,6 +501,7 @@ class _CompletionDeliveryCoordinator:
                 if undelivered:
                     for notice in undelivered:
                         notice.suppress_run = True
+                    self._changed(address)
                     await self._persist_without_run(address, bucket, undelivered)
         except BaseException as error:
             closing = self._closed and isinstance(error, asyncio.CancelledError)
@@ -650,13 +693,17 @@ class _CompletionDeliveryCoordinator:
     async def close_execution_group(self, extension: str, group_id: str, epoch: str) -> None:
         """Withdraw this group's pending notices; its later submissions fail validation."""
         key = (extension, group_id, epoch)
-        for bucket in self._buckets.values():
+        for bucket in list(self._buckets.values()):
+            withdrawn = False
             for notice in list(bucket.notices.values()):
                 owner = notice.execution_owner
                 if owner is not None and (owner.extension, owner.group_id, owner.epoch) == key:
                     bucket.notices.pop(notice.id, None)
+                    withdrawn = True
                     if not notice.delivered.done():
                         notice.delivered.cancel()
+            if withdrawn:
+                self._changed(bucket.address)
 
     @staticmethod
     def _still_pending(
@@ -673,11 +720,15 @@ class _CompletionDeliveryCoordinator:
         notices: list[_CompletionNotice],
     ) -> None:
         """Resolve exact notices only after their combined note is persisted."""
+        removed = False
         for notice in notices:
             if bucket.notices.get(notice.id) is not notice:
                 continue
             bucket.notices.pop(notice.id, None)
+            removed = True
             self._confirm(notice)
+        if removed:
+            self._changed(address)
 
     @staticmethod
     def _confirm(notice: _CompletionNotice) -> None:
@@ -685,17 +736,20 @@ class _CompletionDeliveryCoordinator:
         if not notice.delivered.done():
             notice.delivered.set_result(None)
 
-    @staticmethod
     def _drop_read(
-        bucket: _CompletionBucket, notices: list[_CompletionNotice]
+        self, bucket: _CompletionBucket, notices: list[_CompletionNotice]
     ) -> list[_CompletionNotice]:
         """Drop the notices the Model read; return the others."""
         unread: list[_CompletionNotice] = []
+        removed = False
         for notice in notices:
             if not notice.read:
                 unread.append(notice)
             elif bucket.notices.get(notice.id) is notice:
                 bucket.notices.pop(notice.id, None)
+                removed = True
+        if removed:
+            self._changed(bucket.address)
         return unread
 
     def _acknowledgement_callback(
@@ -709,21 +763,25 @@ class _CompletionDeliveryCoordinator:
 
         return acknowledge
 
-    @staticmethod
     def _fail(
+        self,
         bucket: _CompletionBucket,
         notices: list[_CompletionNotice],
         error: BaseException,
     ) -> None:
+        removed = False
         for notice in notices:
             if bucket.notices.get(notice.id) is not notice:
                 continue
             bucket.notices.pop(notice.id, None)
+            removed = True
             if not notice.delivered.done():
                 if isinstance(error, asyncio.CancelledError):
                     notice.delivered.cancel()
                 else:
                     notice.delivered.set_exception(error)
+        if removed:
+            self._changed(bucket.address)
 
     def _suppress_origin(self, address: SessionAddress, run_id: str) -> None:
         origins = self._suppressed_origins.setdefault(address, [])

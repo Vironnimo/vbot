@@ -32,6 +32,9 @@ Curated durable facts about the user and the work, kept as Markdown in an Identi
 ## Run
 One Session execution with a durable identity and lifecycle: an initiating request, any User messages explicitly steered into it, and all Model output, visible thinking blocks, Tool calls/results, and follow-up assistant output until completion, failure, interruption, or cancellation (`runs.md`). Can span multiple Model/Tool steps; not an Agent, Session, or single Provider HTTP request.
 
+## Session activity
+Whether a Session's work is finished, as the server reports it to every Accessor: `working` (a Run active or queued), `waiting` (no Run, but pending work that will wake the Session by itself, such as Sub-Agents answering it) or `idle`; its work span runs from leaving `idle` until reaching it again (`activity.md`). Not Agent activity (whether a Run counts toward an Agent's attention status), the background job list (`activity_status`), or a Sub-Agent's activity file.
+
 ## Agent Takeover
 Moving the current Session, with its id and full history, to another Agent via `/agent <addr> [task]`; the target owns it from then on and runs the optional task (`chat/commands.md`). Not Handoff (`/handoff`), which writes a summary into a fresh Session.
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from typing import Any, cast
 
+from core.activity import IDLE
 from core.agents import BUILTIN_AGENT_IDS
 from core.archive import ArchiveSubjectInUseError
 from core.channels import ChannelConfigError
@@ -35,7 +36,7 @@ from core.sessions import (
 from core.subagents.links import descendants
 from core.utils.errors import StorageError
 from core.utils.logging import get_logger
-from core.utils.timestamps import canonical_timestamp
+from core.utils.timestamps import canonical_timestamp, format_canonical_timestamp
 from server.events import (
     RESOURCE_KIND_AGENTS,
     RESOURCE_KIND_PROJECTS,
@@ -54,6 +55,8 @@ from server.rpc.event_bridge import (
     publish_archived_sessions,
     publish_resource_changed,
     publish_session_changed,
+    session_activity_service,
+    waiting_for_payload,
 )
 from server.rpc.payloads import _global_compaction_policy_loader
 from server.rpc.validation import (
@@ -308,10 +311,13 @@ def _session_list_rows(
     """Shape Session summaries as ``session.list`` rows.
 
     Each row names its owner as ``agent_address`` and carries whether a Run is
-    active and its effective Compaction Policy.
+    active, its Session activity (``activity_state``, ``work_started_at`` and
+    ``waiting_for``, as in ``session_activity_changed``) and its effective
+    Compaction Policy.
     """
     load_global_policy = _global_compaction_policy_loader(state)
     run_manager = state.runtime.chat_run_manager
+    activity = session_activity_service(state)
     sessions = [dict(summary) for summary in summaries]
     for session in sessions:
         session_id = session.get("id")
@@ -327,6 +333,18 @@ def _session_list_rows(
             )
             is not None
         )
+        current = (
+            activity.state(SessionAddress(session_project_id, session_agent_id, session_id))
+            if activity is not None and isinstance(session_id, str)
+            else IDLE
+        )
+        session["activity_state"] = current.state
+        session["work_started_at"] = (
+            format_canonical_timestamp(current.work_started_at)
+            if current.work_started_at is not None
+            else None
+        )
+        session["waiting_for"] = waiting_for_payload(current.waiting_for)
         override = session.pop(COMPACTION_POLICY_META_KEY, None)
         session["compaction_policy_override"] = (
             dict(override) if isinstance(override, dict) else None

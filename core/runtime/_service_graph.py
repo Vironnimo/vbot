@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from core.activity import SessionActivity
 from core.agents.agents import AgentStore
 from core.agents.temporary import TemporaryAgentRegistry
 from core.archive import ArchiveService
@@ -169,6 +170,7 @@ class RuntimeServiceGraph:
         self._librarian_service: LibrarianService | None = None
         self._session_title_service: SessionTitleService | None = None
         self._subagent_coordinator: SubAgentCoordinator | None = None
+        self._session_activity: SessionActivity | None = None
         self._chat_loop: ChatLoop | None = None
         self._command_dispatcher: CommandDispatcher | None = None
         self._chat_run_manager: ChatRunManager | None = None
@@ -354,6 +356,10 @@ class RuntimeServiceGraph:
 
     subagents: _StartedService[SubAgentCoordinator] = _StartedService(
         lambda runtime: runtime._subagent_coordinator, "Sub-agent coordinator is not available"
+    )
+
+    session_activity: _StartedService[SessionActivity] = _StartedService(
+        lambda runtime: runtime._session_activity, "Session activity is not available"
     )
 
     projects: _StartedService[ProjectStore] = _StartedService(

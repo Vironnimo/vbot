@@ -134,6 +134,19 @@ def track_process_tree(root_pid: int) -> ProcessTree:
     return _PosixSessionTree(root_pid)
 
 
+def listening_pids() -> frozenset[int]:
+    """The ids of the processes listening on a TCP port now, in one socket read. Blocks.
+
+    Raises ``psutil.AccessDenied`` where the platform keeps sockets private
+    (macOS without root); a socket whose process is not visible has no id here.
+    """
+    return frozenset(
+        connection.pid
+        for connection in psutil.net_connections(kind="tcp")
+        if connection.status == psutil.CONN_LISTEN and connection.pid
+    )
+
+
 def observe_process_tree(root_pid: int) -> ProcessTree:
     """Observe the tree of the just-started interactive *root_pid*.
 
@@ -853,6 +866,7 @@ __all__ = [
     "ProcessTreeTracker",
     "ProgramExit",
     "RunningProcess",
+    "listening_pids",
     "observe_process_tree",
     "track_process_tree",
 ]

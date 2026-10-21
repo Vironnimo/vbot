@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -11,6 +12,7 @@ import pytest
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 from starlette.websockets import WebSocketDisconnect  # type: ignore[import-not-found]
 
+from core.activity import IDLE, FinishedWork, SessionActivityState, WaitingFor
 from core.runs import RunKind, RunStatus
 from core.sessions import SessionAddress
 from core.utils.timestamps import is_canonical_timestamp
@@ -61,6 +63,7 @@ def test_websocket_handshake_sends_connection_ready_frame_with_no_pre_connect_re
         "replay_status": "fresh",
         "active_runs": [],
         "queues": [],
+        "session_activity": [],
     }
     # The hello names the running server, so a late client knows since when it runs.
     assert set(server) == {"version", "started_at"}
@@ -201,11 +204,12 @@ class _QueuedItem:
         return {"id": self.item_id, "internal": self.internal}
 
 
-def test_websocket_hello_snapshots_running_runs_and_public_queues(
+def test_websocket_hello_snapshots_running_runs_queues_and_session_activity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The hello lets a reconnecting window re-attach running Runs over SSE and
-    rebuild its Queues without extra reads."""
+    """The hello lets a reconnecting window re-attach running Runs over SSE,
+    rebuild its Queues and show which Sessions work or wait without extra
+    reads; activity changes follow as live events."""
     runs = [
         _stub_run(
             "run-running",
@@ -233,13 +237,23 @@ def test_websocket_hello_snapshots_running_runs_and_public_queues(
         (coder_session, _QueuedItem("hidden", internal=True)),
         (writer_session, _QueuedItem("third")),
     ]
-    app = _stub_app(tmp_path)
+    runtime = StubRuntime(tmp_path, StubAdapter())
+    activity = runtime.session_activity
+    app = create_app(runtime=cast(Any, runtime))
+    started = datetime(2026, 10, 21, 9, 0, tzinfo=UTC)
+    activity.states[writer_session] = SessionActivityState(
+        "waiting", started, WaitingFor(subagents=1)
+    )
 
     with TestClient(app) as client:
         monkeypatch.setattr(app.state.chat_runs, "active_runs", lambda: list(runs))
         monkeypatch.setattr(app.state.chat_runs, "all_queued", lambda: list(queued))
         with client.websocket_connect("/ws") as websocket:
             hello = websocket.receive_json()
+            assert client.portal is not None
+            finished = FinishedWork(started, datetime(2026, 10, 21, 9, 5, tzinfo=UTC), 300_000)
+            client.portal.call(activity.publish, writer_session, IDLE, finished)
+            change = websocket.receive_json()
 
     def snapshot(run_id: str, **fields: Any) -> dict[str, Any]:
         return {
@@ -279,6 +293,29 @@ def test_websocket_hello_snapshots_running_runs_and_public_queues(
             ],
         },
     ]
+    writer = {"project_id": "project-b", "agent_id": "writer", "session_id": "session-b"}
+    assert hello["session_activity"] == [
+        {
+            **writer,
+            "state": "waiting",
+            "work_started_at": "2026-10-21T09:00:00.000000Z",
+            "waiting_for": {"subagents": 1, "commands": 0, "results": 0},
+        }
+    ]
+    assert (change["type"], change["payload"]) == (
+        "session_activity_changed",
+        {
+            **writer,
+            "state": "idle",
+            "work_started_at": None,
+            "waiting_for": {"subagents": 0, "commands": 0, "results": 0},
+            "finished_work": {
+                "started_at": "2026-10-21T09:00:00.000000Z",
+                "finished_at": "2026-10-21T09:05:00.000000Z",
+                "duration_ms": 300_000,
+            },
+        },
+    )
 
 
 @pytest.mark.asyncio

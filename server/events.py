@@ -31,6 +31,9 @@ RESOURCE_CHANGED_EVENT = "resource_changed"
 COMMAND_STATUS_CHANGED_EVENT = "command_status_changed"
 RECALL_INDEX_STATUS_EVENT = "recall_index_status"
 ACTIVITY_STATUS_EVENT = "activity_status"
+# A Session's activity changed: ``working``, ``waiting`` or ``idle`` with its
+# work span (``server.rpc.event_bridge.session_activity_payload``).
+SESSION_ACTIVITY_CHANGED_EVENT = "session_activity_changed"
 # Published once when a stop request reaches the server:
 # ``{"initiator": <STOP_INITIATORS value or "unknown">}``.
 SERVER_STOPPING_EVENT = "server_stopping"
@@ -52,6 +55,7 @@ ALLOWED_SERVER_EVENT_TYPES = frozenset(
         COMMAND_STATUS_CHANGED_EVENT,
         RECALL_INDEX_STATUS_EVENT,
         ACTIVITY_STATUS_EVENT,
+        SESSION_ACTIVITY_CHANGED_EVENT,
         SERVER_STOPPING_EVENT,
         CRON_FAILURE_ALERT_EVENT,
     }

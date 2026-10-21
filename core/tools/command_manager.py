@@ -118,7 +118,8 @@ from ._command_types import (
     StopReason,
 )
 from ._interpreter_host import InterpreterHost
-from .process_tree import ProcessTreeTracker, track_process_tree
+from ._service_detection import SERVICE_POLL_SECONDS, ListeningReader, ServiceDetection
+from .process_tree import ProcessTreeTracker, listening_pids, track_process_tree
 
 _LOGGER = get_logger("tools.command_manager")
 
@@ -137,8 +138,10 @@ class CommandManager:
     it nothing is delivered. *temporary_files* holds the live log files; without
     it commands have none. The other parameters are seams for tests: the process
     *launcher* (by default a ``PipeLauncher``; the manager closes it with itself)
-    and *process_tracker*, the clock (*monotonic*, *sleep*) and *run_blocking*,
-    which runs process queries, kills and log file writes off the Event Loop.
+    and *process_tracker*, the clock (*monotonic*, *sleep*), *run_blocking*,
+    which runs process queries, kills and log file writes off the Event Loop,
+    and *read_listening*, which reads the processes listening on a TCP port
+    (``_service_detection``).
     """
 
     def __init__(
@@ -156,6 +159,7 @@ class CommandManager:
         sweep_interval_seconds: float = COMMAND_SWEEP_INTERVAL_SECONDS,
         output_host: InterpreterHost | None = None,
         checkpoint_store: CommandCheckpointStore | None = None,
+        read_listening: ListeningReader = listening_pids,
     ) -> None:
         """*output_host* cleans the commands' output; by default the manager
         owns one with subinterpreter workers and closes it with itself."""
@@ -187,6 +191,7 @@ class CommandManager:
             sleep=sleep,
             run_blocking=run_blocking,
             changed=self._notify,
+            announce=self._announce,
             checkpoint=self._checkpoint,
             flush=self.flush,
         )
@@ -198,6 +203,12 @@ class CommandManager:
         self._closed_execution_groups: set[tuple[str, str, str]] = set()
         self._closed = False
         self._sweeper: asyncio.Task[None] | None = None
+        self._service_detection = ServiceDetection(
+            self._records.values,
+            read_listening=read_listening,
+            run_blocking=run_blocking,
+            sleep=sleep,
+        )
 
     # Manager lifecycle
 
@@ -245,8 +256,10 @@ class CommandManager:
 
         That is when it moves to the background, ends, when a process it left
         running ends (``CommandReport.still_running`` shrank), when it
-        finishes, and when it is forgotten (``status`` is then None). Returns
-        the unsubscribe function.
+        finishes, and when it is forgotten (``status`` is then None); also when
+        what ``pending_wakes`` counts may have changed: its result reached
+        ``TriggerService`` or was withdrawn, or it was found to be a service.
+        Returns the unsubscribe function.
         """
         self._callbacks.append(callback)
 
@@ -282,6 +295,7 @@ class CommandManager:
         """
         self._closed = True
         self._stop_sweeper()
+        self._service_detection.close()
         if self._recovery_task is not None:
             self._recovery_task.cancel()
         try:
@@ -306,6 +320,7 @@ class CommandManager:
         """
         self._closed = True
         self._stop_sweeper()
+        await self._service_detection.aclose()
         # Launches in progress start their commands first, so their kill is not missed.
         await _settle(list(self._pending))
         await self._close_launcher()
@@ -681,6 +696,18 @@ class CommandManager:
             for record in self._records.values()
         )
 
+    def pending_wakes(self, owner: CommandOwner) -> int:
+        """How many background commands of *owner* will still wake it by themselves.
+
+        Each has its delivery armed and still runs, or its result is on its way
+        to ``TriggerService``, which counts it from then on. A command whose
+        process listens on a TCP port is a service and never counts (checked
+        every ``SERVICE_POLL_SECONDS``), unlike in ``has_pending_delivery``.
+        """
+        return sum(
+            1 for record in self._records.values() if record.owner == owner and record.awaits_wake
+        )
+
     def has_unfinished_background(self, *, besides: CommandOwner | None = None) -> bool:
         """Whether a background command of a Session other than *besides* is still unfinished.
 
@@ -932,6 +959,10 @@ class CommandManager:
 
     def _notify(self, command_id: str) -> None:
         self._checkpoint(command_id)
+        self._announce(command_id)
+
+    def _announce(self, command_id: str) -> None:
+        self._service_detection.wake()
         for callback in list(self._callbacks):
             try:
                 callback(command_id)
@@ -973,6 +1004,7 @@ __all__ = [
     "COMMAND_SWEEP_INTERVAL_SECONDS",
     "COMMAND_TAIL_CHARS",
     "COMMAND_TEMPORARY_CATEGORY",
+    "SERVICE_POLL_SECONDS",
     "CommandCapacityError",
     "CommandCheckpointError",
     "CommandChangedCallback",

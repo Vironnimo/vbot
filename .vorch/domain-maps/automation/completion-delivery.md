@@ -35,6 +35,10 @@ this coordinator. Its durable command checkpoint authorizes only an outcome Note
 in the same live Session generation, committed with a canonical receipt through
 Sessions; it never admits a Run or revives the old group (`tools/shell.md`).
 
+## Pending wakes
+
+Session activity counts a Session as `waiting` while the coordinator holds notices that will still wake it (`activity.md`, `waiting_for.results`). `TriggerService.pending_completion_wakes(address)` counts the held notices that are waking (`wake=True`), not suppressed by a user's Stop (`suppress_run`) and not yet read: a notice joined at a request boundary counts as read once the Model answered that request, so it no longer counts after its Run ends. `add_completion_changed_callback(callback)` calls `callback(address)` whenever that count may have changed: submission, withdrawal, user-cancel suppression, an execution group closing, acknowledgement, a read notice being dropped and a failed delivery; close notifies nothing. Callback failures are logged. Coverage: `test_completion_delivery_joins_active_run_at_next_request_boundary`.
+
 ## Process-local state and close
 
 - Completion buckets, dedup, retries, and remembered cancelled origins are process-local; delivery waits at Run boundaries rather than queuing one Run per producer. Once the fallback note persists, the reminder itself is durable across restarts.
