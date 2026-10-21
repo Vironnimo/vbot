@@ -104,7 +104,7 @@ from core.runtime.keep_awake import KeepAwakeController
 from core.secrets import settle_plaintext_credentials
 from core.secrets.agent_secrets import AgentSecrets
 from core.secrets.requests import SecretRequests
-from core.sessions import ChatSession, ChatSessionManager
+from core.sessions import ChatSession, ChatSessionManager, SessionAddress
 from core.sessions.titles import SessionTitleService
 from core.settings.paths import (
     DEFAULT_ATTACHMENT_MAX_SIZE_BYTES,
@@ -117,6 +117,7 @@ from core.skills.runtime import SkillRuntime, load_global_skill_registry
 from core.statistics import StatisticsIndex
 from core.storage.storage import StorageManager
 from core.subagents import SubAgentCoordinator
+from core.subagents.links import ancestors
 from core.tools import (
     ChangeTracker,
     FileReadState,
@@ -144,7 +145,7 @@ from core.tools import (
 from core.tools.calendar import register_calendar_tool
 from core.tools.classify import register_classify_tool
 from core.tools.command_manager import CommandManager
-from core.tools.cron import register_cron_tool
+from core.tools.cron import SessionAncestors, register_cron_tool
 from core.tools.live import LIVE_TOOL_FAMILY, LiveToolHosts, register_live_tools
 from core.tools.load_tools import register_load_tools_tool
 from core.tools.secrets import register_secrets_tool
@@ -833,6 +834,7 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._tools,
             runtime._cron_service,
             reference_lock=runtime._automation_references.lock,
+            session_ancestors=_session_ancestors(runtime),
         )
         register_calendar_tool(
             runtime._tools,
@@ -998,6 +1000,18 @@ def _command_analyzer() -> CommandAnalyzer:
     from core.permissions.commands.commands import CommandAnalyzer
 
     return CommandAnalyzer(powershell_executable=powershell_executable(inherited_value("PATH")))
+
+
+def _session_ancestors(runtime: Runtime) -> SessionAncestors | None:
+    """The Parent Sessions of a Sub-Agent Session, read on the Session database's pool."""
+    sessions = runtime._chat_sessions
+    if sessions is None:
+        return None
+
+    async def parents(address: SessionAddress) -> list[SessionAddress]:
+        return await sessions.run_async(ancestors, sessions, address)
+
+    return parents
 
 
 def _log_startup_failure(runtime: Runtime) -> None:

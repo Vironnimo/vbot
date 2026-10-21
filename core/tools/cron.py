@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from datetime import UTC, datetime
 from functools import cache
@@ -26,6 +27,7 @@ from core.automation.cron import (
 )
 from core.permissions import PermissionDenied
 from core.projects import InvalidAgentAddressError, format_agent_address, parse_agent_address
+from core.sessions import SessionAddress
 from core.tools._cron_arguments import (
     CURRENT_SESSION,
     DELIVER_PLATFORM_FIELD,
@@ -68,6 +70,9 @@ if TYPE_CHECKING:
     import asyncio
 
     from core.automation.cron import CronJob, CronService, ParsedSchedule
+
+# session_ancestors(address) -> the Parent Sessions of a Sub-Agent Session, nearest first.
+SessionAncestors = Callable[[SessionAddress], Awaitable[list[SessionAddress]]]
 
 CRON_TOOL_NAME = "cron"
 CRON_TOOL_DESCRIPTION = (
@@ -229,25 +234,35 @@ _REFERENCE_ACTIONS = frozenset({"create", "update"})
 
 
 def register_cron_tool(
-    registry: ToolRegistry, cron_service: CronService, *, reference_lock: asyncio.Lock
+    registry: ToolRegistry,
+    cron_service: CronService,
+    *,
+    reference_lock: asyncio.Lock,
+    session_ancestors: SessionAncestors | None = None,
 ) -> None:
     """Register the cron tool with a vBot tool registry.
 
     ``reference_lock`` is the Agent reference lock (``AutomationReferences.lock``).
     create and update hold it like the cron RPCs, so a job cannot select an Agent
     or Project between a removal's reference check and the removal.
+
+    ``session_ancestors(address)`` returns the Parent Sessions of a Sub-Agent
+    Session, nearest first. A restricted Session pins a job only to itself or to
+    a Session below it; without the callable, only to itself.
     """
 
     async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
         if arguments.get("action") in _REFERENCE_ACTIONS:
             async with reference_lock:
                 before = _stored_watch(cron_service, arguments)
-                result = await _handle_cron_tool(cron_service, context, arguments)
+                result = await _handle_cron_tool(
+                    cron_service, context, arguments, session_ancestors
+                )
             # A check can take a minute; other Agent and Project changes need not wait for it.
             if arguments.get("watch", NO_WATCH) != NO_WATCH:
                 return await _with_first_check(cron_service, result, before)
             return result
-        return await _handle_cron_tool(cron_service, context, arguments)
+        return await _handle_cron_tool(cron_service, context, arguments, session_ancestors)
 
     registry.register(
         CRON_TOOL_NAME,
@@ -273,10 +288,11 @@ async def _handle_cron_tool(
     cron_service: CronService,
     context: ToolContext,
     arguments: JsonObject,
+    session_ancestors: SessionAncestors | None = None,
 ) -> JsonObject:
     arguments = dict(arguments)
     late_limits = arguments.pop(LATE_LIMITS_FIELD, None)
-    result = await _run_cron_action(cron_service, context, arguments)
+    result = await _run_cron_action(cron_service, context, arguments, session_ancestors)
     if late_limits:
         return with_late_limits_note(result, late_limits, REFUSAL_PREFIX)
     return result
@@ -286,6 +302,7 @@ async def _run_cron_action(
     cron_service: CronService,
     context: ToolContext,
     arguments: JsonObject,
+    session_ancestors: SessionAncestors | None = None,
 ) -> JsonObject:
     action = arguments.get("action")
     if action not in CRON_ACTIONS:
@@ -301,11 +318,11 @@ async def _run_cron_action(
                 )
             )
         if action == "create":
-            return await _handle_create(cron_service, context, arguments)
+            return await _handle_create(cron_service, context, arguments, session_ancestors)
         if action == "list":
             return _handle_list(cron_service, arguments)
         if action == "update":
-            return await _handle_update(cron_service, context, arguments)
+            return await _handle_update(cron_service, context, arguments, session_ancestors)
         if action == "delete":
             return await _handle_delete(cron_service, arguments)
         if action == "enable":
@@ -317,6 +334,8 @@ async def _run_cron_action(
         )
     except CronCallRefusedError as error:
         return tool_failure("invalid_arguments", str(error))
+    except _PinRefusedError as error:
+        return tool_failure("permission_denied", str(error), retryable=False)
     except (CronTargetError, InvalidAgentAddressError) as error:
         # Checked before ValueError: missing-target errors are also resolver
         # ValueErrors, and a malformed target address is one too.
@@ -358,7 +377,10 @@ def _target_failure(error: CronTargetError | InvalidAgentAddressError) -> JsonOb
 
 
 async def _handle_create(
-    cron_service: CronService, context: ToolContext, arguments: JsonObject
+    cron_service: CronService,
+    context: ToolContext,
+    arguments: JsonObject,
+    session_ancestors: SessionAncestors | None = None,
 ) -> JsonObject:
     missing = [name for name in ("prompt", "schedule") if name not in arguments]
     if missing:
@@ -384,6 +406,9 @@ async def _handle_create(
     paused = arguments.get(ENABLED_FIELD) is False
     session_id = (
         _session_id(context, arguments, agent_id, project_id) if "session" in arguments else None
+    )
+    await _check_pinned_session(
+        session_ancestors, context, arguments, (project_id, agent_id, session_id)
     )
     delivery, delivery_note = _delivery(context, arguments, agent_id, project_id)
     watch = _watch(arguments)
@@ -436,7 +461,10 @@ def _handle_list(cron_service: CronService, arguments: JsonObject) -> JsonObject
 
 
 async def _handle_update(
-    cron_service: CronService, context: ToolContext, arguments: JsonObject
+    cron_service: CronService,
+    context: ToolContext,
+    arguments: JsonObject,
+    session_ancestors: SessionAncestors | None = None,
 ) -> JsonObject:
     job_id = arguments["id"]
     # A time zone alone cannot change a job: another zone is refused here, the server's drops.
@@ -497,6 +525,17 @@ async def _handle_update(
     current = cron_service.get_job(job_id)
     ceiling = current.permission_ceiling
     if context.permissions.restricted:
+        moved = "agent_id" in updates
+        await _check_pinned_session(
+            session_ancestors,
+            context,
+            arguments,
+            (
+                updates["project_id"] if moved else current.project_id,
+                updates["agent_id"] if moved else current.agent_id,
+                updates.get("session_id", current.session_id),
+            ),
+        )
         # The job now also runs under the boundary of the restricted Session
         # that changed it, never wider than before.
         ceiling = _joined_ceiling(ceiling, context.permissions.to_ceiling_dict(source="cron"))
@@ -537,6 +576,59 @@ def _sent_secret_note(name: str, *, shown: bool) -> str:
     if shown:
         return f'"{name}" had no effect: vBot made the job\'s secret, shown as secret.'
     return f'"{name}" had no effect: vBot makes a webhook job\'s secret itself.'
+
+
+class _PinRefusedError(Exception):
+    """A restricted Session's job would keep another Session under its rules."""
+
+
+async def _check_pinned_session(
+    session_ancestors: SessionAncestors | None,
+    context: ToolContext,
+    arguments: JsonObject,
+    job: tuple[str | None, str, str | None],
+) -> None:
+    """Refuse a restricted Session's job that runs in a Session outside its own tree.
+
+    The job runs under the scheduling Session's rules, and a Session a job runs
+    in keeps that ceiling for all later Runs, so the job may continue only the
+    calling Session or a Session of one of its Sub-Agents. ``job`` is the
+    Project, Agent and Session the job runs in.
+    """
+    project_id, agent_id, session_id = job
+    if not context.permissions.restricted or session_id is None:
+        return
+    pinned = SessionAddress(project_id, agent_id, session_id)
+    if (project_id, agent_id, session_id) == (
+        context.project_id,
+        context.agent_id,
+        context.session_id,
+    ):
+        return
+    own = (
+        SessionAddress(context.project_id, context.agent_id, context.session_id)
+        if context.session_id is not None
+        else None
+    )
+    if own is not None and session_ancestors is not None and own in await session_ancestors(pinned):
+        return
+    reason = (
+        f'Session "{pinned.session_id}": the job runs under your permission rules, and that '
+        "Session would keep them for all its later Runs."
+    )
+    if "session" in arguments:
+        raise _PinRefusedError(
+            refusal(
+                f"the permission rules refuse running a job in {reason} Pin a job only to "
+                'this conversation ("current") or a Session of your Sub-Agents.',
+                arguments,
+                session=NEW_SESSION,
+            )
+        )
+    raise _PinRefusedError(
+        f"{REFUSAL_PREFIX}the permission rules refuse changing a job that runs in {reason} "
+        "If the task needs this change, tell the user."
+    )
 
 
 def _target_agent(context: ToolContext, target: str) -> tuple[str, str | None]:
