@@ -168,13 +168,15 @@ async def test_run_actions_follow_the_current_server_controls(
     app = ConversationApp(server, agent_id="main")
     async with app.run_test(size=(100, 35)) as pilot:
         await pilot.pause()
-        await open_actions(app, pilot)
+        worker = await open_actions(app, pilot)
         action = (
             operation,
             "run-one" if active else None,
             "call-one" if operation != "compact" else None,
         )
         await choose(app, pilot, action)
+        # An idle picker does not mean the action's server refresh and RPC have finished.
+        await worker.wait()
         expected = {"agent_id": "main", **extra}
         if operation != "cancel":
             expected["session_id"] = "session-one"
