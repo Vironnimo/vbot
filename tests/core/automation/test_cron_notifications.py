@@ -44,11 +44,12 @@ async def test_notifications_survive_restart_without_repeating_a_completed_run(
             else ChannelError("Transport unavailable", possibly_delivered=failure == "uncertain")
         )
         monkeypatch.setattr(chats, "send", AsyncMock(side_effect=send_error))
+    assert (await service._execution._trigger_job_run(job)).succeeded
     if failure == "interrupted":
         with pytest.raises(asyncio.CancelledError):
-            await service._execution._trigger_job_run(job)
+            await service._notifications.flush()
     else:
-        assert (await service._execution._trigger_job_run(job)).succeeded
+        await service._notifications.flush()
     assert service.get_job(job.id).status == "completed"
     assert service.get_job(job.id).delivery_progress()["waiting"] == 1
     assert trigger.trigger_run.await_count == 1
@@ -129,3 +130,45 @@ async def test_failure_alerts_retry_after_stop_and_a_failed_claim_never_sends(
     assert "stopped after 5" in chats.sent[1][1]
     assert trigger.trigger_run.await_count == 5
     await service.aclose()
+
+
+@pytest.mark.asyncio
+async def test_slow_delivery_never_holds_a_cron_run_slot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, trigger = make_service(tmp_path)
+    chats = FakeChats()
+    service.set_chat_delivery(chats)
+    entered, release = asyncio.Event(), asyncio.Event()
+    original_send = chats.send
+
+    async def send(
+        channel_id: str, message: str, platform_target: str, *, thread_id: str | None = None
+    ) -> None:
+        entered.set()
+        await release.wait()
+        await original_send(channel_id, message, platform_target, thread_id=thread_id)
+
+    monkeypatch.setattr(chats, "send", send)
+    service._run_slots = asyncio.Semaphore(1)
+    service.start()
+    try:
+        job = await service.create_job(
+            agent_id="agent-one",
+            prompt="Check",
+            schedule_type="interval",
+            interval_seconds=60,
+            delivery=_CHAT,
+        )
+        scripted_runs(trigger, (RunStatus.COMPLETED, "First."), (RunStatus.COMPLETED, "Second."))
+        assert (await service._execution._trigger_job_run(job)).succeeded
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        assert (
+            await asyncio.wait_for(service._execution._trigger_job_run(job), timeout=1)
+        ).succeeded
+        assert trigger.trigger_run.await_count == 2 and chats.sent == []
+    finally:
+        release.set()
+        await service._notifications.flush()
+        await service.aclose()
+    assert [text for _, text, *_ in chats.sent] == ["First.", "Second."]

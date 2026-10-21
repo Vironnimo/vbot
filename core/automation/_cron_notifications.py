@@ -62,6 +62,10 @@ class CronNotifications:
         if self._task is None or self._task.done():
             self._task = asyncio.create_task(self._run(), name="cron-notifications")
 
+    def wake(self) -> None:
+        """A persisted message can be sent without holding a Cron Run slot."""
+        self._wake.set()
+
     def stop(self) -> None:
         if self._task is not None:
             self._task.cancel()
@@ -89,7 +93,7 @@ class CronNotifications:
                 replace(item, state="pending", error=None, retry_at=0) for item in previous
             )
             await self._owner._save_edit(lambda: setattr(job, "notifications", previous))
-        self._wake.set()
+        self.wake()
 
     async def flush(self, job_id: str | None = None) -> None:
         async with self._lock:

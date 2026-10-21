@@ -153,6 +153,7 @@ async def test_failed_checks_count_toward_the_streak_and_alert_without_touching_
     trigger_service.trigger_run.assert_not_awaited()
     # A chat gets the alerts as messages; vBot, without a failed Run to mark, gets
     # them as alerts for its accessors.
+    await service._notifications.flush()
     alerts = [message for _, message, *_ in chats.sent] + [alert.message for alert in in_app]
     assert {(alert.job_id, alert.agent_id) for alert in in_app} <= {(job_id, "agent-one")}
     assert len(alerts) == 3

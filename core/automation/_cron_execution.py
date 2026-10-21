@@ -277,7 +277,7 @@ class CronExecution:
                 saved = await self._save_jobs_after_fire(latest.id)
                 await self._finalize_exhausted_job(latest.id)
                 if not silent:
-                    await self._owner._notifications.flush(latest.id)
+                    self._owner._notifications.wake()
                 return CronRunOutcome(
                     succeeded=saved or not latest.notifications, admitted=admitted
                 )
@@ -430,7 +430,7 @@ class CronExecution:
             return
         self._owner._notifications.stage(job, text)
         await self._save_jobs_after_fire(job.id)
-        await self._owner._notifications.flush(job.id)
+        self._owner._notifications.wake()
 
     async def _persist_after_fire(self, job_id: str) -> bool:
         """Persist job state after a fire, giving up after bounded retries.

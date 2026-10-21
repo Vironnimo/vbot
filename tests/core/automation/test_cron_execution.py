@@ -272,9 +272,10 @@ async def test_a_run_answer_reaches_the_jobs_chat_unless_it_is_silent(
     updated = service.get_job(job.id)
     assert updated.last_outcome == "success"
     assert updated.last_run_silent is not delivered
+    await service._notifications.flush()
     if delivered:
         assert chats.sent == [("tg-main", answer, "chat-42", "7")]
-        assert updated.delivery_progress()["waiting"] == 0
+        assert service.get_job(job.id).delivery_progress()["waiting"] == 0
         # The chat's Session learns what was sent, unless the job ran in it.
         [(channel_id, platform_target, note, thread_id, skip_session_id)] = chats.notes
         assert (channel_id, platform_target, thread_id) == ("tg-main", "chat-42", "7")
@@ -359,6 +360,7 @@ async def test_what_reaches_the_user_follows_the_jobs_delivery(
     reported = [True, False, False, True, False, False, True]
     assert decisions == (reported if delivery == "app" else [False] * len(reported))
     assert in_app == []
+    await service._notifications.flush()
     if delivery == "chat":
         assert chats.sent[0][1] == "The build is red."
         alerts = [message for _, message, *_ in chats.sent[1:]]
@@ -415,6 +417,7 @@ async def test_the_user_learns_when_a_once_job_fails_for_good(
         assert "will not run again" in alert.message
         assert chats.sent == []
         return
+    await service._notifications.flush()
     [(channel_id, message, platform_target, thread_id)] = chats.sent
     assert (channel_id, platform_target, thread_id) == ("tg-main", "chat-42", "7")
     assert "will not run again" in message
