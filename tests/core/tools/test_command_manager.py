@@ -26,6 +26,7 @@ import pytest
 import pytest_asyncio
 
 from core.database import write_bootstrap_marker
+from core.permissions import PermissionBoundary
 from core.runs import RunAdmissionBlockedError, RunExecutionOwner
 from core.sessions import ChatSessionManager, SessionAddress
 from core.storage.temp_files import TemporaryFileManager
@@ -52,6 +53,7 @@ from core.tools.process_tree import (
     track_process_tree,
 )
 from core.utils.timestamps import parse_timestamp
+from tests.core.permissions.command_check_support import restricted
 from tests.core.tools.command_manager_helpers import (
     OWNER,
     FakeSink,
@@ -901,6 +903,64 @@ async def test_background_checkpoint_recovers_once_after_restart(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("rules", ["full_access", "restricted"])
+async def test_a_delivery_formatted_after_restart_names_only_paths_its_session_may_read(
+    tmp_path: Path, rules: str
+) -> None:
+    """The checkpoint keeps the boundary of the command's Session; recovery formats under it."""
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "helpers.py").touch()
+    permissions = (
+        restricted(tmp_path, deny=["Read(tools/**)"])
+        if rules == "restricted"
+        else PermissionBoundary.UNRESTRICTED
+    )
+    stored = permissions.to_ceiling_dict(source="agent")
+    data = tmp_path / "sessions"
+    write_bootstrap_marker(data)
+    sessions = ChatSessionManager(data)
+    sessions.create(OWNER.agent_id, OWNER.session_id, OWNER.project_id)
+    generation_id = sessions.get(OWNER).generation_id
+    assert generation_id is not None
+    try:
+        async with command_harness(tmp_path, checkpoint_store=sessions) as harness:
+            await harness.manager.wait_recovered()
+            command_id, process = await harness.launch(
+                command="python -c 'import helpers'", permissions=permissions
+            )
+            await harness.manager.to_background_durably(command_id, deliver=True)
+            process.write("ModuleNotFoundError: No module named 'helpers'\n")
+            process.exit(1)
+            await harness.finish(command_id)
+            await harness.manager.flush()
+            checkpoint = sessions.background_command_read()[0]["checkpoint"]
+        assert checkpoint["permission_ceiling"] == stored
+        # The previous server saved the end, but not the body of its delivery.
+        checkpoint["body"] = None
+        sessions.background_command_put(
+            OWNER, command_id, "run-a", checkpoint, generation_id=generation_id
+        )
+    finally:
+        sessions.close()
+
+    sessions = ChatSessionManager(data)
+    try:
+        async with command_harness(tmp_path, checkpoint_store=sessions) as restored:
+            await eventually(lambda: bool(restored.sink.submissions))
+            body = restored.sink.bodies[0]
+            assert "Hint: Python cannot import 'helpers'" in body
+            # The rules refuse reading tools/, so the hint does not name the module there.
+            assert ("tools/helpers.py" in body) is (rules == "full_access")
+            restored.sink.futures[0].set_result(None)
+            await restored.manager.wait_recovered()
+            saved = sessions.background_command_read()[0]["checkpoint"]
+            assert not saved["pending"]
+            assert saved["permission_ceiling"] == stored
+    finally:
+        sessions.close()
+
+
+@pytest.mark.asyncio
 async def test_a_failed_checkpoint_cannot_be_hidden_by_another_commands_write(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1430,6 +1490,7 @@ async def _launch_real(manager: CommandManager, tmp_path: Path, *argv: str) -> t
         env=_environment(),
         origin_run_id="run-a",
         formatter=format_report,
+        permissions=PermissionBoundary.UNRESTRICTED,
     )
     return handle.command_id, handle.pid
 

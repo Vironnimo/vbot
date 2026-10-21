@@ -134,7 +134,7 @@ async def consume_stream_response(
     *,
     public_model: str,
     can_restart: bool,
-    output_scope: OutputFileScope | None,
+    output_scope: OutputFileScope,
     chunk_timeout_seconds: float | None,
     request_context: dict[str, Any] | None,
     stream_draft: StreamDraft | None,
@@ -459,7 +459,7 @@ def _finalize_after_started_tools(
     run: Run,
     *,
     message_id: str | None,
-    output_scope: OutputFileScope | None,
+    output_scope: OutputFileScope,
 ) -> _AssistantStep:
     """Keep a stream that broke after some of its Tool Calls started.
 
@@ -492,7 +492,7 @@ def _finalize_interrupted_partial(
     run: Run,
     *,
     interruption_cause: InterruptionCause,
-    output_scope: OutputFileScope | None,
+    output_scope: OutputFileScope,
     recovery: Literal["none", "continue", "interrupt"] = "none",
     recovery_note: str | None = None,
     recovery_error: Exception | None = None,

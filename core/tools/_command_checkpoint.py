@@ -5,6 +5,10 @@ unexpected stop of vBot, ``recover`` rebuilds each command that was still
 running from its raw log file: the output it wrote until then, and how long it
 ran at least (from its start to the last write of that file or its last saved
 state). Its result is delivered as usual; nothing is run again.
+
+A checkpoint also keeps the Permission Boundary of the command's Session as a
+ceiling (``permission_ceiling``, ``None`` for full access), so a delivery that
+recovery formats names only paths that Session may read.
 """
 
 from __future__ import annotations
@@ -17,6 +21,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol, cast
 
+from core.permissions import (
+    BoundaryContext,
+    PermissionBoundary,
+    PermissionCeiling,
+    normalize_permission_rules,
+)
 from core.runs import RunAdmissionBlockedError, RunExecutionOwner
 from core.sessions import SessionAddress, SessionNotFoundError
 from core.utils.logging import get_logger
@@ -38,6 +48,11 @@ LogReader = Callable[[Path], Awaitable[LogSnapshot | None]]
 
 
 class CommandCheckpointStore(Protocol):
+    @property
+    def data_dir(self) -> Path:
+        """The data directory the store keeps its checkpoints in."""
+        ...
+
     def background_command_put(
         self,
         address: SessionAddress,
@@ -94,6 +109,8 @@ class CommandCheckpoints:
         self._tail: asyncio.Task[None] | None = None
         self._write_errors: dict[str, Exception] = {}
         self._generations: dict[str, str] = {}
+        # The stored ceiling of each command's Session boundary; None for full access.
+        self._ceilings: dict[str, dict[str, object] | None] = {}
         self._loading: asyncio.Task[list[dict[str, Any]]] | None = None
         self._recovery_loaded = False
         self.pending_ids: set[str] = set()
@@ -114,8 +131,13 @@ class CommandCheckpoints:
         version = versions.get(owner)
         return version[0] if version is not None else None
 
-    def bind(self, command_id: str, generation_id: str) -> None:
+    def bind(self, command_id: str, generation_id: str, *, permissions: PermissionBoundary) -> None:
+        """Bind a new command to its Session generation and the boundary it runs under."""
+        self._bind(command_id, generation_id, permissions.to_ceiling_dict(source="agent"))
+
+    def _bind(self, command_id: str, generation_id: str, ceiling: dict[str, object] | None) -> None:
         self._generations[command_id] = generation_id
+        self._ceilings[command_id] = ceiling
 
     def remaining_retention(self, command_id: str) -> float:
         return self._retained_until[command_id] - time.time()
@@ -164,6 +186,7 @@ class CommandCheckpoints:
             "execution_owner": asdict(execution_owner) if execution_owner is not None else None,
             "retained_until": self._retained_until.get(report.command_id),
             "started_at": format_canonical_timestamp(datetime.fromtimestamp(started_at, UTC)),
+            "permission_ceiling": self._ceilings.get(report.command_id),
         }
         self._queue(
             report.command_id,
@@ -178,6 +201,7 @@ class CommandCheckpoints:
     def delete(self, command_id: str) -> None:
         self._recovered.pop(command_id, None)
         self._generations.pop(command_id, None)
+        self._ceilings.pop(command_id, None)
         self._retained_until.pop(command_id, None)
         self._started_at.pop(command_id, None)
         self.pending_ids.discard(command_id)
@@ -323,7 +347,8 @@ class CommandCheckpoints:
         for row, log in zip(rows, logs, strict=True):
             state = row["checkpoint"]
             report = _report(row)
-            self.bind(report.command_id, row["generation_id"])
+            ceiling = state.get("permission_ceiling")
+            self._bind(report.command_id, row["generation_id"], ceiling)
             if (started_at := _started_at(state)) is not None:
                 self._started_at[report.command_id] = started_at
             if (deadline := state.get("retained_until")) is not None:
@@ -337,7 +362,12 @@ class CommandCheckpoints:
             execution = state.get("execution_owner")
             report = self._interrupted(report, log)
             if body is None and state["pending"]:
-                body = format_command_delivery(report)
+                body = format_command_delivery(
+                    report,
+                    permissions=_delivery_boundary(
+                        report.command_id, ceiling, report.workdir, self.store.data_dir
+                    ),
+                )
             entry = _Recovered(
                 report,
                 row["origin_run_id"],
@@ -493,6 +523,42 @@ async def _read_unfinished_log(
         # Writing a log that failed kept less than the saved transcript holds.
         return None
     return await read_log(Path(path))
+
+
+def _delivery_boundary(
+    command_id: str, ceiling: object, workdir: Path, data_dir: Path
+) -> PermissionBoundary:
+    """The boundary of the command's Session, rebuilt from its stored *ceiling*.
+
+    Only the ceiling's layers, the Agent's own still tagged ``agent``, with the
+    protected locations of a ceiling-only boundary, as a Cron watch check has
+    them: the Session's Workspace, Scratch Area and Skill folders are no
+    readable exceptions in the data directory, and its Agent's configuration
+    file is not named. A ceiling that cannot be read permits reading only
+    vBot's artifact folders, so the hint names no other path.
+    """
+    if ceiling is None:
+        return PermissionBoundary.UNRESTRICTED
+    from core.chat._run_permissions import artifact_dirs, installation_dirs
+
+    context = BoundaryContext(
+        workdir=workdir,
+        home=Path.home(),
+        data_dir=data_dir,
+        install_dirs=installation_dirs(),
+        readable_dirs=artifact_dirs(data_dir),
+    )
+    try:
+        stored = PermissionCeiling.from_ceiling_dict(ceiling)
+    except ValueError:
+        _LOGGER.warning(
+            "Unreadable permission rules of a recovered command (command=%s)", command_id
+        )
+        rules = normalize_permission_rules(
+            {"read": "work_area", "write": "scratch", "deny": ["Read({workdir})"]}
+        )
+        return PermissionBoundary.build(rules, context)
+    return PermissionBoundary.build(None, context, ceilings=(stored,))
 
 
 def _started_at(state: dict[str, Any]) -> float | None:

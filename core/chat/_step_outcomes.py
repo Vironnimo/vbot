@@ -18,7 +18,6 @@ from core.chat.output_files import OutputFileScope, resolve_assistant_file_refer
 from core.chat.usage import ContextTarget, RequestContextEstimate, RequestContextUsage
 from core.chat.wire_shaping import _assistant_continuation_dict, _complete_usage_with_estimates
 from core.models.pricing import TokenPricing, price_usage
-from core.permissions import PermissionBoundary
 from core.providers.adapter import (
     TERMINAL_OUTCOME_OUTPUT_TRUNCATED,
     TERMINAL_OUTCOME_STOP,
@@ -83,7 +82,7 @@ OUTPUT_INTEGRITY_RECOVERY_NOTE = (
 def _prepare_completed_assistant(
     assistant_message: ChatMessage,
     request_messages: list[JsonObject],
-    output_scope: OutputFileScope | None,
+    output_scope: OutputFileScope,
     estimated_input_tokens: int,
     pricing: TokenPricing | None = None,
 ) -> ChatMessage:
@@ -366,7 +365,7 @@ def _terminal_outcome_error(
 def _combined_interrupted_result(
     messages: list[ChatMessage],
     *,
-    output_scope: OutputFileScope | None,
+    output_scope: OutputFileScope,
 ) -> ChatMessage:
     """Return one consumer-facing view of every visible recovery fragment."""
     if not messages:
@@ -413,15 +412,15 @@ def _terminal_tool_failure(
 def _with_assistant_output_files(
     message: ChatMessage,
     *,
-    scope: OutputFileScope | None,
+    scope: OutputFileScope,
 ) -> ChatMessage:
     """Attach resolved output files once at the canonical Assistant boundary."""
     if message.output_files is not None or not isinstance(message.content, str):
         return message
     output_files = resolve_assistant_file_references(
         message.content,
-        cwd=scope.cwd if scope is not None else None,
-        permissions=scope.permissions if scope is not None else PermissionBoundary.UNRESTRICTED,
+        cwd=scope.cwd,
+        permissions=scope.permissions,
     )
     return replace(message, output_files=output_files) if output_files is not None else message
 

@@ -35,7 +35,7 @@ class OutputFileScope:
     """Where one Run's Assistant file markers resolve, and what its rules let it read."""
 
     cwd: Path | None
-    permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED
+    permissions: PermissionBoundary
 
 
 @dataclass(frozen=True)
@@ -96,7 +96,7 @@ def resolve_assistant_file_references(
     content: str | None,
     *,
     cwd: Path | None,
-    permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED,
+    permissions: PermissionBoundary,
 ) -> list[AssistantFileReference] | None:
     """Resolve explicit ``file:<path>`` tokens without reading or copying file bytes.
 

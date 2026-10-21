@@ -336,7 +336,7 @@ def ended_result(
     names: ToolNames,
     *,
     subagent: str | None = None,
-    permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED,
+    permissions: PermissionBoundary,
 ) -> JsonObject:
     """The result data of an ended command, fields in order and omitted when empty.
 
@@ -369,7 +369,7 @@ def ended_result(
     failed = failed_programs(report)
     if failed:
         data["failed_programs"] = list(failed)
-    hint = failure_hint(report, output, names, permissions)
+    hint = failure_hint(report, output, names, permissions=permissions)
     if hint is not None:
         data["hint"] = hint
     if report.still_running:
@@ -415,7 +415,8 @@ def failure_hint(
     report: CommandReport,
     output: str,
     names: ToolNames,
-    permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED,
+    *,
+    permissions: PermissionBoundary,
 ) -> str | None:
     """A hint for a command that failed or did not run as written.
 
@@ -639,7 +640,7 @@ def format_command_delivery(
     report: CommandReport,
     *,
     names: ToolNames = _names_nothing,
-    permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED,
+    permissions: PermissionBoundary,
 ) -> str:
     """The message that delivers a background command's result when it ends.
 
@@ -676,7 +677,7 @@ def format_command_delivery(
         # The label names the purpose; the Agent needs the exact command too.
         lines.append(f"Command: {_capped(report.command, _DELIVERY_COMMAND_CHARS)}")
     output = command_output_text(report)
-    hint = failure_hint(report, output, names, permissions)
+    hint = failure_hint(report, output, names, permissions=permissions)
     if hint is not None:
         lines.append(f"Hint: {hint}")
     failed = failed_programs(report)

@@ -151,7 +151,7 @@ class ModelStepBoundary:
         *,
         terminal_outcome: TerminalOutcome | None,
         messages_for_request: list[JsonObject],
-        output_scope: OutputFileScope | None,
+        output_scope: OutputFileScope,
         request_context_usage: JsonObject,
         request_estimate: RequestContextEstimate,
         request_tools: list[JsonObject],

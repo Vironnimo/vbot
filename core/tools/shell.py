@@ -444,6 +444,7 @@ class ShellTool:
                     names=delivery_names(names),
                     permissions=context.permissions,
                 ),
+                permissions=context.permissions,
                 execution_owner=context.execution_owner,
                 on_output=progress,
                 request=start.request.data if start.request is not None else None,
