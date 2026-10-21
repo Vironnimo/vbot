@@ -167,6 +167,10 @@ function Get-CallTarget($Expression) {
         foreach ($argument in @($Expression.Arguments)) { if ($null -ne $argument) { $arguments.Add((ConvertTo-Word $argument)) } }
         return @{ kind = 'new'; type = (Get-TypeName $Expression.Expression.TypeName); arguments = $arguments }
     }
+    if ($Expression -is [System.Management.Automation.Language.StringConstantExpressionAst] -or
+        $Expression -is [System.Management.Automation.Language.ExpandableStringExpressionAst]) {
+        return @{ kind = 'text' }
+    }
     if ($Expression -is [System.Management.Automation.Language.VariableExpressionAst]) {
         $name = Get-VariableName $Expression
         if ($name -eq '_' -or $name -eq 'psitem') {
@@ -248,7 +252,7 @@ function Get-Analysis([string]$Text) {
     $tokens = $null
     $parseErrors = $null
     $ast = [System.Management.Automation.Language.Parser]::ParseInput($Text, [ref]$tokens, [ref]$parseErrors)
-    $result = @{ errors = (New-List); incomplete = $false; commands = (New-List); assigned = (New-List); functions = (New-List); environment_changed = $false; calls = (New-List); strings = (New-List) }
+    $result = @{ errors = (New-List); incomplete = $false; commands = (New-List); assigned = (New-List); functions = (New-List); environment_changed = $false; calls = (New-List); strings = (New-List); items = (New-List) }
     foreach ($parseError in $parseErrors) {
         $result.errors.Add($parseError.Message)
         if ($parseError.IncompleteInput) { $result.incomplete = $true }
@@ -330,6 +334,18 @@ function Get-Analysis([string]$Text) {
     foreach ($node in $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.InvokeMemberExpressionAst] }, $true)) {
         $result.calls.Add((Get-Call $node))
     }
+    # A property assignment ((gi x).IsReadOnly = $true) is a call of set_<Name>.
+    foreach ($node in $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.AssignmentStatementAst] }, $true)) {
+        $left = $node.Left
+        while ($left -is [System.Management.Automation.Language.ConvertExpressionAst]) { $left = $left.Child }
+        if ($left -isnot [System.Management.Automation.Language.MemberExpressionAst] -or
+            $left -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -or
+            $left.Member -isnot [System.Management.Automation.Language.StringConstantExpressionAst]) { continue }
+        $result.calls.Add(@{
+            offset = $node.Extent.EndOffset; source = $node.Extent.Text; member = 'set_' + $left.Member.Value
+            static = [bool]$left.Static; target = (Get-CallTarget $left.Expression); arguments = (New-List)
+        })
+    }
     foreach ($node in $ast.FindAll({ param($node)
                 $node -is [System.Management.Automation.Language.StringConstantExpressionAst] -or
                 $node -is [System.Management.Automation.Language.ExpandableStringExpressionAst]
@@ -337,6 +353,32 @@ function Get-Analysis([string]$Text) {
         if (Test-ExpressionString $node) {
             $result.strings.Add(@{ offset = $node.Extent.StartOffset; word = (ConvertTo-Word $node) })
         }
+    }
+    # ${C:\x} and $c:x name an item of a provider drive: its content is read, or
+    # written when the variable is assigned to (=, +=, ++, foreach).
+    foreach ($node in $ast.FindAll({ param($node)
+                $node -is [System.Management.Automation.Language.VariableExpressionAst] -and $node.VariablePath.IsDriveQualified
+            }, $true)) {
+        if ($node.VariablePath.DriveName -in 'env', 'variable', 'function', 'alias') { continue }
+        $written = $false
+        for ($parent = $node.Parent; $null -ne $parent; $parent = $parent.Parent) {
+            if ($parent -is [System.Management.Automation.Language.AssignmentStatementAst]) {
+                $left = $parent.Left.Extent
+                $written = $node.Extent.StartOffset -ge $left.StartOffset -and $node.Extent.EndOffset -le $left.EndOffset
+                break
+            }
+            if ($parent -is [System.Management.Automation.Language.ForEachStatementAst]) {
+                $written = [object]::ReferenceEquals($parent.Variable, $node)
+                break
+            }
+            if ($parent -is [System.Management.Automation.Language.UnaryExpressionAst] -and
+                ([string]$parent.TokenKind -match 'PlusPlus|MinusMinus')) {
+                $written = $true
+                break
+            }
+            if ($parent -is [System.Management.Automation.Language.StatementAst]) { break }
+        }
+        $result.items.Add(@{ offset = $node.Extent.StartOffset; source = $node.Extent.Text; path = $node.VariablePath.UserPath; write = $written })
     }
     return $result
 }

@@ -156,7 +156,9 @@ class ProgramSpec:
     ``write_flags`` make operands writes (``sed -i``). ``default`` is the
     access on the working directory without any operand. ``listing``: the
     output names paths below the operands. ``filter``: passes pipeline input
-    through. ``slash``: options start with ``/`` (Windows programs).
+    through. ``slash``: options start with ``/`` (Windows programs). Options of
+    ``search_flags`` apply each operand's name at every depth below its folder
+    (``del /s *.tmp`` deletes ``*.tmp`` in every subfolder).
     """
 
     operands: AccessKind | None = None
@@ -172,7 +174,10 @@ class ProgramSpec:
     listing: bool = False
     filter: bool = False
     slash: bool = False
+    search_flags: frozenset[str] = frozenset()
 
+
+_SLASH_S = frozenset({"/s", "/S"})
 
 _RECURSIVE = frozenset({"-r", "-R", "--recursive"})
 _READ_TEXT = ProgramSpec(
@@ -223,11 +228,6 @@ PROGRAMS: Mapping[str, ProgramSpec] = {
     "touch": ProgramSpec(
         operands="write",
         values={"-d": None, "-t": None, "-r": "read", "--reference": "read", "--date": None},
-    ),
-    "ln": ProgramSpec(
-        operands="read",
-        last="write",
-        values={"-t": "write", "--target-directory": "write", "-S": None},
     ),
     "chmod": ProgramSpec(
         operands="write", skip=1, skip_cancel=frozenset({"--reference"}), subtree_flags=_RECURSIVE
@@ -394,31 +394,92 @@ PROGRAMS: Mapping[str, ProgramSpec] = {
     "gunzip": ProgramSpec(operands="write"),
     "bzip2": ProgramSpec(operands="write"),
     "xz": ProgramSpec(operands="write"),
+    # Programs that open no file their words name: no mentions (CommandPlan.mentions).
+    **dict.fromkeys(
+        (
+            "echo",
+            "printf",
+            "sleep",
+            "true",
+            "false",
+            "test",
+            "[",
+            "basename",
+            "dirname",
+            "seq",
+            "expr",
+            "which",
+            "whoami",
+            "date",
+            "export",
+            "unset",
+            "exit",
+            "set",
+            "shift",
+            # cmd internals
+            "assoc",
+            "break",
+            "cls",
+            "color",
+            "endlocal",
+            "ftype",
+            "goto",
+            "path",
+            "pause",
+            "prompt",
+            "rem",
+            "setlocal",
+            "time",
+            "title",
+            "ver",
+            "verify",
+            "vol",
+        ),
+        ProgramSpec(),
+    ),  # fmt: skip
     # Windows programs with switches.
-    "xcopy": ProgramSpec(operands="read", last="write", subtree=True, slash=True),
+    "xcopy": ProgramSpec(
+        operands="read",
+        last="write",
+        subtree=True,
+        slash=True,
+        search_flags=frozenset({"/s", "/S", "/e", "/E"}),
+    ),
     "robocopy": ProgramSpec(operands="read", last="write", subtree=True, slash=True),
     "takeown": ProgramSpec(operands="write", slash=True, values={"/f": "write", "/F": "write"}),
-    "findstr": ProgramSpec(operands="read", skip=1, slash=True, filter=True),
+    "findstr": ProgramSpec(
+        operands="read",
+        skip=1,
+        slash=True,
+        filter=True,
+        subtree_flags=_SLASH_S,
+        search_flags=_SLASH_S,
+    ),
+    # where /r folder names: searches the whole folder; without /r it searches PATH.
+    "where": ProgramSpec(
+        slash=True, values={"/r": "read", "/R": "read"}, subtree_flags=frozenset({"/r", "/R"})
+    ),
     "certutil": ProgramSpec(operands="read", slash=True),
 }
 
 # cmd built-ins (``cmd /c``): slash options, the same operand model.
 CMD_BUILTINS: Mapping[str, ProgramSpec] = {
-    "del": ProgramSpec(operands="write", subtree_flags=frozenset({"/s", "/S"}), slash=True),
-    "erase": ProgramSpec(operands="write", subtree_flags=frozenset({"/s", "/S"}), slash=True),
+    "del": ProgramSpec(operands="write", subtree_flags=_SLASH_S, search_flags=_SLASH_S, slash=True),
+    "erase": ProgramSpec(
+        operands="write", subtree_flags=_SLASH_S, search_flags=_SLASH_S, slash=True
+    ),
     "rd": ProgramSpec(operands="write", subtree=True, slash=True),
     "rmdir": ProgramSpec(operands="write", subtree=True, slash=True),
     "md": ProgramSpec(operands="write", slash=True),
     "mkdir": ProgramSpec(operands="write", slash=True),
     "copy": ProgramSpec(operands="read", last="write", default="write", slash=True),
     "move": ProgramSpec(operands="write", subtree=True, slash=True),
-    "ren": ProgramSpec(operands="write", slash=True),
-    "rename": ProgramSpec(operands="write", slash=True),
     "type": ProgramSpec(operands="read", slash=True),
     "dir": ProgramSpec(
         operands="read",
         default="read",
-        subtree_flags=frozenset({"/s", "/S"}),
+        subtree_flags=_SLASH_S,
+        search_flags=_SLASH_S,
         slash=True,
         listing=True,
     ),

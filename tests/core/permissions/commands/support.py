@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +14,8 @@ from core.permissions.commands.commands import CommandPlan, PlannedPathAccess
 # Every table runs in ROOT/w/p with the home folder ROOT/h; expectations name
 # paths relative to ROOT with "/" separators, then a wildcard access's pattern
 # below its literal folder, "/**" for subtree accesses and " !name" for each
-# folder name an exclusion leaves out.
+# folder name an exclusion leaves out. Mentions (words checked only against
+# deny rules and protected locations) are compared only where a row names them.
 ROOT = Path("C:/") if sys.platform == "win32" else Path("/")
 CWD = ROOT / "w" / "p"
 HOME = ROOT / "h"
@@ -27,6 +28,7 @@ class Expected:
     unresolved: frozenset[str]
     urls: tuple[str, ...]
     hosts: tuple[str, ...]
+    mentions: frozenset[str] | None = None
 
 
 def case(
@@ -38,10 +40,18 @@ def case(
     unresolved: tuple[str, ...] = (),
     urls: tuple[str, ...] = (),
     hosts: tuple[str, ...] = (),
+    mentions: tuple[str, ...] | None = None,
     marks: Any = (),
 ) -> Any:
-    """One table row: the plan of *line*; ``commands`` None skips comparing them."""
-    expected = Expected(commands, frozenset(paths), frozenset(unresolved), urls, hosts)
+    """One table row: the plan of *line*; ``commands`` or ``mentions`` None skips comparing them."""
+    expected = Expected(
+        commands,
+        frozenset(paths),
+        frozenset(unresolved),
+        urls,
+        hosts,
+        None if mentions is None else frozenset(mentions),
+    )
     return pytest.param(line, expected, id=id, marks=marks)
 
 
@@ -57,9 +67,12 @@ def check(plan: CommandPlan, expected: Expected) -> None:
         frozenset(element.kind for element in plan.unresolved),
         plan.urls,
         plan.hosts,
+        frozenset(_path(access) for access in plan.mentions),
     )
     if expected.commands is None:
-        actual = Expected(None, actual.paths, actual.unresolved, actual.urls, actual.hosts)
+        actual = replace(actual, commands=None)
+    if expected.mentions is None:
+        actual = replace(actual, mentions=None)
     assert actual == expected, plan
 
 

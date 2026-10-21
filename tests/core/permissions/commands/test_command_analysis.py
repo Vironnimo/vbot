@@ -185,6 +185,33 @@ async def _analyze(line: str, shell: ShellKind) -> Any:
             id="recursive searches and their exact exclusions",
             paths=("read w/p/** !secrets", "read w/p/src/**"),
         ),
+        case(
+            "awk '{print $1}' notes/a.txt; jq -r .key --from-file=q.jq; echo secrets/key",
+            id="words of programs without a spec are mentions",
+            mentions=(
+                "read w/p/notes/a.txt",
+                "read w/p/{print $1}",
+                "read w/p/.key",
+                "read w/p/q.jq",
+            ),
+        ),
+        case(
+            "ln -s ../secret link; ln target hard",
+            id="a link writes itself and what it leads to",
+            paths=(
+                "write w/p/link",
+                "write w/p/secret/**",
+                "write w/secret/**",
+                "write w/p/hard",
+                "write w/p/target",
+            ),
+        ),
+        case(
+            "perl -pi -e 's/a/b/' f.txt; ruby -i -pe x g.txt; perl -e 'print 1' h.txt",
+            id="in-place script edits write their files",
+            paths=("write w/p/f.txt", "write w/p/g.txt"),
+            mentions=("read w/p/h.txt",),
+        ),
         case("rm (", id="parse error is unresolved", unresolved=("command",)),
         case(
             "cd /etc && cat passwd",
@@ -270,9 +297,43 @@ async def test_bash_plan(line: str, expected: Expected) -> None:
         ),
         case(
             "mklink link target",
-            id="mklink writes the link",
-            paths=("write w/p/link", "read w/p/target"),
+            id="mklink writes the link and what it leads to",
+            paths=("write w/p/link", "write w/p/target/**", "write w/p/link/target/**"),
         ),
+        case(
+            "mklink /h hard target",
+            id="mklink /h writes the file",
+            paths=("write w/p/hard", "write w/p/target"),
+        ),
+        case(
+            "ren dir1 dir2 & ren sub\\*.txt *.bak",
+            id="ren moves what lies below",
+            paths=(
+                "write w/p/dir1/**",
+                "write w/p/dir2/**",
+                "write w/p/sub/*.txt/**",
+                "write w/p/sub/*.bak/**",
+            ),
+            marks=_WINDOWS,
+        ),
+        case(
+            "del /s *.key & dir /s /b secrets & findstr /s token *.txt & attrib /s +r *.pem",
+            id="slash s reaches every depth",
+            paths=(
+                "write w/p/**/*.key/**",
+                "read w/p/**/secrets/**",
+                "read w/p/**/*.txt/**",
+                "write w/p/**/*.pem/**",
+            ),
+        ),
+        case("where /r . *.pem", id="where /r reads the folder", paths=("read w/p/**",)),
+        case(
+            'forfiles /p src /s /m *.key /c "cmd /c type @file"',
+            id="forfiles reads its matches and leaves its command unresolved",
+            paths=("read w/p/src/**/*.key/**",),
+            unresolved=("command",),
+        ),
+        case("call type %X%", id="call expands percent words again", unresolved=("path_read",)),
     ],
 )
 @pytest.mark.asyncio

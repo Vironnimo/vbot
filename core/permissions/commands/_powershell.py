@@ -348,7 +348,8 @@ def process_launcher(executable: Path) -> HelperLauncher:
 def lower(result: dict[str, Any]) -> Script:
     """The ``Script`` of one helper answer.
 
-    Commands, .NET method calls and expression strings come in source order:
+    Commands, .NET method calls, expression strings and variable paths
+    (``${C:/x}``) come in source order:
     a command at its start, a call at its end, after the commands whose
     output it uses.
     """
@@ -400,6 +401,17 @@ def lower(result: dict[str, Any]) -> Script:
         entries.append(
             RawCommand([], word.source, offset=int(entry.get("offset", -1)), expression=word)
         )
+    for entry in result.get("items") or []:
+        source = str(entry.get("source", ""))
+        target = Word.literal(str(entry.get("path", "")), source=source, glob=True)
+        entries.append(
+            RawCommand(
+                [],
+                source,
+                offset=int(entry.get("offset", -1)),
+                item=Redirect("write" if entry.get("write") else "read", target),
+            )
+        )
     entries.sort(key=lambda raw: raw.offset)
     script.commands = entries
     return script
@@ -448,6 +460,7 @@ _TARGET_KINDS: dict[str, CallTargetKind] = {
     "new": "new",
     "command": "command",
     "item": "item",
+    "text": "text",
 }
 _PART_KINDS = {"s": "text", "v": "variable", "d": "dynamic"}
 

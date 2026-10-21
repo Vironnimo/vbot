@@ -268,6 +268,17 @@ def is_clearly_path(text: str, *, windows_switches: bool) -> bool:
     return climbs_out(text)
 
 
+def may_name_path(text: str, *, windows_switches: bool) -> bool:
+    """Whether a word that is not clearly a path may still name one (a mention).
+
+    Options (``-x``), URLs, words with line breaks and, for a Windows program,
+    switches (``/all``) do not; every other word may be a file name.
+    """
+    if not text or "\n" in text or "\x00" in text or text.startswith("-") or is_url(text):
+        return False
+    return not (windows_switches and text.startswith("/") and not re.search(r"[\\/]", text[1:]))
+
+
 def climbs_out(text: str) -> bool:
     """Whether a relative path leaves its starting folder through ``..``."""
     depth = 0

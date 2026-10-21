@@ -65,6 +65,8 @@ from core.permissions.commands._state import (
     Value,
     environment_key,
     items,
+    joined_path,
+    sibling,
 )
 from core.permissions.commands._syntax import Part, Pipeline, RawCommand, Script, Word
 from core.permissions.commands.commands import (
@@ -91,6 +93,17 @@ _PRUNED_NAME = re.compile(r"^[^\\/*?\[\]{}!]+/?$")
 type PowerShellParse = Callable[[str], Mapping[str, Any]]
 
 
+def _every_depth(text: str, pattern: str | None) -> tuple[str, str | None]:
+    """The folder and the ``**/name`` glob of a path whose name matches at every depth."""
+    if pattern is None:
+        cut = max(text.rfind("/"), text.rfind("\\"))
+        name = text[cut + 1 :]
+        if name in ("", ".", "..") or ":" in name:
+            return text, None
+        text, pattern = text[: cut + 1] or ".", name
+    return text, "**/" + pattern
+
+
 class Analysis:
     """One analysis of a command line; ``plan`` returns what it found."""
 
@@ -106,6 +119,7 @@ class Analysis:
         self._powershell = powershell
         self._commands: list[SimpleCommand] = []
         self._paths: dict[tuple[object, ...], PlannedPathAccess] = {}
+        self._mentions: dict[tuple[object, ...], PlannedPathAccess] = {}
         self._unresolved: dict[tuple[str, str, str], UnresolvedElement] = {}
         self._urls: dict[str, None] = {}
         self._hosts: dict[str, None] = {}
@@ -121,6 +135,7 @@ class Analysis:
             tuple(self._unresolved.values()),
             tuple(self._urls),
             tuple(self._hosts),
+            tuple(self._mentions.values()),
         )
 
     # Scripts ----------------------------------------------------------------
@@ -209,6 +224,10 @@ class Analysis:
         if raw.expression is not None:
             _dotnet.expression_string(self, context, raw)
             return
+        if raw.item is not None:
+            # ${C:/x}: PowerShell expands wildcards in a variable path too.
+            self.access(context, raw, raw.item.kind, raw.item.target, glob=True, tier="a")
+            return
         if raw.words:
             if context.shell == "powershell":
                 _cmdlets.powershell_command(self, context, raw)
@@ -261,12 +280,22 @@ class Analysis:
             return
         if lowered == "mklink":
             self.emit(context, name, arguments, raw)
-            operands = [
-                word for word in arguments if not self.is_switch(context, raw, word, slash=True)
-            ]
-            for index, word in enumerate(operands[:2]):
-                kind: AccessKind = "write" if index == 0 else "read"
-                self.access(context, raw, kind, word, glob=False, tier="a")
+            location = self.first(context, raw)
+            operands: list[Word] = []
+            hard = False
+            for word in arguments:
+                if self.is_switch(context, raw, word, slash=True):
+                    hard = hard or (self.value(context, word, location).text or "").lower() == "/h"
+                else:
+                    operands.append(word)
+            if len(operands) >= 2:
+                self.link(context, raw, operands[0], operands[1], hard=hard)
+            elif operands:
+                self.access(context, raw, "write", operands[0], glob=False, tier="a")
+            return
+        if lowered in ("ren", "rename"):
+            self.emit(context, name, arguments, raw)
+            self._cmd_rename(context, raw, arguments)
             return
         if lowered == "start":
             self.emit(context, name, arguments, raw)
@@ -278,6 +307,47 @@ class Analysis:
             self.apply_spec(context, raw, lowered, spec, arguments)
             return
         self.program(context, raw, _paths.program_name(name), arguments)
+
+    def link(
+        self, context: Context, raw: RawCommand, link: Word, target: Word, *, hard: bool
+    ) -> None:
+        """Creating a link at *link* to *target*: a write of both.
+
+        A symbolic link or junction may only lead into an area the Session may
+        change in full, so its target is a subtree write: later paths through
+        the link, also in the same line, then reach nothing the analysis did
+        not check. A hardlink's target is a plain write. A relative symbolic
+        target counts from the link's folder (and from the link, should it
+        name a folder the link lands in) as well as from the working directory.
+        """
+        self.access(context, raw, "write", link, glob=False, tier="a")
+        self.access(context, raw, "write", target, glob=False, tier="a", subtree=not hard)
+        text = self.value(context, target, self.first(context, raw)).text
+        if hard or text is None or re.match(r"^(?:[\\/~]|[A-Za-z]:)", text):
+            return
+        for placed in (sibling(link, text), joined_path(link, target)):
+            self.access(context, raw, "write", placed, glob=False, tier="a", subtree=True)
+
+    def _cmd_rename(self, context: Context, raw: RawCommand, arguments: Sequence[Word]) -> None:
+        """``ren src new``: renaming a folder moves everything below it, as ``move`` does.
+
+        The new name lies in the source's folder.
+        """
+        operands = [
+            word for word in arguments if not self.is_switch(context, raw, word, slash=True)
+        ]
+        if not operands:
+            return
+        source = operands[0]
+        self.access(context, raw, "write", source, glob=True, tier="a", subtree=True)
+        if len(operands) < 2:
+            return
+        name = self.value(context, operands[1], self.first(context, raw)).text
+        if name is None:
+            self.unresolve("path_write", raw.source, "the new name is computed when it runs")
+            return
+        target = operands[1] if re.search(r"[\\/]", name) else sibling(source, name)
+        self.access(context, raw, "write", target, glob=True, tier="a", subtree=True)
 
     def _cmd_start(self, context: Context, raw: RawCommand, arguments: Sequence[Word]) -> None:
         rest = list(arguments)
@@ -320,6 +390,11 @@ class Analysis:
         if wrapper is not None:
             saved = context.locations(raw.scope)
             inner = unwrap(self, context, raw, lowered, wrapper, arguments)
+            if inner and lowered == "call" and context.shell == "cmd":
+                # cmd runs what call names as a command of its own, built-ins included.
+                words = self._expanded_again(context, raw, inner)
+                self._cmd_command(context, replace(raw, words=words))
+                return
             if inner is not None:
                 if inner:
                     self.words_command(context, raw, inner, fed=fed or lowered == "xargs")
@@ -343,6 +418,19 @@ class Analysis:
             return
         self.emit(context, name, arguments, raw)
         self._program_body(context, raw, lowered, arguments, fed=fed)
+
+    def _expanded_again(
+        self, context: Context, raw: RawCommand, words: Sequence[Word]
+    ) -> list[Word]:
+        """cmd's ``call`` expands ``%NAME%`` once more when it runs: such words are dynamic."""
+        location = self.first(context, raw)
+        expanded: list[Word] = []
+        for word in words:
+            text = self.value(context, word, location).text
+            if text is not None and "%" in text:
+                word = Word((Part("dynamic", word.source),), word.source)
+            expanded.append(word)
+        return expanded
 
     def _global_options(
         self,
@@ -547,15 +635,25 @@ class Analysis:
                 else:
                     local.append(word)
             paths = local
+        search = bool(flags & spec.search_flags)
         if operand_kind is not None:
             for position, word in enumerate(paths):
                 kind = operand_kind
+                every_depth = search
                 if spec.first is not None and position == 0:
                     kind = spec.first
                 if spec.last is not None and len(paths) >= 2 and position == len(paths) - 1:
-                    kind = spec.last
+                    kind, every_depth = spec.last, False  # the destination is one folder
                 self.access(
-                    context, raw, kind, word, glob=True, tier="a", subtree=subtree, pruned=pruned
+                    context,
+                    raw,
+                    kind,
+                    word,
+                    glob=True,
+                    tier="a",
+                    subtree=subtree,
+                    pruned=pruned,
+                    every_depth=every_depth,
                 )
             if spec.last is not None and len(paths) == 1 and spec.slash:
                 # copy x / xcopy x: the copy lands in the working directory.
@@ -666,10 +764,11 @@ class Analysis:
             return
         self.listed_targets(listing, kind)
 
-    def listed_targets(self, listing: Listing, kind: AccessKind) -> None:
+    def listed_targets(self, listing: Listing, kind: AccessKind, *, subtree: bool = False) -> None:
         """Record *kind* for each entry *listing* names; changing a folder reaches below it."""
         for path, source, glob in listing.roots or ():
-            self.add(kind, path, source, subtree=listing.recursive or kind == "write", glob=glob)
+            below = subtree or listing.recursive or kind == "write"
+            self.add(kind, path, source, subtree=below, glob=glob)
 
     # Words and paths --------------------------------------------------------
 
@@ -807,14 +906,21 @@ class Analysis:
         subtree: bool = False,
         pruned: tuple[str, ...] = (),
         deep: bool = False,
+        every_depth: bool = False,
+        mention: bool = False,
     ) -> list[tuple[Path, str]]:
         """Record the access *word* makes from every candidate location; return the paths.
 
         A wildcard reaches the entries it matches in its literal folder; with
-        *deep* (``Get-ChildItem *.md -Recurse``) the whole folder.
+        *deep* (``Get-ChildItem *.md -Recurse``) the whole folder. With
+        *every_depth* (cmd's ``/s``: ``del /s *.tmp``) the last name, wildcard
+        or not, matches at every depth below its folder. With
+        *mention* (tier B of a command without a path spec), a word that is
+        not clearly a path but may name one becomes a mention.
         """
         found: list[tuple[Path, str]] = []
         brace = context.shell == "bash"
+        windows_switches = context.shell != "bash"
         for item in items(word):
             for location in context.locations(raw.scope):
                 value = self.value(context, item, location)
@@ -826,12 +932,18 @@ class Analysis:
                         )
                     continue
                 text = value.text
+                mentioned = False
                 if tier == "b":
                     file_url = _paths.file_url_path(text)
                     if file_url is not None:
                         text = file_url
-                    elif not _paths.is_clearly_path(text, windows_switches=context.shell != "bash"):
-                        continue
+                    elif not _paths.is_clearly_path(text, windows_switches=windows_switches):
+                        if not (
+                            mention
+                            and _paths.may_name_path(text, windows_switches=windows_switches)
+                        ):
+                            continue
+                        mentioned = True
                 elif _paths.is_url(text):
                     continue
                 text = _paths.without_long_prefix(text)
@@ -844,13 +956,17 @@ class Analysis:
                 ):
                     split = _paths.glob_split(text, brace=brace)
                     if isinstance(split, Unresolvable):
-                        self.unresolve(
-                            UNRESOLVED_KIND[kind], item.source, f"the path {split.reason}"
-                        )
+                        if not mentioned:
+                            self.unresolve(
+                                UNRESOLVED_KIND[kind], item.source, f"the path {split.reason}"
+                            )
                         continue
                     text, pattern = split
                     if deep:
                         pattern, reaches_below = None, True
+                if every_depth:
+                    text, pattern = _every_depth(text, pattern)
+                    reaches_below = reaches_below or pattern is not None
                 path = _paths.resolve(
                     text,
                     location.cwd,
@@ -862,9 +978,16 @@ class Analysis:
                 if path is None:
                     continue
                 if isinstance(path, Unresolvable):
-                    if tier == "a" or location.cwd is None:
+                    if not mentioned and (tier == "a" or location.cwd is None):
                         self.unresolve(
                             UNRESOLVED_KIND[kind], item.source, f"the path {path.reason}"
+                        )
+                    continue
+                if mentioned:
+                    key = (path, pattern)
+                    if key not in self._mentions:
+                        self._mentions[key] = PlannedPathAccess(
+                            "read", path, item.source[:SOURCE_LIMIT], glob=pattern
                         )
                     continue
                 self.add(
@@ -873,7 +996,14 @@ class Analysis:
                 found.append((path, item.source))
         return found
 
-    def tier_b(self, context: Context, raw: RawCommand, words: Iterable[Word]) -> None:
+    def tier_b(
+        self, context: Context, raw: RawCommand, words: Iterable[Word], *, mentions: bool = False
+    ) -> None:
+        """Tier B: words that are clearly paths are reads.
+
+        With *mentions* (a command without a path spec), every other static
+        word that may name a path is a mention (``CommandPlan.mentions``).
+        """
         location = self.first(context, raw)
         for word in words:
             if word.block:
@@ -887,7 +1017,7 @@ class Analysis:
             elif text is not None and re.match(r"^-{0,2}[A-Za-z_][\w.-]*=", text):
                 # --output=../x, DESTDIR=/opt
                 target = Word.literal(text.split("=", 1)[1], source=word.source)
-            self.access(context, raw, "read", target, glob=True, tier="b")
+            self.access(context, raw, "read", target, glob=True, tier="b", mention=mentions)
 
     def collect_urls(self, value: Value) -> None:
         for match in _URL.finditer(value.text if value.text is not None else value.source):

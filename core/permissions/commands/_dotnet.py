@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 
 from core.permissions.commands._specs import AccessKind
 from core.permissions.commands._state import Context, Listing
-from core.permissions.commands._syntax import MemberCall, RawCommand, Word
+from core.permissions.commands._syntax import CallTarget, MemberCall, RawCommand, Word
 
 if TYPE_CHECKING:
     from core.permissions.commands._analysis import Analysis
@@ -124,15 +124,28 @@ _ITEM: Mapping[str, _Method] = {
     "enumeratefiles": _m(self_kind="read"),
     "enumeratedirectories": _m(self_kind="read"),
     "enumeratefilesysteminfos": _m(self_kind="read"),
-}
+    # Property assignments the helper lowers as set_<name> calls: (gi x).IsReadOnly = $true.
+    **dict.fromkeys(
+        (
+            "set_isreadonly", "set_attributes", "set_creationtime", "set_creationtimeutc",
+            "set_lastwritetime", "set_lastwritetimeutc", "set_lastaccesstime",
+            "set_lastaccesstimeutc", "set_unixfilemode",
+        ),
+        _m(self_kind="write"),
+    ),
+}  # fmt: skip
+# Enumerations whose SearchOption argument (after the pattern) can reach below.
+_ENUMERATIONS = ("getfiles", "getdirectories", "getfilesystem", "enumerate")
 # Method names that on any object only make sense for files: when the object
-# cannot be followed, the call is unresolved. Ambiguous names (Replace, Open,
-# Create, CopyTo) count only on objects known to be files.
+# cannot be followed, the call is unresolved. The other FileInfo and
+# DirectoryInfo methods of _ITEM are too, unless the call is clearly another
+# type's (_other_use).
 _FILE_ONLY = frozenset(
     {
         "delete", "moveto", "createsubdirectory", "openwrite", "appendtext", "createtext",
         "encrypt", "decrypt", "deletefile", "deletefolder", "copyfile", "copyfolder",
         "movefile", "movefolder", "createtextfile", "opentextfile", "createfolder",
+        *(name for name in _ITEM if name.startswith("set_")),
     }
 )  # fmt: skip
 # Web methods, on any object (WebClient, HttpClient): the address and the files they use.
@@ -200,12 +213,40 @@ def member_call(analysis: Analysis, context: Context, raw: RawCommand) -> None:
         listing = analysis.listing_before(context, target.feed)
     if method is not None and listing is not None and listing.roots is not None:
         _on_items(analysis, context, raw, call, method, listing)
-    elif member in _FILE_ONLY:
+    elif member in _FILE_ONLY or (
+        member in _ITEM and not _other_use(member, target, listing, call.arguments)
+    ):
         analysis.unresolve(
             "path_write",
             raw.source,
             f"it calls {call.member} on an object this analysis cannot follow",
         )
+
+
+def _other_use(
+    member: str, target: CallTarget, listing: Listing | None, arguments: Sequence[Word]
+) -> bool:
+    """Whether a FileInfo or DirectoryInfo method name is called on another type.
+
+    ``'a.b'.Replace('.', '/')`` on a string, ``(Get-Content f).Replace(...)``
+    on the output of a command that lists no items, ``$connection.Open()``
+    without the FileMode a file needs. ``$x.CopyTo($y, 1)`` stays a file copy:
+    PowerShell passes 1 as FileInfo.CopyTo's overwrite flag.
+    """
+    if target.kind == "text" or (target.kind == "command" and listing is None):
+        return True
+    return member == "open" and not arguments
+
+
+def _recursive_option(arguments: Sequence[Word], index: int) -> bool:
+    """Whether the SearchOption or EnumerationOptions at *index* may reach below the folder.
+
+    Only a literal TopDirectoryOnly (or 0) stays in the folder.
+    """
+    if len(arguments) <= index:
+        return False
+    text = arguments[index].source.strip().strip("'\"").lower()
+    return not (text == "0" or text.endswith("topdirectoryonly"))
 
 
 def expression_string(analysis: Analysis, context: Context, raw: RawCommand) -> None:
@@ -227,9 +268,7 @@ def _static(
             method = _WRITE0  # an unlisted method of a file type: its first argument may change
         else:
             return
-    if member.startswith(
-        ("getfiles", "getdirectories", "getfilesystementries", "enumerate")
-    ) and any("alldirectories" in word.source.lower() for word in call.arguments):
+    if member.startswith(_ENUMERATIONS) and _recursive_option(call.arguments, 2):
         method = _m((0, "subtree_read"))
     _apply(analysis, context, raw, method, call.arguments)
 
@@ -248,8 +287,12 @@ def _on_items(
         )
         return
     if method.self_kind is not None:
-        # Changing a listed folder reaches below it.
-        analysis.listed_targets(listing, "read" if method.self_kind == "read" else "write")
+        # Changing a listed folder reaches below it, as does a recursive enumeration.
+        member = (call.member or "").lower()
+        recursive = member.startswith(_ENUMERATIONS) and _recursive_option(call.arguments, 1)
+        analysis.listed_targets(
+            listing, "read" if method.self_kind == "read" else "write", subtree=recursive
+        )
     _apply(analysis, context, raw, _Method(method.effects), call.arguments)
 
 

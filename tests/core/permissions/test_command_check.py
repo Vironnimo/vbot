@@ -239,6 +239,11 @@ async def real_analyzer() -> AsyncIterator[CommandAnalyzer]:
     [
         pytest.param("bash", "cat ../outside.txt", "not_permitted", id="bash-read-outside"),
         pytest.param("bash", "rm -r build && git status", None, id="bash-inside"),
+        # A program without a spec: each word, and an option's value, is checked
+        # against deny rules and protected locations, and passes otherwise.
+        pytest.param("bash", "awk 1 --file=secrets/key.txt", "deny_rule", id="mention-denied"),
+        pytest.param("bash", "awk '{print}' notes --out=x", None, id="mention-allowed"),
+        pytest.param("bash", "echo secrets/key.txt", None, id="no-path-program"),
         pytest.param(
             "powershell",
             "Set-Content -Path ..\\outside.txt -Value x",
@@ -257,8 +262,13 @@ async def test_real_analysis_reaches_the_same_decisions(
     work = tmp_path / "work"
     work.mkdir()
     checker = CommandChecker(lambda: real_analyzer)
+    rules: dict[str, object] = {
+        "read": "work_area",
+        "write": "work_area",
+        "deny": ["Read({workdir}/secrets/**)"],
+    }
     refusal = await checker.check_line(
-        boundary(work, {"read": "work_area", "write": "work_area"}),
+        boundary(work, rules),
         line,
         shell=shell,  # type: ignore[arg-type]
         cwd=work,

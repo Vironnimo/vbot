@@ -13,7 +13,7 @@ from typing import Literal
 
 type PartKind = Literal["text", "variable", "dynamic"]
 type RedirectKind = Literal["read", "write"]
-type CallTargetKind = Literal["type", "new", "command", "item", "other"]
+type CallTargetKind = Literal["type", "new", "command", "item", "text", "other"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,7 +83,8 @@ class CallTarget:
     ``new``: an object of ``type_name`` built from ``arguments``
     (``[IO.FileInfo]::new(x)``, ``[IO.FileInfo]'x'``); ``command``: the output
     of the command at source ``offset`` (``(Get-Item x).Delete()``); ``item``:
-    the pipeline input ``$_`` of the command at ``feed``; ``other``: anything
+    the pipeline input ``$_`` of the command at ``feed``; ``text``: a string
+    literal (``'a'.Replace(...)``); ``other``: anything
     else, such as a variable. ``type_name`` is lower-case without ``system.``.
     """
 
@@ -115,9 +116,10 @@ class RawCommand:
     name is a function the script defines itself.
 
     PowerShell also lowers what its expressions do into entries without
-    ``words``: a .NET method ``call`` and an ``expression`` string (a string
-    an expression names, not a command word). ``offset`` is the PowerShell
-    source position an entry is ordered by.
+    ``words``: a .NET method ``call``, an ``expression`` string (a string
+    an expression names, not a command word) and an ``item``, the content of
+    a provider item a variable path names (``${C:/x}``; a write when assigned
+    to). ``offset`` is the PowerShell source position an entry is ordered by.
     """
 
     words: list[Word]
@@ -133,6 +135,7 @@ class RawCommand:
     offset: int = -1
     call: MemberCall | None = None
     expression: Word | None = None
+    item: Redirect | None = None
 
 
 @dataclass(slots=True)
