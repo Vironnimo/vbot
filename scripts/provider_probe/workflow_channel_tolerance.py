@@ -5,12 +5,13 @@ from __future__ import annotations
 import argparse
 import json
 from dataclasses import asdict
+from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, override
 from unittest.mock import AsyncMock, Mock
 
-from core.channels import ChannelConfig
+from core.channels import ChannelConfig, ChannelService
 from core.channels.adapter import RouteFacts
 from core.database import write_bootstrap_marker
 from core.sessions import ChatSessionManager
@@ -105,11 +106,16 @@ async def channel_case(
                 }
             )
 
-        service = Mock()
+        service = Mock(spec=ChannelService)
         service.list_channels.return_value = configs
         service.send = AsyncMock(side_effect=receive)
-        service.ensure_outbound_session = AsyncMock(
+        service._chat_sessions = sessions
+        service._connections = Mock()
+        service._connections.active_adapter.return_value.ensure_outbound_session = AsyncMock(
             return_value=RouteFacts(agent_id="probe-agent", session_id="target")
+        )
+        service.record_outbound_note = AsyncMock(
+            side_effect=partial(ChannelService.record_outbound_note, service)
         )
         registry = ToolRegistry()
         register_channel_send_tool(registry, service, sessions, max_attachment_size_bytes=10000)
