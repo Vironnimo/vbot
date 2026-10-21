@@ -45,6 +45,8 @@ export default Object.freeze({
   'permissions.base.default': 'Default: {value}',
   'permissions.base.writeNarrowed':
     'Changing files now stays in the work area: an Agent can change only files it can read.',
+  'permissions.base.writeStaysInWorkArea':
+    'Changing files stays in the work area, because reading is limited to it: an Agent can change only files it can read.',
   'permissions.base.writeWithinRead':
     'Not available while reading stays in the work area: an Agent can change only files it can read.',
   'permissions.base.workAreaHelp':
@@ -84,7 +86,7 @@ export default Object.freeze({
   'permissions.preview.read': 'Read',
   'permissions.preview.write': 'Change',
   'permissions.preview.commands': 'Run',
-  'permissions.preview.web': 'Open',
+  'permissions.preview.web': 'Fetch from',
   'permissions.preview.deny': 'Never',
   'permissions.preview.inactive': 'Skipped here',
   'permissions.preview.inactiveHint':
@@ -110,6 +112,7 @@ export default Object.freeze({
     'Inherited from the Session that scheduled this Run',
   'permissions.session.source.other': 'Inherited limit',
   'permissions.session.workdir': 'Works in',
+  'permissions.session.scratch': 'the conversation’s scratch area',
   'permissions.session.clear': 'Remove inherited limits',
   'permissions.session.clearTitle': 'Remove inherited limits?',
   'permissions.session.clearText':

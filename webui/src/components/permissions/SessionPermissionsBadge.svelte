@@ -4,11 +4,13 @@
   import { floatingHoverCard } from '$lib/tooltip.js';
   import Button from '../ui/Button.svelte';
   import ConfirmDialog from '../ui/ConfirmDialog.svelte';
+  import InfoHint from '../ui/InfoHint.svelte';
 
   // A compact "Restricted" mark for a Session (or a draft's next Session)
   // whose Runs work under Permission Rules; nothing for full access. Its
   // hover card lists every layer that applies (`permissions.session`): the
-  // Agent's own rules and each inherited limit. A Session that stores
+  // Agent's own rules and each inherited limit, then the honest limits of
+  // the checks (`.vorch/domain-maps/permissions.md`). A Session that stores
   // inherited limits (from the Session that started it or a scheduled job)
   // offers to remove them, after a confirmation
   // (`permissions.clear_session_ceiling`).
@@ -78,11 +80,26 @@
     clearError = '';
   }
 
+  const SCRATCH = '{scratch}';
+  const SEPARATOR = ', ';
+
+  // A row's value as items: the folders or rules of a list (`mono`), or one
+  // word for no limit or nothing. The Agent's own rules keep `{scratch}`, the
+  // conversation's scratch area, which has no folder before a Run creates it:
+  // it reads as a name, and a rule below it is explained under the rows.
   function listed(values, anything) {
-    if (values === null || values === undefined) return anything;
-    return values.length > 0
-      ? values.join(', ')
-      : t('permissions.preview.nothing');
+    if (values === null || values === undefined) return [{ text: anything }];
+    if (values.length === 0)
+      return [{ text: t('permissions.preview.nothing') }];
+    return values.map((value) =>
+      value === SCRATCH
+        ? { text: t('permissions.session.scratch') }
+        : { text: value, mono: true },
+    );
+  }
+
+  function codes(values) {
+    return values.map((value) => ({ text: value, mono: true }));
   }
 
   const SOURCE_LABELS = {
@@ -100,45 +117,38 @@
 
   function layerRows(layer) {
     const rows = [
-      { label: sourceLabel(layer.source), value: '' },
+      { label: sourceLabel(layer.source), items: [] },
       {
         label: t('permissions.session.workdir'),
-        value: layer.workdir ?? '',
-        mono: true,
+        items: codes(layer.workdir ? [layer.workdir] : []),
       },
       {
         label: t('permissions.preview.read'),
-        value: listed(layer.read, t('permissions.preview.anywhere')),
-        mono: Array.isArray(layer.read),
+        items: listed(layer.read, t('permissions.preview.anywhere')),
       },
       {
         label: t('permissions.preview.write'),
-        value: listed(layer.write, t('permissions.preview.anywhere')),
-        mono: Array.isArray(layer.write),
+        items: listed(layer.write, t('permissions.preview.anywhere')),
       },
       {
         label: t('permissions.preview.commands'),
-        value: listed(layer.commands, t('permissions.preview.anyCommand')),
-        mono: Array.isArray(layer.commands),
+        items: listed(layer.commands, t('permissions.preview.anyCommand')),
       },
       {
         label: t('permissions.preview.web'),
-        value: listed(layer.web, t('permissions.preview.anySite')),
-        mono: Array.isArray(layer.web),
+        items: listed(layer.web, t('permissions.preview.anySite')),
       },
     ];
     if ((layer.deny ?? []).length > 0) {
       rows.push({
         label: t('permissions.preview.deny'),
-        value: layer.deny.join(', '),
-        mono: true,
+        items: codes(layer.deny),
       });
     }
     if ((layer.inactive ?? []).length > 0) {
       rows.push({
         label: t('permissions.preview.inactive'),
-        value: layer.inactive.join(', '),
-        mono: true,
+        items: codes(layer.inactive),
       });
     }
     return rows;
@@ -146,6 +156,12 @@
 
   let rows = $derived(
     summary?.restricted ? (summary.layers ?? []).flatMap(layerRows) : [],
+  );
+  // A folder or rule below the scratch area still names `{scratch}`.
+  let namesScratch = $derived(
+    rows.some((row) =>
+      row.items.some((item) => item.mono && item.text.includes(SCRATCH)),
+    ),
   );
   let clearable = $derived(
     Boolean(summary?.restricted && summary.stored_ceiling && sessionId),
@@ -182,11 +198,26 @@
       <dl class="app-tooltip__rows">
         {#each rows as row, index (index)}
           <dt class="app-tooltip__label">{row.label}</dt>
-          <dd class="app-tooltip__value" class:app-tooltip__mono={row.mono}>
-            {row.value}
+          <dd class="app-tooltip__value">
+            {#each row.items as item, position (position)}
+              {#if position > 0}{SEPARATOR}{/if}<span
+                class:app-tooltip__mono={item.mono}>{item.text}</span
+              >
+            {/each}
           </dd>
         {/each}
       </dl>
+      {#if namesScratch}
+        <p class="session-permissions-card__note">
+          {t('permissions.preview.scratch', { scratch: SCRATCH })}
+        </p>
+      {/if}
+      <p
+        class="session-permissions-card__note session-permissions-card__limits"
+      >
+        {t('permissions.limits')}
+        <InfoHint text={t('permissions.limitsHelp')} />
+      </p>
       {#if clearable}
         <div class="session-permissions-card__footer">
           <Button
@@ -260,6 +291,19 @@
     font-size: var(--fs-label-sm);
     line-height: 1.4;
     user-select: text;
+  }
+  .session-permissions-card__note {
+    margin: 6px 0 0;
+    color: var(--text-lo);
+  }
+  .session-permissions-card__limits {
+    margin-top: 8px;
+    padding-top: 7px;
+    border-top: 1px solid var(--border-2);
+  }
+  .session-permissions-card__limits :global(.info-hint) {
+    margin-left: 2px;
+    vertical-align: -3px;
   }
   .session-permissions-card__footer {
     display: flex;

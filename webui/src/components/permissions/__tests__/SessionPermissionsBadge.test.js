@@ -102,6 +102,50 @@ describe('SessionPermissionsBadge', () => {
     expect(document.querySelector('[data-session-permissions]')).not.toBeNull();
   });
 
+  it('names the scratch area and states the limits of the checks', async () => {
+    permissionsMock.mockResolvedValue({
+      restricted: true,
+      layers: [
+        {
+          ...OWN_LAYER,
+          read: ['/work', '{scratch}'],
+          write: ['/work', '{scratch}'],
+          web: ['github.com'],
+        },
+      ],
+      stored_ceiling: false,
+    });
+    await render({ sessionId: 's1' });
+
+    const card = document.querySelector('[data-session-permissions-card]');
+    const values = [...card.querySelectorAll('dd')].map((dd) =>
+      dd.textContent.replace(/\s+/g, ' ').trim(),
+    );
+    expect(values).toContain(`/work, ${t('permissions.session.scratch')}`);
+    expect(card.textContent).not.toContain('{scratch}');
+    const labels = [...card.querySelectorAll('dt')].map((dt) =>
+      dt.textContent.trim(),
+    );
+    expect(labels).toContain(t('permissions.preview.web'));
+    expect(card.textContent).toContain(t('permissions.limits'));
+    expect(
+      card.querySelector('.info-hint').getAttribute('data-help-text'),
+    ).toBe(t('permissions.limitsHelp'));
+
+    // A rule below the scratch area keeps the placeholder, explained once.
+    await unmount(component);
+    document.body.innerHTML = '';
+    permissionsMock.mockResolvedValue({
+      restricted: true,
+      layers: [{ ...OWN_LAYER, deny: ['Read({scratch}/keys)'] }],
+      stored_ceiling: false,
+    });
+    await render({ sessionId: 's1' });
+    expect(
+      document.querySelector('[data-session-permissions-card]').textContent,
+    ).toContain(t('permissions.preview.scratch', { scratch: '{scratch}' }));
+  });
+
   it('offers no removal for limits the Session does not store', async () => {
     permissionsMock.mockResolvedValue({
       restricted: true,
