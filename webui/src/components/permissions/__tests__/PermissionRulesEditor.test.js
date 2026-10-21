@@ -253,14 +253,40 @@ describe('PermissionRulesEditor', () => {
     );
   });
 
-  it('shows the server problem of a rule next to it', async () => {
+  it('says when an inherited read keeps an own write in the work area', async () => {
+    const own = { write: 'anywhere' };
+    const inherited = { read: 'work_area' };
+    const answer = response({
+      permission_rules: own,
+      preset: 'custom',
+      inherited,
+      effective: { read: 'work_area', write: 'work_area' },
+    });
+    answer.bases.write.excluded = ['anywhere'];
+    validateMock.mockResolvedValue(answer);
+    await mountEditor({ value: own, level: 'override', agentId: 'coder@app' });
+
+    expect(document.body.textContent).toContain(
+      t('permissions.base.writeStaysInWorkArea'),
+    );
+  });
+
+  it('shows the server problem of a rule next to it, without its field path', async () => {
     const own = { deny: ['Foo(x)'] };
-    const message = 'permission_rules.deny[0] "Foo(x)": unknown kind Foo';
+    const reason = '"Foo(x)": unknown kind Foo';
     validateMock.mockResolvedValue(
       response({
         valid: false,
         preset: null,
-        errors: [{ part: 'deny', index: 0, rule: 'Foo(x)', message }],
+        errors: [
+          {
+            part: 'deny',
+            index: 0,
+            rule: 'Foo(x)',
+            message: `permission_rules.deny[0] ${reason}`,
+            reason,
+          },
+        ],
       }),
     );
     await mountEditor({ value: own });
@@ -269,6 +295,7 @@ describe('PermissionRulesEditor', () => {
       `input[aria-label="${t('permissions.rulePattern', { index: 1 })}"]`,
     );
     expect(pattern.getAttribute('aria-invalid')).toBe('true');
-    expect(document.body.textContent).toContain(message);
+    expect(document.body.textContent).toContain(reason);
+    expect(document.body.textContent).not.toContain('permission_rules.deny');
   });
 });

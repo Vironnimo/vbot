@@ -261,6 +261,18 @@
     ];
   }
 
+  // An own write base the read that applies narrows (`write: anywhere` here
+  // while the inherited read stays in the work area): it is saved, but the
+  // Agent's Runs change files only in the work area. With an own read, the
+  // server refuses the set instead.
+  function writeNarrowedByInherited(base) {
+    return (
+      Boolean(own?.write) &&
+      !own.read &&
+      (base.excluded ?? []).includes(own.write)
+    );
+  }
+
   function setBase(part, choice) {
     if (choice === INHERIT && own === null) return;
     const next = withPermissionBase(
@@ -401,6 +413,10 @@
             {#if part === 'write' && writeNarrowed}
               <div class="s-row-desc" role="status">
                 {t('permissions.base.writeNarrowed')}
+              </div>
+            {:else if part === 'write' && writeNarrowedByInherited(base)}
+              <div class="s-row-desc" role="status">
+                {t('permissions.base.writeStaysInWorkArea')}
               </div>
             {/if}
             {#if problems.length > 0}
