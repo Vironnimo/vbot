@@ -240,7 +240,9 @@ async def test_a_job_with_a_permission_ceiling_runs_only_checks_its_rules_allow(
         tmp_path, launches, command_checker=fake_checker(analyzer), ceiling_boundary=boundary
     )
 
-    with pytest.raises(WatchCheckError, match="The check did not run: The permission rules refuse"):
+    # Worded for the user's alert as for the Agent: no "you", and how to fix the watch.
+    refused = "The check did not run: the permission rules refuse .* Change the watch to a command"
+    with pytest.raises(WatchCheckError, match=refused):
         await runner.run_command(
             "Remove-Item -Recurse ../elsewhere",
             agent_id="agent-one",

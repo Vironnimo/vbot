@@ -95,7 +95,7 @@ Hosts and commands: a deny rule of any layer refuses; under `listed` every such 
 
 ## Agent-facing text
 
-This domain owns the refusal text (`PermissionRefusal.message`, `core/permissions/_refusal.py`), which Tools return as `permission_denied`. Before you change, add or delete a sentence of it, read the `permission_denied` rows in `tools/agent-facing-text.md`: they record why each sentence exists. Update the row for every sentence you change and add one for every sentence you add.
+This domain owns the refusal texts (`PermissionRefusal.message`, which Tools return as `permission_denied`, and `watch_message` for Cron watch checks, `core/permissions/_refusal.py`), the command-check reasons and hints (`_command_check.py`), and the reasons for the `core:permissions` System Prompt block and the permission Run failures that Chat renders (`core/chat/_run_permissions.py`). Before you change, add or delete a sentence of them, read `permissions/agent-facing-text.md`: it records why each sentence exists. Update its row for every sentence you change and add one for every sentence you add.
 
 ## Tests
 

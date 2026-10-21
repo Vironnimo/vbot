@@ -930,6 +930,9 @@ def test_a_restricted_search_leaves_out_what_the_rules_refuse(
     assert "secrets" in full
     for refused in ("secrets", ".key", "o.txt"):
         assert refused not in restricted
+    if "--dirs" not in arguments.get("args", []):
+        # Like a read listing, the result says that the rules left paths out.
+        assert "permission rules refuse to read are left out" in result["data"]["note"]
     if "-L" in arguments.get("args", []):
         assert "links" in result["data"]["note"]
 

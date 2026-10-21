@@ -1101,7 +1101,7 @@ async def test_calls_refused_before_the_start_run_nothing(shell: Shell) -> None:
         pytest.param(
             {},
             plan("cp a b", writes=[Path("/elsewhere/b")]),
-            "outside the folders this Agent can change",
+            "outside the folders you can change",
             id="write-outside",
         ),
         pytest.param(
@@ -1126,7 +1126,7 @@ async def test_calls_refused_before_the_start_run_nothing(shell: Shell) -> None:
         pytest.param(
             {"web": "listed", "allow": ["Web(example.com)"]},
             plan("ssh git.example.org", hosts=["git.example.org"]),
-            "the permission rules refuse fetching git.example.org",
+            "the permission rules refuse connecting to git.example.org",
             id="unlisted-host",
         ),
         pytest.param(
