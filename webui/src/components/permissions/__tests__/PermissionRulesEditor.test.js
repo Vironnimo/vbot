@@ -132,6 +132,25 @@ describe('PermissionRulesEditor', () => {
     );
   });
 
+  // An Agent can change only files it can read.
+  it('narrows write when read stays in the work area and says why', async () => {
+    const own = { write: 'anywhere' };
+    validateMock.mockResolvedValue(
+      response({ permission_rules: own, preset: 'custom', effective: own }),
+    );
+    await mountEditor({ value: own });
+
+    choose(
+      trigger(t('permissions.part.read')),
+      t('permissions.base.read.work_area'),
+    );
+
+    expect(changes.at(-1)).toEqual({ read: 'work_area', write: 'work_area' });
+    expect(document.body.textContent).toContain(
+      t('permissions.base.writeNarrowed'),
+    );
+  });
+
   it('shows the server problem of a rule next to it', async () => {
     const own = { deny: ['Foo(x)'] };
     const message = 'permission_rules.deny[0] "Foo(x)": unknown kind Foo';

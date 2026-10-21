@@ -26,6 +26,7 @@
     withPermissionBase,
     withPermissionRuleList,
     withPastedPermissionRules,
+    writeWithinRead,
   } from '$lib/permissionRules.js';
 
   const noop = () => {};
@@ -96,6 +97,8 @@
   let checkError = $state('');
   let pasteOpen = $state(false);
   let pasteText = $state('');
+  // Set when choosing a read base narrowed the own write base with it.
+  let writeNarrowed = $state(false);
   let sequence = 0;
 
   let own = $derived(normalizePermissionRules(value));
@@ -199,7 +202,12 @@
 
   function baseOptions(part, parentRules) {
     const fallback = effectivePermissionBase(null, parentRules, part);
-    const value = baseLabel(part, fallback.value);
+    // What the level reads decides how far an inherited write reaches.
+    const read = effectivePermissionBase(own, parentRules, 'read').value;
+    const value = baseLabel(
+      part,
+      part === 'write' ? writeWithinRead(read, fallback.value) : fallback.value,
+    );
     return [
       {
         value: INHERIT,
@@ -208,16 +216,33 @@
             ? t('permissions.base.default', { value })
             : t('permissions.base.inherited', { value }),
       },
-      ...PERMISSION_BASES[part].map((base) => ({
-        value: base,
-        label: baseLabel(part, base),
-      })),
+      ...PERMISSION_BASES[part].map((base) => {
+        const narrowed =
+          part === 'write' && writeWithinRead(read, base) !== base;
+        return {
+          value: base,
+          label: baseLabel(part, base),
+          disabled: narrowed,
+          tooltip: narrowed ? t('permissions.base.writeWithinRead') : '',
+        };
+      }),
     ];
   }
 
   function setBase(part, choice) {
     if (choice === INHERIT && own === null) return;
-    onChange(withPermissionBase(own, part, choice === INHERIT ? null : choice));
+    const next = withPermissionBase(
+      own,
+      part,
+      choice === INHERIT ? null : choice,
+    );
+    if (part === 'read' || part === 'write') {
+      writeNarrowed =
+        part === 'read' &&
+        own?.write === 'anywhere' &&
+        next.write !== 'anywhere';
+    }
+    onChange(next);
   }
 
   function shownRules(effect) {
@@ -314,6 +339,11 @@
               <InfoHint text={t('permissions.base.workAreaHelp')} />
             {/if}
           </div>
+          {#if part === 'write' && writeNarrowed}
+            <div class="s-row-desc" role="status">
+              {t('permissions.base.writeNarrowed')}
+            </div>
+          {/if}
           {#if problems.length > 0}
             <p class="s-row-error" id={`${idPrefix}-${part}-error`}>
               {problems.join(' ')}

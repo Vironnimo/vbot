@@ -71,12 +71,23 @@ export function joinPermissionRule(kind, pattern) {
   return `${kind}(${pattern})`;
 }
 
+// An Agent can change only files it can read (the server's rule): `write`
+// `anywhere` under `read` `work_area` narrows to `work_area`. The server
+// refuses one rule set that holds both and narrows them across levels.
+export function writeWithinRead(read, write) {
+  return read === 'work_area' && write === 'anywhere' ? 'work_area' : write;
+}
+
 // `rules` with one base set; `null` removes the part so it is inherited. A
 // rule set without own rules starts empty: setting a part makes it own rules.
+// An own `write` that the new `read` no longer permits narrows with it.
 export function withPermissionBase(rules, part, value) {
   const next = { ...(normalizePermissionRules(rules) ?? {}) };
   if (value === null || value === undefined) delete next[part];
   else next[part] = value;
+  if (typeof next.write === 'string') {
+    next.write = writeWithinRead(next.read, next.write);
+  }
   return next;
 }
 
@@ -104,8 +115,18 @@ export function applyPermissionPreset(rules, definition) {
 }
 
 // The base `part` that applies: the own value, else the inherited one, else
-// its unrestricted default. `source` says which level supplied it.
+// its unrestricted default. `source` says which level supplied it. `write`
+// stays within the `read` that applies.
 export function effectivePermissionBase(rules, inherited, part) {
+  if (part === 'write') {
+    const write = levelPermissionBase(rules, inherited, part);
+    const read = levelPermissionBase(rules, inherited, 'read').value;
+    return { ...write, value: writeWithinRead(read, write.value) };
+  }
+  return levelPermissionBase(rules, inherited, part);
+}
+
+function levelPermissionBase(rules, inherited, part) {
   const own = normalizePermissionRules(rules);
   if (typeof own?.[part] === 'string') {
     return { value: own[part], source: 'own' };

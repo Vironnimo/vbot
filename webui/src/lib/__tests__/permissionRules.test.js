@@ -37,6 +37,23 @@ describe('Permission Rules editing', () => {
     });
   });
 
+  // An Agent can change only files it can read.
+  it('keeps write within read', () => {
+    expect(
+      withPermissionBase({ write: 'anywhere' }, 'read', 'work_area'),
+    ).toEqual({ write: 'work_area', read: 'work_area' });
+    expect(
+      effectivePermissionBase(
+        { read: 'work_area' },
+        { write: 'anywhere' },
+        'write',
+      ),
+    ).toEqual({ value: 'work_area', source: 'inherited' });
+    expect(
+      withPermissionBase({ read: 'work_area' }, 'write', 'scratch'),
+    ).toEqual({ read: 'work_area', write: 'scratch' });
+  });
+
   it('starts own rules when a base is set and removes a base to inherit', () => {
     expect(withPermissionBase(null, 'web', 'listed')).toEqual({
       web: 'listed',

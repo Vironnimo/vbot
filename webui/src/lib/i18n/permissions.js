@@ -38,6 +38,10 @@ export default Object.freeze({
   'permissions.base.web.listed': 'Only allowed sites',
   'permissions.base.inherited': 'Inherited: {value}',
   'permissions.base.default': 'Default: {value}',
+  'permissions.base.writeNarrowed':
+    'Changing files now stays in the work area: an Agent can change only files it can read.',
+  'permissions.base.writeWithinRead':
+    'Not available while reading stays in the work area: an Agent can change only files it can read.',
   'permissions.base.workAreaHelp':
     'The work area is the folder a Session works in plus its scratch area.',
   'permissions.allowTitle': 'Allow rules',
