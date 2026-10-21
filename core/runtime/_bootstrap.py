@@ -691,6 +691,7 @@ def bootstrap(runtime: Runtime) -> None:
                 if runtime._subagent_coordinator is not None
                 else None
             ),
+            server_port=lambda: runtime._server_port,
         )
         runtime._chat_loop = ChatLoop(
             chat_dependencies,

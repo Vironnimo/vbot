@@ -203,7 +203,7 @@ def make_read_handler(
                 )
             arguments = {**arguments, "encoding": encoding}
         try:
-            resolved = context.resolve_path(arguments["path"])
+            resolved = context.resolve_path(arguments["path"], access="read")
         except RuntimeError as error:
             return tool_failure("invalid_path", str(error))
         cwd = _call_cwd(context)

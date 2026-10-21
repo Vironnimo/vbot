@@ -743,7 +743,7 @@ def run_operations(
         for name in (operation.path, operation.destination):
             if name is not None and name not in resolved and name not in resolution_errors:
                 try:
-                    resolved[name] = _resolve(context, name)
+                    resolved[name] = _resolve(context, name, access="write")
                 except _PatchError as error:
                     resolution_errors[name] = _error_data(error, batch)
     # Delete and Move act on the named entry: a final link itself, not its target.
@@ -841,7 +841,7 @@ def _current_path(
     A Delete or Move earlier in the patch can remove or rename a link, so a later
     Add at that name creates a file there instead of writing to the old target.
     """
-    path = _resolve(context, name)
+    path = _resolve(context, name, access="write")
     if entry:
         path = _entry_path(context, name, path, destination=destination)
     if path not in locked:

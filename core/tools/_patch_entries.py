@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from core.tools._patch_syntax import _PatchError
-from core.tools._tool_context import is_link_entry
+from core.tools._tool_context import PathResolveAccess, is_link_entry
 from core.tools.tools import ToolContext
 
 
@@ -45,11 +45,17 @@ def _snapshot(path: Path) -> _Snapshot:
     return _Snapshot(path.read_bytes(), stat.S_IMODE(info.st_mode))
 
 
-def _resolve(context: ToolContext, path: str, *, follow_final_link: bool = True) -> Path:
+def _resolve(
+    context: ToolContext,
+    path: str,
+    *,
+    access: PathResolveAccess,
+    follow_final_link: bool = True,
+) -> Path:
     try:
         if "\x00" in path:
             raise ValueError(path)
-        return context.resolve_path(path, follow_final_link=follow_final_link)
+        return context.resolve_path(path, access=access, follow_final_link=follow_final_link)
     except (ValueError, OSError, RuntimeError) as error:
         raise _PatchError("invalid_path", path=path, reason=str(error)) from error
 
@@ -60,7 +66,7 @@ def _entry_path(context: ToolContext, name: str, content: Path, *, destination: 
     A move destination keeps its requested final-name spelling, so a rename that
     only changes letter case still names a different entry on Windows.
     """
-    entry = _resolve(context, name, follow_final_link=False)
+    entry = _resolve(context, name, access="write", follow_final_link=False)
     return entry if destination or is_link_entry(entry) else content
 
 

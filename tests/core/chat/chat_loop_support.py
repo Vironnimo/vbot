@@ -329,7 +329,8 @@ class StubAgentResolver:
 
     def capture_session_settings(self, address: SessionAddress, agent: Any) -> AgentOverrides:
         captured = self.session_overrides(address).capture(agent)
-        self._session_overrides[address] = captured.as_dict()
+        # Like the real resolver, capturing keeps a stored permission ceiling.
+        self._session_overrides[address] = captured.session_metadata().get("agent_overrides", {})
         return captured
 
     def update_session_overrides(

@@ -423,7 +423,7 @@ def _video_frame_paths(context: ToolContext, arguments: JsonObject) -> dict[str,
 def _output_dir(context: ToolContext, arguments: JsonObject, *, default_name: str) -> Path:
     value = optional_string(arguments.get("output_dir"), field_name="output_dir")
     if value:
-        return context.resolve_path(value)
+        return context.resolve_path(value, access="write")
     root = context.workspace if context.project_id is None else context.effective_cwd
     return root / default_name
 

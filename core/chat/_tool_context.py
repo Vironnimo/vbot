@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 from core.agents import default_workspace_dir
 from core.chat.messages import JsonObject, ReplySurface
 from core.extensions import ExtensionRegistry
+from core.permissions import PermissionBoundary
 from core.runs import Run
 from core.sessions import ChatSession, ToolResultFacts, ToolResultPayload
 from core.tools import (
@@ -52,6 +53,7 @@ class ToolDispatchContext:
     skill_registry: SkillRegistry | None = None
     reply_surface: ReplySurface | None = None
     subagent_session: bool = False
+    permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED
     tool_restriction: Sequence[str] | None = None
     tool_denial_resolver: Callable[[str], str | None] | None = None
     base_allowed_tools: Sequence[str] | None = None

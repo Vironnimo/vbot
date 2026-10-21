@@ -9,6 +9,7 @@ registration.
 
 from __future__ import annotations
 
+from core.permissions import PermissionDenied
 from core.tools._edit_engine import file_excerpt
 from core.tools._file_changes import (
     ChangeBatch,
@@ -64,11 +65,12 @@ def _locate_context(
 ) -> list[str]:
     """Show where the lines of a context-only hunk are in the file, if they are there."""
     try:
-        path = _resolve(context, name)
+        path = _resolve(context, name, access="read")
         if path.stat().st_size > _CONTEXT_SEARCH_MAX_BYTES:
             return []
         content = decode_text(path.read_bytes(), path)
-    except OSError, _PatchError:
+    except OSError, _PatchError, PermissionDenied:
+        # A refused read shows no excerpt; the failure itself still reports.
         return []
     text = "\n".join(lines)
     found = replace_fuzzy(

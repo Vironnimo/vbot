@@ -25,6 +25,7 @@ from core.chat._request_history import (
 from core.chat._request_media import RequestMedia
 from core.chat._request_targets import RequestTargets
 from core.chat._request_tool_catalog import RequestToolCatalog
+from core.chat._run_permissions import permissions_prompt_block
 from core.chat._run_state import RequestBuildInputs, _RequestState
 from core.chat._tool_epoch import (
     LiveToolCatalog,
@@ -267,10 +268,16 @@ class RequestBuilder:
     async def _session_prompt_blocks(
         self, inputs: RequestBuildInputs, *, failed_blocks: set[str] | None = None
     ) -> tuple[BlockDefinition, ...]:
-        """Render temporary Session contributions for snapshots and change notes."""
+        """Render temporary Session contributions for snapshots and change notes.
+
+        The Run's ``core:permissions`` block joins them: like them it follows the
+        Run, not the prompt layout, and is pinned per prompt epoch.
+        """
+        permissions = permissions_prompt_block(inputs.permissions)
+        blocks: list[BlockDefinition] = [permissions] if permissions is not None else []
         binding = inputs.temporary_binding
         if binding is None:
-            return ()
+            return tuple(blocks)
         registry = self._dependencies.get_extension_registry()
         capability = (
             registry.session_capability(binding, self._dependencies.tools)
@@ -282,7 +289,6 @@ class RequestBuilder:
                 "This Session has an invalid configuration. "
                 "Ask the user to check it through its Extension."
             )
-        blocks: list[BlockDefinition] = []
         for declaration in capability.prompt_blocks:
             block_id = f"extension_session:{declaration.slug}"
             try:

@@ -875,7 +875,7 @@ def _resolve_workdir(
         return context.effective_cwd.resolve()
     if is_project_workdir(workdir_value):
         return project_workdir(projects, workdir_value)
-    return context.resolve_path(workdir_value)
+    return context.resolve_path(workdir_value, access="start_dir")
 
 
 def _owner(context: ToolContext) -> TerminalOwner:

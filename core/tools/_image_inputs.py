@@ -321,7 +321,7 @@ def _check_local(
     single: bool,
 ) -> None:
     """Refuse folders and missing files among the local images of ``items``."""
-    cwd = context.resolve_path(".")
+    cwd = context.resolve_path(".", access="display")
     missing: list[tuple[int, str, list[Path]]] = []
     for index, path in local.items():
         try:
@@ -358,7 +358,7 @@ def resolve_local_images(
     """
     items = _requested_items(raw_paths, field, "local image path", "local image paths")
     local = {
-        index: context.resolve_path(_local_path_text(text, field))
+        index: context.resolve_path(_local_path_text(text, field), access="read")
         for index, text in enumerate(items)
     }
     _present(context, _named(list(local.values())), source=True)
@@ -383,7 +383,7 @@ async def resolve_analysis_images(
         if (address := image_address(text)) is not None
     }
     local = {
-        index: context.resolve_path(_local_path_text(text, field))
+        index: context.resolve_path(_local_path_text(text, field), access="read")
         for index, text in enumerate(items)
         if index not in addresses
     }
