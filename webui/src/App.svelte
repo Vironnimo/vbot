@@ -121,6 +121,7 @@
     renameComposerAgent,
   } from '$lib/composerMemory.js';
   import { renameWidgetStatesAgent } from '$lib/widgetStates.svelte.js';
+  import { invalidatePortals } from '$lib/portals.svelte.js';
   import {
     isDesktopAccessor,
     onDesktopOpenSession,
@@ -505,6 +506,7 @@
     onReloadAgents: selection.reloadAgentsFromServer,
     onReloadExtensionPages: extensions.loadExtensionPages,
     onExtensionChange: extensions.publishChange,
+    onPortalsChanged: invalidatePortals,
     onLoadDataStoreStatus: loadDataStoreStatus,
     onLoadBackgroundActivity: loadBackgroundActivity,
     onCheckWebuiBuild: checkWebuiBuild,

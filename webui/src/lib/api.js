@@ -210,6 +210,8 @@ export {
   removeFromQueue,
   updateQueueItem,
   steerQueueItem,
+  listPortals,
+  closePortal,
 } from './api/chat.js';
 export {
   listTerminals,
