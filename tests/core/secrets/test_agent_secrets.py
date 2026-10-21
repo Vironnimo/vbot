@@ -47,6 +47,7 @@ class FakeSource:
 
     def __init__(self, values: Mapping[str, str]) -> None:
         self.values = dict(values)
+        self.optional_fields: set[str] = set()
         self.locked = False
         self.lock_calls = 0
 
@@ -62,6 +63,11 @@ class FakeSource:
     def resolve(self, reference: str, field_name: str) -> str:
         if self.locked:
             raise SecretSourceError("locked", "the vault is locked")
+        if field_name not in self.values:
+            raise SecretSourceError(
+                "optional_field_missing" if field_name in self.optional_fields else "not_found",
+                f"No {field_name} field",
+            )
         return self.values[field_name]
 
     def unlock(self, inputs: Mapping[str, str]) -> SourceStatus:
@@ -335,6 +341,40 @@ def test_environment_gives_every_field_for_a_name_or_one_field_for_its_variable(
     assert one is not None and one[0] == {"GITHUB_PASSWORD": PASSWORD}
     assert secrets.environment(SessionAddress(None, "main", "s1"), "PATH") is None
     assert "GITHUB_PASSWORD" in secrets.environment_names(SessionAddress(None, "main", "s1"))
+
+
+def test_source_environment_skips_only_absent_optional_fields(tmp_path: Path) -> None:
+    secrets = _secrets(tmp_path)
+    source = FakeSource({"username": "admin", "password": PASSWORD})
+    source.optional_fields = {"totp", "notes"}
+    secrets.replace_sources([source])
+    secrets.create(
+        name="db",
+        kind="login",
+        values={},
+        actor="user",
+        agents=["main"],
+        source=SourceBinding("vault", "entry-1"),
+        source_fields={name: name for name in ("username", "password", "totp", "notes")},
+    )
+    address = SessionAddress(None, "main", "s1")
+    result = secrets.environment(address, "DB")
+    assert result is not None and result[0] == {"DB_USERNAME": "admin", "DB_PASSWORD": PASSWORD}
+    assert [use.field for use in result[1]] == ["username", "password"]
+    for value in ("DB_TOTP", "DB_NOTES"):
+        with pytest.raises(SecretUseError) as missing:
+            secrets.environment(address, value)
+        assert missing.value.code == "optional_field_missing"
+    with pytest.raises(SecretUseError):
+        secrets.substitute(address, "{{secret:DB.totp}}", "terminal")
+    del source.values["password"]
+    with pytest.raises(SecretUseError) as mandatory:
+        secrets.environment(address, "DB")
+    assert mandatory.value.code == "source_failed"
+    source.locked = True
+    with pytest.raises(SecretUseError) as locked:
+        secrets.environment(address, "DB")
+    assert locked.value.code == "source_failed"
 
 
 def test_source_bound_secrets_resolve_at_use_and_stay_masked(tmp_path: Path) -> None:

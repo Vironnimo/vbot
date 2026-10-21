@@ -216,6 +216,8 @@ describe('Settings Agent Secrets panel', () => {
           fields: [
             { name: 'UserName', concealed: false, value: 'me@example.com' },
             { name: 'Password', concealed: true },
+            { name: 'totp', concealed: true, optional: true },
+            { name: 'notes', concealed: true, optional: true },
           ],
         },
       ],

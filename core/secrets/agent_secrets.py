@@ -101,6 +101,7 @@ SecretUseFailure = Literal[
     "unknown_field",
     "sink_not_allowed",
     "source_failed",
+    "optional_field_missing",
 ]
 ChangeKind = Literal["created", "changed", "deleted"]
 
@@ -789,10 +790,21 @@ class AgentSecrets:
                     "Tell the user if this use is needed; they can allow it in "
                     "Settings -> Secrets.",
                 )
-            values = {variables[item.name]: self.field_value(secret, item) for item in fields}
-            uses = [SecretUse(secret.name, item.name, "environment", secret) for item in fields]
+            values: dict[str, str] = {}
+            uses: list[SecretUse] = []
             for item in fields:
+                try:
+                    values[variables[item.name]] = self.field_value(secret, item)
+                except SecretUseError as error:
+                    if secret.name == wanted and error.code == "optional_field_missing":
+                        continue
+                    raise
+                uses.append(SecretUse(secret.name, item.name, "environment", secret))
                 self._record_use(secret, item.name, "environment", address)
+            if not values:
+                raise SecretUseError(
+                    "source_failed", f"{secret.name} has no available fields in its Secret Source."
+                )
             if consume:
                 self.consume(address, uses, passed_only=passed_only)
             return values, uses
@@ -875,7 +887,9 @@ class AgentSecrets:
                 else "Tell the user what failed."
             )
             raise SecretUseError(
-                "source_failed",
+                "optional_field_missing"
+                if error.code == "optional_field_missing"
+                else "source_failed",
                 f"{source.label} did not deliver {secret.name}.{target.name}: {error} {hint}",
             ) from None
         self.remember_value(value, secret.reference(target.name))

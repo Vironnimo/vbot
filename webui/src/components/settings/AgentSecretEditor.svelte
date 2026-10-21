@@ -106,7 +106,10 @@
   let included = $state(
     untrack(() =>
       (binding?.entry?.fields ?? [])
-        .filter((field) => normalizeFieldName(field.name))
+        .filter(
+          (field) =>
+            normalizeFieldName(field.name) && (!field.optional || field.value),
+        )
         .map((field) => field.name),
     ),
   );
