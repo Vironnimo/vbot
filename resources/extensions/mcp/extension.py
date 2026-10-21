@@ -34,7 +34,7 @@ from core.tools.tools import (
     tool_success,
 )
 
-from ._arguments import browse_normalizer
+from ._arguments import browse_normalizer, connection_display
 from ._catalog import CatalogSummaries, catalog_summary
 from ._connectors import ConnectorCatalog, load_connectors
 from ._definitions import (
@@ -274,6 +274,7 @@ class MCPService:
         follower_hint = (
             MCP_MESSAGES["disconnected"].format(connection=runner.id) if enabled else unavailable
         )
+        normalizer = browse_normalizer(parent)
         declarations = [
             {
                 "name": parent,
@@ -286,7 +287,8 @@ class MCPService:
                 "parallel_safe": False,
                 "open_input_schema": True,
                 "requires_opt_in": True,
-                "argument_normalizer": browse_normalizer(parent),
+                "argument_normalizer": normalizer,
+                "display": connection_display(normalizer),
                 "announce_changes": ["parameters.target"],
                 # Secret values leave the machine to this server only where allowed.
                 "secret_sinks": {"arguments": "external_tools"},

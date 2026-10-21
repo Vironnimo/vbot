@@ -11,6 +11,7 @@ from resources.extensions.mcp._calls import SubscriptionEndedError
 from resources.extensions.mcp._tasks import TaskEndedError
 from resources.extensions.mcp.client import InvocationNotSentError
 from tests.resources.extensions.mcp.mcp_test_support import (
+    CONNECTION_TOOL,
     context,
     dispatch,
     model_text,
@@ -604,3 +605,28 @@ async def test_a_request_that_never_ran_says_why(
     result = await dispatch(registry, host, {"action": "search"})
 
     assert model_text(result) == f"Error ({expected}"
+
+
+@pytest.mark.parametrize(
+    ("arguments", "summary"),
+    [
+        (
+            {"action": "call", "target": f"tool:inspect:{'a' * 24}", "arguments": {}},
+            "call · inspect",
+        ),
+        ({"tool": "inspect", "args": {"value": "x"}}, "call · inspect"),
+        (
+            {"action": "describe", "targets": ["tool:inspect", "prompt:review"]},
+            "describe · inspect, review",
+        ),
+        ({"action": "search", "query": "render scene"}, "search · render scene"),
+        ({"action": "search", "kind": "operation"}, "search · operation"),
+        ({"action": "read", "result_id": "res_abc", "pointer": "/content"}, "read"),
+        # A call the normalizer refuses shows as written.
+        ({"target": "inspect"}, ""),
+    ],
+)
+def test_the_connection_row_names_its_action_and_target(context_service, arguments, summary):
+    _service, registry, _runner, _calls = context_service
+
+    assert registry.get(CONNECTION_TOOL).display.summary(arguments) == summary

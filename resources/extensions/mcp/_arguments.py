@@ -17,8 +17,10 @@ from typing import Any
 
 from core.tools.call_syntax import normalize_call_arguments
 from core.tools.contracts import ToolContractError, compile_tool_contract
+from core.tools.tools import ToolDisplay
 
 from ._definitions import MCP_PARAMETERS, describe_call
+from ._discovery import target_name
 
 _FIELDS = tuple(MCP_PARAMETERS["properties"])
 
@@ -382,3 +384,39 @@ class _Browse:
 def browse_normalizer(tool: str) -> Callable[[Any], Any]:
     """Return the ``argument_normalizer`` of the connection Tool named *tool*."""
     return _Browse(tool)
+
+
+def connection_display(normalizer: Callable[[Any], Any]) -> ToolDisplay:
+    """The connection Tool's row in the user's view: its action, then what it names.
+
+    The row sees the call as the Agent wrote it, so it reads it through the
+    Tool's *normalizer*; a call the normalizer refuses shows as written.
+    """
+
+    def summary(arguments: dict[str, Any]) -> str:
+        try:
+            normalized = normalizer(arguments)
+        except ToolContractError:
+            normalized = arguments
+        if not isinstance(normalized, dict) or not _is_text(normalized.get("action")):
+            return ""
+        action = normalized["action"].strip()
+        detail = ""
+        if action == "call" and _is_text(normalized.get("target")):
+            detail = target_name(normalized["target"])
+        elif action == "describe" and isinstance(normalized.get("targets"), list):
+            detail = ", ".join(
+                target_name(item) for item in normalized["targets"] if _is_text(item)
+            )
+        elif action == "search":
+            detail = next(
+                (
+                    normalized[key].strip()
+                    for key in ("query", "kind")
+                    if _is_text(normalized.get(key))
+                ),
+                "",
+            )
+        return " · ".join(part for part in (action, detail) if part)
+
+    return ToolDisplay(summary_builder=summary)

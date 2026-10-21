@@ -594,6 +594,11 @@ def invalid_target_arguments(entry: dict[str, Any], problem: str) -> dict[str, A
     )
 
 
+def target_name(target: str) -> str:
+    """The item *target* names, without its kind and fingerprint."""
+    return _parse_target(target)[1] or target.strip()
+
+
 def _parse_target(target: str) -> tuple[str | None, str, str | None]:
     """Split ``kind:name:fingerprint``; kind and fingerprint may be absent."""
     parts = target.split(":")
