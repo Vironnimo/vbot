@@ -11,19 +11,20 @@ const OFFSET = 4;
 // The scroll area's default cap; `computePanelPosition`'s `maxHeight` moves it.
 const MAX_HEIGHT = 240;
 const FLIP_THRESHOLD = 200;
-const STATUS_DOTS = new Set(['idle', 'running', 'unread']);
+const STATUS_DOTS = new Set(['idle', 'running', 'waiting', 'unread']);
 
 /**
  * Optional per-option decorations shared by both Dropdown variants:
- * `statusDot` ('idle' | 'running' | 'unread') renders the app's status dot
- * before the label (also on the trigger for the selected option), `badge` a
- * compact count pill after it, `ariaLabel` replaces the option's
+ * `statusDot` ('idle' | 'running' | 'waiting' | 'unread') renders the app's
+ * status dot before the label (also on the trigger for the selected option),
+ * `badge` a compact count pill after it, `ariaLabel` replaces the option's
  * accessible name when the visible label alone omits that status, and
- * `tooltip` (quick-tooltip content, lib/tooltip.js) describes the option on
- * hover. `marker` ({ label }) renders a small muted check right after the
- * label (OptionMarker.svelte): `label` is its accessible name, part of the
- * option's own name, and its hover tooltip. Option tooltips open beside the
- * list so they never cover the neighbouring options.
+ * `tooltip` (quick-tooltip content, lib/tooltip.js, or a function building it
+ * at each hover) describes the option on hover. `marker` ({ label }) renders
+ * a small muted check right after the label (OptionMarker.svelte): `label` is
+ * its accessible name, part of the option's own name, and its hover tooltip.
+ * Option tooltips open beside the list so they never cover the neighbouring
+ * options.
  */
 export function optionDecorations(option) {
   const statusDot = option?.statusDot;
@@ -51,6 +52,9 @@ function optionMarker(marker) {
 }
 
 function sideTooltip(content) {
+  if (typeof content === 'function') {
+    return () => sideTooltip(content());
+  }
   if (typeof content === 'string') {
     return content ? { text: content, placement: 'right' } : '';
   }

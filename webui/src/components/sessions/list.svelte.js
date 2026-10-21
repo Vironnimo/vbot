@@ -38,6 +38,7 @@ export function createSessionList(context) {
       sessionState.sessions,
       context.liveActivity,
       context.agentId,
+      context.sessionActivity,
     ),
   );
   let visibleSessions = $derived(

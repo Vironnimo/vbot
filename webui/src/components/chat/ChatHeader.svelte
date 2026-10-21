@@ -20,7 +20,7 @@
   const AGENT_PANEL_MIN_WIDTH = 260;
   // The roster's inline padding, which leaves room for focus rings.
   const ROSTER_INSET = 2;
-  const ACTIVITY_STATUSES = new Set(['running', 'unread']);
+  const ACTIVITY_STATUSES = new Set(['running', 'waiting', 'unread']);
   // The Project groups this browser opened or closed in the picker.
   const EXPANDED_PROJECTS_KEY = 'vbot.chat.agentPicker.expandedProjects';
 
@@ -33,8 +33,10 @@
     // model, thinkingEffort }] }]. A Project without members is left out.
     projectGroups = [],
     // Per-Agent activity keyed by Agent address (a bare Identity Agent id or
-    // `agent@project`): { status: 'running' | 'unread' | 'idle',
-    // unreadCount, latestUnreadAt }.
+    // `agent@project`): { status: 'running' | 'waiting' | 'unread' | 'idle',
+    // unreadCount, latestUnreadAt, work }. `work` is what the Agent's working
+    // or waiting Sessions do together (`agentSessionActivity`), null while
+    // they are idle.
     agentActivity = {},
     // The address of the Agent whose Session is shown.
     selectedAddress = '',
@@ -286,14 +288,18 @@
       latestUnreadAt: Number(activity.latestUnreadAt) || 0,
       index,
       label: agentActivityLabel(fullName, status, unreadCount),
-      tooltip: agentActivityTooltip({
-        name: fullName,
-        id,
-        status,
-        unreadCount,
-        model,
-        thinkingEffort,
-      }),
+      // Built at each hover, so the work's span is current.
+      tooltip: () =>
+        agentActivityTooltip({
+          name: fullName,
+          id,
+          status,
+          unreadCount,
+          work: activity.work ?? null,
+          nowMs: Date.now(),
+          model,
+          thinkingEffort,
+        }),
     };
   }
 
@@ -310,25 +316,26 @@
     };
   }
 
-  // A closed group shows what its Agents do: running wins over unread.
+  // A closed group shows what its Agents do: running wins over waiting, and
+  // waiting over unread.
   function groupActivity(entries) {
     const unreadCount = entries.reduce(
       (sum, entry) => sum + entry.unreadCount,
       0,
     );
-    const status = entries.some((entry) => entry.status === 'running')
-      ? 'running'
-      : entries.some((entry) => entry.status === 'unread')
-        ? 'unread'
-        : 'idle';
+    const status =
+      ['running', 'waiting', 'unread'].find((candidate) =>
+        entries.some((entry) => entry.status === candidate),
+      ) ?? 'idle';
     return { status, unreadCount };
   }
 
-  // Picker order: running Agents, then unread ones (newest result first),
-  // then the rest in roster order.
+  // Picker order: running Agents, then waiting ones, then unread ones (newest
+  // result first), then the rest in roster order.
   function byActivity(entries) {
     return [
       ...entries.filter((entry) => entry.status === 'running'),
+      ...entries.filter((entry) => entry.status === 'waiting'),
       ...newestResultFirst(
         entries.filter((entry) => entry.status === 'unread'),
       ),
@@ -402,6 +409,18 @@
         });
       }
       return t('chat.agentActivity.running', { name });
+    }
+    if (status === 'waiting') {
+      if (unreadCount === 1) {
+        return t('chat.agentActivity.waitingUnreadOne', { name });
+      }
+      if (unreadCount > 1) {
+        return t('chat.agentActivity.waitingUnreadCount', {
+          name,
+          count: unreadCount,
+        });
+      }
+      return t('chat.agentActivity.waiting', { name });
     }
     if (status === 'unread') {
       if (unreadCount === 1) {

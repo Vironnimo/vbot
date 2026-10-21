@@ -1,4 +1,9 @@
 import { isTerminalRunEvent } from '../api.js';
+import {
+  SESSION_WAITING,
+  SESSION_WORKING,
+  agentSessionActivity,
+} from '../sessionActivity.js';
 
 export const CHAT_STATUS_IDLE = 'idle';
 
@@ -15,6 +20,8 @@ export const CHAT_STATUS_INTERRUPTED = 'interrupted';
 const AGENT_ACTIVITY_IDLE = 'idle';
 
 const AGENT_ACTIVITY_RUNNING = 'running';
+
+const AGENT_ACTIVITY_WAITING = 'waiting';
 
 const AGENT_ACTIVITY_UNREAD = 'unread';
 
@@ -67,6 +74,11 @@ export function createChatState() {
     // map joined with what this Chat's stop and output reads learned. A
     // command shows only in the Session that started it, never in a fork.
     commandStatuses: {},
+    // App's server-owned Session activity (`sessionActivity.js`): working
+    // and waiting Sessions by Session key; null until the server reported
+    // it. Agent activity reads it, and unread results count only for idle
+    // Sessions.
+    sessionActivity: null,
   };
 }
 
@@ -338,29 +350,36 @@ export function applySessionCompletionActivity(sessionState, source) {
   return sessionState;
 }
 
+// An Agent's status from the server's Session activity, in strict priority:
+// `running` while one of its Sessions works (and counts toward Agent
+// activity), `waiting` while one waits, `unread` while an idle Session other
+// than the displayed one holds an unread result, else `idle`.
 export function agentActivityStatus(state, agentId, displayedSessionKey = '') {
-  const sessions = Object.values(state?.sessions ?? {}).filter(
-    (sessionState) => sessionState.agentId === agentId,
-  );
-  if (
-    sessions.some(
-      (sessionState) =>
-        isRunActive(sessionState) &&
-        runContributesToAgentActivity(sessionState),
-    )
-  ) {
+  const work = agentSessionActivity(state?.sessionActivity, agentId);
+  if (work?.state === SESSION_WORKING) {
     return AGENT_ACTIVITY_RUNNING;
   }
+  if (work?.state === SESSION_WAITING) {
+    return AGENT_ACTIVITY_WAITING;
+  }
   if (
-    sessions.some(
+    Object.values(state?.sessions ?? {}).some(
       (sessionState) =>
+        sessionState.agentId === agentId &&
         sessionState.key !== displayedSessionKey &&
-        sessionState.hasUnreadCompletion,
+        sessionState.hasUnreadCompletion &&
+        isSessionIdle(state, sessionState),
     )
   ) {
     return AGENT_ACTIVITY_UNREAD;
   }
   return AGENT_ACTIVITY_IDLE;
+}
+
+// A result is finished only once its Session reached idle: until then the
+// Session shows its work, not the unread result.
+function isSessionIdle(state, sessionState) {
+  return !state?.sessionActivity?.[sessionState.key];
 }
 
 export function newestUnreadSessionForAgent(state, agentId) {
@@ -373,8 +392,8 @@ export function newestUnreadSessionForAgent(state, agentId) {
   return unreadSessions[0] ?? null;
 }
 
-// Counts an Agent's Sessions holding an unread result (the Sessions Agent
-// navigation can land on) and the time of the newest one, in epoch
+// Counts an Agent's idle Sessions holding an unread result (the Sessions
+// Agent navigation can land on) and the time of the newest one, in epoch
 // milliseconds (0 when unknown). The displayed Session is excluded, like in
 // agentActivityStatus, because its result is being read.
 export function agentUnreadResults(state, agentId, displayedSessionKey = '') {
@@ -396,7 +415,8 @@ function unreadResultSessions(state, agentId) {
     (sessionState) =>
       sessionState.agentId === agentId &&
       sessionState.hasUnreadCompletion &&
-      sessionState.unreadRunId,
+      sessionState.unreadRunId &&
+      isSessionIdle(state, sessionState),
   );
 }
 
@@ -643,10 +663,6 @@ export function contextCompactionState(sessionState) {
     }
   }
   return compacting ? 'running' : 'unavailable';
-}
-
-function runContributesToAgentActivity(sessionState) {
-  return sessionState?.currentRun?.contributesToAgentActivity !== false;
 }
 
 // Reset a session's live Run state when freshly loaded History has confirmed

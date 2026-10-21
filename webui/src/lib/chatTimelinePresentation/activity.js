@@ -105,13 +105,24 @@ export function reasoningDurationLabel(child, nowMs = Date.now()) {
 // timestamp. File-change statistics are appended to this same line via
 // `changeStatsParts`, while transient problem notices (provider liveness)
 // render on a separate line below via `runFooterNotice` so they can never
-// push the stable parts onto a wrap line.
-export const runFooterParts = (assistantRun, nowMs = Date.now()) => {
+// push the stable parts onto a wrap line. `waiting` marks the Session's
+// latest Run while the Session waits for work that will wake it (Session
+// activity): the duration stays the Run's own, followed by "(Waiting)".
+export const runFooterParts = (
+  assistantRun,
+  nowMs = Date.now(),
+  { waiting = false } = {},
+) => {
   const parts = [];
   parts.push(runStatusLabel(assistantRun.status));
   const duration = formatRunDuration(assistantRun, nowMs);
+  const waitingMark = waiting && assistantRun.status !== 'running';
   if (duration) {
-    parts.push(duration);
+    parts.push(
+      waitingMark ? t('chat.runDurationWaiting', { duration }) : duration,
+    );
+  } else if (waitingMark) {
+    parts.push(t('chat.runWaiting'));
   }
   const iterationLabel = labelForRunIterations(assistantRun);
   if (iterationLabel) {

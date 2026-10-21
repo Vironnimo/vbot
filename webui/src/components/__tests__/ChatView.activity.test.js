@@ -37,6 +37,8 @@ import {
 } from './ChatView.support.js';
 import { createChatViewParentHarness } from './ChatView.parent.support.svelte.js';
 import { createRunEventFeed } from '../../lib/runEventFeed.svelte.js';
+import { sessionActivityFromSnapshot } from '../../lib/sessionActivity.js';
+import { reactiveProps } from './reactiveProps.support.svelte.js';
 
 const beta = (currentSessionId) =>
   createAgent({
@@ -51,26 +53,47 @@ describe('ChatView Agent activity', () => {
   const chat = setupChatViewTestSuite();
 
   describe('personal Agents', () => {
-    it('shows background Agent activity as running without selecting that Agent', async () => {
+    it('shows background Agent work from Session activity without selecting that Agent', async () => {
       const agents = [createAgent(), beta('session-beta')];
       rpcMock.mockImplementation(createChatRpcMock({ agents }));
-      await chat.mountChat({ sharedAgents: agents });
+      const props = reactiveProps({
+        sharedAgents: agents,
+        sessionActivity: null,
+      });
+      await chat.mountChat(props);
+      const betaWork = (state, fields = {}) =>
+        sessionActivityFromSnapshot([
+          {
+            project_id: null,
+            agent_id: 'beta',
+            session_id: 'session-beta',
+            state,
+            work_started_at: '2026-05-09T00:00:00+00:00',
+            ...fields,
+          },
+        ]);
 
-      testRunStreamRefs[0].handleServerEvent(
-        runServerEvent('run_started', {
-          sequence: 1,
-          run_id: 'run-beta',
-          agent_id: 'beta',
-          session_id: 'session-beta',
-          output: { status: 'running' },
-        }),
-      );
+      props.sessionActivity = betaWork('working');
       flushSync();
-
       expect(selectedAgentName()).toBe('Alpha');
       expect(
         agentPill('Beta')?.querySelector('.tab-indicator--running'),
       ).toBeTruthy();
+
+      props.sessionActivity = betaWork('waiting', {
+        waiting_for: { subagents: 1, commands: 0, results: 0 },
+      });
+      flushSync();
+      expect(agentPill('Beta').getAttribute('aria-label')).toBe(
+        t('chat.agentActivity.waiting', { name: 'Beta' }),
+      );
+      expect(
+        agentPill('Beta').querySelector('.tab-indicator--waiting'),
+      ).toBeTruthy();
+
+      props.sessionActivity = {};
+      flushSync();
+      expect(agentPill('Beta').querySelector('.tab-indicator')).toBeNull();
     });
 
     it.each([

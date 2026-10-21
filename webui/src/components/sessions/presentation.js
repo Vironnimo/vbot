@@ -2,6 +2,10 @@ import { asText as asSharedText } from '$lib/values.js';
 import { activeLocaleTag, t } from '$lib/i18n.js';
 import { formatMoment } from '$lib/timeText.js';
 import {
+  sessionActivityLabel as activityLabel,
+  sessionActivityText,
+} from '$lib/sessionActivity.js';
+import {
   sessionDisplayName,
   sessionParentReference,
 } from '$lib/sessionListView.js';
@@ -113,6 +117,29 @@ function originRows(origin, { label, sessions, agents }) {
 }
 
 // The unread marker: what the unread Run ended with and when.
+// A working or waiting Session row's work in words: "Working" or what it
+// waits for ("Waiting for 2 Sub-Agents").
+export function sessionActivityLabel(session) {
+  return activityLabel(rowWork(session));
+}
+
+// The status card of a working or waiting Session row: its work and the span
+// so far ("Waiting for 1 command · 4m 12s").
+export function sessionActivityDetails(session, { nowMs = Date.now() } = {}) {
+  return {
+    text: sessionActivityText(rowWork(session), nowMs),
+    placement: 'right',
+  };
+}
+
+function rowWork(session) {
+  return {
+    state: session.activity_state,
+    workStartedAt: session.work_started_at,
+    waitingFor: session.waiting_for,
+  };
+}
+
 export function unreadRunDetails(session, { nowMs = Date.now() } = {}) {
   const status = asText(session.unread_run_status);
   return {

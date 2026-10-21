@@ -14,6 +14,7 @@ import {
   saveSessionListFilters,
   visibleSessionsForSelection,
 } from '../sessionListView.js';
+import { sessionActivityFromSnapshot } from '../sessionActivity.js';
 
 describe('Session filter storage', () => {
   afterEach(() => vi.unstubAllGlobals());
@@ -83,6 +84,9 @@ describe('sessionListView helpers', () => {
         platform_conv_id: '12345',
         source_channel_id: 'tg-assistant',
         last_active_at: '2026-05-15T10:00:00+00:00',
+        activity_state: 'waiting',
+        work_started_at: '2026-05-15T09:58:00+00:00',
+        waiting_for: { subagents: 0, commands: 2, results: 0 },
       },
       {
         id: 'plain-session',
@@ -107,7 +111,8 @@ describe('sessionListView helpers', () => {
       is_channel_session: false,
       latest_completion_run_id: 'run-one',
       has_unread_completion: true,
-      has_active_run: false,
+      activity_state: 'idle',
+      work_started_at: null,
       unread_run_id: 'run-one',
       unread_run_status: 'completed',
     });
@@ -115,64 +120,89 @@ describe('sessionListView helpers', () => {
       display_name: 'telegram/12345',
       source_channel_id: 'tg-assistant',
       is_channel_session: true,
+      activity_state: 'waiting',
+      work_started_at: '2026-05-15T09:58:00+00:00',
+      waiting_for: { subagents: 0, commands: 2, results: 0 },
     });
   });
 
   it('overlays live activity by complete agent address and Session id', () => {
     const sessions = applySessionList(createSessionListState(), [
-      { id: 'shared-id', has_active_run: false },
+      { id: 'shared-id' },
       {
         id: 'shared-id',
         agent_address: 'reviewer@project',
         has_unread_completion: false,
       },
-      { id: 'server-only', has_active_run: true },
+      {
+        id: 'server-only',
+        activity_state: 'working',
+        work_started_at: '2026-08-31T11:00:00+00:00',
+      },
     ]).sessions;
-
-    const projected = overlayLiveSessionActivity(
-      sessions,
-      [
-        {
-          agent_address: 'alpha',
-          session_id: 'shared-id',
-          has_active_run: true,
-          has_unread_completion: false,
-        },
-        {
-          agent_address: 'reviewer@project',
-          session_id: 'shared-id',
-          has_active_run: false,
-          has_unread_completion: true,
-          latest_completion_run_id: 'run-two',
-          unread_run_id: 'run-two',
-          unread_run_status: 'completed',
-          unread_run_at: '2026-08-31T12:00:00+00:00',
-        },
-      ],
-      'alpha',
-    );
-
-    expect(
+    const unread = [
+      {
+        agent_address: 'reviewer@project',
+        session_id: 'shared-id',
+        has_unread_completion: true,
+        latest_completion_run_id: 'run-two',
+        unread_run_id: 'run-two',
+        unread_run_status: 'completed',
+        unread_run_at: '2026-08-31T12:00:00+00:00',
+      },
+    ];
+    const rowOf = (projected, agentAddress) =>
       projected.find(
         (session) =>
-          session.id === 'shared-id' && session.agent_address === null,
-      ),
-    ).toMatchObject({
-      id: 'shared-id',
-      has_active_run: true,
-      has_unread_completion: false,
-    });
-    expect(
-      projected.find((session) => session.agent_address === 'reviewer@project'),
-    ).toMatchObject({
-      id: 'shared-id',
-      has_active_run: false,
+          session.id === 'shared-id' && session.agent_address === agentAddress,
+      );
+
+    // Before App holds Session activity, rows keep what the server listed.
+    const beforeHello = overlayLiveSessionActivity(sessions, unread, 'alpha');
+    expect(rowOf(beforeHello, null)).toBe(rowOf(sessions, null));
+    expect(rowOf(beforeHello, 'reviewer@project')).toMatchObject({
       has_unread_completion: true,
       unread_run_id: 'run-two',
+      activity_state: 'idle',
+    });
+    expect(
+      beforeHello.find((session) => session.id === 'server-only'),
+    ).toMatchObject({ activity_state: 'working' });
+
+    // App's Session activity names each row by its full Session key; a row
+    // it does not hold is idle.
+    const activity = sessionActivityFromSnapshot([
+      {
+        project_id: null,
+        agent_id: 'alpha',
+        session_id: 'shared-id',
+        state: 'waiting',
+        work_started_at: '2026-08-31T11:30:00+00:00',
+        waiting_for: { subagents: 2, commands: 1, results: 0 },
+      },
+    ]);
+    const projected = overlayLiveSessionActivity(
+      sessions,
+      unread,
+      'alpha',
+      activity,
+    );
+    expect(rowOf(projected, null)).toMatchObject({
+      activity_state: 'waiting',
+      work_started_at: '2026-08-31T11:30:00+00:00',
+      waiting_for: { subagents: 2, commands: 1, results: 0 },
+    });
+    expect(rowOf(projected, 'reviewer@project')).toMatchObject({
+      activity_state: 'idle',
+      has_unread_completion: true,
     });
     expect(
       projected.find((session) => session.id === 'server-only'),
-    ).toMatchObject({ has_active_run: true });
+    ).toMatchObject({ activity_state: 'idle', work_started_at: null });
+    // A row whose live activity is unchanged keeps its identity.
+    expect(
+      rowOf(overlayLiveSessionActivity(projected, [], 'alpha', activity), null),
+    ).toBe(rowOf(projected, null));
   });
 
   it.each([

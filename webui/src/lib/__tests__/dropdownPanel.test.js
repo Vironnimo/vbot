@@ -134,6 +134,17 @@ describe('optionDecorations', () => {
         tooltip: { text: 'Verified', placement: 'right' },
       },
     });
+    // A tooltip built at each hover keeps its side placement.
+    const built = optionDecorations({
+      statusDot: 'waiting',
+      tooltip: () => ({ title: 'Beta', rows: [] }),
+    });
+    expect(built.statusDot).toBe('waiting');
+    expect(built.tooltip()).toEqual({
+      title: 'Beta',
+      rows: [],
+      placement: 'right',
+    });
     expect(
       optionDecorations({
         statusDot: 'blinking',

@@ -206,6 +206,72 @@ describe('App controller', () => {
     }
   });
 
+  it('keeps the non-idle Session activity of each hello and applies its changes by Session key', async () => {
+    const { controller, state } = setup();
+    const row = (agentId, projectId, sessionId, activity, extra = {}) => ({
+      project_id: projectId,
+      agent_id: agentId,
+      session_id: sessionId,
+      state: activity,
+      work_started_at: activity === 'idle' ? null : '2026-10-21T10:00:00+00:00',
+      waiting_for: { subagents: 0, commands: 0, results: 0 },
+      ...extra,
+    });
+    const hello = (rows) =>
+      controller.handleServerEvent({
+        type: 'connection_ready',
+        active_runs: [],
+        session_activity: rows,
+      });
+    const changed = (payload) =>
+      controller.handleServerEvent({
+        type: 'session_activity_changed',
+        payload,
+      });
+
+    expect(state.sessionActivity).toBeNull();
+    await hello([
+      row('alpha', null, 'one', 'working', {
+        contributes_to_agent_activity: false,
+      }),
+      row('builder', 'web', 'two', 'waiting', {
+        waiting_for: { subagents: 2, commands: 1, results: 0 },
+      }),
+    ]);
+    expect(state.sessionActivity).toEqual({
+      'alpha::one': {
+        agentAddress: 'alpha',
+        sessionId: 'one',
+        state: 'working',
+        workStartedAt: '2026-10-21T10:00:00+00:00',
+        waitingFor: { subagents: 0, commands: 0, results: 0 },
+        contributesToAgentActivity: false,
+      },
+      'builder@web::two': {
+        agentAddress: 'builder@web',
+        sessionId: 'two',
+        state: 'waiting',
+        workStartedAt: '2026-10-21T10:00:00+00:00',
+        waitingFor: { subagents: 2, commands: 1, results: 0 },
+        contributesToAgentActivity: true,
+      },
+    });
+
+    await changed(row('builder', 'web', 'two', 'working'));
+    expect(state.sessionActivity['builder@web::two'].state).toBe('working');
+    await changed({
+      ...row('alpha', null, 'one', 'idle'),
+      finished_work: { duration_ms: 1000 },
+    });
+    expect(Object.keys(state.sessionActivity)).toEqual(['builder@web::two']);
+
+    // Every hello replaces what the previous connection reported.
+    await hello([row('gamma', null, 'three', 'waiting')]);
+    expect(Object.keys(state.sessionActivity)).toEqual(['gamma::three']);
+    await hello(undefined);
+    expect(state.sessionActivity).toEqual({});
+  });
+
   it('keeps the latest pushed Recall index status', async () => {
     const { controller, state } = setup();
     expect(state.recallIndexStatus).toBeNull();
@@ -375,7 +441,14 @@ describe('App controller', () => {
 
   it('applies an Agent rename mapping before reloading', async () => {
     const onAgentIdChanged = vi.fn();
-    const { actions, controller } = setup({ onAgentIdChanged });
+    const { actions, controller, state } = setup({ onAgentIdChanged });
+    await controller.handleServerEvent({
+      type: 'connection_ready',
+      active_runs: [],
+      session_activity: [
+        { agent_id: 'alpha', session_id: 'one', state: 'working' },
+      ],
+    });
 
     await controller.handleServerEvent(
       resourceChanged('agents', {
@@ -390,6 +463,9 @@ describe('App controller', () => {
       }),
     );
 
+    // The renamed Agent's working Session moves to its new address.
+    expect(Object.keys(state.sessionActivity)).toEqual(['analyst::one']);
+    expect(state.sessionActivity['analyst::one'].agentAddress).toBe('analyst');
     expect(onAgentIdChanged).toHaveBeenNthCalledWith(1, 'alpha', 'researcher');
     expect(onAgentIdChanged).toHaveBeenNthCalledWith(
       2,

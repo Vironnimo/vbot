@@ -55,6 +55,9 @@
     subAgentStatuses = {},
     backgroundCommandStatuses = {},
     commandStatuses = {},
+    // The Session waits for work that will wake it (Session activity); its
+    // latest Run's footer says so.
+    sessionWaiting = false,
     onNavigateToSubAgent = () => {},
     // Open in split view for Sub-Agent links (`{ label, open(target) }`, with
     // the link's `{ agentId, sessionId }` target); null offers no link menu.
@@ -81,6 +84,9 @@
 
   const timelineItems = $derived(
     timelineRowsForViewport(sourceTimelineItems, chatWorkingMode),
+  );
+  const latestRunItemId = $derived(
+    timelineItems.findLast((item) => item.type === 'assistant_run')?.id ?? null,
   );
 
   let nowMs = $state(Date.now());
@@ -627,6 +633,7 @@
         {subAgentStatuses}
         {backgroundCommandStatuses}
         {commandStatuses}
+        sessionWaiting={sessionWaiting && item.id === latestRunItemId}
         {nowMs}
         {isReasoningOpen}
         onReasoningOpenChange={setReasoningOpen}
