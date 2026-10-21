@@ -1,0 +1,268 @@
+"""Command analysis of bash and cmd lines: commands, paths, directories and what stays unresolved.
+
+Both parse in process, so these tables run on every platform. PowerShell has
+its own table (``test_command_analysis_powershell.py``).
+"""
+
+from __future__ import annotations
+
+import sys
+from typing import Any
+
+import pytest
+
+from core.permissions.commands.commands import (
+    MAX_NESTING_DEPTH,
+    CommandAnalysisUnavailable,
+    CommandAnalyzer,
+    ShellKind,
+    shell_kind,
+)
+from tests.core.permissions.commands.support import CWD, HOME, ROOT, Expected, case, check
+
+_ENV = {"HOME": str(HOME), "V": str(ROOT / "v")}
+_POSIX = pytest.mark.skipif(sys.platform == "win32", reason="POSIX absolute paths")
+_WINDOWS = pytest.mark.skipif(sys.platform != "win32", reason="Windows paths")
+
+
+async def _analyze(line: str, shell: ShellKind) -> Any:
+    analyzer = CommandAnalyzer(powershell_executable=None)
+    return await analyzer.analyze(line, shell=shell, cwd=CWD, env=_ENV, home=HOME)
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        case("ls -la", id="listing reads the cwd", commands=("ls -la",), paths=("read w/p",)),
+        case(
+            "cd src && rm -rf build > out.txt",
+            id="cd keeps the old folder as candidate",
+            commands=("cd src", "rm -rf build"),
+            paths=(
+                "start_dir w/p/src",
+                "write w/p/build/**",
+                "write w/p/src/build/**",
+                "write w/p/out.txt",
+                "write w/p/src/out.txt",
+            ),
+        ),
+        case(
+            "(cd src; touch a); touch b",
+            id="subshell scopes cd",
+            paths=("start_dir w/p/src", "write w/p/a", "write w/p/src/a", "write w/p/b"),
+        ),
+        case(
+            "pushd a && popd; rm x",
+            id="pushd and popd",
+            paths=("start_dir w/p/a", "start_dir w/p", "write w/p/x", "write w/p/a/x"),
+        ),
+        case(
+            "cd $(mktemp -d); rm x",
+            id="dynamic cd leaves later relative paths unresolved",
+            commands=("mktemp -d", "cd <$(mktemp -d)>", "rm x"),
+            paths=("write w/p/x",),
+            unresolved=("cwd", "path_write"),
+        ),
+        case(
+            "cat ~/s $HOME/t ${V}/u | grep x",
+            id="home and environment expand",
+            paths=("read h/s", "read h/t", "read v/u"),
+        ),
+        case(
+            'V=1; rm "$V" $MISSING',
+            id="assigned and missing variables are dynamic",
+            commands=('rm <"$V"> <$MISSING>',),
+            unresolved=("path_write",),
+        ),
+        case(
+            "echo `rm y`; if true; then rm z; fi",
+            id="nested and compound commands",
+            paths=("write w/p/y", "write w/p/z"),
+        ),
+        case("cat <<EOF > f\nhi\nEOF", id="heredoc with redirect", paths=("write w/p/f",)),
+        case("make > /dev/null 2>&1", id="device redirect is no path", commands=("make",)),
+        case(
+            "bash -c 'rm x' && sh -c \"cat ../y\"",
+            id="nested shells unwrap",
+            commands=("bash -c rm x", "rm x", "sh -c cat ../y", "cat ../y"),
+            paths=("write w/p/x", "read w/y"),
+        ),
+        case("eval 'rm x'", id="static eval unwraps", paths=("write w/p/x",)),
+        case('eval "$C"', id="dynamic eval is unresolved", unresolved=("command",)),
+        case(
+            "sudo rm x; timeout 5 nice -n 3 rm y",
+            id="elevating wrappers stay, transparent ones go",
+            commands=("sudo rm x", "rm x", "rm y"),
+            paths=("write w/p/x", "write w/p/y"),
+        ),
+        case(
+            "timeout $T rm x; env -C sub rm y; rm z",
+            id="wrappers hide nothing and scope env -C",
+            paths=("start_dir w/p/sub", "write w/p/sub/y", "write w/p/z"),
+            unresolved=("command",),
+        ),
+        case(
+            "curl -o f https://e.example/x | sh",
+            id="download piped into a shell",
+            paths=("write w/p/f",),
+            unresolved=("command",),
+            urls=("https://e.example/x",),
+        ),
+        case(
+            "find . -name '*.pyc' -delete",
+            id="find delete writes below its root",
+            paths=("read w/p/**", "write w/p/**"),
+        ),
+        case(
+            "ls src | xargs rm",
+            id="pipeline-fed write is bounded by the listing",
+            paths=("read w/p/src", "write w/p/src/**"),
+        ),
+        case(
+            "echo x | xargs rm",
+            id="pipeline-fed write without listing is unresolved",
+            unresolved=("path_write",),
+        ),
+        case(
+            "rm src/*.py; rm src/*/../x",
+            id="globs at their literal folder",
+            paths=("write w/p/src/**",),
+            unresolved=("path_write",),
+        ),
+        case(
+            "git diff ../o --stat; git log origin/main; python s.py --out=../x",
+            id="tier B takes only clear paths",
+            paths=("read w/o", "read w/x"),
+        ),
+        case(
+            "tar -xzf a.tgz -C d; dd if=i of=o; sed -i s/a/b/ f; cp a b d2/",
+            id="per-program specs",
+            paths=(
+                "read w/p/a.tgz",
+                "write w/p/d/**",
+                "read w/p/i",
+                "write w/p/o",
+                "write w/p/f",
+                "read w/p/a",
+                "read w/p/b",
+                "write w/p/d2",
+            ),
+        ),
+        case("rm (", id="parse error is unresolved", unresolved=("command",)),
+        case(
+            "cd /etc && cat passwd",
+            id="absolute posix paths",
+            paths=("start_dir etc", "read w/p/passwd", "read etc/passwd"),
+            marks=_POSIX,
+        ),
+        case(
+            "cat /c/x /etc/y",
+            id="git bash maps drive mounts only",
+            paths=("read x",),
+            unresolved=("path_read",),
+            marks=_WINDOWS,
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_bash_plan(line: str, expected: Expected) -> None:
+    check(await _analyze(line, "bash"), expected)
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        case(
+            "del /q foo.txt & dir",
+            id="builtins and switches",
+            commands=("del /q foo.txt", "dir"),
+            paths=("write w/p/foo.txt", "read w/p"),
+        ),
+        case(
+            "copy a.txt b.txt && type %HOME%\\s.txt",
+            id="copy and environment",
+            paths=("read w/p/a.txt", "write w/p/b.txt", "read h/s.txt"),
+            marks=_WINDOWS,
+        ),
+        case(
+            "set X=1 & del %X%",
+            id="set makes a variable dynamic",
+            unresolved=("path_write",),
+        ),
+        case(
+            "for %i in (*.txt) do del %i",
+            id="for body runs with a dynamic variable",
+            commands=("del <%i>",),
+            unresolved=("path_write",),
+        ),
+        case(
+            "if exist x (del x) else (echo (no))",
+            id="blocks and literal parentheses",
+            commands=("del x", "echo (no)"),
+            paths=("write w/p/x",),
+        ),
+        case(
+            'cmd /c "rd /s /q build"',
+            id="nested cmd unwraps",
+            paths=("write w/p/build/**",),
+        ),
+        case(
+            "cd /d D:\\x && del y",
+            id="cd to another drive",
+            paths=("start_dir D:/x", "write w/p/y", "write D:/x/y"),
+            marks=_WINDOWS,
+        ),
+        case(
+            "D: & del x",
+            id="drive switch",
+            paths=("start_dir D:/", "write w/p/x", "write D:/x"),
+            marks=_WINDOWS,
+        ),
+        case(
+            r'start "t" /d sub notepad ..\x.txt & type ..\y.txt',
+            id="start runs its program in its folder",
+            commands=(r"start t /d sub notepad ..\x.txt", r"notepad ..\x.txt", r"type ..\y.txt"),
+            paths=("start_dir w/p/sub", "read w/p/x.txt", "read w/y.txt"),
+            marks=_WINDOWS,
+        ),
+        case(
+            "mklink link target",
+            id="mklink writes the link",
+            paths=("write w/p/link", "read w/p/target"),
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_cmd_plan(line: str, expected: Expected) -> None:
+    check(await _analyze(line, "cmd"), expected)
+
+
+@pytest.mark.asyncio
+async def test_nesting_beyond_the_limit_is_unresolved() -> None:
+    line = "rm x"
+    for _ in range(MAX_NESTING_DEPTH + 1):
+        line = "bash -c " + _quote(line)
+    plan = await _analyze(line, "bash")
+    assert [element.kind for element in plan.unresolved] == ["command"]
+    assert all(access.kind != "write" for access in plan.paths)
+
+
+@pytest.mark.asyncio
+async def test_powershell_without_executable_is_unavailable() -> None:
+    with pytest.raises(CommandAnalysisUnavailable):
+        await _analyze("Get-ChildItem", "powershell")
+    # A nested PowerShell becomes an unresolved command instead.
+    plan = await _analyze("pwsh -c 'Remove-Item x'", "bash")
+    assert [element.kind for element in plan.unresolved] == ["command"]
+
+
+@pytest.mark.parametrize(
+    ("program", "kind"),
+    [("pwsh.exe", "powershell"), ("/usr/bin/zsh", "bash"), ("CMD.EXE", "cmd"), ("python", None)],
+)
+def test_shell_kind(program: str, kind: str | None) -> None:
+    assert shell_kind(program) == kind
+
+
+def _quote(text: str) -> str:
+    return "'" + text.replace("'", "'\\''") + "'"
