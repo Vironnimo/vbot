@@ -28,6 +28,7 @@ from core.memory import DEFAULT_MEMORY_PROMPT_MODE
 from core.models import Capabilities, Model, ModelQuery, ReasoningCapabilities
 from core.models.models import ModelRegistry
 from core.projects import ProjectNotFoundError
+from core.projects._resolution_values import inherited_permission_rules
 from core.projects.paths import cwd_identity_key
 from core.projects.resolver import (
     AgentOverrides,
@@ -171,6 +172,7 @@ class StubAgents:
             thinking_effort=agent.thinking_effort,
             tool_loading=getattr(agent, "tool_loading", None),
             defaults=defaults,
+            permission_rules=getattr(agent, "permission_rules", None),
         )
         if not changes:
             return agent
@@ -497,6 +499,14 @@ class StubAgentResolver:
             self._agents._defaults_provider() if self._agents._defaults_provider is not None else {}
         )
         return complete_tool_loading(defaults.get("tool_loading"))
+
+    def inherited_permission_rules(self, member: Any = None) -> dict[str, Any] | None:
+        """The shared Permission Rules default an Agent inherits, as the real resolver."""
+        del member
+        defaults = (
+            self._agents._defaults_provider() if self._agents._defaults_provider is not None else {}
+        )
+        return inherited_permission_rules((), AgentDefaults.from_dict(defaults))
 
     def effective_config(
         self, project_id: str | None, agent_id: str, *, session_id: str | None = None

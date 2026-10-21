@@ -176,7 +176,12 @@ async def test_settings_update_persists_sections_and_returns_the_full_settings_p
         skills={"directories": ["~/skills", " C:/skills/team "]},
         subagents=_SUBAGENTS,
         compaction=_COMPACTION,
-        defaults={"agent": {"model": "openai/gpt-4.1-mini"}},
+        defaults={
+            "agent": {
+                "model": "openai/gpt-4.1-mini",
+                "permission_rules": {"read": "work_area", "allow": ["Write(src/**)"]},
+            }
+        },
         reflection={"enabled": True, "memory_turn_interval": 5},
         librarian={"archive_after_days": 30},
         web_search={"provider": "searxng", "searxng": {"base_url": "http://localhost:9999"}},
@@ -205,7 +210,13 @@ async def test_settings_update_persists_sections_and_returns_the_full_settings_p
     assert result["subagents"] == _SUBAGENTS
     assert result["compaction"] == _COMPACTION
     assert result["archive"] == {"retention_days": None}
-    assert result["defaults"] == {"agent": {"model": "openai/gpt-4.1-mini"}}
+    # A default rule set is saved normalized: the alias under its canonical kind.
+    assert result["defaults"] == {
+        "agent": {
+            "model": "openai/gpt-4.1-mini",
+            "permission_rules": {"read": "work_area", "allow": ["Edit(src/**)"]},
+        }
+    }
     # A partial section merges with its defaults.
     assert result["reflection"] == {
         "enabled": True,
@@ -489,12 +500,21 @@ async def test_reset_last_default_preserves_unknown_fields(tmp_path: Path, metho
     state = _stored_state(tmp_path)
     storage = state.runtime.storage
     storage.save_settings(
-        {"defaults": {"agent": {"temperature": 0.2, "future_option": True}, "future_section": 1}}
+        {
+            "defaults": {
+                "agent": {
+                    "temperature": 0.2,
+                    "permission_rules": {"read": "work_area"},
+                    "future_option": True,
+                },
+                "future_section": 1,
+            }
+        }
     )
     params = (
-        _patch(_unset("defaults.agent.temperature"))
+        _patch(_unset("defaults.agent.temperature"), _unset("defaults.agent.permission_rules"))
         if method == "settings.patch"
-        else {"defaults": {"agent": {"temperature": None}}}
+        else {"defaults": {"agent": {"temperature": None, "permission_rules": None}}}
     )
 
     await rpc_result(state, method, **params)

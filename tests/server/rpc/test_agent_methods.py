@@ -15,6 +15,7 @@ import pytest
 from core.agents.agents import AgentStore
 from core.database import write_bootstrap_marker
 from core.models import Capabilities, Model, ReasoningCapabilities
+from core.permissions import PermissionRules
 from core.projects.resolver import AgentResolver, ModelConfigurationChecker
 from core.projects.store import ProjectStore
 from core.prompts import LayoutEntry, load_bundled_default_layout
@@ -220,6 +221,7 @@ def _real_agent_state(tmp_path: Path, defaults: JsonObject) -> SimpleNamespace:
 
 
 _SHARED_TOOL_LOADING = {"on_demand": True, "always_loaded": ["read"]}
+_SHARED_PERMISSION_RULES = {"read": "work_area", "deny": ["Read(**/.env)"]}
 
 
 @pytest.mark.asyncio
@@ -228,7 +230,11 @@ _SHARED_TOOL_LOADING = {"on_demand": True, "always_loaded": ["read"]}
     [
         pytest.param({}, "openai/gpt-5.2", "agent", id="own-value"),
         pytest.param(
-            {"model": "openai/gpt-5.2", "tool_loading": _SHARED_TOOL_LOADING},
+            {
+                "model": "openai/gpt-5.2",
+                "tool_loading": _SHARED_TOOL_LOADING,
+                "permission_rules": _SHARED_PERMISSION_RULES,
+            },
             None,
             "global_default",
             id="global-default",
@@ -243,7 +249,11 @@ async def test_agent_get_reports_raw_config_and_the_effective_source(
         state.runtime.agents.create("orchestrator", "Orchestrator")
     else:
         state.runtime.agents.create(
-            "orchestrator", "Orchestrator", model=own_model, tool_loading={"on_demand": False}
+            "orchestrator",
+            "Orchestrator",
+            model=own_model,
+            tool_loading={"on_demand": False},
+            permission_rules={"write": "scratch"},
         )
 
     result = await rpc_result(state, "agent.get", id="orchestrator")
@@ -256,6 +266,7 @@ async def test_agent_get_reports_raw_config_and_the_effective_source(
         "thinking_effort",
         "compaction_policy",
         "tool_loading",
+        "permission_rules",
     }
     # ``config`` is the Agent's own value; the top-level value is the resolved one.
     assert result["config"]["model"] == (own_model or "")
@@ -274,6 +285,14 @@ async def test_agent_get_reports_raw_config_and_the_effective_source(
             "on_demand": False,
             "always_loaded": list(DEFAULT_ALWAYS_LOADED_TOOLS),
         }
+    # ``permission_rules_default`` is the shared rule set an Agent without its own inherits.
+    assert result["permission_rules_default"] == (_SHARED_PERMISSION_RULES if defaults else None)
+    if own_model is None:
+        assert result["config"]["permission_rules"] is None
+        assert result["permission_rules"] == _SHARED_PERMISSION_RULES
+    else:
+        assert result["config"]["permission_rules"] == result["permission_rules"]
+        assert result["permission_rules"] == {"write": "scratch"}
 
 
 @pytest.mark.asyncio
@@ -376,6 +395,16 @@ async def test_agent_list_reports_the_effective_context_window(
             id="tool-loading",
         ),
         pytest.param({"tool_loading": None}, "tool_loading", None, id="tool-loading-removed"),
+        # An alias is saved under its canonical kind.
+        pytest.param(
+            {"permission_rules": {"read": "work_area", "allow": ["Write(src/**)"]}},
+            "permission_rules",
+            {"read": "work_area", "allow": ["Edit(src/**)"]},
+            id="permission-rules",
+        ),
+        pytest.param(
+            {"permission_rules": None}, "permission_rules", None, id="permission-rules-removed"
+        ),
     ],
 )
 async def test_agent_update_applies_a_mutable_field(
@@ -383,7 +412,11 @@ async def test_agent_update_applies_a_mutable_field(
 ) -> None:
     state = make_state(tmp_path, StubAdapter())
     state.runtime.agents.update(
-        "coder", name="Coder", temperature=0.9, tool_loading={"on_demand": True}
+        "coder",
+        name="Coder",
+        temperature=0.9,
+        tool_loading={"on_demand": True},
+        permission_rules=PermissionRules(write="scratch"),
     )
 
     updated = await rpc_result(state, "agent.update", id="coder", **params)
@@ -451,6 +484,12 @@ async def test_workspace_is_set_by_update_only(tmp_path: Path) -> None:
             {"id": "coder", "tool_loading": {"on_demand": True, "always_loaded": "read"}},
             "tool_loading.always_loaded",
         ),
+        (
+            "agent.update",
+            {"id": "coder", "permission_rules": {"allow": ["Read(src)", "Foo(x)"]}},
+            'permission_rules.allow[1] "Foo(x)": unknown kind Foo',
+        ),
+        ("agent.create", {"id": "writer", "permission_rules": ["Read(x)"]}, "permission_rules"),
         ("agent.reorder", {"agent_ids": ["coder", "coder"], "expected_revision": 1}, ""),
     ],
 )

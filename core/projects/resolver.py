@@ -42,6 +42,7 @@ from core.projects._resolution_values import (
     _resolve_sampling,
     _resolve_thinking_effort,
     effective_project_allowed_skills,
+    inherited_permission_rules,
     permission_rules_source,
     resolve_permission_rules,
 )
@@ -792,6 +793,21 @@ class AgentResolver:
         """
         return complete_tool_loading(
             AgentDefaults.from_dict(self._global_agent_defaults()).tool_loading
+        )
+
+    def inherited_permission_rules(
+        self, member: AgentProfile | None = None
+    ) -> dict[str, Any] | None:
+        """Return the Permission Rules an Agent inherits for each part it does not set itself.
+
+        An Identity Agent inherits ``defaults.agent.permission_rules``; a Team
+        *member*'s vBot override inherits the repository's rules, then that
+        default. ``None`` when nothing is inherited (full access) or the stored
+        default is invalid; editors show the value as the default.
+        """
+        levels = (member.permission_rules,) if member is not None else ()
+        return inherited_permission_rules(
+            levels, AgentDefaults.from_dict(self._global_agent_defaults())
         )
 
     def effective_tools_for_member(self, project: Project, member: AgentProfile) -> dict[str, Any]:

@@ -10,6 +10,7 @@ from typing import Any, cast
 from core.chat import ChatMessage
 from core.chat.model_resolution import resolve_agent_context_window
 from core.compaction import effective_compaction_policy
+from core.permissions import PermissionRules, permission_rules_to_dict
 from core.providers.providers import (
     model_is_local,
     resolve_effective_context_window,
@@ -235,6 +236,14 @@ def _agent_response(state: Any, agent: Any) -> JsonObject:
         "tool_loading": _tool_loading_payload(agent),
         # What the Agent inherits for each part it does not set, both parts complete.
         "tool_loading_default": state.runtime.agent_resolver.inherited_tool_loading(),
+        # The Permission Rules the Agent runs with, its own parts filled in from the
+        # shared default (``config.permission_rules`` holds its own); ``None`` is full
+        # access. Built-in Agents always have full access.
+        "permission_rules": (
+            _permission_rules_payload(agent) if getattr(agent, "builtin", None) is None else None
+        ),
+        # What the Agent inherits for each part it does not set; ``None`` for nothing.
+        "permission_rules_default": state.runtime.agent_resolver.inherited_permission_rules(),
         # ``None`` while the Agent has no current Session (a new conversation).
         "current_session_id": agent.current_session_id or None,
         "context_window": _agent_context_window(state, agent),
@@ -255,6 +264,11 @@ def _tool_loading_payload(agent: Any) -> JsonObject | None:
     return copy.deepcopy(tool_loading) if isinstance(tool_loading, dict) else None
 
 
+def _permission_rules_payload(agent: Any) -> JsonObject | None:
+    rules = getattr(agent, "permission_rules", None)
+    return permission_rules_to_dict(rules) if isinstance(rules, PermissionRules) else None
+
+
 def _agent_raw_config(state: Any, agent_id: str) -> JsonObject:
     """Return an identity agent's raw own values (``""``/``None`` preserved)."""
     raw = state.runtime.agents.get_raw(agent_id)
@@ -269,6 +283,7 @@ def _agent_raw_config(state: Any, agent_id: str) -> JsonObject:
         "thinking_effort": raw.thinking_effort,
         "compaction_policy": dict(raw_policy) if raw_policy is not None else None,
         "tool_loading": _tool_loading_payload(raw),
+        "permission_rules": _permission_rules_payload(raw),
     }
 
 

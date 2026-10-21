@@ -404,6 +404,24 @@ def permission_rules_source(
     return result
 
 
+def inherited_permission_rules(
+    levels: tuple[PermissionRules | None, ...], defaults: AgentDefaults
+) -> dict[str, Any] | None:
+    """The stored form of what an editable level inherits for the parts it leaves unset.
+
+    ``levels`` are the levels below the edited one (a Team member's repository
+    rules), most specific first, then the shared default. ``None`` while nothing
+    is inherited, or while the stored default is invalid, which
+    :func:`permission_rules_source` reports as ``error``.
+    """
+    try:
+        default = defaults.resolved_permission_rules()
+    except InvalidPermissionRulesDefaultError:
+        default = None
+    inherited = resolve_rule_set(*levels, default)
+    return permission_rules_to_dict(inherited) if inherited is not None else None
+
+
 def _overridden_model(project: Project, agent_id: str) -> str:
     """Return the agent's overridden model, or ``""`` when not overridden."""
     return str(project.overrides.get(agent_id, {}).get("model", "") or "")
