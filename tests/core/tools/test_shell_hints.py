@@ -783,6 +783,22 @@ _ESCAPED_QUOTE = 'In PowerShell, \\" does not escape a quote'
             (),
             "",
         ),
+        # A failed program reported a piece of the split argument: the word after
+        # the quote, or the cut text before it.
+        (
+            'git grep -n "name = \\"value\\"" -- src',
+            128,
+            "fatal: unable to resolve revision: value\\",
+            ("git.exe exited with code 128",),
+            "`value\\`",
+        ),
+        (
+            'rg -n "x|\\"y\\"" src; Write-Output done',
+            0,
+            "rg: regex parse error:\n    (?:x|\\)\n    ^\nerror: unclosed group\ndone",
+            ("rg.exe exited with code 2",),
+            '`"x|\\"`',
+        ),
         # A literal regex error, one from another stage, a valid escaped backslash,
         # or an expandable argument is not evidence that this quote cut the pattern.
         (
@@ -849,6 +865,29 @@ _ESCAPED_QUOTE = 'In PowerShell, \\" does not escape a quote'
             1,
             "Get-ChildItem: A positional parameter cannot be found that accepts argument 'c'.",
             (),
+            None,
+        ),
+        # A failure that names no piece, a piece echoed by a cmdlet while another
+        # program failed, and \" inside single quotes, which reaches git whole.
+        (
+            'git grep -n "name = \\"value\\"" -- src',
+            128,
+            "fatal: not a git repository (or any of the parent directories): .git",
+            ("git.exe exited with code 128",),
+            None,
+        ),
+        (
+            'Write-Output "Running \\"tests\\" now"; python check.py',
+            1,
+            "Running \\\ntests\\ now\nFAILED (failures=1)",
+            _FAILED,
+            None,
+        ),
+        (
+            "git grep -n 'name = \\\"value\\\"' -- src",
+            128,
+            "fatal: unable to resolve revision: value\\",
+            ("git.exe exited with code 128",),
             None,
         ),
     ],

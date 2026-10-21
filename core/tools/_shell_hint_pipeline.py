@@ -9,11 +9,12 @@ from . import _shell_hint_common as _common
 from ._shell_hint_code import (
     _COMMAND_WORD,
     _FIRST_STAGE,
-    _PIPELINE_PROGRAM,
     _POWERSHELL_NOT_RECOGNIZED,
+    _RUN_START,
     _calls,
     _powershell_code,
     _program_at,
+    _program_name,
     _top_level_split,
     _top_level_statements,
     _working_program,
@@ -22,6 +23,7 @@ from ._shell_hint_common import (
     _DEV_NULL,
     _DEV_NULL_HINT,
     _DEV_NULL_RESOLVED,
+    _exit_codes,
     _Failure,
     _scan_window,
 )
@@ -53,16 +55,6 @@ _ERROR_LINE = re.compile(
     r"|FAIL(?:ED)?\b|npm ERR!|not ok\b|[\u2717\u2718\u2716\u274c])",
     re.M,
 )
-
-
-def _exit_codes(failed_programs: Sequence[str], program: str) -> list[str]:
-    """The distinct codes *program*'s failed runs exited with, in order."""
-    codes: dict[str, None] = {}
-    for entry in failed_programs:
-        name, _, code = entry.partition(" exited with code ")
-        if code and name.lower().removesuffix(".exe") == program:
-            codes[code.split(" ", 1)[0]] = None
-    return list(codes)
 
 
 def _stage_text(command: str, code: str, start: int, end: int) -> str:
@@ -178,8 +170,6 @@ def _hint_first_stage(
     return None
 
 
-# Where a program can run: after a separator, a pipe or an opening bracket.
-_RUN_START = re.compile(r"[;\n{(|]|&&")
 # Statements that print nothing: a change of location, or an assignment.
 _LOCATION_CHANGE = re.compile(
     r"(?:cd|chdir|sl|Set-Location|Push-Location|pushd|Pop-Location|popd)(?:[ \t]+[^|&(){}]*+)?",
@@ -223,15 +213,6 @@ def _own_lines(
 
 _CHAIN = re.compile(r"&&|\|\|")
 _PIPE = re.compile(r"\|(?!\|)")
-
-
-def _program_name(command: str, code: str, start: int, end: int) -> str | None:
-    """The program a pipeline between *start* and *end* starts with, lowercase without .exe."""
-    first = _PIPELINE_PROGRAM.match(code, start, end)
-    if first is None:
-        return None
-    name = re.split(r"[/\\]", command[first.start(1) : first.end(1)].strip("'\""))[-1].lower()
-    return name.removesuffix(".exe") or None
 
 
 def _hint_skipped_after_pipeline(

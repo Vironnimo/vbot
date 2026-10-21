@@ -42,7 +42,7 @@ class _PowerShellCode:
 
     Offsets are the command's own. ``early_end`` is the first string opened with
     ' or " that a typographic quote of the same kind ended: (opening offset,
-    closing offset). ``escaped_end`` is the offset of the first " that ended a
+    closing offset). ``escaped_ends`` are the offsets of each " that ended a
     double-quoted string after a backslash, written as an escape: a word, a
     string or a block follows it directly. ``flat`` is ``text`` with the line
     breaks inside strings and here-strings blanked too, so every line break left
@@ -52,9 +52,14 @@ class _PowerShellCode:
 
     text: str
     early_end: tuple[int, int] | None
-    escaped_end: int | None = None
+    escaped_ends: tuple[int, ...] = ()
     flat: str = ""
     double_strings: tuple[tuple[int, int], ...] = ()
+
+    @property
+    def escaped_end(self) -> int | None:
+        """The first of ``escaped_ends``, or None."""
+        return self.escaped_ends[0] if self.escaped_ends else None
 
 
 def _powershell_code(command: str) -> _PowerShellCode:
@@ -68,7 +73,7 @@ def _powershell_code(command: str) -> _PowerShellCode:
     code = list(command)
     flat = list(command)
     early_end: tuple[int, int] | None = None
-    escaped_end: int | None = None
+    escaped_ends: list[int] = []
     end = len(command)
     double_strings: list[tuple[int, int]] = []
 
@@ -129,17 +134,16 @@ def _powershell_code(command: str) -> _PowerShellCode:
             if early_end is None and stop < end and char in "'\"" and command[stop] != char:
                 early_end = (start, stop)
             if (
-                escaped_end is None
-                and char == '"'
+                char == '"'
                 and stop + 1 < end
                 and command[stop] == '"'
                 and command[stop - 1] == "\\"
                 and command[stop + 1] not in _ARGUMENT_END
             ):
-                escaped_end = stop
+                escaped_ends.append(stop)
             position = stop + 1
     return _PowerShellCode(
-        "".join(code), early_end, escaped_end, "".join(flat), tuple(double_strings)
+        "".join(code), early_end, tuple(escaped_ends), "".join(flat), tuple(double_strings)
     )
 
 
@@ -174,6 +178,19 @@ def _working_program(word: str) -> str | None:
         return name
     stem = name[:-4] if name.lower().endswith(".exe") else name
     return stem if re.sub(r"[\d.]+$", "", stem.lower()) in _WORKING_PROGRAMS else None
+
+
+# Where a program can run: after a separator, a pipe or an opening bracket.
+_RUN_START = re.compile(r"[;\n{(|]|&&")
+
+
+def _program_name(command: str, code: str, start: int, end: int) -> str | None:
+    """The program a pipeline between *start* and *end* starts with, lowercase without .exe."""
+    first = _PIPELINE_PROGRAM.match(code, start, end)
+    if first is None:
+        return None
+    name = re.split(r"[/\\]", command[first.start(1) : first.end(1)].strip("'\""))[-1].lower()
+    return name.removesuffix(".exe") or None
 
 
 def _program_at(command: str, code: str, start: int, end: int | None = None) -> str | None:
