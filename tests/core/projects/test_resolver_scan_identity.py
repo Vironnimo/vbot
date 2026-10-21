@@ -596,6 +596,16 @@ def test_identity_permission_rules_inherit_unset_parts_and_refuse_an_invalid_def
         "deny": [],
     }
     store.create("sealed", "Sealed", model="openai/gpt-5.2", permission_rules=every_part)
+    # The Full access preset: every part set, nothing restricted.
+    full_access = {
+        "read": "anywhere",
+        "write": "anywhere",
+        "commands": "any",
+        "web": "any",
+        "allow": [],
+        "deny": [],
+    }
+    store.create("free", "Free", model="openai/gpt-5.2", permission_rules=full_access)
     resolver = AgentResolver(
         store, projects, _openai_configured(), lambda: defaults, sessions=store._session_manager()
     )
@@ -605,13 +615,19 @@ def test_identity_permission_rules_inherit_unset_parts_and_refuse_an_invalid_def
 
     assert resolved == normalize_permission_rules({"read": "work_area", "write": "scratch"})
     assert effective["parts"] == {"read": "global_default", "write": "agent"}
+    # Explicit full access overrides every part of the restrictive default.
+    assert resolver.resolve_agent(None, "free").permission_rules is None
+    assert resolver.effective_config(None, "free")["permission_rules"]["value"] is None
 
     # An unreadable default never means full access: Agents that need it refuse to run.
     defaults["permission_rules"] = INVALID_PERMISSION_RULES
     with pytest.raises(AgentResolutionError, match="vbot doctor config"):
         resolver.resolve_agent(None, "coder")
     assert "error" in resolver.effective_config(None, "coder")["permission_rules"]
-    assert [agent.id for agent in store.list()] == ["coder", "sealed"]
+    assert [agent.id for agent in store.list()] == ["coder", "sealed", "free"]
     assert resolver.resolve_agent(None, "sealed").permission_rules == (
         normalize_permission_rules(every_part)
     )
+    # Its own rules set every part, so it runs; they restrict nothing.
+    unbaked = resolver.resolve_agent(None, "free").permission_rules
+    assert unbaked is not None and not unbaked.restricts

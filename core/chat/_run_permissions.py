@@ -124,7 +124,7 @@ async def run_permission_boundary(
     extension_ceiling = getattr(agent, "permission_ceiling", None)
     if isinstance(extension_ceiling, PermissionCeiling):
         ceilings.append(extension_ceiling)
-    if rules is None and not ceilings:
+    if not ceilings and (rules is None or not rules.restricts):
         return PermissionBoundary.UNRESTRICTED
 
     data_dir = Path(dependencies.storage.data_dir)

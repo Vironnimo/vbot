@@ -117,10 +117,27 @@ async def test_a_restricted_run_checks_tool_accesses_against_its_expanded_bounda
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "rules",
+    [
+        pytest.param(None, id="no-rules"),
+        pytest.param(
+            {
+                "read": "anywhere",
+                "write": "anywhere",
+                "commands": "any",
+                "web": "any",
+                "allow": [],
+                "deny": [],
+            },
+            id="explicit-full-access",
+        ),
+    ],
+)
 async def test_a_run_without_rules_gets_full_access_without_building_a_boundary(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rules: dict[str, object] | None
 ) -> None:
-    runtime, seen = _runtime(tmp_path, None)
+    runtime, seen = _runtime(tmp_path, rules)
 
     def unexpected(*_args: object, **_kwargs: object) -> Any:
         raise AssertionError("an unrestricted Run built a boundary")

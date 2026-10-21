@@ -308,9 +308,13 @@ def test_agent_create_confirms_the_saved_agent(
             {"permission_rules": {"web": "listed", "allow": ["Web(docs.python.org)"]}},
             id="permission-rules-json",
         ),
+        # Full access is the explicit full set: it overrides a restrictive shared default.
         pytest.param(
             ("--permissions", "full-access"),
-            {"permission_rules": None},
+            {"permission_rules": {
+                "read": "anywhere", "write": "anywhere", "commands": "any", "web": "any",
+                "allow": [], "deny": [],
+            }},
             id="permissions-full-access",
         ),
         pytest.param(

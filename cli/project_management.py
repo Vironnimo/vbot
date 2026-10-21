@@ -515,14 +515,9 @@ def _preset_rules(raw_value: str) -> object:
         name = preset_name(raw_value)
     except PermissionRulesError as exc:
         raise ValueError(str(exc)) from exc
-    rules = preset_definitions()[name]
-    if rules is None:
-        # An override without rules inherits the repository's and the shared default.
-        raise ValueError(
-            "full-access is no override value; clear-override permission_rules removes the "
-            "override, and the agent then follows the repository's rules and the shared default"
-        )
-    return rules
+    # full-access is the explicit full set: it overrides the repository's rules and the
+    # shared default; clear-override permission_rules follows them instead.
+    return preset_definitions()[name]
 
 
 def _json_or_default(value: object) -> str:

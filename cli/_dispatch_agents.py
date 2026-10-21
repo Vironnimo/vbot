@@ -109,8 +109,8 @@ def _agent_tool_access_args_error(args: argparse.Namespace) -> str | None:
         )
     if permissions == "full_access" and adds_rules:
         return (
-            "--permissions full-access removes the agent's own rules, so it takes no "
-            "--allow-rule or --deny-rule; choose work-dir, work-dir-read-only or a JSON object"
+            "--permissions full-access lifts every limit, so it takes no --allow-rule or "
+            "--deny-rule; choose work-dir, work-dir-read-only or a JSON object"
         )
     return None
 
