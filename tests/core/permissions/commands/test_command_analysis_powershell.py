@@ -120,7 +120,7 @@ async def analyzer() -> AsyncIterator[CommandAnalyzer]:
                 "write D:/b.txt",
                 "write w/p/logs/today",
                 "write w/p/c.txt/**",
-                "write w/p/d.txt",
+                "write w/p/d.txt/**",
             ),
         ),
         case(
@@ -199,6 +199,41 @@ async def analyzer() -> AsyncIterator[CommandAnalyzer]:
             "Get-ChildItem *.md; Select-String -Path *.md x",
             id="wildcards stay patterns below their folder",
             paths=("read w/p/*.md",),
+        ),
+        case(
+            "${C:\\s\\key.txt}; ${C:\\s\\out.txt} = 'a'; ${C:\\s\\n.txt} += 'b'; "
+            "${env:PATH}; ${function:prompt}",
+            id="drive variables read and write files",
+            paths=("read s/key.txt", "write s/n.txt", "write s/out.txt"),
+        ),
+        case(
+            "[IO.Directory]::GetFiles('src', '*.key', 'TopDirectoryOnly'); "
+            "(Get-ChildItem a).GetFiles('*.key', $option)",
+            id="a search option is recursive unless it says top directory only",
+            paths=("read w/p/src", "read w/p/a", "read w/p/a/*/**"),
+        ),
+        case(
+            "(Get-Item a.txt).IsReadOnly = $false; $x.CopyTo('d.txt', 1); $y.Open()",
+            id="item properties write and unfollowable file methods are unresolved",
+            paths=("read w/p/a.txt", "write w/p/a.txt/**"),
+            unresolved=("path_write",),
+        ),
+        case(
+            "New-Item -ItemType SymbolicLink -Path l -Target t; "
+            "New-Item -ItemType HardLink -Path h -Value t2",
+            id="new links write themselves and what they lead to",
+            paths=(
+                "write w/p/l",
+                "write w/p/l/t/**",
+                "write w/p/t/**",
+                "write w/p/h",
+                "write w/p/t2",
+            ),
+        ),
+        case(
+            "Invoke-Thing secrets/x -Mode fast",
+            id="words of unknown cmdlets are mentions",
+            mentions=("read w/p/secrets/x", "read w/p/fast"),
         ),
         case("Remove-Item (", id="parse error is unresolved", unresolved=("command",)),
     ],

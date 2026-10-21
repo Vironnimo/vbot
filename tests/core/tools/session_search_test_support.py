@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from core.permissions import PermissionBoundary
 from core.sessions import ChatSessionManager
 from core.tools.session_search import SESSION_SEARCH_TOOL_NAME, register_session_search_tool
 from core.tools.tools import ToolContext, ToolRegistry, is_tool_result_envelope
@@ -14,7 +15,9 @@ from tests.core.tools.tools_test_support import dispatch_as_executor
 JsonObject = dict[str, Any]
 
 
-def _context(data_root: Path, *, project_id: str | None) -> ToolContext:
+def _context(
+    data_root: Path, *, project_id: str | None, permissions: PermissionBoundary
+) -> ToolContext:
     workspace = data_root / "workspace"
     workspace.mkdir(exist_ok=True)
     return ToolContext(
@@ -28,6 +31,7 @@ def _context(data_root: Path, *, project_id: str | None) -> ToolContext:
         vbot_root=data_root.parent,
         data_root=data_root,
         project_id=project_id,
+        permissions=permissions,
     )
 
 
@@ -39,6 +43,7 @@ async def search(
     sessions: ChatSessionManager | None = None,
     timezone: str | None = None,
     project_id: str | None = None,
+    permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED,
 ) -> JsonObject:
     """Call session_search over ``backend`` as the Tool executor does.
 
@@ -53,7 +58,9 @@ async def search(
         timezone_name_loader=(lambda: timezone) if timezone is not None else None,
     )
     return await dispatch_as_executor(
-        registry, _context(data_root, project_id=project_id), arguments
+        registry,
+        _context(data_root, project_id=project_id, permissions=permissions),
+        arguments,
     )
 
 

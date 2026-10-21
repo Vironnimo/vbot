@@ -485,7 +485,17 @@ def _handle_acl(
         if icacls and files:
             continue  # icacls names one file or folder; later words are values
         files += 1
-        analysis.access(context, raw, "write", word, glob=True, tier="a", subtree=recursive)
+        # attrib /s and icacls /t apply the name in every subfolder.
+        analysis.access(
+            context,
+            raw,
+            "write",
+            word,
+            glob=True,
+            tier="a",
+            subtree=recursive,
+            every_depth=recursive,
+        )
 
 
 _ICACLS_VALUES = frozenset(
@@ -746,12 +756,13 @@ def program_outputs(
     name: str,
     arguments: Sequence[Word],
 ) -> None:
-    """A program without a spec: its ``OUTPUT_OPTIONS`` are writes, the rest tier B."""
+    """A program without a spec: its ``OUTPUT_OPTIONS`` are writes, the rest tier B mentions."""
     options = OUTPUT_OPTIONS.get(name, frozenset())
     location = analysis.first(context, raw)
     pairs = [(word, analysis.value(context, word, location).text) for word in arguments]
     consumed = _output_values(analysis, context, raw, pairs, options) if options else set()
-    analysis.tier_b(context, raw, [word for word in arguments if id(word) not in consumed])
+    rest = [word for word in arguments if id(word) not in consumed]
+    analysis.tier_b(context, raw, rest, mentions=True)
 
 
 def _output_values(
@@ -810,7 +821,137 @@ def _operands(
     return operands
 
 
+def _handle_script_editor(
+    analysis: Analysis,
+    context: Context,
+    raw: RawCommand,
+    name: str,
+    arguments: Sequence[Word],
+    fed: bool,
+) -> None:
+    """perl and ruby: ``-i`` edits the file operands in place, as ``sed -i`` does.
+
+    Without ``-e`` the first operand is the script, which they read; the other
+    words are mentions as for any program without a spec.
+    """
+    location = analysis.first(context, raw)
+    in_place = False
+    code = False
+    rest: list[Word] = []
+    operands: list[Word] = []
+    index = 0
+    while index < len(arguments):
+        word = arguments[index]
+        text = analysis.value(context, word, location).text
+        index += 1
+        if text is None or not text.startswith("-") or text == "-" or operands:
+            operands.append(word)
+            continue
+        if text == "--":
+            operands.extend(arguments[index:])
+            break
+        rest.append(word)
+        for position, letter in enumerate(text[1:], start=1):
+            if letter == "i":
+                in_place = True
+                break  # the rest of the bundle is the backup suffix
+            if letter in "eE":
+                code = True
+                if position == len(text) - 1 and index < len(arguments):
+                    index += 1  # the code is the next word
+                break
+            if letter in "IMmxdDCF0l":
+                break  # the rest of the bundle is this option's value
+    if not code and operands:
+        analysis.access(context, raw, "read", operands.pop(0), glob=False, tier="a")
+    if in_place:
+        for word in operands:
+            analysis.access(context, raw, "write", word, glob=True, tier="a")
+    else:
+        rest += operands
+    analysis.tier_b(context, raw, rest, mentions=True)
+
+
+def _handle_ln(
+    analysis: Analysis,
+    context: Context,
+    raw: RawCommand,
+    name: str,
+    arguments: Sequence[Word],
+    fed: bool,
+) -> None:
+    """ln [-s] target... link: each target is linked (``Analysis.link``)."""
+    location = analysis.first(context, raw)
+    pairs = [(word, analysis.value(context, word, location).text) for word in arguments]
+    symbolic = any(
+        text is not None
+        and (text == "--symbolic" or (re.match(r"^-[A-Za-z]+$", text) is not None and "s" in text))
+        for _, text in pairs
+    )
+    folder: Word | None = None
+    for index, (_, text) in enumerate(pairs):
+        if text in ("-t", "--target-directory") and index + 1 < len(pairs):
+            folder = pairs[index + 1][0]
+        elif text is not None and text.startswith("--target-directory="):
+            folder = Word.literal(text.partition("=")[2], source=raw.source)
+    operands = [word for word, _ in _operands(pairs, frozenset({"-t", "--target-directory", "-S"}))]
+    if folder is None and len(operands) >= 2:
+        folder = operands.pop()
+    for target in operands:
+        if folder is None:
+            text = analysis.value(context, target, location).text or ""
+            link = Word.literal(
+                re.split(r"[\\/]", text.rstrip("/\\"))[-1] or ".", source=raw.source
+            )
+        else:
+            link = folder
+        analysis.link(context, raw, link, target, hard=not symbolic)
+
+
+def _handle_forfiles(
+    analysis: Analysis,
+    context: Context,
+    raw: RawCommand,
+    name: str,
+    arguments: Sequence[Word],
+    fed: bool,
+) -> None:
+    """forfiles /p folder /m mask /s /c command: reads what it finds, runs /c on each."""
+    location = analysis.first(context, raw)
+    folder: Word | None = None
+    mask: Word | None = None
+    recursive = False
+    index = 0
+    while index < len(arguments):
+        option = (analysis.value(context, arguments[index], location).text or "").lower()
+        index += 1
+        if option == "/s":
+            recursive = True
+        elif option in ("/p", "/m", "/c", "/d"):
+            value = arguments[index] if index < len(arguments) else None
+            index += 1
+            if option == "/c":
+                analysis.unresolve(
+                    "command",
+                    raw.source,
+                    "forfiles fills in its /c command for each file it finds when it runs",
+                )
+            elif option == "/p":
+                folder = value
+            elif option == "/m":
+                mask = value
+    target = mask or Word.literal("*", source=raw.source)
+    target = relative_to(target, folder or Word.literal(".", source=raw.source))
+    analysis.access(
+        context, raw, "read", target, glob=True, tier="a", subtree=recursive, every_depth=recursive
+    )
+
+
 HANDLERS: Mapping[str, Handler] = {
+    "forfiles": _handle_forfiles,
+    "ln": _handle_ln,
+    "perl": _handle_script_editor,
+    "ruby": _handle_script_editor,
     "icacls": _handle_acl,
     "attrib": _handle_acl,
     "find": _handle_find,

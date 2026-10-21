@@ -287,6 +287,15 @@ async def _search_sessions(
 ) -> JsonObject:
     query = _required_string(arguments, "query")
     agent_id = _agent_id(arguments, context)
+    if agent_id != context.agent_id and context.permissions.restricted:
+        # The rules confine what this Session reads; another Agent's conversations
+        # can hold what they keep from it.
+        raise _SessionSearchError(
+            "permission_denied",
+            f'agent_id "{agent_id}" names another Agent. Under your permission rules, '
+            "session_search searches only your own Agent's Sessions, including its "
+            "Sub-Agent Sessions with include_subagents. Omit agent_id.",
+        )
     session_id = _optional_string(arguments.get("session_id"))
     if agent_id == context.agent_id and session_id == context.session_id:
         raise _SessionSearchError(

@@ -176,7 +176,7 @@ def cmdlet(
         _web_address(analysis, context, raw, binding)
     parameters = cmdlet_parameters(lowered)
     if parameters is None:
-        analysis.tier_b(context, raw, raw.words[1:])
+        analysis.tier_b(context, raw, raw.words[1:], mentions=True)
         return
     _path_parameters(analysis, context, raw, lowered, binding, parameters)
     if lowered in LISTING_CMDLETS:
@@ -234,8 +234,17 @@ def _path_parameters(
     if lowered == "new-item":
         item_type = analysis.literal_of(context, raw, binding.bound.get("ItemType"))
         if item_type is not None and item_type.lower() in ("symboliclink", "junction", "hardlink"):
-            for link in items(binding.bound.get("Value")):
-                analysis.access(context, raw, "read", link, glob=False, tier="a")
+            path = first_bound(binding, "Path", "LiteralPath")
+            if path is not None and "Name" in binding.bound:
+                path = joined_path(path, binding.bound["Name"])
+            hard = item_type.lower() == "hardlink"
+            for target in items(binding.bound.get("Value")):
+                if path is None:
+                    analysis.access(
+                        context, raw, "write", target, glob=False, tier="a", subtree=not hard
+                    )
+                else:
+                    analysis.link(context, raw, path, target, hard=hard)
     has_path = any(name in parameters for name in ("Path", "LiteralPath", "FilePath"))
     bound_path = any(name in binding.bound for name in ("Path", "LiteralPath", "FilePath"))
     if has_path and not bound_path:
@@ -292,9 +301,11 @@ def _rename_target(analysis: Analysis, context: Context, raw: RawCommand, bindin
         analysis.unresolve("path_write", raw.source, "the new name is computed when it runs")
         return
     if re.search(r"[\\/]", text) or source is None:
-        analysis.access(context, raw, "write", new_name, glob=False, tier="a")
+        analysis.access(context, raw, "write", new_name, glob=False, tier="a", subtree=True)
         return
-    analysis.access(context, raw, "write", sibling(source, text), glob=False, tier="a")
+    # The renamed item keeps everything below it.
+    target = sibling(source, text)
+    analysis.access(context, raw, "write", target, glob=False, tier="a", subtree=True)
 
 
 def _start_process(analysis: Analysis, context: Context, raw: RawCommand, binding: Binding) -> None:

@@ -138,7 +138,11 @@ class CommandPlan:
 
     ``urls`` are the http(s) URLs its words name (a web program's target
     without scheme, ``curl example.com``, as ``http://``); ``hosts`` the other
-    hosts it connects to (``ssh host``, ``scp host:x .``).
+    hosts it connects to (``ssh host``, ``scp host:x .``). ``mentions`` are the
+    other static words of programs and cmdlets without a path spec, each
+    placed as a ``read`` of the path it would name (``awk 1 secrets/key.pem``):
+    whether the program reads them is unknown, so only deny rules and
+    protected locations apply to them, never a base.
     """
 
     commands: tuple[SimpleCommand, ...]
@@ -146,10 +150,12 @@ class CommandPlan:
     unresolved: tuple[UnresolvedElement, ...]
     urls: tuple[str, ...]
     hosts: tuple[str, ...] = ()
+    mentions: tuple[PlannedPathAccess, ...] = ()
 
 
 class CommandAnalysisUnavailable(VBotError):  # noqa: N818 - names the outcome
-    """The analysis could not run (the PowerShell helper failed or timed out); fail closed."""
+    """The analysis could not run (the PowerShell helper failed or timed out, or the
+    bash parser could not be loaded); fail closed."""
 
 
 class CommandAnalyzer:

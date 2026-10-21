@@ -291,6 +291,7 @@ class PermissionBoundary:
         glob: str | None = None,
         pruned: Sequence[str] = (),
         work_tree: bool = False,
+        deny_only: bool = False,
     ) -> PermissionRefusal | None:
         """Whether ``access`` to ``path`` is permitted; relative paths join ``base``.
 
@@ -306,16 +307,23 @@ class PermissionBoundary:
         ``work_tree``: a git operation replaces the work tree of the repository
         whose top is ``path``, so the rule files below it may change, as when
         the repository changes its own settings upstream.
+        ``deny_only``: ``path`` is a word that may name a path (a command
+        mention), so only protected locations and deny rules apply, and links
+        are followed only when it names an existing entry.
         """
         if not self._layers:
             return None
         normalized = normalize_access_path(
-            path, base=self._base(base), home=self._home, windows=self._windows
+            path,
+            base=self._base(base),
+            home=self._home,
+            windows=self._windows,
+            follow_missing=not deny_only,
         )
         target = normalized.lexical
         lexical_key = self._key(normalized.lexical)
         if normalized.unsafe is not None:
-            if not self._names_exactly(lexical_key, access):
+            if not deny_only and not self._names_exactly(lexical_key, access):
                 return self.refusal(access, target, "unsafe_form", location=normalized.unsafe)
             keys: tuple[str, ...] = (lexical_key,)
         else:
@@ -338,7 +346,7 @@ class PermissionBoundary:
                     source=layer.layer.source,
                     resolved=shown,
                 )
-        for layer in self._compiled:
+        for layer in () if deny_only else self._compiled:
             if not all(self._granted(key, access) or layer.permits(key, access) for key in keys):
                 return self.refusal(
                     access,
@@ -349,7 +357,7 @@ class PermissionBoundary:
                     resolved=shown,
                 )
         if subtree or glob is not None:
-            reach = tuple(glob.split("/")) if glob else ()
+            reach = tuple(path_key(glob, windows=self._windows).split("/")) if glob else ()
             if subtree or not reach:
                 reach += ("**",)
             names = frozenset(path_key(name, windows=self._windows) for name in pruned)

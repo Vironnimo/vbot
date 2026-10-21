@@ -6,9 +6,11 @@ It owns the ``CommandAnalyzer``, creates it on the first check of a restricted
 boundary and closes it at shutdown; full access never creates it. The decision
 order: the start directory, then every simple command against deny rules and
 ``commands: listed`` allow rules, vBot's own CLI, the URLs and host names that
-reach the vBot server, every URL and host, every path access, and last whatever
-the analysis could not resolve. The analysis and the decision run on bounded
-worker pools (the decision resolves links on disk), never on the Event Loop.
+reach the vBot server, every URL and host, every path access, the mentions
+(words of commands without a path spec, against deny rules and protected
+locations only), and last whatever the analysis could not resolve. The
+analysis and the decision run on bounded worker pools (the decision resolves
+links on disk), never on the Event Loop.
 Contract: ``.vorch/domain-maps/permissions.md``.
 """
 
@@ -268,6 +270,10 @@ class CommandChecker:
             if refused is not None:
                 if refused.below is not None and kind == "read" and not access.work_tree:
                     refused = replace(refused, hint=_DENIED_BELOW_HINT)
+                return refused
+        for mention in plan.mentions:
+            refused = boundary.check_path(mention.path, "read", glob=mention.glob, deny_only=True)
+            if refused is not None:
                 return refused
         for element in plan.unresolved:
             return _unresolved_refusal(boundary, element, text, workdir_parameter)

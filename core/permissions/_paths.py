@@ -136,13 +136,17 @@ def normalize_access_path(
     base: str,
     home: str,
     windows: bool,
+    follow_missing: bool = True,
 ) -> NormalizedPath:
     """Normalize one path an access names, relative paths against ``base``.
 
     ``base`` and ``home`` are absolute lexical paths. ``~`` and ``~/...`` expand to
     ``home``; placeholders do not (a Tool argument ``{workdir}`` is a file name).
     An unsafe form is returned unresolved; every other path is also resolved
-    through links and junctions on its longest existing prefix.
+    through links and junctions on its longest existing prefix. Without
+    ``follow_missing``, a path that names no existing entry stays unresolved:
+    reading it reaches nothing a link could lead to, and the cheap existence
+    check spares a ``realpath`` per word.
     """
     text = os.fspath(path)
     if "\x00" in text:
@@ -162,6 +166,8 @@ def normalize_access_path(
     else:
         # POSIX follows a link before ``..`` climbs out of it.
         resolved_input = text if text.startswith("/") else base.rstrip("/") + "/" + text
+    if not follow_missing and not os.path.lexists(resolved_input):
+        return NormalizedPath(lexical.text, lexical.text)
     return NormalizedPath(lexical.text, resolve_text(resolved_input, windows=windows))
 
 

@@ -41,6 +41,7 @@ from core.tools._web_fetch_pages import (
     SavedPageError,
     load_page,
     page_matches_url,
+    page_owner,
     read_page,
     save_page,
     similar_refs,
@@ -633,10 +634,10 @@ def make_web_fetch_handler(
     *input_estimate_factor* corrects token estimates for a Model, so a view's
     token bound holds for the calling Agent's Model.
     """
-    # The address of the page each conversation (Session and Agent, as a saved
-    # page's owner) read last, the site a root-relative url belongs to. Kept in
-    # memory: after a restart a path fails until a page is read again.
-    last_pages: OrderedDict[tuple[str, str], str] = OrderedDict()
+    # The address of the page each conversation (by the Session address, as a
+    # saved page's owner) read last, the site a root-relative url belongs to. Kept
+    # in memory: after a restart a path fails until a page is read again.
+    last_pages: OrderedDict[str, str] = OrderedDict()
     # One bound per host across all calls and Agents: the Runtime registers this
     # handler once, so it is the process's bound without a module global.
     hosts = HostSlots()
@@ -649,7 +650,7 @@ def make_web_fetch_handler(
     def remember(context: ToolContext, results: list[JsonObject]) -> None:
         for result in results:
             if result["ok"] and "ref" in result["data"] and "url" in result["data"]:
-                key = (context.session_id, context.agent_id)
+                key = page_owner(context)
                 last_pages[key] = result["data"]["url"]
                 last_pages.move_to_end(key)
         while len(last_pages) > _REMEMBERED_CONVERSATIONS:
@@ -859,7 +860,7 @@ def make_web_fetch_handler(
             request = _parse_request(arguments)
         except ValueError as error:
             return tool_failure("invalid_arguments", str(error), retryable=False)
-        sited = _with_site(request, last_pages.get((context.session_id, context.agent_id)))
+        sited = _with_site(request, last_pages.get(page_owner(context)))
         if not isinstance(sited, _Request):
             return sited
         request = sited

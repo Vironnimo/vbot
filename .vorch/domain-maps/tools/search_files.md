@@ -641,15 +641,20 @@ argument and no check.
   `-L`/`--follow` is dropped with a note, because ripgrep follows no links
   then and the checked roots stay the boundary (`confine_flags`).
 - Below a readable root, `refusable_below` patterns become anchored excluding
-  globs after every other glob (`--glob=!/<scope path>/<pattern>`); results,
-  counts, directory listings and diagnostics are filtered again by
-  `check_path`, which also covers patterns that do not translate into globs.
+  globs after every other glob (`--glob=!/<scope path>/<pattern>`, `--iglob`
+  on Windows, where the rules match without case; `[`, `]`, `{`, `}` escaped
+  as classes); results, counts, directory listings and diagnostics are
+  filtered again by `check_path`, which also covers patterns that do not
+  translate into globs (a backslash, or `**` for the whole root). So
+  `files_searched` counts only permitted files; the filter also subtracts the
+  entries it removes from it.
 - When the rules could refuse something below a searched root, the result's
   `note` says so once, without a count: what an excluding glob kept ripgrep from
   reading is never touched, so the search cannot tell whether anything was there
   (a read listing counts its hidden entries, because it reads the folder anyway).
 - Open: ripgrep still reads ignore files of parent directories and the global
-  gitignore; `files_searched` counts can include files the filter removes.
+  gitignore; a no-match count still includes refused files whose pattern holds
+  a backslash (POSIX only).
 
 ## Native Dependency and Permissions
 
