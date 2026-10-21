@@ -91,6 +91,7 @@ Hosts and commands: a deny rule of any layer refuses; under `listed` every such 
 - A path pattern covers what it names and everything below it, with or without wildcards (`{workdir}/secret*` covers `{workdir}/secrets/key.pem`). Matching is case-insensitive on Windows (`casefold`), never on POSIX.
 - Tool paths do not expand placeholders: `{workdir}` in a Tool argument is a file name, as in `ToolContext.resolve_path` (`tools/file_state.md` -> Path resolution); only `~` expands.
 - The library protects only the folders the caller names: which folders count as installation or as readable vBot artifacts (and whether a development checkout is an installation) is the caller's decision.
+- `limits_writes` (a narrowed write base or a path deny rule in any layer) decides changes no path rule covers: `skill_manage` then changes only the Agent's own Skills (`skills/skill-manage.md` -> Calls).
 - Ceilings are self-contained: they store their own Work Area folders, so a Sub-Agent working elsewhere stays inside its parent's area.
 
 ## Agent-facing text

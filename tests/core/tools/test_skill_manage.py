@@ -11,6 +11,7 @@ from typing import Any, cast
 
 import pytest
 
+from core.permissions import BoundaryContext, PermissionBoundary, normalize_permission_rules
 from core.providers.tool_schema import sanitize_anthropic_tool_input_schema
 from core.runs import RunKind
 from core.skills import _history as skill_history_module
@@ -46,6 +47,7 @@ def _context(
     root: Path,
     run_kind: RunKind | None = None,
     skill_agent_id: str | None = None,
+    permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED,
 ) -> ToolContext:
     return ToolContext(
         agent_id=agent_id,
@@ -60,6 +62,7 @@ def _context(
         data_root=root,
         cwd=root,
         run_kind=run_kind,
+        permissions=permissions,
     )
 
 
@@ -139,9 +142,10 @@ class _Harness:
         agent_id: str = "main",
         run_kind: RunKind | None = None,
         skill_agent_id: str | None = None,
+        permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED,
     ) -> dict[str, Any]:
         """Call the Tool as ``agent_id``; ``skill_agent_id`` binds a Librarian Session."""
-        context = _context(agent_id, self.root, run_kind, skill_agent_id)
+        context = _context(agent_id, self.root, run_kind, skill_agent_id, permissions)
         try:
             result = cast(
                 dict[str, Any],
@@ -1311,6 +1315,78 @@ def test_publish_refusals_change_nothing(
     assert {
         path: path.read_bytes() for path in tmp_path.rglob("SKILL.md") if path.is_file()
     } == before
+    assert harness.global_reloads == 0
+
+
+@pytest.mark.parametrize(
+    ("rules", "limited"),
+    [
+        ({"write": "work_area"}, True),
+        ({"deny": ["Read(~/.ssh/**)"]}, True),
+        ({"web": "listed"}, False),
+    ],
+    ids=["write-base", "deny-rule", "web-only"],
+)
+def test_rules_that_limit_writes_keep_changes_to_own_skills(
+    tmp_path: Path, rules: dict[str, object], limited: bool
+) -> None:
+    harness = _Harness(tmp_path, scopes={"guide": "global"})
+    _global_skill(harness)
+    harness.share()
+    harness.create(name="notes")
+    boundary = PermissionBoundary.build(
+        normalize_permission_rules(rules),
+        BoundaryContext(workdir=tmp_path / "work", home=tmp_path / "home", data_dir=tmp_path),
+    )
+    before = {path: path.read_bytes() for path in tmp_path.rglob("SKILL.md")}
+
+    def patch(name: str, *, scope: str | None = None) -> dict[str, Any]:
+        arguments: dict[str, object] = {
+            "action": "patch",
+            "name": name,
+            "old_string": "# ",
+            "new_string": "# Changed ",
+        }
+        if scope is not None:
+            arguments["scope"] = scope
+        return harness.run(arguments, permissions=boundary)
+
+    own = harness.run(
+        {"action": "patch", "name": "notes", "old_string": "# Demo", "new_string": "# Mine"},
+        permissions=boundary,
+    )
+    results = {
+        "global": patch("guide"),
+        "global-scope": patch("guide", scope="global"),
+        "shared": patch("deploy"),
+        "publish": harness.run({"action": "publish", "name": "notes"}, permissions=boundary),
+    }
+    assert own["ok"] is True
+    if not limited:
+        assert all(result["ok"] is True for result in results.values())
+        return
+    rule = "because they limit where you can change files. If the task needs this change, tell "
+    assert results == {
+        **{
+            key: tool_failure(
+                "permission_denied",
+                f"Skill '{name}' is not one of your own Skills; nothing changed. The permission "
+                f"rules let you change only your own Skills, {rule}the user.",
+                retryable=False,
+            )
+            for key, name in (("global", "guide"), ("global-scope", "guide"), ("shared", "deploy"))
+        },
+        "publish": tool_failure(
+            "permission_denied",
+            "Skill 'notes' stays one of your own Skills; nothing changed. The permission rules "
+            f"keep you from making Skills global, {rule}the user.",
+            retryable=False,
+        ),
+    }
+    after = {path: path.read_bytes() for path in tmp_path.rglob("SKILL.md")}
+    assert {path: data for path, data in after.items() if "notes" not in path.parts} == {
+        path: data for path, data in before.items() if "notes" not in path.parts
+    }
     assert harness.global_reloads == 0
 
 

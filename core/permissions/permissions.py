@@ -226,6 +226,18 @@ class PermissionBoundary:
         return bool(self._layers)
 
     @property
+    def limits_writes(self) -> bool:
+        """Whether a layer narrows where files may change: a write base or a path deny rule.
+
+        Changes that other Agents see and that no path rule decides, such as of a
+        global Skill, are refused then (``skill_manage``).
+        """
+        return any(
+            layer.layer.write != "anywhere" or layer.read_deny or layer.edit_deny
+            for layer in self._compiled
+        )
+
+    @property
     def layers(self) -> tuple[PermissionLayer, ...]:
         """Every layer, the Agent's own first; each must permit an access."""
         return self._layers
