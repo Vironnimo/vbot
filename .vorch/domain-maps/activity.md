@@ -52,7 +52,7 @@ A background command one of whose processes listens on a TCP port; from then on 
 
 ## Constraints & Gotchas
 
-- Process-local: a restarted server starts every Session `idle`, and a source that changed before Session activity subscribed (bootstrap phase 8) is seen only with its next change.
+- Process-local: a restarted server starts every Session `idle` (no Run, background command or held notice survives a restart as wake work), and every Accessor replaces its state with the new hello. The Runtime builds Session activity inside the synchronous `bootstrap`, after Cron, Channels and command recovery were started but before the Event Loop runs any of their tasks, so no change can precede its subscription; keep it in that synchronous stretch.
 - No Queue hook: input queued behind an active Run triggers no recompute, so `contributes_to_agent_activity` can stay False after a contributing item queued behind an excluded Run until the next event.
 - A user input that redirects a child's answers to the user takes effect for the Parent at the child's next change; until then the Parent stays `waiting`.
 - A child stays published non-idle through its own settle period, so its Parent reaches `idle` up to one settle period later per tree level.
