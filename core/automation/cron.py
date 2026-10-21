@@ -84,6 +84,7 @@ from core.projects import (
     ResolutionProjectNotFoundError,
     format_agent_address,
 )
+from core.secrets._references import EMPTY_MASKER, SecretMasker
 from core.sessions import SessionAddress
 from core.utils.file_status import exists_strict
 from core.utils.ids import new_id
@@ -201,7 +202,9 @@ class CronService:
         sessions: ChatSessionManager | None = None,
         tz: str | ZoneInfo | None = None,
         calendar: EventCalendar | None = None,
+        secret_masker: Callable[[], SecretMasker] = lambda: EMPTY_MASKER,
     ) -> None:
+        self._secret_masker = secret_masker
         self._writer = _CRON_WRITER
         self._trigger_service = trigger_service
         self._agent_resolver = agent_resolver

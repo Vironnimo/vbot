@@ -166,7 +166,7 @@ class CronExecution:
                         project_id=latest.project_id,
                         run_kind=RunKind.CRON,
                         contributes_to_agent_activity=False,
-                        context_note=context,
+                        context_note=self._owner._secret_masker().mask(context),
                         completion_activity=_delivery.completion_activity(
                             partial(self._owner._jobs.get, job.id)
                         ),
@@ -254,7 +254,7 @@ class CronExecution:
                 if latest is None:
                     return CronRunOutcome(succeeded=False, admitted=admitted)
                 completed_at = _timing._utc_now_iso()
-                answer = _delivery.final_answer_text(result)
+                answer = self._owner._secret_masker().mask(_delivery.final_answer_text(result))
                 silent = _delivery.is_silent(answer)
                 latest.last_completed_at = completed_at
                 latest.last_outcome = "success"

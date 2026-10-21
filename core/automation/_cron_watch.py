@@ -31,6 +31,7 @@ from core.automation._cron_jobs import (
     CronWatch,
     _parse_utc_timestamp,
 )
+from core.secrets._references import EMPTY_MASKER, SecretMasker
 from core.utils.atomic import atomic_write_text
 from core.utils.logging import get_logger
 
@@ -131,15 +132,17 @@ def output_digest(output: str) -> str:
     return hashlib.sha256(output.encode("utf-8", "replace")).hexdigest()
 
 
-def compare(raw_output: str, baseline: WatchBaseline | None) -> WatchComparison:
+def compare(
+    raw_output: str, baseline: WatchBaseline | None, masker: SecretMasker = EMPTY_MASKER
+) -> WatchComparison:
     """Normalize a check's output and diff it from ``baseline``; CPU work for a worker."""
-    output = normalize_output(raw_output)
-    digest = output_digest(output)
+    digest = output_digest(normalize_output(raw_output))
+    output = normalize_output(masker.mask(raw_output))
     if baseline is None or baseline.digest == digest:
         return WatchComparison(output, digest)
     hunks = itertools.islice(
         difflib.unified_diff(
-            baseline.output.split("\n"),
+            masker.mask(baseline.output).split("\n"),
             output.split("\n"),
             lineterm="",
             n=_DIFF_CONTEXT_LINES,
@@ -225,7 +228,8 @@ def write_baseline(directory: Path, job_id: str, baseline: WatchBaseline) -> Non
     payload = {
         "job_id": job_id,
         "watch": baseline.watch.to_dict(),
-        "hash": baseline.digest,
+        "hash": output_digest(baseline.output),
+        "comparison_hash": baseline.digest,
         "output": baseline.output,
         "checked_at": baseline.checked_at,
         "changed_at": baseline.changed_at,
@@ -261,7 +265,12 @@ def _parse_baseline(payload: Any, job_id: str) -> WatchBaseline:
         if not isinstance(changed_at, str):
             raise ValueError("changed_at must be a timestamp or null")
         _parse_utc_timestamp(changed_at, field_name="changed_at")
-    return WatchBaseline(watch, digest, output, checked_at=checked_at, changed_at=changed_at)
+    comparison_hash = payload.get("comparison_hash", digest)
+    if not isinstance(comparison_hash, str) or len(comparison_hash) != 64:
+        raise ValueError("invalid comparison hash")
+    return WatchBaseline(
+        watch, comparison_hash, output, checked_at=checked_at, changed_at=changed_at
+    )
 
 
 def _cut(text: str, limit: int) -> tuple[str, bool]:

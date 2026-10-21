@@ -21,6 +21,7 @@ from core.automation.cron import (
     WatchCheckError,
 )
 from core.runs import RunStatus
+from core.secrets._references import SecretMasker
 from tests.core.automation.cron_test_support import (
     FakeChats,
     FakeChecks,
@@ -268,3 +269,30 @@ async def test_a_watch_is_refused_where_no_check_can_run(
 
     with pytest.raises(CronJobValidationError, match=message):
         await service.create_job(agent_id="agent-one", prompt="Report", watch=_COMMAND, **schedule)
+
+
+@pytest.mark.asyncio
+async def test_watch_redacts_before_storage_and_still_detects_secret_changes(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    old, new = "synthetic-old-credential", "synthetic-new-credential"
+    reference = "{{secret:API}}"
+    masker = SecretMasker({old: reference, new: reference})
+    service, trigger = make_service(tmp_path, secret_masker=lambda: masker)
+    checks = FakeChecks([old, old, new, WatchCheckError(f"Failed: {new}")])
+    job_id = await _watching_job(service, checks)
+    scripted_runs(trigger, (RunStatus.COMPLETED, "Updated."))
+    for _ in range(4):
+        await service._watcher.fire(service.get_job(job_id))
+    assert trigger.trigger_run.await_count == 1
+    assert _baseline(service, job_id)["output"] == reference
+    assert reference in (service.get_job(job_id).last_check_error or "")
+    note = trigger.trigger_run.await_args.kwargs["context_note"]
+    stored = "\n".join(
+        path.read_text(encoding="utf-8") for path in (tmp_path / "cron").rglob("*.json")
+    )
+    for value in [old, new]:
+        assert value not in stored
+        assert value not in note
+        assert value not in caplog.text

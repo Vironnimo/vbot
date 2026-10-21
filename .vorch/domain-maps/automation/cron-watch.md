@@ -16,7 +16,7 @@ User decision 2026-10-20 (`.vorch/plans/cron-proactive-automation.md`, decision 
 `_cron_scheduler._run_recurring_job` hands each due time of a job with a watch to `CronWatcher.fire` (`_cron_watcher.py`) instead of `CronExecution._trigger_job_run`:
 
 1. The check runs in one of four check slots (`MAX_CONCURRENT_CRON_RUNS`, apart from the Run slots) under a per-job lock, so checks of one job never overlap. A job that is gone, inactive, no longer watching or has a restart pending is not checked, and an output whose watch an edit replaced meanwhile is dropped.
-2. `_cron_watch.compare` (on the `cron-watch` pool) normalizes the output (LF line endings, trailing whitespace of each line, leading and trailing blank lines; at most 200,000 characters are watched), hashes it with SHA-256 and diffs it from the baseline.
+2. `_cron_watch.compare` (on the `cron-watch` pool) normalizes the output (LF line endings, trailing whitespace of each line, leading and trailing blank lines; at most 200,000 characters are watched), hashes it with SHA-256 to detect changes, then masks known concealed Secret values before storing output or building the diff. Different concealed values still count as a change even when their masked displays match.
 3. No baseline for this watch: the output becomes the baseline and no Run starts. Unchanged: no Run starts. Both record `last_checked_at`; a successful check after a failed one also clears `last_check_error` and resets `consecutive_failures` (the check works again).
 4. Changed: `_trigger_job_run(job, change=...)` starts the Run with the change note. Only a successful Run makes the new output the baseline (`_commit`, which also sets `last_changed_at`); a change whose Run failed or could not start is found again at the next check. Edits wait for that commit as they wait for the Run (`_executing_jobs`).
 
@@ -26,7 +26,7 @@ User decision 2026-10-20 (`.vorch/plans/cron-proactive-automation.md`, decision 
 
 ## Baseline file
 
-`cron/watch-state/<sha256 of job id>.json`: `job_id`, `watch`, `hash`, `output` (normalized, at most 200,000 characters), `checked_at`, `changed_at` (null until a change's Run succeeded). Disposable runtime state outside the JSON document contract (`../json-documents.md`): no `format_version`, never converted, no data-snapshot member, written atomically on the `cron` `OrderedWorker` like claims. A missing file, an unreadable or inconsistent one (WARNING; job id or hash do not match) or one recorded for another watch counts as none: the next check records a new baseline and starts no Run. A failed write logs ERROR; after a Run, the next check then finds the change again.
+`cron/watch-state/<sha256 of job id>.json`: `job_id`, `watch`, `hash` (integrity of the saved output), `comparison_hash` (change fingerprint, falling back to `hash` for older baselines), `output` (masked, normalized, at most 200,000 characters), `checked_at`, `changed_at` (null until a change's Run succeeded). Disposable runtime state outside the JSON document contract (`../json-documents.md`): no `format_version`, never converted, no data-snapshot member, written atomically on the `cron` `OrderedWorker` like claims. A missing file, an unreadable or inconsistent one (WARNING; job id or hash do not match) or one recorded for another watch counts as none: the next check records a new baseline and starts no Run. An older baseline containing a currently known concealed value is masked and rewritten before use; a failed rewrite fails the check without exposing its output. A failed write logs ERROR; after a Run, the next check then finds the change again.
 
 ## Change note
 
@@ -34,7 +34,7 @@ User decision 2026-10-20 (`.vorch/plans/cron-proactive-automation.md`, decision 
 
 ## Check failures
 
-- A `WatchCheckError` (its message names what failed, without a final period) or an unexpected error ("The check could not run: ...", logged ERROR with traceback) fails the check: `last_checked_at` and `last_check_error` are recorded, and `consecutive_failures` counts it like a failed Run, with the same five-failure stop (`cron.md` -> Execution health). WARNING `Cron watch check failed (job=... failures=... first=...)`.
+- A `WatchCheckError` (its message names what failed, without a final period) or an unexpected error ("The check could not run: ...", logged ERROR with traceback) fails the check: `last_checked_at` and `last_check_error` are recorded, and `consecutive_failures` counts it like a failed Run, with the same five-failure stop (`cron.md` -> Execution health). Errors are masked before storage or alerts; logs carry identifiers and error stacks without command output or raw exception messages. WARNING `Cron watch check failed (job=... failures=... first=...)`.
 - Alerts follow the Run failure alerts (`cron.md` -> Delivery) with `check=True`: the alert's error is `last_check_error`, the stop text says `failures in a row`, and the second-failure text says the job keeps checking on schedule. A `chat` job gets them; an `app` job has no failed Run to mark, so its alerts reach the tray as `cron_failure_alert` (`cron.md` -> Delivery); `none` sends nothing.
 
 ## Check runner (`core/tools/watch_checks.py`)
