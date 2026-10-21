@@ -67,6 +67,7 @@ How to read the maps: `AGENTS.md` -> Load context for the task.
 | projects.md | `core/projects/` | Project boundary, anchor/ceiling invariants |
 | subagents.md | `core/subagents/` | Sub-Agent tree, answer forwarding, tree control, reply targets |
 | tools.md | `core/tools/` | Tool contracts and policy; index to per-tool maps |
+| permissions.md | `core/permissions/` | Permission Rules: rule language, Permission Boundary decisions, path normalization, protected locations, refusals |
 | storage.md | `core/storage/` | Data-directory layout, temp-file lifecycle, persistence |
 | secrets.md | `core/secrets/` | Secret Store, key protection, plaintext conversion, Agent Secrets |
 | skills.md | `core/skills/` | Skill loading/validation, scopes, authoring, history and archive, Prompt-Epoch Catalog |
