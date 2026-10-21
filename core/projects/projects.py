@@ -102,6 +102,7 @@ PROJECT_DEFAULT_ALLOWED_TOOLS: tuple[str, ...] = (
     "subagent",
     "skill",
     "show_widget",
+    "portal",
 )
 
 
