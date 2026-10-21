@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -28,8 +29,8 @@ LINKS_NOTE = (
 )
 # Flags whose value is a file ripgrep reads.
 _PATH_FLAGS = ("--file", "--ignore-file")
-# A pattern holding ripgrep glob syntax beyond * and ? is filtered, not excluded.
-_GLOB_SPECIAL = re.compile(r"[\[\]{}\\!]")
+# Rule patterns take these characters literally; ripgrep globs do so inside a class.
+_GLOB_LITERAL = re.compile(r"[\[\]{}]")
 
 
 @dataclass(frozen=True)
@@ -74,9 +75,16 @@ def confine_flags(query: SearchQuery, cwd: Path, permissions: PermissionBoundary
 
 
 def scope_confinement(scope: Scope, permissions: PermissionBoundary) -> Confinement:
-    """The excluding globs and the filter one ripgrep run needs."""
+    """The excluding globs and the filter one ripgrep run needs.
+
+    The excluding globs keep refused files out of ripgrep's searched-file
+    count, so they match without case on Windows, as the rules do there.
+    """
     if not permissions.restricted:
         return UNCONFINED
+    context = permissions.context
+    windows = (context.platform if context else sys.platform) == "win32"
+    flag = "--iglob" if windows else "--glob"
     globs: list[str] = []
     filtered = False
     for path in scope.paths:
@@ -85,9 +93,10 @@ def scope_confinement(scope: Scope, permissions: PermissionBoundary) -> Confinem
         prefix = "" if relative in {"", "."} else relative + "/"
         for pattern in permissions.refusable_below(root, "read"):
             filtered = True
-            glob = f"!/{prefix}{pattern}"
-            if pattern != "**" and not _GLOB_SPECIAL.search(glob[1:]):
-                globs.append(f"--glob={glob}")
+            glob = _GLOB_LITERAL.sub(lambda match: f"[{match.group()}]", f"!/{prefix}{pattern}")
+            # ripgrep reads a backslash as an escape; only the filter leaves such paths out.
+            if pattern != "**" and "\\" not in glob:
+                globs.append(f"{flag}={glob}")
     return Confinement(list(dict.fromkeys(globs)), filtered)
 
 

@@ -533,11 +533,18 @@ class SearchExecution:
         return [path for path in paths if self.permissions.check_path(path, "read") is None]
 
     def _filtered(self, result: ScanResult, scope: Scope) -> ScanResult:
-        """Leave out the entries and ignored paths of ``result`` the rules refuse to read."""
+        """Leave out the entries and ignored paths of ``result`` the rules refuse to read.
+
+        The count of searched files leaves out the refused files ripgrep searched.
+        """
         if self._confinement(scope).filtered:
-            result.entries = [
+            kept = [
                 entry for entry in result.entries if permitted(self.permissions, scope, entry[0])
             ]
+            if result.files_searched is not None:
+                removed = len(result.entries) - len(kept)
+                result.files_searched = max(0, result.files_searched - removed)
+            result.entries = kept
             result.ignored = self._readable(result.ignored, scope)
         return result
 

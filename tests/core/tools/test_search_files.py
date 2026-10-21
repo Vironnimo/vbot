@@ -881,7 +881,11 @@ async def test_the_user_sees_the_results_further_pages_and_warnings(tmp_path: Pa
 
 _DENYING = {
     "read": "work_area",
-    "deny": ["Read({workdir}/src/secrets/**)", "Read({workdir}/**/*.key)"],
+    "deny": [
+        "Read({workdir}/src/secrets/**)",
+        "Read({workdir}/**/*.key)",
+        "Read({workdir}/**/draft[1].txt)",
+    ],
 }
 
 
@@ -893,6 +897,8 @@ def _restricted_tree(tmp_path: Path) -> tuple[Path, PermissionBoundary]:
             "src/a.txt": "token\n",
             "src/secrets/k.txt": "token\n",
             "src/c.key": "token\n",
+            "src/D.KEY": "token\n",
+            "src/draft[1].txt": "token\n",
             "b.key": "token\n",
         },
     )
@@ -928,10 +934,21 @@ def test_a_restricted_search_leaves_out_what_the_rules_refuse(
     restricted = json.dumps(result["data"])
     assert "src" in restricted
     assert "secrets" in full
-    for refused in ("secrets", ".key", "o.txt"):
+    for refused in ("secrets", ".key", "o.txt", "draft"):
         assert refused not in restricted
+    assert ("KEY" in restricted) is (sys.platform != "win32")
     if "-L" in arguments.get("args", []):
         assert "links" in result["data"]["note"]
+
+
+def test_a_restricted_search_counts_only_the_files_it_may_read(tmp_path: Path) -> None:
+    work, boundary = _restricted_tree(tmp_path)
+
+    result = asyncio.run(dispatch(work, {"pattern": "nomatch"}, permissions=boundary))
+
+    # src/a.txt, and src/D.KEY where the rules match case-sensitively.
+    searched = "1 searched file." if sys.platform == "win32" else "2 searched files."
+    assert result["data"]["summary"] == f"No matches in {searched}"
 
 
 @pytest.mark.parametrize(
