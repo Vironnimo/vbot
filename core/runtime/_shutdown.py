@@ -185,6 +185,8 @@ def _steps(runtime: Runtime) -> Iterator[_Step]:
         )
     if (performance := runtime._performance) is not None:
         yield _Step("performance", performance.stop, performance.aclose)
+    if (portals := runtime._portals) is not None:
+        yield _Step("portals", portals.stop, portals.aclose)
     if (commands := runtime._command_manager) is not None:
         yield _Step("command_processes", commands.close, commands.aclose)
     if (terminals := runtime._terminal_manager) is not None:

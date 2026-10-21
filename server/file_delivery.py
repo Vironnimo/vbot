@@ -38,6 +38,9 @@ _CAPABILITY_DOMAINS = {
     EXTENSION_RUN_URL_PREFIX: b"extension-run:",
     WIDGET_URL_PREFIX: b"widget:",
 }
+#: Portal capabilities are no URL of this server: the Portal's own listener checks them.
+_PORTAL_DOMAIN = b"portal:"
+_BARE_TOKEN_DOMAINS = (*_CAPABILITY_DOMAINS.values(), _PORTAL_DOMAIN)
 _CAPABILITY_URL = re.compile(
     "(" + "|".join(re.escape(prefix) for prefix in _CAPABILITY_DOMAINS) + ")"
     r"([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)"
@@ -160,7 +163,7 @@ class FileDelivery:
             return value
 
         def bind(token: str, domain: bytes | None = None) -> str:
-            domains = (domain,) if domain is not None else tuple(_CAPABILITY_DOMAINS.values())
+            domains = (domain,) if domain is not None else _BARE_TOKEN_DOMAINS
             if not any(self._valid_signature(token, candidate) for candidate in domains):
                 return token
             claims: JsonObject = {"capability": token, "actor": actor}
@@ -566,6 +569,32 @@ class FileDelivery:
         except UnicodeError, ValueError, TypeError:
             return None
         return widget_id or None
+
+    def portal_token(self, portal_id: str) -> str:
+        """Return the capability that opens Portal *portal_id*; bound per recipient like others."""
+        payload = _urlsafe_encode(portal_id.encode("utf-8"))
+        signature = _urlsafe_encode(
+            hmac.digest(self._secret, _PORTAL_DOMAIN + payload.encode("ascii"), hashlib.sha256)
+        )
+        return f"{payload}.{signature}"
+
+    def portal_claims(self, token: str) -> tuple[str, str | None] | None:
+        """Return the Portal id a capability opens and its bound actor, or ``None``.
+
+        The actor is ``None`` for an unbound capability, which only the Access
+        Modes without sign-in hand out.
+        """
+        envelope = self._access_envelope(token)
+        inner = envelope["capability"] if envelope is not None else token
+        if not self._valid_signature(inner, _PORTAL_DOMAIN):
+            return None
+        try:
+            portal_id = _urlsafe_decode(inner.split(".")[0]).decode("utf-8")
+        except UnicodeError, ValueError, TypeError:
+            return None
+        if not portal_id:
+            return None
+        return portal_id, envelope["actor"] if envelope is not None else None
 
     @staticmethod
     def widget_headers() -> dict[str, str]:

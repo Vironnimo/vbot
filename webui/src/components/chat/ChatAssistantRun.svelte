@@ -34,6 +34,7 @@
     runFooterNotice,
     runFooterParts,
     showWidgetFromTool,
+    portalFromTool,
     speechArtifactFromTool,
     subAgentAgentId,
     subAgentDescription,
@@ -62,6 +63,7 @@
   import ChatSubAgentMessage from './ChatSubAgentMessage.svelte';
   import ChatWidget from './ChatWidget.svelte';
   import ChatWidgetState from './ChatWidgetState.svelte';
+  import ChatPortal from './ChatPortal.svelte';
   import MarkdownContent from './MarkdownContent.svelte';
   import { timelineViewState } from './timelineViewState.svelte.js';
 
@@ -686,6 +688,10 @@
           {@const shownWidget = showWidgetFromTool(child)}
           {#if shownWidget}
             <ChatWidget widget={shownWidget} />
+          {/if}
+          {@const shownPortal = portalFromTool(child)}
+          {#if shownPortal}
+            <ChatPortal portal={shownPortal} />
           {/if}
         {/if}
       {:else if child.type === 'user_message'}

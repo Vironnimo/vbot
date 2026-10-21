@@ -30,7 +30,7 @@ Bridge protocol (plain objects; the parent posts only to the frame's window, the
 - Values become durable only when sent. Before that they live in the browser's origin storage, so another device does not see unsent changes.
 - Capability URLs are process-local; after a restart History projection mints new ones and the WebUI follows a new URL only until the frame has connected.
 - Channels and the TUI show no widget. The Tool result says so for those reply surfaces, so the Agent can tell the user to open the Session in the app.
-- Not built: opening a widget in the second Chat area, updating a widget in place, widgets reading live data, Portals (a dev-server proxy), widgets on Channels.
+- Not built: opening a widget in the second Chat area, updating a widget in place, widgets reading live data (Portals show running apps, `tools/portal.md`), widgets on Channels.
 
 ## Agent-facing text
 

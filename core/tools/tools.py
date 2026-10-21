@@ -485,6 +485,8 @@ class ToolRegistry:
             payload["secrets_used"] = list(context.presentation_secret_uses)
         if context is not None and context.presentation_widget:
             payload["widget_reference"] = dict(context.presentation_widget)
+        if context is not None and context.presentation_portal:
+            payload["portal"] = dict(context.presentation_portal)
         if "details" in payload:
             payload["details"].extend(_detail_blocks(context, result, payload["details"]))
         return payload

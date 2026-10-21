@@ -23,6 +23,7 @@ What the server serves to browsers by capability instead of credential: signed o
 ## Agent widgets
 
 - `GET /api/widgets/{token}` (`server/_widget_routes.py`) serves an Agent widget's document under the domain-separated capability `widget:` over its payload id (`FileDelivery.widget_url`/`widget_id`, registered in `_CAPABILITY_DOMAINS` and `_CAPABILITY_ROUTES`, so `authenticated` mode binds it like other capability URLs). The URL is minted when a Tool display is projected. Headers: the active-document CSP narrowed to `sandbox allow-scripts` plus `frame-ancestors 'self'`, `no-store`. A frame navigation carries no `Origin: null`, so the route needs no CORS exception. Document and bridge: `tools/show_widget.md`.
+- Portals (`tools/portal.md`) use the capability domain `portal:` over the Portal id (`FileDelivery.portal_token`/`portal_claims`). It names no route of the main server: it is listed only among the bare-token domains `bind()` wraps, `portal.list` returns it bound to the caller, and only the Portal's own listener accepts it. The WebUI CSP adds `frame-src 'self' <scheme>://<request host>:*` so the card can embed a Portal (no source for an IPv6 literal host).
 
 ## Opaque-origin exceptions
 

@@ -39,6 +39,7 @@
     reasoningDurationLabel,
     shouldRenderMessage,
     showWidgetFromTool,
+    portalFromTool,
     speechArtifactFromResult,
     takeoverSeparatorLabel,
     goalEventLabel,
@@ -62,6 +63,7 @@
   import ChatSubAgentMessage from './ChatSubAgentMessage.svelte';
   import ChatWidget from './ChatWidget.svelte';
   import ChatWidgetState from './ChatWidgetState.svelte';
+  import ChatPortal from './ChatPortal.svelte';
   import MarkdownContent from './MarkdownContent.svelte';
   import ChatReasoning from './ChatReasoning.svelte';
   import ToolDetails from './ToolDetails.svelte';
@@ -507,6 +509,7 @@
     {@const eventToolRow = toolRowFromEvent(item.event)}
     {@const eventPresentation = toolRowPresentation(eventToolRow)}
     {@const eventWidget = showWidgetFromTool(eventToolRow)}
+    {@const eventPortal = portalFromTool(eventToolRow)}
     <article class="msg assistant">
       <div class="msg-header">
         <span class="msg-author">{labelForEvent(item.event)}</span>
@@ -580,6 +583,9 @@
         {/if}
         {#if eventWidget}
           <ChatWidget widget={eventWidget} />
+        {/if}
+        {#if eventPortal}
+          <ChatPortal portal={eventPortal} />
         {/if}
       </div>
     </article>

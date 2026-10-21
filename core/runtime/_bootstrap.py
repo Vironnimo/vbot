@@ -141,6 +141,8 @@ from core.tools.command_manager import CommandManager
 from core.tools.cron import register_cron_tool
 from core.tools.live import LIVE_TOOL_FAMILY, LiveToolHosts, register_live_tools
 from core.tools.load_tools import register_load_tools_tool
+from core.tools.portal import register_portal_tool
+from core.tools.portal_registry import PortalRegistry
 from core.tools.secrets import register_secrets_tool
 from core.tools.show_widget import register_show_widget_tool
 from core.tools.status import register_status_tool
@@ -430,6 +432,9 @@ def bootstrap(runtime: Runtime) -> None:
         register_generate_speech_tool(runtime._tools, runtime._speech)
         register_classify_tool(runtime._tools, runtime._decisions)
         register_show_widget_tool(runtime._tools)
+        # The server attaches the listeners; until then opening a Portal is refused.
+        runtime._portals = PortalRegistry()
+        register_portal_tool(runtime._tools, runtime._portals)
         register_analyze_image_tool(
             runtime._tools, runtime._image, attachment_store=runtime._attachment_store
         )

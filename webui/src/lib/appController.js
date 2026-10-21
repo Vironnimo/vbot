@@ -138,6 +138,9 @@ export function createAppController({
   onReloadAgents,
   onReloadExtensionPages = async () => {},
   onExtensionChange = () => {},
+  // A Session's Portals changed (its `portals` scope), or, with null, every
+  // Session's may have.
+  onPortalsChanged = () => {},
   onLoadDataStoreStatus = async () => {},
   onLoadBackgroundActivity = async () => {},
   onCheckWebuiBuild = async () => {},
@@ -248,6 +251,7 @@ export function createAppController({
         state.terminalsRefreshToken += 1;
         state.skillsRefreshToken += 1;
         state.archiveRefreshToken += 1;
+        onPortalsChanged(null);
         refreshOwners.push(onLoadProjects, onReloadAgents);
       }
       // Recovery owners are independent. Optional projections cannot hold up
@@ -361,6 +365,9 @@ export function createAppController({
       if (deletion) {
         state.sessionDeletion = deletion;
       }
+    }
+    if (kind === 'portals') {
+      onPortalsChanged(event.payload?.scope ?? null);
     }
     if (kind === 'queue') {
       const scope = event.payload?.scope ?? {};

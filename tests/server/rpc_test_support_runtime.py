@@ -51,6 +51,7 @@ from core.skills import SkillAuthoringService
 from core.storage import StorageManager
 from core.tools import FileReadState, ToolRegistry
 from core.tools.command_manager import CommandManager
+from core.tools.portal_registry import PortalRegistry
 from core.utils.errors import ConfigError
 from core.utils.version import BuildIdentity
 from server.events import ServerEventBus
@@ -538,6 +539,7 @@ class StubRuntime:
         self.chat_runs: ChatRunManager | None = None
         self.extensions: Any = None
         self.terminal_manager = StubTerminalManager()
+        self.portals = PortalRegistry()
         self.command_manager = CommandManager()
         self.cron_service: Any = StubJobService()
         self.bootstrap_service: Any = StubJobService()

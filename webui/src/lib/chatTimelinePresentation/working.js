@@ -3,17 +3,21 @@ import { t } from '$lib/i18n.js';
 import { toolDurationMs, toolStartedTimestamp } from './toolFacts.js';
 import { visibleRunChildren } from './activity.js';
 import { isShowWidgetTool } from './widgets.js';
+import { isPortalTool } from './portals.js';
 
-// A `show_widget` row is output for the user, like an Agent message: it ends
-// a span, so its widget stays visible in compact mode.
+// `show_widget` and `portal` rows are output for the user, like an Agent
+// message: they end a span, so their widget or Portal card stays visible in
+// compact mode.
 const isWorkingChild = (child) =>
   child.type === 'reasoning' ||
-  (child.type === 'tool_call' && !isShowWidgetTool(child));
+  (child.type === 'tool_call' &&
+    !isShowWidgetTool(child) &&
+    !isPortalTool(child));
 
 // Compact Work details fold each contiguous span of at least two Thinking or
-// Tool rows into one Working line; Assistant output, widgets, user messages
-// and every other row stay in place, and a single Thinking or Tool row stays
-// inline.
+// Tool rows into one Working line; Assistant output, widgets, Portal cards,
+// user messages and every other row stay in place, and a single Thinking or
+// Tool row stays inline.
 export function groupRunChildren(children, workingMode) {
   if (workingMode !== 'compact') {
     return children.map((child) => ({

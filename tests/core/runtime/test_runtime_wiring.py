@@ -52,6 +52,7 @@ CANONICAL_BUILTIN_TOOLS = [
     "generate_speech",
     "generate_video",
     "memory",
+    "portal",
     "project",
     "read",
     "search_files",
