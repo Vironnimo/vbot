@@ -52,6 +52,26 @@ def _session_address(project_id: str | None, agent_id: str, session_id: str) -> 
     return SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
 
 
+def _subscribe(
+    callbacks: list[Callable[[Run], None]], callback: Callable[[Run], None]
+) -> Callable[[], None]:
+    callbacks.append(callback)
+
+    def remove_callback() -> None:
+        if callback in callbacks:
+            callbacks.remove(callback)
+
+    return remove_callback
+
+
+def _notify(callbacks: list[Callable[[Run], None]], run: Run, failure: str) -> None:
+    for callback in list(callbacks):
+        try:
+            callback(run)
+        except Exception:
+            _LOGGER.warning(failure, exc_info=True)
+
+
 def _decide_completion_activity(run: Run, status: RunStatus, result: object) -> None:
     """Let the admission's decision set whether the finished Run counts as activity.
 
@@ -113,6 +133,7 @@ class ChatRunManager:
         self._waiting_work_admissions: dict[str, WaitingWorkAdmission] = {}
         self._runs: dict[str, Run] = {}
         self._run_started_callbacks: list[Callable[[Run], None]] = []
+        self._run_finished_callbacks: list[Callable[[Run], None]] = []
         self._completed_run_retention_limit = completed_run_retention_limit
         self._run_event_retention_limit = run_event_retention_limit
         self._waiting_work_limit = waiting_work_limit
@@ -179,13 +200,15 @@ class ChatRunManager:
 
     def add_run_started_callback(self, callback: Callable[[Run], None]) -> Callable[[], None]:
         """Register a callback invoked whenever this manager starts a Run."""
-        self._run_started_callbacks.append(callback)
+        return _subscribe(self._run_started_callbacks, callback)
 
-        def remove_callback() -> None:
-            if callback in self._run_started_callbacks:
-                self._run_started_callbacks.remove(callback)
+    def add_run_finished_callback(self, callback: Callable[[Run], None]) -> Callable[[], None]:
+        """Register a callback invoked once a Run of this manager has finished.
 
-        return remove_callback
+        It runs after the Run's terminal event, once the Session is released and
+        the next queued item, if any, has started. Returns the unsubscribe function.
+        """
+        return _subscribe(self._run_finished_callbacks, callback)
 
     @asynccontextmanager
     async def session_admission_guard(
@@ -877,7 +900,10 @@ class ChatRunManager:
                 if self._active_by_session.get(address) is run:
                     self._active_by_session.pop(address, None)
                 self._prune_terminal_runs_locked()
-            await self._drain_next(address)
+            try:
+                await self._drain_next(address)
+            finally:
+                self._notify_run_finished(run)
         if abort is not None:
             raise abort
 
@@ -980,11 +1006,10 @@ class ChatRunManager:
         return run
 
     def _notify_run_started(self, run: Run) -> None:
-        for callback in list(self._run_started_callbacks):
-            try:
-                callback(run)
-            except Exception:
-                _LOGGER.warning("Run start callback failed", exc_info=True)
+        _notify(self._run_started_callbacks, run, "Run start callback failed")
+
+    def _notify_run_finished(self, run: Run) -> None:
+        _notify(self._run_finished_callbacks, run, "Run finish callback failed")
 
     def _prune_terminal_runs_locked(self) -> None:
         terminal_run_ids = [

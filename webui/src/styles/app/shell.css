@@ -284,6 +284,13 @@
   animation: agent-activity-pulse 1.4s ease-in-out infinite;
 }
 
+/* Waiting work is not finished either: an amber ring, still, so it reads as
+   related to running but not busy. */
+.tab-indicator--waiting {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--amber);
+}
+
 .tab-indicator--unread {
   background: var(--blue);
   box-shadow: 0 0 0 2px var(--blue-dim);

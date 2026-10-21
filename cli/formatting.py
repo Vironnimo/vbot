@@ -3,6 +3,8 @@
 The management modules render RPC result fields as deterministic, agent-facing
 plain text. These small formatters were copy-pasted across ~14 of them; this is
 their one home. Modules import them under their local ``_name`` convention.
+``duration_text`` also serves the TUI and the tray's toasts, which write
+durations as the WebUI does.
 """
 
 from __future__ import annotations
@@ -85,3 +87,15 @@ def format_string_list(value: object) -> str:
     if not value:
         return "[]"
     return ",".join(str(item) for item in value)
+
+
+def duration_text(milliseconds: float) -> str:
+    """A duration as the WebUI writes it: 0.4s, 12s, 1m 5s, 1h 2m."""
+    seconds = max(0.0, milliseconds / 1000)
+    if seconds < 10:
+        return f"{seconds:.1f}s"
+    if seconds < 60:
+        return f"{round(seconds)}s"
+    hours, rest = divmod(round(seconds), 3600)
+    minutes, seconds_left = divmod(rest, 60)
+    return f"{hours}h {minutes}m" if hours else f"{minutes}m {seconds_left}s"

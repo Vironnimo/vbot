@@ -12,6 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast, override
 
+from core.activity import IDLE, FinishedWork, SessionActivityCallback, SessionActivityState
 from core.archive import ArchiveService, ArchiveServices
 from core.automation import (
     AutomationReferences,
@@ -457,6 +458,37 @@ class StubRecall:
         self.removed_agents.append(agent_id)
 
 
+class StubSessionActivity:
+    """Session activity the test sets; ``publish`` announces a change like ``SessionActivity``."""
+
+    def __init__(self) -> None:
+        self.states: dict[SessionAddress, SessionActivityState] = {}
+        self._callbacks: list[SessionActivityCallback] = []
+
+    def state(self, address: SessionAddress) -> SessionActivityState:
+        return self.states.get(address, IDLE)
+
+    def snapshot(self) -> list[tuple[SessionAddress, SessionActivityState]]:
+        return list(self.states.items())
+
+    def add_changed_callback(self, callback: SessionActivityCallback) -> Callable[[], None]:
+        self._callbacks.append(callback)
+        return lambda: self._callbacks.remove(callback)
+
+    def publish(
+        self,
+        address: SessionAddress,
+        state: SessionActivityState,
+        finished: FinishedWork | None = None,
+    ) -> None:
+        if state.state == "idle":
+            self.states.pop(address, None)
+        else:
+            self.states[address] = state
+        for callback in list(self._callbacks):
+            callback(address, state, finished)
+
+
 class StubRuntime:
     def __init__(self, tmp_path: Path, adapter: StubAdapter) -> None:
         self._model_database_refresh_lock = asyncio.Lock()
@@ -520,6 +552,7 @@ class StubRuntime:
         self.statistics_index: Any = StubStatisticsIndex()
         self.usage_recorder: Any = None
         self.trigger_service: Any = None
+        self.session_activity = StubSessionActivity()
         self.recall_reload_count = 0
         self.recall: Any = StubRecall()
         self.extension_reload_count = 0

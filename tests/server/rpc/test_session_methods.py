@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -17,6 +18,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from core.activity import SessionActivityState, WaitingFor
 from core.agents import AgentNotFoundError
 from core.channels import ChannelConfig
 from core.chat import ChatMessage
@@ -33,6 +35,7 @@ from tests.server.rpc_test_support import (
     JsonObject,
     StubAdapter,
     StubProject,
+    StubSessionActivity,
     call,
     make_state,
     resource_changes,
@@ -385,12 +388,29 @@ async def test_session_list_scopes_one_agent_and_resolves_the_effective_policy(
     agent_id: str, scope: tuple[str, str | None]
 ) -> None:
     state, _resolver, sessions = stub_session_state()
+    activity = StubSessionActivity()
+    activity.states[SessionAddress(scope[1], scope[0], "s1")] = SessionActivityState(
+        "waiting", datetime(2026, 10, 21, 9, 0, tzinfo=UTC), WaitingFor(commands=2)
+    )
+    state.runtime.session_activity = activity
 
     result = await rpc_result(state, "session.list", agent_id=agent_id)
 
     [session] = result["sessions"]
     assert session["id"] == "s1"
     assert session["agent_address"] == agent_id
+    # The row carries the Session's activity, as ``session_activity_changed`` reports it.
+    assert (
+        session["has_active_run"],
+        session["activity_state"],
+        session["work_started_at"],
+        session["waiting_for"],
+    ) == (
+        False,
+        "waiting",
+        "2026-10-21T09:00:00.000000Z",
+        {"subagents": 0, "commands": 2, "results": 0},
+    )
     assert session["compaction_policy_override"] is None
     assert session["compaction_policy_effective"]["enabled"] is True
     assert sessions.listed == [scope]

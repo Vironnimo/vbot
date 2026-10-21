@@ -11,6 +11,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Protocol, cast
 from uuid import uuid4
 
+from core.activity import SessionActivity
 from core.agents import LIVE_BACKEND_BUILTIN
 from core.agents.agents import AgentStore
 from core.agents.temporary import TemporaryAgentRegistry
@@ -838,6 +839,12 @@ def bootstrap(runtime: Runtime) -> None:
             runtime, runtime._trigger_service, secrets=runtime._agent_secrets
         )
         runtime._subagent_coordinator.install(runtime._chat_run_manager)
+        runtime._session_activity = SessionActivity(
+            runs=runtime._chat_run_manager,
+            commands=runtime._command_manager,
+            completions=runtime._trigger_service,
+            subagents=runtime._subagent_coordinator,
+        )
         register_subagent_tools(
             runtime._tools,
             runtime._subagent_coordinator,

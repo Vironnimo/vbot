@@ -6,6 +6,7 @@ import asyncio
 import logging
 from collections import OrderedDict
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import get_ident
 from types import SimpleNamespace
@@ -13,6 +14,7 @@ from typing import Any, cast
 
 import pytest
 
+from core.activity import IDLE, FinishedWork, SessionActivityState, WaitingFor
 from core.chat import ChatMessage
 from core.chat.output_files import AssistantFileReference
 from core.runs import (
@@ -32,8 +34,13 @@ from core.runs import (
     RunEvent,
     RunKind,
 )
+from core.sessions import SessionAddress
 from core.subagents import SUBAGENT_SESSION_STARTED_EVENT, SUBAGENT_STATUS_CHANGED_EVENT
-from server.events import ALLOWED_SERVER_EVENT_TYPES, ServerEventBus
+from server.events import (
+    ALLOWED_SERVER_EVENT_TYPES,
+    SESSION_ACTIVITY_CHANGED_EVENT,
+    ServerEventBus,
+)
 from server.file_delivery import FileDelivery
 from server.rpc import event_bridge
 from server.rpc.event_bridge import (
@@ -45,7 +52,9 @@ from server.rpc.event_bridge import (
     _bridge_queued_item_to_event_bus,
     _publish_run_events,
     _server_event_from_run_event,
+    bridge_run_to_event_bus,
     publish_resource_changed,
+    publish_session_activity_changed,
 )
 
 JsonObject = dict[str, Any]
@@ -594,3 +603,91 @@ def test_run_event_bridge_dedupe_cache_is_bounded() -> None:
     assert list(cache) == ["run-two", "run-three"]
     assert event_bridge._run_was_already_bridged(state, cache, "run-one") is False
     assert list(cache) == ["run-three", "run-one"]
+
+
+@pytest.mark.asyncio
+async def test_session_activity_changes_follow_the_terminal_events_of_their_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An accessor that sees a Session go idle has already seen its Run end;
+    changes of one Session keep their order, other Sessions do not wait."""
+    state = SimpleNamespace(
+        event_bus=ServerEventBus(),
+        run_event_bridge_run_ids=OrderedDict(),
+        file_delivery=FileDelivery(),
+        run_event_bridges={},
+        session_activity_publications={},
+    )
+    projecting = asyncio.Event()
+    release = asyncio.Event()
+
+    async def paused_projection(value: Any, **kwargs: Any) -> Any:
+        projecting.set()
+        await release.wait()
+        return value
+
+    # The Run ends while its bridge still projects its start.
+    monkeypatch.setattr(event_bridge, "remove_opaque_provider_metadata_async", paused_projection)
+    run = Run(run_id="run-one", agent_id="agent-1", session_id="session-1", project_id="vbot")
+    run.emit(RUN_STARTED_EVENT, {"status": "running"})
+    bridge_run_to_event_bus(state, run)
+    await asyncio.wait_for(projecting.wait(), timeout=1)
+    run.mark_completed("done")
+
+    address = SessionAddress("vbot", "agent-1", "session-1")
+    started = datetime(2026, 10, 21, 9, 0, 0, 250_000, tzinfo=UTC)
+    waiting = SessionActivityState("waiting", started, WaitingFor(subagents=2, commands=1))
+    finished = FinishedWork(started, started + timedelta(seconds=90), 90_000)
+    publish_session_activity_changed(state, address, waiting)
+    publish_session_activity_changed(state, address, IDLE, finished)
+    excluded = SessionActivityState("working", started, contributes_to_agent_activity=False)
+    publish_session_activity_changed(state, SessionAddress(None, "agent-2", "session-2"), excluded)
+    release.set()
+    await asyncio.wait_for(state.session_activity_publications[address], timeout=1)
+
+    assert [event["type"] for event in state.event_bus.events] == [
+        SESSION_ACTIVITY_CHANGED_EVENT,
+        "run_started",
+        "run_completed",
+        "resource_changed",
+        "resource_changed",
+        SESSION_ACTIVITY_CHANGED_EVENT,
+        SESSION_ACTIVITY_CHANGED_EVENT,
+    ]
+    activity = [
+        event["payload"]
+        for event in state.event_bus.events
+        if event["type"] == SESSION_ACTIVITY_CHANGED_EVENT
+    ]
+    assert activity == [
+        {
+            "project_id": None,
+            "agent_id": "agent-2",
+            "session_id": "session-2",
+            "state": "working",
+            "work_started_at": "2026-10-21T09:00:00.250000Z",
+            "waiting_for": {"subagents": 0, "commands": 0, "results": 0},
+            "contributes_to_agent_activity": False,
+        },
+        {
+            "project_id": "vbot",
+            "agent_id": "agent-1",
+            "session_id": "session-1",
+            "state": "waiting",
+            "work_started_at": "2026-10-21T09:00:00.250000Z",
+            "waiting_for": {"subagents": 2, "commands": 1, "results": 0},
+        },
+        {
+            "project_id": "vbot",
+            "agent_id": "agent-1",
+            "session_id": "session-1",
+            "state": "idle",
+            "work_started_at": None,
+            "waiting_for": {"subagents": 0, "commands": 0, "results": 0},
+            "finished_work": {
+                "started_at": "2026-10-21T09:00:00.250000Z",
+                "finished_at": "2026-10-21T09:01:30.250000Z",
+                "duration_ms": 90_000,
+            },
+        },
+    ]

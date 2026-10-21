@@ -752,7 +752,13 @@ async def test_completion_delivery_joins_active_run_at_next_request_boundary(
 
     origin = await manager.start(_ADDRESS, executor)
     service, loop, session = _completion_service(tmp_path, manager)
+    # What Session activity counts at each announced change.
+    wakes: list[tuple[SessionAddress, int]] = []
+    service.add_completion_changed_callback(
+        lambda address: wakes.append((address, service.pending_completion_wakes(address)))
+    )
     delivery = _submit(service, "bash:in-run", "finished during the active run", origin.id)
+    assert wakes == [(_ADDRESS, 1)]
 
     if deferred:
         session.begin_defer_notes()
@@ -771,6 +777,8 @@ async def test_completion_delivery_joins_active_run_at_next_request_boundary(
     notes = _notes(session)
     assert len(notes) == 1
     assert "finished during the active run" in notes[0]
+    # In the Session now, but it wakes the Session until the Model answered.
+    assert service.pending_completion_wakes(_ADDRESS) == 1
     if ending == "user_cancelled":
         await manager.cancel(origin.id, reason="user")
     else:
@@ -786,6 +794,8 @@ async def test_completion_delivery_joins_active_run_at_next_request_boundary(
     # without storing them again; a user's Stop never does.
     assert _ADDRESS not in buckets
     assert len(_notes(session)) == 1
+    assert service.pending_completion_wakes(_ADDRESS) == 0
+    assert wakes[-1] == (_ADDRESS, 0)
     if follow_up:
         [message] = loop.messages
         assert automation_module.UNREAD_COMPLETION_TEXT in message

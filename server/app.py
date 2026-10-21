@@ -43,6 +43,7 @@ from server._app_lifecycle import (
     _unregister_model_catalog_change_bridge,
     _unregister_recall_index_status_bridge,
     _unregister_run_event_bridge,
+    _unregister_session_activity_bridge,
     _unregister_session_completion_read_bridge,
     _unregister_session_title_bridge,
     _unregister_skill_change_bridge,
@@ -83,6 +84,7 @@ from server._streams import (
     _replay_after_sequence,
     _RunStreamingResponse,
     _server_identity,
+    _session_activity_snapshot,
     _sse_run_events,
     _stream_websocket_events,
     _unregister_ws_client,
@@ -282,6 +284,7 @@ def create_app(
                 await _shutdown_statistics_warmup(app.state.statistics_warmup_task)
                 await app.state.activity.aclose()
                 _unregister_run_event_bridge(app.state)
+                _unregister_session_activity_bridge(app.state)
                 _unregister_session_title_bridge(app.state)
                 _unregister_session_completion_read_bridge(app.state)
                 _unregister_cron_change_bridge(app.state)
@@ -666,6 +669,7 @@ def create_app(
                 "replay_status": replay_status,
                 "active_runs": active_runs,
                 "queues": _queues_snapshot(websocket.app.state),
+                "session_activity": _session_activity_snapshot(websocket.app.state),
                 "server": websocket.app.state.server_identity,
             }
             await websocket.send_json(

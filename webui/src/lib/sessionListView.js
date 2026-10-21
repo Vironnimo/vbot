@@ -1,4 +1,11 @@
 import { t } from './i18n.js';
+import {
+  SESSION_IDLE,
+  SESSION_WAITING,
+  normalizeActivityState,
+  normalizeWaitingFor,
+  sessionActivityKey,
+} from './sessionActivity.js';
 import { asOptionalText, isPlainObject } from './values.js';
 
 // Librarian and Live Sessions are not among them: the server lists them only in
@@ -168,10 +175,16 @@ export function appendProjectGroupPage(groups, projectId, page) {
   });
 }
 
+// The list rows with Chat's live unread state (`activityRows`) and App's live
+// Session activity (`sessionActivity`, see ../sessionActivity.js) laid over
+// the last snapshot. Once App holds Session activity, a row it lacks is idle;
+// before that, rows keep the activity the server listed. A row whose live
+// activity matches keeps its identity.
 export function overlayLiveSessionActivity(
   sessions,
   activityRows,
   defaultAgentAddress,
+  sessionActivity = null,
 ) {
   const fallbackAddress = asOptionalText(defaultAgentAddress);
   const activityBySession = new Map();
@@ -191,22 +204,52 @@ export function overlayLiveSessionActivity(
     if (sessionId === null || agentAddress === null) {
       return session;
     }
-    const activity = activityBySession.get(`${agentAddress}::${sessionId}`);
-    if (!activity) {
+    const key = sessionActivityKey(agentAddress, sessionId);
+    const activity = activityBySession.get(key);
+    const unread = activity
+      ? {
+          has_unread_completion: activity.has_unread_completion === true,
+          latest_completion_run_id: asOptionalText(
+            activity.latest_completion_run_id,
+          ),
+          unread_run_id: asOptionalText(activity.unread_run_id),
+          unread_run_status: asOptionalText(activity.unread_run_status),
+          unread_run_at: asOptionalText(activity.unread_run_at),
+        }
+      : null;
+    const entry = sessionActivity?.[key];
+    const work = sessionActivity
+      ? rowActivity(entry?.state, entry?.workStartedAt, entry?.waitingFor)
+      : null;
+    if (!unread && (!work || sameRowActivity(session, work))) {
       return session;
     }
-    return {
-      ...session,
-      has_active_run: activity.has_active_run === true,
-      has_unread_completion: activity.has_unread_completion === true,
-      latest_completion_run_id: asOptionalText(
-        activity.latest_completion_run_id,
-      ),
-      unread_run_id: asOptionalText(activity.unread_run_id),
-      unread_run_status: asOptionalText(activity.unread_run_status),
-      unread_run_at: asOptionalText(activity.unread_run_at),
-    };
+    return { ...session, ...unread, ...work };
   });
+}
+
+// A row's Session activity: `activity_state` ('working', 'waiting' or
+// 'idle'), when the work started and what a waiting Session waits for.
+function rowActivity(state, workStartedAt, waitingFor) {
+  const activityState = normalizeActivityState(state);
+  return {
+    activity_state: activityState,
+    work_started_at:
+      activityState === SESSION_IDLE ? null : asOptionalText(workStartedAt),
+    waiting_for: normalizeWaitingFor(
+      activityState === SESSION_WAITING ? waitingFor : null,
+    ),
+  };
+}
+
+function sameRowActivity(session, work) {
+  return (
+    session.activity_state === work.activity_state &&
+    session.work_started_at === work.work_started_at &&
+    Object.keys(work.waiting_for).every(
+      (kind) => session.waiting_for?.[kind] === work.waiting_for[kind],
+    )
+  );
 }
 
 export function selectSession(state, sessionId, agentAddress = null) {
@@ -420,7 +463,11 @@ function normalizeSession(session) {
     created_at: asOptionalText(session?.created_at),
     last_active_at: asOptionalText(session?.last_active_at),
     has_unread_completion: session?.has_unread_completion === true,
-    has_active_run: session?.has_active_run === true,
+    ...rowActivity(
+      session?.activity_state,
+      session?.work_started_at,
+      session?.waiting_for,
+    ),
     latest_completion_run_id: asOptionalText(session?.latest_completion_run_id),
     unread_run_id: asOptionalText(session?.unread_run_id),
     unread_run_status: asOptionalText(session?.unread_run_status),

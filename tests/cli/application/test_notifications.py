@@ -75,6 +75,46 @@ def _read(run_id: str = "run_1") -> dict[str, Any]:
     return {"type": "resource_changed", "payload": {"kind": "sessions", "scope": scope}}
 
 
+_SPAN = "2026-10-21T10:00:00.000000Z"
+_NEXT_SPAN = "2026-10-21T11:00:00.000000Z"
+
+
+def _activity_row(state: str = "working", **fields: object) -> dict[str, Any]:
+    busy = state != "idle"
+    return {
+        "project_id": None,
+        "agent_id": "coder",
+        "session_id": "ses_1",
+        "state": state,
+        "work_started_at": _SPAN if busy else None,
+        "waiting_for": {"subagents": int(state == "waiting"), "commands": 0, "results": 0},
+        **fields,
+    }
+
+
+def _activity(state: str, **fields: object) -> dict[str, Any]:
+    return {"type": "session_activity_changed", "payload": _activity_row(state, **fields)}
+
+
+def _hello(*rows: dict[str, Any], replay_status: str = "fresh") -> dict[str, Any]:
+    return {
+        "type": "connection_ready",
+        "replay_status": replay_status,
+        "session_activity": list(rows),
+    }
+
+
+_WORKING = _hello(_activity_row())
+_IDLE = _activity(
+    "idle",
+    finished_work={
+        "started_at": _SPAN,
+        "finished_at": "2026-10-21T10:12:05.000000Z",
+        "duration_ms": 725_000,
+    },
+)
+
+
 @pytest.mark.parametrize(
     ("event_type", "payload", "kind"),
     [
@@ -190,6 +230,80 @@ def test_run_toast_respects_its_setting_and_the_read_acknowledgement(
 
     assert len(sink.shown) == shown
     assert sink.dismissed == dismissed
+
+
+@pytest.mark.parametrize(
+    ("steps", "shown"),
+    [
+        pytest.param([_WORKING, _run_event()], [], id="still-working"),
+        pytest.param(
+            [_WORKING, _run_event(), _IDLE],
+            [("run:run_1", "Fix login\nFinished after 12m 5s")],
+            id="shown-once-idle",
+        ),
+        pytest.param(
+            [_WORKING, _run_event(), _activity("idle", session_id="ses_2")],
+            [],
+            id="another-session-idle",
+        ),
+        # Wake-ups after Sub-Agent answers end the same span with one toast.
+        pytest.param(
+            [
+                _WORKING,
+                _run_event(),
+                _activity("waiting"),
+                _activity("working"),
+                _run_event(run_id="run_2", run_kind="system"),
+                _IDLE,
+            ],
+            [("run:run_2", "Fix login\nFinished after 12m 5s")],
+            id="one-toast-per-span",
+        ),
+        pytest.param(
+            [_WORKING, _run_event("run_failed", error="Provider refused")],
+            [("run:run_1", "Fix login\nProvider refused")],
+            id="failure-at-once",
+        ),
+        pytest.param([_WORKING, _run_event(), _read(), _IDLE], [], id="read-meanwhile"),
+        # The idle report was lost with the connection: the hello settles it.
+        pytest.param(
+            [_WORKING, _run_event(), _hello()],
+            [("run:run_1", "Fix login")],
+            id="idle-in-a-gap",
+        ),
+        pytest.param(
+            [_WORKING, _run_event(), _hello(_activity_row(work_started_at=_NEXT_SPAN))],
+            [("run:run_1", "Fix login")],
+            id="next-span-in-a-gap",
+        ),
+        # A resumed stream replays every change itself, the idle report included.
+        pytest.param(
+            [
+                _WORKING,
+                _run_event(),
+                _hello(replay_status="resumed"),
+                _run_event(run_id="run_2"),
+                _IDLE,
+            ],
+            [("run:run_2", "Fix login\nFinished after 12m 5s")],
+            id="resumed-replay",
+        ),
+    ],
+)
+def test_completed_run_toast_waits_for_the_end_of_the_sessions_work_span(
+    steps: list[dict[str, Any]], shown: list[tuple[str, str]]
+):
+    sink = _Sink()
+
+    async def scenario() -> None:
+        notifier = _notifier(sink)
+        for step in steps:
+            notifier.event_received(step)
+            await _settle()
+
+    asyncio.run(scenario())
+
+    assert [(toast.key, toast.body) for toast in sink.shown] == shown
 
 
 @pytest.mark.parametrize(

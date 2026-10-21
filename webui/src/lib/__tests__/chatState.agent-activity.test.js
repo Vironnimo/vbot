@@ -9,9 +9,12 @@ import {
   ensureSessionState,
   isRunActive,
   newestUnreadSessionForAgent,
-  startRun,
   visibleTimelineItemsForRender,
 } from '../chatState.js';
+import {
+  applySessionActivityChange,
+  sessionActivityFromSnapshot,
+} from '../sessionActivity.js';
 import { createRunEventFeed } from '../runEventFeed.svelte.js';
 import {
   deferred,
@@ -892,13 +895,8 @@ describe('scoped completion activity', () => {
 });
 
 describe('Agent activity projection', () => {
-  it('prioritizes a running Session over unread results and finds the newest unread Session', () => {
+  it('derives Agent status from Session activity and counts unread results of idle Sessions only', () => {
     const chatState = createChatState();
-    const runningSession = ensureSessionState(
-      chatState,
-      'alpha',
-      'session-running',
-    );
     const olderUnread = ensureSessionState(chatState, 'alpha', 'session-older');
     const newerUnread = ensureSessionState(chatState, 'alpha', 'session-newer');
     olderUnread.hasUnreadCompletion = true;
@@ -907,13 +905,51 @@ describe('Agent activity projection', () => {
     newerUnread.hasUnreadCompletion = true;
     newerUnread.unreadRunId = 'run-new';
     newerUnread.unreadRunAt = '2026-07-20T10:05:00+00:00';
-    startRun(runningSession, {
-      run_id: 'run-live',
-      status: 'running',
+    const row = (sessionId, state, extra = {}) => ({
+      project_id: null,
+      agent_id: 'alpha',
+      session_id: sessionId,
+      state,
+      work_started_at: '2026-07-20T10:06:00+00:00',
+      ...extra,
     });
 
-    expect(agentActivityStatus(chatState, 'alpha')).toBe('running');
+    expect(agentActivityStatus(chatState, 'alpha')).toBe('unread');
     expect(newestUnreadSessionForAgent(chatState, 'alpha')).toBe(newerUnread);
+
+    // The newer result's Session waits for its Sub-Agent: not finished yet.
+    chatState.sessionActivity = sessionActivityFromSnapshot([
+      row('session-newer', 'waiting', { waiting_for: { subagents: 1 } }),
+    ]);
+    expect(agentActivityStatus(chatState, 'alpha')).toBe('waiting');
+    expect(agentUnreadResults(chatState, 'alpha').count).toBe(1);
+    expect(newestUnreadSessionForAgent(chatState, 'alpha')).toBe(olderUnread);
+
+    // Working wins over waiting, unless the work leaves Agent activity out.
+    const excluded = applySessionActivityChange(
+      chatState.sessionActivity,
+      row('session-system', 'working', {
+        contributes_to_agent_activity: false,
+      }),
+    );
+    chatState.sessionActivity = excluded;
+    expect(agentActivityStatus(chatState, 'alpha')).toBe('waiting');
+    chatState.sessionActivity = applySessionActivityChange(
+      excluded,
+      row('session-running', 'working'),
+    );
+    expect(agentActivityStatus(chatState, 'alpha')).toBe('running');
+
+    // Idle removes a Session's entry; its result counts again.
+    chatState.sessionActivity = applySessionActivityChange(
+      applySessionActivityChange(
+        chatState.sessionActivity,
+        row('session-running', 'idle'),
+      ),
+      row('session-newer', 'idle'),
+    );
+    expect(agentActivityStatus(chatState, 'alpha')).toBe('unread');
+    expect(agentUnreadResults(chatState, 'alpha').count).toBe(2);
   });
 
   it('does not project the displayed Session unread while preserving other unread results', () => {
@@ -969,7 +1005,7 @@ describe('Agent activity projection', () => {
     ['run_completed', 'completed'],
     ['run_interrupted', 'interrupted'],
   ])(
-    'keeps an excluded Run out of Agent activity through %s while retaining its timeline',
+    'keeps an excluded Run out of unread results through %s while retaining its timeline',
     (terminalType, terminalStatus) => {
       const chatState = createChatState();
       const sessionState = ensureSessionState(
@@ -988,7 +1024,6 @@ describe('Agent activity projection', () => {
 
       expect(isRunActive(sessionState)).toBe(true);
       expect(sessionState.currentRun?.contributesToAgentActivity).toBe(false);
-      expect(agentActivityStatus(chatState, 'alpha')).toBe('idle');
 
       appendRunEvent(sessionState, {
         type: terminalType,
@@ -1006,7 +1041,6 @@ describe('Agent activity projection', () => {
       expect(sessionState.status).toBe(terminalStatus);
       expect(sessionState.hasUnreadCompletion).toBe(false);
       expect(sessionState.latestCompletionRunId).toBe('');
-      expect(agentActivityStatus(chatState, 'alpha')).toBe('idle');
       expect(visibleTimelineItemsForRender(sessionState)).toEqual([
         expect.objectContaining({
           type: 'assistant_run',

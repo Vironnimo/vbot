@@ -122,6 +122,9 @@ def _steps(runtime: Runtime) -> Iterator[_Step]:
         # once readiness is withdrawn; stop the sampler while they are readable.
         yield _Step("provider_usage_sampler", provider_usage.stop, provider_usage.astop)
     yield _Step("readiness", None, partial(_withdraw_readiness, runtime))
+    if (activity := runtime._session_activity) is not None:
+        # Before the work it follows ends, so shutdown publishes no finished work.
+        yield _Step("session_activity", None, activity.aclose)
 
     if (channels := runtime._channel_service) is not None:
         yield _Step("channels", channels.stop, channels.aclose)

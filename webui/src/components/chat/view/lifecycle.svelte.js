@@ -130,6 +130,12 @@ export function createChatViewLifecycle(context) {
     untrack(() => chatController.applyCommandStatuses(statuses));
   });
 
+  // App's Session activity decides Agent activity and which unread results
+  // count (only those of idle Sessions).
+  $effect(() => {
+    chatState.sessionActivity = context.sessionActivity;
+  });
+
   $effect(() => {
     const sessionState = context.active ? target.activeSessionState : null;
     void context.runEvents?.lifecycle;

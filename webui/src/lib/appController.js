@@ -33,6 +33,11 @@ import {
   tokenKeysForKind,
 } from './resourceInvalidation.js';
 import { createRunEventFeed } from './runEventFeed.svelte.js';
+import {
+  applySessionActivityChange,
+  renameSessionActivityAgent,
+  sessionActivityFromSnapshot,
+} from './sessionActivity.js';
 import { appendSessionInvalidation } from './sessionInvalidation.js';
 
 // The live statuses of background shell commands, oldest evicted first.
@@ -93,6 +98,11 @@ export function createAppControllerState() {
     // its shell exited. A replay gap or a server restart may have lost an
     // end, so the map starts over then.
     commandStatuses: {},
+    // The server's Session activity (`sessionActivity.js`): every working or
+    // waiting Session by Session key. Null until the first
+    // `connection_ready`, whose `session_activity` replaces it each time;
+    // `session_activity_changed` updates one entry and idle removes it.
+    sessionActivity: null,
     serverNoticeState: '',
     serverRecoveryGeneration: 0,
     sessionDeletion: null,
@@ -208,6 +218,9 @@ export function createAppController({
       invalidateCatalogReads();
       state.connectionSnapshot = event;
       runEvents.resetActiveRuns(event.active_runs);
+      state.sessionActivity = sessionActivityFromSnapshot(
+        event.session_activity,
+      );
       const refreshOwners = [
         onLoadDataStoreStatus,
         onLoadBackgroundActivity,
@@ -274,6 +287,13 @@ export function createAppController({
       }
       return;
     }
+    if (event.type === 'session_activity_changed') {
+      state.sessionActivity = applySessionActivityChange(
+        state.sessionActivity,
+        event.payload,
+      );
+      return;
+    }
     if (event.type === 'recall_index_status') {
       state.recallIndexStatus = event.payload ?? null;
       return;
@@ -310,6 +330,11 @@ export function createAppController({
         typeof scope.new_agent_id === 'string' &&
         scope.new_agent_id
       ) {
+        state.sessionActivity = renameSessionActivityAgent(
+          state.sessionActivity,
+          scope.old_agent_id,
+          scope.new_agent_id,
+        );
         onAgentIdChanged(scope.old_agent_id, scope.new_agent_id);
       }
     }

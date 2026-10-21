@@ -29,19 +29,35 @@ const AGENTS = [
   { id: 'eta', name: 'Eta' },
 ];
 
-// Beta and Epsilon run; Eta has the newest unread result, then Delta, then
-// Gamma; Alpha (selected) and Zeta are idle.
+// Beta runs and Epsilon waits for work, both since 12:00; Eta has the newest
+// unread result, then Delta, then Gamma; Alpha (selected) and Zeta are idle.
+const WORK_STARTED_AT = '2026-08-31T12:00:00+00:00';
 const ACTIVITY = {
   alpha: { status: 'idle', unreadCount: 0, latestUnreadAt: 0 },
-  beta: { status: 'running', unreadCount: 0, latestUnreadAt: 0 },
+  beta: {
+    status: 'running',
+    unreadCount: 0,
+    latestUnreadAt: 0,
+    work: { state: 'working', workStartedAt: WORK_STARTED_AT },
+  },
   gamma: { status: 'unread', unreadCount: 2, latestUnreadAt: 1_000 },
   delta: { status: 'unread', unreadCount: 1, latestUnreadAt: 5_000 },
-  epsilon: { status: 'running', unreadCount: 0, latestUnreadAt: 0 },
+  epsilon: {
+    status: 'waiting',
+    unreadCount: 0,
+    latestUnreadAt: 0,
+    work: {
+      state: 'waiting',
+      workStartedAt: WORK_STARTED_AT,
+      waitingFor: { subagents: 2, commands: 1, results: 0 },
+    },
+  },
   zeta: { status: 'idle', unreadCount: 0, latestUnreadAt: 0 },
   eta: { status: 'unread', unreadCount: 1, latestUnreadAt: 9_000 },
 };
 
 const running = (name) => t('chat.agentActivity.running', { name });
+const waiting = (name) => t('chat.agentActivity.waiting', { name });
 const idle = (name) => t('chat.agentActivity.idle', { name });
 const unread = (name, count) =>
   count === 1
@@ -131,7 +147,7 @@ describe('ChatHeader', () => {
       running('Beta'),
       unread('Gamma', 2),
       unread('Delta', 1),
-      running('Epsilon'),
+      waiting('Epsilon'),
     ]);
     expect(
       pills().map((pill) => [
@@ -145,7 +161,7 @@ describe('ChatHeader', () => {
       ['tab-indicator--running', 'Beta', 'false'],
       ['tab-indicator--unread', 'Gamma', 'false'],
       ['tab-indicator--unread', 'Delta', 'false'],
-      ['tab-indicator--running', 'Epsilon', 'false'],
+      ['tab-indicator--waiting', 'Epsilon', 'false'],
     ]);
 
     // The displayed Agent stays selectable: it lands on its unread Session.
@@ -153,17 +169,25 @@ describe('ChatHeader', () => {
     pills()[0].click();
     expect(onSelectAgent.mock.calls).toEqual([['gamma'], ['alpha']]);
 
-    vi.useFakeTimers();
+    // The tooltip names the work and its span when it shows.
+    vi.useFakeTimers({ now: Date.parse('2026-08-31T12:04:12+00:00') });
     pills()[1].dispatchEvent(new Event('pointerenter'));
     await vi.advanceTimersByTimeAsync(TOOLTIP_SHOW_DELAY_MS);
     expect(tooltipDetails()).toEqual({
       title: 'Beta',
       rows: [
-        [t('chat.agentActivity.status'), t('chat.agentActivity.stateRunning')],
+        [t('chat.agentActivity.status'), 'Running · 4m 12s'],
         [t('chat.agentActivity.model'), 'anthropic/claude-sonnet-4'],
         [t('chat.agentActivity.thinkingEffort'), 'high'],
       ],
     });
+    pills()[1].dispatchEvent(new Event('pointerleave'));
+    pills()[4].dispatchEvent(new Event('pointerenter'));
+    await vi.advanceTimersByTimeAsync(TOOLTIP_SHOW_DELAY_MS);
+    expect(tooltipDetails().rows[0]).toEqual([
+      t('chat.agentActivity.status'),
+      'Waiting for 2 Sub-Agents, 1 command · 4m 12s',
+    ]);
   });
 
   it('keeps a displayed Agent outside the first five on the bar', () => {
@@ -201,15 +225,32 @@ describe('ChatHeader', () => {
 
     await openAllAgents();
     const options = Array.from(document.querySelectorAll('[role="option"]'));
-    // Running first, then unread by newest result, then the roster.
+    // Running first, then waiting, then unread by newest result, then the
+    // roster.
     expect(options.map((option) => option.getAttribute('aria-label'))).toEqual([
       running('Beta'),
-      running('Epsilon'),
+      waiting('Epsilon'),
       unread('Eta', 1),
       unread('Delta', 1),
       unread('Gamma', 2),
       idle('Alpha'),
       idle('Zeta'),
+    ]);
+    expect(
+      options.map(
+        (option) =>
+          option
+            .querySelector('.tab-indicator')
+            ?.className.match(/tab-indicator--\w+/)?.[0],
+      ),
+    ).toEqual([
+      'tab-indicator--running',
+      'tab-indicator--waiting',
+      'tab-indicator--unread',
+      'tab-indicator--unread',
+      'tab-indicator--unread',
+      'tab-indicator--idle',
+      'tab-indicator--idle',
     ]);
     expect(
       options.map(
@@ -390,38 +431,44 @@ describe('ChatHeader', () => {
       expect(onSelectAgent).toHaveBeenCalledWith('builder@web');
     });
 
-    it('summarizes a closed group and marks All agents with its activity', async () => {
-      // This browser closed Infra earlier.
-      localStorage.setItem(
-        'vbot.chat.agentPicker.expandedProjects',
-        JSON.stringify({ ops: false }),
-      );
-      mountWithProjects({
-        selectedAddress: 'alpha',
-        agentActivity: {
-          'deployer@ops': { status: 'running', unreadCount: 1 },
-        },
-      });
-      const activity = `${t('chat.agentActivity.stateRunning')} · ${t('chat.agentActivity.stateUnreadOne')}`;
+    it.each([
+      ['running', 'chat.agentActivity.stateRunning'],
+      ['waiting', 'chat.agentActivity.stateWaiting'],
+    ])(
+      'summarizes a closed group %s and marks All agents with its activity',
+      async (status, stateKey) => {
+        // This browser closed Infra earlier.
+        localStorage.setItem(
+          'vbot.chat.agentPicker.expandedProjects',
+          JSON.stringify({ ops: false }),
+        );
+        mountWithProjects({
+          selectedAddress: 'alpha',
+          agentActivity: {
+            'deployer@ops': { status, unreadCount: 1 },
+          },
+        });
+        const activity = `${t(stateKey)} · ${t('chat.agentActivity.stateUnreadOne')}`;
 
-      expect(
-        allAgentsTrigger().querySelector('.tab-indicator--running'),
-      ).toBeTruthy();
-      expect(allAgentsTrigger().getAttribute('aria-label')).toBe(
-        t('chat.agentBar.allAgentsActivity', { activity }),
-      );
-      await openTree();
+        expect(
+          allAgentsTrigger().querySelector(`.tab-indicator--${status}`),
+        ).toBeTruthy();
+        expect(allAgentsTrigger().getAttribute('aria-label')).toBe(
+          t('chat.agentBar.allAgentsActivity', { activity }),
+        );
+        await openTree();
 
-      const infra = Array.from(
-        document.querySelectorAll('[role="treeitem"][aria-level="1"]'),
-      ).find((row) => row.textContent.includes('Infra'));
-      expect(infra.getAttribute('aria-expanded')).toBe('false');
-      expect(infra.querySelector('.tab-indicator--running')).toBeTruthy();
-      expect(infra.querySelector('.count-badge')?.textContent).toBe('1');
-      expect(infra.getAttribute('aria-label')).toBe(
-        t('chat.agentPicker.projectActivity', { project: 'Infra', activity }),
-      );
-    });
+        const infra = Array.from(
+          document.querySelectorAll('[role="treeitem"][aria-level="1"]'),
+        ).find((row) => row.textContent.includes('Infra'));
+        expect(infra.getAttribute('aria-expanded')).toBe('false');
+        expect(infra.querySelector(`.tab-indicator--${status}`)).toBeTruthy();
+        expect(infra.querySelector('.count-badge')?.textContent).toBe('1');
+        expect(infra.getAttribute('aria-label')).toBe(
+          t('chat.agentPicker.projectActivity', { project: 'Infra', activity }),
+        );
+      },
+    );
 
     it('opens and closes groups with tree keys and remembers the choice', async () => {
       const onSelectAgent = vi.fn();

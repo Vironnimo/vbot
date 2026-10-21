@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from core.sessions import ChatSession, ChatSessionManager
 
 from core.automation._completion import (
+    CompletionChangedCallback,
     OwnedCompletionValidator,
     _CompletionDeliveryCoordinator,
 )
@@ -143,6 +144,25 @@ class TriggerService:
 
     def has_execution_work(self, owner: RunExecutionOwner) -> bool:
         return self._completion_delivery.has_execution_work(owner)
+
+    def pending_completion_wakes(self, address: SessionAddress) -> int:
+        """How many held results will still wake the Session at *address*.
+
+        A result counts from its submission until the Model answered a request
+        that carried it, or it was persisted without waking the Session
+        (``wake=False``, a Run the user stopped), withdrawn or failed.
+        """
+        return self._completion_delivery.pending_wakes(address)
+
+    def add_completion_changed_callback(
+        self, callback: CompletionChangedCallback
+    ) -> Callable[[], None]:
+        """Call *callback* with a Session address whenever its held results change.
+
+        That is when one is submitted, consumed, withdrawn or failed, or stops
+        waking the Session. Returns the unsubscribe function.
+        """
+        return self._completion_delivery.add_changed_callback(callback)
 
     def cancel_completion(
         self,

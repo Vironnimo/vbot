@@ -1,9 +1,9 @@
 import {
   agentActivityStatus,
   agentUnreadResults,
-  isRunActive,
   visibleTimelineItemsForRender,
 } from '$lib/chatState.js';
+import { SESSION_WAITING, agentSessionActivity } from '$lib/sessionActivity.js';
 import {
   backgroundTasks,
   runningSubAgentCommands,
@@ -37,7 +37,13 @@ export function createChatViewActivity(context) {
   // The server covers all work, including directly opened Terminals and
   // descendants absent from the loaded History. Local rows bridge the first
   // read only; an accepted empty projection retires stale local work hints.
+  // A Session waiting for work that will wake it (App's Session activity)
+  // offers Stop all too.
   let backgroundWorkRunning = $derived.by(() => {
+    const key = target.activeSessionState?.key;
+    if (key && chatState.sessionActivity?.[key]?.state === SESSION_WAITING) {
+      return true;
+    }
     const work = target.activeSessionState?.workProjection;
     if (work) return work.background_work_running || work.run_active;
     return (
@@ -60,6 +66,8 @@ export function createChatViewActivity(context) {
     ),
   ]);
 
+  // Per Agent address: its status dot, unread results and what its working
+  // or waiting Sessions do together (`work`, null while idle).
   let pickerAgentActivity = $derived.by(() => {
     const displayedSessionKey = target.displayedSessionKey();
     return Object.fromEntries(
@@ -79,17 +87,19 @@ export function createChatViewActivity(context) {
             ),
             unreadCount: unreadResults.count,
             latestUnreadAt: unreadResults.latestAt,
+            work: agentSessionActivity(chatState.sessionActivity, address),
           },
         ];
       }),
     );
   });
 
+  // The held Sessions' unread state over the Session list's rows; whether a
+  // row works or waits comes from App's Session activity.
   let sessionDrawerActivity = $derived.by(() =>
     Object.values(chatState.sessions).map((sessionState) => ({
       agent_address: sessionState.agentId,
       session_id: sessionState.sessionId,
-      has_active_run: isRunActive(sessionState),
       has_unread_completion: sessionState.hasUnreadCompletion === true,
       latest_completion_run_id: sessionState.latestCompletionRunId || null,
       unread_run_id: sessionState.unreadRunId || null,

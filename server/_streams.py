@@ -23,7 +23,11 @@ from server.events import (
     ServerEventBus,
 )
 from server.file_delivery import FILE_PREVIEW_WORKERS, FileDelivery
-from server.rpc.event_bridge import publish_resource_changed
+from server.rpc.event_bridge import (
+    publish_resource_changed,
+    session_activity_payload,
+    session_activity_service,
+)
 from server.rpc.payloads import (
     file_url_candidates,
     remove_opaque_provider_metadata_async,
@@ -280,6 +284,18 @@ def _active_runs_snapshot(state: Any) -> list[JsonObject]:
             item["source_session_id"] = source_session_id
         snapshot.append(item)
     return snapshot
+
+
+def _session_activity_snapshot(state: Any) -> list[JsonObject]:
+    """Build the Session activity list for the connection-ready hello frame.
+
+    Every Session that is not idle, in the shape of ``session_activity_changed``
+    without ``finished_work``; a Session missing from it is idle.
+    """
+    activity = session_activity_service(state)
+    if activity is None:
+        return []
+    return [session_activity_payload(address, current) for address, current in activity.snapshot()]
 
 
 def _queues_snapshot(state: Any) -> list[JsonObject]:

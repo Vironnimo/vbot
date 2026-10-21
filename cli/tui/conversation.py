@@ -17,6 +17,7 @@ from textual.widgets import TextArea
 from textual.worker import Worker
 
 from cli.tui import agent_secrets
+from cli.tui.activity import SessionActivity, session_mark
 from cli.tui.dialogs import Picker
 from cli.tui.drafts import kept_draft, readdress_saved_inputs
 from cli.tui.state import Conversation, JsonObject, TimelineGapError
@@ -57,6 +58,7 @@ class ConversationController:
         self.history_cache: OrderedDict[int, Conversation] = OrderedDict()
         self.older_loading: set[int] = set()
         self.refresh_pending = False
+        self.activity = SessionActivity()
 
     async def bootstrap(self) -> None:
         if self.initial_agent and self.initial_session:
@@ -341,6 +343,10 @@ class ConversationController:
                     delay = 0.5
                     refused = False
                     kind = event.get("type", "")
+                    if kind == "connection_ready":
+                        self.activity.connection_ready(event)
+                    elif kind == "session_activity_changed":
+                        self.activity.changed(event.get("payload") or {})
                     if kind == "resource_changed":
                         resource = event.get("payload") or {}
                         if resource.get("kind") in {"agents", "projects"}:
@@ -592,14 +598,12 @@ class ConversationController:
                 if self.app.conversation is not origin:
                     return
                 for row in response.get("sessions", []):
-                    active = "● " if row.get("has_active_run") else ""
-                    unread = "• " if row.get("has_unread_completion") is True else ""
                     title = (
                         row.get("title")
                         or row.get("auto_title")
                         or f"Untitled · {str(row['id'])[:8]}"
                     )
-                    label = f"{active}{unread}{title} · {row['agent_address']}"
+                    label = f"{session_mark(row)}{title} · {row['agent_address']}"
                     project = row.get("working_project_id")
                     if project:
                         label += f" · {project}"

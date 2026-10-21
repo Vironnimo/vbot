@@ -37,6 +37,7 @@ from core.tools.command_manager import (
     COMMAND_RETENTION_SECONDS,
     COMMAND_TAIL_CHARS,
     COMMAND_TEMPORARY_CATEGORY,
+    SERVICE_POLL_SECONDS,
     CommandCapacityError,
     CommandManager,
     CommandManagerError,
@@ -953,6 +954,12 @@ async def test_a_background_result_is_delivered_once_when_the_command_ends(
     assert harness.manager.status(command_id) is None
     assert harness.manager.commands([OWNER, CHILD]) == []
     assert not harness.manager.has_unfinished_background()
+    # What Session activity counts at each change: the result wakes CHILD until
+    # the sink holds it, without a gap between the end and the handover.
+    wakes: list[int] = []
+    harness.manager.add_changed_callback(
+        lambda _command_id: wakes.append(harness.manager.pending_wakes(CHILD))
+    )
 
     moved = harness.manager.to_background(command_id, deliver=True)
 
@@ -983,13 +990,70 @@ async def test_a_background_result_is_delivered_once_when_the_command_ends(
             "wake": True,
         }
     ]
-    # Moved to the background, ended, finished.
-    assert harness.changes == [command_id] * 3
+    # Moved to the background, ended, handed to the sink, finished.
+    assert harness.changes == [command_id] * 4
+    assert wakes == [1, 1, 0, 0]
     # A foreground command never delivers and raises no change events.
     foreground_id, foreground = await harness.launch()
     foreground.exit(0)
     await harness.finish(foreground_id)
     assert len(harness.sink.submissions) == 1 and foreground_id not in harness.changes
+
+
+class _Sockets:
+    """The processes listening on a TCP port, as the service detection reads them."""
+
+    def __init__(self) -> None:
+        self.listening: set[int] = set()
+        self.denied = False
+        self.reads = 0
+
+    def __call__(self) -> frozenset[int]:
+        self.reads += 1
+        if self.denied:
+            raise psutil.AccessDenied()
+        return frozenset(self.listening)
+
+
+@pytest.mark.asyncio
+async def test_a_command_serving_on_a_tcp_port_stops_counting_as_a_pending_wake(
+    tmp_path: Path,
+) -> None:
+    sockets = _Sockets()
+    async with command_harness(tmp_path, read_listening=sockets) as harness:
+        manager = harness.manager
+        server_id, server = await harness.launch(command="serve")
+        watcher_id, watcher = await harness.launch(command="watch")
+        for command_id in (server_id, watcher_id):
+            manager.to_background(command_id, deliver=True)
+        # A process the server's shell started listens on a port.
+        server.tree.running.append(SERVER)
+        sockets.listening.add(SERVER.pid)
+        # Sockets the platform keeps private detect nothing.
+        sockets.denied = True
+        await harness.advance(SERVICE_POLL_SECONDS)
+        assert (sockets.reads, manager.pending_wakes(OWNER)) == (1, 2)
+
+        sockets.denied = False
+        harness.changes.clear()
+        await harness.advance(SERVICE_POLL_SECONDS)
+        # The server is a service; the watcher without a port still counts.
+        assert manager.pending_wakes(OWNER) == 1
+        assert harness.changes == [server_id]
+        # Goals keep counting every command whose result is armed.
+        assert manager.has_pending_delivery(OWNER)
+        # The classification is sticky.
+        sockets.listening.clear()
+        await harness.advance(SERVICE_POLL_SECONDS)
+        assert manager.pending_wakes(OWNER) == 1
+
+        watcher.exit(0)
+        await harness.finish(watcher_id)
+        assert manager.pending_wakes(OWNER) == 0
+        # Nothing is polled while no command it could find runs.
+        reads = sockets.reads
+        await harness.advance(3 * SERVICE_POLL_SECONDS, step=1.0)
+        assert sockets.reads == reads
 
 
 @pytest.mark.asyncio

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
@@ -117,6 +118,7 @@ class SubAgentForwarding:
         self._followed: dict[str, tuple[Run, asyncio.Task[None]]] = {}
         # Runs whose Parent stopped them itself; their outcome is in its Tool result.
         self._silenced: set[str] = set()
+        self._forwarded_callbacks: list[Callable[[SessionAddress], None]] = []
 
     def install(self, run_manager: ChatRunManager) -> None:
         """Start following Runs as *run_manager* starts them."""
@@ -129,6 +131,27 @@ class SubAgentForwarding:
     def followed_runs(self) -> list[Run]:
         """Return the Runs currently followed for forwarding."""
         return [run for run, _task in self._followed.values()]
+
+    def pending(self, address: SessionAddress) -> bool:
+        """Whether a Run of the Session at *address* has not yet handed its answer
+        to delivery: it still runs, or its forwarding is not done."""
+        return any(
+            run_id not in self._silenced and not task.done() and _run_address(run) == address
+            for run_id, (run, task) in self._followed.items()
+        )
+
+    def add_forwarded_callback(
+        self, callback: Callable[[SessionAddress], None]
+    ) -> Callable[[], None]:
+        """Call *callback* with a Session's address once a followed Run of it is
+        done forwarding, delivered or not. Returns the unsubscribe function."""
+        self._forwarded_callbacks.append(callback)
+
+        def remove() -> None:
+            if callback in self._forwarded_callbacks:
+                self._forwarded_callbacks.remove(callback)
+
+        return remove
 
     def reply_to_user(self, address: SessionAddress, message_id: str) -> None:
         """Tell the Parent when a user input redirects the Sub-Agent's answers."""
@@ -143,9 +166,17 @@ class SubAgentForwarding:
         task.add_done_callback(lambda done: self._finish_following(run.id, done))
 
     def _finish_following(self, run_id: str, task: asyncio.Task[None]) -> None:
-        self._followed.pop(run_id, None)
+        followed = self._followed.pop(run_id, None)
         self._silenced.discard(run_id)
         _log_task_failure(task)
+        if followed is None:
+            return
+        address = _run_address(followed[0])
+        for callback in list(self._forwarded_callbacks):
+            try:
+                callback(address)
+            except Exception:
+                _LOGGER.warning("A Sub-Agent forwarding callback failed", exc_info=True)
 
     async def _follow(self, run: Run) -> None:
         sessions = self._runtime.chat_sessions

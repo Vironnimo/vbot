@@ -11,6 +11,8 @@
     autofocusRename,
     sessionHoverDetails,
     unreadRunDetails,
+    sessionActivityDetails,
+    sessionActivityLabel,
     sessionMarker,
   } from './sessions/presentation.js';
   import { tooltip } from '$lib/tooltip.js';
@@ -51,9 +53,12 @@
     // Roster of addressable agents ({ address, name }) the "All agents"
     // filter lists sessions for — the same set the Chat agent bars show.
     agents = [],
-    // Lean projection of Chat's live Run/activity state. It overlays the last
+    // Lean projection of Chat's live unread state. It overlays the last
     // session.list snapshot so an already-open drawer reacts immediately.
     liveActivity = [],
+    // App's live Session activity (lib/sessionActivity.js), null before the
+    // first connection: whether each row works or waits.
+    sessionActivity = null,
     // Persisted filter state from the parent (ChatView). On first mount this
     // is null and the filters default; on remount (panel reopened) the
     // previously chosen filters are restored so toggling the panel doesn't
@@ -172,6 +177,9 @@
     get liveActivity() {
       return liveActivity;
     },
+    get sessionActivity() {
+      return sessionActivity;
+    },
     get onSessionSelected() {
       return onSessionSelected;
     },
@@ -208,6 +216,7 @@
         group.sessions,
         liveActivity,
         null,
+        sessionActivity,
       ).map((session) => ({
         ...session,
         // Named in the row's details card, not on the row.
@@ -862,16 +871,21 @@
           })}
       >
         <div class="session-row__heading">
-          <!-- One status slot before the title: running wins over an
-                 unread result. -->
-          {#if session.has_active_run}
+          <!-- One status slot before the title: work that is not finished
+                 (working, or waiting for work that will wake it) hides an
+                 unread result, which counts only once the Session is idle. -->
+          {#if session.activity_state === 'working' || session.activity_state === 'waiting'}
             <span
-              class="session-row__status session-row__active-dot"
-              aria-label={t('sessions.activeRun')}
-              use:tooltip={t('sessions.activeRunHint')}
+              class="session-row__status session-row__activity"
+              aria-label={sessionActivityLabel(session)}
+              use:tooltip={() => sessionActivityDetails(session)}
             >
               <span
-                class="tab-indicator tab-indicator--running"
+                class="tab-indicator"
+                class:tab-indicator--running={session.activity_state ===
+                  'working'}
+                class:tab-indicator--waiting={session.activity_state ===
+                  'waiting'}
                 aria-hidden="true"
               ></span>
             </span>

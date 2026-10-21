@@ -37,7 +37,9 @@ from server.rpc.event_bridge import (
     publish_command_status_changed,
     publish_recall_index_status,
     publish_resource_changed,
+    publish_session_activity_changed,
     publish_session_changed,
+    session_activity_service,
 )
 from server.rpc.methods import METHODS
 from server.rpc.statistics_methods import statistics_service
@@ -78,7 +80,11 @@ def _initialize_app_state(
     app.state.client_registry = ClientRegistry()
     app.state.file_delivery = file_delivery
     app.state.run_event_bridge_run_ids = OrderedDict()
+    # Bridges still publishing, per Session: activity changes wait for them.
+    app.state.run_event_bridges = {}
+    app.state.session_activity_publications = {}
     app.state.run_event_bridge_unsubscribe = _register_run_event_bridge(app.state)
+    app.state.session_activity_bridge_unsubscribe = _register_session_activity_bridge(app.state)
     app.state.session_title_bridge_unsubscribe = _register_session_title_bridge(app.state)
     app.state.session_completion_read_bridge_unsubscribe = _register_session_completion_read_bridge(
         app.state
@@ -165,6 +171,27 @@ def _unregister_run_event_bridge(state: Any) -> None:
     if unsubscribe is not None:
         unsubscribe()
     state.run_event_bridge_unsubscribe = None
+
+
+def _register_session_activity_bridge(state: Any) -> Any:
+    """Publish each Session activity change after the Run events that caused it."""
+    activity = session_activity_service(state)
+    if activity is None:
+        return None
+    return activity.add_changed_callback(
+        lambda address, current, finished: publish_session_activity_changed(
+            state, address, current, finished
+        )
+    )
+
+
+def _unregister_session_activity_bridge(state: Any) -> None:
+    unsubscribe = getattr(state, "session_activity_bridge_unsubscribe", None)
+    if unsubscribe is not None:
+        unsubscribe()
+    state.session_activity_bridge_unsubscribe = None
+    for task in getattr(state, "session_activity_publications", {}).values():
+        task.cancel()
 
 
 def _register_session_title_bridge(state: Any) -> Any:

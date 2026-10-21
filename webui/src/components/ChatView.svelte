@@ -27,6 +27,7 @@
   import { getDraft } from '$lib/composerMemory.js';
   import { agentNeedsModel } from '$lib/onboarding.js';
   import { parseAgentAddress } from '$lib/agentAddress.js';
+  import { SESSION_WAITING } from '$lib/sessionActivity.js';
   import { createChatViewActivity } from './chat/view/activity.svelte.js';
   import { createChatViewLifecycle } from './chat/view/lifecycle.svelte.js';
   import { createChatViewTarget } from './chat/view/target.svelte.js';
@@ -111,6 +112,9 @@
     // (`command_status_changed`: `{ status, stillRunning, sessionId }`); the
     // controller re-applies the whole map.
     commandStatuses = {},
+    // App's Session activity (`sessionActivity.js`): every working or waiting
+    // Session by Session key; null until the server first reported it.
+    sessionActivity = null,
     terminalsRefreshToken = 0,
     // Bumped when Agent Secrets or Secret requests change; the displayed
     // Session's pending requests are read again.
@@ -629,6 +633,9 @@
     get commandStatuses() {
       return commandStatuses;
     },
+    get sessionActivity() {
+      return sessionActivity;
+    },
     get queueInvalidation() {
       return queueInvalidation;
     },
@@ -740,6 +747,7 @@
           invalidations={sessionInvalidations}
           agents={target.sessionDrawerAgents}
           liveActivity={activity.sessionDrawerActivity}
+          {sessionActivity}
           initialFilters={sessionFilters}
           onFiltersChange={(next) => {
             sessionFilters = next;
@@ -784,6 +792,9 @@
             backgroundCommandStatuses={target.activeSessionState
               ?.backgroundCommandStatuses}
             commandStatuses={activity.commandStatuses}
+            sessionWaiting={sessionActivity?.[
+              target.activeSessionState?.key ?? ''
+            ]?.state === SESSION_WAITING}
             onLoadOlder={actions.loadOlderHistory}
             onLoadRunHistory={(gap) =>
               chatController.loadRunHistory(target.activeSessionState, gap)}

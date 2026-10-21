@@ -85,6 +85,9 @@
     // has ended.
     backgroundCommandStatuses = null,
     commandStatuses = null,
+    // This is the Session's latest Run and the Session waits for work that
+    // will wake it: the footer marks the duration "(Waiting)".
+    sessionWaiting = false,
     nowMs = Date.now(),
   } = $props();
 
@@ -850,8 +853,10 @@
         {@render runChild(group.child)}
       {/if}
     {/each}
-    {#if item.segment_tail !== false && runFooterParts(item, nowMs).length > 0}
-      {@const footerParts = runFooterParts(item, nowMs)}
+    {#if item.segment_tail !== false && runFooterParts( item, nowMs, { waiting: sessionWaiting } ).length > 0}
+      {@const footerParts = runFooterParts(item, nowMs, {
+        waiting: sessionWaiting,
+      })}
       {@const changeStats = runChangeStats(item)}
       {@const footerLabel = [
         ...footerParts,

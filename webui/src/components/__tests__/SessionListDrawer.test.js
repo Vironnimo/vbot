@@ -16,6 +16,7 @@ import {
   waitForCondition,
 } from './SessionListDrawer.support.js';
 import { appendSessionInvalidation } from '../../lib/sessionInvalidation.js';
+import { sessionActivityFromSnapshot } from '../../lib/sessionActivity.js';
 import { t } from '../../lib/i18n.js';
 import { TOOLTIP_SHOW_DELAY_MS } from '../../lib/tooltip.js';
 
@@ -148,47 +149,71 @@ describe('SessionListDrawer list', () => {
     expect(api.listSessions).toHaveBeenCalledTimes(1);
   });
 
-  it('updates a mounted row from live running to unread activity without reloading', async () => {
+  it('shows a mounted row working, then waiting, then its unread result once idle without reloading', async () => {
     api.listSessions.mockResolvedValue({
       sessions: [
         session('session-1', {
-          has_active_run: false,
-          has_unread_completion: false,
+          activity_state: 'working',
+          work_started_at: '2026-08-31T12:00:00+00:00',
         }),
       ],
     });
     const props = drawer.mount({
       currentSessionId: 'another-session',
       liveActivity: [],
+      sessionActivity: null,
     });
     await waitForCondition(() => rowCount() === 1);
-    expect(document.querySelector('.session-row__active-dot')).toBeNull();
+    const marker = () => document.querySelector('.session-row__activity');
+    const dot = () => marker()?.querySelector('.tab-indicator');
+    // Before the first connection the row shows the activity it was listed with.
+    expect(dot().classList.contains('tab-indicator--running')).toBe(true);
+    expect(marker().getAttribute('aria-label')).toBe(
+      t('chat.sessionActivity.working'),
+    );
 
-    const activity = (fields) => [
-      { agent_address: 'alpha', session_id: 'session-1', ...fields },
+    // Its Run ended with a result, but Sub-Agents and a command will wake it:
+    // an amber ring naming them, and no unread marker yet.
+    props.liveActivity = [
+      {
+        agent_address: 'alpha',
+        session_id: 'session-1',
+        has_unread_completion: true,
+        latest_completion_run_id: 'run-one',
+        unread_run_id: 'run-one',
+        unread_run_status: 'completed',
+        unread_run_at: '2026-08-31T12:03:00+00:00',
+      },
     ];
-    props.liveActivity = activity({
-      has_active_run: true,
-      has_unread_completion: false,
-    });
+    props.sessionActivity = sessionActivityFromSnapshot([
+      {
+        project_id: null,
+        agent_id: 'alpha',
+        session_id: 'session-1',
+        state: 'waiting',
+        work_started_at: '2026-08-31T12:00:00+00:00',
+        waiting_for: { subagents: 2, commands: 1, results: 0 },
+      },
+    ]);
     flushSync();
-    await waitForCondition(
-      () => document.querySelector('.session-row__active-dot') !== null,
+    expect(dot().classList.contains('tab-indicator--waiting')).toBe(true);
+    expect(dot().classList.contains('tab-indicator--running')).toBe(false);
+    expect(marker().getAttribute('aria-label')).toBe(
+      'Waiting for 2 Sub-Agents, 1 command',
     );
+    expect(document.querySelector('.session-row__unread')).toBeNull();
+    vi.useFakeTimers({ now: Date.parse('2026-08-31T12:04:12+00:00') });
+    marker().dispatchEvent(new Event('pointerenter'));
+    await vi.advanceTimersByTimeAsync(TOOLTIP_SHOW_DELAY_MS);
+    expect(document.getElementById('app-tooltip').textContent).toBe(
+      'Waiting for 2 Sub-Agents, 1 command · 4m 12s',
+    );
+    vi.useRealTimers();
 
-    props.liveActivity = activity({
-      has_active_run: false,
-      has_unread_completion: true,
-      latest_completion_run_id: 'run-one',
-      unread_run_id: 'run-one',
-      unread_run_status: 'completed',
-      unread_run_at: '2026-08-31T12:00:00+00:00',
-    });
+    props.sessionActivity = {};
     flushSync();
-    await waitForCondition(
-      () => document.querySelector('.session-row__unread') !== null,
-    );
-    expect(document.querySelector('.session-row__active-dot')).toBeNull();
+    expect(marker()).toBeNull();
+    expect(document.querySelector('.session-row__unread')).not.toBeNull();
     expect(api.listSessions).toHaveBeenCalledTimes(1);
   });
 

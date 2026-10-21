@@ -21,6 +21,7 @@ import {
   resetComposerMemory,
 } from '../../lib/composerMemory.js';
 import { createRunEventFeed } from '../../lib/runEventFeed.svelte.js';
+import { isRunActive } from '../../lib/chatState.js';
 import ChatWorkspace from '../ChatWorkspace.svelte';
 import { reactiveProps } from './reactiveProps.support.svelte.js';
 
@@ -537,25 +538,23 @@ describe('ChatWorkspace', () => {
       },
       ChatWorkspace,
     );
-    // Each area's Agent bar shows the Agents' activity.
-    const pillLabels = (index) =>
-      Array.from(pane(index).querySelectorAll('button.agent-pill')).map(
-        (pill) => pill.getAttribute('aria-label'),
-      );
-    await waitForCondition(() => pillLabels(0).includes('Beta: Running'));
+    // Each area's Chat state follows the Runs of every Session.
+    const runActive = (index, key) =>
+      isRunActive(testChatStateRefs[index]?.sessions[key]);
+    await waitForCondition(() => runActive(0, 'beta::b-1'));
 
     // Beta's Run ends; Gamma's starts, and later traffic pushes both events
     // out of App's feed.
     runEvents.append(lifecycle('run_completed', 'R1', 'beta', 'b-1'));
-    await waitForCondition(() => !pillLabels(0).includes('Beta: Running'));
+    await waitForCondition(() => !runActive(0, 'beta::b-1'));
     runEvents.append(lifecycle('run_started', 'R2', 'gamma', 'g-1'));
     runEvents.append(lifecycle('run_output', 'R2', 'gamma', 'g-1'));
     runEvents.append(lifecycle('run_output', 'R2', 'gamma', 'g-1'));
 
     action(0, 'Split view');
-    await waitForCondition(() => pillLabels(1).includes('Gamma: Running'));
+    await waitForCondition(() => runActive(1, 'gamma::g-1'));
 
-    expect(pillLabels(1)).not.toContain('Beta: Running');
+    expect(runActive(1, 'beta::b-1')).toBe(false);
   });
 
   describe('deleting the displayed current Session', () => {

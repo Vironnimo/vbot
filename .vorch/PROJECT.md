@@ -49,6 +49,7 @@ How to read the maps: `AGENTS.md` -> Load context for the task.
 | model_tasks.md | `core/model_tasks/` | Task Model bindings and execution, target discovery, option schemas, Decision Model executor |
 | chat.md | `core/chat/` | ChatMessage boundary, Agentic Loop invariants |
 | runs.md | `core/runs/` | Run lifecycle, cancellation, timeline events, queues |
+| activity.md | `core/activity/` | Session activity (working, waiting, idle) and work span across Runs, commands, results and Sub-Agents |
 | compaction.md | `core/compaction/` | Triggers, strategies, plans, checkpoints |
 | sessions.md | `core/sessions/` | Canonical SQLite Session persistence, metadata, and lifecycle |
 | database.md | `core/database/` | SQLite kernel, format evolution, data-store marker, data snapshots, configuration backups, recovery |

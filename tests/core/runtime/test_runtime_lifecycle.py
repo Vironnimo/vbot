@@ -811,6 +811,7 @@ _ASYNC_SHUTDOWN = (
     "extension_runtime.aclose",
     "extension_databases.close",
     "provider_usage.astop",
+    "session_activity.aclose",
     "channels.aclose",
     "cron.aclose",
     "bootstrap.aclose",
@@ -940,6 +941,7 @@ async def test_runtime_shutdown_runs_every_step_before_reporting_failures(
     for attribute, label in (
         ("_extension_runtime", "extension_runtime"),
         ("_extensions", "extensions"),
+        ("_session_activity", "session_activity"),
         ("_channel_service", "channels"),
         ("_cron_service", "cron"),
         ("_bootstrap_service", "bootstrap"),

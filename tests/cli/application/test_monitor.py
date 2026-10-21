@@ -21,6 +21,14 @@ from cli.server_management import ServerInstance, ServerState
 from tests.cli.cli_test_support import make_instance, start_local_token
 
 _STARTED_AT = "2026-10-05T12:58:10.000000Z"
+_HELLO = {
+    "type": "connection_ready",
+    "epoch": "e1",
+    "last_sequence": 4,
+    "replay_status": "fresh",
+    "server": {"version": "1.2.3", "started_at": _STARTED_AT},
+    "session_activity": [],
+}
 _RUN_EVENT = {
     "type": "run_completed",
     "sequence": 5,
@@ -71,13 +79,7 @@ def test_monitor_follows_the_stream_as_tray_and_resumes_after_a_restart(tmp_path
         assert connection.request is not None
         paths.append(connection.request.path)
         if len(paths) == 1:
-            hello = {
-                "epoch": "e1",
-                "last_sequence": 4,
-                "replay_status": "fresh",
-                "server": {"version": "1.2.3", "started_at": _STARTED_AT},
-            }
-            await connection.send(json.dumps({"type": "connection_ready", **hello}))
+            await connection.send(json.dumps(_HELLO))
             await connection.send(json.dumps({"type": "heartbeat"}))
             await connection.send(json.dumps(_RUN_EVENT))
             await connection.close(1012, "restart")
@@ -100,7 +102,7 @@ def test_monitor_follows_the_stream_as_tray_and_resumes_after_a_restart(tmp_path
             monitor = ServerMonitor(lambda: target, recorder, local=True, user_agent="test")
             await asyncio.to_thread(monitor.start)
             try:
-                calls = [await recorder.next() for _ in range(3)]
+                calls = [await recorder.next() for _ in range(4)]
                 await asyncio.wait_for(resumed.wait(), timeout=5)
             finally:
                 await asyncio.to_thread(monitor.close)
@@ -113,6 +115,8 @@ def test_monitor_follows_the_stream_as_tray_and_resumes_after_a_restart(tmp_path
     assert calls == [
         # The hello names the server process, so the tray knows since when it runs.
         ("status", MonitorStatus(url, "connected", True, "1.2.3", _STARTED_AT)),
+        # The hello itself follows, so the notifier starts over from its snapshots.
+        ("event", _HELLO),
         ("event", _RUN_EVENT),
         ("lost", 1012),
     ]

@@ -244,6 +244,7 @@
 
   let providerAuthEvent = $derived(appControllerState.providerAuthEvent);
   let commandStatuses = $derived(appControllerState.commandStatuses);
+  let sessionActivity = $derived(appControllerState.sessionActivity);
   let connectionSnapshot = $derived(appControllerState.connectionSnapshot);
 
   let serverSwitcherOpen = $state(false);
@@ -722,6 +723,7 @@
         onSessionNavigation={chatNavigation.handleSessionNavigation}
         {runEvents}
         {commandStatuses}
+        {sessionActivity}
         {terminalsRefreshToken}
         {agentSecretsRefreshToken}
         {connectionSnapshot}

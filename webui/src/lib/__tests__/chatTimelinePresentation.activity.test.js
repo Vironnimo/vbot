@@ -134,6 +134,22 @@ describe('runFooterParts', () => {
     expect(runFooterParts(run)).toEqual(expected());
   });
 
+  it('marks the latest Run of a waiting Session after its own duration', () => {
+    const waiting = { waiting: true };
+    expect(
+      runFooterParts({ status: 'completed', durationMs: 8000 }, 0, waiting),
+    ).toEqual([
+      status('completed'),
+      t('chat.runDurationWaiting', { duration: seconds('8.0') }),
+    ]);
+    expect(
+      runFooterParts({ status: 'completed', durationMs: null }, 0, waiting),
+    ).toEqual([status('completed'), t('chat.runWaiting')]);
+    expect(
+      runFooterParts({ status: 'running', durationMs: null }, 0, waiting),
+    ).toEqual([status('running')]);
+  });
+
   it('details the Run state, moments, runtime and Model responses', () => {
     const start = '2026-08-05T18:19:52Z';
     const nowMs = Date.parse(end) + 60_000;

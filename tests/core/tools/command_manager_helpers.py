@@ -294,11 +294,13 @@ async def command_harness(
     sink: FakeSink | None = None,
     run_blocking: Callable[..., Awaitable[Any]] = run_inline,
     checkpoint_store: Any = None,
+    read_listening: Callable[[], frozenset[int]] = frozenset,
 ) -> AsyncIterator[Harness]:
     """A started manager over fakes, with its log files under *tmp_path*; closed after.
 
     Process queries and kills run inline unless *run_blocking* says otherwise;
-    output is cleaned inline.
+    output is cleaned inline. No process listens on a TCP port unless
+    *read_listening* says otherwise.
     """
     clock = FakeClock()
     launcher = FakeLauncher()
@@ -313,6 +315,7 @@ async def command_harness(
         max_live=max_live,
         output_host=InterpreterHost.in_process(),
         checkpoint_store=checkpoint_store,
+        read_listening=read_listening,
     )
     harness = Harness(manager, launcher, clock, sink, tmp_path)
     manager.add_changed_callback(harness.changes.append)

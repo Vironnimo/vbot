@@ -32,6 +32,7 @@ import {
 import { createChatViewParentHarness } from './ChatView.parent.support.svelte.js';
 import { reactiveProps } from './reactiveProps.support.svelte.js';
 import { createRunEventFeed } from '../../lib/runEventFeed.svelte.js';
+import { sessionActivityFromSnapshot } from '../../lib/sessionActivity.js';
 import { t } from '../../lib/i18n.js';
 import { assistantRun, outputItem, toolItem } from './timelineItems.support.js';
 
@@ -675,7 +676,11 @@ describe('ChatView Runs', () => {
         return fallback(method, params);
       });
       const feed = createRunEventFeed();
-      const props = reactiveProps({ ...alphaProps(), runEvents: feed });
+      const props = reactiveProps({
+        ...alphaProps(),
+        runEvents: feed,
+        sessionActivity: null,
+      });
       await chat.mountChat(props);
       await waitForCondition(() => Boolean(labelledButton(t('chat.stopAll'))));
       expect(findCancelRunButton()).toBeUndefined();
@@ -714,6 +719,24 @@ describe('ChatView Runs', () => {
         last_sequence: 1,
       };
       await waitForCondition(() => Boolean(labelledButton(t('chat.stopAll'))));
+
+      // A Session waiting for work that will wake it offers Stop all too.
+      running = false;
+      props.terminalsRefreshToken = 2;
+      await waitForCondition(() => labelledButton(t('chat.stopAll')) === null);
+      props.sessionActivity = sessionActivityFromSnapshot([
+        {
+          project_id: null,
+          agent_id: 'alpha',
+          session_id: 'session-1',
+          state: 'waiting',
+          work_started_at: '2026-05-09T00:00:00+00:00',
+          waiting_for: { subagents: 0, commands: 0, results: 1 },
+        },
+      ]);
+      await waitForCondition(() => Boolean(labelledButton(t('chat.stopAll'))));
+      props.sessionActivity = {};
+      await waitForCondition(() => labelledButton(t('chat.stopAll')) === null);
     });
 
     const finishedChild = subSessionHistory({

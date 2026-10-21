@@ -12,6 +12,7 @@ through :meth:`SubAgentCoordinator.subagents`, ``running_work`` and
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from contextlib import AsyncExitStack
 from typing import TYPE_CHECKING, Any, cast
 
@@ -357,6 +358,27 @@ class SubAgentCoordinator:
     async def drain_activity(self) -> None:
         """Wait until the activity files' text so far is on disk."""
         await self._activities.drain()
+
+    def forwarding_pending(self, address: SessionAddress) -> bool:
+        """Whether a Run of the Session at *address* has not yet handed its answer
+        to delivery; a Run its Parent stopped itself forwards nothing."""
+        return self._forwarding.pending(address)
+
+    def add_forwarded_callback(
+        self, callback: Callable[[SessionAddress], None]
+    ) -> Callable[[], None]:
+        """Call *callback* with a Session's address once a Run of it is done
+        forwarding, delivered or not. Returns the unsubscribe function."""
+        return self._forwarding.add_forwarded_callback(callback)
+
+    async def parent_link(self, address: SessionAddress) -> SubAgentLink | None:
+        """Read the Session's Parent link off the Event Loop.
+
+        None for a Session without one or one that no longer exists; raises when
+        its metadata cannot be read.
+        """
+        sessions = self._runtime.chat_sessions
+        return await sessions.run_async(read_link, sessions, address, strict=True)
 
     def references_identity_agent(self, agent_id: str) -> bool:
         """Return whether a followed Run in an Identity Agent's Session is still forwarding."""

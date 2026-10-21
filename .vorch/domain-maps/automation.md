@@ -65,7 +65,7 @@ Read these only when your task matches - not by default.
 - Cron jobs with a `watch`: the check before each Run and its runner, baselines, the change note, check failures -> `automation/cron-watch.md`
 - Cron webhook jobs: the `/api/hooks/` route, secrets, URL, waiting requests, the webhook note -> `automation/cron-webhooks.md`
 - Cron jobs bound to calendar events: event times, owed occurrences and their windows, the event context note, event-change checks, deletion with the event -> `automation/event-jobs.md`
-- Background completion delivery: `submit_completion`/`cancel_completion`, request-boundary joins, follow-up Runs, delivery claims, Extension-owned notices, close -> `automation/completion-delivery.md`
+- Background completion delivery: `submit_completion`/`cancel_completion`, request-boundary joins, follow-up Runs, delivery claims, Extension-owned notices, pending wakes, close -> `automation/completion-delivery.md`
 - Reflection reviews: briefs, Tool gating, review orchestration, cadence counters, `/reflect`, attribution -> `automation/reflection.md`
 - Reading or undoing the Memory and Skill changes of a learning Run (`learning.changes`, `learning.undo`, review outcomes) -> `automation/learning-changes.md`
 - Choosing how background producers inform the Model (persisted notes vs internal triggers) -> `model-communication.md`

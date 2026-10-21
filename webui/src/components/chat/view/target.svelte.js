@@ -1,6 +1,5 @@
 import {
   isProjectSelected,
-  agentActivityStatus,
   resolveAgentAddressing,
   selectedAgent,
   currentSessionState,
@@ -112,25 +111,6 @@ export function createChatViewTarget(context) {
   let activeAgent = $derived(getActiveAgent());
 
   let activeSessionState = $derived(getActiveSessionState());
-
-  let projectAgentStatuses = $derived.by(() =>
-    Object.fromEntries(
-      projectTeam.map((member) => {
-        const address = formatAgentAddress(
-          member.agent_id,
-          context.selectedProjectId,
-        );
-        return [
-          member.agent_id,
-          agentActivityStatus(
-            context.chatState,
-            address,
-            displayedSessionKey(),
-          ),
-        ];
-      }),
-    ),
-  );
 
   // Outside address of the displayed agent (bare id for identity, full
   // `agent@projekt` otherwise) — what address-parsing RPCs like session.list
@@ -834,9 +814,6 @@ export function createChatViewTarget(context) {
     },
     get activeSessionState() {
       return activeSessionState;
-    },
-    get projectAgentStatuses() {
-      return projectAgentStatuses;
     },
     get activeAgentAddress() {
       return activeAgentAddress;

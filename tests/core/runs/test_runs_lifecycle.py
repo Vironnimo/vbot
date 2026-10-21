@@ -220,28 +220,48 @@ async def test_failed_run_releases_session_lock() -> None:
     assert await next_run.wait() == "ok"
 
 
-async def test_run_started_callbacks_are_notified_and_removable() -> None:
+async def test_run_started_and_finished_callbacks_are_notified_and_removable() -> None:
     manager = ChatRunManager()
     observed_runs: list[Run] = []
+    # Each finished Run with the Session's active Run at that moment.
+    finished: list[tuple[Run, Run | None]] = []
+    release = asyncio.Event()
 
     async def execute(_run: Run) -> str:
+        await release.wait()
         return "done"
 
+    def record_finished(run: Run) -> None:
+        active = manager.active_run(
+            agent_id=SESSION.agent_id, session_id=SESSION.session_id, project_id=None
+        )
+        finished.append((run, active))
+
     remove_callback = manager.add_run_started_callback(observed_runs.append)
+    remove_finished = manager.add_run_finished_callback(record_finished)
     first_run = await manager.start(
         SESSION,
         execute,
     )
+    queued = await manager.enqueue(SESSION, execute, display_content="next")
+    release.set()
     await first_run.wait()
+    queued_run = await queued.future
+    await queued_run.wait()
+    await asyncio.sleep(0)
     remove_callback()
+    remove_finished()
 
     second_run = await manager.start(
         SESSION,
         execute,
     )
     await second_run.wait()
+    await asyncio.sleep(0)
 
-    assert observed_runs == [first_run]
+    assert observed_runs == [first_run, queued_run]
+    # A finished Run has released its Session and the queued Run has started.
+    assert finished == [(first_run, queued_run), (queued_run, None)]
 
 
 async def test_completed_run_lookup_retention_is_bounded() -> None:
