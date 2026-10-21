@@ -18,6 +18,7 @@ from cli.formatting import format_string_list as _format_string_list
 from cli.formatting import record_fields
 from cli.formatting import string_or_default as _string_or_default
 from cli.formatting import value_text as _value_text
+from cli.permission_notes import permission_notes, with_notes
 from cli.rpc_client import rpc_call as _rpc_call
 from cli.server_management import CommandResult, ServerInstance
 from core.permissions import (
@@ -161,9 +162,14 @@ def agent_create(
     payload = _rpc_call(instance, "agent.create", params)
     if not payload.ok:
         return payload.to_command_result()
+    notes = permission_notes(
+        instance,
+        resolved.get("permission_rules"),
+        agent_id=_string_or_default(payload.data.get("id"), agent_id),
+    )
     return CommandResult(
         ok=True,
-        message=_format_agent_operation("created", payload.data, agent_id),
+        message=with_notes(_format_agent_operation("created", payload.data, agent_id), notes),
         instance=instance,
         attention=_agent_attention(payload.data),
     )
@@ -195,9 +201,10 @@ def agent_update(
     payload = _rpc_call(instance, "agent.update", params)
     if not payload.ok:
         return payload.to_command_result()
+    notes = permission_notes(instance, resolved.get("permission_rules"), agent_id=agent_id)
     return CommandResult(
         ok=True,
-        message=_format_agent_operation("updated", payload.data, agent_id),
+        message=with_notes(_format_agent_operation("updated", payload.data, agent_id), notes),
         instance=instance,
         attention=_agent_attention(payload.data),
     )

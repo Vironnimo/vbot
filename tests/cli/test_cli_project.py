@@ -355,17 +355,56 @@ def test_project_override_set_coerces_the_value(
     rpc: FakeRpc, run_cli: RunCli, field: str, raw: str, value: object
 ) -> None:
     rpc.reply("project.set_override", {"project": _project(), "scan": CLEAN_SCAN})
+    rpc.reply("permissions.validate", {"notes": []})
 
     code, out, _err = run_cli("project", "override", "set", "vbot", "builder", field, raw)
 
     assert code == 0
-    assert rpc.calls == [
-        (
-            "project.set_override",
-            {"project_id": "vbot", "agent_id": "builder", "field": field, "value": value},
-        )
-    ]
+    assert rpc.calls[0] == (
+        "project.set_override",
+        {"project_id": "vbot", "agent_id": "builder", "field": field, "value": value},
+    )
+    # Only rule strings can be rewritten: a preset alone needs no check afterwards.
+    checked = isinstance(value, dict) and bool(value.get("deny"))
+    assert rpc.calls[1:] == (
+        [("permissions.validate", {"permission_rules": value, "agent_id": "builder@vbot"})]
+        if checked
+        else []
+    )
     assert f"set builder.{field} override on" in out and "vbot" in out
+
+
+def test_a_permission_override_says_how_its_rules_were_saved_and_what_applies(
+    rpc: FakeRpc, run_cli: RunCli
+) -> None:
+    rpc.reply("project.set_override", {"project": _project(), "scan": CLEAN_SCAN})
+    # The rules the member inherits keep reading in the work area.
+    rpc.reply(
+        "permissions.validate",
+        {
+            "notes": ["Shell() was saved as Shell(*)."],
+            "bases": {
+                "read": {"value": "work_area", "source": "inherited"},
+                "write": {
+                    "value": "anywhere",
+                    "source": "own",
+                    "excluded": ["anywhere"],
+                    "narrowed_by_read": {"work_area": {"anywhere": "work_area"}},
+                },
+            },
+        },
+    )
+
+    code, out, _err = run_cli(
+        "project", "override", "set", "vbot", "builder", "permission_rules",
+        '{"write":"anywhere","deny":["Shell()"]}',
+    )  # fmt: skip
+
+    assert code == 0
+    lines = out.splitlines()
+    assert lines[0].startswith("set builder.permission_rules override on")
+    assert lines[1] == "Note: Shell() was saved as Shell(*)."
+    assert lines[2].startswith("Note: write anywhere applies as work_area, because the inherited")
 
 
 def test_project_override_refuses_an_unknown_preset_before_any_request(

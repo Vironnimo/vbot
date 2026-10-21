@@ -28,6 +28,7 @@ from cli.formatting import bool_text as _bool_text
 from cli.formatting import format_string_list as _format_string_list
 from cli.formatting import record_fields
 from cli.formatting import string_or_default as _string_or_default
+from cli.permission_notes import permission_notes, with_notes
 from cli.rpc_client import rpc_call as _rpc_call
 from cli.server_management import CommandResult, ServerInstance
 from core.permissions import PermissionRulesError, apply_preset, preset_name
@@ -142,10 +143,18 @@ def project_set_override(
     )
     if not payload.ok:
         return payload.to_command_result()
+    notes = (
+        permission_notes(instance, value, agent_id=f"{agent_id}@{project_id}")
+        if field == "permission_rules"
+        else []
+    )
     return CommandResult(
         ok=True,
-        message=_format_project_operation(
-            f"set {agent_id}.{field} override on", payload.data, project_id
+        message=with_notes(
+            _format_project_operation(
+                f"set {agent_id}.{field} override on", payload.data, project_id
+            ),
+            notes,
         ),
         instance=instance,
     )

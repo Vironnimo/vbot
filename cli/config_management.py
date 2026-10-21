@@ -5,8 +5,11 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from cli.permission_notes import permission_notes
 from cli.rpc_client import rpc_call as _rpc_call
 from cli.server_management import CommandResult, ServerInstance
+
+PERMISSION_RULES_DEFAULT_PATH = "defaults.agent.permission_rules"
 
 
 def config_raw(instance: ServerInstance) -> CommandResult:
@@ -133,6 +136,12 @@ def config_patch(instance: ServerInstance, operations: list[dict[str, Any]]) -> 
         )
 
     changed_paths = {path for path in changed if isinstance(path, str)}
+    # Rule sets the server rewrote say so, as `agent update` does.
+    rule_sets = {
+        operation["path"]: operation.get("value")
+        for operation in operations
+        if operation.get("op") == "set" and operation.get("path") == PERMISSION_RULES_DEFAULT_PATH
+    }
     lines = []
     for item in changes:
         if not isinstance(item, dict):
@@ -141,6 +150,8 @@ def config_patch(instance: ServerInstance, operations: list[dict[str, Any]]) -> 
         status = "updated" if path in changed_paths else "unchanged"
         value = _json_value(item.get("value"))
         lines.append(f"{status}: {path} = {value}")
+        if path in rule_sets:
+            lines.extend(permission_notes(instance, rule_sets[path]))
         if "pending_value" in item:
             lines.append(f"  pending: {_json_value(item['pending_value'])}")
         lines.append(f"  application: {item.get('application', 'unknown')}")

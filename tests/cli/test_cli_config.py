@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 import sys
 from typing import Any
 
@@ -162,6 +163,34 @@ def test_config_set_sends_one_atomic_patch_and_prints_the_applied_change(
     ]
     for text in ('web_search.provider = "searxng"', "application: live", "restart_required: no"):
         assert text in out
+
+
+def test_config_set_of_the_default_permission_rules_says_how_they_were_saved(
+    rpc: FakeRpc, run_cli: RunCli
+) -> None:
+    path = "defaults.agent.permission_rules"
+    saved = {"deny": ["Shell(git push *)"]}
+    rpc.reply(
+        "settings.patch",
+        {
+            "changed": [path],
+            "changes": [{"path": path, "value": saved, "application": "live"}],
+            "restart_required": False,
+        },
+    )
+    note = "Bash(git push:*) was saved as Shell(git push *)."
+    rpc.reply("permissions.validate", {"notes": [note]})
+
+    code, out, _err = run_cli("config", "set", path, '{"deny":["Bash(git push:*)"]}')
+
+    assert code == 0
+    # The shared default stands alone: it is checked without an Agent.
+    assert rpc.calls[1] == (
+        "permissions.validate",
+        {"permission_rules": {"deny": ["Bash(git push:*)"]}},
+    )
+    lines = out.splitlines()
+    assert lines[lines.index(f"updated: {path} = {json.dumps(saved)}") + 1] == f"Note: {note}"
 
 
 @pytest.mark.parametrize(
