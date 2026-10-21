@@ -9,8 +9,6 @@
   import { validatePermissionRules } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import {
-    PERMISSION_BASES,
-    PERMISSION_BASE_PARTS,
     PERMISSION_LEVEL_AGENT,
     PERMISSION_LEVEL_DEFAULT,
     PERMISSION_LEVEL_OVERRIDE,
@@ -20,7 +18,6 @@
     PERMISSION_RULE_EFFECTS,
     PERMISSION_RULE_KINDS,
     applyPermissionPreset,
-    effectivePermissionBase,
     joinPermissionRule,
     normalizePermissionRules,
     parsePastedPermissionRules,
@@ -31,7 +28,6 @@
     withPermissionBase,
     withPermissionRuleList,
     withPastedPermissionRules,
-    writeWithinRead,
   } from '$lib/permissionRules.js';
 
   const noop = () => {};
@@ -119,6 +115,9 @@
       : normalizePermissionRules(inherited),
   );
   let presets = $derived(result?.presets ?? {});
+  // What applies to each base and which bases the level cannot choose; the
+  // base rows wait for the server's first answer.
+  let bases = $derived(result?.bases ?? {});
   let current = $derived(checkedKey === requestKey ? result : null);
   let errors = $derived(current?.errors ?? []);
   let complete = $derived(permissionRulesComplete(own));
@@ -236,28 +235,25 @@
     return BASE_LABELS[part]?.[base]?.() ?? base;
   }
 
-  function baseOptions(part, parentRules) {
-    const fallback = effectivePermissionBase(null, parentRules, part);
-    // What the level reads decides how far an inherited write reaches.
-    const read = effectivePermissionBase(own, parentRules, 'read').value;
-    const value = baseLabel(
-      part,
-      part === 'write' ? writeWithinRead(read, fallback.value) : fallback.value,
-    );
+  // `base` is the server's `bases[part]`: what applies without an own value
+  // (with its source), the choices, and those the level cannot choose.
+  function baseOptions(part, base) {
+    const inherit = base.inherit ?? {};
+    const value = baseLabel(part, inherit.value);
+    const excluded = base.excluded ?? [];
     return [
       {
         value: INHERIT,
         label:
-          fallback.source === 'default'
+          inherit.source === 'default'
             ? t('permissions.base.default', { value })
             : t('permissions.base.inherited', { value }),
       },
-      ...PERMISSION_BASES[part].map((base) => {
-        const narrowed =
-          part === 'write' && writeWithinRead(read, base) !== base;
+      ...(base.choices ?? []).map((choice) => {
+        const narrowed = excluded.includes(choice);
         return {
-          value: base,
-          label: baseLabel(part, base),
+          value: choice,
+          label: baseLabel(part, choice),
           disabled: narrowed,
           tooltip: narrowed ? t('permissions.base.writeWithinRead') : '',
         };
@@ -271,6 +267,7 @@
       own,
       part,
       choice === INHERIT ? null : choice,
+      bases,
     );
     if (part === 'read' || part === 'write') {
       writeNarrowed =
@@ -391,7 +388,7 @@
           />
         </div>
       </div>
-      {#each PERMISSION_BASE_PARTS as part (part)}
+      {#each Object.entries(bases) as [part, base] (part)}
         {@const problems = permissionProblems(errors, part)}
         <div class="s-row s-row--compact">
           <div class="s-row-info">
@@ -416,7 +413,7 @@
             <Dropdown
               id={`${idPrefix}-${part}`}
               value={own?.[part] ?? INHERIT}
-              options={baseOptions(part, parent)}
+              options={baseOptions(part, base)}
               {disabled}
               invalid={problems.length > 0}
               ariaLabel={PART_LABELS[part]()}
