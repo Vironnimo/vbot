@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import Mock
 
+from core.permissions import PermissionBoundary
 from core.tools.apply_patch import make_apply_patch_handler, register_apply_patch_tool
 from core.tools.edit import register_edit_tools
 from core.tools.file_state import FileReadState
@@ -66,7 +67,12 @@ def registry(state: FileReadState | None = None, *, read: bool = False) -> ToolR
 
 
 async def call(
-    root: Path, arguments: dict, *, tools: ToolRegistry | None = None, name="apply_patch"
+    root: Path,
+    arguments: dict,
+    *,
+    tools: ToolRegistry | None = None,
+    name="apply_patch",
+    permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED,
 ):
     """Run one call through the Tool executor and return its result envelope."""
     tools = tools or registry()
@@ -80,6 +86,7 @@ async def call(
             data_root=root / "data",
             vbot_root=root,
             allowed_tools=["apply_patch", "edit", "write", "read"],
+            permissions=permissions,
         ),
     )
     assert is_tool_result_envelope(results[0])

@@ -23,6 +23,7 @@ from functools import cache
 from pathlib import Path, PurePath
 from typing import Any
 
+from core.permissions import PermissionBoundary
 from core.projects import ProjectStore
 from core.secrets.agent_secrets import REFERENCE_PATTERN, has_reference
 from core.tools._path_suggestions import similar_entries
@@ -696,11 +697,17 @@ def _workdir(context: ToolContext, arguments: JsonObject, projects: ProjectStore
         # missing one, so the manager reports the actual filesystem failure.
         return workdir
     if not directory:
-        raise _call_error(_missing_workdir(workdir, given=bool(raw), cwd=context.effective_cwd))
+        raise _call_error(
+            _missing_workdir(
+                workdir, given=bool(raw), cwd=context.effective_cwd, permissions=context.permissions
+            )
+        )
     return workdir
 
 
-def _missing_workdir(workdir: Path, *, given: bool, cwd: Path) -> str:
+def _missing_workdir(
+    workdir: Path, *, given: bool, cwd: Path, permissions: PermissionBoundary
+) -> str:
     """The failure for a missing directory; *given* when the call named it as
     workdir, *cwd* the working directory a call without workdir uses.
 
@@ -719,7 +726,7 @@ def _missing_workdir(workdir: Path, *, given: bool, cwd: Path) -> str:
             f"is in, or {fallback}"
         )
     message = f"workdir {model_path(workdir)} is not an existing directory."
-    nearby = similar_entries(workdir, kind="dirs")
+    nearby = similar_entries(workdir, permissions=permissions, kind="dirs")
     if nearby:
         message += f" Similar directories: {', '.join(model_path(path) for path in nearby)}."
     return f"{message} Pass an existing directory, or {fallback}"
