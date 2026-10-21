@@ -17,9 +17,11 @@ without any work.
 
 from __future__ import annotations
 
+import functools
 import ipaddress
 import os
 import re
+import socket
 import sys
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
@@ -287,12 +289,20 @@ class PermissionBoundary:
         )
 
     def check_path(
-        self, path: PathLike, access: PathAccess, *, base: PathLike | None = None
+        self,
+        path: PathLike,
+        access: PathAccess,
+        *,
+        base: PathLike | None = None,
+        subtree: bool = False,
     ) -> PermissionRefusal | None:
         """Whether ``access`` to ``path`` is permitted; relative paths join ``base``.
 
         ``base`` defaults to the working directory. ``start_dir`` (the directory a
-        process starts in) is decided like reading that directory.
+        process starts in) is decided like reading that directory. With
+        ``subtree`` the access also reaches everything below ``path`` (a
+        recursive delete or listing): a protected location or a deny rule that
+        could match below it refuses too.
         """
         if not self._layers:
             return None
@@ -335,6 +345,39 @@ class PermissionBoundary:
                     base=layer.layer.write if access == "write" else layer.layer.read,
                     resolved=shown,
                 )
+        if subtree:
+            return self._subtree_refusal(keys, access, target, shown)
+        return None
+
+    def _subtree_refusal(
+        self, keys: tuple[str, ...], access: PathAccess, target: str, shown: str | None
+    ) -> PermissionRefusal | None:
+        """A refusal for what lies below the permitted folder that ``keys`` name."""
+        protected: list[tuple[ProtectedLocation, _Area | None]] = [
+            ("agent_config", self._agent_config),
+            ("data_dir", self._data_dirs),
+        ]
+        if access == "write":
+            protected.extend(("installation", area) for area in self._install_dirs)
+        for location, area in protected:
+            if area is not None and any(
+                is_inside(folder, key) for folder in area.keys for key in keys
+            ):
+                return self.refusal(
+                    access, target, "protected_location", location=location, resolved=shown
+                )
+        for layer in self._compiled:
+            rules = layer.read_deny + layer.edit_deny if access == "write" else layer.read_deny
+            for rule in rules:
+                if any(rule.may_match_below(key) for key in keys):
+                    return self.refusal(
+                        access,
+                        target,
+                        "deny_rule",
+                        rule=rule.rule.text,
+                        source=layer.layer.source,
+                        resolved=shown,
+                    )
         return None
 
     def check_host(self, host: str) -> PermissionRefusal | None:
@@ -385,7 +428,7 @@ class PermissionBoundary:
         if (
             self.loopback_port is not None
             and effective_port == self.loopback_port
-            and _is_loopback(host)
+            and is_own_host(host)
         ):
             return self.refusal(
                 "web", f"{scheme}://{parts.netloc}", "protected_location", location="vbot_server"
@@ -404,6 +447,7 @@ class PermissionBoundary:
         location: ProtectedLocation | str | None = None,
         detail: str | None = None,
         resolved: str | None = None,
+        hint: str | None = None,
     ) -> PermissionRefusal:
         """A refusal of this boundary with its allowed summary (also for command checks)."""
         return PermissionRefusal(
@@ -417,6 +461,7 @@ class PermissionBoundary:
             detail=detail,
             resolved=resolved,
             allowed=self.allowed_summary(access),
+            hint=hint,
         )
 
     def allowed_summary(self, access: PermissionAccess) -> tuple[str, ...] | None:
@@ -560,6 +605,7 @@ class _PathRule:
     rule: PermissionRule
     patterns: tuple[re.Pattern[str], ...]
     literal: str | None
+    keys: tuple[str, ...] = ()
 
     @classmethod
     def of(cls, rule: PermissionRule, *, windows: bool) -> _PathRule:
@@ -572,10 +618,14 @@ class _PathRule:
             variants.append(LexicalPath(resolved.root, resolved.segments + rest).text)
         keys = dict.fromkeys(path_key(variant, windows=windows) for variant in variants)
         literal = None if has_wildcard(lexical.text) else path_key(lexical.text, windows=windows)
-        return cls(rule, tuple(compile_pattern(key) for key in keys), literal)
+        return cls(rule, tuple(compile_pattern(key) for key in keys), literal, tuple(keys))
 
     def matches(self, key: str) -> bool:
         return any(pattern.fullmatch(key) is not None for pattern in self.patterns)
+
+    def may_match_below(self, folder_key: str) -> bool:
+        """Whether the rule can match an entry below the folder ``folder_key``."""
+        return any(_may_match_below(pattern, folder_key) for pattern in self.keys)
 
 
 class _CompiledLayer:
@@ -725,14 +775,59 @@ def _retagged(layer: PermissionLayer, source: LayerSource) -> PermissionLayer:
     )
 
 
-def _is_loopback(host: str) -> bool:
+def is_own_host(host: str) -> bool:
+    """Whether the normalized ``host`` names this machine, where the vBot API listens.
+
+    Loopback and unspecified addresses, ``localhost`` and this machine's own
+    name. Its LAN addresses are not recognized.
+    """
+    host = host.strip("[]").rstrip(".")
     if host == "localhost" or host.endswith(".localhost"):
+        return True
+    machine = _machine_name()
+    if machine and (host == machine or host.startswith(machine + ".")):
         return True
     try:
         address = ipaddress.ip_address(host)
     except ValueError:
         return False
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        return address.ipv4_mapped.is_loopback or address.ipv4_mapped.is_unspecified
     return address.is_loopback or address.is_unspecified
+
+
+@functools.cache
+def _machine_name() -> str:
+    return socket.gethostname().casefold().rstrip(".")
+
+
+def _may_match_below(pattern_key: str, folder_key: str) -> bool:
+    """Whether the path pattern can match an entry strictly below ``folder_key``.
+
+    Segment by segment: the folder's segments must fit the pattern's leading
+    segments, and the pattern must have segments left; ``**`` can always match.
+    """
+    pattern = pattern_key.rstrip("/").split("/")
+    folder = folder_key.rstrip("/").split("/")
+    for index, segment in enumerate(folder):
+        if index >= len(pattern):
+            # The pattern names the folder or one above it, so it covers the folder.
+            return True
+        if "**" in pattern[index]:
+            return True
+        if _segment_pattern(pattern[index]).fullmatch(segment) is None:
+            return False
+    return len(pattern) > len(folder)
+
+
+@functools.cache
+def _segment_pattern(segment: str) -> re.Pattern[str]:
+    return re.compile(
+        "".join(
+            "[^/]*" if char == "*" else "[^/]" if char == "?" else re.escape(char)
+            for char in segment
+        )
+    )
 
 
 def _layer_from_dict(value: object, where: str, *, windows: bool) -> PermissionLayer:
@@ -829,6 +924,7 @@ __all__ = [
     "RuleNormalization",
     "WebBase",
     "WriteBase",
+    "is_own_host",
     "normalize_path",
     "normalize_permission_rule",
     "normalize_permission_rules",

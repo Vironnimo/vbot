@@ -17,7 +17,7 @@ starts on the first PowerShell analysis.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -166,6 +166,28 @@ class CommandAnalyzer:
         analysis = Analysis(env=env, home=home, powershell=self._helper)
         try:
             await analysis.run(command_line, shell, (cwd,), depth=0)
+        except HelperUnavailable as error:
+            raise CommandAnalysisUnavailable(str(error)) from error
+        return analysis.plan()
+
+    async def analyze_argv(
+        self,
+        argv: Sequence[str],
+        *,
+        cwd: Path,
+        env: Mapping[str, str],
+        home: Path,
+    ) -> CommandPlan:
+        """The plan of starting the program *argv* directly in *cwd*, without a shell.
+
+        For a terminal's program: its words are literal, and a shell program
+        with a command (``pwsh -Command ...``) is analyzed like any nested shell.
+        """
+        from core.permissions.commands._analysis import Analysis
+
+        analysis = Analysis(env=env, home=home, powershell=self._helper)
+        try:
+            await analysis.run_argv(tuple(argv), cwd)
         except HelperUnavailable as error:
             raise CommandAnalysisUnavailable(str(error)) from error
         return analysis.plan()

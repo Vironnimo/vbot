@@ -27,6 +27,11 @@ One owner builds it from explicit layers, each applied over the previous one:
 7. **Run identity** (commands only): who runs the command, and the one-time
    update handoff. Applied last, so nothing above replaces it.
 
+A Session with Permission Rules gets a confined environment instead of layer 7:
+without the instance variables of layer 2, the Run identity and this server's
+own ``vbot`` command on ``PATH`` (``VBOT_SCRATCH_DIR`` stays), so a command
+cannot find or address the vBot server through its environment.
+
 A command's environment comes in two parts (``CommandEnvironment``): layers 1
 to 4 are its shell's start environment, the same for every call until the login
 environment or the instance changes, so a shell started before the call can
@@ -172,13 +177,20 @@ class CommandEnvironment:
 
 
 def command_environment(
-    run: RunIdentity,
+    run: RunIdentity | None,
     *,
     variables: Mapping[str, str] | None = None,
     credentials: Mapping[str, str] | None = None,
     scratch: ScratchFolder | None = None,
+    confined: bool = False,
 ) -> CommandEnvironment:
-    """Environment of one shell command run by an Agent."""
+    """Environment of one shell command run by an Agent.
+
+    *confined* (a Session with Permission Rules) leaves out what exists only to
+    reach or control the vBot server: the instance variables, the Run identity
+    and this server's own ``vbot`` command on ``PATH``; ``VBOT_SCRATCH_DIR``
+    stays. *run* is None only for a confined command.
+    """
     base = _command_base()
     environment = dict(base)
     _apply(environment, variables or {})
@@ -186,12 +198,15 @@ def command_environment(
     if scratch is not None:
         _apply(environment, scratch_environment(scratch))
     _remove(environment, (RUN_PROJECT_ID_ENV, UPDATE_HANDOFF_ENV))
-    run_variables = {RUN_AGENT_ID_ENV: run.agent_id, RUN_SESSION_ID_ENV: run.session_id}
-    if run.project_id is not None:
-        run_variables[RUN_PROJECT_ID_ENV] = run.project_id
-    if run.update_handoff is not None:
-        run_variables[UPDATE_HANDOFF_ENV] = run.update_handoff
-    _apply(environment, run_variables)
+    if confined:
+        _confine(environment)
+    elif run is not None:
+        run_variables = {RUN_AGENT_ID_ENV: run.agent_id, RUN_SESSION_ID_ENV: run.session_id}
+        if run.project_id is not None:
+            run_variables[RUN_PROJECT_ID_ENV] = run.project_id
+        if run.update_handoff is not None:
+            run_variables[UPDATE_HANDOFF_ENV] = run.update_handoff
+        _apply(environment, run_variables)
     changes: dict[str, str | None] = {
         name: value for name, value in environment.items() if base.get(name) != value
     }
@@ -199,12 +214,49 @@ def command_environment(
     return CommandEnvironment(base, changes)
 
 
-def unattended_command_environment() -> CommandEnvironment:
+def unattended_command_environment(*, confined: bool = False) -> CommandEnvironment:
     """Environment of a command vBot runs outside a Run, such as a Cron watch check.
 
     Layers 1 to 4: no Run identity, Session scratch, variables or credentials.
+    *confined* (a job with a permission ceiling) as for ``command_environment``.
     """
-    return CommandEnvironment(_command_base(), {})
+    base = _command_base()
+    if not confined:
+        return CommandEnvironment(base, {})
+    environment = dict(base)
+    _confine(environment)
+    changes: dict[str, str | None] = {
+        name: value for name, value in environment.items() if base.get(name) != value
+    }
+    changes.update({name: None for name in base if name not in environment})
+    return CommandEnvironment(base, changes)
+
+
+def _confine(environment: dict[str, str]) -> None:
+    """Remove what only reaches or controls the vBot server (Permission Rules)."""
+    _remove(
+        environment,
+        (
+            *_INSTANCE_VARIABLES,
+            RUN_AGENT_ID_ENV,
+            RUN_SESSION_ID_ENV,
+            RUN_PROJECT_ID_ENV,
+            UPDATE_HANDOFF_ENV,
+        ),
+    )
+    directory = _instance_command_directory
+    path = _get(environment, "PATH")
+    if directory is not None and path:
+        _apply(
+            environment,
+            {
+                "PATH": os.pathsep.join(
+                    entry
+                    for entry in path.split(os.pathsep)
+                    if entry and not _same_directory(entry, directory)
+                )
+            },
+        )
 
 
 def _command_base() -> dict[str, str]:

@@ -54,6 +54,7 @@ from core.model_tasks import (
 from core.model_tasks.decisions import DecisionService
 from core.model_tasks.live import LiveVoiceService, backend_instructions
 from core.models.models import ModelRegistry
+from core.permissions import CommandChecker
 from core.projects import ProjectStore, build_agent_resolver
 from core.prompts import (
     PromptAgentStore,
@@ -142,6 +143,8 @@ from core.tools.cron import register_cron_tool
 from core.tools.live import LIVE_TOOL_FAMILY, LiveToolHosts, register_live_tools
 from core.tools.load_tools import register_load_tools_tool
 from core.tools.secrets import register_secrets_tool
+from core.tools.shell import powershell_executable
+from core.tools.shell_environment import inherited_value
 from core.tools.status import register_status_tool
 from core.tools.subagent import register_subagent_tools
 from core.tools.tools import ToolPromptBlockRegistry, ToolRegistry
@@ -153,6 +156,7 @@ from core.utils.tokens import prewarm_estimation_encoding
 from core.utils.version import detect_build_identity
 
 if TYPE_CHECKING:
+    from core.permissions.commands.commands import CommandAnalyzer
     from core.runtime.runtime import Runtime
 
 
@@ -708,6 +712,8 @@ def bootstrap(runtime: Runtime) -> None:
         )
         runtime._trigger_service.set_owned_completion_starter(runtime._start_owned_completion)
         runtime._trigger_service.set_owned_completion_validator(runtime._validate_owned_completion)
+        # Analyzes restricted Sessions' commands; its analyzer starts on first use.
+        runtime._command_checker = CommandChecker(_command_analyzer)
         runtime._terminal_manager = _build_terminal_manager(runtime)
         if runtime._operational_producers == "enabled":
             runtime._start_terminal_manager()
@@ -835,6 +841,7 @@ def bootstrap(runtime: Runtime) -> None:
             projects=runtime._projects,
             scratch_areas=runtime._scratch_areas,
             secrets=runtime._agent_secrets,
+            command_checker=runtime._command_checker,
         )
         runtime._subagent_coordinator = SubAgentCoordinator(
             runtime, runtime._trigger_service, secrets=runtime._agent_secrets
@@ -931,6 +938,13 @@ def bootstrap(runtime: Runtime) -> None:
     # startup traceback as its context.
     clean_up_failed_startup(runtime)
     raise startup_error
+
+
+def _command_analyzer() -> CommandAnalyzer:
+    """The command analyzer of restricted Sessions, parsing with the shell's own PowerShell."""
+    from core.permissions.commands.commands import CommandAnalyzer
+
+    return CommandAnalyzer(powershell_executable=powershell_executable(inherited_value("PATH")))
 
 
 def _log_startup_failure(runtime: Runtime) -> None:

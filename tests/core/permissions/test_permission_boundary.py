@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import sys
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -161,6 +162,30 @@ def test_path_decisions(area: Area, path: str, access: PathAccess, reason: str |
         assert "\\" not in refusal.target
 
 
+@pytest.mark.parametrize(
+    ("path", "access", "reason"),
+    [
+        pytest.param("src", "write", None, id="nothing-protected-below"),
+        pytest.param(".", "write", "deny_rule", id="deny-rule-below"),
+        pytest.param(".", "read", "deny_rule", id="read-deny-below"),
+        pytest.param("{data}/..", "read", "protected_location", id="data-dir-below"),
+        pytest.param("{root}", "write", "protected_location", id="installation-below"),
+    ],
+)
+def test_a_subtree_access_is_refused_for_what_lies_below(
+    area: Area, path: str, access: PathAccess, reason: str | None
+) -> None:
+    rules = {"deny": ["Read({workdir}/secrets/**)", "Edit({workdir}/*.lock)"]}
+    target = str(area.root) if path == "{root}" else area.path(path)
+    boundary = area.boundary(rules)
+
+    refusal = boundary.check_path(target, access, subtree=True)
+
+    assert (refusal.reason if refusal else None) == reason
+    # Without subtree the folder itself is permitted.
+    assert boundary.check_path(target, access) is None
+
+
 def test_an_empty_rule_set_keeps_full_reach_but_protects_vbot(area: Area) -> None:
     boundary = area.boundary({})
 
@@ -315,6 +340,10 @@ def test_host_decisions(area: Area, host: str, reason: str | None) -> None:
         pytest.param("http://127.0.0.1:22333/api/rpc", "protected_location", id="server-ipv4"),
         pytest.param("http://localhost:22333/", "protected_location", id="server-localhost"),
         pytest.param("http://[::1]:22333/", "protected_location", id="server-ipv6"),
+        pytest.param("http://0.0.0.0:22333/", "protected_location", id="server-unspecified"),
+        pytest.param(
+            f"http://{socket.gethostname()}:22333/", "protected_location", id="server-machine-name"
+        ),
         pytest.param("http://127.0.0.1:5173/", None, id="other-local-port"),
         pytest.param("https://example.com/page", None, id="ordinary-url"),
         pytest.param("ftp://example.com/file", "unanalyzable", id="other-scheme"),

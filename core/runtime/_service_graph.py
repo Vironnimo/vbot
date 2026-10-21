@@ -44,6 +44,7 @@ from core.model_tasks.decisions import DecisionService
 from core.model_tasks.live import LiveVoiceService
 from core.models.models import ModelRegistry
 from core.performance import PerformanceService
+from core.permissions import CommandChecker
 from core.projects import (
     AgentResolver,
     ProjectStore,
@@ -142,6 +143,7 @@ class RuntimeServiceGraph:
         self._update_handoffs: UpdateHandoffs | None = None
         self._terminal_manager: TerminalManager | None = None
         self._command_manager: CommandManager | None = None
+        self._command_checker: CommandChecker | None = None
         self._scratch_areas: ScratchAreas | None = None
         self._skills: SkillRegistry | None = None
         self._skill_authoring: SkillAuthoringService | None = None

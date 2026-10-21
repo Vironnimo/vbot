@@ -1,0 +1,228 @@
+"""Contract tests of ``CommandChecker``: what a restricted command line may run, and its analyzer.
+
+Most cases decide a fixed plan from ``FakeAnalyzer``; the Tools' own tests show
+where each refusal reaches the Agent. A few cases run the real analysis (bash in
+process everywhere, PowerShell where its helper can start) to show the checker
+and the analysis agree on the plan's shape.
+"""
+
+from __future__ import annotations
+
+import shutil
+import sys
+from pathlib import Path
+
+import pytest
+
+from core.permissions import (
+    BoundaryContext,
+    CommandChecker,
+    PermissionBoundary,
+    PermissionCeiling,
+    normalize_permission_rules,
+)
+from core.permissions.commands.commands import CommandAnalyzer
+from tests.core.permissions.command_check_support import (
+    UNAVAILABLE,
+    FakeAnalyzer,
+    fake_checker,
+    plan,
+)
+
+PORT = 22333
+
+
+def boundary(
+    work: Path, rules: dict[str, object], *, ceiling: dict[str, object] | None = None
+) -> PermissionBoundary:
+    context = BoundaryContext(
+        workdir=work, home=work / "home", data_dir=work.parent / "data", loopback_port=PORT
+    )
+    ceilings: tuple[PermissionCeiling, ...] = ()
+    if ceiling is not None:
+        parent = PermissionBoundary.build(normalize_permission_rules(ceiling), context)
+        stored = parent.ceiling(source="parent")
+        assert stored is not None
+        ceilings = (PermissionCeiling.from_ceiling_dict(stored.to_ceiling_dict()),)
+    return PermissionBoundary.build(normalize_permission_rules(rules), context, ceilings=ceilings)
+
+
+@pytest.mark.parametrize(
+    ("rules", "ceiling", "commands", "reason"),
+    [
+        pytest.param(
+            {"commands": "listed", "allow": ["Shell(git *)"]},
+            {"commands": "listed", "allow": ["Shell(git status)"]},
+            ("git log",),
+            "not_permitted",
+            id="every-listing-layer-must-allow",
+        ),
+        pytest.param(
+            {"commands": "listed", "allow": ["Shell(git *)"]},
+            {"commands": "listed", "allow": ["Shell(git status)"]},
+            ("git status",),
+            None,
+            id="allowed-by-every-layer",
+        ),
+        pytest.param(
+            {},
+            {"deny": ["Shell(npm publish *)"]},
+            ("npm publish",),
+            "deny_rule",
+            id="inherited-deny",
+        ),
+        pytest.param({}, None, ("vbot.ps1 agent list",), "protected_location", id="vbot-script"),
+        pytest.param(
+            {}, None, (f"curl ws://[::1]:{PORT}/live",), "protected_location", id="host-port-word"
+        ),
+        pytest.param({}, None, (f"curl localhost:{PORT + 1}",), None, id="other-port"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_command_decisions(
+    tmp_path: Path,
+    rules: dict[str, object],
+    ceiling: dict[str, object] | None,
+    commands: tuple[str, ...],
+    reason: str | None,
+) -> None:
+    checker = fake_checker(FakeAnalyzer(plan(*commands)))
+
+    refusal = await checker.check_line(
+        boundary(tmp_path, rules, ceiling=ceiling),
+        " ; ".join(commands),
+        shell="bash",
+        cwd=tmp_path,
+        env={},
+        home=tmp_path,
+    )
+
+    assert (refusal.reason if refusal else None) == reason
+
+
+@pytest.mark.parametrize(
+    ("command", "cwd_in_checkout", "refused"),
+    [
+        pytest.param("python {root}/cli/main.py agent list", False, True, id="cli-script"),
+        pytest.param("python cli/main.py agent list", True, True, id="relative-cli-script"),
+        pytest.param("python -m cli.main agent list", True, True, id="cli-module"),
+        pytest.param("python -m cli.main agent list", False, False, id="other-cli-module"),
+        pytest.param("python tools/build.py", True, False, id="other-script"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_vbots_own_cli_cannot_be_started(
+    tmp_path: Path, command: str, cwd_in_checkout: bool, refused: bool
+) -> None:
+    root = tmp_path / "vbot"
+    work = root if cwd_in_checkout else tmp_path / "work"
+    analyzer = FakeAnalyzer(plan(command.replace("{root}", root.as_posix())))
+    checker = fake_checker(analyzer, vbot_root=root)
+
+    refusal = await checker.check_line(
+        boundary(work, {}), command, shell="bash", cwd=work, env={}, home=tmp_path
+    )
+
+    assert (refusal.location if refusal else None) == ("vbot_cli" if refused else None)
+
+
+@pytest.mark.asyncio
+async def test_the_analyzer_starts_on_the_first_restricted_check_and_ends_with_the_checker(
+    tmp_path: Path,
+) -> None:
+    analyzer = FakeAnalyzer(plan("ls"))
+    created: list[FakeAnalyzer] = []
+
+    def factory() -> FakeAnalyzer:
+        created.append(analyzer)
+        return analyzer
+
+    checker = CommandChecker(factory)  # type: ignore[arg-type]
+    restricted = boundary(tmp_path, {})
+
+    unrestricted = await checker.check_line(
+        PermissionBoundary.UNRESTRICTED, "ls", shell="bash", cwd=tmp_path, env={}, home=tmp_path
+    )
+    assert unrestricted is None and created == []
+    for _ in range(2):
+        assert (
+            await checker.check_line(
+                restricted, "ls", shell="bash", cwd=tmp_path, env={}, home=tmp_path
+            )
+            is None
+        )
+    assert created == [analyzer]
+
+    analyzer.result = UNAVAILABLE
+    failed = await checker.check_line(
+        restricted, "ls", shell="bash", cwd=tmp_path, env={}, home=tmp_path
+    )
+    assert failed is not None and failed.reason == "unanalyzable"
+    assert "If the task needs this access" not in failed.message("bash")
+
+    await checker.aclose()
+    assert analyzer.closed
+    closed = await checker.check_line(
+        restricted, "ls", shell="bash", cwd=tmp_path, env={}, home=tmp_path
+    )
+    assert closed is not None and closed.reason == "unanalyzable"
+
+
+@pytest.mark.asyncio
+async def test_a_terminal_program_is_checked_as_one_command(tmp_path: Path) -> None:
+    analyzer = FakeAnalyzer(plan("ssh prod"))
+    checker = fake_checker(analyzer)
+
+    refusal = await checker.check_argv(
+        boundary(tmp_path, {"deny": ["Shell(ssh *)"]}),
+        ["ssh", "prod"],
+        cwd=tmp_path,
+        env={},
+        home=tmp_path,
+    )
+
+    assert refusal is not None and refusal.rule == "Shell(ssh *)"
+    assert analyzer.argvs == [(("ssh", "prod"), tmp_path)]
+
+
+_PWSH = shutil.which("pwsh")
+
+
+@pytest.mark.parametrize(
+    ("shell", "line", "reason"),
+    [
+        pytest.param("bash", "cat ../outside.txt", "not_permitted", id="bash-read-outside"),
+        pytest.param("bash", "rm -r build && git status", None, id="bash-inside"),
+        pytest.param(
+            "powershell",
+            "Set-Content -Path ..\\outside.txt -Value x",
+            "not_permitted",
+            id="powershell-write-outside",
+            marks=pytest.mark.skipif(
+                sys.platform != "win32" or _PWSH is None, reason="PowerShell's own parser"
+            ),
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_real_analysis_reaches_the_same_decisions(
+    tmp_path: Path, shell: str, line: str, reason: str | None
+) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+    checker = CommandChecker(
+        lambda: CommandAnalyzer(powershell_executable=Path(_PWSH) if _PWSH else None)
+    )
+    try:
+        refusal = await checker.check_line(
+            boundary(work, {"read": "work_area", "write": "work_area"}),
+            line,
+            shell=shell,  # type: ignore[arg-type]
+            cwd=work,
+            env={},
+            home=tmp_path,
+        )
+    finally:
+        await checker.aclose()
+
+    assert (refusal.reason if refusal else None) == reason

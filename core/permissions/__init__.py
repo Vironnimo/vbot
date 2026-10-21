@@ -1,5 +1,6 @@
 """Permission Rules domain public API (``permissions.md``)."""
 
+from core.permissions._command_check import CommandChecker
 from core.permissions.permissions import (
     PLACEHOLDERS,
     RULE_KINDS,
@@ -24,6 +25,7 @@ from core.permissions.permissions import (
     RuleNormalization,
     WebBase,
     WriteBase,
+    is_own_host,
     normalize_path,
     normalize_permission_rule,
     normalize_permission_rules,
@@ -36,6 +38,7 @@ __all__ = [
     "PLACEHOLDERS",
     "RULE_KINDS",
     "BoundaryContext",
+    "CommandChecker",
     "CommandsBase",
     "LayerSource",
     "NormalizedPath",
@@ -56,6 +59,7 @@ __all__ = [
     "RuleNormalization",
     "WebBase",
     "WriteBase",
+    "is_own_host",
     "normalize_path",
     "normalize_permission_rule",
     "normalize_permission_rules",

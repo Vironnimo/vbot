@@ -29,6 +29,8 @@ from typing import Any
 import pytest
 import pytest_asyncio
 
+from core.permissions import BoundaryContext, PermissionBoundary, normalize_permission_rules
+from core.permissions.commands.commands import UnresolvedElement
 from core.projects import ProjectNotFoundError
 from core.secrets import KeyFileProtection, SecretStore
 from core.secrets.agent_secrets import AgentSecrets
@@ -69,6 +71,12 @@ from core.tools.update_handoff import (
     read_update_handoff_ticket,
 )
 from core.utils.paths import model_path
+from tests.core.permissions.command_check_support import (
+    UNAVAILABLE,
+    FakeAnalyzer,
+    fake_checker,
+    plan,
+)
 from tests.core.secrets.secrets_test_support import data_directory
 from tests.core.tools.command_manager_helpers import (
     OWNER,
@@ -110,9 +118,13 @@ class Shell:
         projects: FakeProjects | None = None,
         scratch_areas: ScratchAreas | None = None,
         secrets: AgentSecrets | None = None,
+        analyzer: FakeAnalyzer | None = None,
+        permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED,
     ) -> None:
         self.commands = commands
         self.registry = ToolRegistry()
+        self.checker = fake_checker(analyzer or FakeAnalyzer())
+        self.permissions = permissions
         register_shell_tool(
             self.registry,
             commands.manager,
@@ -121,6 +133,7 @@ class Shell:
             projects=projects,  # type: ignore[arg-type]
             scratch_areas=scratch_areas,
             secrets=secrets,
+            command_checker=self.checker,
         )
         self.cancel_callbacks: list[Callable[[], Any]] = []
         self.background_callbacks: list[Callable[[], bool]] = []
@@ -164,6 +177,7 @@ class Shell:
             background_registration_hook=self.background_callbacks.append,
             result_persisted_hook=self.persisted.append,
             emit_hook=lambda _event, payload: self.live_output.append(payload),
+            permissions=self.permissions,
         )
 
     def call(
@@ -1062,6 +1076,156 @@ async def test_calls_refused_before_the_start_run_nothing(shell: Shell) -> None:
     assert "not granted to this Agent" in secret["error"]["message"]
     assert nul["error"]["code"] == "invalid_arguments"
     assert shell.launcher.argv == []
+
+
+# --- Permission Rules -----------------------------------------------------------
+
+PORT = 22333
+
+
+def restricted(tmp_path: Path, **rules: object) -> PermissionBoundary:
+    """A boundary whose Work Area is *tmp_path*, the shell harness's working directory."""
+    return PermissionBoundary.build(
+        normalize_permission_rules({"read": "work_area", "write": "work_area", **rules}),
+        BoundaryContext(
+            workdir=tmp_path,
+            home=tmp_path / "home",
+            data_dir=tmp_path.parent / f"{tmp_path.name}-vbot-data",
+            loopback_port=PORT,
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("rules", "analysis", "fragment"),
+    [
+        pytest.param(
+            {"deny": ["Shell(git push *)"]},
+            plan("git push origin main"),
+            "the rule Shell(git push *) denies it",
+            id="denied-command",
+        ),
+        pytest.param(
+            {"commands": "listed", "allow": ["Shell(git status)"]},
+            plan("git status", "rm notes.txt"),
+            'running "rm notes.txt", because only commands that match an allow rule can run',
+            id="unlisted-command",
+        ),
+        pytest.param(
+            {},
+            plan("cp a b", writes=[Path("/elsewhere/b")]),
+            "outside the folders this Agent can change",
+            id="write-outside",
+        ),
+        pytest.param(
+            {"deny": ["Read({workdir}/secrets/**)"]},
+            plan("cat secrets/key", reads=[Path("secrets/key")]),
+            "denies it",
+            id="denied-read",
+        ),
+        pytest.param(
+            {"deny": ["Read({workdir}/secrets/**)"]},
+            plan("rm -r .", subtree_writes=[Path(".")]),
+            "denies it",
+            id="subtree-write-over-denied-folder",
+        ),
+        pytest.param({}, plan("vbot agent list"), "vBot's own command line", id="vbot-cli"),
+        pytest.param(
+            {},
+            plan("curl", urls=[f"http://127.0.0.1:{PORT}/api/agents"]),
+            "it is the vBot server itself",
+            id="loopback-url",
+        ),
+        pytest.param(
+            {},
+            plan(f"nc localhost {PORT}"),
+            "it is the vBot server itself",
+            id="loopback-host-and-port",
+        ),
+        pytest.param(
+            {},
+            plan(
+                "cat",
+                unresolved=[
+                    UnresolvedElement("path_read", "$f", "the path is computed when it runs")
+                ],
+            ),
+            "the path is computed when it runs ($f), so the check cannot tell what it reads. "
+            "Write each path literally in the command.",
+            id="unresolved",
+        ),
+        pytest.param(
+            {}, UNAVAILABLE, "vBot could not analyze it to check it", id="analysis-unavailable"
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_restricted_calls_the_rules_refuse_launch_nothing(
+    tmp_path: Path, rules: dict[str, object], analysis: object, fragment: str
+) -> None:
+    analyzer = FakeAnalyzer()
+    analyzer.result = analysis  # type: ignore[assignment]
+    async with started_shell(
+        tmp_path, analyzer=analyzer, permissions=restricted(tmp_path, **rules)
+    ) as shell:
+        result = await shell.call({"command": "the command", "run_in_background": True})
+
+    assert result["error"]["code"] == "permission_denied", result
+    assert result["error"]["retryable"] is False
+    assert fragment in result["error"]["message"]
+    assert result["error"]["message"].startswith(f"{SHELL_MODEL_NAME} was not run: ")
+    assert shell.launcher.argv == []
+    # The analysis saw the call's command in its working directory.
+    assert [(line, cwd) for line, _shell, cwd, _env in analyzer.lines] == [
+        ("the command", tmp_path)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_restricted_shell_starts_only_in_its_area_and_without_vbot_control_variables(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("VBOT_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("VBOT_SERVER_PORT", str(PORT))
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    handoffs = UpdateHandoffs(tmp_path / "data")
+    analyzer = FakeAnalyzer(plan("build"))
+    async with started_shell(
+        tmp_path,
+        analyzer=analyzer,
+        permissions=restricted(tmp_path),
+        update_handoffs=handoffs,
+    ) as shell:
+        refused = await shell.call({"command": "build", "workdir": str(outside)})
+        call = shell.call({"command": "build", "env": {"MODE": "ci"}})
+        (await shell.started()).exit(0)
+        assert data(await shell.returned(call))["status"] == "exited"
+
+    assert refused["error"]["code"] == "permission_denied"
+    assert "working in" in refused["error"]["message"]
+    command, env = launched(shell.launcher)
+    assert (command, env["MODE"]) == ("build", "ci")
+    assert not {
+        "VBOT_DATA_DIR",
+        "VBOT_SERVER_PORT",
+        "VBOT_RUN_AGENT_ID",
+        "VBOT_RUN_SESSION_ID",
+        "VBOT_RUN_PROJECT_ID",
+        "VBOT_UPDATE_HANDOFF",
+    } & set(env)
+    # The analysis expanded the call's own variables, in the same confined environment.
+    assert analyzer.lines[-1][3]["MODE"] == "ci"
+    assert "VBOT_DATA_DIR" not in analyzer.lines[-1][3]
+
+
+@pytest.mark.asyncio
+async def test_full_access_runs_commands_without_analyzing_them(shell: Shell) -> None:
+    call = shell.call({"command": "vbot agent list"})
+    (await shell.started()).exit(0)
+    assert data(await shell.returned(call))["status"] == "exited"
+
+    assert shell.checker.analyzer_started is False
 
 
 @pytest.mark.parametrize(

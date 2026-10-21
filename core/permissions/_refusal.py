@@ -64,8 +64,8 @@ class PermissionRefusal:
     ``source``), a ``protected_location`` (``location``), ``not_permitted`` by the
     ``base`` of the layer ``source`` and no allow rule, an ``unsafe_form``
     (``location`` names the form, such as ``network path``) or ``unanalyzable``
-    (``detail`` is a sentence saying what could not be analyzed and how to write
-    the access instead). ``allowed`` lists the folders, commands or hosts this
+    (``detail`` says what could not be analyzed; ``hint`` is a sentence saying how
+    to write the access so it can be checked). ``allowed`` lists the folders, commands or hosts this
     access kind may reach; ``None`` when its base allows everything. ``resolved``
     is where a link or junction on the path leads, when that differs.
     """
@@ -80,6 +80,7 @@ class PermissionRefusal:
     detail: str | None = None
     resolved: str | None = None
     allowed: tuple[str, ...] | None = None
+    hint: str | None = None
 
     def message(self, tool: str | None = None) -> str:
         """The Agent-facing refusal; with ``tool``, phrased as that Tool's failure."""
@@ -91,11 +92,17 @@ class PermissionRefusal:
             if tool
             else f"The permission rules refuse {action}"
         )
-        parts = [f"{lead}, because {self._reason()}.", _SAME_EVERYWHERE]
+        parts = [f"{lead}, because {self._reason()}."]
+        # What could not be analyzed can still pass when written so it can be.
+        if self.reason != "unanalyzable":
+            parts.append(_SAME_EVERYWHERE)
+        if self.hint is not None:
+            parts.append(self.hint)
         if self.allowed is not None:
             listed, nothing = _ALLOWED[self.access]
             parts.append(listed.format(items=", ".join(self.allowed)) if self.allowed else nothing)
-        parts.append(_NEXT_STEP)
+        if self.hint is None:
+            parts.append(_NEXT_STEP)
         return " ".join(parts)
 
     def _reason(self) -> str:

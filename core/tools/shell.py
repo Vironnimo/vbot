@@ -10,8 +10,9 @@ from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
+from core.permissions import CommandChecker, PermissionDenied
 from core.projects import ProjectStore
 from core.runs import TOOL_CALL_OUTPUT_EVENT
 from core.secrets.agent_secrets import AgentSecrets, SecretUse, SecretUseError, describe_uses
@@ -63,7 +64,7 @@ from core.tools.command_manager import (
     StopReason,
 )
 from core.tools.model_names import SHELL_MODEL_NAME
-from core.tools.scratch_areas import ScratchAreas, ScratchUnavailableError
+from core.tools.scratch_areas import ScratchAreas, ScratchFolder, ScratchUnavailableError
 from core.tools.shell_environment import (
     CommandEnvironment,
     RunIdentity,
@@ -99,6 +100,8 @@ CredentialResolver = Callable[[str], str]
 # writes: a program that reads it directly instead of stdin (Python's getpass,
 # $Host.UI.RawUI.ReadKey()) waits silently until stopped instead of failing.
 _CONSOLE_READS_WAIT = sys.platform == "win32"
+# The language of the host shell, for command analysis under Permission Rules.
+HOST_SHELL_KIND: Literal["powershell", "bash"] = "powershell" if sys.platform == "win32" else "bash"
 
 
 @dataclass(frozen=True)
@@ -204,8 +207,10 @@ class ShellTool:
         projects: ProjectStore | None = None,
         scratch_areas: ScratchAreas | None = None,
         secrets: AgentSecrets | None = None,
+        command_checker: CommandChecker | None = None,
     ) -> None:
         self._commands = command_manager
+        self._checker = command_checker
         self._resolve_credential = credential_resolver or (lambda _name: "")
         self._secrets = secrets
         self._update_handoffs = update_handoffs
@@ -231,13 +236,21 @@ class ShellTool:
                 else frozenset()
             ),
         )
+        scratch = await self._scratch(context)
+        confined = context.permissions.restricted
+        if confined:
+            # Before any Agent Secret is used and before the handoff token exists.
+            await self._check_permissions(context, call, scratch)
         try:
             secret_environment = await self._secret_environment(context, call)
         except SecretUseError as error:
             return tool_failure("secret_unavailable", f"{SHELL_MODEL_NAME} was not run: {error}")
-        handoff = _issue_update_handoff(self._update_handoffs, context)
+        # A restricted Session cannot reach the server to use an update handoff.
+        handoff = None if confined else _issue_update_handoff(self._update_handoffs, context)
         try:
-            command_id = await self._start(context, call, handoff, names, secret_environment)
+            command_id = await self._start(
+                context, call, handoff, names, secret_environment, scratch
+            )
         except _NotStartedError as failure:
             if handoff is not None:
                 handoff.release()
@@ -251,6 +264,51 @@ class ShellTool:
         if call.background:
             return await self._background_result(call, command_id, names, reason="background")
         return await self._wait(context, call, command_id, names)
+
+    async def _scratch(self, context: ToolContext) -> ScratchFolder | None:
+        if self._scratch_areas is None:
+            return None
+        # Scratch is optional; its owner logged an unavailable folder. The
+        # command still runs with the host's normal temporary directories.
+        with contextlib.suppress(ScratchUnavailableError):
+            return await self._scratch_areas.folder_for(
+                SessionAddress(context.project_id, context.agent_id, context.session_id)
+            )
+        return None
+
+    async def _check_permissions(
+        self, context: ToolContext, call: _ShellCall, scratch: ScratchFolder | None
+    ) -> None:
+        """Refuse the call before launch when the Session's Permission Rules refuse it."""
+        boundary = context.permissions
+        if self._checker is None:
+            raise PermissionDenied(
+                boundary.refusal(
+                    "command",
+                    call.command,
+                    "unanalyzable",
+                    detail="this vBot cannot analyze commands to check them",
+                )
+            )
+        environment = await asyncio.to_thread(
+            partial(
+                command_environment,
+                None,
+                variables=call.variables,
+                scratch=scratch,
+                confined=True,
+            )
+        )
+        refusal = await self._checker.check_line(
+            boundary,
+            call.command,
+            shell=HOST_SHELL_KIND,
+            cwd=call.workdir,
+            env=environment.complete(),
+            home=Path.home(),
+        )
+        if refusal is not None:
+            raise PermissionDenied(refusal)
 
     async def _secret_environment(self, context: ToolContext, call: _ShellCall) -> dict[str, str]:
         """The variables of the Agent Secrets this call names; blocking sources run off-loop."""
@@ -326,6 +384,7 @@ class ShellTool:
         handoff: UpdateHandoffGrant | None,
         names: ToolNames,
         secret_environment: dict[str, str],
+        scratch: ScratchFolder | None,
     ) -> str:
         credentials = {name: self._resolve_credential(name) for name in call.credential_names}
         if self._secrets is not None:
@@ -333,14 +392,6 @@ class ShellTool:
             for name, value in credentials.items():
                 self._secrets.remember_value(value, f"{{{{secret:{name}}}}}")
         credentials.update(secret_environment)
-        scratch = None
-        if self._scratch_areas is not None:
-            # Scratch is optional; its owner logged an unavailable folder. The
-            # command still runs with the host's normal temporary directories.
-            with contextlib.suppress(ScratchUnavailableError):
-                scratch = await self._scratch_areas.folder_for(
-                    SessionAddress(context.project_id, context.agent_id, context.session_id)
-                )
 
         def prepare() -> HostShellStart:
             environment = command_environment(
@@ -353,6 +404,7 @@ class ShellTool:
                 variables=call.variables,
                 credentials=credentials,
                 scratch=scratch,
+                confined=context.permissions.restricted,
             )
             # PATH lookup probes the filesystem and uses this call's fresh environment.
             return _shell_start(call, environment)
@@ -641,10 +693,13 @@ def register_shell_tool(
     projects: ProjectStore | None = None,
     scratch_areas: ScratchAreas | None = None,
     secrets: AgentSecrets | None = None,
+    command_checker: CommandChecker | None = None,
 ) -> ShellTool:
     """Register the shell Tool with a vBot Tool registry.
 
     *projects* resolves ``workdir: "project:<project-id>"``; without it that form fails.
+    *command_checker* checks a restricted Session's commands before launch;
+    without it such a Session cannot run commands.
     """
     tool = ShellTool(
         command_manager,
@@ -653,6 +708,7 @@ def register_shell_tool(
         projects=projects,
         scratch_areas=scratch_areas,
         secrets=secrets,
+        command_checker=command_checker,
     )
     registry.register(
         SHELL_TOOL_NAME,

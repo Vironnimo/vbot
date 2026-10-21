@@ -183,6 +183,20 @@ class Analysis:
         for command in script.commands:
             await self._command(context, command)
 
+    async def run_argv(self, argv: Sequence[str], cwd: Path) -> None:
+        """Analyze starting the program *argv* directly, its words literal."""
+        if not argv:
+            return
+        raw = RawCommand(words=[Word.literal(item) for item in argv], source=" ".join(argv))
+        context = _Context(
+            shell="bash",
+            depth=0,
+            assigned=set(),
+            environment_changed=False,
+            states={(): (_Location(cwd),)},
+        )
+        await self._program_command(context, raw)
+
     async def _parse(self, text: str, shell: ShellKind, delayed_expansion: bool) -> Script | None:
         if shell == "bash":
             from core.permissions.commands._bash import parse_bash
