@@ -110,7 +110,8 @@ class BuiltinAgents:
         """Create one valid bootstrap Agent when the store has none.
 
         Invalid Agent directories are preserved for diagnosis. If one already
-        occupies ``main``, the bootstrap Agent uses the first free ``main-N`` id.
+        occupies ``main``, or grants still name it, the bootstrap Agent uses the
+        first free ``main-N`` id.
         """
         with self._owner._snapshot_barrier.compound_mutation(), self._owner._change():
             if self._owner.list():
@@ -119,7 +120,11 @@ class BuiltinAgents:
             candidate = _BOOTSTRAP_AGENT_ID
             suffix = 2
             reserved = self._owner._renames._pending_rename_ids()
-            while exists_strict(self._owner._agent_dir(candidate)) or candidate in reserved:
+            while (
+                exists_strict(self._owner._agent_dir(candidate))
+                or candidate in reserved
+                or self._owner.id_references(candidate)
+            ):
                 candidate = f"{_BOOTSTRAP_AGENT_ID}-{suffix}"
                 suffix += 1
             return self._owner.create(candidate, _BOOTSTRAP_AGENT_NAME)

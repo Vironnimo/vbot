@@ -24,7 +24,9 @@ _NEW_ID_PLACEHOLDERS = {
     "project": "<new-project-id>",
     "session": "<new-session-id>",
 }
-_CONFLICT_CODES = frozenset({"agent_id_taken", "project_id_taken", "session_address_taken"})
+_CONFLICT_CODES = frozenset(
+    {"agent_id_taken", "agent_id_referenced", "project_id_taken", "session_address_taken"}
+)
 
 
 def archive_list(

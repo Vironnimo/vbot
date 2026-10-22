@@ -85,7 +85,7 @@ def _assert_agent_is(runtime: Runtime, agent_id: str, current_session_id: str) -
         "GITHUB",
         "SCRATCH",
     ]
-    assert len(secrets.granted_to_agent(agent_id)) == len(secrets.all()) == 2
+    assert len(secrets.naming_identity_agent(agent_id)) == len(secrets.all()) == 2
     assert not (runtime.storage.data_dir / "agents" / "rename-pending.json").exists()
 
 
@@ -294,6 +294,10 @@ async def test_a_rename_to_an_id_that_references_still_name_changes_nothing(
         # A Secret grant left for the id refuses the rename too; deletion checks only automations.
         assert refused.value.references == (f"cron:{leftover.id}", "secret:LEFT")
         assert await runtime.agent_references("researcher") == (f"cron:{leftover.id}",)
+        # The archived Agent keeps its grant for a restore; a namesake may not take it.
+        with pytest.raises(AgentReferencedError) as created:
+            runtime.agents.create("researcher")
+        assert created.value.references == ("secret:LEFT",)
         assert len(channel_reads) > 0
         assert threading.get_ident() not in channel_reads
         assert sorted(agent.id for agent in runtime.agents.list()) == ["coder", "main"]

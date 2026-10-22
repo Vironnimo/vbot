@@ -83,6 +83,10 @@ def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
+def _keep_agent_secrets(*_agent_ids: str) -> None:
+    return None
+
+
 async def _release_nothing(_sessions: Sequence[SessionAddress]) -> None:
     return None
 
@@ -107,6 +111,10 @@ class ArchiveServices:
     ``close_session_transports`` closes what stays open for archived Sessions:
     Provider transports (such as a Codex WebSocket) and Portals; ``remove_session_secrets``
     deletes the Agent Secrets bound to them, which a restore does not bring back.
+    Agent Secret grants that name an archived Identity Agent's id stay for its
+    restore: ``move_agent_secrets(old, new)`` moves them to the id a restore
+    gives it, ``release_agent_secrets`` drops them when its entry is purged.
+    Both block and repeat safely.
     """
 
     data_dir: Path
@@ -132,6 +140,8 @@ class ArchiveServices:
         _release_nothing
     )
     remove_session_secrets: Callable[[Sequence[SessionAddress]], Awaitable[None]] = _release_nothing
+    move_agent_secrets: Callable[[str, str], object] = _keep_agent_secrets
+    release_agent_secrets: Callable[[str], object] = _keep_agent_secrets
 
 
 class ArchiveService:

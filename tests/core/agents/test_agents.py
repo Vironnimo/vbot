@@ -17,6 +17,7 @@ from core.agents import (
     AgentError,
     AgentNotFoundError,
     AgentOrderConflictError,
+    AgentReferencedError,
     AgentStore,
     BuiltinAgentError,
     InvalidAgentIdError,
@@ -24,6 +25,7 @@ from core.agents import (
     validate_agent_file,
 )
 from core.agents._config import AGENT_DESCRIPTION_MAX_LENGTH
+from core.database import write_bootstrap_marker
 from core.permissions import normalize_permission_rules
 from core.tools.availability import ToolAccess
 from core.tools.live import LIVE_TOOL_NAMES
@@ -196,6 +198,28 @@ def test_ensure_bootstrap_avoids_invalid_main_directory(store: AgentStore) -> No
     assert created is not None
     assert created.id == "main-2"
     assert [agent.id for agent in store.list()] == ["main-2"]
+
+
+def test_a_new_agent_never_takes_an_id_that_secret_grants_still_name(
+    tmp_path: Path, template_dir: Path
+) -> None:
+    """An archived Agent's grants wait for its restore; a namesake would inherit them."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    write_bootstrap_marker(data_dir)
+    granted = {"main": ("secret:API",), "coder": ("secret:API", "secret:DB")}
+    store = AgentStore(
+        data_dir, template_dir=template_dir, id_references=lambda id: granted.get(id, ())
+    )
+
+    bootstrap = store.ensure_bootstrap()
+    with pytest.raises(AgentReferencedError) as refused:
+        store.create("coder")
+
+    assert bootstrap is not None and bootstrap.id == "main-2"
+    assert refused.value.references == ("secret:API", "secret:DB")
+    assert "Restore that Agent, or remove these grants" in str(refused.value)
+    assert not store.exists("coder")
 
 
 def test_ensure_builtin_agents_creates_them_outside_the_roster(store: AgentStore) -> None:

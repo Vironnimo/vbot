@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 
+from core.agents import AgentReferencedError
 from core.archive import (
     AgentArchiveOutcome,
     ArchiveEntryBusyError,
@@ -845,6 +846,64 @@ async def test_purging_an_agent_whose_cleanup_did_not_finish_completes_it_first(
         assert world.sessions.archive_ledger.entry(entry_id) is None
         # A live Agent that took the id keeps the grants naming it.
         assert allowed == (["coder"] if case == "id-reused" else [])
+
+
+@pytest.mark.asyncio
+async def test_an_archived_agents_secret_grants_wait_for_its_restore_and_go_with_its_purge(
+    world: ArchiveWorld,
+) -> None:
+    agents, secrets = world.agents, world.secrets
+
+    def granted(agent_id: str) -> list[str]:
+        return [secret.name for secret in secrets.naming_identity_agent(agent_id)]
+
+    agent_with_session(world, "coder")
+    agents.create("manager")
+    for name, holders in (("API", ["coder"]), ("SHARED", ["coder", "manager"])):
+        secrets.create(
+            name=name,
+            kind="token",
+            values={"value": f"{name}-value-1234"},
+            actor="user",
+            agents=holders,
+        )
+
+    archived = await world.service.archive_agent("coder")
+    # The grants wait for the restore, so no namesake may take them.
+    with pytest.raises(AgentReferencedError) as refused:
+        agents.create("coder")
+    assert refused.value.references == ("secret:API", "secret:SHARED")
+    await world.service.restore(archived.entry_id)
+    assert granted("coder") == ["API", "SHARED"]
+
+    # Restored under another id, the Agent takes its grants along.
+    archived = await world.service.archive_agent("coder")
+    await world.service.restore(archived.entry_id, target_id="coder-new")
+    assert granted("coder") == [] and granted("coder-new") == ["API", "SHARED"]
+
+    # Another archived Agent cannot return under an id whose grants wait.
+    waiting = await world.service.archive_agent("coder-new")
+    agent_with_session(world, "other")
+    other = await world.service.archive_agent("other")
+    with pytest.raises(ArchiveRestoreConflictError) as conflict:
+        await world.service.restore(other.entry_id, target_id="coder-new")
+    assert [item.code for item in conflict.value.conflicts] == ["agent_id_referenced"]
+
+    # A purge drops the grants, never the Secrets or another Agent's grants.
+    await world.service.purge([waiting.entry_id])
+    assert granted("coder-new") == []
+    assert {secret.name: secret.agents for secret in secrets.all()} == {
+        "API": (),
+        "SHARED": ("manager",),
+    }
+    assert (await world.service.restore_check(other.entry_id, target_id="coder-new")).possible
+
+    # A live Agent that took the id again keeps the grants naming it.
+    agents.create("other")
+    api = next(secret for secret in secrets.all() if secret.name == "API")
+    secrets.update(api.id, agents=["other"], actor="user")
+    await world.service.purge([other.entry_id])
+    assert granted("other") == ["API"]
 
 
 @pytest.mark.asyncio

@@ -590,14 +590,73 @@ class AgentSecrets:
         for change in changes:
             self._notify(change)
 
-    def granted_to_agent(self, agent: str) -> list[AgentSecret]:
-        """The Secrets granted to Agent address ``agent``, directly or as pass-through root."""
-        return [
-            secret
-            for secret in self._records.values()
-            if agent in secret.agents
-            or any(grant.agent == agent for grant in secret.session_grants)
-        ]
+    def naming_identity_agent(self, agent_id: str) -> list[AgentSecret]:
+        """The Secrets whose grants name Identity Agent ``agent_id``, sorted by name.
+
+        Exactly what :meth:`retarget_agent` moves and :meth:`remove_identity_agent`
+        drops: an Agent grant, a pass-through root, or a Session of the Agent on a
+        pass-through path.
+        """
+        return sorted(
+            (
+                secret
+                for secret in self._records.values()
+                if _names_identity_agent(secret, agent_id)
+            ),
+            key=lambda secret: secret.name,
+        )
+
+    def remove_identity_agent(self, agent_id: str) -> int:
+        """Drop every grant naming Identity Agent ``agent_id`` (blocking).
+
+        For a purged archived Agent, so no grant waits for an Agent that cannot
+        return: its Agent grants and the pass-through paths rooted in it or
+        through its Sessions go, and the ``session`` and ``once`` Secrets of its
+        Sessions are deleted, in one store write. The Secrets themselves stay
+        with the user. Repeating it changes nothing. Returns how many Secrets
+        changed or went.
+        """
+        changes: list[SecretChange] = []
+        with self._lock:
+            updated: dict[str, AgentSecret | None] = {}
+            for secret in self._records.values():
+                if not _names_identity_agent(secret, agent_id):
+                    continue
+                if secret.lifetime in ("session", "once") and agent_id in secret.agents:
+                    updated[secret.id] = None
+                    changes.append(SecretChange("deleted", secret, "agent purged"))
+                    continue
+                grants = tuple(
+                    grant
+                    for grant in secret.session_grants
+                    if not _grant_names_identity_agent(grant, agent_id)
+                )
+                kept = replace(
+                    secret,
+                    agents=tuple(item for item in secret.agents if item != agent_id),
+                    session_grants=grants,
+                    sessions=tuple(dict.fromkeys(grant.path[-1].session_id for grant in grants)),
+                )
+                updated[secret.id] = kept
+                changes.append(SecretChange("changed", kept, "agent purged"))
+            if updated:
+                texts = {
+                    key: None if secret is None else encode_record(secret)
+                    for key, secret in updated.items()
+                }
+
+                def write(change: SecretTransaction) -> None:
+                    for key, text in texts.items():
+                        if text is None:
+                            change.remove(AGENT_SECRETS, key)
+                        else:
+                            change.set(AGENT_SECRETS, key, text)
+
+                self._store.update(write)
+                self._commit(updated)
+        for change in changes:
+            self._notify(change)
+        return len(changes)
 
     def retarget_agent(self, agent_id: str, new_agent_id: str) -> int:
         """Move the grants of Identity Agent ``agent_id`` to ``new_agent_id`` (blocking).
@@ -1068,4 +1127,16 @@ def _session_bound(secret: AgentSecret, address: SessionAddress) -> int:
     return int(
         secret.session_id == address.session_id
         or any(grant.path[-1] == address for grant in secret.session_grants)
+    )
+
+
+def _grant_names_identity_agent(grant: SessionGrant, agent_id: str) -> bool:
+    return grant.agent == agent_id or any(
+        address.project_id is None and address.agent_id == agent_id for address in grant.path
+    )
+
+
+def _names_identity_agent(secret: AgentSecret, agent_id: str) -> bool:
+    return agent_id in secret.agents or any(
+        _grant_names_identity_agent(grant, agent_id) for grant in secret.session_grants
     )

@@ -372,6 +372,7 @@ def bootstrap(runtime: Runtime) -> None:
             defaults_provider=lambda: storage.load_defaults().get("agent", {}),
             sessions=runtime._chat_sessions,
             snapshot_barrier=runtime._snapshot_barrier,
+            id_references=partial(_secret_grant_references, runtime._agent_secrets),
         )
         # A Session of an Identity Agent whose creator names no working Project
         # (Channels, Automation, wake word) works in the Agent's default Project.
@@ -1110,3 +1111,8 @@ def start_event_loop_service(service: _LoopService | None, unavailable: str) -> 
     except RuntimeError:
         return
     service.start()
+
+
+def _secret_grant_references(secrets: AgentSecrets, agent_id: str) -> tuple[str, ...]:
+    """The Agent Secret grants a new Identity Agent ``agent_id`` would inherit."""
+    return tuple(f"secret:{secret.name}" for secret in secrets.naming_identity_agent(agent_id))
