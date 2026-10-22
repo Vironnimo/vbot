@@ -34,6 +34,7 @@ from core.channels import ChannelService
 from core.database import SnapshotBarrier
 from core.sessions import ChatSessionManager
 from core.tools.command_manager import CommandManager
+from core.tools.portal_registry import PortalRegistry
 from core.tools.terminal_manager import TerminalManager
 from core.utils.logging import get_logger
 from core.utils.workers import settle_before_cancelling
@@ -51,10 +52,11 @@ class AgentRenameServices:
     cron: CronService
     bootstrap: BootstrapService
     snapshot_barrier: SnapshotBarrier
-    # None while startup builds the owners; no Terminal Session or command
-    # survives a restart.
+    # None while startup builds the owners; no Terminal Session, command or
+    # Portal survives a restart.
     terminals: TerminalManager | None
     commands: CommandManager | None
+    portals: PortalRegistry | None
 
 
 @dataclass(frozen=True)
@@ -273,9 +275,9 @@ def _retarget_references(services: AgentRenameServices, rename: AgentRename) -> 
 async def _retarget_on_loop(services: AgentRenameServices, rename: AgentRename) -> _References:
     """:func:`_retarget_references` on the Event Loop, which owns the started owners' state.
 
-    The live Terminal Sessions and commands of the Agent's Sessions move as
-    well, so their cleanup and their completion notices follow the Sessions to
-    the new id.
+    The live Terminal Sessions, Portals and commands of the Agent's Sessions
+    move as well, so their cleanup and their completion notices follow the
+    Sessions to the new id.
     """
     source, target = rename.source_id, rename.target_id
     # A running Channel service rebuilds each adapter; a stopped one only
@@ -292,6 +294,8 @@ async def _retarget_on_loop(services: AgentRenameServices, rename: AgentRename) 
     terminal_count = (
         0 if terminals is None else await terminals.transfer_agent_scope(source, target)
     )
+    if services.portals is not None:
+        services.portals.transfer_agent_scope(source, target)
     commands = services.commands
     command_count = 0 if commands is None else await commands.transfer_agent_scope(source, target)
     return _References(

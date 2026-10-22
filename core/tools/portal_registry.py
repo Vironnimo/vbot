@@ -6,8 +6,9 @@ server. The registry owns the Portal records and their lifetime; the server
 attaches the network side (``PortalListeners``), which binds the listener and
 forwards each request under the server's access rules.
 
-Portals are process-local: they end when their Session is archived, when the
-Agent or the user closes them, and when vBot stops. Closing a Portal never
+Portals are process-local: they end when their Session is archived or its
+Extension releases it, when the Agent or the user closes them, and when vBot
+stops; they follow a renamed Identity Agent's Sessions. Closing a Portal never
 stops the app. While Portals are open, a watch connects to each target now and
 then, so the card can show whether the app answers
 (``.vorch/domain-maps/tools/portal.md``).
@@ -211,6 +212,23 @@ class PortalRegistry:
         for portal_id in closed:
             self.close(portal_id)
         return len(closed)
+
+    def transfer_agent_scope(self, agent_id: str, new_agent_id: str) -> int:
+        """Move the Portals of a renamed Identity Agent's Sessions to its new id.
+
+        Each Portal keeps its id, listener and credential; only its owner changes,
+        so the moved Session lists and closes it. Returns how many moved.
+        """
+        moved: list[tuple[SessionAddress, SessionAddress]] = []
+        for portal_id, portal in list(self._portals.items()):
+            owner = portal.owner
+            if owner.project_id is None and owner.agent_id == agent_id:
+                target = replace(owner, agent_id=new_agent_id)
+                self._portals[portal_id] = replace(portal, owner=target)
+                moved.append((owner, target))
+        for owner in dict.fromkeys(address for pair in moved for address in pair):
+            self._changed(owner)
+        return len(moved)
 
     def report_listening(self, portal_id: str, listening: bool) -> None:
         """Record what forwarding a request learned about whether the app answers."""

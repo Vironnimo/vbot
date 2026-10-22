@@ -159,6 +159,32 @@ async def test_archiving_sessions_closes_only_their_portals() -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_renamed_agents_portals_follow_its_sessions() -> None:
+    portals = PortalRegistry(probe=lambda _port: asyncio.sleep(0, result=True))
+    listeners = _Listeners()
+    portals.attach(listeners)
+    changed: list[SessionAddress] = []
+    old = SessionAddress(None, "coder", "current")
+    project = SessionAddress("shop", "coder", "current")
+    moved, _opened = await portals.open(old, target_port=5173, title="t", path="/")
+    stays, _opened = await portals.open(project, target_port=5173, title="t", path="/")
+    portals.subscribe(changed.append)
+
+    assert portals.transfer_agent_scope("coder", "researcher") == 1
+
+    new = SessionAddress(None, "researcher", "current")
+    # Same Portal (id, listener, credential), now listed and closed by the moved Session.
+    assert portals.list(old) == []
+    assert [(portal.id, portal.listen_port) for portal in portals.list(new)] == [
+        (moved.id, moved.listen_port)
+    ]
+    assert portals.list(project) == [stays]
+    assert changed == [old, new]
+    assert listeners.closed == []
+    await portals.aclose()
+
+
+@pytest.mark.asyncio
 async def test_a_user_outside_the_webui_learns_where_the_card_shows(tmp_path: Path) -> None:
     tools, portals, _listeners = _setup()
     surface = ReplySurface.channel(
