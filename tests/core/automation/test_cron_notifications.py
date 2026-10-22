@@ -172,3 +172,38 @@ async def test_slow_delivery_never_holds_a_cron_run_slot(
         await service._notifications.flush()
         await service.aclose()
     assert [text for _, text, *_ in chats.sent] == ["First.", "Second."]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("started", [True, False], ids=["live", "at-startup"])
+async def test_an_agent_rename_takes_the_waiting_notifications_along(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, started: bool
+) -> None:
+    service, trigger = make_service(tmp_path)
+    chats = FakeChats()
+    service.set_chat_delivery(chats)
+    job = await service.create_job(
+        agent_id="agent-one",
+        prompt="Check",
+        schedule_type="interval",
+        interval_seconds=60,
+        delivery=_CHAT,
+    )
+    scripted_runs(trigger, (RunStatus.COMPLETED, "The result."))
+    service.set_chat_delivery(None)
+    assert (await service._execution._trigger_job_run(job)).succeeded
+    # The rename moves the Channel first; until the job follows, the message waits.
+    chats.owners["tg-main"] = "agent-two"
+    service.set_chat_delivery(chats)
+    await service._notifications.flush()
+    assert chats.sent == []
+    if started:
+        await service.retarget_agent_async(job.id, "agent-two")
+    else:
+        service.retarget_agent(job.id, "agent-two")
+    now = notifications.time.time()
+    monkeypatch.setattr(notifications.time, "time", lambda: now + 30)
+    await service._notifications.flush()
+    assert chats.sent == [("tg-main", "The result.", "chat-42", "7")]
+    assert service.get_job(job.id).delivery_progress()["waiting"] == 0
+    await service.aclose()

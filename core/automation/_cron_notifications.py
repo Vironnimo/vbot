@@ -119,8 +119,9 @@ class CronNotifications:
         job = self._owner._jobs.get(job_id)
         if job is None:
             return False
+        # Only an Agent rename changes a message's Agent; one it made meanwhile stays.
         job.notifications = tuple(
-            item if old.id == item.id else old
+            replace(item, agent_id=old.agent_id) if old.id == item.id else old
             for old in job.notifications
             if not (sent and old.id == item.id)
         )

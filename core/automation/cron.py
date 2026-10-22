@@ -638,13 +638,14 @@ class CronService:
         For a service that is not started, such as during a rename that completes
         at startup: blocking. The jobs of a started service belong to the Event
         Loop, so :meth:`retarget_agent_async` changes them there. The same change
-        as ``update_job(job_id, agent_id=...)``; the rename logs one summary line,
-        so this step logs at DEBUG only.
+        as ``update_job(job_id, agent_id=...)``, except that the job's retained
+        chat notifications of the earlier id follow it, as their Channel does;
+        the rename logs one summary line, so this step logs at DEBUG only.
         """
         if self._started:
             raise RuntimeError("Retarget the jobs of a started Cron service on its Event Loop")
         job, candidate, changed_fields, _restart = self._stage_update(
-            job_id, {"agent_id": agent_id}
+            job_id, {"agent_id": agent_id}, rename=True
         )
         if changed_fields:
             self._jobs[job_id] = candidate
@@ -663,13 +664,13 @@ class CronService:
         An edit like :meth:`update_job`: it applies at once and awaits its save off
         the loop.
         """
-        job, updated, changed_fields = await self._edit(job_id, {"agent_id": agent_id})
+        job, updated, changed_fields = await self._edit(job_id, {"agent_id": agent_id}, rename=True)
         if changed_fields:
             _log_retarget(job_id, job.agent_id, agent_id)
         return updated
 
     async def _edit(
-        self, job_id: str, fields: dict[str, Any]
+        self, job_id: str, fields: dict[str, Any], *, rename: bool = False
     ) -> tuple[CronJob, CronJob, list[str]]:
         """Apply ``fields`` to memory and the job tasks at once, then save; undo both on failure.
 
@@ -679,7 +680,7 @@ class CronService:
         """
         async with self._edits:
             job, candidate, changed_fields, restart_task = self._stage_update(
-                job_id, fields, validate_references=False
+                job_id, fields, validate_references=False, rename=rename
             )
             issued = False
             try:
@@ -695,7 +696,7 @@ class CronService:
                         issued = True
                     # A fire may have changed the job while its references were checked.
                     job, candidate, changed_fields, restart_task = self._stage_update(
-                        job_id, fields, validate_references=False
+                        job_id, fields, validate_references=False, rename=rename
                     )
                 if changed_fields:
                     await self._apply_edit(job_id, job, candidate, changed_fields, restart_task)
@@ -781,14 +782,22 @@ class CronService:
         return await self._watcher.wait_for_first_check(job_id, FIRST_CHECK_WAIT_SECONDS)
 
     def _stage_update(
-        self, job_id: str, fields: dict[str, Any], *, validate_references: bool = True
+        self,
+        job_id: str,
+        fields: dict[str, Any],
+        *,
+        validate_references: bool = True,
+        rename: bool = False,
     ) -> tuple[CronJob, CronJob, list[str], bool]:
         """Validate ``fields`` against a job without applying them.
 
         Returns the current job, the updated candidate, the names that changed
         and whether the job's task must restart. Without changes the candidate
         is the current job itself. ``validate_references=False`` leaves the
-        blocking target and Session reads to the caller.
+        blocking target and Session reads to the caller. ``rename`` moves the
+        retained notifications of the job's earlier Agent id to the new one: an
+        Agent rename moves their Channel too, while an ordinary edit never
+        redirects an older message.
         """
         self._ensure_jobs_loaded()
         job = self._jobs.get(job_id)
@@ -808,6 +817,13 @@ class CronService:
 
         for field_name, field_value in fields.items():
             setattr(candidate, field_name, field_value)
+        if rename and candidate.agent_id != job.agent_id:
+            candidate.notifications = tuple(
+                dataclasses.replace(item, agent_id=candidate.agent_id)
+                if item.agent_id == job.agent_id
+                else item
+                for item in job.notifications
+            )
         if candidate.schedule_type == "once":
             if "remaining_runs" in fields and candidate.remaining_runs is None:
                 raise CronJobValidationError(
