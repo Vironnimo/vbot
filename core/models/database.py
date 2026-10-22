@@ -258,11 +258,9 @@ def select_model_database_files(
     """
 
     system_models_dir = system_resources_dir / MODEL_DATABASE_DIRECTORY_NAME
-    try:
-        selected, _runtime_catalogs = _select_catalogs(system_models_dir, runtime_models_dir)
-    except OSError as exc:
-        report(f"Could not list the Model DB catalogs: {exc}")
-        selected = {}
+    selected, _runtime_catalogs = _select_catalogs(
+        system_models_dir, runtime_models_dir, report=report
+    )
     canonical = selected.pop(CANONICAL_FILE_NAME, None)
     return ModelDatabaseFiles(
         canonical=canonical,
@@ -362,10 +360,12 @@ def begin_system_model_database_refresh(
 def _select_catalogs(
     system_models_dir: Path,
     runtime_models_dir: Path | None,
+    *,
+    report: ModelDataIssueReport | None = None,
 ) -> tuple[dict[str, Path], dict[str, datetime]]:
     """Return every selected catalog path and the records of those from the runtime root."""
 
-    selected = _catalog_paths(system_models_dir)
+    selected = _catalog_paths(system_models_dir, report=report)
     runtime_manifest = (
         read_model_database_manifest(runtime_models_dir) if runtime_models_dir is not None else None
     )
@@ -376,26 +376,53 @@ def _select_catalogs(
     runtime_catalogs: dict[str, datetime] = {}
     for name, fetched_at in runtime_manifest.catalogs.items():
         runtime_path = runtime_models_dir / name
-        if not is_file_strict(runtime_path):
-            continue
         system_fetched_at = system_catalogs.get(name)
         if name in selected and system_fetched_at is not None and system_fetched_at >= fetched_at:
+            continue
+        try:
+            if not is_file_strict(runtime_path):
+                continue
+        except OSError as exc:
+            if report is None:
+                raise
+            report(f"Could not check Model DB catalog '{runtime_path}': {exc}")
+            # An unavailable newer catalog is not missing: omit this Provider,
+            # rather than silently loading its superseded system catalog.
+            selected.pop(name, None)
             continue
         selected[name] = runtime_path
         runtime_catalogs[name] = fetched_at
     return selected, runtime_catalogs
 
 
-def _catalog_paths(models_dir: Path) -> dict[str, Path]:
-    """Return the generated catalog files of one root by file name."""
+def _catalog_paths(
+    models_dir: Path, *, report: ModelDataIssueReport | None = None
+) -> dict[str, Path]:
+    """List catalogs, isolating read failures only for tolerant Load callers.
 
-    if not is_dir_strict(models_dir):
+    Refresh staging and publication remain strict: an unavailable catalog may
+    not be mistaken for an absent one and dropped from a published root.
+    """
+
+    try:
+        paths = list(models_dir.iterdir()) if is_dir_strict(models_dir) else []
+    except OSError as exc:
+        if report is None:
+            raise
+        report(f"Could not list Model DB catalogs in '{models_dir}': {exc}")
         return {}
-    return {
-        path.name: path
-        for path in models_dir.iterdir()
-        if _is_catalog_file_name(path.name) and is_file_strict(path)
-    }
+    catalogs: dict[str, Path] = {}
+    for path in paths:
+        if not _is_catalog_file_name(path.name):
+            continue
+        try:
+            if is_file_strict(path):
+                catalogs[path.name] = path
+        except OSError as exc:
+            if report is None:
+                raise
+            report(f"Could not check Model DB catalog '{path}': {exc}")
+    return catalogs
 
 
 def _is_catalog_file_name(name: Any) -> bool:

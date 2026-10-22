@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -314,12 +315,14 @@ def test_system_refresh_is_unpublished_until_complete_commit(tmp_path: Path) -> 
     assert manifest.catalogs == {"openai.json": manifest.refreshed_at, "anthropic.json": _JULY_20}
 
 
+@pytest.mark.parametrize("unavailable", [None, "runtime-catalog", "system-catalog", "system-root"])
 def test_load_combines_runtime_and_system_catalogs_under_bundled_overrides(
-    tmp_path: Path,
+    tmp_path: Path, deny_access: Callable[[Path], None], unavailable: str | None
 ) -> None:
     resources_dir = tmp_path / "resources"
     system_models_dir = resources_dir / "models"
-    runtime_models_dir = tmp_path / "data" / "models"
+    data_dir = tmp_path / "data"
+    runtime_models_dir = DataDirectoryLayout(data_dir).models
     _write_provider_database(system_models_dir, generated_name="System", override_name="System")
     _write_provider_database(runtime_models_dir, generated_name="Runtime", override_name="Runtime")
     for models_dir, provider_id, name in [
@@ -354,12 +357,36 @@ def test_load_combines_runtime_and_system_catalogs_under_bundled_overrides(
         catalogs={"openai.json": _JULY_21, "ollama.json": _JULY_21},
     )
 
+    if unavailable is not None:
+        denied = {
+            "runtime-catalog": runtime_models_dir / "ollama.json",
+            "system-catalog": system_models_dir / "anthropic.json",
+            "system-root": system_models_dir,
+        }[unavailable]
+        deny_access(denied)
+
     registry = ModelRegistry.load(resources_dir, runtime_models_dir=runtime_models_dir)
 
-    assert registry.get("openai", "gpt-test").name == "System override"
-    assert registry.get("anthropic", "model").name == "Shipped by an update"
-    assert registry.get("ollama", "model").name == "Served locally"
-    assert registry.get("hand-only", "manual-model").name == "Manual"
+    assert registry.get("openai", "gpt-test").name == (
+        "Runtime" if unavailable == "system-root" else "System override"
+    )
+    if unavailable in {"system-catalog", "system-root"}:
+        assert registry.list_for_provider("anthropic") == []
+    else:
+        assert registry.get("anthropic", "model").name == "Shipped by an update"
+    if unavailable == "runtime-catalog":
+        assert registry.list_for_provider("ollama") == []
+    else:
+        assert registry.get("ollama", "model").name == "Served locally"
+    if unavailable == "system-root":
+        assert registry.list_for_provider("hand-only") == []
+    else:
+        assert registry.get("hand-only", "manual-model").name == "Manual"
+
+    if unavailable is not None:
+        # Refresh cannot publish a partial copy of the same unreadable data.
+        with pytest.raises(PermissionError):
+            begin_runtime_model_database_refresh(resources_dir, data_dir)
 
 
 def _write_catalogs(models_dir: Path, names: list[str]) -> None:
