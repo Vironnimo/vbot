@@ -58,8 +58,11 @@ from core.secrets._references import (
     SecretMasker,
     find_references,
     has_reference,
+    has_reference_or_escape,
     map_strings,
+    unescape_references,
 )
+from core.secrets._references import substitute as substitute_references
 from core.secrets._totp import TotpSeedError, totp_code
 from core.secrets.sources import SecretSource, SecretSourceError, SourceStatus
 from core.secrets.store import AGENT_SECRETS, SecretStore, SecretTransaction, credential_name_key
@@ -91,8 +94,10 @@ __all__ = [
     "describe_uses",
     "find_references",
     "has_reference",
+    "has_reference_or_escape",
     "main_field_name",
     "normalize_secret_name",
+    "unescape_references",
 ]
 
 _LOGGER = get_logger("secrets")
@@ -585,14 +590,73 @@ class AgentSecrets:
         for change in changes:
             self._notify(change)
 
-    def granted_to_agent(self, agent: str) -> list[AgentSecret]:
-        """The Secrets granted to Agent address ``agent``, directly or as pass-through root."""
-        return [
-            secret
-            for secret in self._records.values()
-            if agent in secret.agents
-            or any(grant.agent == agent for grant in secret.session_grants)
-        ]
+    def naming_identity_agent(self, agent_id: str) -> list[AgentSecret]:
+        """The Secrets whose grants name Identity Agent ``agent_id``, sorted by name.
+
+        Exactly what :meth:`retarget_agent` moves and :meth:`remove_identity_agent`
+        drops: an Agent grant, a pass-through root, or a Session of the Agent on a
+        pass-through path.
+        """
+        return sorted(
+            (
+                secret
+                for secret in self._records.values()
+                if _names_identity_agent(secret, agent_id)
+            ),
+            key=lambda secret: secret.name,
+        )
+
+    def remove_identity_agent(self, agent_id: str) -> int:
+        """Drop every grant naming Identity Agent ``agent_id`` (blocking).
+
+        For a purged archived Agent, so no grant waits for an Agent that cannot
+        return: its Agent grants and the pass-through paths rooted in it or
+        through its Sessions go, and the ``session`` and ``once`` Secrets of its
+        Sessions are deleted, in one store write. The Secrets themselves stay
+        with the user. Repeating it changes nothing. Returns how many Secrets
+        changed or went.
+        """
+        changes: list[SecretChange] = []
+        with self._lock:
+            updated: dict[str, AgentSecret | None] = {}
+            for secret in self._records.values():
+                if not _names_identity_agent(secret, agent_id):
+                    continue
+                if secret.lifetime in ("session", "once") and agent_id in secret.agents:
+                    updated[secret.id] = None
+                    changes.append(SecretChange("deleted", secret, "agent purged"))
+                    continue
+                grants = tuple(
+                    grant
+                    for grant in secret.session_grants
+                    if not _grant_names_identity_agent(grant, agent_id)
+                )
+                kept = replace(
+                    secret,
+                    agents=tuple(item for item in secret.agents if item != agent_id),
+                    session_grants=grants,
+                    sessions=tuple(dict.fromkeys(grant.path[-1].session_id for grant in grants)),
+                )
+                updated[secret.id] = kept
+                changes.append(SecretChange("changed", kept, "agent purged"))
+            if updated:
+                texts = {
+                    key: None if secret is None else encode_record(secret)
+                    for key, secret in updated.items()
+                }
+
+                def write(change: SecretTransaction) -> None:
+                    for key, text in texts.items():
+                        if text is None:
+                            change.remove(AGENT_SECRETS, key)
+                        else:
+                            change.set(AGENT_SECRETS, key, text)
+
+                self._store.update(write)
+                self._commit(updated)
+        for change in changes:
+            self._notify(change)
+        return len(changes)
 
     def retarget_agent(self, agent_id: str, new_agent_id: str) -> int:
         """Move the grants of Identity Agent ``agent_id`` to ``new_agent_id`` (blocking).
@@ -769,20 +833,21 @@ class AgentSecrets:
         *,
         passed_only: bool = False,
         consume: bool = True,
+        literals: dict[str, str] | None = None,
     ) -> tuple[Any, list[SecretUse]]:
-        """``value`` (JSON-like) with references replaced; raises :class:`SecretUseError`."""
+        """``value`` (JSON-like) with references replaced; raises :class:`SecretUseError`.
+
+        An escaped reference (``{{!secret:NAME}}``) becomes the reference text.
+        ``literals``, when given, receives each substituted value with the
+        reference text it replaced, so a caller can tell the two readings apart.
+        """
         uses: list[SecretUse] = []
         # One value per reference and call, so a ``once`` Secret named twice
         # in the same call is resolved (and consumed) once.
         resolved_values: dict[tuple[str, str | None], tuple[str, SecretUse]] = {}
 
         def replace_text(text: str) -> str:
-            references = find_references(text)
-            if not references:
-                return text
-            parts: list[str] = []
-            position = 0
-            for reference in references:
+            def resolve(reference: Reference) -> str:
                 key = (reference.name, reference.field)
                 if key not in resolved_values:
                     resolved_values[key] = self.resolve(
@@ -793,13 +858,13 @@ class AgentSecrets:
                         consume=False,
                     )
                 resolved, use = resolved_values[key]
-                parts.append(text[position : reference.start])
-                parts.append(resolved)
-                position = reference.end
                 if use not in uses:
                     uses.append(use)
-            parts.append(text[position:])
-            return "".join(parts)
+                if literals is not None:
+                    literals.setdefault(resolved, text[reference.start : reference.end])
+                return resolved
+
+            return substitute_references(text, resolve)
 
         changed = map_strings(value, replace_text)
         if consume:
@@ -956,29 +1021,33 @@ class AgentSecrets:
     ) -> SecretUseError:
         exists = any(item.name == reference.name for item in self.all())
         names = self._names_text(address, passed_only)
+        literal = (
+            f" If you meant the text {{{{secret:{reference.text_name}}}}} itself, "
+            f"write {{{{!secret:{reference.text_name}}}}}."
+        )
         if exists and passed_only:
             return SecretUseError(
                 "not_granted",
                 f"{reference.name} was not passed to you. Your Secrets: {names}. "
-                "If you need it, say so in your report; your Parent Agent can pass it.",
+                "If you need it, say so in your report; your Parent Agent can pass it." + literal,
             )
         if exists:
             return SecretUseError(
                 "not_granted",
                 f"{reference.name} is not granted to you. Your Secrets: {names}. "
-                "Ask the user to grant it in Settings -> Secrets if you need it.",
+                "Ask the user to grant it in Settings -> Secrets if you need it." + literal,
             )
         system = {credential_name_key(item).upper() for item in self._credential_names()}
         if reference.name in system:
             return SecretUseError(
                 "not_granted",
                 f"{reference.name} is a vBot credential, not a Secret you can use here. "
-                f"Your Secrets: {names}.",
+                f"Your Secrets: {names}." + literal,
             )
         return SecretUseError(
             "unknown_secret",
             f"No Secret named {reference.name}. Your Secrets: {names}. "
-            "Use the secrets Tool to request one from the user.",
+            "Use the secrets Tool to request one from the user." + literal,
         )
 
     def _names_text(self, address: SessionAddress, passed_only: bool) -> str:
@@ -1058,4 +1127,16 @@ def _session_bound(secret: AgentSecret, address: SessionAddress) -> int:
     return int(
         secret.session_id == address.session_id
         or any(grant.path[-1] == address for grant in secret.session_grants)
+    )
+
+
+def _grant_names_identity_agent(grant: SessionGrant, agent_id: str) -> bool:
+    return grant.agent == agent_id or any(
+        address.project_id is None and address.agent_id == agent_id for address in grant.path
+    )
+
+
+def _names_identity_agent(secret: AgentSecret, agent_id: str) -> bool:
+    return agent_id in secret.agents or any(
+        _grant_names_identity_agent(grant, agent_id) for grant in secret.session_grants
     )

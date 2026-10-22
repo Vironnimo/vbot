@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import builtins
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager, suppress
 from copy import deepcopy
 from dataclasses import replace
@@ -170,8 +170,12 @@ class AgentStore:
         defaults_provider: Callable[[], dict[str, Any]] | None = None,
         sessions: ChatSessionManager | None = None,
         snapshot_barrier: SnapshotBarrier | None = None,
+        id_references: Callable[[str], Sequence[str]] | None = None,
     ) -> None:
         self._data_dir = Path(data_dir).expanduser().resolve()
+        # What other owners keep under an Identity Agent id that a new Agent of
+        # that id would inherit: Agent Secret grants an archived Agent keeps.
+        self._id_references = id_references
         self._template_dir = (
             Path(template_dir) if template_dir is not None else _DEFAULT_TEMPLATE_DIR
         )
@@ -246,9 +250,14 @@ class AgentStore:
     ) -> Agent:
         """Create and persist a new Agent and its Workspace; it has no Session yet.
 
-        The id must be free and may not be one vBot reserves (:class:`InvalidAgentIdError`).
+        The id must be free and may not be one vBot reserves (:class:`InvalidAgentIdError`);
+        an id other owners still reference is refused with :class:`AgentReferencedError`
+        (:meth:`id_references`).
         """
         _validate_new_agent_id(agent_id)
+        references = self.id_references(agent_id)
+        if references:
+            raise AgentReferencedError(agent_id, references, creating=True)
         return self._mutations._create(
             agent_id,
             name,
@@ -271,6 +280,17 @@ class AgentStore:
             librarian_enabled=librarian_enabled,
             description=description,
         )
+
+    def id_references(self, agent_id: str) -> tuple[str, ...]:
+        """What a new Agent named ``agent_id`` would inherit, as ``<kind>:<id>`` labels.
+
+        Agent Secret grants (``secret:<name>``) that still name the id, usually
+        kept by an archived Agent of that id for its restore; empty when the id
+        is clear.
+        """
+        if self._id_references is None:
+            return ()
+        return tuple(self._id_references(agent_id))
 
     def get(self, agent_id: str) -> Agent:
         """Load an agent from disk by its exact id, with a verified current-Session pointer."""

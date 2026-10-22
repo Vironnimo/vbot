@@ -1,6 +1,6 @@
 # Agent Secrets
 
-Agent Secrets are passwords, keys and other values Agents use by reference without seeing them: you write `{{secret:NAME}}` where the value belongs, and vBot inserts it in the places the Secret allows. Your own Secrets, and requesting one from the user, go through the `secrets` Tool. `vbot agent-secrets` manages the Secrets of every Agent, the Secret requests waiting for the user and the Secret Sources (password managers) that Extensions provide. Credentials vBot itself uses, such as a token a Skill requires, are `vbot data-store secrets` (`references/data-store.md`).
+Agent Secrets are passwords, keys and other values Agents use by reference without seeing them: you write `{{secret:NAME}}` where the value belongs, and vBot inserts it in the places the Secret allows. To write the text `{{secret:NAME}}` itself, such as in documentation, write `{{!secret:NAME}}`. Your own Secrets, and requesting one from the user, go through the `secrets` Tool. `vbot agent-secrets` manages the Secrets of every Agent, the Secret requests waiting for the user and the Secret Sources (password managers) that Extensions provide. Credentials vBot itself uses, such as a token a Skill requires, are `vbot data-store secrets` (`references/data-store.md`).
 
 ```bash
 vbot agent-secrets list

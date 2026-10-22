@@ -11,6 +11,7 @@ import shutil
 import sqlite3
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -23,6 +24,7 @@ from core.automation import AutomationReferences
 from core.database import SnapshotBarrier
 from core.projects import ProjectStore
 from core.runs import ChatRunManager
+from core.secrets.agent_secrets import AgentSecrets
 from core.sessions import (
     ARCHIVE_KIND_AGENT,
     ARCHIVE_TREE_AGENT,
@@ -36,6 +38,7 @@ from core.sessions import (
 from core.subagents.links import ancestors
 from core.tools.scratch_areas import ScratchAreas
 from core.utils.timestamps import utc_now_timestamp
+from tests.core.secrets.secrets_test_support import open_store
 
 
 class _Team:
@@ -92,6 +95,7 @@ class ArchiveWorld:
     runs: ChatRunManager
     team: _Team
     scratch_areas: ScratchAreas
+    secrets: AgentSecrets
     commands: _Commands = field(default_factory=_Commands)
     usage_imports: list[None] = field(default_factory=list)
     recall_removals: list[tuple[str | None, str, str | None]] = field(default_factory=list)
@@ -170,7 +174,15 @@ def world(tmp_path: Path, current_session_store_template: Path) -> Iterator[Arch
         shutil.copy2(current_session_store_template / name, data_dir)
     sessions = ChatSessionManager(data_dir)
     barrier = SnapshotBarrier()
-    agents = AgentStore(data_dir, sessions=sessions, snapshot_barrier=barrier)
+    secrets = AgentSecrets(open_store(tmp_path, data_dir), clock=lambda: datetime.now(UTC))
+    agents = AgentStore(
+        data_dir,
+        sessions=sessions,
+        snapshot_barrier=barrier,
+        id_references=lambda agent_id: tuple(
+            f"secret:{secret.name}" for secret in secrets.naming_identity_agent(agent_id)
+        ),
+    )
     projects = ProjectStore(data_dir, sessions=sessions, snapshot_barrier=barrier)
 
     def scratch_identity(address: SessionAddress) -> str | None:
@@ -192,6 +204,7 @@ def world(tmp_path: Path, current_session_store_template: Path) -> Iterator[Arch
             ancestors=lambda address: ancestors(sessions, address),
             busy_sessions=lambda: (),
         ),
+        secrets=secrets,
     )
     nothing = SimpleNamespace(list_jobs=lambda: [])
 
@@ -226,6 +239,8 @@ def world(tmp_path: Path, current_session_store_template: Path) -> Iterator[Arch
         invalidate_agent_skills=world.skill_invalidations.append,
         invalidate_project=lambda _project_id: None,
         close_session_transports=close_session_transports,
+        move_agent_secrets=lambda agent_id, new_id: secrets.retarget_agent(agent_id, new_id),
+        release_agent_secrets=secrets.remove_identity_agent,
     )
     world.service = ArchiveService(world.services)
     world.service.add_changed_callback(lambda: world.changes.append(None))

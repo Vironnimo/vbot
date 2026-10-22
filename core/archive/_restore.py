@@ -21,7 +21,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from core.agents import Agent, AgentError, default_workspace_dir
-from core.archive._operations import prune_empty_parents, reroot_agents, stored_path
+from core.archive._operations import (
+    holds_agent_id_grants,
+    prune_empty_parents,
+    reroot_agents,
+    stored_path,
+)
 from core.archive._types import (
     RESTORE_CONFLICT_CODES,
     RestoreCheck,
@@ -191,6 +196,9 @@ def follow_up(services: ArchiveServices, entry: ArchiveEntry) -> tuple[str, ...]
         )
         grants = [grant for grant in facts.get("grants") or () if isinstance(grant, Mapping)]
         grant_agent_ids = services.agents.restore_delegation_grants(target, grants)
+        if target != entry.subject_id and holds_agent_id_grants(services, entry):
+            # Its Agent Secret grants waited under the old id.
+            services.move_agent_secrets(entry.subject_id, target)
     elif entry.kind == ARCHIVE_KIND_PROJECT:
         reroot_agents(services, facts.get("unrooted_agents") or (), target, entry.archived_at)
     for tree in entry.trees:
@@ -466,6 +474,14 @@ def _plan_agent(
         findings.block("reserved_target_id", reserved_name_message("Agent id", target))
     elif target_problem is not None:
         findings.block("agent_id_taken", f"an Agent with id {target} exists", agent_id=target)
+    elif renamed and (references := services.agents.id_references(target)):
+        # Another archived Agent of that id keeps them; this one would inherit them.
+        findings.block(
+            "agent_id_referenced",
+            f"Agent Secrets are still granted to {target} ({', '.join(references)})",
+            agent_id=target,
+            references=list(references),
+        )
     else:
         _check_addresses(services, entry, findings, **({"agent_id": target} if renamed else {}))
     for grant in entry.facts.get("grants") or ():

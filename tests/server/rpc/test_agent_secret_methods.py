@@ -152,11 +152,11 @@ async def test_answering_a_request_stores_the_value_for_the_waiting_agent(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("path", ["give", "answer"])
-@pytest.mark.parametrize("lifetime", ["session", "once", "permanent", "until"])
-async def test_replacing_a_secret_applies_the_chosen_lifetime_and_expiry(
+@pytest.mark.parametrize("lifetime", ["session", "once", "permanent", "until", None])
+async def test_replacing_a_secret_applies_the_chosen_lifetime_or_keeps_its_own(
     tmp_path: Path,
     path: str,
-    lifetime: Lifetime,
+    lifetime: Lifetime | None,
 ) -> None:
     state = _state(tmp_path)
     secrets = state.runtime.agent_secrets
@@ -175,7 +175,9 @@ async def test_replacing_a_secret_applies_the_chosen_lifetime_and_expiry(
     )
     secrets.pass_to_session(address, ["API"], child)
     expiry = datetime(2031, 1, 1, tzinfo=UTC) if lifetime == "until" else None
-    params: dict[str, Any] = {"values": {"value": PASSWORD}, "lifetime": lifetime}
+    params: dict[str, Any] = {"values": {"value": PASSWORD}}
+    if lifetime is not None:
+        params["lifetime"] = lifetime
     if expiry is not None:
         params["expires_at"] = expiry.isoformat()
     if path == "answer":
@@ -207,9 +209,18 @@ async def test_replacing_a_secret_applies_the_chosen_lifetime_and_expiry(
             **params,
         )
     assert result["secret"]["id"] == old.id
+    if path == "give":
+        # The result says when the replacement changed the lifetime.
+        assert result["previous_lifetime"] == (None if lifetime in {None, "until"} else "until")
     secrets.reload()
     updated = secrets.get(old.id)
-    assert updated.lifetime == lifetime and updated.expires_at == expiry
+    if lifetime is None:
+        # Without a chosen lifetime the Secret keeps its own, its expiry and its grants
+        # (the request suggested session).
+        assert (updated.lifetime, updated.expires_at) == ("until", old.expires_at)
+        assert updated.agents == old.agents
+    else:
+        assert updated.lifetime == lifetime and updated.expires_at == expiry
     assert updated.fields[0].value == PASSWORD
     assert secrets.lookup(address, "API") is not None
     local = lifetime in {"session", "once"}

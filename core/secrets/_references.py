@@ -3,6 +3,10 @@
 A reference is ``{{secret:NAME}}`` or ``{{secret:NAME.field}}``. The same text
 is the placeholder an Agent writes and the mask vBot puts where a known value
 appeared, so masked text written back through a sink restores the value.
+
+An escaped reference, ``{{!secret:NAME}}``, stands for the reference text
+itself: substitution removes one ``!`` (``{{!!secret:NAME}}`` gives
+``{{!secret:NAME}}``), so every text can be written through a sink.
 """
 
 from __future__ import annotations
@@ -20,6 +24,12 @@ from urllib.parse import quote, quote_plus
 #: matched case-insensitively and normalized by the resolver.
 REFERENCE_PATTERN: Final = re.compile(
     r"\{\{\s*secret:\s*([A-Za-z][A-Za-z0-9_]{0,63})(?:\.([A-Za-z][A-Za-z0-9_]{0,31}))?\s*\}\}"
+)
+
+# A reference or an escaped one: group 1 holds the escape marks, empty for a
+# reference. Names and fields as in ``REFERENCE_PATTERN``.
+_REFERENCE_OR_ESCAPE: Final = re.compile(
+    r"\{\{\s*(!*)\s*secret:\s*([A-Za-z][A-Za-z0-9_]{0,63})(?:\.([A-Za-z][A-Za-z0-9_]{0,31}))?\s*\}\}"
 )
 
 #: Values shorter than this are not masked: they would match unrelated text.
@@ -71,6 +81,16 @@ def has_reference(value: Any) -> bool:
     return any(REFERENCE_PATTERN.search(text) for text in iter_strings(value))
 
 
+def has_reference_or_escape(value: Any) -> bool:
+    """Whether any string inside ``value`` (JSON-like) holds a reference or an escaped one."""
+    return any(_REFERENCE_OR_ESCAPE.search(text) for text in iter_strings(value))
+
+
+def unescape_references(text: str) -> str:
+    """``text`` with one ``!`` removed from each escaped reference; references stay."""
+    return substitute(text, lambda reference: text[reference.start : reference.end])
+
+
 def iter_strings(value: Any) -> Iterable[str]:
     if isinstance(value, str):
         yield value
@@ -96,16 +116,32 @@ def map_strings(value: Any, change: Callable[[str], str]) -> Any:
 
 
 def substitute(text: str, resolve: Callable[[Reference], str]) -> str:
-    """``text`` with every reference replaced by ``resolve``'s value."""
-    references = find_references(text)
-    if not references:
-        return text
+    """``text`` with every reference replaced by ``resolve``'s value.
+
+    An escaped reference loses one ``!`` and is never resolved.
+    """
     parts: list[str] = []
     position = 0
-    for reference in references:
-        parts.append(text[position : reference.start])
-        parts.append(resolve(reference))
-        position = reference.end
+    for match in _REFERENCE_OR_ESCAPE.finditer(text):
+        parts.append(text[position : match.start()])
+        if match.group(1):
+            # Escaped: drop the first ``!``.
+            parts.append(text[match.start() : match.start(1)])
+            parts.append(text[match.start(1) + 1 : match.end()])
+        else:
+            parts.append(
+                resolve(
+                    Reference(
+                        name=match.group(2).upper(),
+                        field=match.group(3).lower() if match.group(3) else None,
+                        start=match.start(),
+                        end=match.end(),
+                    )
+                )
+            )
+        position = match.end()
+    if not parts:
+        return text
     parts.append(text[position:])
     return "".join(parts)
 

@@ -129,7 +129,7 @@ async def identity_agent_references(
     )
     if services.secrets is not None:
         references.extend(
-            f"secret:{secret.name}" for secret in services.secrets.granted_to_agent(agent_id)
+            f"secret:{secret.name}" for secret in services.secrets.naming_identity_agent(agent_id)
         )
     return tuple(sorted(references))
 

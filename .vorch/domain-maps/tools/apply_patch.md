@@ -741,6 +741,14 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   so an imperfect copy can still request an indentation-only change. Explicit
   hints and EOF constraints still apply. A missing
   deletion/move source remains an error, not inferred proof of prior execution.
+- A hunk whose text held Agent Secret values substituted by dispatch carries a
+  literal reading (`_Hunk.literal`, built in `run_operations` from
+  `ToolContext.secret_literals`): the same change with each value read back as
+  the reference text it replaced. `_place` tries the hunk precisely, then the
+  literal reading precisely only, then the hunk with every step; only
+  `text_not_found` and `context_not_found` fall through, never an ambiguity. A
+  literal match writes the new text with the references as text and notes it
+  (`secrets/agent-secrets.md` -> References and sinks).
 
 ## Mutation invariants
 
@@ -860,6 +868,7 @@ replacements still went through Delete File plus Add File (agent-eval
 | `eof_not_found` next step: `That marker changes only the end of the file; to change these lines where they are, leave it out.` | The error named the mismatch but no next step (Errors: three parts); the lines are in the file, so leaving out the marker is the call that applies the change where the excerpt shows them. |
 | `eof_after_hint`: `*** End of File adds the lines at the end of the file, but the @@ line "..." is not the last line. To add them after that line, leave out *** End of File; to add them at the end of the file, leave out the @@ line.` | Replaces `the file does not end with the lines before *** End of File` plus `No similar text is in the file`, a misleading cause for added lines, which are never in the file. Both next steps are safe as written. |
 | `context_block_not_found`: `the lines of the @@ block "..." above the lines to replace were not found together.` | Names the block by its first line: a patch can hold several `@@` blocks, and without candidates nothing else in the error said which one failed. |
+| Literal reading note (shared with `edit`): `Kept {{secret:API}} as text: the file holds that text, not the Secret's value.` | The Agent wrote a reference and vBot did not insert the value; without the note an Agent that meant the value believes it is in the file (Tolerance: report every interpretation). It names the reference, so it needs no edit label. |
 | Truncated excerpt (shared with `edit`): `Excerpt truncated. Continue with read(path="X", offset="12:241", limit=3).` | Names the call that shows the cut text, in the form `read` takes. It said `If read is available, continue with ...; otherwise use another file reader.` until 2026-10-13: the other results and errors of this pipeline name `read` calls without a condition (`_read_hint`), and the hedge only made the next step longer. |
 
 ## Verification
@@ -891,7 +900,8 @@ replacements still went through Delete File plus Add File (agent-eval
 - `test_copy_match.py` covers shared prose/identifier distinctions and target
   IDs in substring recovery.
 - `test_edit_tools.py` covers `edit` and `write` on the same pipeline
-  (`edit.md` -> Verification).
+  (`edit.md` -> Verification); `test_edit_tools_secret_references.py` the
+  literal reading and the reference escape through dispatch.
 - Existing fuzzy-match, file-state, Runtime and Provider-schema
   tests cover the shared boundaries.
   `tests/core/providers/test_ollama_cloud.py` verifies intact patch arguments through
