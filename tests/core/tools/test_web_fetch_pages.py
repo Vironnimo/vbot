@@ -500,7 +500,9 @@ async def test_refs_are_refused_across_sessions_agents_projects_expiry_and_trave
 @pytest.mark.asyncio
 async def test_an_unusable_ref_beside_url_fetches_the_url_and_says_why(tmp_path, monkeypatch):
     network = AsyncMock(
-        side_effect=lambda session, url, max_bytes: make_result(text="Iron page", url=url)
+        side_effect=lambda session, url, max_bytes, truncate=False: make_result(
+            text="Iron page", url=url
+        )
     )
     monkeypatch.setattr("core.tools._public_http._http_get", network)
     tool, context = web_fetch_registry(), make_context(tmp_path)
