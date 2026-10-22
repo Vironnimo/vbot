@@ -377,15 +377,15 @@ def normalize_host(host: str) -> str:
     """The comparison form of a host an access names: lowercase, IDNA, no brackets.
 
     An IPv4 address in any form the resolver reads (``127.1``, ``2130706433``,
-    ``0x7f000001``) takes its dotted form, so rules and checks compare one form.
+    ``0x7f000001``, ``[::ffff:7f00:1]``) takes its dotted form, so rules and
+    checks compare one form.
     """
     text = host.strip().lower().rstrip(".")
     bracketed = text.startswith("[") and text.endswith("]")
     text = text[1:-1] if bracketed else canonical_host(text)
-    try:
-        return ipaddress.ip_address(text).compressed
-    except ValueError:
-        pass
+    address = _address_form(text)
+    if address is not None:
+        return address
     import idna
 
     try:
@@ -574,10 +574,11 @@ def _host_pattern(text: str) -> str:
         raise _RuleProblemError("a * can only start a host, as in Web(*.example.com).")
     bracketed = body.startswith("[") and body.endswith("]")
     unbracketed = body[1:-1] if bracketed else canonical_host(body)
-    if _is_ip(unbracketed):
+    address = _address_form(unbracketed)
+    if address is not None:
         if wildcard:
             raise _RuleProblemError("an IP address cannot have a *. prefix.")
-        return ipaddress.ip_address(unbracketed).compressed
+        return address
     if "/" in body or ":" in body or _CONTROL.search(body) or " " in body:
         raise _RuleProblemError(
             "Web takes a host without scheme, port or path, such as Web(example.com)."
@@ -591,6 +592,21 @@ def _host_pattern(text: str) -> str:
     if len(encoded) > 253 or any(_HOST_LABEL.match(label) is None for label in encoded.split(".")):
         raise _RuleProblemError(f"{body} is not a valid host name.")
     return ("*." if wildcard else "") + encoded
+
+
+def _address_form(text: str) -> str | None:
+    """The comparison form of an IP literal, else ``None``.
+
+    An IPv4-mapped IPv6 address (``::ffff:10.0.0.5``) reaches the IPv4 host, so
+    it takes the IPv4 address's dotted form.
+    """
+    try:
+        address = ipaddress.ip_address(text)
+    except ValueError:
+        return None
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        return str(address.ipv4_mapped)
+    return address.compressed
 
 
 def _is_ip(text: str) -> bool:

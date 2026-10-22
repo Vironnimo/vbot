@@ -398,9 +398,12 @@ class PermissionBoundary:
         ``reach`` is the pattern of what it reaches below the folder, as segments.
         """
         protected: list[tuple[ProtectedLocation, _Area | None]] = [
-            ("agent_config", self._agent_config),
-            ("data_dir", self._data_dirs),
+            ("agent_config", self._agent_config)
         ]
+        # A folder in a part of the data directory the access may reach (the
+        # Scratch Area, the Workspace, a readable folder) has only such parts below.
+        if not all(self._data_dir_allowed(key, access) for key in keys):
+            protected.append(("data_dir", self._data_dirs))
         if access == "write" and not git:
             protected.append(("agent_config", self._rule_files))
         if access == "write":
@@ -677,7 +680,8 @@ class PermissionBoundary:
         return any(area.contains(key) for area in (*self._readable, self._workspace) if area)
 
     def _names_exactly(self, key: str, access: PathAccess) -> bool:
-        return any(layer.names_exactly(key, access) for layer in self._compiled)
+        # Every layer refuses unsafe forms by itself, so each must name the path.
+        return all(layer.names_exactly(key, access) for layer in self._compiled)
 
     def _protected(self, keys: tuple[str, ...], access: PathAccess) -> ProtectedLocation | None:
         for key in keys:
