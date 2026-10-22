@@ -11,28 +11,23 @@ It does not own configuration persistence, workspace memory, HTTP/RPC transport,
 ## Terms
 
 ### Prompt Block
-**Definition:** The unit the System Prompt is assembled from - an ordered, gated contribution that is either an editable **text** block (text may carry `{include:...}` and `{generated:...}` markers) or a non-editable **data** block (SOUL, Working Project context, config-agent body, auto-list, or dynamic render). Every contributor hands over a block *definition*; the prompt is the layout-ordered, three-gate-filtered, normalized concatenation of survivors.
-**Not:** A prompt fragment - a bundled resource file that may supply a block's default text; the block is the reorderable, toggleable, gated unit, contributable from any source.
+One ordered, gated piece of the System Prompt with a stable id, an owner and a content kind: an editable text block or a non-editable data block (Data Model). Not a prompt fragment, the bundled resource file that may supply a block's default text.
 
 ### Block Layout
-**Definition:** The persisted per-scope ordered list of `{id, enabled, source}` owning order and on/off state (`layout.json` per scope, `{"format_version": 1, "entries": [...]}`). A saved layout that fails to load reads as no layout and refuses edits; only `reset_layout` (`prompt.reset_layout`) replaces it. A block absent from the layout appends after the laid-out entries, ordered by `default_rank`, with `default_enabled`; an entry whose definition is gone is inert - skipped at build, pruned on next write.
-**Not:** Definitions or text - the layout owns order + enabled only.
+The per-scope saved order and on/off state of the blocks, without their definitions or text (Assembly Pipeline; stored form: `storage/prompt-files.md` -> Block persistence).
 
-### Block Owner (three-gate filter)
-**Definition:** A block renders only when all three gates hold: user-enabled (layout on) + owner-active + non-empty after expansion. The **owner** - `always` / `identity` / `memory` / `tool:<name>` / `channel` / `subagent_session` / `extension:<name>` - is gate 2: `identity` requires an Identity/Memory Workspace, `channel` drops entirely without an enabled Channel config for that Agent, `subagent_session` requires a prompt built for a Session linked to a Parent Agent, `memory` requires an Identity/Memory Workspace and follows `memory_prompt_mode` alone, regardless of Tool permission (`memory.md` -> Modes and gating).
-**Not:** The Source prefix - owner is the activation condition, source is provenance; both may read `tool:`/`extension:` but are distinct fields.
+### Block Owner
+The activation condition of a block: a block renders only when the user enabled it, its owner is active and it is not empty (Data Model, Assembly Pipeline). Not the Source prefix, which records where a block comes from.
 
 ### Source prefix
-**Definition:** The namespace before the first colon in a block id - `core:` / `tool:` / `extension:` / `user:` / `memory:` - mapping to its override folder `blocks/<namespace>/<slug>.md` (the colon never reaches the path).
-**Not:** The Block Owner (see above).
+The namespace before the first colon of a block id, which records where the block comes from and names its override folder (`prompts/block-editing-and-preview.md`). Not the Block Owner.
 
 ### Producer
-**Definition:** A function registered under a marker name rendering a `{generated:NAME}` placeholder at build time - the auto-lists `tool_list` / `on_demand_tool_list` / `skill_catalog` / `channel_list` and `memory_files`. Unknown markers (warned once per process per marker) and raising Producers render empty with a warning; empty results leave no residue, and one Producer cannot fail the System Prompt or Run.
-**Not:** A dynamic block - a producer fills one marker inside an editable block; a dynamic block's entire body is a render function, whose text Chat pins per prompt epoch (Interfaces -> `render_dynamic_blocks`).
+A named function that fills one `{generated:...}` marker inside a text block at build time, such as the Tool or Skill catalog (`prompts/core-blocks.md` -> Producers). Not a dynamic block, whose whole body is a render function that Chat pins per prompt epoch (Interfaces -> `render_dynamic_blocks`).
 
 ## Data Model
 
-A **block** (`BlockDefinition`) carries: fully-qualified `id` `<source>:<slug>` (source is an open string, no-colon ids are contract errors); `owner` driving gate 2 (`always`, `identity`, `memory`, `channel`, `subagent_session`, `tool:<name>` = Tool among the request's Tool definitions when the caller passes them, else in exact effective policy + current provider definitions; a trailing `*` (`tool:mcp_*`) matches any such Tool with that name prefix, used by Tool-gated Extension blocks (`extensions/capabilities.md`); `extension:<name>` = in loaded set); `kind` `text` (override cascade + markers) or `data` (not user-editable, `default_text` inserted verbatim, `{...}` never interpreted); exactly one of `default_text`/`render`; `default_rank`; `default_enabled` (`False` ships an opt-in block staying off even under older layouts); `requires_generated` (a Producer name: the static text renders empty while that Producer renders nothing, so a heading around an empty list leaves no trace).
+A **block** (`BlockDefinition`) carries: fully-qualified `id` `<source>:<slug>` (source is an open string, no-colon ids are contract errors); `owner` driving gate 2 (`always`, `identity` = the Agent has an Identity/Memory Workspace, `memory` = a Workspace and `memory_prompt_mode` alone, regardless of Tool permission (`memory.md` -> Modes and gating), `channel` = an enabled Channel config of the Agent, `subagent_session` = a prompt built for a Sub-Agent Session, `builtin:<kind>` = the built-in Agent of that kind, `tool:<name>` = Tool among the request's Tool definitions when the caller passes them, else in exact effective policy + current provider definitions; a trailing `*` (`tool:mcp_*`) matches any such Tool with that name prefix, used by Tool-gated Extension blocks (`extensions/capabilities.md`); `extension:<name>` = in loaded set); `kind` `text` (override cascade + markers) or `data` (not user-editable, `default_text` inserted verbatim, `{...}` never interpreted); exactly one of `default_text`/`render`; `default_rank`; `default_enabled` (`False` ships an opt-in block staying off even under older layouts); `requires_generated` (a Producer name: the static text renders empty while that Producer renders nothing, so a heading around an empty list leaves no trace).
 
 Core, memory and data block ids and what each renders: `prompts/core-blocks.md`. Custom user blocks are `user:<slug>`, owner `always`. A missing, explicitly empty, or broken persisted layout uses the bundled defaults (`resources/prompts/layout.json`; broken files: `storage/prompt-files.md`). Empty means no custom order or enablement, not no blocks: disabling all blocks requires explicit `enabled: false` entries. The nine core text blocks read defaults from their fragment resources; an Agent scope reads its Agent copies, except `core:system_reminders` and `core:subagent_role`, which render their bundled fragment in every scope because custom-prompt Agent copies predate them (block overrides and layout enablement still apply).
 
@@ -88,7 +83,7 @@ This domain owns the System Prompt framing and notices `core/prompts/` renders (
 Read these only when your task matches - not by default.
 
 - Adding or changing a pinned prompt-epoch input, `pinned_context.py`, the `render_*` snapshot methods or a `BlockCatalog` -> `prompts/adding-a-pinned-input.md`
-- Changing what a core, memory or data block renders (`core:runtime`, `core:soul`, `core:working_project`, `core:channels`, ...), the Runtime variables or the bundled layout -> `prompts/core-blocks.md`
+- Changing what a core, memory or data block renders (`core:runtime`, `core:soul`, `core:working_project`, `core:channels`, ...), the Runtime variables, the Producers or the bundled layout -> `prompts/core-blocks.md`
 - Changing Tool-, Extension- or temporary-Session blocks (On-demand Tools, `tool:load_tools`, `tool:subagent`, `tool:bash`, `prompt_blocks`, `block_details`) -> `prompts/contributed-blocks.md`
 - Changing include, SOUL or Project file reads (`render_prompt_file`, `render_project_files`, size cap, notices) -> `prompts/prompt-files.md`
 - Changing `prompt.*` RPCs (block edit/layout, `user:` blocks, scopes) or `prompt.preview` -> `prompts/block-editing-and-preview.md`

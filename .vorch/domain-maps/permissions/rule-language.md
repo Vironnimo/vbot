@@ -14,7 +14,7 @@ Stored form `{read, write, commands, web, allow, deny}`, every part optional:
 
 ## Bases, kinds and placeholders
 
-- Bases: `read` `anywhere|work_area`, `write` `anywhere|work_area|scratch`, `commands` `any|listed`, `web` `any|listed`; defaults are the unrestricted values.
+- Bases: `read` `anywhere|work_area`, `write` `anywhere|work_area|scratch`, `commands` `any|listed`, `web` `any|listed`; defaults are the unrestricted values. `work_area` permits the Work Area (working directory and Scratch Area; `../permissions.md` -> Terms -> Work Area), `scratch` only the Scratch Area; allow rules add to a narrowed base, so `read: work_area` reads the Work Area plus what read allow rules name.
 - Kinds `Read`, `Edit`, `Shell`, `Web`; aliases `Write`, `MultiEdit`, `NotebookEdit` -> `Edit`, `Glob`, `Grep`, `LS`, `List` -> `Read`, `Bash`, `PowerShell` -> `Shell`, `WebFetch(domain:x)` -> `Web(x)`. `Shell(...)` patterns: `commands.md` -> Patterns.
 - Placeholders `{workdir}`, `{project}`, `{scratch}`, `{workspace}`, `{home}` and `~` may only start a path pattern; a relative pattern resolves against `{workdir}`. A rule whose placeholder has no value in a Run is dropped from that Run (`PermissionBoundary.build`).
 - Host patterns (`Web(...)`): `example.com` covers the host and its subdomains, `*.example.com` only subdomains, `*` every host, IP literals match exactly, an IPv4 address in its dotted form whichever form a rule or access writes (`127.1`, `_addresses.py`; also IPv4-mapped IPv6, `[::ffff:127.0.0.1]`). The same rules decide hosts that ssh, scp and `git@host:` reach (`check_host(host, "connect")`).
@@ -33,7 +33,7 @@ Stored form `{read, write, commands, web, allow, deny}`, every part optional:
 
 ## Descriptions
 
-`describe_permission_rules(rules, *, values)` / `describe_layer(layer)`: one layer as the user reads it (`source`, `bases`, `workdir`, readable and writable folders or `None` for no limit, allowed commands and hosts or `None`, deny rules, and for the Agent's own layer the `inactive` rules whose placeholder has no value). Unknown placeholders stay as written (`{scratch}`). `permissions.session` shows these per layer for a Session; editors show the effective parts.
+`describe_permission_rules(rules, *, values)` / `describe_layer(layer)`: one layer as the user reads it (`source`: `agent` for the Agent's own rules, else `parent`, `cron` or `extension`; `bases`, `workdir`, readable and writable folders or `None` for no limit, allowed commands and hosts or `None`, deny rules, and for the Agent's own layer the `inactive` rules whose placeholder has no value). Unknown placeholders stay as written (`{scratch}`). `permissions.session` shows these per layer for a Session; editors show the effective parts.
 
 ## Editors
 

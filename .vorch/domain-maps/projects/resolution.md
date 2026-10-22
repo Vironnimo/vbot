@@ -1,6 +1,6 @@
 # Project Agent Resolution
 
-Read this reference when changing how a Project Agent becomes effective runtime configuration, including fallback order, provenance, model usability, capability ceilings, or working-Project helpers.
+Read this reference when changing how a Project Agent becomes effective runtime configuration, including fallback order, provenance, model usability, capability ceilings, working-Project helpers, or which instruction files Project Context loads.
 
 ## Uniform Resolution Seam
 
@@ -60,7 +60,7 @@ Compaction policy and `tool_loading` (On-demand Tools) are supported per-Agent P
 
 ### Permission Rules
 
-`RuntimeAgent.permission_rules` resolves per part with `resolve_rule_set` (`../permissions.md`), most specific level first, then `defaults.agent.permission_rules` (`resolve_permission_rules`, `_resolution_values.py`):
+`RuntimeAgent.permission_rules` (GLOSSARY -> Permission Rules; the rule language: `../permissions.md`) resolves per part with `resolve_rule_set`, most specific level first, then `defaults.agent.permission_rules` (`resolve_permission_rules`, `_resolution_values.py`):
 
 ```text
 Identity Agent:   agent.json -> global default
@@ -126,6 +126,10 @@ Texts (Agent- and user-visible; `_runtime_agent.py`, `_session_resolution.py`):
 - `DEFAULT_PROJECT_MISSING_MESSAGE`: `Agent {agent_id} starts new Sessions in Project {project_id}, which no longer exists. Choose another default Project for the Agent.`
 - `TEAM_WORKING_PROJECT_MESSAGE`: `A Session of Team Agent {agent_id}@{project_id} works in Project {project_id}; it cannot work in another Project.`
 
+## Project Context instructions
+
+The instructions of Project Context (GLOSSARY -> Project Context) are `Project.instruction_files`, the one resolver (`resolve_instruction_files`, `core/projects/instructions.py`): while `auto_instructions` is on, first the repository's main instruction file - `AGENTS.md`, else the first existing of `CLAUDE.md`, `.claude/CLAUDE.md`, `GEMINI.md`, `.github/copilot-instructions.md` in the repository root, chosen anew whenever the frame renders, so a repository that gains an `AGENTS.md` switches on its own - then the additional `auto_load` files, each file once. A candidate whose status cannot be checked counts as present, so a failing file is reported instead of being replaced by the next one. They enter under the prompt file cap (`prompts/prompt-files.md`); folder instructions of subfolders reach the Agent later as notes (`chat/request-building.md` -> Folder instructions). `_project_context.py` projects Project Context into prompt and Skill scopes.
+
 ## Change Rules
 
 `preview_temporary_agent` and persisted temporary-Agent resolution share
@@ -144,7 +148,7 @@ and `tests/core/runtime/test_runtime_extension_host.py`.
 
 ## Source & Tests
 
-- Resolution orchestration: `core/projects/resolver.py`; Session overrides and Working Project binding: `_session_resolution.py`; Team freshness and translation: `_team_resolution.py`; temporary Agents: `_temporary_resolution.py`; prompt/Skill scopes: `_project_context.py`
+- Resolution orchestration: `core/projects/resolver.py`; Session overrides and Working Project binding: `_session_resolution.py`; Team freshness and translation: `_team_resolution.py`; temporary Agent chain (bindings, repository Profiles, previews): `_temporary_resolution.py`; prompt/Skill scopes: `_project_context.py`
 - Resolved Agent contracts and Session Agent overrides: `core/projects/_runtime_agent.py`
 - Capability ceilings, scalar fallback and effective provenance: `core/projects/_resolution_values.py`
 - Model usability and Connection gating: `ModelConfigurationChecker` in `core/projects/_model_configuration.py` (public imports remain available through `core.projects` and `resolver.py`)
