@@ -150,11 +150,11 @@ def register(api):
         "Start the bundled workflow Skill.",
         start_workflow,
         argument="optional",
-        argument_hint="What should the workflow achieve?",
+        argument_hint="optional: what the workflow should achieve",
     )
 ```
 
-`argument_hint` (API 20) asks for the argument in plain words a user understands, not usage notation; the WebUI shows it greyed after the typed command.
+`argument_hint` (API 20) tells how to use the command, in plain words rather than usage notation; the WebUI shows it greyed after the typed command, when the user already chose the command, while the description says what it does in the `/` list.
 
 The handler, synchronous or asynchronous, receives `(context, argument)`: `argument` is the trimmed text after the Command, or `None`. It returns a `CommandOutcome` whose `command` equals the declared name. `ExtensionCommandContext` offers `agent_id`, `session_id`, `project_id`, `reply_surface`, `report_change(...)` and `await start_run(content, *, internal=False)`, which starts the Run at the same address and reply surface.
 

@@ -168,7 +168,9 @@ SECRETS_PROMPT_BLOCK_HEAD: Final = (
     "## Secrets\n\n"
     "You can use these Secrets without seeing their values. Write a reference such as "
     "{{secret:NAME.field}} where the value belongs, in the places listed for each Secret; "
-    "vBot inserts the value there. Tool output shows values as their references."
+    "vBot inserts the value there. Tool output shows values as their references. "
+    "To write the text {{secret:NAME}} itself, such as in documentation, write "
+    "{{!secret:NAME}}."
 )
 SECRETS_CATALOG_TITLE: Final = "Secrets"
 

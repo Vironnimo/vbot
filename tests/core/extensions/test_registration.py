@@ -277,7 +277,7 @@ def test_declarations_land_on_the_loaded_record(tmp_path: Path) -> None:
         "    api.register_command(\n"
         "        'workflow', 'Start the workflow.', _workflow, argument='required',\n"
         "        catalog_result='state_change', execution_mode='serialized',\n"
-        "        unavailable_surfaces={'channel'}, argument_hint='Describe the workflow',\n"
+        "        unavailable_surfaces={'channel'}, argument_hint='what the workflow should do',\n"
         "    )\n",
     )
 
@@ -317,7 +317,7 @@ def test_declarations_land_on_the_loaded_record(tmp_path: Path) -> None:
             "state_change",
             "serialized",
             frozenset({"channel"}),
-            "Describe the workflow",
+            "what the workflow should do",
         )
     ]
 

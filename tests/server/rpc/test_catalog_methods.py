@@ -363,7 +363,7 @@ async def test_extension_commands_come_from_live_dispatcher_catalog() -> None:
         description="Run the workflow.",
         handler=lambda _context, _argument: CommandOutcome(command="workflow"),
         unavailable_surfaces={"tui"},
-        argument_hint="What should the workflow achieve?",
+        argument_hint="optional: what the workflow should achieve",
     )
     state = _state(global_names=[], command_dispatcher=dispatcher)
 
@@ -375,7 +375,7 @@ async def test_extension_commands_come_from_live_dispatcher_catalog() -> None:
         "description": "Run the workflow.",
         "type": "command",
         "argument": "optional",
-        "argument_hint": "What should the workflow achieve?",
+        "argument_hint": "optional: what the workflow should achieve",
         "output": "toast",
     }
     tui_result = await _list_commands(state, {"reply_surface": "tui"})

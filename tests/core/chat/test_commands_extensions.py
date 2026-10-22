@@ -94,7 +94,7 @@ async def test_extension_command_supports_async_handler_and_follow_up_run() -> N
         ("help", {}),
         ("workflow", {"argument": cast(Any, [])}),
         ("workflow", {"argument_hint": "<goal>\n<more>"}),
-        ("workflow", {"argument": "none", "argument_hint": "Describe your goal"}),
+        ("workflow", {"argument": "none", "argument_hint": "your goal"}),
     ],
     ids=[
         "invalid-name",

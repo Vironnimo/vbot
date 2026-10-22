@@ -134,7 +134,7 @@ describe('ChatComposer suggestions', () => {
             description: 'Set a goal.',
             type: 'command',
             argument: 'optional',
-            argument_hint: 'Describe your goal',
+            argument_hint: 'your goal, or pause, resume, clear',
           },
           statusCommand,
         ],
@@ -147,9 +147,9 @@ describe('ChatComposer suggestions', () => {
       expect(ghost()).toBeNull();
 
       typeInComposer('/goal');
-      expect(ghost()).toBe(' Describe your goal');
+      expect(ghost()).toBe(' your goal, or pause, resume, clear');
       typeInComposer('/GOAL ');
-      expect(ghost()).toBe('Describe your goal');
+      expect(ghost()).toBe('your goal, or pause, resume, clear');
 
       // Once the argument starts, and for a command without one, nothing shows.
       typeInComposer('/goal Ship');

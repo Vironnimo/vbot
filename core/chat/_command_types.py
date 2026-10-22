@@ -55,8 +55,9 @@ class CommandSpec:
     # The argument can carry a Secret value: accessors keep no copy of the command
     # text, and a Channel removes the user's message where the platform allows.
     secret_argument: bool = False
-    # A plain-language prompt for the argument (`Describe your goal`), shown
-    # greyed after the typed command; empty for a command without an argument.
+    # How to use the command, in plain words (`your goal, or pause, resume,
+    # clear`), shown greyed after the typed command; the description says what
+    # it does. Empty for a command without an argument.
     argument_hint: str = ""
 
 

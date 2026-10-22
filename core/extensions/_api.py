@@ -284,8 +284,9 @@ class ExtensionAPI:
     ) -> None:
         """Declare a slash command for later application by Chat.
 
-        ``argument_hint`` asks for the argument in plain words (``Describe your
-        goal``); the WebUI shows it greyed after the typed command.
+        ``argument_hint`` tells how to use the command in plain words (``your
+        goal, or pause, resume, clear``); the WebUI shows it greyed after the
+        typed command.
 
         Declaration is intentionally inert here. ``CommandDispatcher`` validates
         the metadata and installs the handler after Runtime has created its
