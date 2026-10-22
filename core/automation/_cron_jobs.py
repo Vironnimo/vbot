@@ -187,7 +187,18 @@ CRON_JOBS_SHAPE = json_document({"jobs"}, {"jobs": json_list(CRON_JOB_SHAPE, key
 
 
 def _cron_is_schedulable(expression: str, reference: datetime) -> bool:
-    """Require both valid syntax and a reachable fire within croniter's search horizon."""
+    """Require deterministic valid syntax and a reachable fire within croniter's search horizon.
+
+    croniter's random (``R``) and hashed (``H``) tokens are refused: they pick
+    other times at every parse, so live scheduling, catch-up and projection
+    would disagree. No month or weekday name starts with either letter.
+    """
+    if any(
+        element[:1].upper() in {"H", "R"}
+        for field in expression.split()
+        for element in field.split(",")
+    ):
+        return False
     if not croniter.is_valid(expression):
         return False
     try:

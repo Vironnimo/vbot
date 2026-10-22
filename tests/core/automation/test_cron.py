@@ -41,8 +41,19 @@ from tests.core.automation.cron_test_support import (
 
 
 @pytest.mark.asyncio
-async def test_impossible_cron_is_rejected_before_mutation(tmp_path):
-    expression = "0 0 30 2 *"
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "0 0 30 2 *",
+        # croniter's random and hashed tokens pick other times at every parse,
+        # so live scheduling, catch-up and projection would disagree.
+        "R 9 * * *",
+        "0 9 * * r",
+        "0 9 * * mon,R(0-6)",
+        "H 9 * * *",
+    ],
+)
+async def test_impossible_cron_is_rejected_before_mutation(tmp_path, expression):
     service, _ = make_service(tmp_path, tz="Europe/Berlin")
     with pytest.raises(CronJobValidationError):
         service.parse_schedule(expression)
