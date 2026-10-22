@@ -566,8 +566,23 @@ async def test_request_is_a_pinned_browser_like_get_with_a_streamed_body(
         ),
         ("text/html", b"<p>Gr\xc3\xbc\xc3\x9fe aus K\xc3\xb6ln</p>", "Grüße aus Köln"),
         ("text/plain", b"Gr\xfc\xdfe \x93aus\x94 K\xf6ln", "Grüße \u201caus\u201d Köln"),
+        # A codec label that names no page charset falls back to detection.
+        ("text/plain; charset=idna", b"Gr\xc3\xbc\xc3\x9fe aus K\xc3\xb6ln", "Grüße aus Köln"),
+        (
+            "text/plain; charset=unicode_escape",
+            rb"C:\new\u00e9 Gr" + b"\xfc\xdfe",
+            r"C:\new\u00e9 Grüße",
+        ),
     ],
-    ids=["header-charset", "byte-order-mark", "meta-charset", "undeclared-utf-8", "undeclared"],
+    ids=[
+        "header-charset",
+        "byte-order-mark",
+        "meta-charset",
+        "undeclared-utf-8",
+        "undeclared",
+        "failing-codec",
+        "rewriting-codec",
+    ],
 )
 async def test_bodies_are_decoded_as_a_browser_decodes_them(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, content_type: str, body: bytes, text: str
