@@ -423,7 +423,17 @@ def wiki(
             if action == "list":
                 content = row["content"].casefold()
                 found = [index for index in map(content.find, terms) if index >= 0]
-                start = max(0, min(found) - 80) if found else 0
+                start = min(found) if found else 0
+                if found and len(content) != len(row["content"]):
+                    # Case folding can expand a character (for example, sharp s to ss).
+                    # The excerpt indexes the original content, not that folded copy.
+                    folded_offset = 0
+                    for original_offset, character in enumerate(row["content"]):
+                        folded_offset += len(character.casefold())
+                        if folded_offset > start:
+                            start = original_offset
+                            break
+                start = max(0, start - 80)
                 value["excerpt"] = row["content"][start : start + 320]
             entries.append(value)
         result: Json = {"entries": entries, "has_more": len(rows) > limit}
