@@ -15,6 +15,7 @@ serve a connection's catalog, and a connection has loaded the client by then.
 from __future__ import annotations
 
 import difflib
+import functools
 import hashlib
 import json
 import re
@@ -130,6 +131,8 @@ def target_for(kind: str, name: str, definition: Any) -> str:
     return f"{kind}:{name}:{fingerprint}"
 
 
+# The operations' schemas are constant, so each target is computed once.
+@functools.lru_cache(maxsize=32)
 def operation_target(operation: str) -> str:
     from .client import operation_schema
 
