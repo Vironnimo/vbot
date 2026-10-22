@@ -375,26 +375,37 @@ describe('SettingsView provider credentials', () => {
       expect(modalRoot().textContent).not.toContain('OpenRouter');
     });
 
-    it('starts provider.connect, shows the device code, and copies it', async () => {
-      await startDeviceFlowFromAddModal();
+    it.each(['browser', 'desktop'])(
+      'starts provider.connect and copies the device code through the %s clipboard',
+      async (accessor) => {
+        await startDeviceFlowFromAddModal();
+        const writeText = vi.fn().mockResolvedValue(undefined);
+        if (accessor === 'desktop') {
+          window.history.replaceState({}, '', '/?accessor=desktop');
+          window.pywebview = { api: { setClipboardText: writeText } };
+          navigator.clipboard = undefined;
+        } else {
+          navigator.clipboard.writeText = writeText;
+        }
 
-      expect(rpcMock).toHaveBeenCalledWith('provider.connect', {
-        ...COPILOT,
-        account: 'default',
-      });
-      expect(document.body.textContent).toContain(
-        t('settings.providers.device_flow.title', {
-          provider: 'GitHub Copilot',
-        }),
-      );
-      expect(document.body.textContent).toContain(
-        'https://github.com/login/device',
-      );
+        expect(rpcMock).toHaveBeenCalledWith('provider.connect', {
+          ...COPILOT,
+          account: 'default',
+        });
+        expect(document.body.textContent).toContain(
+          t('settings.providers.device_flow.title', {
+            provider: 'GitHub Copilot',
+          }),
+        );
+        expect(document.body.textContent).toContain(
+          'https://github.com/login/device',
+        );
 
-      buttonByText('Copy').click();
-      await waitForCondition(() => successToasts(toastMock).length > 0);
-      expect(navigator.clipboard.writeText).toHaveBeenCalledWith(USER_CODE);
-    });
+        buttonByText('Copy').click();
+        await waitForCondition(() => successToasts(toastMock).length > 0);
+        expect(writeText).toHaveBeenCalledWith(USER_CODE);
+      },
+    );
 
     it('closes the modal and shows a success toast after auth completion', async () => {
       await startDeviceFlowFromAddModal();

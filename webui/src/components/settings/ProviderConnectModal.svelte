@@ -12,6 +12,7 @@
     setProviderKey,
   } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
+  import { writeClipboardText } from '$lib/clipboard.js';
   import {
     DEFAULT_ACCOUNT_ID,
     isSharedOpenCodeConnection,
@@ -374,16 +375,8 @@
       return;
     }
 
-    if (typeof navigator === 'undefined' || !navigator.clipboard?.writeText) {
-      onToast({
-        title: t('settings.providers.device_flow.copy_error'),
-        variant: 'error',
-      });
-      return;
-    }
-
     try {
-      await navigator.clipboard.writeText(userCode);
+      await writeClipboardText(userCode);
       copiedCode = true;
       onToast({
         title: t('settings.providers.device_flow.copy_success'),

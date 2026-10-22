@@ -4,6 +4,7 @@
   // `tools` lists `{ definition, tokens, on_demand }`; a caller without token
   // estimates leaves `tokens` out and no size is shown.
   import { t } from '$lib/i18n.js';
+  import { writeClipboardText } from '$lib/clipboard.js';
   import Badge from './ui/Badge.svelte';
   import Button from './ui/Button.svelte';
   import EmptyState from './ui/EmptyState.svelte';
@@ -26,9 +27,7 @@
 
   async function copyDefinition() {
     try {
-      await navigator.clipboard.writeText(
-        JSON.stringify(selected.definition, null, 2),
-      );
+      await writeClipboardText(JSON.stringify(selected.definition, null, 2));
       onToast({ title: t('common.copied'), variant: 'success' });
     } catch {
       onToast({
