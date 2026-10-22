@@ -36,6 +36,7 @@ from ._board_view import (
     unknown_recipients_message,
     with_notes,
 )
+from ._change_pacing import ChangePacing
 from ._extension_values import (
     AgentCallError,
     Json,
@@ -148,6 +149,7 @@ class SwarmExtension:
         # stored value; an unknown participant, as after a restart, asks the Store.
         self._lifecycle_runs: dict[tuple[str, str], str] = {}
         self._pacing = WakePacing(self._enqueue_wakes)
+        self._changes = ChangePacing(self._publish_change)
         self.management = SwarmManagement(self)
 
     async def start(self, host: ExtensionHost) -> None:
@@ -215,6 +217,7 @@ class SwarmExtension:
         # The host drains this owner (``_quiesce``) before it runs shutdown
         # handlers, so no Swarm Run is left to stop here.
         self._pacing.close()
+        self._changes.close()
         # Wake schedulers await shielded workers; cancel both before awaiting
         # either. A pending title request keeps the stored local title.
         tasks = (*self._cleanup_tasks, *self._title_tasks, *self._wake_tasks.values())
@@ -439,8 +442,13 @@ class SwarmExtension:
     # id: ``swarms`` its entry in the Swarm list (created, deleted, state, title,
     # settings), ``participants`` their Runs, states and pending messages,
     # ``discussions`` discussions and their members,
-    # ``wiki`` its Wiki pages.
+    # ``wiki`` its Wiki pages. ``ChangePacing`` publishes each resource and id at
+    # most once a second, the first change at once.
     def _changed(self, resource: str, record_id: str, revision: int = 0) -> None:
+        if self.host is not None and self.host.publish_change is not None:
+            self._changes.changed(resource, record_id, revision)
+
+    def _publish_change(self, resource: str, record_id: str, revision: int) -> None:
         host = self.host
         if host is None or host.publish_change is None:
             return

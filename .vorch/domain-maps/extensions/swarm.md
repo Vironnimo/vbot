@@ -28,7 +28,8 @@ The in-memory wait after a participant's completed Run in which it used no Tool 
   delegates to `_board_tool.py` (call checks, actions, corrections) and
   `_board_view.py` (pure recipient resolution and result text); `_tool_calls.py`
   holds the per-Tool call-syntax normalizers. `_wake_pacing.py` holds the
-  in-memory quiet periods that narrow which posts wake a participant.
+  in-memory quiet periods that narrow which posts wake a participant;
+  `_change_pacing.py` paces the changes `_changed` publishes to open pages.
   `_management.py` owns operator dispatch/serialization, catalog/profile CRUD and human
   Board/Wiki operations. Management and live execution log once at their owner after the change (`logging.md`):
   profile created/updated (changed field names)/deleted, delivery settings updated
@@ -648,9 +649,10 @@ saved post without creating another one (`SwarmPage.board.test.js`). The compose
 Preparing a batch is not delivery. Only a matching canonical Session receipt
 acknowledges its contents. Tool batches are acknowledged after their complete
 carrier is saved. Successful automatic and Tool delivery acknowledgments publish
-a `participants` change, so pending counts refresh during an active Run without
-waiting for another Board mutation or Run completion. Failed acknowledgments
-retain pending state; empty Tool batches do not invalidate the page. At startup,
+a `participants` change (paced, at most one a second per Swarm; see below), so
+pending counts refresh during an active Run without waiting for another Board
+mutation or Run completion. Failed acknowledgments retain pending state; empty
+Tool batches do not invalidate the page. At startup,
 after epoch recovery, `SwarmStore.reconcile_prepared_deliveries()` acknowledges
 every unacknowledged batch whose receipt the Session already saved, so a stop
 between the carrier commit and the acknowledgment does not deliver those posts
@@ -1266,6 +1268,16 @@ Private UI routing: `ui/SwarmPage.svelte` is the page root: it creates the page 
 
 Page route (the page's place in the app history, `webui/app-shell.md` -> Navigation): `''` is the start page (Run form), `/swarms/<id>` the Board, `/swarms/<id>/<tab>` the Wiki, Participants and Usage tabs, and `/profiles/<id>` and `/profiles/new` the profile editor. Opening a Swarm, a profile, the start page or a tab pushes the target route and shows the route the host sends back; a refused autosave transition keeps the current tab. Board citations, Wiki links and participant inspection wait for their accepted tab. A profile route outside the loaded list page resolves that profile with `profiles.get`. Deleting the shown Swarm or profile, saving a new profile, and a route the page cannot show replace the route with what the page shows; corrections wait until the newest route is shown. Showing another record closes the dialogs of the current record. Filters, search, the selected Wiki page, participant inspection and the editor's open disclosures are not part of the route. The page root provides the client's layer registry, so its dialogs (compose, communication settings, Run details, delete confirmations, the profile editor's leave dialogs) close on Back/Forward before the route changes (`SwarmPage.test.js`).
 
+`extension.py::_changed` paces what it publishes (`_change_pacing.ChangePacing`):
+the first change of a resource and id goes out at once and opens a 1 s window
+(`INTERVAL_SECONDS`); later changes of it within the window go out once when it
+closes, with their highest revision, and open the next window. No change is
+dropped and none is more than a second late; unpublished changes are dropped at
+Extension shutdown, since the retiring registration refreshes every page itself.
+Delivery acknowledgments made about two thirds of a Swarm's published changes
+(6,503 in one Swarm, 2026-10); in a 5-participant probe Swarm published changes
+fell from 121 to 26, `participants` from 89 to 9 (`test_swarm_change_pacing.py`;
+the other Swarm tests publish at once through `INTERVAL_SECONDS = 0`).
 Background invalidations are coalesced by the Swarm-internal `ui/pageRefresh.js`:
 each mounted page/panel has one refresh in flight and at most one pending pass,
 which later changes join but never postpone. A pass receives the union of the
