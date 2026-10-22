@@ -1,10 +1,10 @@
 """PowerShell command analysis: the plan table against real pwsh, and the helper's lifecycle.
 
 The table needs PowerShell 7 on Windows, the only host where the Shell Tool
-runs PowerShell; one helper serves the whole module. Elsewhere a nested
-``pwsh -c`` is analyzed too, and pwsh expands a native program's wildcards
-there: that test runs wherever pwsh is, for both platforms. The lifecycle
-tests use a fake helper and run everywhere.
+runs PowerShell; one helper serves the whole module. The recorded native-word
+parse tests both platforms' wildcard lowering without starting an external
+runtime, and a Windows integration check keeps that recording current.
+The lifecycle tests use a fake helper and run everywhere.
 """
 
 from __future__ import annotations
@@ -30,6 +30,13 @@ from tests.core.permissions.commands.support import CWD, HOME, Expected, case, c
 
 _PWSH = shutil.which("pwsh")
 _ENV = {"USERPROFILE": str(HOME), "HOME": str(HOME), "PATH": ""}
+_NATIVE_WILDCARDS_LINE = (
+    "python s*/a.py; python 's*/b.py'; python ('s*/c.py'); "
+    "python 'q*',s*/d; Get-Content -LiteralPath s*/e"
+)
+_NATIVE_WILDCARDS_PARSE = json.loads(
+    Path(__file__).with_name("powershell_native_wildcards.json").read_text(encoding="utf-8")
+)
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
@@ -256,21 +263,34 @@ async def test_powershell_plan(analyzer: CommandAnalyzer, line: str, expected: E
     check(await analyzer.analyze(line, shell="powershell", cwd=CWD, env=_ENV, home=HOME), expected)
 
 
-@pytest.mark.skipif(_PWSH is None, reason="PowerShell 7")
 @pytest.mark.asyncio
 @pytest.mark.parametrize("posix", [False, True], ids=["windows", "posix"])
 async def test_pwsh_expands_native_program_wildcards_outside_windows(
-    analyzer: CommandAnalyzer, monkeypatch: pytest.MonkeyPatch, posix: bool
+    monkeypatch: pytest.MonkeyPatch, posix: bool
 ) -> None:
     """Outside Windows pwsh expands a native program's unquoted wildcards, as bash does."""
     monkeypatch.setattr(_powershell, "NATIVE_GLOBS", posix)
-    line = (
-        "python s*/a.py; python 's*/b.py'; python ('s*/c.py'); "
-        "python 'q*',s*/d; Get-Content -LiteralPath s*/e"
-    )
-    plan = await analyzer.analyze(line, shell="powershell", cwd=CWD, env=_ENV, home=HOME)
+    helper = _FakeHelper()
+    helper.result = _NATIVE_WILDCARDS_PARSE
+    analyzer = _analyzer(helper)
+    try:
+        plan = await analyzer.analyze(
+            _NATIVE_WILDCARDS_LINE, shell="powershell", cwd=CWD, env=_ENV, home=HOME
+        )
+    finally:
+        await analyzer.aclose()
     globs = {access.glob for access in plan.paths if access.glob is not None}
     assert globs == ({"s*/a.py", "s*/c.py", "q*", "s*/d"} if posix else set())
+
+
+@pytest.mark.skipif(sys.platform != "win32" or _PWSH is None, reason="PowerShell 7 on Windows")
+@pytest.mark.asyncio
+async def test_powershell_native_word_recording_matches_the_helper(
+    analyzer: CommandAnalyzer,
+) -> None:
+    # The helper's JSON-lines protocol is the contract consumed by the lowering.
+    assert analyzer._helper is not None
+    assert await analyzer._helper.analyze(_NATIVE_WILDCARDS_LINE) == _NATIVE_WILDCARDS_PARSE
 
 
 # Lifecycle ---------------------------------------------------------------------
@@ -292,7 +312,7 @@ class _FakeChannel:
         self._helper.requests += 1
         behavior = self._helper.behaviors.pop(0) if self._helper.behaviors else "answer"
         if behavior == "answer":
-            answer = {"id": request["id"], "ok": True, "result": _EMPTY}
+            answer = {"id": request["id"], "ok": True, "result": self._helper.result}
             self._lines.put_nowait(json.dumps(answer).encode() + b"\n")
         elif behavior == "exit":
             self._lines.put_nowait(b"")
@@ -313,6 +333,7 @@ class _FakeHelper:
         self.channels: list[_FakeChannel] = []
         self.behaviors: list[str] = []
         self.requests = 0
+        self.result: dict[str, Any] = _EMPTY
         self.memory: int | None = 1
         self._starts = starts
 

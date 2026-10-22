@@ -1,0 +1,221 @@
+{
+  "commands": [
+    {
+      "stop_parsing": false,
+      "pipeline": null,
+      "source": "python s*/a.py",
+      "redirects": [],
+      "words": [
+        {
+          "quoted": false,
+          "source": "s*/a.py",
+          "parts": [
+            {
+              "v": "s*/a.py",
+              "k": "s"
+            }
+          ]
+        }
+      ],
+      "invocation": "",
+      "offset": 0,
+      "name": {
+        "quoted": false,
+        "source": "python",
+        "parts": [
+          {
+            "v": "python",
+            "k": "s"
+          }
+        ]
+      }
+    },
+    {
+      "stop_parsing": false,
+      "pipeline": null,
+      "source": "python 's*/b.py'",
+      "redirects": [],
+      "words": [
+        {
+          "quoted": true,
+          "source": "'s*/b.py'",
+          "parts": [
+            {
+              "v": "s*/b.py",
+              "k": "s"
+            }
+          ]
+        }
+      ],
+      "invocation": "",
+      "offset": 16,
+      "name": {
+        "quoted": false,
+        "source": "python",
+        "parts": [
+          {
+            "v": "python",
+            "k": "s"
+          }
+        ]
+      }
+    },
+    {
+      "stop_parsing": false,
+      "pipeline": null,
+      "source": "python ('s*/c.py')",
+      "redirects": [],
+      "words": [
+        {
+          "source": "('s*/c.py')",
+          "parts": [
+            {
+              "v": "s*/c.py",
+              "k": "s"
+            }
+          ]
+        }
+      ],
+      "invocation": "",
+      "offset": 34,
+      "name": {
+        "quoted": false,
+        "source": "python",
+        "parts": [
+          {
+            "v": "python",
+            "k": "s"
+          }
+        ]
+      }
+    },
+    {
+      "offset": 42,
+      "redirects": [],
+      "expression": true,
+      "source": "'s*/c.py'",
+      "pipeline": null
+    },
+    {
+      "stop_parsing": false,
+      "pipeline": null,
+      "source": "python 'q*',s*/d",
+      "redirects": [],
+      "words": [
+        {
+          "items": [
+            {
+              "quoted": true,
+              "source": "'q*'",
+              "parts": [
+                {
+                  "v": "q*",
+                  "k": "s"
+                }
+              ]
+            },
+            {
+              "quoted": false,
+              "source": "s*/d",
+              "parts": [
+                {
+                  "v": "s*/d",
+                  "k": "s"
+                }
+              ]
+            }
+          ],
+          "source": "'q*',s*/d",
+          "parts": []
+        }
+      ],
+      "invocation": "",
+      "offset": 54,
+      "name": {
+        "quoted": false,
+        "source": "python",
+        "parts": [
+          {
+            "v": "python",
+            "k": "s"
+          }
+        ]
+      }
+    },
+    {
+      "stop_parsing": false,
+      "pipeline": null,
+      "source": "Get-Content -LiteralPath s*/e",
+      "redirects": [],
+      "words": [
+        {
+          "parameter": "LiteralPath",
+          "source": "-LiteralPath",
+          "parts": []
+        },
+        {
+          "quoted": false,
+          "source": "s*/e",
+          "parts": [
+            {
+              "v": "s*/e",
+              "k": "s"
+            }
+          ]
+        }
+      ],
+      "invocation": "",
+      "offset": 72,
+      "binding": {
+        "unbound": [],
+        "errors": [],
+        "bound": {
+          "LiteralPath": {
+            "quoted": false,
+            "source": "s*/e",
+            "parts": [
+              {
+                "v": "s*/e",
+                "k": "s"
+              }
+            ]
+          }
+        }
+      },
+      "name": {
+        "quoted": false,
+        "source": "Get-Content",
+        "parts": [
+          {
+            "v": "Get-Content",
+            "k": "s"
+          }
+        ]
+      },
+      "type": "Cmdlet",
+      "resolved": "Get-Content"
+    }
+  ],
+  "calls": [],
+  "strings": [
+    {
+      "word": {
+        "quoted": true,
+        "source": "'s*/c.py'",
+        "parts": [
+          {
+            "v": "s*/c.py",
+            "k": "s"
+          }
+        ]
+      },
+      "offset": 42
+    }
+  ],
+  "assigned": [],
+  "errors": [],
+  "items": [],
+  "incomplete": false,
+  "environment_changed": false,
+  "functions": []
+}
