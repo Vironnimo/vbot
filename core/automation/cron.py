@@ -928,6 +928,15 @@ class CronService:
         if not fields:
             return job, job, [], False
 
+        if (
+            job.status in TERMINAL_CRON_JOB_STATUSES
+            and not rename
+            and any(getattr(job, name) != value for name, value in fields.items())
+        ):
+            raise CronJobValidationError(
+                "Completed or missed jobs are immutable history and cannot be changed"
+            )
+
         candidate = self._clone_job(job)
         restart_task = any(field in _RESTART_FIELDS for field in fields)
 
@@ -970,10 +979,6 @@ class CronService:
             and ("schedule_type" in fields or "interval_seconds" in fields)
         ):
             candidate.interval_anchor_at = _timing._utc_now_iso()
-        if job.status in TERMINAL_CRON_JOB_STATUSES and candidate.status != job.status:
-            raise CronJobValidationError(
-                "Completed or missed jobs are immutable history and cannot change status"
-            )
         if fields.get("status") == "active" and job.status == "failed":
             candidate.consecutive_failures = 0
             # Enabling the stopped job again answers the alert about its failures.
