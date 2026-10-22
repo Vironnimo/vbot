@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,10 @@ from desktop.settings import (
     write_last_used,
     write_servers,
 )
+
+# Bridge calls run on separate threads. The settings store serializes each
+# individual write; a server mutation also keeps its preceding reads together.
+_MUTATIONS_LOCK = threading.RLock()
 
 
 @dataclass(frozen=True)
@@ -119,19 +124,20 @@ def add_server(
 
     entry = ServerEntry.for_address(parse_server_address(host, port), label)
 
-    servers = list_servers(settings_file)
-    replaced = False
-    updated: list[ServerEntry] = []
-    for existing in servers:
-        if existing.key == entry.key:
+    with _MUTATIONS_LOCK:
+        servers = list_servers(settings_file)
+        replaced = False
+        updated: list[ServerEntry] = []
+        for existing in servers:
+            if existing.key == entry.key:
+                updated.append(entry)
+                replaced = True
+            else:
+                updated.append(existing)
+        if not replaced:
             updated.append(entry)
-            replaced = True
-        else:
-            updated.append(existing)
-    if not replaced:
-        updated.append(entry)
 
-    write_servers([item.to_storage() for item in updated], settings_file)
+        write_servers([item.to_storage() for item in updated], settings_file)
     return entry
 
 
@@ -149,16 +155,17 @@ def remove_server(
     """
 
     target_key = _entry_key(host, port)
-    servers = list_servers(settings_file)
-    remaining = [entry for entry in servers if entry.key != target_key]
-    if len(remaining) == len(servers):
-        return False
+    with _MUTATIONS_LOCK:
+        servers = list_servers(settings_file)
+        remaining = [entry for entry in servers if entry.key != target_key]
+        if len(remaining) == len(servers):
+            return False
 
-    write_servers([entry.to_storage() for entry in remaining], settings_file)
+        write_servers([entry.to_storage() for entry in remaining], settings_file)
 
-    last_used = read_last_used(settings_file)
-    if last_used is not None and ServerEntry.from_storage(last_used).key == target_key:
-        clear_last_used(settings_file)
+        last_used = read_last_used(settings_file)
+        if last_used is not None and ServerEntry.from_storage(last_used).key == target_key:
+            clear_last_used(settings_file)
     return True
 
 
@@ -171,7 +178,8 @@ def select_server(
     """Mark a server as last-used so the next launch auto-connects to it."""
 
     address = parse_server_address(host, port)
-    write_last_used(address.host, address.port, settings_file, scheme=address.scheme)
+    with _MUTATIONS_LOCK:
+        write_last_used(address.host, address.port, settings_file, scheme=address.scheme)
 
 
 def resolve_last_used(settings_file: Path | None = None) -> ServerEntry | None:
