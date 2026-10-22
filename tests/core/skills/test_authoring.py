@@ -472,6 +472,8 @@ def test_rejects_illegal_skill_names(
         "assets/con/x.txt",
         "scripts/a:b.py",
         "references/notes.",
+        # On Windows a drive-relative part joins as the parent folder.
+        "references/C:../SKILL.md",
     ],
 )
 def test_support_files_stay_inside_resource_directories(
@@ -482,6 +484,8 @@ def test_support_files_stay_inside_resource_directories(
 
     with pytest.raises(SkillAuthoringError):
         service.write_file(root, "demo", bad_path, "x", writer=AGENT)
+    with pytest.raises(SkillAuthoringError):
+        service.remove_file(root, "demo", bad_path, writer=AGENT)
 
     assert (root / "demo" / "SKILL.md").read_bytes() == before
     assert sorted(path.name for path in (root / "demo").iterdir()) == ["SKILL.md"]

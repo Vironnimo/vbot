@@ -137,7 +137,17 @@ class CronNotifications:
                 job = self._owner._jobs.get(key)
                 if job is None:
                     continue
+                # Keep each conversation's notifications in order: one still
+                # waiting holds back only later ones of the same chat and thread.
+                held: set[tuple[str, str, str | None]] = set()
                 for snapshot in job.notifications:
+                    conversation = (
+                        snapshot.channel_id,
+                        snapshot.platform_target,
+                        snapshot.thread_id,
+                    )
+                    if conversation in held:
+                        continue
                     live = self._owner._jobs.get(key)
                     item = next(
                         (n for n in (live.notifications if live else ()) if n.id == snapshot.id),
@@ -151,12 +161,13 @@ class CronNotifications:
                         await self._alert(key)
                     elif item.state == "pending" and item.due(_timing._utc_now()):
                         await self._send(key, item)
-                    # Keep a conversation's notifications in order.
                     latest = self._owner._jobs.get(key)
-                    if latest is None or any(
+                    if latest is None:
+                        break
+                    if any(
                         n.id == item.id and n.state != "uncertain" for n in latest.notifications
                     ):
-                        break
+                        held.add(conversation)
 
     async def _update(
         self,

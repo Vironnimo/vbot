@@ -14,13 +14,22 @@ COMPACTION_SETTING_DEFAULTS: dict[str, Any] = {
 }
 
 
-def normalize_compaction_settings(compaction: Any) -> dict[str, Any]:
-    """Return the normalized global compaction Policy."""
-    return normalize_compaction_policy(compaction, use_defaults=True)
+def normalize_compaction_settings(compaction: Any, *, stored: bool = False) -> dict[str, Any]:
+    """Return the normalized global compaction Policy (``stored``: see below)."""
+    return normalize_compaction_policy(compaction, use_defaults=True, stored=stored)
 
 
-def normalize_compaction_policy(policy: Any, *, use_defaults: bool = False) -> dict[str, Any]:
-    """Validate and normalize one complete Compaction Policy."""
+def normalize_compaction_policy(
+    policy: Any, *, use_defaults: bool = False, stored: bool = False
+) -> dict[str, Any]:
+    """Validate and normalize one complete Compaction Policy.
+
+    Input refuses fields the Policy or its selected Trigger or Strategy type does
+    not use. A ``stored`` Policy, read from a document, ignores them instead
+    (Generation 1: readers tolerate unknown fields), so a hand-edited leftover
+    such as ``tail_tokens`` under a ``continuation`` Strategy, which raw
+    validation only warns about, cannot break Settings reads or updates.
+    """
     if policy is None:
         if use_defaults:
             return {
@@ -35,7 +44,7 @@ def normalize_compaction_policy(policy: Any, *, use_defaults: bool = False) -> d
         raise StorageError("Compaction Policy must be an object")
     section = _coerce_compaction_section(policy)
     unsupported = sorted(set(section) - {"enabled", "trigger", "strategy"})
-    if unsupported:
+    if unsupported and not stored:
         raise StorageError(f"Unsupported Compaction Policy fields: {', '.join(unsupported)}")
     if not use_defaults:
         missing = sorted({"enabled", "trigger", "strategy"} - set(section))
@@ -44,8 +53,8 @@ def normalize_compaction_policy(policy: Any, *, use_defaults: bool = False) -> d
     enabled = section.get("enabled", True)
     if not isinstance(enabled, bool):
         raise StorageError("Compaction Policy enabled must be a boolean")
-    trigger = _normalize_compaction_trigger(section.get("trigger"))
-    strategy = _normalize_compaction_strategy(section.get("strategy"))
+    trigger = _normalize_compaction_trigger(section.get("trigger"), stored=stored)
+    strategy = _normalize_compaction_strategy(section.get("strategy"), stored=stored)
     return {"enabled": enabled, "trigger": trigger, "strategy": strategy}
 
 
@@ -57,7 +66,7 @@ def _coerce_compaction_section(compaction: Any) -> dict[str, Any]:
     return dict(compaction)
 
 
-def _normalize_compaction_trigger(value: Any) -> dict[str, Any]:
+def _normalize_compaction_trigger(value: Any, *, stored: bool) -> dict[str, Any]:
     if value is None:
         return {"type": "context_ratio", "threshold": 0.8}
     if not isinstance(value, Mapping):
@@ -66,7 +75,7 @@ def _normalize_compaction_trigger(value: Any) -> dict[str, Any]:
     trigger_type = trigger.get("type", "context_ratio")
     if trigger_type == "context_ratio":
         unsupported = sorted(set(trigger) - {"type", "threshold", "tokens"})
-        if unsupported:
+        if unsupported and not stored:
             raise StorageError(
                 f"Unsupported context-ratio Trigger fields: {', '.join(unsupported)}"
             )
@@ -81,7 +90,7 @@ def _normalize_compaction_trigger(value: Any) -> dict[str, Any]:
         return normalized
     if trigger_type == "input_tokens":
         unsupported = sorted(set(trigger) - {"type", "tokens"})
-        if unsupported:
+        if unsupported and not stored:
             raise StorageError(f"Unsupported input-token Trigger fields: {', '.join(unsupported)}")
         return {
             "type": trigger_type,
@@ -113,7 +122,7 @@ def _normalize_compaction_positive_integer(value: Any, field: str, default: int)
     return value
 
 
-def _normalize_compaction_strategy(value: Any) -> dict[str, Any]:
+def _normalize_compaction_strategy(value: Any, *, stored: bool) -> dict[str, Any]:
     if value is None:
         return {"type": "summary_tail", "tail_tokens": 15_000, "summary_model": None}
     if not isinstance(value, Mapping):
@@ -122,7 +131,7 @@ def _normalize_compaction_strategy(value: Any) -> dict[str, Any]:
     strategy_type = strategy.get("type", "summary_tail")
     if strategy_type == "summary_tail":
         unsupported = sorted(set(strategy) - {"type", "tail_tokens", "summary_model"})
-        if unsupported:
+        if unsupported and not stored:
             raise StorageError(
                 f"Unsupported summary-tail Strategy fields: {', '.join(unsupported)}"
             )
@@ -138,7 +147,7 @@ def _normalize_compaction_strategy(value: Any) -> dict[str, Any]:
         }
     if strategy_type == "continuation":
         unsupported = sorted(set(strategy) - {"type"})
-        if unsupported:
+        if unsupported and not stored:
             raise StorageError(
                 f"Unsupported continuation Strategy fields: {', '.join(unsupported)}"
             )

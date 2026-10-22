@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from unittest.mock import ANY, AsyncMock
+from typing import Any
+from unittest.mock import ANY
 
 import pytest
 
 import core.automation.cron as cron_module
+from core.automation import _cron_timing as cron_timing
 from core.runs import RunKind
 from tests.core.automation.cron_test_support import (
     make_service,
@@ -15,18 +18,23 @@ from tests.core.automation.cron_test_support import (
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("clock_steps_back", [False, True], ids=["steady", "clock-steps-back"])
 async def test_run_cron_job_fires_and_continues_after_trigger_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    clock_steps_back: bool,
 ) -> None:
     # Arrange
-    service, trigger_service = make_service(tmp_path)
+    clock = [datetime(2030, 10, 5, 9, 59, 30, tzinfo=UTC)]
+    monkeypatch.setattr(cron_timing, "_utc_now", lambda: clock[0])
+    service, trigger_service = make_service(tmp_path, tz="UTC")
     job = await service.create_job(
         agent_id="agent-one",
         prompt="Cron prompt",
         schedule_type="cron",
         cron_expression="* * * * *",
     )
+    fired_at: list[datetime] = []
 
     async def trigger_then_fail_then_pause(
         _agent_id: str,
@@ -40,21 +48,29 @@ async def test_run_cron_job_fires_and_continues_after_trigger_failure(
     ) -> None:
         assert run_kind is RunKind.CRON
         assert contributes_to_agent_activity is False
+        fired_at.append(clock[0])
         if trigger_service.trigger_run.await_count == 1:
+            if clock_steps_back:
+                # A time sync steps the wall clock back past the fire just made.
+                clock[0] -= timedelta(seconds=40)
             raise RuntimeError("boom")
         service._jobs[job.id].status = "paused"
 
-    monkeypatch.setattr(
-        "core.automation._cron_timing._sleep_until_utc", AsyncMock(return_value=True)
-    )
-    monkeypatch.setattr("core.automation._cron_timing._sleep", AsyncMock())
+    async def sleep_until(target: datetime, **_kwargs: Any) -> bool:
+        clock[0] = max(clock[0], target)
+        return True
+
+    monkeypatch.setattr(cron_timing, "_sleep_until_utc", sleep_until)
     trigger_service.trigger_run.side_effect = trigger_then_fail_then_pause
 
     # Act
     await service._scheduler._run_recurring_job(job, "cron")
 
-    # Assert
-    assert trigger_service.trigger_run.await_count == 2
+    # Assert: the failed fire is not repeated, the next due time fires.
+    assert fired_at == [
+        datetime(2030, 10, 5, 10, 0, tzinfo=UTC),
+        datetime(2030, 10, 5, 10, 1, tzinfo=UTC),
+    ]
     trigger_service.trigger_run.assert_awaited_with(
         "agent-one",
         "Cron prompt",
@@ -67,8 +83,7 @@ async def test_run_cron_job_fires_and_continues_after_trigger_failure(
     )
     updated = service.get_job(job.id)
     assert updated.status == "paused"
-    assert updated.last_fired_at is not None
-    assert updated.last_fired_at.endswith("+00:00")
+    assert updated.last_fired_at == "2030-10-05T10:01:00+00:00"
 
 
 @pytest.mark.asyncio

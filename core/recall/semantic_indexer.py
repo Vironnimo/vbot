@@ -528,8 +528,10 @@ class SemanticIndexer:
         # Bound the exponent too: a long outage must not overflow before min runs.
         doublings = min(self._failures - 1, math.ceil(math.log2(BACKOFF_MAX_S / BACKOFF_INITIAL_S)))
         backoff = min(BACKOFF_INITIAL_S * 2**doublings, BACKOFF_MAX_S)
-        if classified.retry_after is not None:
-            backoff = max(backoff, classified.retry_after)
+        if classified.retry_after is not None and classified.retry_after > backoff:
+            # A provider hint may lengthen the wait, but never past the backoff ceiling:
+            # an unbounded hint ("Retry-After: inf") would stop the indexer for good.
+            backoff = min(classified.retry_after, BACKOFF_MAX_S)
         self._state = "retrying" if classified.kind == "transient" else "error"
         self._last_error = classified.failure
         self._due = self._backoff_until = self._monotonic() + backoff
