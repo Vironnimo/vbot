@@ -490,6 +490,36 @@ describe('Projects controller editing', () => {
     });
   });
 
+  it('saves an added Skill folder after a running save and reports its refusal', async () => {
+    const running = deferred();
+    const setProject = vi
+      .fn()
+      .mockReturnValueOnce(running.promise)
+      .mockRejectedValueOnce(
+        new Error('Skill folder is not an existing directory: missing'),
+      );
+    const { controller, state } = await loadedController({}, { setProject });
+
+    controller.updateEditField('display_name', 'Renamed');
+    const save = controller.saveSelectedProject();
+    const adding = controller.addSkillFolder('missing');
+    running.resolve({
+      project: { project_id: 'demo', display_name: 'Renamed' },
+      scan: {},
+    });
+    await expect(save).resolves.toBe(true);
+    const result = await adding;
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('missing');
+    expect(setProject).toHaveBeenCalledTimes(2);
+    expect(setProject.mock.calls[1][1].sources).toEqual([
+      { id: 'folder:missing', enabled: true },
+    ]);
+    expect(state.editForm.sources).toEqual([]);
+    expect(state.editError).toBe('');
+  });
+
   it("keeps edits made while another Project's removal is in flight", async () => {
     const removal = deferred();
     const records = {
