@@ -176,7 +176,7 @@ def build_effective_settings(raw_settings: JsonObject) -> JsonObject:
             field: normalize_subagent_integer(field, raw_settings.get(field), default)
             for field, default in SUBAGENT_SETTING_DEFAULTS.items()
         },
-        "compaction": normalize_compaction_settings(raw_settings.get("compaction")),
+        "compaction": normalize_compaction_settings(raw_settings.get("compaction"), stored=True),
         "defaults": normalize_defaults_settings(raw_settings.get("defaults")),
         "providers": providers,
         "recall": normalize_recall_settings(raw_settings.get("recall")),
@@ -301,10 +301,32 @@ def apply_settings_patch(
 
     try:
         build_effective_settings(candidate)
+        _check_patched_compaction(candidate, operations)
     except (StorageError, TypeError, ValueError) as error:
         raise SettingsPathError(f"invalid settings patch: {error}") from error
 
     return candidate, tuple(changed_paths)
+
+
+def _check_patched_compaction(
+    candidate: JsonObject, operations: list[SettingsPatchOperation]
+) -> None:
+    """Refuse a patched Compaction part that keeps a field its type does not use.
+
+    Effective Settings ignore such a stored field (a hand edit must not break
+    reads), so the parts a patch sets are checked here like any other input.
+    """
+    compaction = candidate.get("compaction")
+    if not isinstance(compaction, dict):
+        return
+    parts = {
+        operation.resolved.path.values[1]
+        for operation in operations
+        if operation.operation == "set"
+        and operation.resolved.path.values[0] == "compaction"
+        and len(operation.resolved.path.values) > 1
+    }
+    normalize_compaction_settings({part: compaction[part] for part in parts if part in compaction})
 
 
 def setting_details(

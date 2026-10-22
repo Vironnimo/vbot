@@ -503,7 +503,7 @@ def apply_compaction_settings(
 
     normalized_compaction = normalize_compaction_settings(
         {
-            **normalize_compaction_settings(settings.get("compaction")),
+            **normalize_compaction_settings(settings.get("compaction"), stored=True),
             **dict(compaction),
         }
     )
