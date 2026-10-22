@@ -912,16 +912,26 @@ class ChatSessionManager:
         return self._store.retarget_identity_agent_references(old_agent_id, new_agent_id)
 
     def retarget_metadata_value(
-        self, agent_id: str, key: str, old_value: str, new_value: str
+        self,
+        agent_id: str,
+        key: str,
+        old_value: str,
+        new_value: str,
+        *,
+        matching: Mapping[str, str] | None = None,
     ) -> int:
-        """Point one open metadata value of an Identity Agent's live Sessions elsewhere.
+        """Point one open metadata value of an Identity Agent's global Sessions elsewhere.
 
-        Every live global Session of ``agent_id`` whose metadata ``key`` holds
-        ``old_value`` gets ``new_value``, such as the Librarian Sessions bound to a
-        renamed Agent. Returns how many changed; only values still naming
-        ``old_value`` change, so a repeated call after an interruption finishes it.
+        Every live or archived global Session of ``agent_id`` whose metadata
+        ``key`` holds ``old_value``, and whose ``matching`` keys hold the given
+        values, gets ``new_value`` in one transaction, such as the Librarian
+        Sessions bound to a renamed Agent; an archived one keeps it through a
+        restore. Returns how many changed; only values still naming ``old_value``
+        change, so a repeated call after an interruption finishes it.
         """
-        return self._store.retarget_metadata_value(agent_id, key, old_value, new_value)
+        return self._store.retarget_metadata_value(
+            agent_id, key, old_value, new_value, matching=matching
+        )
 
     def delete(self, address: SessionAddress) -> None:
         """Delete one live Session; its live review forks go first.
