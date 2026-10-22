@@ -29,6 +29,7 @@ from core.database import (
     reserve_config_backup,
     restore_config_backup,
 )
+from core.database import _config_restore as config_restore_module
 from core.database import config_backups as config_backups_module
 from core.database.marker import acquire_operation_lock
 from tests.core.database.database_test_support import write_document
@@ -367,7 +368,7 @@ def test_an_interrupted_restore_holds_the_maintenance_guard_until_repeated_or_re
         # A state no backup holds yet: the restore backs it up first.
         _write(data_dir, "settings.json", _settings("UTC"))
         _write(data_dir, NOTE, "KEY=two\n")
-    real_write = config_backups_module.atomic_write_bytes
+    real_write = config_restore_module.atomic_write_bytes
 
     def fail_on_settings(target: Path, *args: object, **kwargs: object) -> None:
         if target.name == "settings.json" and not wrote_every_file:
@@ -378,7 +379,7 @@ def test_an_interrupted_restore_holds_the_maintenance_guard_until_repeated_or_re
             raise OSError("injected failure")
 
     with monkeypatch.context() as patched:
-        patched.setattr(config_backups_module, "atomic_write_bytes", fail_on_settings)
+        patched.setattr(config_restore_module, "atomic_write_bytes", fail_on_settings)
         with pytest.raises(OSError, match="injected"):
             restore_config_backup(data_dir, backup_id, now=NOW + timedelta(minutes=10))
     # The backup that holds the replaced state, the undo point of the restore.
@@ -452,7 +453,7 @@ def test_restore_holds_the_operation_lock_until_every_file_and_the_guard_are_set
     _write(data_dir, NOTE, "KEY=new\n")
     _write(data_dir, "settings.json", _settings("UTC"))
     writing, finish = Event(), Event()
-    real_write = config_backups_module.atomic_write_bytes
+    real_write = config_restore_module.atomic_write_bytes
 
     def hold_last_write(target: Path, *args: object, **kwargs: object) -> None:
         if target == data_dir / "settings.json":
@@ -460,7 +461,7 @@ def test_restore_holds_the_operation_lock_until_every_file_and_the_guard_are_set
             assert finish.wait(2)
         real_write(target, *args, **kwargs)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(config_backups_module, "atomic_write_bytes", hold_last_write)
+    monkeypatch.setattr(config_restore_module, "atomic_write_bytes", hold_last_write)
     monkeypatch.setattr("core.database.marker.OPERATION_LOCK_TIMEOUT_SECONDS", 0.1)
     with ThreadPoolExecutor(max_workers=1) as threads:
         restoring = threads.submit(restore_config_backup, data_dir, backup_id)
