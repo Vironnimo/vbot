@@ -19,6 +19,7 @@ Every text addresses the Agent as `you` (`vbot-agent-tools` Skill -> Wording), e
 | `You can read in: <folders>.` / `You can change files in:` / `You can work in:` / `You can run only:` / `You can fetch only from:` / `You can connect only to:` (or `You cannot ... any ...`) | Names what is allowed, so the next call can succeed inside the boundary instead of probing (F5, F6). Left out when the base allows everything. Reading and working also name the Workspace, which every rule set lets the Agent read; working names the literal folder of a rule (`docs`, not `docs/**`), since a process starts in a folder. |
 | `If the task needs this access, tell the user.` | The only way forward when the task needs the refused access; the user, not the Agent, changes the rules (F5). Left out when the refusal has a `hint`, which names the way forward. |
 | `fetching "", because the address names no host` | An empty host name (`ssh ""`) is refused as unanalyzable; the quotes keep the empty target visible (it rendered as `fetching , because`). |
+| `fetching "exa\u200dmple.com", because it is not a host name every program reads the same way` | A host IDNA rejects or with a character some programs decode (`%`) names no one host (`rule-language.md` -> Bases, kinds and placeholders); the reason says why an address that looks ordinary was refused, and characters that do not print appear escaped, so the Agent sees the difference (2026-10-22). |
 
 ## Command-check reasons and hints
 

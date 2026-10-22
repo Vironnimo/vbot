@@ -255,6 +255,8 @@ async def real_analyzer() -> AsyncIterator[CommandAnalyzer]:
         pytest.param("bash", "awk 1 --file=secrets/key.txt", "deny_rule", id="mention-denied"),
         pytest.param("bash", "awk '{print}' notes --out=x", None, id="mention-allowed"),
         pytest.param("bash", "echo secrets/key.txt", None, id="no-path-program"),
+        # curl.exe on Windows requests fass.at for this name, other programs xn--fa-hia.at.
+        pytest.param("bash", "curl -s https://faß.at/", "deny_rule", id="host-a-program-reads"),
         pytest.param(
             "powershell",
             "Set-Content -Path ..\\outside.txt -Value x",
@@ -276,7 +278,7 @@ async def test_real_analysis_reaches_the_same_decisions(
     rules: dict[str, object] = {
         "read": "work_area",
         "write": "work_area",
-        "deny": ["Read({workdir}/secrets/**)"],
+        "deny": ["Read({workdir}/secrets/**)", "Web(fass.at)"],
     }
     refusal = await checker.check_line(
         boundary(work, rules),

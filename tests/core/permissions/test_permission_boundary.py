@@ -380,34 +380,52 @@ def test_malformed_ceilings_are_refused(stored: object) -> None:
 
 
 @pytest.mark.parametrize(
-    ("host", "reason"),
+    ("host", "reason", "by_program"),
     [
-        pytest.param("example.com", None, id="listed-host"),
-        pytest.param("WWW.Example.com.", None, id="subdomain-of-listed-host"),
-        pytest.param("bad.example.com", "deny_rule", id="denied-subdomain"),
-        pytest.param("api.github.com", None, id="wildcard-subdomain"),
-        pytest.param("github.com", "not_permitted", id="wildcard-excludes-the-domain"),
-        pytest.param("10.0.0.5", None, id="ip-literal"),
-        pytest.param("10.0.0.50", "not_permitted", id="other-ip"),
+        pytest.param("example.com", None, False, id="listed-host"),
+        pytest.param("WWW.Example.com.", None, False, id="subdomain-of-listed-host"),
+        pytest.param("bad.example.com", "deny_rule", False, id="denied-subdomain"),
+        pytest.param("api.github.com", None, False, id="wildcard-subdomain"),
+        pytest.param("github.com", "not_permitted", False, id="wildcard-excludes-the-domain"),
+        pytest.param("10.0.0.5", None, False, id="ip-literal"),
+        pytest.param("10.0.0.50", "not_permitted", False, id="other-ip"),
         # Hosts and rules compare IPv4 addresses in their dotted form.
-        pytest.param("10.5", None, id="short-form-of-listed-ip"),
-        pytest.param("167772165", None, id="number-form-of-listed-ip"),
-        pytest.param("127.0.0.1", "deny_rule", id="ip-denied-in-short-form"),
-        pytest.param("0x7f000001", "deny_rule", id="hex-form-of-denied-ip"),
-        pytest.param("other.org", "not_permitted", id="unlisted-host"),
-        pytest.param("", "unanalyzable", id="no-host"),
+        pytest.param("10.5", None, False, id="short-form-of-listed-ip"),
+        pytest.param("167772165", None, False, id="number-form-of-listed-ip"),
+        pytest.param("127.0.0.1", "deny_rule", False, id="ip-denied-in-short-form"),
+        pytest.param("0x7f000001", "deny_rule", False, id="hex-form-of-denied-ip"),
+        pytest.param("other.org", "not_permitted", False, id="unlisted-host"),
+        pytest.param("", "unanalyzable", False, id="no-host"),
+        pytest.param("my_host.example.com", None, False, id="underscore-label"),
+        pytest.param("ＥＸＡＭＰＬＥ.com\u3002", None, False, id="fullwidth-letters-and-full-stop"),
+        # vBot requests a name's nontransitional IDNA form, as browsers do; programs
+        # a command runs can also request the transitional one (straße.de -> strasse.de).
+        pytest.param("straße.de", None, False, id="idn-as-vbot-requests-it"),
+        pytest.param("straße.de", "not_permitted", True, id="idn-as-a-program-can-request-it"),
+        pytest.param("faß.at", None, False, id="transitional-form-vbot-does-not-request"),
+        pytest.param("faß.at", "deny_rule", True, id="denied-transitional-form"),
+        # Programs read these as different hosts: they drop or refuse the joiner;
+        # curl decodes the escape.
+        pytest.param("exa\u200dmple.com", "unanalyzable", True, id="zero-width-joiner"),
+        pytest.param("ex%61mple.com", "unanalyzable", False, id="percent-escape"),
     ],
 )
-def test_host_decisions(area: Area, host: str, reason: str | None) -> None:
+def test_host_decisions(area: Area, host: str, reason: str | None, by_program: bool) -> None:
     boundary = area.boundary(
         {
             "web": "listed",
-            "allow": ["Web(example.com)", "Web(*.github.com)", "Web(10.0.0.5)"],
-            "deny": ["Web(bad.example.com)", "Web(127.1)"],
+            "allow": [
+                "Web(example.com)",
+                "Web(*.github.com)",
+                "Web(10.0.0.5)",
+                "Web(straße.de)",
+                "Web(*.at)",
+            ],
+            "deny": ["Web(bad.example.com)", "Web(127.1)", "Web(fass.at)"],
         }
     )
 
-    refusal = boundary.check_host(host)
+    refusal = boundary.check_host(host, by_program=by_program)
 
     assert (refusal.reason if refusal else None) == reason
 

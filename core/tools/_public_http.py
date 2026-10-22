@@ -28,7 +28,12 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal
 from urllib.parse import urljoin, urlparse
 
-from core.permissions import PermissionBoundary, PermissionDenied, PermissionRefusal
+from core.permissions import (
+    PermissionBoundary,
+    PermissionDenied,
+    PermissionRefusal,
+    normalize_host,
+)
 from core.tools.tools import JsonObject, tool_failure
 from core.utils.http_status import is_retryable_status, parse_retry_after
 from core.utils.logging import get_logger
@@ -491,10 +496,17 @@ async def _validate_public_target(scheme: str, host: str | None, port: int) -> t
     if scheme not in {"http", "https"}:
         raise _InvalidUrlError(f"Only http and https URLs can be fetched, not {scheme}: URLs.")
 
-    normalized_host = (host or "").encode("idna").decode("ascii").rstrip(".").lower()
-    if not normalized_host:
+    if not (host or "").strip().rstrip("."):
         raise _InvalidUrlError(
             "The URL has no host name. Pass a full URL such as https://example.com/page."
+        )
+    # The form the permission rules compared; a name it has none for is refused.
+    normalized_host = normalize_host(host or "")
+    if normalized_host is None:
+        visible = "".join(c if c.isprintable() else f"\\u{ord(c):04x}" for c in host or "")
+        raise _InvalidUrlError(
+            f'"{visible}" is not a valid host name. Check the address for typos and '
+            "invisible characters."
         )
 
     if normalized_host == "localhost" or normalized_host.endswith(".localhost"):
