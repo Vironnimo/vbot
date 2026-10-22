@@ -46,6 +46,15 @@ class SwarmDatabase:
         """
         return await self._database.run_async(function, self, *arguments)
 
+    async def read(self, operation: Callable[[sqlite3.Connection], Any]) -> Any:
+        """Run ``operation`` in one read transaction on the worker pool.
+
+        Unlike ``_read``, a read that meets contention is retried within the
+        kernel's patience, as a write would be.
+        """
+        self._require_open()
+        return await self._database.read_async(operation)
+
     def _open(self) -> None:
         with self._database.read() as connection:
             row = connection.execute(

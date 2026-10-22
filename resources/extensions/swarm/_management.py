@@ -325,7 +325,7 @@ class SwarmManagement:
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
             self._extension._wake_dirty.discard(swarm_id)
-            self._extension._pacing.forget(swarm_id)
+            self._extension._forget(swarm_id)
             host = self._extension.host
             if host is None or host.temporary_agents is None:
                 raise SwarmStoreError("swarm_closed")
@@ -355,7 +355,7 @@ class SwarmManagement:
         task = self._extension._wake_tasks.get(result["swarm_id"])
         if task is not None:
             task.cancel()
-        self._extension._pacing.forget(result["swarm_id"])
+        self._extension._forget(result["swarm_id"])
         report = await host.temporary_agents.close_group(result["swarm_id"], reason="swarm_stop")
         finished = await self._extension._store().finish_stop(
             result["swarm_id"],

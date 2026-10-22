@@ -102,10 +102,21 @@ def unsupported_operations(catalog: Mapping[str, Any]) -> frozenset[str]:
     return TASK_OPERATIONS - offered
 
 
+@functools.cache
+def _model_schema_json(operation: str) -> str:
+    """The JSON Schema of a protocol operation's parameter model, built once.
+
+    Building it from the pydantic model takes milliseconds, and every browse
+    of a connection lists all operations twice (target and definition).
+    """
+    return json.dumps(OPERATION_MODELS[operation].model_json_schema(by_alias=True))
+
+
 def operation_schema(operation: str) -> dict[str, Any]:
-    model = OPERATION_MODELS.get(operation)
-    if model is not None:
-        return dict(model.model_json_schema(by_alias=True))
+    """The arguments schema of *operation*; a fresh copy the caller may change."""
+    if operation in OPERATION_MODELS:
+        schema: dict[str, Any] = json.loads(_model_schema_json(operation))
+        return schema
     properties = {"after": {"type": "integer", "minimum": 0}} if operation == "events" else {}
     return {"type": "object", "properties": properties, "additionalProperties": False}
 
