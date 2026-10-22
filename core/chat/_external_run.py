@@ -40,6 +40,7 @@ from core.providers.adapter import normalize_tool_call_candidate
 from core.runs import (
     ASSISTANT_OUTPUT_EVENT,
     USER_MESSAGE_EVENT,
+    ActiveRunError,
     Run,
     RunAdmission,
     RunKind,
@@ -49,7 +50,7 @@ from core.tools import called_tool_name, tool_failure
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
 from core.utils.surrogates import replace_lone_surrogates, without_lone_surrogates
-from core.utils.workers import finish_despite_cancel
+from core.utils.workers import finish_despite_cancel, settle_before_cancelling
 
 if TYPE_CHECKING:
     from core.chat._request_builder import RequestBuilder
@@ -476,15 +477,22 @@ async def start_external_run(
             Path(prompt_project.cwd) if prompt_project is not None else None
         )
     except BaseException:
-        await _discard(dependencies, address)
+        # The Run ends before its Session goes: a Run left on a removed Session
+        # could never store its end, also when the caller was cancelled.
+        await settle_before_cancelling(handle.discard())
         raise
     return handle
 
 
 async def _discard(dependencies: ChatLoopDependencies, address: SessionAddress) -> None:
+    """Remove the Session of a conversation that never started, unless a Run still holds it."""
     sessions = dependencies.sessions
     try:
-        await sessions.run_async(sessions.delete, address)
+        async with dependencies.run_manager.session_admission_guard(address):
+            await sessions.run_async(sessions.delete, address)
+    except ActiveRunError:
+        # A Run that has not ended yet owns the Session; it stays.
+        return
     except Exception:
         _LOGGER.warning(
             "Could not remove the unused Session (agent=%s session=%s)",
