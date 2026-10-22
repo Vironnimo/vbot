@@ -445,13 +445,7 @@ class CompactionRunCoordinator:
         if self._host.compaction_service is None:
             return current_state
 
-        settings = await self._host.run_transform(
-            self._load_compaction_settings,
-            agent,
-            agent_id=run.agent_id,
-            session_id=run.session_id,
-            project_id=run.project_id,
-        )
+        settings = await self._run_compaction_settings(context)
         forced = run.compaction_state == "pending"
         # A pending request comes from the user; otherwise a configured threshold fired.
         trigger, reason = ("manual", "requested") if forced else ("auto", settings.trigger)
@@ -823,6 +817,29 @@ class CompactionRunCoordinator:
         # The checkpoint is already stored: a Stop that arrived during its commit
         # must not hide it.
         run.emit(COMPACTION_COMPLETED_EVENT, payload, allow_after_cancel=True)
+
+    async def _run_compaction_settings(self, context: Any) -> CompactionSettings:
+        """The Run's settings for this decision; resolved again only after a change.
+
+        A decision must see a Policy change made since the previous one. The
+        Agent level is fixed for the Run; the Session and global levels change
+        only through metadata writes and Settings saves or reloads of this
+        process, whose revisions are read before resolving.
+        """
+        run, agent = context.run, context.agent
+        revisions = (self._host.sessions.metadata_revision, self._host.storage.settings_revision)
+        cached = context.compaction_settings
+        if cached is not None and cached[0] is agent and cached[1] == revisions:
+            return cast(CompactionSettings, cached[2])
+        settings = await self._host.run_transform(
+            self._load_compaction_settings,
+            agent,
+            agent_id=run.agent_id,
+            session_id=run.session_id,
+            project_id=run.project_id,
+        )
+        context.compaction_settings = (agent, revisions, settings)
+        return cast(CompactionSettings, settings)
 
     def _load_compaction_settings(
         self,

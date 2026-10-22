@@ -392,6 +392,9 @@ class _RunExecutionContext:
     # them, whatever their outcome); an attempt's time is ``chat.compaction``'s,
     # so the progression restarts ``chat.request_build`` after one.
     compaction_attempts: int = 0
+    # The Compaction coordinator's settings for this Run's decisions with the
+    # revisions they were resolved at (its own format).
+    compaction_settings: Any = None
     stream_draft: StreamDraft = field(init=False)
 
     def __post_init__(self) -> None:

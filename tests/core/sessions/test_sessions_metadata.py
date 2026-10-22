@@ -185,6 +185,7 @@ def test_unchanged_metadata_and_activity_mutations_write_nothing(manager) -> Non
     assert manager.mark_terminal_run_read(address, "run-1")["marked_read"] is True
     writer = manager._store._writer
     revision = _state_revision(manager, address)
+    metadata_revision = manager.metadata_revision
     changes = writer.total_changes
 
     previous, updated = manager.mutate_metadata_with_previous(
@@ -196,6 +197,10 @@ def test_unchanged_metadata_and_activity_mutations_write_nothing(manager) -> Non
     assert previous == updated
     assert writer.total_changes == changes
     assert _state_revision(manager, address) == revision
+    # The process-local metadata revision changes only with a metadata write.
+    assert manager.metadata_revision == metadata_revision
+    manager.mutate_metadata(address, lambda metadata: metadata.update(title="Changed"))
+    assert manager.metadata_revision != metadata_revision
 
     asyncio.run(admit_run(manager, address, RunKind.CRON))
     assert _state_revision(manager, address) > revision

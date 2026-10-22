@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import builtins
 import sqlite3
+import threading
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from pathlib import Path
@@ -97,6 +98,8 @@ class SessionStore:
         self.path = Path(path)
         self._health = SessionHealth()
         self._database = open_database(session_database_spec(self.path, health=self._health))
+        self._metadata_revision = 0
+        self._metadata_revision_lock = threading.Lock()
 
     @property
     def database(self) -> Database:
@@ -106,6 +109,17 @@ class SessionStore:
     @property
     def _writer(self) -> sqlite3.Connection:
         return self._database.writer
+
+    @property
+    def metadata_revision(self) -> int:
+        """A process-local number that changes after every metadata write.
+
+        It advances once a write transaction that rewrote any Session's
+        metadata storage ends, committed or not, so an unchanged value proves
+        that no Session's metadata changed in this process meanwhile. Read it
+        before the metadata it validates.
+        """
+        return self._metadata_revision
 
     async def run_async[Decoded](
         self, function: Callable[..., Decoded], *arguments: Any, **keyword_arguments: Any
@@ -135,17 +149,24 @@ class SessionStore:
         patience_s: float = WRITE_PATIENCE_S,
     ) -> WriteResult:
         fts_retried = False
-        while True:
-            try:
-                return self._database.write(func, patience_s=patience_s)
-            except (sqlite3.Error, DatabaseError) as exc:
-                if fts_retried or not _is_fts_failure(exc):
-                    raise
-                # The derived search index failed, not canonical storage:
-                # detach it and retry the write without it.
-                fts_retried = True
-                with suppress(Exception):
-                    self._database.write(_store_fts._detach_fts, patience_s=patience_s)
+        try:
+            while True:
+                try:
+                    return self._database.write(func, patience_s=patience_s)
+                except (sqlite3.Error, DatabaseError) as exc:
+                    if fts_retried or not _is_fts_failure(exc):
+                        raise
+                    # The derived search index failed, not canonical storage:
+                    # detach it and retry the write without it.
+                    fts_retried = True
+                    with suppress(Exception):
+                        self._database.write(_store_fts._detach_fts, patience_s=patience_s)
+        finally:
+            # After the transaction ended, so a reader that sees the new
+            # revision also reads the committed metadata.
+            if _store_values.take_metadata_storage_written():
+                with self._metadata_revision_lock:
+                    self._metadata_revision += 1
 
     def close(self) -> None:
         self._database.close()
