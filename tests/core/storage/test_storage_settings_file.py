@@ -8,6 +8,7 @@ import json
 import os
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ from core.settings import validate_settings_file
 from core.settings.paths import SettingsPathError, parse_patch_operations
 from core.storage import StorageError, StorageManager
 from core.storage import storage as storage_module
+from tests.core.database.database_test_support import frozen_members
 
 
 def _write_raw(storage: StorageManager, content: str | bytes) -> None:
@@ -43,6 +45,40 @@ def test_settings_round_trip_as_a_versioned_sorted_document(tmp_path: Path) -> N
     assert text.endswith("\n")
     assert list(json.loads(text)) == ["format_version", "keep_awake", "port", "timezone"]
     assert json.loads(text)["format_version"] == 1
+
+
+@pytest.mark.parametrize("mutation", ["save", "update", "patch"])
+def test_settings_reads_continue_while_a_write_waits_for_a_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
+) -> None:
+    storage = StorageManager(tmp_path)
+    storage.save_settings({"keep_awake": False})
+    original = storage.settings_path.read_bytes()
+
+    def change() -> None:
+        if mutation == "save":
+            storage.save_settings({"keep_awake": True})
+        elif mutation == "update":
+            storage.update_settings_sections({"server": {"keep_awake": True}})
+        else:
+            storage.patch_settings(
+                parse_patch_operations([{"op": "set", "path": "server.keep_awake", "value": True}])
+            )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        with frozen_members(tmp_path, monkeypatch) as gate:
+            writing = executor.submit(change)
+            assert gate.waiting.acquire(timeout=2)
+            # These reads take the same lock as Event Loop Settings consumers.
+            assert executor.submit(storage.load_settings).result(timeout=2) == {"keep_awake": False}
+            assert executor.submit(storage.load_model_task_settings).result(timeout=2) == {}
+            assert storage.settings_path.read_bytes() == original
+            assert not writing.done()
+        writing.result(timeout=2)
+
+    assert storage.load_settings() == {"keep_awake": True}
+    assert gate.capture is not None
+    assert (gate.capture.attempts, gate.capture.waited_changes) == (1, 1)
 
 
 def test_save_settings_rejects_unserializable_values(tmp_path: Path) -> None:

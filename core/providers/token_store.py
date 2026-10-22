@@ -105,7 +105,9 @@ class TokenStore:
     def __init__(self, secrets: SecretStore) -> None:
         self._secrets = secrets
         self._refresh_locks: dict[Account, asyncio.Lock] = {}
-        self._mutation_lock = RLock()
+        # Protect only the refresh-lock catalog; SecretStore serializes writes
+        # in its transaction after snapshot admission, without holding this lock.
+        self._refresh_locks_lock = RLock()
         self._unusable = LoggedConditions()
 
     def refresh_lock(
@@ -115,7 +117,7 @@ class TokenStore:
         """Return the shared refresh lock for one Provider Connection Account."""
 
         key = account
-        with self._mutation_lock:
+        with self._refresh_locks_lock:
             lock = self._refresh_locks.get(key)
             if lock is None:
                 lock = asyncio.Lock()
@@ -136,13 +138,10 @@ class TokenStore:
 
         token_id = self._token_id(account)
         payload = self._token_to_dict(token)
-        with self._mutation_lock:
-            try:
-                self._secrets.update(
-                    lambda transaction: self._write(transaction, token_id, payload)
-                )
-            except SecretStoreError as error:
-                raise OAuthTokenFileError(f"{error} {_RESET_HINT}") from error
+        try:
+            self._secrets.update(lambda transaction: self._write(transaction, token_id, payload))
+        except SecretStoreError as error:
+            raise OAuthTokenFileError(f"{error} {_RESET_HINT}") from error
 
     async def save_async(
         self,
@@ -199,11 +198,10 @@ class TokenStore:
         """
 
         token_id = self._token_id(account)
-        with self._mutation_lock:
-            try:
-                self._secrets.remove_entry(OAUTH_TOKENS, token_id)
-            except SecretStoreError as error:
-                raise OAuthTokenFileError(str(error)) from error
+        try:
+            self._secrets.remove_entry(OAUTH_TOKENS, token_id)
+        except SecretStoreError as error:
+            raise OAuthTokenFileError(str(error)) from error
 
     def replace_if_current(
         self,
@@ -229,11 +227,10 @@ class TokenStore:
                 self._write(transaction, token_id, self._token_to_dict(replacement))
             return True
 
-        with self._mutation_lock:
-            try:
-                return self._secrets.update(replace)
-            except SecretStoreError as error:
-                raise OAuthTokenFileError(f"{error} {_RESET_HINT}") from error
+        try:
+            return self._secrets.update(replace)
+        except SecretStoreError as error:
+            raise OAuthTokenFileError(f"{error} {_RESET_HINT}") from error
 
     async def replace_if_current_async(
         self,

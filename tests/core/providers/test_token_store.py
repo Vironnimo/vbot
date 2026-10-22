@@ -6,6 +6,7 @@ import base64
 import json
 import logging
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from core.providers.token_store import (
     TokenStore,
 )
 from core.secrets import OAUTH_TOKENS, SecretStore, SecretTransaction
+from tests.core.database.database_test_support import frozen_members
 
 
 def _tamper(store_path: Path, token_id: str) -> None:
@@ -28,6 +30,46 @@ def _tamper(store_path: Path, token_id: str) -> None:
     sealed[-1] ^= 0x01
     document[OAUTH_TOKENS][token_id] = base64.b64encode(bytes(sealed)).decode("ascii")
     store_path.write_text(json.dumps(document), encoding="utf-8")
+
+
+@pytest.mark.parametrize("mutation", ["save", "delete", "refresh", "retire"])
+def test_snapshot_waiting_token_writes_leave_reads_and_refresh_locks_available(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
+) -> None:
+    secrets = SecretStore(tmp_path)
+    store = TokenStore(secrets)
+    account = Account("github-copilot", "oauth")
+    token = OAuthToken(access_token="original")
+    replacement = OAuthToken(access_token="replacement")
+    store.save(account, token)
+    refresh_lock = store.refresh_lock(account)
+    original = secrets.path.read_bytes()
+
+    def change() -> None:
+        if mutation == "save":
+            store.save(account, replacement)
+        elif mutation == "delete":
+            store.delete(account)
+        else:
+            assert store.replace_if_current(
+                account, token, replacement if mutation == "refresh" else None
+            )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        with frozen_members(tmp_path, monkeypatch) as gate:
+            writing = executor.submit(change)
+            assert gate.waiting.acquire(timeout=2)
+            assert executor.submit(store.refresh_lock, account).result(timeout=2) is refresh_lock
+            other = Account("github-copilot", "oauth", "other")
+            assert executor.submit(store.refresh_lock, other).result(timeout=2) is not refresh_lock
+            assert executor.submit(store.load, account).result(timeout=2) == token
+            assert secrets.path.read_bytes() == original
+            assert not writing.done()
+        writing.result(timeout=2)
+
+    assert store.load(account) == (replacement if mutation in {"save", "refresh"} else None)
+    assert gate.capture is not None
+    assert (gate.capture.attempts, gate.capture.waited_changes) == (1, 1)
 
 
 def test_token_round_trips_as_a_versioned_document_without_exposing_secrets(

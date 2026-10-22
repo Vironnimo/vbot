@@ -23,6 +23,7 @@ from core.json_documents import (
     FORMAT_VERSION_FIELD,
     JsonDocumentWriteError,
     check_json_document_writable,
+    document_change,
     strip_unknown_fields,
     write_json_document,
 )
@@ -358,7 +359,7 @@ class StorageManager:
         if not callable(mutator):
             raise StorageError("Settings mutator must be callable")
 
-        with self._settings_lock:
+        with document_change(self.settings_path), self._settings_lock:
             merged_settings = dict(self._load_settings_for_update())
             result = mutator(merged_settings)
             self.save_settings(merged_settings)
@@ -376,7 +377,7 @@ class StorageManager:
         the write. Unknown fields stay within the persistence boundary, where
         their presence prevents a leaf reset from pruning their parent object.
         """
-        with self._settings_lock:
+        with document_change(self.settings_path), self._settings_lock:
             try:
                 document = check_json_document_writable(self.settings_path, SETTINGS_FORMAT) or {}
             except JsonDocumentWriteError as exc:
@@ -752,7 +753,8 @@ class StorageManager:
         if not isinstance(settings, Mapping):
             raise StorageError("Settings must be a mapping")
 
-        with self._settings_lock:
+        # Wait for a snapshot before taking the lock that loop-side readers use.
+        with document_change(self.settings_path), self._settings_lock:
             self.ensure_directories()
             self._settings_cache = None
             try:
