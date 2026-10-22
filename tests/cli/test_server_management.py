@@ -53,7 +53,8 @@ KILLED = ["terminate", ("wait", 0.5), "kill", ("wait", 0.5)]
 class FakeProcess:
     """A spawned or listening server process that records lifecycle calls.
 
-    ``wait`` raises its timeout error for the first ``timeouts`` calls.
+    ``wait`` raises its timeout error for the first ``timeouts`` calls, advancing
+    ``clock`` by the timeout it waited.
     """
 
     def __init__(
@@ -64,6 +65,7 @@ class FakeProcess:
         timeout_error: Callable[[float], Exception] = server_management.psutil.TimeoutExpired,
         exit_code: int | None = None,
         create_time: float = 1000.25,
+        clock: list[float] | None = None,
     ) -> None:
         self.pid = pid
         self.calls: list[Any] = []
@@ -71,6 +73,7 @@ class FakeProcess:
         self._timeout_error = timeout_error
         self._exit_code = exit_code
         self._create_time = create_time
+        self._clock = clock
 
     def poll(self) -> int | None:
         return self._exit_code
@@ -88,6 +91,8 @@ class FakeProcess:
         self.calls.append(("wait", timeout))
         if self._timeouts:
             self._timeouts -= 1
+            if self._clock is not None:
+                self._clock[0] += timeout
             raise self._timeout_error(timeout)
 
 
@@ -647,46 +652,92 @@ def test_stop_server_leaves_a_vbot_listener_the_data_directory_did_not_start(
     assert process.calls == []
 
 
+POLL = ("wait", 0.5)
+
+
 @pytest.mark.parametrize(
-    ("control", "recorded", "message", "process_id", "forced", "calls"),
+    ("control", "recorded", "later", "listener", "message", "process_id", "forced", "calls"),
     [
-        pytest.param(True, {}, "stopped", 456, False, [("wait", 2.0)], id="exits-in-time"),
+        pytest.param(True, {}, [], 456, "stopped", 456, False, [POLL], id="drains-in-time"),
         pytest.param(
             True,
-            {"timeouts": 1},
+            {"timeouts": 4},
+            [UNREACHABLE] * 4,
+            456,
             "stopped",
             456,
             True,
-            [("wait", 2.0), "kill", ("wait", 2.0)],
-            id="stuck-is-killed",
+            [POLL] * 4 + ["kill", ("wait", 2.0)],
+            id="never-answers-is-killed",
         ),
         pytest.param(
-            True, {"create_time": 2000.5}, "not running", None, False, [], id="reused-pid"
+            True,
+            {"timeouts": 2},
+            [UNREACHABLE, VBOT],
+            456,
+            "stopped",
+            456,
+            False,
+            [POLL, POLL, ("wait", 2.0)],
+            id="starting-is-asked-once-ready",
         ),
-        pytest.param(False, {}, "not running", None, False, [], id="no-record"),
+        pytest.param(
+            True,
+            {"timeouts": 2},
+            [VBOT, VBOT],
+            789,
+            "stopped",
+            456,
+            False,
+            [POLL, POLL, POLL],
+            id="another-servers-answer-is-not-asked",
+        ),
+        pytest.param(
+            True, {"create_time": 2000.5}, [], 456, "not running", None, False, [], id="reused-pid"
+        ),
+        pytest.param(False, {}, [], 456, "not running", None, False, [], id="no-record"),
     ],
 )
-def test_stop_server_finishes_only_the_recorded_process_after_the_listener_closed(
+def test_stop_server_finishes_only_the_recorded_process_while_no_listener_answers(
     instance: ServerInstance,
     monkeypatch: pytest.MonkeyPatch,
     control: bool,
     recorded: dict[str, Any],
+    later: list[HealthProbeResult],
+    listener: int,
     message: str,
     process_id: int | None,
     forced: bool,
     calls: list[Any],
 ) -> None:
-    process = FakeProcess(**recorded)
+    # The control record exists before the listener and outlives it: a starting server
+    # gets the shutdown request once it answers, and only a draining or stuck one waits
+    # out the timeout.
+    clock = [0.0]
+    process = FakeProcess(clock=clock, **recorded)
     record = SimpleNamespace(pid=456, process_create_time=1000.25) if control else None
-    answer_health(monkeypatch, UNREACHABLE)
+    requested: list[str] = []
+
+    def request_shutdown(_instance: ServerInstance, target: FakeProcess, *, initiator: str):
+        assert target is process
+        requested.append(initiator)
+        return True
+
+    answer_health(monkeypatch, UNREACHABLE, *later)
+    monkeypatch.setattr(server_management, "_monotonic", lambda: clock[0])
     monkeypatch.setattr(server_management, "read_server_control", lambda *_args: record)
     monkeypatch.setattr(server_management.psutil, "Process", lambda _pid: process)
+    monkeypatch.setattr(
+        server_management, "find_listening_process", lambda _instance: FakeProcess(pid=listener)
+    )
+    monkeypatch.setattr(server_management, "_request_cooperative_shutdown", request_shutdown)
 
-    result = stop_server(instance, shutdown_timeout_seconds=2.0)
+    result = stop_server(instance, shutdown_timeout_seconds=2.0, initiator="tray_stop")
 
     assert (result.ok, result.message, result.process_id) == (True, message, process_id)
     assert result.forced is forced
     assert process.calls == calls
+    assert requested == (["tray_stop"] if VBOT in later and listener == 456 else [])
 
 
 @pytest.mark.parametrize(

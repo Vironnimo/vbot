@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Callable
+from contextlib import ExitStack
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -450,6 +451,68 @@ def test_restore_stops_verifies_and_restarts_the_previously_running_server(
     try:
         assert restored.exists(SessionAddress(None, "agent", "restore"))
         assert not restored.exists(SessionAddress(None, "agent", "later"))
+    finally:
+        restored.close()
+
+
+@pytest.mark.parametrize("taken", ["before-stop", "after-stop"])
+def test_restore_reports_how_it_left_data_and_server_when_another_operation_holds_the_lock(
+    tmp_path: Path, monkeypatch, taken: str
+) -> None:
+    # An update or tray action of the installation can hold its operation lock; the
+    # restore then says whether the data changed and that the server stays stopped.
+    from cli.application import processes as application_processes
+    from cli.application.state import Installation, exclusive
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    instance = _instance(data_dir)
+    snapshot = _snapshot_with_one_session(data_dir)
+    sessions = ChatSessionManager(data_dir)
+    sessions.create("agent", session_id="later").append(ChatMessage.user("after the snapshot"))
+    sessions.close()
+    install = Installation(tmp_path / "app", "server", "127.0.0.1", 8420, str(data_dir))
+    install.root.mkdir()
+    other_operation = ExitStack()
+    if taken == "before-stop":
+        other_operation.enter_context(exclusive(install.root))
+    classified: list[ServerState] = []
+
+    def classify(_instance: object, **_kwargs: object) -> ServerState:
+        # Running before the restore, stopped once the stop returned.
+        classified.append("absent" if classified else "running")
+        if taken == "after-stop" and len(classified) == 2:
+            other_operation.enter_context(exclusive(install.root))
+        return classified[-1]
+
+    def stop(target: Installation) -> CommandResult:
+        stopped.append(target)
+        return CommandResult(ok=True, message="stopped", instance=instance)
+
+    stopped: list[Installation] = []
+    monkeypatch.setattr(
+        data_store_management,
+        "probe_health_patiently",
+        lambda _instance: HealthProbeResult(reachable=False, is_vbot=False),
+    )
+    monkeypatch.setattr(data_store_management, "classify_server", classify)
+    monkeypatch.setattr(application_processes, "owning_installation", lambda _target: install)
+    monkeypatch.setattr(application_processes, "stop", stop)
+    monkeypatch.setattr(
+        application_processes, "start", lambda _target: pytest.fail("the lock is held")
+    )
+
+    with other_operation:
+        result = data_store_management.data_store_snapshot_restore(instance, snapshot.name, True)
+
+    assert result.ok is False
+    assert result.message.startswith(
+        f"restored data snapshot {snapshot.name}" if taken == "after-stop" else "could not stop"
+    )
+    assert stopped == ([install] if taken == "after-stop" else [])
+    restored = ChatSessionManager(data_dir)
+    try:
+        assert restored.exists(SessionAddress(None, "agent", "later")) is (taken == "before-stop")
     finally:
         restored.close()
 

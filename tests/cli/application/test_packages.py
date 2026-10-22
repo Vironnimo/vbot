@@ -433,6 +433,16 @@ def test_same_identity_is_idempotent_only_for_the_exact_same_payload(tmp_path: P
     assert not cache.exists()
     with pytest.raises(ApplicationError, match="different payload"):
         stage_package(install, changed, local=True)
+    # The installed version itself, a prepared update `update activate` selects, is
+    # verified in place like a package of it; no other directory is a package.
+    cache = _write(install.version(_VERSION), _CACHE)
+    assert stage_package(install, install.version(_VERSION), local=True) == _VERSION
+    assert not cache.exists()
+    _write(install.version(_VERSION), "app/unexpected.py")
+    with pytest.raises(ApplicationError):
+        stage_package(install, install.version(_VERSION), local=True)
+    with pytest.raises(ApplicationError):
+        stage_package(install, tmp_path, local=True)
 
 
 @pytest.mark.parametrize("protocol", [None, True, 2, 1])

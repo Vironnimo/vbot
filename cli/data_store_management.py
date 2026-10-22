@@ -920,21 +920,31 @@ def _change_while_stopped(
 def _lifecycle(
     instance: ServerInstance,
 ) -> tuple[Callable[[], CommandResult], Callable[[], CommandResult]]:
-    """Stop and start *instance* the way its owner does."""
+    """Stop and start *instance* the way its owner does.
+
+    A packaged installation's refusal, such as another application operation
+    holding its lock, is a failed result, so the caller can report what the change
+    already did and how the server was left.
+    """
     from cli.application import processes
-    from cli.application.state import exclusive
+    from cli.application.state import ApplicationError, exclusive
 
     install = processes.owning_installation(instance)
     if install is None:
         return (lambda: stop_server(instance)), (lambda: start_server(instance))
 
+    def locked(action: Callable[[], CommandResult]) -> CommandResult:
+        try:
+            with exclusive(install.root):
+                return action()
+        except ApplicationError as exc:
+            return CommandResult(ok=False, message=str(exc), instance=instance)
+
     def stop() -> CommandResult:
-        with exclusive(install.root):
-            return processes.stop(install)
+        return locked(lambda: processes.stop(install))
 
     def start() -> CommandResult:
-        with exclusive(install.root):
-            return processes.start(install)
+        return locked(lambda: processes.start(install))
 
     return stop, start
 

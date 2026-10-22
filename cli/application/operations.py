@@ -208,11 +208,16 @@ def request_update(
     install: Installation,
     *,
     package: Path | None = None,
+    prepared_version: str | None = None,
     restart: bool = True,
     handoff_token: str | None = None,
     host: bool = False,
 ) -> Operation:
     """Request an update, or join the equivalent one in progress.
+
+    ``prepared_version`` selects a version an earlier ``--no-restart`` update
+    already installed (``update activate``): its directory becomes the operation's
+    package, which the worker verifies in place instead of extracting a copy.
 
     ``host`` is true only for the tray host, which always starts the worker
     itself. Any other requester hands the worker to a running tray, or to a tray
@@ -220,7 +225,11 @@ def request_update(
     and returns once that tray started the worker. A confined requester whose
     handoff fails raises ``ApplicationError`` instead of starting the worker.
     """
-    if package is not None and not package.expanduser().is_file():
+    if prepared_version is not None:
+        package = install.version(prepared_version)
+        if not (package / "release.json").is_file():
+            raise ApplicationError("The prepared application version is no longer installed")
+    elif package is not None and not package.expanduser().is_file():
         raise ApplicationError("The selected application package does not exist")
     # Claiming is idempotent per token, so a repeated Agent request coalesces below.
     handoff_ticket = _claimed_handoff(install, handoff_token)

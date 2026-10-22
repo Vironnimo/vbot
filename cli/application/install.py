@@ -6,7 +6,6 @@ import argparse
 import base64
 import json
 import shutil
-import zipfile
 from pathlib import Path
 
 from cli.application.packages import validate_release
@@ -15,7 +14,6 @@ from cli.application.state import (
     SHAPES,
     ApplicationError,
     Installation,
-    contained,
     current_platform,
     exclusive,
     load_installation,
@@ -35,18 +33,6 @@ from core.utils.config import DEFAULT_PORT
 #: Global Agent defaults a new data directory starts with. An install-time seed,
 #: not a Runtime fallback: an existing data directory keeps its settings.
 FRESH_AGENT_DEFAULTS = {"thinking_effort": "high"}
-
-
-def archive_payload(install: Installation, version_id: str) -> Path:
-    payload = install.version(version_id)
-    validate_release(payload, shape=install.install_shape, remove_bytecode_caches=True)
-    archive = contained(install.root, f"staging/{payload.name}.zip")
-    archive.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
-        for path in payload.rglob("*"):
-            if path.is_file():
-                bundle.write(path, path.relative_to(payload).as_posix())
-    return archive
 
 
 def install_payload(
