@@ -3,7 +3,7 @@
   // occurrence's details beside the entry that opened it, and the delete
   // question, which stacks over that card.
   import { t } from '$lib/i18n.js';
-  import { monthlyChoices } from '$lib/calendarEventForm.js';
+  import { monthlyChoice, monthlyChoices } from '$lib/calendarEventForm.js';
   import { eventById, todayKey } from '$lib/calendarView.js';
   import { weekdayNames } from '$lib/dateTimeFields.js';
   import Button from '../ui/Button.svelte';
@@ -307,7 +307,7 @@
               >
                 <Dropdown
                   id="calendar-form-monthly"
-                  value={values.monthly_by}
+                  value={monthlyChoice(values)}
                   options={monthlyOptions}
                   ariaLabel={t('calendar.form.monthlyOn')}
                   onValueChange={(next) => (values.monthly_by = next)}
