@@ -9,6 +9,7 @@ import pytest
 
 from core.automation.goals import GoalService
 from core.chat import ChatSessionManager
+from core.permissions import PermissionBoundary
 from core.providers.adapter import tool_result_text
 from core.runs import ChatRunManager
 from core.sessions import SESSION_GOAL_META_KEY, SessionAddress
@@ -48,6 +49,7 @@ class _Tool:
             vbot_root=self.tmp_path,
             data_root=self.tmp_path,
             session_tool_grants=("update_goal",),
+            permissions=PermissionBoundary.UNRESTRICTED,
         )
         result = await dispatch_as_executor(self.registry, context, arguments)
         return bool(result["ok"]), str(tool_result_text(json.dumps(result)))

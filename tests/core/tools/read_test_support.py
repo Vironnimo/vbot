@@ -12,6 +12,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 from core.attachments import AttachmentTooLargeError
 from core.model_tasks import SpeechTranscriptionResult
+from core.permissions import PermissionBoundary
 from core.tools import (
     READ_TOOL_NAME,
     ChangeTracker,
@@ -87,6 +88,7 @@ def make_context(
         data_root=workspace.parent / "data",
         cwd=cwd,
         change_tracker=change_tracker,
+        permissions=PermissionBoundary.UNRESTRICTED,
     )
 
 

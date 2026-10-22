@@ -13,6 +13,7 @@ from typing import Any
 from unittest.mock import Mock
 
 from core.automation.cron import CronService
+from core.permissions import PermissionBoundary
 from core.tools import ToolContext, ToolRegistry, tool_failure
 from core.tools.cron import _normalize_cron_arguments, register_cron_tool
 from scripts.provider_probe.choices import CRON_CASES
@@ -101,6 +102,7 @@ async def cron_case(adapter: Any, args: argparse.Namespace, case: dict[str, Any]
                 workspace=root,
                 vbot_root=root,
                 data_root=root,
+                permissions=PermissionBoundary.UNRESTRICTED,
             )
             try:
                 results.append(await registry.dispatch(context, call["arguments"], ["cron"]))

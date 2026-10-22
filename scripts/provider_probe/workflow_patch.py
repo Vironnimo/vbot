@@ -9,6 +9,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
+from core.permissions import PermissionBoundary
 from scripts.provider_probe.common import PROJECT_ROOT
 
 
@@ -490,6 +491,7 @@ async def _probe_apply_patch_case(
                 cwd=root,
                 vbot_root=root,
                 data_root=root,
+                permissions=PermissionBoundary.UNRESTRICTED,
             )
             read_result = await registry.dispatch(read_context, {"path": name}, ["read"])
             assert read_result["ok"]
@@ -521,6 +523,7 @@ async def _probe_apply_patch_case(
                 cwd=root,
                 vbot_root=root,
                 data_root=root,
+                permissions=PermissionBoundary.UNRESTRICTED,
             )
             seed_result = await registry.dispatch(seed_context, case["seed"], ["apply_patch"])
             messages.extend(
@@ -577,6 +580,7 @@ async def _probe_apply_patch_case(
                 cwd=root,
                 vbot_root=root,
                 data_root=root,
+                permissions=PermissionBoundary.UNRESTRICTED,
             )
             try:
                 outcomes.append(await registry.dispatch(context, arguments, ["apply_patch"]))

@@ -15,6 +15,7 @@ import pytest
 
 from core.extensions.extensions import ExtensionAPI, ExtensionDeclarations
 from core.extensions.operations import ExtensionHost
+from core.permissions import PermissionBoundary
 from core.tools.availability import resolve_tool_access
 from core.tools.tools import ToolContext, ToolRegistry
 from core.utils.ids import new_id
@@ -75,6 +76,7 @@ def context(
         workspace=host.data_dir,
         vbot_root=host.data_dir,
         data_root=host.data_dir,
+        permissions=PermissionBoundary.UNRESTRICTED,
     )
     if session is None:
         return call

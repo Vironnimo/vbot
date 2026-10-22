@@ -12,6 +12,7 @@ from typing import Any
 
 from core.chat import ChatMessage
 from core.database import write_bootstrap_marker
+from core.permissions import PermissionBoundary
 from core.projects import AgentOverrides, ResolutionAgentNotFoundError
 from core.runs import ChatRunManager
 from core.sessions import ChatSessionManager, SessionAddress
@@ -122,6 +123,7 @@ class FirstUseFixture:
             vbot_root=PROJECT_ROOT,
             data_root=self.data,
             tool_settings={"subagent": {"allowed_agents": ["reviewer"]}},
+            permissions=PermissionBoundary.UNRESTRICTED,
         )
 
     def write(self, files: dict[str, str]) -> None:

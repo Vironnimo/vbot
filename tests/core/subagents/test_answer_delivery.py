@@ -10,6 +10,7 @@ import pytest
 
 from core.automation import TriggerService
 from core.chat import ChatMessage
+from core.permissions import PermissionBoundary
 from core.runs import Run, RunAdmission, RunKind
 from core.storage import TemporaryFileManager
 from core.subagents import SubAgentCoordinator
@@ -109,6 +110,7 @@ async def test_steered_answers_arrive_once_in_order_and_later_runs_do_not_replay
                     workspace=tmp_path,
                     vbot_root=tmp_path,
                     data_root=tmp_path,
+                    permissions=PermissionBoundary.UNRESTRICTED,
                 ),
                 {
                     "action": "send",

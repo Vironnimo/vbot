@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from core.permissions import PermissionBoundary
 from core.tools import ToolCall, ToolExecutor, ToolRegistry, tool_success
 from core.tools._tool_context import ToolContext
 from core.tools.live import LIVE_TOOL_NAMES, LiveToolHosts, register_live_tools
@@ -44,6 +45,7 @@ async def _run(registry: ToolRegistry, name: str, session_id: str, arguments: An
         workspace=Path("."),
         vbot_root=Path("."),
         data_root=Path("."),
+        permissions=PermissionBoundary.UNRESTRICTED,
     )
     result = registry.get(name).handler(context, arguments)
     return await result if inspect.isawaitable(result) else result

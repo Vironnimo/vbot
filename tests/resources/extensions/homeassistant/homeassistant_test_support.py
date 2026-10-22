@@ -17,6 +17,7 @@ from typing import Any
 import pytest
 
 from core.extensions import ExtensionRegistry
+from core.permissions import PermissionBoundary
 from core.tools.contracts import ToolContractError
 from core.tools.tools import ToolContext, ToolRegistry, is_tool_result_envelope, tool_failure
 from tests.resources.extensions.bundled_test_support import load_bundled
@@ -92,6 +93,7 @@ def make_context(tool_name: str) -> ToolContext:
         workspace=Path("/tmp/workspace"),
         vbot_root=Path("/tmp/app"),
         data_root=Path("/tmp/data"),
+        permissions=PermissionBoundary.UNRESTRICTED,
     )
 
 

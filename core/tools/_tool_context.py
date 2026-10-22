@@ -115,6 +115,11 @@ class ToolContext:
     workspace: Path
     vbot_root: Path
     data_root: Path
+    # The Run's Permission Boundary (``core.permissions``): every access a Tool
+    # makes for the Agent is checked against it before any effect. Required, so
+    # a caller that forgets the boundary fails the type check instead of running
+    # with full access; a caller outside any Agent passes ``UNRESTRICTED``.
+    permissions: PermissionBoundary = field(repr=False, compare=False)
     # Completed Agentic Loop Iteration whose Assistant response requested this
     # Tool Call. Direct callers that do not execute inside Chat leave it at 0.
     iteration_number: int = 0
@@ -156,12 +161,6 @@ class ToolContext:
     # The Session is linked to a Parent Agent (a Sub-Agent Session): it uses only
     # the Secrets bound to or passed into it, none granted to its Agent.
     subagent_session: bool = False
-    # The Run's Permission Boundary (``core.permissions``): every access a Tool
-    # makes for the Agent is checked against it before any effect. Callers
-    # outside Runs keep full access.
-    permissions: PermissionBoundary = field(
-        default=PermissionBoundary.UNRESTRICTED, repr=False, compare=False
-    )
     # The admitted Run's reply destination, unaffected by another chat using the
     # same Session. Runtime-only; never supplied by Model arguments.
     reply_surface: ReplySurface | None = None
@@ -641,6 +640,8 @@ class ToolExecutionConfig:
     workspace: Path
     vbot_root: Path
     data_root: Path
+    # See ``ToolContext.permissions``.
+    permissions: PermissionBoundary = field(repr=False, compare=False)
     # Completed Agentic Loop Iteration that produced this execution group.
     iteration_number: int = 0
     agent_model: str | None = None
@@ -663,10 +664,6 @@ class ToolExecutionConfig:
     run_kind: RunKind | None = None
     # See ``ToolContext.subagent_session``.
     subagent_session: bool = False
-    # See ``ToolContext.permissions``.
-    permissions: PermissionBoundary = field(
-        default=PermissionBoundary.UNRESTRICTED, repr=False, compare=False
-    )
     reply_surface: ReplySurface | None = None
     allowed_tools: Sequence[str] | None = None
     emit_hook: ToolEmitHook | None = None

@@ -25,7 +25,9 @@ from core.tools.tools import (
 )
 
 
-def context(root: Path, **kwargs) -> ToolContext:
+def context(
+    root: Path, *, permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED, **kwargs
+) -> ToolContext:
     return ToolContext(
         agent_id="agent-test",
         session_id="session-test",
@@ -36,6 +38,7 @@ def context(root: Path, **kwargs) -> ToolContext:
         workspace=root,
         data_root=root / "data",
         vbot_root=root,
+        permissions=permissions,
         **kwargs,
     )
 
