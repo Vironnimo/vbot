@@ -126,6 +126,41 @@ describe('ChatComposer suggestions', () => {
       );
     });
 
+    it("shows a command's argument hint after its typed name and in its row", () => {
+      composer.mount({
+        availableSkills: [
+          {
+            name: 'goal',
+            description: 'Set a goal.',
+            type: 'command',
+            argument: 'optional',
+            argument_hint: '<objective> [--max N]',
+          },
+          statusCommand,
+        ],
+      });
+      const ghost = () =>
+        document.body.querySelector('.msg-input-ghost__hint')?.textContent ??
+        null;
+
+      typeInComposer('/go');
+      expect(ghost()).toBeNull();
+      expect(
+        document.body.querySelector('.skill-autocomplete__hint').textContent,
+      ).toBe('/goal <objective> [--max N]');
+
+      typeInComposer('/goal');
+      expect(ghost()).toBe(' <objective> [--max N]');
+      typeInComposer('/GOAL ');
+      expect(ghost()).toBe('<objective> [--max N]');
+
+      // Once the argument starts, and for a command without one, nothing shows.
+      typeInComposer('/goal Ship');
+      expect(ghost()).toBeNull();
+      typeInComposer('/status');
+      expect(ghost()).toBeNull();
+    });
+
     it('keeps keyboard navigation through every match across key releases', () => {
       composer.mount({
         availableSkills: Array.from({ length: 9 }, (_item, index) => ({

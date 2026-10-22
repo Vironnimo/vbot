@@ -38,8 +38,13 @@ async def complete(app: ConversationApp, *, commands: bool = False) -> None:
     )
     if app.conversation is not view or view.key != key or editor.text != draft:
         return
+    # A command's argument hint follows its name as it would be typed.
     choices = [
-        (f"/{item['name']} · {item['type']} · {item.get('description', '')}", item["name"])
+        (
+            " ".join(part for part in (f"/{item['name']}", item.get("argument_hint")) if part)
+            + f" · {item['type']} · {item.get('description', '')}",
+            item["name"],
+        )
         for item in response.get("items", [])
     ]
     value = await app.push_screen_wait(

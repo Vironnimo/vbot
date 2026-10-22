@@ -29,6 +29,7 @@ What each `API_VERSION` (`extensions.md` -> Loading and identity invariants) add
 - v17: Secret Sources for Agent Secrets (`api.register_secret_source`, a `core.secrets.sources.SecretSource`; `secrets/agent-secrets.md` -> Secret Sources).
 - v18: `host.resolve_permissions(project_id, agent_id)`, the Permission Boundary of a new Session of an Agent, for Tool calls an Extension makes as that Agent outside any Session (`extensions/host.md`).
 - v19: Tool rows of page History and Run streams carry bounded previews of their call (`rawTruncated`); `history.tool_call` (`extensionPageClient.readToolCall`) reads the whole call (`webui/extension-pages.md` -> Run streams and history).
+- v20: argument hints on slash Commands (`api.register_command(..., argument_hint=...)`, `chat/commands.md`).
 
 ## Offline document validation
 

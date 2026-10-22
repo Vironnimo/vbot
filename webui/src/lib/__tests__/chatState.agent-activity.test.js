@@ -209,6 +209,12 @@ describe('command suggestions', () => {
     const listChatCommands = vi.fn().mockResolvedValue({
       items: [
         { name: '/HELP', type: 'command', description: 'Show help' },
+        {
+          name: 'goal',
+          type: 'command',
+          argument: 'optional',
+          argument_hint: '<objective>',
+        },
         { name: 'review', type: 'skill', description: 'Review code' },
       ],
     });
@@ -221,6 +227,7 @@ describe('command suggestions', () => {
     expect(listChatCommands).toHaveBeenCalledWith({ agent_id: 'alpha' });
     expect(chatState.availableSkills).toMatchObject([
       { name: 'help', type: 'command' },
+      { name: 'goal', type: 'command', argument_hint: '<objective>' },
       { name: 'review', type: 'skill' },
     ]);
   });

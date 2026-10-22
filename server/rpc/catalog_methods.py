@@ -143,6 +143,7 @@ async def _list_commands(state: Any, params: JsonObject) -> JsonObject:
                 # The public presentation hint is projected from Chat's neutral
                 # result category; the catalog never drives command execution.
                 "argument": spec.argument,
+                "argument_hint": spec.argument_hint,
                 "output": _COMMAND_CATALOG_OUTPUT[spec.catalog_result],
             }
             for spec in state.command_dispatcher.catalog()

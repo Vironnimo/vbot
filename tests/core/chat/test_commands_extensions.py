@@ -89,8 +89,20 @@ async def test_extension_command_supports_async_handler_and_follow_up_run() -> N
 
 @pytest.mark.parametrize(
     ("name", "options"),
-    [("Bad Name", {}), ("help", {}), ("workflow", {"argument": cast(Any, [])})],
-    ids=["invalid-name", "shadows-built-in", "invalid-argument-mode"],
+    [
+        ("Bad Name", {}),
+        ("help", {}),
+        ("workflow", {"argument": cast(Any, [])}),
+        ("workflow", {"argument_hint": "<goal>\n<more>"}),
+        ("workflow", {"argument": "none", "argument_hint": "<goal>"}),
+    ],
+    ids=[
+        "invalid-name",
+        "shadows-built-in",
+        "invalid-argument-mode",
+        "multi-line-hint",
+        "hint-without-argument",
+    ],
 )
 def test_extension_command_rejects_invalid_metadata(name: str, options: dict[str, Any]) -> None:
     dispatcher = CommandDispatcher(ChatRunManager())

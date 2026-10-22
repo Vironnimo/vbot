@@ -87,6 +87,12 @@ def test_built_in_commands_declare_their_argument_result_kind_and_new_session_mo
         "status": ("none", "detail", "session_less"),
         "stop": ("optional", "notice", "needs_session"),
     }
+    # Every command that takes an argument says what may follow its name.
+    assert {
+        name: bool(spec.argument_hint) for name, spec in CommandDispatcher.BUILT_IN_COMMANDS.items()
+    } == {
+        name: spec.argument != "none" for name, spec in CommandDispatcher.BUILT_IN_COMMANDS.items()
+    }
 
 
 @pytest.mark.parametrize(
@@ -225,11 +231,23 @@ def test_help_lists_the_current_commands_as_detail() -> None:
         handler=lambda _context, _argument: CommandOutcome(command="restricted"),
         unavailable_surfaces={"webui", "tui"},
     )
+    dispatcher.register_extension_command(
+        "fixture",
+        name="workflow",
+        description="Start the workflow.",
+        handler=lambda _context, _argument: CommandOutcome(command="workflow"),
+        argument_hint=" [objective] ",
+    )
     result = _execute_sync(dispatcher, "/help")
 
     assert result.feedback is not None and result.feedback.kind == "detail"
     reply = result.feedback.text
-    assert "/compact - Compact the current session's context immediately." in reply
+    assert (
+        "/compact [what the summary should keep] - Compact the current session's context "
+        "immediately." in reply
+    )
+    assert "/status - Show current session and runtime status." in reply
+    assert "/workflow [objective] - Start the workflow." in reply
     assert "/continue" not in reply
     assert "/retry" not in reply
     assert "$skill-name" in reply
