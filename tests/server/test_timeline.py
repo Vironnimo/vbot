@@ -205,7 +205,7 @@ async def test_snapshot_survives_replay_eviction_and_patches_only_new_text(
         [row] = initial["items"]
         [child] = row["items"]
         assert child["content"] == "x" * 20_000
-        assert child["events"] == []
+        assert "events" not in child
         active.emit("assistant_output_delta", {"content_delta": "tail"})
         frame = await anext(stream)
         patch = data(frame)

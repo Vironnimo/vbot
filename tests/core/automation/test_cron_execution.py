@@ -428,6 +428,12 @@ async def test_the_user_learns_when_a_once_job_fails_for_good(
         )
         assert "will not run again" in alert.message
         assert chats.sent == []
+        # Every accessor finds it on the job, unread, until the user acknowledges it.
+        stored = make_service(tmp_path)[0].get_job(job.id).unread_alert
+        assert stored is not None
+        assert (stored.message, stored.kind) == (alert.message, "failure")
+        assert (await service.acknowledge_alert(job.id)).unread_alert is None
+        assert make_service(tmp_path)[0].get_job(job.id).unread_alert is None
         return
     await service._notifications.flush()
     [(channel_id, message, platform_target, thread_id)] = chats.sent

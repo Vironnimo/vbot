@@ -97,7 +97,11 @@
     clearTimeout(idTimer);
   }
 
+  // A preview still running answers for older ids: dropping it keeps the
+  // typed id from being replaced by its answer.
   function setId(server, value) {
+    ++request;
+    previewing = false;
     ids = { ...ids, [server.name]: value.trim() };
     idsPending = true;
     clearTimeout(idTimer);

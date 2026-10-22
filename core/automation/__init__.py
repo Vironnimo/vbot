@@ -10,7 +10,6 @@ from core.automation.bootstrap import (
 from core.automation.cron import (
     CronOccurrence,
     CronService,
-    load_validated_cron_jobs_json,
     validate_cron_jobs_data,
     validate_cron_jobs_file,
 )
@@ -71,7 +70,6 @@ __all__ = [
     "ReflectionService",
     "TriggerService",
     "GoalService",
-    "load_validated_cron_jobs_json",
     "validate_cron_jobs_data",
     "validate_cron_jobs_file",
     "validate_bootstrap_jobs_data",

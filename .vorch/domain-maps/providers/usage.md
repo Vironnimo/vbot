@@ -35,7 +35,7 @@ Fetchers fan out concurrently. Each has a bounded timeout and fails open into it
 
 Successful snapshots cache per exact Connection+Account target for 10 seconds, or longer where a Provider sets a polling floor (`_MIN_CACHE_TTL_SECONDS`: Ollama Cloud 60 seconds); error snapshots for 60 seconds. A per-target async lock coalesces concurrent cache misses so multiple browser windows and the automatic collector do not multiply outbound requests. The service caches normalized snapshots, never raw OAuth tokens.
 
-Every fetch acquires fresh auth through Runtime token getters or reads narrowly required token-store extras. Logs include no token data. Provider-specific endpoint/header/shape facts remain in each Provider's map.
+Every fetch acquires fresh auth through Runtime token getters or reads narrowly required token-store extras. Failure logs identify the base Connection only, never its Account id or token data. Provider-specific endpoint/header/shape facts remain in each Provider's map.
 
 OpenAI Usage uses the same `OAuthRequestRecovery` as Chat and discovery, renewing once after an actual HTTP 401 and rebuilding both Authorization and Account routing. Repeated rejection/failed renewal remains an error snapshot within the existing timeout. Copilot Usage cannot use the Copilot bearer recovery: its request uses the original GitHub OAuth extra, while the getter renews only the exchanged Copilot API token. API-key probes have no renewal capability. Coverage: `test_usage.py`.
 

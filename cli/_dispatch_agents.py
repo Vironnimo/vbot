@@ -17,6 +17,7 @@ from cli.data_store_management import (
     data_store_config_backup_list,
     data_store_config_backup_restore,
     data_store_config_backup_show,
+    data_store_convert,
     data_store_incident_acknowledge,
     data_store_secrets_convert,
     data_store_secrets_list,
@@ -469,6 +470,7 @@ def dispatch_data_store_command(
     ] = data_store_config_backup_show,
     config_backup_restore_fn: Callable[..., CommandResult] = data_store_config_backup_restore,
     secrets_status_fn: Callable[[ServerInstance], CommandResult] = data_store_secrets_status,
+    convert_fn: Callable[[ServerInstance, bool], CommandResult] = data_store_convert,
     secrets_convert_fn: Callable[
         [ServerInstance, bool], CommandResult
     ] = data_store_secrets_convert,
@@ -512,6 +514,8 @@ def dispatch_data_store_command(
         return incident_acknowledge_fn(instance, args.incident_id)
     if args.command == "unregister":
         return unregister_fn(instance, args.name, args.yes)
+    if args.command == "convert":
+        return convert_fn(instance, args.yes)
     if args.command == "secrets":
         if args.secrets_command == "list":
             return secrets_list_fn(instance)

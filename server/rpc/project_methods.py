@@ -432,18 +432,22 @@ def _update_project_record(
 
 
 async def _set_override(state: Any, params: JsonObject) -> JsonObject:
-    return await _PROJECT_WORKERS.run(_set_override_record, state, params)
+    result, changed = await _PROJECT_WORKERS.run(_set_override_record, state, params)
+    if changed:
+        _publish_override_change(state)
+    return result
 
 
-def _set_override_record(state: Any, params: JsonObject) -> JsonObject:
+def _set_override_record(state: Any, params: JsonObject) -> tuple[JsonObject, bool]:
     """Override one field (``model`` / ``temperature`` / ``top_p`` / …) for an agent.
 
     Validates the field name and its value before the store write: ``model`` through
     the same usable-model check the ``/model`` command uses (configured here + any
     pinned ``::connection`` allowed), ``temperature`` / ``top_p`` / ``thinking_effort`` through
     the canonical agent field validators. Returns the refreshed project + scan
-    (``clear_override`` returns the same shape). No cache invalidation is needed —
-    ``project.json`` is read fresh on every resolve.
+    (``clear_override`` returns the same shape) and whether the stored value
+    changed. No cache invalidation is needed — ``project.json`` is read fresh on
+    every resolve.
     """
     _reject_unsupported(
         params, {"project_id", "agent_id", "field", "value"}, "project.set_override"
@@ -474,22 +478,26 @@ def _set_override_record(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
-    if previous_value is _MISSING or previous_value != value:
+    changed = previous_value is _MISSING or previous_value != value
+    if changed:
         _LOGGER.info(
             "Project Agent override set (project=%s agent=%s field=%s)",
             project_id,
             agent_id,
             field,
         )
-    return _override_result(state, project)
+    return _override_result(state, project), changed
 
 
 async def _clear_override(state: Any, params: JsonObject) -> JsonObject:
-    return await _PROJECT_WORKERS.run(_clear_override_record, state, params)
+    result, changed = await _PROJECT_WORKERS.run(_clear_override_record, state, params)
+    if changed:
+        _publish_override_change(state)
+    return result
 
 
-def _clear_override_record(state: Any, params: JsonObject) -> JsonObject:
-    """Clear one overridden field for an agent and return the refreshed project.
+def _clear_override_record(state: Any, params: JsonObject) -> tuple[JsonObject, bool]:
+    """Clear one overridden field for an agent; return the refreshed project and a change.
 
     Clearing an absent field (or the agent's last field, which removes the entry) is
     a no-op success. No cache invalidation is needed — ``project.json`` is read fresh
@@ -516,7 +524,18 @@ def _clear_override_record(state: Any, params: JsonObject) -> JsonObject:
             agent_id,
             field,
         )
-    return _override_result(state, project)
+    return _override_result(state, project), had_override
+
+
+def _publish_override_change(state: Any) -> None:
+    """Invalidate the Project and its Team member's effective configuration.
+
+    An override is the winning tier of the member's Model, Tool and Permission
+    Rules resolution, so accessors showing that Agent (the Chat composer's
+    Restricted badge among them) read it again.
+    """
+    publish_resource_changed(state, RESOURCE_KIND_PROJECTS)
+    publish_resource_changed(state, RESOURCE_KIND_AGENTS)
 
 
 def _override_result(state: Any, project: Project) -> JsonObject:

@@ -165,4 +165,29 @@ describe('SecretRequests', () => {
     expect(notices()).toEqual([]);
     expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
+
+  it('keeps the lifetime of a Secret the answer replaces unless the user picks one', async () => {
+    api.listAgentSecrets.mockResolvedValue(
+      listed([
+        request('req-1', 'API', {
+          kind: 'token',
+          lifetime: 'session',
+          replaces: true,
+          fields: [{ name: 'value', concealed: true, optional: false }],
+        }),
+      ]),
+    );
+    api.answerSecretRequest.mockResolvedValue({});
+    await render();
+
+    await click('Enter value');
+    await type('Value', 'new-token-value');
+    await store();
+
+    // No lifetime: the server keeps the replaced Secret's own.
+    expect(api.answerSecretRequest).toHaveBeenCalledWith({
+      id: 'req-1',
+      values: { value: 'new-token-value' },
+    });
+  });
 });

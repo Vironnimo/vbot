@@ -27,6 +27,7 @@ import logging
 import os
 import shutil
 from collections.abc import Iterable
+from contextlib import suppress
 from pathlib import Path
 
 import psutil  # type: ignore[import-untyped]
@@ -72,10 +73,17 @@ def retire_unneeded(install: Installation) -> list[Path]:
                 _retire(version, staging, retired)
         if len(retired) > earlier:
             _LOGGER.info("Retired unneeded application versions (count=%d)", len(retired) - earlier)
-        unfinished = {operation.id for operation in operations(install) if not operation.terminal}
+        pending = [operation for operation in operations(install) if not operation.terminal]
+        unfinished = {operation.id for operation in pending}
         for download in _plain_directories(contained(install.root, "downloads")):
             if download.name not in unfinished:
                 _retire(download, staging, retired)
+        # Earlier versions' `update activate` zipped the prepared version here and
+        # never removed the archive.
+        selected = {os.path.normcase(operation.package or "") for operation in pending}
+        for archive in _activation_archives(staging):
+            if os.path.normcase(str(archive.resolve())) not in selected:
+                _retire(archive, staging, retired)
     except _UndecidableError as exc:
         _LOGGER.warning("Application version cleanup kept every version (reason=%s)", exc)
     except Exception:
@@ -84,9 +92,13 @@ def retire_unneeded(install: Installation) -> list[Path]:
 
 
 def remove_retired(paths: Iterable[Path]) -> None:
-    """Delete retired trees; whatever remains is retried by the next cleanup."""
+    """Delete retired trees and files; whatever remains is retried by the next cleanup."""
     for path in paths:
-        shutil.rmtree(path, ignore_errors=True)
+        if path.is_file() and not path.is_symlink():
+            with suppress(OSError):
+                path.unlink()
+        else:
+            shutil.rmtree(path, ignore_errors=True)
         if path.exists():
             _LOGGER.warning("Could not completely remove %s; the next update retries", path)
 
@@ -105,6 +117,17 @@ def _retire(path: Path, staging: Path, retired: list[Path]) -> None:
         _LOGGER.warning("Application version cleanup deferred a tree (path=%s error=%s)", path, exc)
         return
     retired.append(target)
+
+
+def _activation_archives(staging: Path) -> list[Path]:
+    """The ``<version id>.zip`` files directly below ``staging/``, never links."""
+    if not staging.is_dir():
+        return []
+    return [
+        path
+        for path in sorted(staging.glob("*.zip"))
+        if is_safe_id(path.stem) and path.is_file() and not path.is_symlink()
+    ]
 
 
 def _plain_directories(root: Path) -> list[Path]:

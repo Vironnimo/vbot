@@ -34,6 +34,7 @@ from core.utils.errors import StorageError
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
 from server.events import (
+    RESOURCE_KIND_AGENTS,
     RESOURCE_KIND_COMMANDS,
     RESOURCE_KIND_DATA_STORE,
     RESOURCE_KIND_EXTENSIONS,
@@ -295,13 +296,16 @@ def _publish_settings_effects(state: Any, effects: SettingsChangeEffects) -> Non
     A reloaded, enabled or disabled Extension changes its Commands and page
     registrations (descriptors, epochs), like an explicit ``extensions.reload``.
     A rescanned Skill layer (Skill directories or Extension Skill folders)
-    changes the Skill inventory.
+    changes the Skill inventory. Changed shared Agent defaults change every
+    Agent's effective configuration, its Permission Rules included.
     """
     if effects.commands_changed:
         publish_resource_changed(state, RESOURCE_KIND_COMMANDS)
         publish_resource_changed(state, RESOURCE_KIND_EXTENSIONS)
     if effects.skills_changed:
         publish_resource_changed(state, RESOURCE_KIND_SKILLS)
+    if effects.agents_changed:
+        publish_resource_changed(state, RESOURCE_KIND_AGENTS)
 
 
 def _validate_public_settings_candidate(

@@ -66,6 +66,7 @@ def test_folder_instructions_govern_paths_below_their_folder(tmp_path: Path) -> 
     _write(repo, "app/ui/GEMINI.md")
     loaded = _write(repo, "docs/AGENTS.md")
     _write(repo, "node_modules/pkg/AGENTS.md")
+    _write(repo, ".claude/CLAUDE.md")
     _write(repo, "app/ui/widget.py")
     finder = FolderInstructions.for_project(repo, ["AGENTS.md", "docs/AGENTS.md"])
 
@@ -78,6 +79,8 @@ def test_folder_instructions_govern_paths_below_their_folder(tmp_path: Path) -> 
     assert finder.files_for([repo / "app/ui/widget.py"], seen=[outer]) == [inner]
     assert finder.files_for([repo / "app/ui/CLAUDE.md"]) == [outer]
     assert finder.files_for([loaded.parent / "guide.md"]) == []
+    # A main instruction file location is repository-wide, whichever main file loads.
+    assert finder.files_for([repo / ".claude/skills/s/SKILL.md"]) == []
     # Package folders and paths outside the repository contribute nothing.
     assert finder.files_for([repo / "node_modules/pkg/index.js"]) == []
     assert finder.files_for([tmp_path / "elsewhere.py", repo / "README.md"]) == []

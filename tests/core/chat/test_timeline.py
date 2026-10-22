@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from core.chat.timeline import history_timeline
+from core.chat.timeline import history_timeline, history_tool_call
 from core.runs import RunTimeline
 
 JsonObject = dict[str, Any]
@@ -173,6 +173,11 @@ def test_history_keeps_reused_tool_ids_separate_and_matches_live_child_ids() -> 
     assert [item["result"] for item in history["items"]] == ["one", "two"]
     assert [item["id"] for item in history["items"]] == [item["id"] for item in live["items"]]
     assert len({item["id"] for item in history["items"]}) == 2
+    # The whole call of each row reads back by its row id.
+    assert [history_tool_call(messages, item["id"]) for item in history["items"]] == [
+        {"arguments": {"path": step}, "result": step} for step in ("one", "two")
+    ]
+    assert history_tool_call(messages, "unknown") is None
 
 
 @pytest.mark.parametrize(

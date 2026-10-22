@@ -268,13 +268,15 @@ def _search_context_for_hits(
     sessions: ChatSessionManager | None,
     include_subagents: bool,
     excluded_session_ids: tuple[str, ...],
+    allowed_session_ids: frozenset[str] | None = None,
 ) -> tuple[list[RecallSearchHit], list[JsonObject], dict[str, _SearchSessionContext]]:
     """Describe the Sessions of *hits* and keep the hits this search may return.
 
     Descriptors are read only for the Sessions with hits. Their Recall
     visibility rechecks every hit, so a backend that ignores the request's
     visibility or exclusions, or a Session that changed or vanished since
-    ranking, cannot leak into the result.
+    ranking, cannot leak into the result. ``allowed_session_ids``, when given,
+    is the only Sessions a confined search may return.
     """
     addresses = {
         hit.session_id: SessionAddress(
@@ -291,6 +293,7 @@ def _search_context_for_hits(
             source is None
             or source.recall_visibility not in admitted
             or session_id in excluded_session_ids
+            or (allowed_session_ids is not None and session_id not in allowed_session_ids)
         ):
             continue
         title = source.metadata.get("title") or source.metadata.get("auto_title")

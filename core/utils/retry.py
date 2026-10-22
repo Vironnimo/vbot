@@ -56,10 +56,6 @@ class RetryNotice:
     waiting: bool
 
 
-_retry_observer: ContextVar[Callable[[RetryNotice], None] | None] = ContextVar(
-    "retry_observer", default=None
-)
-
 _retries_owned_by_caller: ContextVar[bool] = ContextVar("retries_owned_by_caller", default=False)
 
 
@@ -72,22 +68,6 @@ def caller_owns_retries() -> Iterator[None]:
     """
     with _retries_owned_by_caller.set(True):
         yield
-
-
-@contextmanager
-def observe_retries(observer: Callable[[RetryNotice], None]) -> Iterator[None]:
-    """Observe retries in this async request scope without changing retry policy."""
-    with _retry_observer.set(observer):
-        yield
-
-
-def _notify_retry(notice: RetryNotice) -> None:
-    observer = _retry_observer.get()
-    if observer is not None:
-        try:
-            observer(notice)
-        except Exception:
-            _LOGGER.warning("Retry observer failed", exc_info=True)
 
 
 def compute_retry_delay(
@@ -184,9 +164,7 @@ async def retry_async[T](
                     delay,
                     " (honoring the server's requested wait)" if honored_retry_after else "",
                 )
-                _notify_retry(RetryNotice(error, attempt + 2, max_retries + 1, delay, True))
                 await _sleep(delay)
-                _notify_retry(RetryNotice(error, attempt + 2, max_retries + 1, 0, False))
 
     # Should be unreachable when max_retries >= 0, but satisfies type checkers.
     assert last_error is not None

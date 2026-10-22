@@ -46,4 +46,8 @@ ANTHROPIC_TOOL_STOP_REASONS = {"tool_use"}
 
 ANTHROPIC_STOP_REASONS = {"end_turn", "stop_sequence"}
 
+# ``model_context_window_exceeded`` ends a turn that filled the Context window
+# before ``max_tokens``; Anthropic documents it as a valid, truncated response.
+ANTHROPIC_TRUNCATED_STOP_REASONS = frozenset({"max_tokens", "model_context_window_exceeded"})
+
 ANTHROPIC_ERROR_STOP_REASONS = {"error", "pause_turn"}

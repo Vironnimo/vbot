@@ -2,5 +2,5 @@
   "name": "Workflow Command",
   "version": "1.0.0",
   "description": "Starts a bundled workflow Skill from a slash command.",
-  "api_version": 2
+  "api_version": 20
 }

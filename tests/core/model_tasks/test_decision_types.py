@@ -5,7 +5,7 @@ import pytest
 from core.model_tasks.decision_types import (
     DecisionError,
     validate_answers,
-    validate_input,
+    validate_questions,
 )
 
 QUESTIONS = [
@@ -39,11 +39,9 @@ RESULT = {
 }
 
 
-def test_round_trip_preserves_application_data_and_optional_absence():
-    state = {"type": "TRUE", "score": "3.0", "image": "just a field", "nested": [{"false": False}]}
-    validated, questions = validate_input(state, QUESTIONS)
-    assert validated == state and validated is not state
-    assert questions == QUESTIONS
+def test_round_trip_preserves_questions_and_optional_absence():
+    questions = validate_questions(QUESTIONS)
+    assert questions == QUESTIONS and questions is not QUESTIONS
     assert validate_answers(RESULT, questions) == RESULT
     assert "confidence" not in validate_answers(RESULT, questions)["answers"]["severity"]
 
@@ -66,24 +64,7 @@ def test_rejects_invalid_complete_questions(mutation):
     questions = copy.deepcopy(QUESTIONS)
     mutation(questions)
     with pytest.raises(DecisionError):
-        validate_input("state", questions)
-
-
-@pytest.mark.parametrize(
-    ("state", "code"),
-    [
-        (None, "invalid_request"),
-        (True, "invalid_request"),
-        (1, "invalid_request"),
-        ({"x": float("nan")}, "invalid_request"),
-        ("x" * 1_000_001, "too_large"),
-    ],
-    ids=["null", "boolean", "integer", "nan", "oversize"],
-)
-def test_rejects_invalid_state(state, code):
-    with pytest.raises(DecisionError) as error:
-        validate_input(state, QUESTIONS)
-    assert error.value.code == code
+        validate_questions(questions)
 
 
 @pytest.mark.parametrize(

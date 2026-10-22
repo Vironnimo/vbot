@@ -15,7 +15,9 @@ from core.sessions import (
 )
 
 # Restore problems another target id avoids; every other blocker it does not.
-RESTORE_CONFLICT_CODES = frozenset({"agent_id_taken", "project_id_taken", "session_address_taken"})
+RESTORE_CONFLICT_CODES = frozenset(
+    {"agent_id_taken", "agent_id_referenced", "project_id_taken", "session_address_taken"}
+)
 
 
 @dataclass(frozen=True)

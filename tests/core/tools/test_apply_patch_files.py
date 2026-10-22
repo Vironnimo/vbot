@@ -128,6 +128,35 @@ def test_overwrite_guard_names_read_for_large_or_binary_files(tmp_path, payload)
     assert path.read_bytes() == payload
 
 
+@pytest.mark.asyncio
+async def test_overwrite_guard_does_not_stamp_unseen_content(tmp_path, monkeypatch):
+    path = tmp_path / "file.txt"
+    path.write_bytes(b"original\n")
+    tools = registry()
+    snapshot = file_changes_module._snapshot
+    reads = 0
+
+    def snapshot_then_change(checked):
+        nonlocal reads
+        observed = snapshot(checked)
+        if checked == path:
+            reads += 1
+            if reads == 2:
+                # The guard's verification read succeeded; another writer then
+                # changes the file before the Tool records that read's stamp.
+                path.write_bytes(b"unseen external content\n")
+        return observed
+
+    monkeypatch.setattr(file_changes_module, "_snapshot", snapshot_then_change)
+    arguments = {"patch": "*** Add File: file.txt\n+replacement"}
+    refused = await call(tmp_path, arguments, tools=tools)
+    assert refused["error"]["code"] == "file_not_read"
+    repeated = await call(tmp_path, arguments, tools=tools)
+    assert not repeated["ok"]
+    assert repeated["error"]["code"] == "file_modified_since_read"
+    assert path.read_bytes() == b"unseen external content\n"
+
+
 @pytest.mark.parametrize(
     ("existing", "body", "expected"),
     [
@@ -998,6 +1027,38 @@ def test_move_rechecks_destination_before_deleting_source(tmp_path, monkeypatch)
     )
     assert source.read_bytes() == b"source bytes\n"
     assert destination.read_bytes() == b"external bytes\n"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changed", ["source", "destination"])
+async def test_entry_move_rechecks_paths_after_creating_parent(tmp_path, monkeypatch, changed):
+    source, target = _linked_file(tmp_path)
+    destination = tmp_path / "new" / "moved.txt"
+    other = tmp_path / "other.txt"
+    other.write_bytes(b"external bytes\n")
+    original_mkdir = Path.mkdir
+
+    def mkdir_then_change(path, *args, **kwargs):
+        original_mkdir(path, *args, **kwargs)
+        if path == destination.parent:
+            if changed == "source":
+                source.unlink()
+                os.symlink(other, source)
+            else:
+                destination.write_bytes(b"external bytes\n")
+
+    monkeypatch.setattr(Path, "mkdir", mkdir_then_change)
+    result = await call(tmp_path, {"patch": "*** Move File: link.txt -> new/moved.txt"})
+
+    assert not result["ok"]
+    assert result["error"]["code"] == "file_changed"
+    assert source.is_symlink()
+    assert source.resolve() == (other if changed == "source" else target).resolve()
+    if changed == "destination":
+        assert destination.read_bytes() == b"external bytes\n"
+    else:
+        assert not os.path.lexists(destination)
+    assert target.read_bytes() == b"precious\n"
 
 
 def test_replacement_rechecks_bytes_after_guard(tmp_path, monkeypatch):

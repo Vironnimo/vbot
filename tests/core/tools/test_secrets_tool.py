@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 from core.chat import ReplySurface
+from core.permissions import PermissionBoundary
 from core.providers.adapter import tool_result_text
 from core.runs import RunKind
 from core.secrets.agent_secrets import AgentSecrets
@@ -57,6 +58,7 @@ class _Tool:
             data_root=self.tmp_path,
             run_kind=RunKind.USER,
             reply_surface=surface or ReplySurface(kind="webui"),
+            permissions=PermissionBoundary.UNRESTRICTED,
         )
         result = await dispatch_as_executor(self.registry, context, arguments)
         return bool(result["ok"]), str(tool_result_text(json.dumps(result)))

@@ -105,9 +105,10 @@ def _rename_entry(source: Path, destination: Path, before: dict[Path, _Snapshot]
     ):
         # A case-sensitive directory can hold both spellings as distinct files.
         raise _PatchError("destination_exists", path=destination)
-    if _snapshot(source) != snapshot:
-        raise _PatchError("file_changed", path=source)
     destination.parent.mkdir(parents=True, exist_ok=True)
+    for path, expected in before.items():
+        if _snapshot(path) != expected:
+            raise _PatchError("file_changed", path=path)
     os.rename(source, destination)
 
 

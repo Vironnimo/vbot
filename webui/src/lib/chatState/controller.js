@@ -17,6 +17,7 @@ import {
   listSessions as requestListSessions,
   loadChatTimeline as requestLoadChatHistory,
   loadChatTimelineChildren as requestLoadTimelineChildren,
+  loadChatToolCall as requestLoadToolCall,
   loadCommandOutput as requestLoadCommandOutput,
   loadLearningChanges as requestLoadLearningChanges,
   loadReflectionRuns as requestLoadReflectionRuns,
@@ -74,6 +75,7 @@ function defaultChatOperations() {
     getSubAgentTree: (...args) => requestGetSubAgentTree(...args),
     loadChatHistory: (...args) => requestLoadChatHistory(...args),
     loadTimelineChildren: (...args) => requestLoadTimelineChildren(...args),
+    loadToolCall: (...args) => requestLoadToolCall(...args),
     loadCommandOutput: (...args) => requestLoadCommandOutput(...args),
     loadLearningChanges: (...args) => requestLoadLearningChanges(...args),
     loadReflectionRuns: (...args) => requestLoadReflectionRuns(...args),
@@ -347,6 +349,7 @@ export function createChatController({
           description: item.description ?? '',
           type: item.type,
           argument: item.argument,
+          argument_hint: item.argument_hint ?? '',
           output: item.output,
         }))
         .filter((item) => item.name.length > 0);
@@ -589,6 +592,18 @@ export function createChatController({
     }
   }
 
+  // The complete arguments and result of one Tool row, read in the History
+  // generation the row was projected in.
+  function loadToolCall(sessionState, { runId, toolId }) {
+    return operations.loadToolCall({
+      agent_id: sessionState.agentId,
+      session_id: sessionState.sessionId,
+      run_id: runId,
+      tool_id: toolId,
+      history_generation: sessionState.historyGeneration,
+    });
+  }
+
   async function cancelTool({
     sessionState,
     agentId = '',
@@ -786,6 +801,7 @@ export function createChatController({
     loadHistoryForSession,
     loadOlderHistory,
     loadRunHistory,
+    loadToolCall,
     loadReflectionChanges: reflections.loadChanges,
     loadSubAgentWork,
     loadProject: (projectId) => operations.showProject(projectId),

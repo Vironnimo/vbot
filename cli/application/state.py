@@ -242,7 +242,9 @@ class Installation:
         path = self.root / "application.json"
         try:
             value = read_json(path)
-        except ApplicationError:
+        except ApplicationError as exc:
+            if not isinstance(exc.__cause__, FileNotFoundError):
+                raise
             value = {}
         known = asdict(self)
         known.pop("root")

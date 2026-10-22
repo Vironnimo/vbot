@@ -37,7 +37,7 @@ from core.tools import (
 )
 from core.tools.availability import ToolAccess
 from core.tools.change_tracker import ChangeTracker
-from core.tools.file_state import FileReadState
+from core.tools.file_state import FileRead, FileReadState
 from core.tools.on_demand import LOAD_TOOLS_TOOL_NAME, on_demand_tools
 from tests.core.chat.chat_loop_adapter_support import (
     BlockingReasoningStreamingStubAdapter,
@@ -449,7 +449,7 @@ class StubPrompts:
         subagent_session: bool = False,
         skill_registry: Any = None,
         skill_catalog: Any = None,
-        read_paths: list[Path] | None = None,
+        read_paths: list[FileRead] | None = None,
         effective_tool_definitions: Any = None,
         on_demand_tools: Any = None,
         session_tool_grants: Any = (),
@@ -582,9 +582,10 @@ class StubPrompts:
         for name in project_context.auto_load:
             file_path = Path(project_context.cwd) / name
             if file_path.exists():
+                status = file_path.stat()
                 blocks.append(f'<file name="{name}">\n{file_path.read_text()}\n</file>')
                 if on_read is not None:
-                    on_read(file_path.resolve())
+                    on_read((file_path.resolve(), (status.st_mtime, status.st_size)))
         return "\n".join(blocks)
 
     def provider_tool_definitions(

@@ -24,7 +24,12 @@ from pathlib import Path
 
 from core.permissions import PermissionBoundary
 from core.sessions import SessionAddress
-from core.tools._edit_engine import apply_hunks, clean_additions, line_ending
+from core.tools._edit_engine import (
+    apply_hunks,
+    clean_additions,
+    line_ending,
+    with_literal_readings,
+)
 from core.tools._patch_entries import (
     _ABSENT,
     _entry_path,
@@ -491,9 +496,10 @@ def _guard_failure(
         text is not None
         and len(payload) <= _GUARD_CONTENT_MAX_BYTES
         and len(lines) <= _GUARD_CONTENT_MAX_LINES
+        and (stamp := state.stamp(path)) is not None
         and _snapshot(path) == snapshot
     ):
-        state.record_read(context.session_id, path)
+        state.record_stamp(context.session_id, path, stamp)
         partial = batch.templates.get("partial_change", "change only the parts that need it")
         # A CRLF file shows plain line breaks, as read shows it.
         plain = [plain_line_end(line) for line in lines]
@@ -763,6 +769,10 @@ def run_operations(
     ``_run_step``), while any other failure, such as a missing file, writes
     nothing.
     """
+    if context.secret_literals:
+        for operation in operations:
+            if operation.action == "update":
+                operation.hunks = with_literal_readings(operation.hunks, context.secret_literals)
     resolved: dict[str, Path] = {}
     resolution_errors: dict[str, JsonObject] = {}
     for operation in operations:

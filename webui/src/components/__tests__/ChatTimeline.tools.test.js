@@ -5,6 +5,7 @@ import {
   detailRow,
   detailText,
   flushSync,
+  tick,
   openDisclosures,
   setupChatTimelineSuite,
   stubClipboard,
@@ -337,8 +338,13 @@ describe('ChatTimeline Tools', () => {
           toolItem({
             id: 'call',
             name: 'apply_patch',
-            arguments: { patch: '*** Begin Patch' },
-            result: { ok: true, data: { content: 'Updated.' } },
+            arguments: { patch: '*** Begin Patch', description: 'Fix typo' },
+            result: {
+              ok: true,
+              error: null,
+              data: { content: 'Updated.', applied: 1 },
+              artifacts: [],
+            },
             ...{ display },
           }),
         ]),
@@ -391,10 +397,73 @@ describe('ChatTimeline Tools', () => {
       );
       expect(rawCall.querySelector('.tool-raw-call__body')).toBeNull();
       openDisclosures('.tool-raw-call');
-      expect(detailText('chat.toolArgs')).toBe('patch: *** Begin Patch');
-      expect(detailText('chat.toolResultLabel')).toBe('Updated.');
+      // The raw call keeps every argument and result field.
+      expect(detailText('chat.toolArgs')).toBe(
+        'patch: *** Begin Patch\ndescription: Fix typo',
+      );
+      expect(detailText('chat.toolResultLabel')).toBe(
+        'content: Updated.\napplied: 1',
+      );
       expect(rawCall.contains(detailRow('chat.toolResultLabel'))).toBe(true);
     });
+
+    // A row carries previews of a long call; the whole call loads once a
+    // section that shows it opens, behind the raw disclosure or directly.
+    it.each([
+      ['detail blocks', true],
+      ['no detail blocks', false],
+    ])(
+      'loads a previewed call when it is first shown, with %s',
+      async (_case, withBlocks) => {
+        const output = 'line\n'.repeat(3);
+        const loadToolCall = vi.fn(async () => ({
+          arguments: { command: 'cat big.log' },
+          result: { ok: true, error: null, data: { output: 'whole' } },
+        }));
+        timeline.render(
+          sessionWithTool([
+            toolItem({
+              id: 'call',
+              name: withBlocks ? 'bash' : 'custom_tool',
+              arguments: { command: 'cat big.log' },
+              result: { ok: true, error: null, data: { output: 'who…' } },
+              rawTruncated: true,
+              display: withBlocks
+                ? structuredDisplay({
+                    details: [
+                      {
+                        type: 'text',
+                        label: 'output',
+                        text: output,
+                        truncated: true,
+                      },
+                    ],
+                  })
+                : null,
+            }),
+          ]),
+          { onLoadToolCall: loadToolCall },
+        );
+
+        openDisclosures('.tool-event');
+        if (withBlocks) {
+          expect(document.body.textContent).toContain(
+            t('chat.toolDetailTruncated'),
+          );
+          expect(loadToolCall).not.toHaveBeenCalled();
+          openDisclosures('.tool-raw-call');
+        }
+        expect(loadToolCall).toHaveBeenCalledWith({
+          runId: 'run-tool',
+          toolId: 'call',
+        });
+        expect(document.body.textContent).toContain(t('chat.toolRawLoading'));
+        await tick();
+        flushSync();
+        expect(detailText('chat.toolResultLabel')).toContain('whole');
+        expect(loadToolCall).toHaveBeenCalledTimes(1);
+      },
+    );
 
     it('lists the matches of a results block with their local time', () => {
       const display = structuredDisplay({
@@ -510,6 +579,61 @@ describe('ChatTimeline Tools', () => {
         ['added', 'Works in UTC+1.'],
         ['added', 'Prefers German.'],
       ]);
+    });
+
+    it('starts a long command at two lines and opens it on request', () => {
+      // jsdom has no layout: with the 20 px fallback line, 60 px of command
+      // exceed two lines and 20 px of output do not matter.
+      const scrollHeight = vi
+        .spyOn(HTMLElement.prototype, 'scrollHeight', 'get')
+        .mockImplementation(function height() {
+          return this.textContent.startsWith('npm') ? 60 : 20;
+        });
+      try {
+        timeline.render(
+          sessionWithTool([
+            toolItem({
+              id: 'call',
+              name: 'bash',
+              arguments: {
+                command: 'npm run build &&\nnpm test &&\nnpm run lint',
+              },
+              result: { ok: true, data: { output: 'done' } },
+              display: structuredDisplay({
+                details: [
+                  {
+                    type: 'text',
+                    label: 'command',
+                    text: 'npm run build &&\nnpm test &&\nnpm run lint',
+                  },
+                  { type: 'text', label: 'output', text: 'done' },
+                ],
+              }),
+            }),
+          ]),
+        );
+        openDisclosures('.tool-event');
+
+        const command = detailRow('chat.toolDetailLabel.command');
+        const text = command.querySelector('.teb-text');
+        const toggle = command.querySelector('.teb-clamp-toggle');
+        expect(text.classList.contains('teb-text--clamped')).toBe(true);
+        expect(toggle.textContent.trim()).toBe(t('chat.showMore'));
+        expect(
+          detailRow('chat.toolDetailLabel.output').querySelector(
+            '.teb-clamp-toggle',
+          ),
+        ).toBeNull();
+
+        toggle.click();
+        flushSync();
+
+        expect(text.classList.contains('teb-text--clamped')).toBe(false);
+        expect(toggle.textContent.trim()).toBe(t('chat.showLess'));
+        expect(toggle.getAttribute('aria-expanded')).toBe('true');
+      } finally {
+        scrollHeight.mockRestore();
+      }
     });
 
     it('shows text blocks as given or read from the call, as literal text', () => {

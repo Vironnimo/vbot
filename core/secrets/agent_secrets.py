@@ -45,6 +45,7 @@ from core.secrets._agent_secret_model import (
     check_sinks,
     decode_record,
     encode_record,
+    main_field_name,
     normalize_secret_name,
     session_address,
     with_given_lifetime,
@@ -57,8 +58,11 @@ from core.secrets._references import (
     SecretMasker,
     find_references,
     has_reference,
+    has_reference_or_escape,
     map_strings,
+    unescape_references,
 )
+from core.secrets._references import substitute as substitute_references
 from core.secrets._totp import TotpSeedError, totp_code
 from core.secrets.sources import SecretSource, SecretSourceError, SourceStatus
 from core.secrets.store import AGENT_SECRETS, SecretStore, SecretTransaction, credential_name_key
@@ -90,7 +94,10 @@ __all__ = [
     "describe_uses",
     "find_references",
     "has_reference",
+    "has_reference_or_escape",
+    "main_field_name",
     "normalize_secret_name",
+    "unescape_references",
 ]
 
 _LOGGER = get_logger("secrets")
@@ -179,14 +186,21 @@ class AgentSecrets:
         self._store = store
         self._clock = clock
         self._credential_names = credential_names
+        # Serializes record writes, which hold it across the Secret Store write.
         self._lock = RLock()
+        # Guards the in-memory state below; never held during I/O, so the
+        # Event Loop's reads and masking never wait for a store write.
+        self._memory_lock = RLock()
+        # Replaced, never changed in place, after each committed write: readers
+        # take no lock.
         self._records: dict[str, AgentSecret] = {}
         self._sources: dict[str, SecretSource] = {}
         # Values known only in memory: system credentials and values a source
         # delivered in this process, each with the reference that masks it.
         self._runtime_values: dict[str, str] = {}
         self._system_values: dict[str, str] = {}
-        self._masker: SecretMasker | None = None
+        # Rebuilt after every change of the known values; read without a lock.
+        self._masker: SecretMasker = EMPTY_MASKER
         self._listeners: list[ChangeListener] = []
         self._loaded = False
         # The latest uses of each Secret since this process started, newest last.
@@ -203,11 +217,11 @@ class AgentSecrets:
                 records[secret_id] = decode_record(secret_id, text)
             except SecretRecordError as error:
                 _LOGGER.warning("Agent Secret %s is unreadable and ignored: %s", secret_id, error)
-        with self._lock:
+        with self._lock, self._memory_lock:
             for previous in self._records.values():
                 self._remember(previous)
             self._records = records
-            self._masker = None
+            self._publish_masker()
             self._loaded = True
         self.sweep()
 
@@ -230,7 +244,7 @@ class AgentSecrets:
     def replace_sources(self, sources: Iterable[SecretSource]) -> None:
         """Offer exactly ``sources``; a source that goes away is locked first."""
         offered = {source.name: source for source in sources}
-        with self._lock:
+        with self._memory_lock:
             removed = [
                 source for name, source in self._sources.items() if offered.get(name) is not source
             ]
@@ -242,12 +256,10 @@ class AgentSecrets:
                 _LOGGER.warning("Secret Source %s did not lock", source.name, exc_info=True)
 
     def sources(self) -> list[SecretSource]:
-        with self._lock:
-            return list(self._sources.values())
+        return list(self._sources.values())
 
     def source(self, name: str) -> SecretSource | None:
-        with self._lock:
-            return self._sources.get(name)
+        return self._sources.get(name)
 
     def source_status(self, name: str) -> SourceStatus:
         source = self.source(name)
@@ -263,15 +275,13 @@ class AgentSecrets:
     def all(self) -> list[AgentSecret]:
         """Every live Secret, in name order."""
         now = self._clock()
-        with self._lock:
-            return sorted(
-                (item for item in self._records.values() if not item.expired(now)),
-                key=lambda item: (item.name, item.id),
-            )
+        return sorted(
+            (item for item in self._records.values() if not item.expired(now)),
+            key=lambda item: (item.name, item.id),
+        )
 
     def get(self, secret_id: str) -> AgentSecret | None:
-        with self._lock:
-            secret = self._records.get(secret_id)
+        secret = self._records.get(secret_id)
         return None if secret is None or secret.expired(self._clock()) else secret
 
     def usable(self, address: SessionAddress, *, passed_only: bool = False) -> list[AgentSecret]:
@@ -580,6 +590,118 @@ class AgentSecrets:
         for change in changes:
             self._notify(change)
 
+    def naming_identity_agent(self, agent_id: str) -> list[AgentSecret]:
+        """The Secrets whose grants name Identity Agent ``agent_id``, sorted by name.
+
+        Exactly what :meth:`retarget_agent` moves and :meth:`remove_identity_agent`
+        drops: an Agent grant, a pass-through root, or a Session of the Agent on a
+        pass-through path.
+        """
+        return sorted(
+            (
+                secret
+                for secret in self._records.values()
+                if _names_identity_agent(secret, agent_id)
+            ),
+            key=lambda secret: secret.name,
+        )
+
+    def remove_identity_agent(self, agent_id: str) -> int:
+        """Drop every grant naming Identity Agent ``agent_id`` (blocking).
+
+        For a purged archived Agent, so no grant waits for an Agent that cannot
+        return: its Agent grants and the pass-through paths rooted in it or
+        through its Sessions go, and the ``session`` and ``once`` Secrets of its
+        Sessions are deleted, in one store write. The Secrets themselves stay
+        with the user. Repeating it changes nothing. Returns how many Secrets
+        changed or went.
+        """
+        changes: list[SecretChange] = []
+        with self._lock:
+            updated: dict[str, AgentSecret | None] = {}
+            for secret in self._records.values():
+                if not _names_identity_agent(secret, agent_id):
+                    continue
+                if secret.lifetime in ("session", "once") and agent_id in secret.agents:
+                    updated[secret.id] = None
+                    changes.append(SecretChange("deleted", secret, "agent purged"))
+                    continue
+                grants = tuple(
+                    grant
+                    for grant in secret.session_grants
+                    if not _grant_names_identity_agent(grant, agent_id)
+                )
+                kept = replace(
+                    secret,
+                    agents=tuple(item for item in secret.agents if item != agent_id),
+                    session_grants=grants,
+                    sessions=tuple(dict.fromkeys(grant.path[-1].session_id for grant in grants)),
+                )
+                updated[secret.id] = kept
+                changes.append(SecretChange("changed", kept, "agent purged"))
+            if updated:
+                texts = {
+                    key: None if secret is None else encode_record(secret)
+                    for key, secret in updated.items()
+                }
+
+                def write(change: SecretTransaction) -> None:
+                    for key, text in texts.items():
+                        if text is None:
+                            change.remove(AGENT_SECRETS, key)
+                        else:
+                            change.set(AGENT_SECRETS, key, text)
+
+                self._store.update(write)
+                self._commit(updated)
+        for change in changes:
+            self._notify(change)
+        return len(changes)
+
+    def retarget_agent(self, agent_id: str, new_agent_id: str) -> int:
+        """Move the grants of Identity Agent ``agent_id`` to ``new_agent_id`` (blocking).
+
+        For an Identity Agent rename, whose Sessions keep their ids: the Agent
+        grants, the Secrets of its Sessions and pass-through paths through them
+        follow in one store write. Selects only what names ``agent_id``, so
+        swapping the ids reverts it. Returns how many Secrets changed.
+        """
+
+        def moved(address: SessionAddress) -> SessionAddress:
+            if address.project_id is None and address.agent_id == agent_id:
+                return replace(address, agent_id=new_agent_id)
+            return address
+
+        with self._lock:
+            changed: list[AgentSecret] = []
+            for secret in self._records.values():
+                agents = tuple(
+                    dict.fromkeys(
+                        new_agent_id if item == agent_id else item for item in secret.agents
+                    )
+                )
+                grants = tuple(
+                    SessionGrant(
+                        new_agent_id if grant.agent == agent_id else grant.agent,
+                        tuple(moved(address) for address in grant.path),
+                    )
+                    for grant in secret.session_grants
+                )
+                if agents != secret.agents or grants != secret.session_grants:
+                    changed.append(replace(secret, agents=agents, session_grants=grants))
+            if changed:
+                texts = {secret.id: encode_record(secret) for secret in changed}
+
+                def write(change: SecretTransaction) -> None:
+                    for key, text in texts.items():
+                        change.set(AGENT_SECRETS, key, text)
+
+                self._store.update(write)
+                self._commit({secret.id: secret for secret in changed})
+        for secret in changed:
+            self._notify(SecretChange("changed", secret, "agent renamed"))
+        return len(changed)
+
     def sweep(self) -> int:
         """Remove expired Secrets (blocking); how many were removed."""
         now = self._clock()
@@ -682,10 +804,7 @@ class AgentSecrets:
                         change.remove(AGENT_SECRETS, key)
 
                 self._store.update(remove)
-                for secret in once.values():
-                    self._remember(secret)
-                    self._records.pop(secret.id)
-                self._masker = None
+                self._commit(dict.fromkeys(once))
         for secret in once.values():
             self._notify(SecretChange("deleted", secret, "used once"))
 
@@ -714,20 +833,21 @@ class AgentSecrets:
         *,
         passed_only: bool = False,
         consume: bool = True,
+        literals: dict[str, str] | None = None,
     ) -> tuple[Any, list[SecretUse]]:
-        """``value`` (JSON-like) with references replaced; raises :class:`SecretUseError`."""
+        """``value`` (JSON-like) with references replaced; raises :class:`SecretUseError`.
+
+        An escaped reference (``{{!secret:NAME}}``) becomes the reference text.
+        ``literals``, when given, receives each substituted value with the
+        reference text it replaced, so a caller can tell the two readings apart.
+        """
         uses: list[SecretUse] = []
         # One value per reference and call, so a ``once`` Secret named twice
         # in the same call is resolved (and consumed) once.
         resolved_values: dict[tuple[str, str | None], tuple[str, SecretUse]] = {}
 
         def replace_text(text: str) -> str:
-            references = find_references(text)
-            if not references:
-                return text
-            parts: list[str] = []
-            position = 0
-            for reference in references:
+            def resolve(reference: Reference) -> str:
                 key = (reference.name, reference.field)
                 if key not in resolved_values:
                     resolved_values[key] = self.resolve(
@@ -738,13 +858,13 @@ class AgentSecrets:
                         consume=False,
                     )
                 resolved, use = resolved_values[key]
-                parts.append(text[position : reference.start])
-                parts.append(resolved)
-                position = reference.end
                 if use not in uses:
                     uses.append(use)
-            parts.append(text[position:])
-            return "".join(parts)
+                if literals is not None:
+                    literals.setdefault(resolved, text[reference.start : reference.end])
+                return resolved
+
+            return substitute_references(text, resolve)
 
         changed = map_strings(value, replace_text)
         if consume:
@@ -812,14 +932,14 @@ class AgentSecrets:
 
     def recent_uses(self, secret_id: str) -> list[RecordedUse]:
         """The latest uses of a Secret since this process started, newest first."""
-        with self._lock:
+        with self._memory_lock:
             return list(reversed(self._uses.get(secret_id, ())))
 
     def _record_use(
         self, secret: AgentSecret, field_name: str, sink: SinkClass, address: SessionAddress
     ) -> None:
         use = RecordedUse(field_name, sink, address.agent_id, address.session_id, self._clock())
-        with self._lock:
+        with self._memory_lock:
             self._uses.setdefault(secret.id, deque(maxlen=_RECENT_USES)).append(use)
         _LOGGER.debug(
             "Agent Secret %s.%s used (sink=%s agent=%s)",
@@ -833,39 +953,40 @@ class AgentSecrets:
 
     @property
     def masker(self) -> SecretMasker:
-        """Masks every value vBot knows; rebuilt only after a change."""
-        with self._lock:
-            if self._masker is None:
-                known: dict[str, str] = {}
-                for name, value in self._system_values.items():
-                    known.setdefault(value, f"{{{{secret:{name}}}}}")
-                known.update(self._runtime_values)
-                for secret in self._records.values():
-                    for item in secret.fields:
-                        if item.value is not None and item.concealed:
-                            known[item.value] = secret.reference(item.name)
-                self._masker = SecretMasker(known) if known else EMPTY_MASKER
-            return self._masker
+        """Masks every value vBot knows; rebuilt after each change, read without a lock."""
+        return self._masker
+
+    def _publish_masker(self) -> None:
+        """Build the masker over the current values; the caller holds ``_memory_lock``."""
+        known: dict[str, str] = {}
+        for name, value in self._system_values.items():
+            known.setdefault(value, f"{{{{secret:{name}}}}}")
+        known.update(self._runtime_values)
+        for secret in self._records.values():
+            for item in secret.fields:
+                if item.value is not None and item.concealed:
+                    known[item.value] = secret.reference(item.name)
+        self._masker = SecretMasker(known) if known else EMPTY_MASKER
 
     def set_system_values(self, values: Mapping[str, str]) -> None:
         """Replace the system credential values masked as ``{{secret:<ENV_NAME>}}``."""
-        with self._lock:
+        with self._memory_lock:
             self._system_values = {
                 credential_name_key(name).upper(): value
                 for name, value in values.items()
                 if isinstance(value, str) and len(value) >= MIN_MASKED_LENGTH
             }
-            self._masker = None
+            self._publish_masker()
 
     def remember_value(self, value: str, reference: str) -> None:
         """Mask a value that reached a process from outside the store (a source, the shell)."""
         if len(value) < MIN_MASKED_LENGTH:
             return
-        with self._lock:
+        with self._memory_lock:
             if self._runtime_values.get(value) == reference:
                 return
             self._runtime_values[value] = reference
-            self._masker = None
+            self._publish_masker()
 
     # -- internals -------------------------------------------------------------
 
@@ -900,29 +1021,33 @@ class AgentSecrets:
     ) -> SecretUseError:
         exists = any(item.name == reference.name for item in self.all())
         names = self._names_text(address, passed_only)
+        literal = (
+            f" If you meant the text {{{{secret:{reference.text_name}}}}} itself, "
+            f"write {{{{!secret:{reference.text_name}}}}}."
+        )
         if exists and passed_only:
             return SecretUseError(
                 "not_granted",
                 f"{reference.name} was not passed to you. Your Secrets: {names}. "
-                "If you need it, say so in your report; your Parent Agent can pass it.",
+                "If you need it, say so in your report; your Parent Agent can pass it." + literal,
             )
         if exists:
             return SecretUseError(
                 "not_granted",
                 f"{reference.name} is not granted to you. Your Secrets: {names}. "
-                "Ask the user to grant it in Settings -> Secrets if you need it.",
+                "Ask the user to grant it in Settings -> Secrets if you need it." + literal,
             )
         system = {credential_name_key(item).upper() for item in self._credential_names()}
         if reference.name in system:
             return SecretUseError(
                 "not_granted",
                 f"{reference.name} is a vBot credential, not a Secret you can use here. "
-                f"Your Secrets: {names}.",
+                f"Your Secrets: {names}." + literal,
             )
         return SecretUseError(
             "unknown_secret",
             f"No Secret named {reference.name}. Your Secrets: {names}. "
-            "Use the secrets Tool to request one from the user.",
+            "Use the secrets Tool to request one from the user." + literal,
         )
 
     def _names_text(self, address: SessionAddress, passed_only: bool) -> str:
@@ -958,22 +1083,35 @@ class AgentSecrets:
     def _write(self, secret: AgentSecret) -> None:
         text = encode_record(secret)
         self._store.update(lambda change: change.set(AGENT_SECRETS, secret.id, text))
-        if previous := self._records.get(secret.id):
-            self._remember(previous)
-        self._records[secret.id] = secret
-        self._masker = None
+        self._commit({secret.id: secret})
 
     def _remove(self, secret: AgentSecret) -> None:
         self._store.update(lambda change: change.remove(AGENT_SECRETS, secret.id))
-        self._remember(secret)
-        self._records.pop(secret.id, None)
-        self._masker = None
+        self._commit({secret.id: None})
+
+    def _commit(self, changes: Mapping[str, AgentSecret | None]) -> None:
+        """Publish records a store write committed (``None``: removed) and the new masker.
+
+        The caller holds ``_lock``; readers see either the old records or the new ones.
+        """
+        records = dict(self._records)
+        with self._memory_lock:
+            for secret_id, secret in changes.items():
+                if previous := records.pop(secret_id, None):
+                    self._remember(previous)
+                if secret is not None:
+                    records[secret_id] = secret
+            self._records = records
+            self._publish_masker()
 
     def _remember(self, secret: AgentSecret) -> None:
-        """Keep redacting retired values for this process, like resolved source values."""
+        """Keep redacting retired values for this process, like resolved source values.
+
+        The caller holds ``_memory_lock`` and publishes the masker afterwards.
+        """
         for item in secret.fields:
-            if item.concealed and item.value is not None:
-                self.remember_value(item.value, secret.reference(item.name))
+            if item.concealed and item.value is not None and len(item.value) >= MIN_MASKED_LENGTH:
+                self._runtime_values[item.value] = secret.reference(item.name)
 
 
 _SINK_WORDS: Final[Mapping[SinkClass, str]] = {
@@ -989,4 +1127,16 @@ def _session_bound(secret: AgentSecret, address: SessionAddress) -> int:
     return int(
         secret.session_id == address.session_id
         or any(grant.path[-1] == address for grant in secret.session_grants)
+    )
+
+
+def _grant_names_identity_agent(grant: SessionGrant, agent_id: str) -> bool:
+    return grant.agent == agent_id or any(
+        address.project_id is None and address.agent_id == agent_id for address in grant.path
+    )
+
+
+def _names_identity_agent(secret: AgentSecret, agent_id: str) -> bool:
+    return agent_id in secret.agents or any(
+        _grant_names_identity_agent(grant, agent_id) for grant in secret.session_grants
     )

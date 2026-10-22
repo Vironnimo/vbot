@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, Mock
 
+from core.permissions import PermissionBoundary
 from core.providers.adapter import tool_result_text
 from core.tools.channel import CHANNEL_SEND_TOOL_NAME, register_channel_send_tool
 from core.tools.tools import (
@@ -69,6 +70,7 @@ def make_context(workspace: Path) -> ToolContext:
         workspace=workspace,
         vbot_root=workspace.parent,
         data_root=workspace.parent / "data",
+        permissions=PermissionBoundary.UNRESTRICTED,
     )
 
 

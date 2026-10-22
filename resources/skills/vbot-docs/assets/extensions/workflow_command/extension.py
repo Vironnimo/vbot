@@ -31,6 +31,7 @@ def register(api) -> None:
         "Start the bundled workflow Skill.",
         _start_workflow,
         argument="optional",
+        argument_hint="optional: what the workflow should achieve",
         catalog_result="notice",
         execution_mode="serialized",
     )

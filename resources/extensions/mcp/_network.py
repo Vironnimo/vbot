@@ -124,7 +124,7 @@ class DestinationGuard(httpcore2.AsyncNetworkBackend):
                 addresses = await self.permitted(host, port)
         except TimeoutError as error:
             raise httpcore2.ConnectTimeout(f"Resolving {host} timed out") from error
-        failure: httpcore2.ConnectError | None = None
+        failure: httpcore2.ConnectError | httpcore2.ConnectTimeout | None = None
         for address in addresses:
             try:
                 # TLS still verifies against *host*: httpcore passes the origin host
@@ -136,7 +136,7 @@ class DestinationGuard(httpcore2.AsyncNetworkBackend):
                     local_address=local_address,
                     socket_options=socket_options,
                 )
-            except httpcore2.ConnectError as error:
+            except (httpcore2.ConnectError, httpcore2.ConnectTimeout) as error:
                 failure = error
         assert failure is not None
         raise failure

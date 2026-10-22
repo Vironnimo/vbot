@@ -310,16 +310,8 @@ export function renderReasoningMarkdownDocument(src, options) {
   return renderMarkdownDocument(reasoningMarkdownSource(src), options);
 }
 
-export function renderReasoningMarkdown(src, options) {
-  return renderReasoningMarkdownDocument(src, options).html;
-}
-
 export function renderReasoningMarkdownStreamingDocument(src, options) {
   return renderMarkdownStreamingDocument(reasoningMarkdownSource(src), options);
-}
-
-export function renderReasoningMarkdownStreaming(src, options) {
-  return renderReasoningMarkdownStreamingDocument(src, options).html;
 }
 
 export function renderMarkdownStreamingDocument(
@@ -361,8 +353,4 @@ export function renderMarkdownStreamingDocument(
     });
 
   return { html, codeBlocks };
-}
-
-export function renderMarkdownStreaming(src, options) {
-  return renderMarkdownStreamingDocument(src, options).html;
 }

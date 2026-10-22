@@ -23,6 +23,15 @@ _UNKNOWN = (
 )
 
 
+# How long a Secret is kept, for the notice that its lifetime changed.
+_KEPT = {
+    "permanent": "permanently",
+    "session": "for this Session",
+    "once": "for one use",
+    "until": "until its expiry",
+}
+
+
 def _address(request: JsonObject) -> str:
     agent = str(request.get("agent_id") or "")
     project = request.get("project_id")
@@ -143,8 +152,10 @@ async def give(app: ConversationApp, view: Conversation) -> bool:
             "name": result["name"],
             "kind": result["kind"],
             "values": result["values"],
-            "lifetime": result["lifetime"],
         }
+        # Without a lifetime a replaced Secret keeps its own; a new one lasts for the Session.
+        if result.get("lifetime"):
+            params["lifetime"] = result["lifetime"]
         if result.get("expires_at"):
             params["expires_at"] = result["expires_at"]
         if result.get("description"):
@@ -170,6 +181,9 @@ def _stored_notice(response: JsonObject, name: str, *, replaced: bool) -> str:
     secret = secret if isinstance(secret, dict) else {}
     stored = str(secret.get("name") or name)
     if replaced:
+        kept = _KEPT.get(str(secret.get("lifetime")))
+        if response.get("previous_lifetime") and kept:
+            return f"Replaced the value of {stored}. It is now kept {kept}."
         return f"Replaced the value of {stored}."
     reference = secret.get("reference")
     if reference:

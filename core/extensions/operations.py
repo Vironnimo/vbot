@@ -11,6 +11,7 @@ from typing import Any
 from jsonschema import Draft202012Validator
 
 from core.extensions.oauth_redirects import OAuthRedirects
+from core.permissions import PermissionBoundary
 from core.tools.availability import activation_sources
 from core.tools.tools import Tool, ToolContext, ToolRegistry
 
@@ -63,6 +64,10 @@ class ExtensionHost:
     capture_tool_call: Callable[[ToolContext], Awaitable[str | None]] | None = None
     restore_tool_call: Callable[[str], Awaitable[ToolContext | None]] | None = None
     deliver_tool_outcome: Callable[[str, str], Awaitable[bool]] | None = None
+    # API v18: the Permission Boundary a new Session of the addressed Agent
+    # (project id, Agent id) works under, for a Tool call an Extension makes as
+    # that Agent outside any Session (MCP management ``invoke``).
+    resolve_permissions: Callable[[str | None, str], Awaitable[PermissionBoundary]] | None = None
 
 
 @dataclass(frozen=True)

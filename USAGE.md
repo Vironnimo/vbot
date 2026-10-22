@@ -513,6 +513,7 @@ vbot data-store snapshot restore <snapshot-id> --database sessions --yes
 vbot data-store snapshot restore <snapshot-id> --documents --yes
 vbot data-store snapshot restore <snapshot-id> --all --yes
 vbot data-store unregister ext.<extension>.<name> --yes
+vbot data-store convert --yes
 vbot data-store config-backup list
 vbot data-store config-backup show <backup-id>
 vbot data-store config-backup restore <backup-id> --file settings.json --yes
@@ -528,6 +529,8 @@ Configuration backups protect the configuration files, which change far more oft
 `config-backup list` shows the backups, newest first, with the files each one changed; `show` compares one backup's files with the current ones (`same`, `differs`, `missing`). `restore` requires `--yes` and either `--file <path>` (repeatable, as `show` names it) or `--all`. It stops the target server when it runs, restores, and starts it again; when every selected file already matches, it changes nothing and leaves the server running. An interrupted restore keeps the server from starting until the same restore is repeated; other restores are refused until then. Before it changes anything it backs up the current state as `before restore <backup-id>`, so restoring that backup takes the restore back. A restore never deletes files: files created after the backup stay, and files whose folder no longer exists (a deleted or renamed Agent, Project or Channel), that are damaged in the backup, or that are reached through a symbolic link or junction (which backups never read) are refused when named and left alone by `--all`. `--all` also leaves the Secret Store `secrets.json` as it is; name it with `--file secrets.json` to restore it.
 
 `unregister` releases the database of a removed Extension. While it stays registered, data snapshots keep copying it, and once its file is gone, snapshot creation and updates refuse until it is released. The files move to `quarantine/` and the registration is dropped. It accepts only Extension databases (`ext.<extension>.<name>`), is refused while an Extension has the database open, and requires `--yes`. Earlier snapshots keep their copy, and restoring that database from one registers it again.
+
+`convert` brings documents an older vBot wrote to the current format, such as Project configurations from before the main instruction file loaded on its own; each Project keeps the instruction files it loaded. The application updater does this during an update; run it yourself for a data directory the updater does not update, for example a development checkout's, or after restoring older documents from a backup. vBot does not read such a document until it is converted, and `vbot doctor config` names the command. It requires `--yes`, stops the target server when it runs and starts it again, and changes nothing when every document is current.
 
 The Session database stores Runs, Messages, Tool invocations/results and checkpoints relationally.
 

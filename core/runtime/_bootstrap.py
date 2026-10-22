@@ -16,7 +16,7 @@ from core.activity import SessionActivity
 from core.agents import LIVE_BACKEND_BUILTIN
 from core.agents.agents import AgentStore
 from core.agents.temporary import TemporaryAgentRegistry
-from core.archive import ArchiveService
+from core.archive import ArchiveService, convert_archived_projects
 from core.attachments import AttachmentStore
 from core.automation import (
     AutomationReferences,
@@ -61,6 +61,7 @@ from core.permissions import (
     PermissionCeiling,
 )
 from core.projects import ProjectStore, build_agent_resolver
+from core.projects.conversion import convert_project_documents
 from core.prompts import (
     PromptAgentStore,
     SkillPromptRegistry,
@@ -289,6 +290,16 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._storage.data_dir,
             store_path=runtime._storage.layout.sessions_db_path,
         )
+        if runtime.safe_startup_mode == "verification":
+            # An update's verification start converts the Project configurations an
+            # older vBot wrote, live and archived, under the update's data snapshot;
+            # a failure fails the verification, so the update rolls back. Normal
+            # startup never converts: an older document stays unreadable until
+            # `vbot data-store convert` converts it.
+            convert_project_documents(runtime._storage.data_dir)
+            convert_archived_projects(
+                runtime._storage.data_dir, runtime._chat_sessions.archive_ledger
+            )
         runtime._attachment_store.collect_session_orphans(runtime._chat_sessions)
         runtime._usage_recorder = UsageRecorder(
             canonical_database_path(runtime._storage.data_dir, "model_usage"),
@@ -372,6 +383,7 @@ def bootstrap(runtime: Runtime) -> None:
             defaults_provider=lambda: storage.load_defaults().get("agent", {}),
             sessions=runtime._chat_sessions,
             snapshot_barrier=runtime._snapshot_barrier,
+            id_references=partial(_secret_grant_references, runtime._agent_secrets),
         )
         # A Session of an Identity Agent whose creator names no working Project
         # (Channels, Automation, wake word) works in the Agent's default Project.
@@ -727,6 +739,7 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._chat_run_manager,
             runtime,
             sessions=runtime._chat_sessions,
+            secret_masker=lambda: runtime.agent_secrets.masker,
         )
         runtime._trigger_service.set_owned_completion_starter(runtime._start_owned_completion)
         runtime._trigger_service.set_owned_completion_validator(runtime._validate_owned_completion)
@@ -1109,3 +1122,8 @@ def start_event_loop_service(service: _LoopService | None, unavailable: str) -> 
     except RuntimeError:
         return
     service.start()
+
+
+def _secret_grant_references(secrets: AgentSecrets, agent_id: str) -> tuple[str, ...]:
+    """The Agent Secret grants a new Identity Agent ``agent_id`` would inherit."""
+    return tuple(f"secret:{secret.name}" for secret in secrets.naming_identity_agent(agent_id))

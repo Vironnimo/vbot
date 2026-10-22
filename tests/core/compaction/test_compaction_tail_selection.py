@@ -25,7 +25,7 @@ from core.compaction.compaction import (
     TAIL_SOFT_LIMIT_PERCENT,
     _plan_working_tail,
 )
-from core.providers.github_copilot_responses import (
+from core.providers._responses_wire import (
     _messages_to_responses_input,
     estimate_responses_input_tokens,
 )

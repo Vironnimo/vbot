@@ -93,7 +93,14 @@ async function command(request) {
   sent.add(id);
   while (sent.size > 4096) sent.delete(sent.values().next().value);
   await saveDelivery();
-  await socket.sendMessage(socket.user.id, content, { messageId: id });
+  try {
+    await socket.sendMessage(socket.user.id, content, { messageId: id });
+  } catch {
+    // A rejected send promise does not prove that WhatsApp posted nothing.
+    const error = new Error('send_unconfirmed');
+    error.possiblyDelivered = true;
+    throw error;
+  }
   return {};
 }
 
@@ -107,8 +114,8 @@ input.on('line', line => {
       request = JSON.parse(line);
       const result = await command(request);
       emit({ id: request.id, ok: true, ...result });
-    } catch {
-      emit({ id: request?.id, ok: false, error: 'operation_failed' });
+    } catch (error) {
+      emit({ id: request?.id, ok: false, error: 'operation_failed', possibly_delivered: error?.possiblyDelivered === true });
     }
   });
 });

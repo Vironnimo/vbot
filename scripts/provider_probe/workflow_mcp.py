@@ -7,12 +7,14 @@ import ast
 import asyncio
 import json
 import logging
+from contextlib import AsyncExitStack
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from typing import Any, override
 
+from core.permissions import PermissionBoundary
 from core.tools.contracts import ToolContractError
 
 
@@ -31,6 +33,7 @@ async def _probe_mcp_workflow(adapter: Any, args: argparse.Namespace) -> dict[st
     from core.tools.availability import ToolAccess
     from core.tools.tools import ToolContext, ToolDefinitionProfileContext, ToolRegistry
     from core.utils.ids import new_id
+    from resources.extensions.mcp._transport import ConnectionTransport
     from resources.extensions.mcp.client import ConnectionRunner
     from resources.extensions.mcp.config import validate_connection
     from resources.extensions.mcp.extension import MCP_GUIDANCE, MCPService
@@ -126,14 +129,15 @@ async def _probe_mcp_workflow(adapter: Any, args: argparse.Namespace) -> dict[st
             {"id": "blender", "transport": "stdio", "command": "unused"}
         )
 
-        class FixtureRunner(ConnectionRunner):
+        class FixtureTransport(ConnectionTransport):
             @override
-            async def _transport(self, stack: Any) -> Any:
+            async def open(self, stack: AsyncExitStack) -> Any:
                 return server
 
-        runner = FixtureRunner(
+        runner = ConnectionRunner(
             service.connections["blender"], host, service.inputs, service._publish
         )
+        runner._transport = FixtureTransport(runner)
         service.runners[runner.id] = runner
         # Connected first, as a Session finds a known connection: the connection Tool's
         # description lists the application's Tools.
@@ -153,6 +157,7 @@ async def _probe_mcp_workflow(adapter: Any, args: argparse.Namespace) -> dict[st
             vbot_root=root,
             data_root=root,
             result_payload_hook=attach_payload,
+            permissions=PermissionBoundary.UNRESTRICTED,
         )
         definitions = registry.provider_definitions(
             allowed_tools=["mcp_blender"],
@@ -193,7 +198,7 @@ async def _probe_mcp_workflow(adapter: Any, args: argparse.Namespace) -> dict[st
             actions.append(str(inputs.get("action")))
             try:
                 result = await registry.dispatch(
-                    call_context, inputs, service._allowed(call_context)
+                    call_context, inputs, await service._allowed(call_context)
                 )
             except (ValueError, ToolContractError) as error:
                 # The Model sees the refusal Chat would return, including its corrected call.

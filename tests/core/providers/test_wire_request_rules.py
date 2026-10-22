@@ -54,7 +54,7 @@ def _bind_request_rules(adapter: Any, model_id: str, request: Mapping[str, Any])
     )
     assert parsed is not None and not issues
     profiles = wire.profiles
-    current = profiles.file_for(wire.provider_id) or parsed
+    current = profiles.files.get(wire.provider_id) or parsed
     rules = current.rules if current is not parsed else ()
     rule = replace(parsed.rules[0], index=len(rules))
     profiles.replace_files(

@@ -1223,6 +1223,8 @@ export default Object.freeze({
   'archive.problem.reservedTargetId':
     'Windows reserves this ID as a device name, like CON, NUL, AUX, COM1, or LPT1. Choose another ID.',
   'archive.problem.agentIdTaken': 'An Agent with the ID {id} exists.',
+  'archive.problem.agentIdReferenced':
+    'Agent Secrets are still granted to the ID {id}, kept for another archived Agent.',
   'archive.problem.projectIdTaken': 'A Project with the ID {id} exists.',
   'archive.problem.sessionTaken': 'A Session with the ID {ids} exists.',
   'archive.problem.projectCwdClaimed':

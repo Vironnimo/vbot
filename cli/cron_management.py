@@ -242,6 +242,7 @@ def _format_job_row(job: object) -> str:
             f" watch={_format_watch(job.get('watch'))}",
             f" last_outcome={last_outcome}",
             f" last_error={job.get('last_error') or '-'}",
+            *_format_alert(job.get("unread_alert")),
             f" prompt={prompt}",
         ],
         separator="",
@@ -286,6 +287,13 @@ def _format_delivery(delivery: object) -> str:
         if delivery.get(name)
     )
     return f"chat[{target}]"
+
+
+def _format_alert(alert: object) -> list[str]:
+    """The unread alert of a job, only while it has one."""
+    if not isinstance(alert, dict) or not isinstance(alert.get("message"), str):
+        return []
+    return [f" alert={alert['message']}"]
 
 
 def _format_watch(watch: object) -> str:

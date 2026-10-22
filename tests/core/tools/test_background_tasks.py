@@ -124,6 +124,7 @@ class Tasks:
             cwd=tmp_path,
             project_id=owner.project_id,
             result_persisted_hook=self.persisted.append,
+            permissions=PermissionBoundary.UNRESTRICTED,
         )
 
     async def call(

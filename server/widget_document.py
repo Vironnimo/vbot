@@ -3,7 +3,7 @@
 ``show_widget`` stores only the Agent's HTML. The server wraps it here on every
 request, so all widgets get the current base styles and bridge. The bridge
 reports the widget's state and height to the WebUI frame host
-(``.vorch/plans/agent-widgets.md`` -> Shell document and bridge).
+(``.vorch/domain-maps/tools/show_widget.md`` -> Widget document and bridge).
 """
 
 from __future__ import annotations

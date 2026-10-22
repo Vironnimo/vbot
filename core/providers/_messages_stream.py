@@ -9,6 +9,7 @@ from core.providers._messages_constants import (
     ANTHROPIC_ERROR_STOP_REASONS,
     ANTHROPIC_STOP_REASONS,
     ANTHROPIC_TOOL_STOP_REASONS,
+    ANTHROPIC_TRUNCATED_STOP_REASONS,
     REASONING_META_CONTENT_BLOCKS,
     THINKING_BLOCK_TYPE,
     TOOL_USE_BLOCK_TYPE,
@@ -307,7 +308,7 @@ class AnthropicMessagesStreamDecoder:
             return TERMINAL_OUTCOME_TOOL_CALLS
         if stop_reason in ANTHROPIC_STOP_REASONS:
             return TERMINAL_OUTCOME_TOOL_CALLS if has_tool_calls else TERMINAL_OUTCOME_STOP
-        if stop_reason == "max_tokens":
+        if stop_reason in ANTHROPIC_TRUNCATED_STOP_REASONS:
             return TERMINAL_OUTCOME_OUTPUT_TRUNCATED
         if stop_reason == "refusal":
             return TERMINAL_OUTCOME_CONTENT_FILTERED

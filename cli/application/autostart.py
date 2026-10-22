@@ -327,7 +327,8 @@ def user_unit_dir() -> Path:
 
 
 def _quote(value: str) -> str:
-    escaped = value.replace("%", "%%").replace("\\", "\\\\").replace('"', '\\"')
+    """Quote one ``ExecStart=`` argument; systemd expands ``%`` specifiers and ``$VAR``."""
+    escaped = value.replace("%", "%%").replace("$", "$$").replace("\\", "\\\\").replace('"', '\\"')
     return f'"{escaped}"'
 
 
@@ -385,7 +386,7 @@ def _unit_launcher(content: str) -> str | None:
         command = shlex.split(values[0])
     except ValueError:
         return None
-    return command[0].replace("%%", "%") if command else None
+    return command[0].replace("%%", "%").replace("$$", "$") if command else None
 
 
 def owned_unit(install: Installation, *, unit_dir: Path | None = None) -> Path | None:

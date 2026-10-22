@@ -697,7 +697,11 @@ function normalizeCronJob(job, systemTimezone = 'UTC') {
       last_delivered_at: optionalText(
         job?.delivery_progress?.last_delivered_at,
       ),
+      // Older messages dropped unsent; the next sent one names them.
+      dropped: Math.max(0, Number(job?.delivery_progress?.dropped) || 0),
     },
+    // The latest alert no Run reports, until the user marks it read; or null.
+    unread_alert: normalizeUnreadAlert(job?.unread_alert, systemTimezone),
     // The latest check, the latest change whose Run succeeded, and why the
     // latest check failed (null once a check succeeds again).
     last_checked_at: lastCheckedAt,
@@ -780,6 +784,20 @@ function normalizeDeliveryKind(value) {
   return value === CRON_DELIVERY_APP || value === CRON_DELIVERY_CHAT
     ? value
     : CRON_DELIVERY_NONE;
+}
+
+function normalizeUnreadAlert(alert, systemTimezone) {
+  const message = asText(alert?.message);
+  if (!message) {
+    return null;
+  }
+  const at = optionalText(alert?.at);
+  return {
+    message,
+    at,
+    kind: alert?.kind === 'delivery' ? 'delivery' : 'failure',
+    at_display: formatTimestamp(at, systemTimezone),
+  };
 }
 
 function normalizeLastResult(result, systemTimezone) {

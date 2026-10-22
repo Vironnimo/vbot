@@ -636,19 +636,31 @@
     aria-label={t('chat.composerArea')}
     use:focusInputFromWrapAction
   >
-    <textarea
-      bind:this={inputElement}
-      bind:value={content}
-      class="msg-input"
-      {disabled}
-      aria-label={t('chat.composerLabel')}
-      oninput={handleInput}
-      onkeydown={handleKeydown}
-      onpaste={media.handlePaste}
-      onclick={handleSelection}
-      onkeyup={handleSelection}
-      placeholder={t('chat.composerPlaceholder')}
-      rows="1"></textarea>
+    <div class="msg-input-field">
+      {#if picker.commandArgumentHint}
+        <!-- What may follow the typed command, greyed behind the caret. -->
+        <div class="msg-input-ghost" aria-hidden="true">
+          <span class="msg-input-ghost__typed"
+            >{picker.commandArgumentHint.typed}</span
+          ><span class="msg-input-ghost__hint"
+            >{picker.commandArgumentHint.hint}</span
+          >
+        </div>
+      {/if}
+      <textarea
+        bind:this={inputElement}
+        bind:value={content}
+        class="msg-input"
+        {disabled}
+        aria-label={t('chat.composerLabel')}
+        oninput={handleInput}
+        onkeydown={handleKeydown}
+        onpaste={media.handlePaste}
+        onclick={handleSelection}
+        onkeyup={handleSelection}
+        placeholder={t('chat.composerPlaceholder')}
+        rows="1"></textarea>
+    </div>
     <ContextUsageRing
       {contextUsage}
       {contextWindow}

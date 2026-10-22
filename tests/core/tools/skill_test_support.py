@@ -7,6 +7,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
+from core.permissions import PermissionBoundary
 from core.runs import RunKind
 from core.skills.skills import SkillRegistry
 from core.tools import (
@@ -76,6 +77,7 @@ class SkillTool:
             skill_activation_hook=activation_hook,
             allowed_skills=["*"] if allowed_skills is None else allowed_skills,
             run_kind=run_kind,
+            permissions=PermissionBoundary.UNRESTRICTED,
         )
         result = asyncio.run(self.tools.dispatch(context, arguments, [SKILL_TOOL_NAME]))
         return cast(dict[str, Any], result)

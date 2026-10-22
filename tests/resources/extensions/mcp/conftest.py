@@ -12,6 +12,7 @@ import pytest_asyncio
 from mcp.server import MCPServer
 
 from core.extensions.operations import ExtensionHost
+from core.permissions import PermissionBoundary
 from core.tools.availability import ToolAccess
 from resources.extensions.mcp.config import validate_connection
 from tests.resources.extensions.mcp.mcp_test_support import SessionPayloads, start_service
@@ -21,6 +22,9 @@ from tests.resources.extensions.mcp.mcp_test_support import SessionPayloads, sta
 def host(tmp_path: Path) -> ExtensionHost:
     async def sample(context: Any, request: Any) -> dict[str, Any]:
         return {"model": "test/model", "content": "sampled", "usage": {"input_tokens": 2}}
+
+    async def unrestricted(project: str | None, name: str) -> PermissionBoundary:
+        return PermissionBoundary.UNRESTRICTED
 
     credentials: dict[str, str] = {}
     agent = SimpleNamespace(
@@ -43,6 +47,7 @@ def host(tmp_path: Path) -> ExtensionHost:
         set_credential=lambda key, value: credentials.__setitem__(key, value),
         state_dir=state_dir,
         load_result_payload=payloads.load,
+        resolve_permissions=unrestricted,
     )
 
 

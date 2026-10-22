@@ -9,6 +9,7 @@ from core.prompts.blocks import BlockDefinition, LayoutEntry
 from core.prompts.prompts import ProjectPromptContext
 from core.storage.prompt_blocks import PromptBlockStore
 from core.tools.availability import ToolAccess
+from core.tools.file_state import FileRead
 from tests.core.prompts.prompts_test_support import (
     StubBlockStore,
     StubSkill,
@@ -51,7 +52,7 @@ def test_explicit_participant_selection_controls_preview_and_runtime(tmp_path: P
         ],
     )
     agent = _temporary_agent(tmp_path, ["core:agent_body"])
-    reads: list[Path] = []
+    reads: list[FileRead] = []
     assert (
         manager.build_system_prompt(
             agent,
@@ -62,7 +63,7 @@ def test_explicit_participant_selection_controls_preview_and_runtime(tmp_path: P
         == "body-sentinel"
     )
     assert calls == []
-    assert project_file not in reads
+    assert project_file not in [path for path, _stamp in reads]
     details: list[dict[str, object]] = []
     preview = manager.build_system_prompt(
         agent,
@@ -82,7 +83,7 @@ def test_explicit_participant_selection_controls_preview_and_runtime(tmp_path: P
         read_paths=reads,
     )
     assert "project-content-sentinel" in prompt
-    assert project_file in reads
+    assert project_file in [path for path, _stamp in reads]
     assert "future-sentinel" not in prompt
     assert (
         manager.build_system_prompt(replace(agent, prompt_blocks=[]), agent_body="body-sentinel")

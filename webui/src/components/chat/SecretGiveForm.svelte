@@ -21,6 +21,7 @@
     lifetimeChoiceDuration,
     lifetimeChoiceParams,
     lifetimeChoices,
+    lifetimeLabel,
     normalizeSecretName,
     secretCommandText,
     secretReference,
@@ -61,7 +62,9 @@
   let name = $state('');
   let kind = $state('token');
   let values = $state({});
-  let lifetime = $state('session');
+  // A value for a Secret the Agent has keeps that Secret's lifetime unless
+  // the user picks another.
+  let lifetime = $state('keep');
   let description = $state('');
   let submitted = $state(false);
   let busy = $state(false);
@@ -112,15 +115,19 @@
     );
   }
 
-  function storedNotice(secret, replaced, given) {
+  function storedNotice(secret, replaced, given, previousLifetime = null) {
     const short = fields.some(
       (field) =>
         field.concealed &&
         given[field.name] &&
         given[field.name].length < SHORT_VALUE,
     );
+    const changed =
+      replaced && previousLifetime && secret.lifetime
+        ? ` ${t('chat.secretForm.lifetimeChanged', { lifetime: lifetimeLabel(secret.lifetime) })}`
+        : '';
     const stored = replaced
-      ? t('chat.secretForm.replaced', { name: secret.name })
+      ? `${t('chat.secretForm.replaced', { name: secret.name })}${changed}`
       : t('chat.secretForm.stored', {
           name: secret.name,
           reference: secret.reference ?? secretReference(secret.name),
@@ -164,6 +171,7 @@
             result?.secret ?? { name: normalizedName },
             result?.replaced === true,
             given,
+            result?.previous_lifetime ?? null,
           ),
         );
         onClose();
@@ -301,7 +309,7 @@
               id={control.controlId}
               ariaLabelledby={control.labelId}
               value={lifetime}
-              options={lifetimeChoices()}
+              options={lifetimeChoices({ keep: 'give' })}
               disabled={busy}
               onValueChange={(next) => (lifetime = next)}
             />

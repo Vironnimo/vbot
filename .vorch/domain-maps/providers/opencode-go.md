@@ -10,7 +10,7 @@ OpenAI-compatible gateway with per-Model protocol/request profiles across **four
 - Gemini transport and codec: `core/providers/gemini_compatible.py` and `_gemini_wire.py`, shared with Zen
 - Default runtime endpoint: OpenAI-compatible `POST /chat/completions`
 - Alternate runtime endpoint for selected models: `POST /messages` through an internal `AnthropicCompatibleAdapter`
-- Alternate runtime endpoint for selected models: `POST /responses` through the shared stateless Responses machinery (`core/providers/github_copilot_responses.py`, same shape the OpenRouter adapter uses for its GPT-5.6 ids)
+- Alternate runtime endpoint for selected models: `POST /responses` through the shared stateless Responses machinery (`core/providers/_responses_wire.py`, same shape the OpenRouter adapter uses for its GPT-5.6 ids)
 
 ## Shared OpenCode credentials
 

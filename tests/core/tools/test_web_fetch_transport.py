@@ -198,7 +198,9 @@ async def test_a_redirect_back_after_a_login_service_set_cookies_reaches_the_pag
     login = "https://idp.example.org/authorize"
     requested: list[str] = []
 
-    async def http_get(session: StreamingSession, url: str, max_bytes: int) -> PublicResponse:
+    async def http_get(
+        session: StreamingSession, url: str, max_bytes: int, **_options: Any
+    ) -> PublicResponse:
         del max_bytes
         requested.append(url)
         if url == login:
@@ -566,8 +568,23 @@ async def test_request_is_a_pinned_browser_like_get_with_a_streamed_body(
         ),
         ("text/html", b"<p>Gr\xc3\xbc\xc3\x9fe aus K\xc3\xb6ln</p>", "Grüße aus Köln"),
         ("text/plain", b"Gr\xfc\xdfe \x93aus\x94 K\xf6ln", "Grüße \u201caus\u201d Köln"),
+        # A codec label that names no page charset falls back to detection.
+        ("text/plain; charset=idna", b"Gr\xc3\xbc\xc3\x9fe aus K\xc3\xb6ln", "Grüße aus Köln"),
+        (
+            "text/plain; charset=unicode_escape",
+            rb"C:\new\u00e9 Gr" + b"\xfc\xdfe",
+            r"C:\new\u00e9 Grüße",
+        ),
     ],
-    ids=["header-charset", "byte-order-mark", "meta-charset", "undeclared-utf-8", "undeclared"],
+    ids=[
+        "header-charset",
+        "byte-order-mark",
+        "meta-charset",
+        "undeclared-utf-8",
+        "undeclared",
+        "failing-codec",
+        "rewriting-codec",
+    ],
 )
 async def test_bodies_are_decoded_as_a_browser_decodes_them(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, content_type: str, body: bytes, text: str
@@ -588,7 +605,7 @@ async def test_redirect_hosts_use_the_same_canonical_url_and_dns_pin(
     calls: list[tuple[str, list[str]]] = []
     redirects = ["https://bücher.example.:8443/page", f"https://[{IPV6_ADDRESS}]/page"]
 
-    async def get(session: Any, url: str, max_bytes: int) -> PublicResponse:
+    async def get(session: Any, url: str, max_bytes: int, **_options: Any) -> PublicResponse:
         calls.append((url, list(session.curl_options[CurlOpt.RESOLVE])))
         if len(calls) <= len(redirects):
             return make_result(status_code=302, headers={"Location": redirects[len(calls) - 1]})
@@ -614,7 +631,7 @@ async def test_calls_share_a_bounded_number_of_requests_per_host(
     peak: Counter[str] = Counter()
     release = asyncio.Event()
 
-    async def get(session: Any, url: str, max_bytes: int) -> PublicResponse:
+    async def get(session: Any, url: str, max_bytes: int, **_options: Any) -> PublicResponse:
         host = urlparse(url).hostname or ""
         active[host] += 1
         peak[host] = max(peak[host], active[host])

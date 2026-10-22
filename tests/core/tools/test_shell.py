@@ -228,24 +228,30 @@ async def test_agent_secrets_reach_only_the_command_environment(tmp_path: Path) 
         refused = await shell.call({"command": "login {{secret:GITHUB.password}}"})
         call = shell.call(
             {
-                "command": "login",
+                # An escaped reference runs as the reference text itself.
+                "command": "login {{!secret:GITHUB}}",
                 "env_keys": ["GITHUB", "API_TOKEN"],
-                "env": {"PGPASSWORD": "{{secret:GITHUB.password}}"},
+                "env": {"PGPASSWORD": "{{secret:GITHUB.password}}", "DOC": "{{!secret:A}} b"},
             }
         )
         process = await shell.started()
+        # Live output is masked; a value still being written is held back.
+        process.write("got hunter2-very-secret\nnext hunter2-ve")
+        await eventually(lambda: shell.live_output)
         process.exit(0)
         await shell.returned(call)
 
+    assert shell.live_output[-1]["output"] == "got {{secret:GITHUB.password}}\nnext "
     assert refused["ok"] is False
     assert len(shell.launcher.processes) == 1
     command, env = launched(shell.launcher)
-    assert command == "login"
+    assert command == "login {{secret:GITHUB}}"
     assert (env["GITHUB_USERNAME"], env["GITHUB_PASSWORD"], env["PGPASSWORD"]) == (
         "julian",
         "hunter2-very-secret",
         "hunter2-very-secret",
     )
+    assert env["DOC"] == "{{secret:A}} b"
     # A credential a command received is masked from then on, like a Secret.
     assert secrets.masker.mask("value-of-API_TOKEN") == "{{secret:API_TOKEN}}"
 
@@ -1308,6 +1314,7 @@ async def run_real(tmp_path: Path, command: str, *, tools: tuple[str, ...] = ())
         vbot_root=tmp_path,
         data_root=tmp_path,
         cwd=tmp_path,
+        permissions=PermissionBoundary.UNRESTRICTED,
     )
     async with real_shell(tmp_path) as registry:
         result = await asyncio.wait_for(

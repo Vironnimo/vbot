@@ -229,11 +229,13 @@ def validate_format_version(
     version: int,
     *,
     path: str = "$",
+    older_hint: str = "convert the file first",
 ) -> bool:
     """Check ``format_version`` against the version this vBot reads.
 
     Returns whether the rest of the document may be validated: fields of another
-    version have another meaning.
+    version have another meaning. ``older_hint`` ends the error of an older
+    version; an owner with a converter names how to run it.
     """
 
     field_path = child_path(path, FORMAT_VERSION_FIELD)
@@ -259,7 +261,7 @@ def validate_format_version(
         add_error(
             diagnostics,
             field_path,
-            f"is {value}, but this vBot reads version {version}; convert the file first",
+            f"is {value}, but this vBot reads version {version}; {older_hint}",
         )
         return False
     return True

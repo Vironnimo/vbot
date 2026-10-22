@@ -182,6 +182,10 @@ def test_path_decisions(area: Area, path: str, access: PathAccess, reason: str |
         ),
         pytest.param(".", "read", None, ("secrets",), None, id="denied-folder-left-out"),
         pytest.param("{data}/..", "read", None, (), "protected_location", id="data-dir-below"),
+        # Below a part of the data directory the access may reach lies nothing protected.
+        pytest.param("{scratch}", "write", None, (), None, id="scratch-area"),
+        pytest.param("{workspace}", "read", "*.md", (), None, id="workspace"),
+        pytest.param("{skills}", "read", None, (), None, id="readable-folder"),
         pytest.param("{root}", "write", None, (), "protected_location", id="installation-below"),
     ],
 )
@@ -267,6 +271,7 @@ def test_a_workspace_working_directory_is_writable_except_agent_json(area: Area)
     boundary = area.boundary({"write": "work_area"}, workdir=area.workspace)
 
     assert boundary.check_path("MEMORY.md", "write") is None
+    assert boundary.check_path("drafts", "write", subtree=True) is None
     refusal = boundary.check_path("../agent.json", "write")
     assert refusal is not None and refusal.location == "agent_config"
 
@@ -394,6 +399,9 @@ def test_malformed_ceilings_are_refused(stored: object) -> None:
         pytest.param("167772165", None, id="number-form-of-listed-ip"),
         pytest.param("127.0.0.1", "deny_rule", id="ip-denied-in-short-form"),
         pytest.param("0x7f000001", "deny_rule", id="hex-form-of-denied-ip"),
+        pytest.param("[::ffff:10.0.0.5]", None, id="ipv6-mapped-form-of-listed-ip"),
+        pytest.param("::ffff:7f00:1", "deny_rule", id="ipv6-mapped-form-of-denied-ip"),
+        pytest.param("192.0.2.1", "deny_rule", id="ip-denied-in-ipv6-mapped-form"),
         pytest.param("other.org", "not_permitted", id="unlisted-host"),
         pytest.param("", "unanalyzable", id="no-host"),
     ],
@@ -403,7 +411,7 @@ def test_host_decisions(area: Area, host: str, reason: str | None) -> None:
         {
             "web": "listed",
             "allow": ["Web(example.com)", "Web(*.github.com)", "Web(10.0.0.5)"],
-            "deny": ["Web(bad.example.com)", "Web(127.1)"],
+            "deny": ["Web(bad.example.com)", "Web(127.1)", "Web([::ffff:192.0.2.1])"],
         }
     )
 

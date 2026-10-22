@@ -41,6 +41,8 @@ Once startup is complete the performance monitor starts in every mode (a passive
 
 ## Service properties
 
+`suggest_agent_description` wires the stateless Agents-owned operation (`core/agents/description.py`).
+
 Explicit typed service declarations share the read-only readiness/availability guard in `_service_access.py`; special properties retain their individual contracts. Initial construction and every shutdown use the same service-reference initializer, including Extension host groups and the selected Recall integration.
 
 All service properties raise `RuntimeError` outside a started runtime, **except `extensions`** (returns `None`); `chat_runs` is a plain attribute until `start()`. `config` is available pre-start (bind resolution). Non-obvious members beyond self-describing services:

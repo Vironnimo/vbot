@@ -41,6 +41,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from core.permissions import PermissionBoundary
 from core.providers.adapter import tool_result_text
 from core.tools.tools import ToolCall, ToolExecutionConfig, ToolExecutor
 from core.utils.tokens import estimate_tokens
@@ -176,6 +177,7 @@ async def run_cases(
                 allowed_tools=names,
                 session_tool_grants=names,
                 input_contracts=contracts,
+                permissions=PermissionBoundary.UNRESTRICTED,
             )
             steps: list[StepOutcome] = []
             for index, step in enumerate(case.steps):

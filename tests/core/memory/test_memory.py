@@ -24,9 +24,9 @@ from core.memory import (
     MemoryTextChange,
     MemoryWriter,
     memory_block_definition,
-    memory_prompt_file_paths,
     read_memory_files,
 )
+from core.tools.file_state import FileRead
 from core.utils.paths import model_path
 
 
@@ -369,9 +369,10 @@ def test_prompt_cuts_a_scope_above_its_budget_and_counts_what_it_left_out(
     )
     (workspace / "USER.md").write_text(f"- {'U' * 3500}\n", encoding="utf-8")
 
+    reads: list[FileRead] = []
     with caplog.at_level(logging.INFO, logger="vbot.memory"):
         rendered = service.read_prompt_files(
-            workspace, MEMORY_PROMPT_MODE_AGENT_USER, memory_tool=memory_tool
+            workspace, MEMORY_PROMPT_MODE_AGENT_USER, memory_tool=memory_tool, on_read=reads.append
         )
         assert (
             service.read_prompt_files(
@@ -393,7 +394,7 @@ def test_prompt_cuts_a_scope_above_its_budget_and_counts_what_it_left_out(
     assert "No entries yet." not in user_section
     assert ("`user`" in user_section) is (memory_tool is not None)
     assert all(entry in service.render_scopes(workspace, ["agent"]) for entry in agent_entries)
-    assert memory_prompt_file_paths(workspace, MEMORY_PROMPT_MODE_AGENT_USER) == []
+    assert reads == []
     # One warning per cut file for repeated renders, without entry text.
     assert [record.levelno for record in caplog.records] == [logging.WARNING] * 2
     assert "AAAA" not in caplog.text and "UUUU" not in caplog.text
@@ -402,14 +403,14 @@ def test_prompt_cuts_a_scope_above_its_budget_and_counts_what_it_left_out(
     service.remove_matching(workspace, "agent", "D" * 10)
     caplog.clear()
     with caplog.at_level(logging.INFO, logger="vbot.memory"):
-        whole = service.read_prompt_files(workspace, MEMORY_PROMPT_MODE_AGENT, memory_tool=None)
+        whole = service.read_prompt_files(
+            workspace, MEMORY_PROMPT_MODE_AGENT, memory_tool=None, on_read=reads.append
+        )
 
     assert whole == service.render_scopes(workspace, ["agent"])
     # The end of the condition is logged once.
     assert [record.levelno for record in caplog.records] == [logging.INFO]
-    assert memory_prompt_file_paths(workspace, MEMORY_PROMPT_MODE_AGENT) == [
-        (workspace / "MEMORY.md").resolve()
-    ]
+    assert [path for path, _stamp in reads] == [(workspace / "MEMORY.md").resolve()]
 
 
 @pytest.mark.parametrize(
@@ -421,17 +422,21 @@ def test_prompt_cuts_a_scope_above_its_budget_and_counts_what_it_left_out(
         (MEMORY_PROMPT_MODE_OFF, ["MEMORY.md"], []),
     ],
 )
-def test_memory_prompt_file_paths_lists_existing_selected_files(
-    workspace: Path, mode: MemoryPromptMode, existing: list[str], expected: list[str]
+def test_memory_prompt_reports_only_existing_selected_files(
+    service: MemoryService,
+    workspace: Path,
+    mode: MemoryPromptMode,
+    existing: list[str],
+    expected: list[str],
 ) -> None:
     # The read-before-write stamping source: absent files have nothing to stamp.
     workspace.mkdir()
     for name in existing:
         (workspace / name).write_text("- fact\n", encoding="utf-8")
 
-    assert memory_prompt_file_paths(workspace, mode) == [
-        (workspace / name).resolve() for name in expected
-    ]
+    reads: list[FileRead] = []
+    service.read_prompt_files(workspace, mode, memory_tool=None, on_read=reads.append)
+    assert [path for path, _stamp in reads] == [(workspace / name).resolve() for name in expected]
 
 
 def test_memory_block_definition_declares_guidance_and_embedded_marker() -> None:

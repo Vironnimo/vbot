@@ -12,6 +12,7 @@ from tempfile import TemporaryDirectory
 from typing import Any, cast
 
 from core.chat.messages import ToolCall
+from core.permissions import PermissionBoundary
 from core.providers.tool_schema import render_tool_definitions
 from core.tools import tool_failure
 from core.tools.contracts import ToolContractError
@@ -181,6 +182,7 @@ async def _probe_swarm_tool(adapter: Any, args: argparse.Namespace) -> dict[str,
                 ),
                 delivery_receipt_hook=lambda *_: None,
                 request_turn_end_hook=lambda *_: None,
+                permissions=PermissionBoundary.UNRESTRICTED,
             )
             if args.swarm_case.startswith("communication_"):
                 return await communication_trial(

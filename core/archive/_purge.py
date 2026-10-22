@@ -6,9 +6,10 @@ first brings the usage ledger up to date (recorded usage outlives the Sessions;
 when that fails, no entry changes), then claims its entries (``purging``), then
 finishes an Agent archive's cleanup that did not complete, then deletes each
 entry's member Sessions newest first, one transaction each, then its payload
-trees, then the entry. It holds no compound mutation: an entry left
-``purging`` by a failure, a stop request or a crash keeps what is not deleted
-yet, and a later purge of it, manual or by the retention sweep, continues.
+trees, then an archived Agent's Agent Secret grants, then the entry. It holds no
+compound mutation: an entry left ``purging`` by a failure, a stop request or a
+crash keeps what is not deleted yet, and a later purge of it, manual or by the
+retention sweep, continues.
 """
 
 from __future__ import annotations
@@ -17,7 +18,12 @@ import threading
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
-from core.archive._operations import cleanup_agent, prune_empty_parents, stored_path
+from core.archive._operations import (
+    cleanup_agent,
+    holds_agent_id_grants,
+    prune_empty_parents,
+    stored_path,
+)
 from core.archive._types import PendingPurge, PurgedEntry, PurgeOutcome, SkippedPurge
 from core.sessions import (
     ARCHIVE_KIND_AGENT,
@@ -160,6 +166,9 @@ def _purge_claimed(
             path = stored_path(services, tree.path)
             remove_tree(path, within=archive_root, stop=check_stop)
             prune_empty_parents(services, path)
+        if entry.kind == ARCHIVE_KIND_AGENT and holds_agent_id_grants(services, entry):
+            # Kept for a restore that can no longer happen.
+            services.release_agent_secrets(entry.subject_id)
         ledger.finish_purge(entry.entry_key)
     except _StoppedError:
         _LOGGER.debug("Archive entry purge stopped; it continues later (entry=%s)", entry.entry_id)

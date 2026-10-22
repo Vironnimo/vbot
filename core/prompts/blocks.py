@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from core.prompts._block_types import (
     BLOCK_KIND_DATA,
@@ -55,9 +55,6 @@ from core.prompts._templates import (
     render_prompt_file as render_prompt_file,
 )
 from core.utils.logging import get_logger
-
-if TYPE_CHECKING:
-    from core.prompts._types import PromptAgent
 
 _LOGGER = get_logger("prompts")
 
@@ -140,29 +137,6 @@ def resolve_layout(
         for definition in missing
     )
     return resolved
-
-
-def passes_gates(
-    block: ResolvedBlock,
-    agent: PromptAgent,
-    owner_activity: OwnerActivity,
-    rendered_text: str,
-) -> bool:
-    """Return whether a block clears all three gates (D5).
-
-    A block renders only when **all three** hold:
-
-    1. user-enabled — its layout entry is ``enabled`` (a defaulted-in block
-       follows its definition's ``default_enabled``).
-    2. owner-active — the owner is active for this agent/run (delegated to the
-       injected :class:`OwnerActivity`, never hardcoded here).
-    3. non-empty — the effective rendered text is non-empty after trim.
-    """
-    if not block.enabled:
-        return False
-    if not owner_activity.is_owner_active(block.definition.owner, agent):
-        return False
-    return bool(rendered_text.strip())
 
 
 def resolve_block_text(
@@ -371,7 +345,6 @@ __all__ = [
     "load_layout_entries",
     "normalize_blocks",
     "parse_block_source",
-    "passes_gates",
     "render_dynamic_block",
     "resolve_block_text",
     "resolve_layout",

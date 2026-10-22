@@ -9,6 +9,7 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -103,11 +104,16 @@ async def test_a_suggested_description_comes_from_the_agent_files_and_saves_noth
 ) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     adapter = StubAdapter([{"content": '"Reviews pull requests for correctness."\nMore text'}])
+    close_adapter = AsyncMock()
+    monkeypatch.setattr(adapter, "aclose", close_adapter, raising=False)
     state = make_state(tmp_path, adapter)
     workspace = tmp_path / "coder-workspace"
     workspace.mkdir()
     state.runtime.agents.update("coder", workspace=str(workspace))
     (workspace / "SOUL.md").write_text("You review pull requests.", encoding="utf-8")
+    sessions = state.runtime.chat_sessions
+    sessions.set_title(sessions.create("coder").address, "Review the RPC changes")
+    sessions.set_title(sessions.create("another-agent").address, "Unrelated private task")
 
     result = await rpc_result(state, "agent.suggest_description", id="coder")
 
@@ -118,6 +124,10 @@ async def test_a_suggested_description_comes_from_the_agent_files_and_saves_noth
     assert user["content"].startswith("<agent>\n")
     assert "You review pull requests." in user["content"]
     assert "debugging: Debug failures." in user["content"]
+    assert "Review the RPC changes" in user["content"]
+    assert "Unrelated private task" not in user["content"]
+    assert adapter.requests[0]["model_id"] == "gpt-5.2"
+    close_adapter.assert_awaited_once()
     assert state.runtime.agents.get("coder").description == ""
 
 

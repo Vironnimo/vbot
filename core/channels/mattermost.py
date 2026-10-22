@@ -24,7 +24,6 @@ class MattermostChannelAdapter(NetworkChannelAdapter):
         self._token = self.credential(self._config.token_env_var)
         self._base = self._config.server_url.rstrip("/") + "/api/v4"
         self._headers = {"Authorization": f"Bearer {self._token}"}
-        self._username = ""
 
     async def api(self, method: str, path: str, **kwargs: Any) -> Any:
         return await self.request(method, self._base + path, headers=self._headers, **kwargs)
@@ -33,7 +32,6 @@ class MattermostChannelAdapter(NetworkChannelAdapter):
     async def _listen(self) -> None:
         identity = await self.api("GET", "/users/me")
         self._bot_id = identity["id"]
-        self._username = identity["username"]
         parts = urlsplit(self._base + "/websocket")
         url = urlunsplit(
             ("wss" if parts.scheme == "https" else "ws", parts.netloc, parts.path, "", "")

@@ -175,7 +175,7 @@ class RecoveryBudget:
 
 @dataclass
 class _RouteFailures:
-    failures: int
+    cooldown: float
     retry_at: float
 
 
@@ -194,10 +194,12 @@ class RouteHealth:
     def failed(self, route: str) -> float:
         """Record that ``route`` gave up; return when new Runs try it again."""
         record = self._routes.get(route)
-        failures = (record.failures if record is not None else 0) + 1
-        pause = min(ROUTE_COOLDOWN_SECONDS * 2.0 ** (failures - 1), MAX_ROUTE_COOLDOWN_SECONDS)
+        pause = min(
+            record.cooldown * 2 if record is not None else ROUTE_COOLDOWN_SECONDS,
+            MAX_ROUTE_COOLDOWN_SECONDS,
+        )
         retry_at = self._clock() + pause
-        self._routes[route] = _RouteFailures(failures, retry_at)
+        self._routes[route] = _RouteFailures(pause, retry_at)
         return retry_at
 
     def recovered(self, route: str) -> None:

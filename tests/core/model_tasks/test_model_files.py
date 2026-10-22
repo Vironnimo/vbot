@@ -147,12 +147,22 @@ def test_fetch_adopts_verified_copies_from_earlier_revisions_and_the_cache(
 
 
 @pytest.mark.parametrize("ranges", [True, False], ids=["resumed", "range-ignored"])
-def test_fetch_continues_a_partial_download(tmp_path: Path, hub, ranges: bool) -> None:
+def test_fetch_continues_a_partial_download(
+    tmp_path: Path, hub, monkeypatch: pytest.MonkeyPatch, ranges: bool
+) -> None:
     model = pinned(**{"model.bin": WEIGHTS})
     target = tmp_path / "model"
     target.mkdir()
     (target / "model.bin.part").write_bytes(WEIGHTS[:1000])
     server = hub(Hub({"model.bin": WEIGHTS}, ranges=ranges))
+    # Enough room for the remaining bytes and the safety margin, but not a
+    # second complete copy: already downloaded bytes must count toward resume.
+    usage = model_files.shutil.disk_usage(tmp_path)
+    monkeypatch.setattr(
+        model_files.shutil,
+        "disk_usage",
+        lambda _path: usage._replace(free=len(WEIGHTS) - 1000 + model_files._SPACE_MARGIN_BYTES),
+    )
 
     fetch(model, target)
 

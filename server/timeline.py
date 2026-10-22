@@ -13,7 +13,7 @@ import json
 from collections.abc import AsyncGenerator
 from typing import Any, cast, override
 
-from core.chat.timeline import history_timeline
+from core.chat.timeline import history_timeline, history_tool_call
 from core.runs import Run, RunTimeline
 from core.sessions import SessionAddress
 from core.utils.workers import finish_despite_cancel
@@ -313,6 +313,54 @@ async def timeline_children(
             "before": before,
             "has_more": start > 0,
         },
+        include_file_urls=include_file_urls,
+    )
+
+
+async def timeline_tool_call(
+    state: Any,
+    address: SessionAddress,
+    run_id: str,
+    tool_id: str,
+    generation: str,
+    *,
+    include_file_urls: bool = False,
+) -> JsonObject:
+    """Read the complete arguments and result of one Tool row of an addressed Run.
+
+    Timeline rows carry only previews of them; a client reads the raw call when
+    the user opens it. ``include_file_urls`` lists its verified file links for a
+    host that grants them per read, such as an Extension page.
+    """
+    session = await state.runtime.chat_sessions.get_async(address)
+    if session.generation_id != generation:
+        raise ValueError("The Session changed; reload its history.")
+    active = state.chat_runs.active_run(
+        agent_id=address.agent_id, session_id=address.session_id, project_id=address.project_id
+    )
+    raw = None
+    if active is not None and active.id == run_id and active.timeline is not None:
+        raw = active.timeline.raw_tool_call(tool_id)
+    if raw is None:
+        messages = await session.load_run_messages_async(run_id)
+
+        def project() -> JsonObject | None:
+            return history_tool_call(
+                [
+                    {**record, "history_run_id": run_id}
+                    for message in messages
+                    if (record := history_message(message, file_delivery=state.file_delivery))
+                    is not None
+                ],
+                tool_id,
+            )
+
+        raw = await FILE_PREVIEW_WORKERS.run(project)
+    if raw is None:
+        raise ValueError("The Tool call is unavailable; reload the conversation.")
+    return await _public_frame(
+        state,
+        {"run_id": run_id, "tool_id": tool_id, "history_generation": generation, **raw},
         include_file_urls=include_file_urls,
     )
 

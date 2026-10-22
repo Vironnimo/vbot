@@ -210,6 +210,10 @@ DATA_STORE_HELP = {
     ),
     "incident": "Manage durable database recovery incidents",
     "unregister": "Release the database of a removed Extension (files move to quarantine)",
+    "convert": (
+        "Convert the documents an older vBot wrote to the current format (the updater does "
+        "this on its own; for data directories it does not update)"
+    ),
     "secrets": (
         "List, set and unset the credentials vBot itself uses in the encrypted Secret "
         "Store, or inspect, convert or replace the store. Values Agents use by reference "
@@ -502,16 +506,6 @@ MEMORY_HELP = {
     "show": "Show one agent's memory entries as they were after a revision",
     "diff": "Compare one agent's memory between two revisions, or a revision and now",
     "revert": "Take back the changes of one or more revisions",
-}
-
-
-EXTENSIONS_HELP = {
-    "list": "List loaded, failed, and disabled extensions",
-    "reload": "Reload all extensions from disk (applies code changes, applied live)",
-    "enable": "Enable a disabled extension (applied live)",
-    "disable": "Disable an extension (applied live)",
-    "show": "Show one extension's settings (schema, current values, secret set-state)",
-    "set": "Set one extension setting (secret -> Secret Store, other fields -> live config)",
 }
 
 

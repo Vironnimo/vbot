@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection, Sequence
+from collections.abc import Callable, Collection, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
 from core.memory._definitions import (
     _INTERNAL_WRITER,
-    _MAX_SCOPE_BUDGET,
     _MEMORY_BLOCK_TEMPLATE,
     _MEMORY_GUIDANCE,
     DEFAULT_MEMORY_PROMPT_MODE,
@@ -39,11 +38,10 @@ from core.memory._definitions import (
 )
 from core.memory._file_backend import (
     FilePinnedMemoryBackend,
-    _read_entries,
-    _total,
     match_memory_entries,
 )
 from core.memory._history import MemoryChange, MemoryHistory, MemoryRevertConflict, MemoryRevision
+from core.tools.file_state import FileRead
 
 if TYPE_CHECKING:
     from core.prompts.blocks import BlockDefinition
@@ -174,16 +172,28 @@ class MemoryService:
         return self._backend.render_scopes(workspace, scopes)
 
     def read_prompt_files(
-        self, workspace: Path, mode: MemoryPromptMode, *, memory_tool: str | None
+        self,
+        workspace: Path,
+        mode: MemoryPromptMode,
+        *,
+        memory_tool: str | None,
+        on_read: Callable[[FileRead], None] | None = None,
     ) -> str:
-        return self._backend.read_prompt_files(workspace, mode, memory_tool=memory_tool)
+        return self._backend.read_prompt_files(
+            workspace, mode, memory_tool=memory_tool, on_read=on_read
+        )
 
 
 class _MemoryFileReader(Protocol):
     """The one method :func:`read_memory_files` needs from a memory provider."""
 
     def read_prompt_files(
-        self, workspace: Path, mode: MemoryPromptMode, *, memory_tool: str | None
+        self,
+        workspace: Path,
+        mode: MemoryPromptMode,
+        *,
+        memory_tool: str | None,
+        on_read: Callable[[FileRead], None] | None = None,
     ) -> str:
         """Return the rendered pinned-memory entries for a mode."""
         ...
@@ -195,6 +205,7 @@ def read_memory_files(
     *,
     provider: _MemoryFileReader,
     memory_tool: str | None,
+    on_read: Callable[[FileRead], None] | None = None,
 ) -> str:
     """Render the embedded ``{generated:memory_files}`` text for one agent/mode.
 
@@ -208,37 +219,9 @@ def read_memory_files(
     can call the memory Tool, or ``None``; see
     :meth:`FilePinnedMemoryBackend.read_prompt_files`.
     """
-    return provider.read_prompt_files(Path(workspace), mode, memory_tool=memory_tool)
-
-
-def memory_prompt_file_paths(workspace: Path, mode: MemoryPromptMode) -> list[Path]:
-    """Resolved absolute paths of the pinned-memory files the prompt shows whole.
-
-    The prompt renders every scope a mode selects — an empty one via its placeholder
-    — but only an on-disk file can be stamped as read-before-write: a still-absent
-    file has nothing whose ``(mtime, size)`` to record, and a later Add to it is
-    a new-file write (exempt) anyway. A file above its scope's budget shows only
-    part of its entries, so stamping it would let the Agent overwrite entries it
-    never saw. So this returns just the existing selected files within their budget,
-    resolved the same way the backend reads them (``workspace / the scope's file``),
-    for the chat loop to stamp. ``off`` mode selects no scope, so it returns ``[]``.
-    The caller must not pass an empty-string workspace (a config agent) — that would
-    resolve against ``Path(".")``; config agents are ``off`` mode and gated out
-    upstream regardless.
-    """
-    workspace_path = Path(workspace)
-    paths: list[Path] = []
-    for scope in MEMORY_PROMPT_MODE_SCOPES[validate_memory_prompt_mode(mode)]:
-        path = (workspace_path / MEMORY_FILES[scope]).resolve()
-        if not path.is_file():
-            continue
-        try:
-            entries = _read_entries(path)
-        except MemoryError:
-            continue
-        if _total(entries) <= _MAX_SCOPE_BUDGET[scope]:
-            paths.append(path)
-    return paths
+    return provider.read_prompt_files(
+        Path(workspace), mode, memory_tool=memory_tool, on_read=on_read
+    )
 
 
 def memory_block_definition() -> BlockDefinition:

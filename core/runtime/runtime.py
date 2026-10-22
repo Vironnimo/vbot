@@ -11,8 +11,9 @@ import os
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, suppress
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
+from core.agents.description import suggest_agent_description
 from core.chat.errors import ChatError
 from core.chat.status_report import StatusWireProfile
 from core.database import SnapshotBarrier, UnregisteredDatabase
@@ -36,7 +37,6 @@ from core.providers.wire_observations import ObservedFacts
 from core.providers.wire_profile import ProfileStatus, Verification, WireProfile
 from core.runs import RunNotFoundError
 from core.runtime import _settings
-from core.runtime._agent_description import suggest_agent_description
 from core.runtime._agent_rename import (
     AgentRenameOutcome,
     AgentRenameServices,
@@ -53,6 +53,7 @@ from core.runtime._service_graph import RuntimeServiceGraph
 from core.runtime._settings import SettingsChangeEffects, apply_settings_change
 from core.runtime._shutdown import run_shutdown, run_shutdown_async
 from core.runtime._skill_merge import SkillMergeServices, follow_skill_merge
+from core.runtime._workers import _RUNTIME_WORKERS
 from core.runtime.interfaces import (
     ConfigProtocol,
     LoggerProtocol,
@@ -69,6 +70,11 @@ from core.skills.runtime import SkillRuntime
 from core.skills.skills import SkillMetadata, SkillRegistry
 from core.utils.errors import ConfigError
 from core.utils.logging import LogManager
+
+if TYPE_CHECKING:
+    from core.permissions import PermissionBoundary, PermissionCeiling
+    from core.projects import RuntimeAgent
+    from core.sessions import SessionAddress
 
 # Windows environment variable names are case-insensitive. The data-directory
 # credential fallback (the Secret Store) follows the same rule there, matching
@@ -161,6 +167,7 @@ class Runtime(RuntimeServiceGraph):
                     resolve_credential=self.resolve_environment_credential,
                     set_credential=self._set_extension_credential,
                     resolve_cwd=self._extension_cwd,
+                    resolve_permissions=self._extension_permissions,
                     oauth_redirects=self.oauth_redirects,
                 ),
                 ensure_started=self._ensure_started,
@@ -185,9 +192,11 @@ class Runtime(RuntimeServiceGraph):
                 resources=(self.terminal_manager, self.command_manager, self.trigger_service),
                 terminals=self.terminal_manager,
                 commands=self.command_manager,
+                portals=self._portals,
                 scratch_areas=self.scratch_areas,
                 get_change_publisher=lambda: self._extension_change_publisher,
                 get_title_service=lambda: self._session_title_service,
+                session_boundary=self._session_boundary,
                 logger=self.logger,
             )
         return self._extension_host_factory
@@ -247,6 +256,46 @@ class Runtime(RuntimeServiceGraph):
             return Path(self.projects.get(working_project_id).cwd)
         return Path(agent.workspace)
 
+    async def _extension_permissions(
+        self, project_id: str | None, agent_id: str
+    ) -> PermissionBoundary:
+        """The boundary of a new Session of the addressed Agent, as ``_extension_cwd``."""
+        return await _RUNTIME_WORKERS.run(self._new_session_boundary, project_id, agent_id)
+
+    def _new_session_boundary(self, project_id: str | None, agent_id: str) -> PermissionBoundary:
+        agent = self.agent_resolver.resolve_agent(project_id, agent_id)
+        working_project_id = self.agent_resolver.new_session_working_project(project_id, agent)
+        project_root = (
+            Path(self.projects.get(working_project_id).cwd)
+            if working_project_id is not None
+            else None
+        )
+        return self._session_boundary(agent, project_root, None, None)
+
+    def _session_boundary(
+        self,
+        agent: RuntimeAgent,
+        project_root: Path | None,
+        ceiling: PermissionCeiling | None,
+        owner: SessionAddress | None,
+    ) -> PermissionBoundary:
+        """Blocking: the boundary of *agent*'s work outside a Run, composed as a Run's.
+
+        It grants neither Skill folders nor a Scratch Area, which only a Run's own
+        Tool calls use; ``owner`` grants that Session's temporary files.
+        """
+        from core.chat import session_permissions
+
+        data_dir = Path(self.storage.data_dir)
+        return session_permissions(
+            agent, data_dir=data_dir, project_root=project_root, ceiling=ceiling
+        ).boundary(
+            data_dir,
+            owner=owner,
+            loopback_port=self._server_port,
+            own_hosts=self._own_server_hosts,
+        )
+
     def _set_extension_credential(self, key: str, value: str) -> None:
         if value:
             self.storage.set_data_dir_credential(key, value)
@@ -291,7 +340,18 @@ class Runtime(RuntimeServiceGraph):
 
     async def suggest_agent_description(self, agent_id: str) -> str:
         """Draft a description of an Identity Agent with its own Model; nothing is saved."""
-        return await suggest_agent_description(self, agent_id)
+        from core.chat.model_resolution import resolve_model_target
+
+        agent = await self.agents.get_async(agent_id)
+        return await suggest_agent_description(
+            agent,
+            sessions=self.chat_sessions,
+            skills_for=lambda identifier: self.skills_for(None, identifier),
+            resolve_model=lambda model: resolve_model_target(self, model),
+            get_adapter=self.get_adapter,
+            usage_recorder=self.usage_recorder,
+            workers=_RUNTIME_WORKERS,
+        )
 
     def activate_bootstrap(self) -> None:
         """Start eligible Bootstrap Runs after the serving lifespan is ready."""
@@ -716,7 +776,8 @@ class Runtime(RuntimeServiceGraph):
 
         The Agent's tree, config, Sessions and Sub-Agent links move together with
         the Channels, Cron and Bootstrap jobs, delegation
-        allow-lists and live Terminal Session scopes that name it. A failure
+        allow-lists and live Terminal Session, Portal and command scopes that
+        name it. A failure
         reverts all of it; an interrupted rename completes on the next start.
         While a Channel, Cron or Bootstrap job still names
         ``new_agent_id``, the rename is refused with ``AgentReferencedError``
@@ -787,6 +848,8 @@ class Runtime(RuntimeServiceGraph):
             snapshot_barrier=self._snapshot_barrier,
             terminals=self._terminal_manager,
             commands=self._command_manager,
+            portals=self._portals,
+            secrets=self._agent_secrets,
         )
 
     def reload_skills(self) -> None:

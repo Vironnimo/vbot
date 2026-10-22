@@ -351,8 +351,6 @@ def make_trigger_service(
     trigger_run: AsyncMock,
     *,
     waiting_work_manager: ChatRunManager | None = None,
-    compact_session: AsyncMock | None = None,
-    has_active_run: Mock | None = None,
     running_run: Run | None = None,
 ) -> SimpleNamespace:
     """Build the trigger service double a Channel engine runs on.
@@ -387,10 +385,6 @@ def make_trigger_service(
 
     return SimpleNamespace(
         trigger_run=trigger_with_admission,
-        compact_session=compact_session or AsyncMock(return_value="Context compacted."),
-        # Synchronous on purpose: the real has_active_run returns a bool, not a
-        # coroutine. An AsyncMock would return a truthy coroutine -> always "busy".
-        has_active_run=has_active_run or Mock(return_value=False),
         reserve_waiting_work=Mock(side_effect=reserve_waiting_work),
         release_waiting_work=release_waiting_work,
         running_run=Mock(return_value=running_run),
@@ -459,8 +453,6 @@ def make_engine(
     admin_user_ids: list[str] | None = None,
     observe_unaddressed: bool = False,
     trigger_run: AsyncMock | None = None,
-    compact_session: AsyncMock | None = None,
-    has_active_run: Mock | None = None,
     command_dispatcher: object | None = None,
     transport: FakeTransport | None = None,
     waiting_work_manager: ChatRunManager | None = None,
@@ -480,8 +472,6 @@ def make_engine(
     trigger_service = make_trigger_service(
         trigger_mock,
         waiting_work_manager=waiting_work_manager,
-        compact_session=compact_session,
-        has_active_run=has_active_run,
         running_run=running_run,
     )
     resolved_transport = transport or FakeTransport()

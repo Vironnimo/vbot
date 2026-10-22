@@ -23,6 +23,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, cast
 
+from core.permissions import PermissionBoundary
 from scripts.provider_probe.learning_texts import (
     AppliedTexts,
     TextPack,
@@ -493,6 +494,7 @@ class EvalWorker:
             note_hook=notes.append,
             skill_activation_hook=_activation_hook(prepared.activated),
             input_contracts=runtime.tools.contracts_for_provider_definitions(prepared.definitions),
+            permissions=PermissionBoundary.UNRESTRICTED,
         )
         executed = iter(
             await ToolExecutor(runtime.tools).execute_many(

@@ -271,7 +271,7 @@ describe('Sub-Agent rows', () => {
       name: 'subagent',
       status: 'failed',
       arguments: { action: 'run', agent_id: 'missing', content: 'Do it' },
-      resultEvent: { type: 'tool_call_result' },
+      finished: true,
       result: { ok: false, error: { code: 'not_found' }, data: null },
     };
     const backgroundBash = backgroundCommandTool();
@@ -400,7 +400,7 @@ describe('Sub-Agent rows', () => {
         background: true,
         content: 'Inspect the project',
       },
-      resultEvent: { type: 'tool_call_result' },
+      finished: true,
       result: {
         ok: true,
         data: { agent_id: 'worker', session_id: 'session-legacy' },
@@ -439,7 +439,7 @@ describe('Sub-Agent status', () => {
           run_id: 'run-child',
           status: 'running',
         },
-        startedEvent: {},
+        started: true,
       }),
       { 'run:run-child': 'completed' },
       'success',

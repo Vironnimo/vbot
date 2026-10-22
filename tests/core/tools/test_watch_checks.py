@@ -2,21 +2,24 @@
 
 from __future__ import annotations
 
+import ipaddress
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
+import curl_cffi.requests
 import httpx
 import pytest
 
 from core.automation.cron import CronWatch, WatchCheckError
 from core.permissions import BoundaryContext, PermissionBoundary, PermissionCeiling
+from core.tools import _public_http as public_http
 from core.tools import watch_checks
 from core.tools._powershell import PowerShellRequest
 from core.tools.shell import HostShellStart
-from core.tools.watch_checks import COMMAND_OUTPUT_MAX_BYTES, WatchCheckRunner
+from core.tools.watch_checks import COMMAND_OUTPUT_MAX_BYTES, URL_MAX_BYTES, WatchCheckRunner
 from tests.core.permissions.command_check_support import (
     FakeAnalyzer,
     fake_checker,
@@ -24,6 +27,7 @@ from tests.core.permissions.command_check_support import (
     restricted,
 )
 from tests.core.tools.command_manager_helpers import FakeProcess
+from tests.core.tools.web_fetch_test_support import StreamingResponse, StreamingSession
 
 _NOT_RUN = 990
 
@@ -185,11 +189,15 @@ async def test_a_watched_url_answers_with_its_main_text(tmp_path: Path) -> None:
     )
     page = _runner(tmp_path, transport=_page(200, "text/html; charset=utf-8", html))
     data = _runner(tmp_path, transport=_page(200, "application/json", b'{"ok": true}'))
+    # The 1 MB cut splits the last character; the rest still decodes as UTF-8.
+    log = "x" + "ä" * (URL_MAX_BYTES // 2)
+    long = _runner(tmp_path, transport=_page(200, "application/json", log.encode()))
 
     assert await page.fetch_url("https://status.example/") == (
         "# Service status\n\nAll systems are up since this morning."
     )
     assert await data.fetch_url("https://status.example/api") == '{"ok": true}'
+    assert await long.fetch_url("https://status.example/log") == log[:-1]
 
 
 @pytest.mark.asyncio
@@ -270,3 +278,20 @@ async def test_a_job_with_a_permission_ceiling_runs_only_checks_its_rules_allow(
     assert (line, cwd) == ("Get-Content status.txt", project)
     assert "VBOT_DATA_DIR" not in environment
     assert len(launches.calls) == 1
+
+    # An allowed URL's longer body is cut at 1 MB, as without a ceiling, never refused,
+    # whatever size it declares.
+    async def public_address(_host: str, _port: int) -> list[object]:
+        return [ipaddress.ip_address("93.184.216.34")]
+
+    page = StreamingResponse(
+        [b"a" * (URL_MAX_BYTES - 1), b"bc", b"d" * URL_MAX_BYTES],
+        headers={
+            "Content-Type": "text/plain",
+            "Content-Length": str(public_http.MAX_RESPONSE_BYTES + 1),
+        },
+    )
+    monkeypatch.setattr(public_http, "_resolve_host_addresses", public_address)
+    monkeypatch.setattr(curl_cffi.requests, "AsyncSession", lambda **_: StreamingSession(page))
+    text = await runner.fetch_url("https://example.com/status", ceiling=ceiling)
+    assert text == "a" * (URL_MAX_BYTES - 1) + "b"

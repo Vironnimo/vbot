@@ -48,13 +48,15 @@ class ToolDispatchContext:
     run: Run
     vbot_root: Path
     data_root: Path
+    # The Run's Permission Boundary, which every Tool Call checks its accesses
+    # against. Required: a dispatch that forgets it must not run unrestricted.
+    permissions: PermissionBoundary
     project_cwd: Path | None = None
     project_id: str | None = None
     skill_project_id: str | None = None
     skill_registry: SkillRegistry | None = None
     reply_surface: ReplySurface | None = None
     subagent_session: bool = False
-    permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED
     tool_restriction: Sequence[str] | None = None
     tool_denial_resolver: Callable[[str], str | None] | None = None
     base_allowed_tools: Sequence[str] | None = None
@@ -81,9 +83,6 @@ class ToolDispatchContext:
         default_factory=list, init=False, repr=False, compare=False
     )
     _turn_end_requested: bool = field(default=False, init=False, repr=False, compare=False)
-    _owned_effect_call_ids: set[str] = field(
-        default_factory=set, init=False, repr=False, compare=False
-    )
     _result_payloads: dict[str, list[ToolResultPayload]] = field(
         default_factory=dict, init=False, repr=False, compare=False
     )
@@ -120,11 +119,9 @@ class ToolDispatchContext:
     def register_delivery_receipt(self, tool_call_id: str, receipt: tuple[str, str, str]) -> None:
         receipt_id, content_hash, effect_kind = receipt
         self._delivery_receipts.append((tool_call_id, receipt_id, content_hash, effect_kind))
-        self._owned_effect_call_ids.add(tool_call_id)
 
     def request_turn_end(self, _tool_call_id: str) -> None:
         object.__setattr__(self, "_turn_end_requested", True)
-        self._owned_effect_call_ids.add(_tool_call_id)
 
     def stage_result_payload(self, tool_call_id: str, tool_name: str, payload: Any) -> str:
         """Keep one payload for this call's Tool Result; persisted with that result.
@@ -197,11 +194,6 @@ class ToolDispatchContext:
     @property
     def turn_end_requested(self) -> bool:
         return self._turn_end_requested
-
-    @property
-    def owned_effect_call_ids(self) -> tuple[str, ...]:
-        """Successful Tool calls whose owner effects crossed this batch boundary."""
-        return tuple(sorted(self._owned_effect_call_ids))
 
 
 def _runtime_allowed_tools(

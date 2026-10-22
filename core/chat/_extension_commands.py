@@ -55,6 +55,7 @@ class ExtensionCommandRegistry:
         argument_execution_mode: str | None = None,
         unavailable_surfaces: object = (),
         page_ids: frozenset[str] = frozenset(),
+        argument_hint: str = "",
     ) -> int:
         """Validate and install one Extension-owned command.
 
@@ -88,6 +89,14 @@ class ExtensionCommandRegistry:
             raise ValueError("page_ids must contain registered page identifiers")
         if not isinstance(argument, str) or argument not in {"none", "optional", "required"}:
             raise ValueError("argument must be one of: none, optional, required")
+        if (
+            not isinstance(argument_hint, str)
+            or not argument_hint.isprintable()
+            or len(argument_hint) > 80
+        ):
+            raise ValueError("argument_hint must be one line of at most 80 characters")
+        if argument == "none" and argument_hint.strip():
+            raise ValueError("argument_hint needs a command that takes an argument")
         if not isinstance(catalog_result, str) or catalog_result not in {
             "notice",
             "detail",
@@ -131,6 +140,7 @@ class ExtensionCommandRegistry:
                 execution_mode=cast(CommandExecutionMode, execution_mode),
                 argument_execution_mode=cast(CommandExecutionMode | None, argument_execution_mode),
                 unavailable_surfaces=cast(frozenset[CommandSurfaceKind], normalized_surfaces),
+                argument_hint=argument_hint.strip(),
                 # Extension commands work on a Session: a new one is created for them.
                 new_session_mode="create_session",
             ),

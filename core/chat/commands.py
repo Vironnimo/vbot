@@ -184,6 +184,7 @@ class CommandDispatcher:
             "agent",
             "Move this session to another agent; no argument lists the directory.",
             argument="optional",
+            argument_hint="agent name, optionally followed by a task",
             catalog_result="state_change",
             execution_mode="immediate",
             argument_execution_mode="serialized",
@@ -193,6 +194,7 @@ class CommandDispatcher:
             "compact",
             "Compact the current session's context immediately.",
             argument="optional",
+            argument_hint="optional: what the summary should keep",
             catalog_result="notice",
             execution_mode="serialized",
         ),
@@ -200,6 +202,7 @@ class CommandDispatcher:
             "goal",
             "Set a goal the agent works toward across turns; /goal pause, resume or clear.",
             argument="optional",
+            argument_hint="your goal, or pause, resume, clear",
             catalog_result="state_change",
             execution_mode="immediate",
             new_session_mode="create_session",
@@ -209,6 +212,7 @@ class CommandDispatcher:
             "handoff",
             "Write a handoff and start a new session (optionally for another agent).",
             argument="optional",
+            argument_hint="optional: agent:name for another agent, then what to focus on",
             catalog_result="state_change",
             execution_mode="serialized",
         ),
@@ -224,6 +228,7 @@ class CommandDispatcher:
             "learn",
             "Author a reusable skill into your own home from a source (folder, URL, or text).",
             argument="optional",
+            argument_hint="a folder, link or text to learn from",
             catalog_result="state_change",
             execution_mode="serialized",
             new_session_mode="create_session",
@@ -232,6 +237,7 @@ class CommandDispatcher:
             "model",
             "Show or permanently set this agent's model (/model reset to clear).",
             argument="optional",
+            argument_hint="model name, or reset",
             catalog_result="state_change",
             execution_mode="immediate",
             argument_execution_mode="serialized",
@@ -249,6 +255,7 @@ class CommandDispatcher:
             "reflect",
             "Review this session in a fork and save durable memory and skill updates.",
             argument="optional",
+            argument_hint="optional: what to focus on",
             catalog_result="state_change",
             execution_mode="serialized",
         ),
@@ -256,6 +263,7 @@ class CommandDispatcher:
             "rename",
             "Rename this session; no argument clears the name.",
             argument="optional",
+            argument_hint="new name, or nothing to clear it",
             catalog_result="notice",
             execution_mode="serialized",
         ),
@@ -263,6 +271,7 @@ class CommandDispatcher:
             "secret",
             "Give the agent a password or key it uses without seeing it.",
             argument="optional",
+            argument_hint="name and value, e.g. API_KEY abc123",
             catalog_result="notice",
             # Immediate: the Run may be waiting in a secrets request this answers.
             execution_mode="immediate",
@@ -283,6 +292,7 @@ class CommandDispatcher:
             "Stop the active run; /stop all also stops background commands, terminals and "
             "sub-agents.",
             argument="optional",
+            argument_hint='"all" also stops background work',
             catalog_result="notice",
             execution_mode="immediate",
         ),
@@ -460,6 +470,7 @@ class CommandDispatcher:
         argument_execution_mode: str | None = None,
         unavailable_surfaces: object = (),
         page_ids: frozenset[str] = frozenset(),
+        argument_hint: str = "",
     ) -> int:
         return self._extension_commands.register(
             extension_name,
@@ -472,6 +483,7 @@ class CommandDispatcher:
             argument_execution_mode=argument_execution_mode,
             unavailable_surfaces=unavailable_surfaces,
             page_ids=page_ids,
+            argument_hint=argument_hint,
         )
 
     def unregister_extension_commands(self, extension_name: str) -> int:

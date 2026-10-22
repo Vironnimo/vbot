@@ -34,14 +34,32 @@ def recorder(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_cumulative_updates_retain_one_call_and_field_provenance(recorder):
+@pytest.mark.parametrize("provider_field", ["reported_cost_usd", "cost"])
+async def test_cumulative_updates_retain_one_call_and_field_provenance(recorder, provider_field):
     identifier = await recorder.start(model="p/model::p:api", kind="live_voice")
-    first = await recorder.update(identifier, {"input_tokens": 12, "reported_cost_usd": 0.1})
+    provider_cost = {"amount_usd": 0.1, "source": "provider"}
+    first = await recorder.update(
+        identifier,
+        {
+            "input_tokens": 12,
+            provider_field: 0.1 if provider_field == "reported_cost_usd" else provider_cost,
+        },
+    )
     revision, records = read_ledger(recorder)
     assert first["usage_call_id"] == identifier
     assert "output_tokens" not in records[0].usage
     assert records[0].usage["cost"] == {"amount_usd": 0.1, "source": "provider"}
-    await recorder.update(identifier, {"input_tokens": 20, "output_tokens": 3})
+    enriched = await recorder.update(identifier, {"input_tokens": 20, "output_tokens": 3})
+    assert enriched["cost"] == provider_cost
+    enriched = await recorder.update(
+        identifier, {"cost": {"amount_usd": 0.0001, "source": "catalog"}}
+    )
+    assert enriched["cost"] == provider_cost
+    updated_cost = {"amount_usd": 0.2, "source": "provider"}
+    await recorder.update(
+        identifier,
+        {provider_field: 0.2 if provider_field == "reported_cost_usd" else updated_cost},
+    )
     await recorder.finish(identifier)
     newer, changed = read_ledger(recorder, revision)
     assert newer > revision
@@ -50,6 +68,7 @@ async def test_cumulative_updates_retain_one_call_and_field_provenance(recorder)
     assert changed[0].status == "completed"
     assert changed[0].usage["input_tokens"] == 20
     assert changed[0].usage["output_tokens"] == 3
+    assert changed[0].usage["cost"] == updated_cost
     assert read_ledger(recorder, newer) == (newer, ())
 
 
@@ -90,6 +109,28 @@ async def test_unknown_attempts_and_estimate_enrichment_are_not_zero_usage(recor
     assert "estimated" not in measured
     assert "output_tokens_estimated" not in measured
     assert len(read_ledger(recorder)[1]) == 2
+
+
+@pytest.mark.asyncio
+async def test_token_enrichment_keeps_snapshot_pricing_after_catalog_refresh(tmp_path):
+    write_bootstrap_marker(tmp_path)
+    pricing = TokenPricing("original", TokenRates(input=2, output=4))
+    owner = UsageRecorder(tmp_path / "model-usage.db", pricing_lookup=lambda _: pricing)
+    try:
+        identifier = await owner.start(model="p/m", kind="chat")
+        original = await owner.finish(identifier, {"input_tokens": 12, "output_tokens": 3})
+        pricing = TokenPricing("refreshed", TokenRates(input=20, output=40))
+
+        enriched = await owner.update(identifier, {"output_tokens": 4})
+
+        assert enriched["cost"]["pricing"] == original["cost"]["pricing"]
+        assert enriched["cost"]["amount_usd"] == pytest.approx(0.00004)
+        later = await owner.start(model="p/m", kind="chat")
+        current = await owner.finish(later, {"input_tokens": 12, "output_tokens": 4})
+        assert current["cost"]["pricing"] == pricing.to_dict()
+        assert current["cost"]["amount_usd"] == pytest.approx(0.0004)
+    finally:
+        owner.close()
 
 
 @pytest.mark.asyncio

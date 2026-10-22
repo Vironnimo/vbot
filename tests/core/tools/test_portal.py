@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from core.chat import ReplySurface
+from core.permissions import BoundaryContext, PermissionBoundary, normalize_permission_rules
 from core.sessions import SessionAddress
 from core.tools.portal import PORTAL_TOOL_NAME, register_portal_tool
 from core.tools.portal_registry import MAX_PORTALS_PER_SESSION, PortalRegistry
@@ -26,9 +27,11 @@ class _Listeners:
 
     def __init__(self) -> None:
         self.next_port = 41000
+        self.opened: list[str] = []
         self.closed: list[str] = []
 
-    async def open(self, _portal_id: str, _target_port: int) -> int:
+    async def open(self, portal_id: str, _target_port: int) -> int:
+        self.opened.append(portal_id)
         self.next_port += 1
         return self.next_port
 
@@ -36,9 +39,14 @@ class _Listeners:
         self.closed.append(portal_id)
 
 
-def _setup() -> tuple[ToolRegistry, PortalRegistry, _Listeners]:
+def _setup(probed: list[int] | None = None) -> tuple[ToolRegistry, PortalRegistry, _Listeners]:
     # Only port 5173 has an app listening.
-    portals = PortalRegistry(probe=lambda port: asyncio.sleep(0, result=port == 5173))
+    def probe(port: int) -> Any:
+        if probed is not None:
+            probed.append(port)
+        return asyncio.sleep(0, result=port == 5173)
+
+    portals = PortalRegistry(probe=probe)
     listeners = _Listeners()
     portals.attach(listeners)
     tools = ToolRegistry()
@@ -116,6 +124,49 @@ async def test_refused_calls_change_nothing_and_say_why(
 
 
 @pytest.mark.asyncio
+async def test_a_restricted_agent_opens_only_ports_its_web_rules_reach(tmp_path: Path) -> None:
+    probed: list[int] = []
+    tools, portals, listeners = _setup(probed)
+    unrestricted, _context = await _call(tools, tmp_path, {"action": "open", "port": 5173})
+    [portal_id] = [portal.id for portal in portals.list(SessionAddress(None, "agent", "session"))]
+
+    def boundary(rules: dict[str, Any]) -> PermissionBoundary:
+        return PermissionBoundary.build(
+            normalize_permission_rules(rules),
+            BoundaryContext(workdir=tmp_path, home=tmp_path, data_dir=tmp_path / "data"),
+        )
+
+    listed_only = boundary({"web": "listed", "allow": ["Web(example.com)"]})
+    denied = boundary({"deny": ["Web(localhost)"]})
+    allowed = boundary({"web": "listed", "allow": ["Web(localhost)"]})
+    probed_before = list(probed)
+    refusals = [
+        (await _call(tools, tmp_path, {"action": "open", "port": port}, permissions=rules))[0]
+        for port, rules in ((3000, listed_only), (5173, listed_only), (3000, denied))
+    ]
+    probed_after_refusals = list(probed)
+    # A refusing boundary still lists and closes the Session's own Portals.
+    listed, _context = await _call(tools, tmp_path, {"action": "list"}, permissions=denied)
+    closed, _context = await _call(
+        tools, tmp_path, {"action": "close", "id": portal_id}, permissions=denied
+    )
+    reached, _context = await _call(
+        tools, tmp_path, {"action": "open", "port": 3000}, permissions=allowed
+    )
+
+    assert unrestricted["data"]["content"].startswith("Opened portal ")
+    for refused in refusals:
+        assert refused["error"]["code"] == "permission_denied"
+        assert refused["error"]["message"].startswith("portal was not run: the permission rules")
+    # Neither a listener nor a probe for a refused port.
+    assert probed_after_refusals == probed_before and len(listeners.opened) == 2
+    assert portal_id in listed["data"]["content"]
+    assert closed["data"]["content"].startswith(f"Closed portal {portal_id}.")
+    assert reached["data"]["content"].startswith("Opened portal ")
+    await portals.aclose()
+
+
+@pytest.mark.asyncio
 async def test_a_session_holds_a_bounded_number_of_portals_until_one_closes(
     tmp_path: Path,
 ) -> None:
@@ -156,6 +207,57 @@ async def test_archiving_sessions_closes_only_their_portals() -> None:
     assert changed == [archived, kept, archived]
     await portals.aclose()
     assert listeners.closed == [gone.id, stays.id]
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_open_leaves_no_listener_behind() -> None:
+    probing = asyncio.Event()
+
+    async def probe(_port: int) -> bool:
+        probing.set()
+        await asyncio.Event().wait()
+        return True
+
+    portals = PortalRegistry(probe=probe)
+    listeners = _Listeners()
+    portals.attach(listeners)
+    owner = SessionAddress(None, "coder", "current")
+    opening = asyncio.ensure_future(portals.open(owner, target_port=5173, title="t", path="/"))
+    await probing.wait()
+
+    opening.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await opening
+
+    assert listeners.closed == listeners.opened != []
+    assert portals.list(owner) == []
+    await portals.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_renamed_agents_portals_follow_its_sessions() -> None:
+    portals = PortalRegistry(probe=lambda _port: asyncio.sleep(0, result=True))
+    listeners = _Listeners()
+    portals.attach(listeners)
+    changed: list[SessionAddress] = []
+    old = SessionAddress(None, "coder", "current")
+    project = SessionAddress("shop", "coder", "current")
+    moved, _opened = await portals.open(old, target_port=5173, title="t", path="/")
+    stays, _opened = await portals.open(project, target_port=5173, title="t", path="/")
+    portals.subscribe(changed.append)
+
+    assert portals.transfer_agent_scope("coder", "researcher") == 1
+
+    new = SessionAddress(None, "researcher", "current")
+    # Same Portal (id, listener, credential), now listed and closed by the moved Session.
+    assert portals.list(old) == []
+    assert [(portal.id, portal.listen_port) for portal in portals.list(new)] == [
+        (moved.id, moved.listen_port)
+    ]
+    assert portals.list(project) == [stays]
+    assert changed == [old, new]
+    assert listeners.closed == []
+    await portals.aclose()
 
 
 @pytest.mark.asyncio

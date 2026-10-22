@@ -85,6 +85,19 @@
   background: var(--red);
 }
 
+/* A job's unread alert, beside its name until marked read. */
+.cron-view .cron-item-alert {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--blue);
+}
+
+.cron-view .cron-alert-time {
+  color: var(--text-lo);
+}
+
 .cron-view .cron-item-name {
   min-width: 0;
   overflow: hidden;

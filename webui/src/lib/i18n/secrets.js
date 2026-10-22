@@ -19,6 +19,8 @@ export default Object.freeze({
   'secrets.lifetime.session': 'This Session',
   'secrets.lifetime.until': 'Until a time',
   'secrets.lifetime.once': 'One use',
+  'secrets.lifetime.keep': 'As it is now',
+  'secrets.lifetime.keepOrSession': 'As it is now, or this Session if new',
   'secrets.duration.1h': 'For 1 hour',
   'secrets.duration.8h': 'For 8 hours',
   'secrets.duration.1d': 'For 1 day',
@@ -46,6 +48,7 @@ export default Object.freeze({
   'chat.secretForm.give': 'Give Secret',
   'chat.secretForm.stored': 'Stored {name}. The Agent sees only {reference}.',
   'chat.secretForm.replaced': 'Replaced the value of {name}.',
+  'chat.secretForm.lifetimeChanged': 'Its lifetime is now: {lifetime}.',
   'chat.secretForm.shortValue':
     'The value has fewer than {min} characters, so vBot cannot recognize it if a program prints it.',
   'chat.secretForm.storeError': 'The Secret could not be stored.',

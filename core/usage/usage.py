@@ -434,6 +434,7 @@ class UsageRecorder:
             if row is None:
                 raise ValueError(f"Unknown Usage call: {call_id}")
             merged: dict[str, Any] = json.loads(row["usage_json"])
+            previous_cost = project_cost(merged.get("cost"))
             for counter in ("input_tokens", "output_tokens"):
                 if counter in incoming and f"{counter}_estimated" not in incoming:
                     merged.pop(f"{counter}_estimated", None)
@@ -445,8 +446,16 @@ class UsageRecorder:
                 merged.pop("estimated", None)
             if "reported_cost_usd" in merged:
                 merged["cost"] = price_usage(merged, None)
+            elif (
+                previous_cost is not None
+                and previous_cost["source"] == "provider"
+                and incoming.get("cost", {}).get("source") != "provider"
+            ):
+                merged["cost"] = previous_cost
             elif "cost" not in incoming and (incoming or "cost" not in merged):
-                pricing = self._pricing_lookup(row["model"]) if self._pricing_lookup else None
+                pricing = TokenPricing.from_dict((previous_cost or {}).get("pricing"))
+                if pricing is None and self._pricing_lookup is not None:
+                    pricing = self._pricing_lookup(row["model"])
                 merged["cost"] = price_usage(merged, pricing)
             encoded = json.dumps(merged, ensure_ascii=False, allow_nan=False)
             new_status = status or row["status"]

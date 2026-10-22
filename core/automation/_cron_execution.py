@@ -262,6 +262,7 @@ class CronExecution:
                 latest.last_outcome = "success"
                 latest.last_error = None
                 latest.consecutive_failures = 0
+                end_failure_alert(latest)
                 latest.last_run_silent = silent
                 if not silent:
                     run_id = getattr(run, "id", None)
@@ -405,8 +406,8 @@ class CronExecution:
         ``check`` says the failure was a watch check's. A chat gets the alert as
         a message. A job delivering to vBot reports a failed Run through that Run
         (``run_reports``); any other failure, such as a failed check or a Run
-        that could not start, reaches vBot's accessors as a
-        :class:`CronFailureAlert`. ``none`` gets nothing.
+        that could not start, is stored on the job as its unread alert and
+        raised as a :class:`CronFailureAlert`. ``none`` gets nothing.
         """
         job = self._owner._jobs.get(job_id)
         if job is None or baseline is None:
@@ -420,15 +421,7 @@ class CronExecution:
         if text is None:
             return
         if kind == "app":
-            self._owner._raise_failure_alert(
-                _delivery.CronFailureAlert(
-                    job_id=job.id,
-                    name=job.name,
-                    agent_id=job.agent_id,
-                    project_id=job.project_id,
-                    message=text,
-                )
-            )
+            await self._owner._record_alert(job.id, text)
             return
         self._owner._notifications.stage(job, text)
         await self._save_jobs_after_fire(job.id)
@@ -472,6 +465,12 @@ class FailureBaseline:
 
     was_failed: bool
     failures: int
+
+
+def end_failure_alert(job: CronJob) -> None:
+    """A success ends the job's failure streak and the unread alert about it."""
+    if job.unread_alert is not None and job.unread_alert.kind == "failure":
+        job.unread_alert = None
 
 
 def _replacement_once_fire(job: CronJob, firing_once_at: str | None) -> bool:

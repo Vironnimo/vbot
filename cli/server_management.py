@@ -66,6 +66,15 @@ DEFAULT_SHUTDOWN_TIMEOUT_SECONDS = 30.0
 DEFAULT_CONTROL_REQUEST_TIMEOUT_SECONDS = PATIENT_PROBE_TIMEOUT_SECONDS
 
 
+# How often a stop re-probes a recorded server without a listener, so one that was
+# still starting gets the shutdown request soon after it becomes ready.
+_LISTENER_POLL_SECONDS = 0.5
+
+
+# Stop deadlines; tests replace it with a controlled clock.
+_monotonic = time.monotonic
+
+
 # A local listener holds the target port but never answered `/health`, so it is
 # neither confirmed as vBot nor known to be foreign.
 UNRESPONSIVE_LISTENER_MESSAGE = "port occupied by unresponsive process"
@@ -415,11 +424,12 @@ def stop_server(
     elif not health.reachable:
         process = _resolve_control_process(instance)
         if process is not None:
-            return _await_process_exit(
+            return _stop_without_listener(
                 instance,
                 health,
                 process,
                 shutdown_timeout_seconds=shutdown_timeout_seconds,
+                initiator=initiator,
             )
         return CommandResult(ok=True, message="not running", instance=instance, health=health)
     elif not health.is_vbot:
@@ -449,13 +459,30 @@ def stop_server(
                 health=health,
             )
 
+    return _shut_down(
+        instance,
+        health,
+        process,
+        shutdown_timeout_seconds=shutdown_timeout_seconds,
+        initiator=initiator,
+    )
+
+
+def _shut_down(
+    instance: ServerInstance,
+    health: HealthProbeResult,
+    process: psutil.Process | Any,
+    *,
+    shutdown_timeout_seconds: float,
+    initiator: str,
+) -> CommandResult:
+    """Ask the exact server process to stop, terminating it when the request fails."""
+
     if not _request_cooperative_shutdown(instance, process, initiator=initiator):
         try:
             process.terminate()
         except psutil.NoSuchProcess:
-            return CommandResult(
-                ok=True, message="stopped", instance=instance, health=health, process_id=process.pid
-            )
+            return _stopped(instance, health, process)
         log_bypassed_stop(
             instance,
             logging.WARNING,
@@ -464,6 +491,57 @@ def stop_server(
         )
     return _await_process_exit(
         instance, health, process, shutdown_timeout_seconds=shutdown_timeout_seconds
+    )
+
+
+def _stop_without_listener(
+    instance: ServerInstance,
+    health: HealthProbeResult,
+    process: psutil.Process | Any,
+    *,
+    shutdown_timeout_seconds: float,
+    initiator: str,
+) -> CommandResult:
+    """Stop the recorded server process while its target does not answer.
+
+    The control record exists before the listener and outlives it: the server is
+    still starting or already draining, and neither can take the shutdown request
+    now. A draining server only needs time. The target is probed while waiting, so a
+    server that becomes ready gets the cooperative request and the full timeout from
+    then on instead of being killed; one that never answers is killed after the
+    timeout.
+    """
+
+    deadline = _monotonic() + shutdown_timeout_seconds
+    while (remaining := deadline - _monotonic()) > 0:
+        try:
+            process.wait(timeout=min(_LISTENER_POLL_SECONDS, remaining))
+        except psutil.TimeoutExpired:
+            answer = probe_health(instance)
+            if answer.is_vbot and _listens_as_recorded(instance, process):
+                return _shut_down(
+                    instance,
+                    answer,
+                    process,
+                    shutdown_timeout_seconds=shutdown_timeout_seconds,
+                    initiator=initiator,
+                )
+            continue
+        except psutil.NoSuchProcess:
+            pass
+        return _stopped(instance, health, process)
+    return _kill_stuck_process(instance, health, process, timeout_seconds=shutdown_timeout_seconds)
+
+
+def _listens_as_recorded(instance: ServerInstance, process: psutil.Process | Any) -> bool:
+    """Whether *process* listens on the target and is still the one the control record names."""
+
+    listener = find_listening_process(instance)
+    recorded = _resolve_control_process(instance)
+    return (
+        listener is not None
+        and recorded is not None
+        and listener.pid == recorded.pid == process.pid
     )
 
 
@@ -540,41 +618,63 @@ def _await_process_exit(
 ) -> CommandResult:
     """Wait for the exact server process to finish teardown, killing it after the timeout."""
 
-    forced = False
     try:
         process.wait(timeout=shutdown_timeout_seconds)
     except psutil.TimeoutExpired:
-        forced = True
-        log_bypassed_stop(
-            instance,
-            logging.WARNING,
-            "Server process killed after stop timeout (pid=%s timeout=%.0fs)",
-            process.pid,
-            shutdown_timeout_seconds,
+        return _kill_stuck_process(
+            instance, health, process, timeout_seconds=shutdown_timeout_seconds
         )
-        try:
-            process.kill()
-            process.wait(timeout=shutdown_timeout_seconds)
-        except psutil.TimeoutExpired:
-            log_bypassed_stop(
-                instance,
-                logging.ERROR,
-                "Server process did not exit after kill (pid=%s)",
-                process.pid,
-            )
-            return CommandResult(
-                ok=False,
-                message="forced termination timed out",
-                instance=instance,
-                health=health,
-                process_id=process.pid,
-                forced=True,
-            )
-        except psutil.NoSuchProcess:
-            pass
     except psutil.NoSuchProcess:
         pass
+    return _stopped(instance, health, process)
 
+
+def _kill_stuck_process(
+    instance: ServerInstance,
+    health: HealthProbeResult,
+    process: psutil.Process | Any,
+    *,
+    timeout_seconds: float,
+) -> CommandResult:
+    """Kill a server process that outlived its stop timeout, bounding the wait for its end."""
+
+    log_bypassed_stop(
+        instance,
+        logging.WARNING,
+        "Server process killed after stop timeout (pid=%s timeout=%.0fs)",
+        process.pid,
+        timeout_seconds,
+    )
+    try:
+        process.kill()
+        process.wait(timeout=timeout_seconds)
+    except psutil.TimeoutExpired:
+        log_bypassed_stop(
+            instance,
+            logging.ERROR,
+            "Server process did not exit after kill (pid=%s)",
+            process.pid,
+        )
+        return CommandResult(
+            ok=False,
+            message="forced termination timed out",
+            instance=instance,
+            health=health,
+            process_id=process.pid,
+            forced=True,
+        )
+    except psutil.NoSuchProcess:
+        pass
+    return _stopped(instance, health, process, forced=True)
+
+
+def _stopped(
+    instance: ServerInstance,
+    health: HealthProbeResult,
+    process: psutil.Process | Any,
+    *,
+    forced: bool = False,
+) -> CommandResult:
     return CommandResult(
         ok=True,
         message="stopped",

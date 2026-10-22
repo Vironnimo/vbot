@@ -73,19 +73,29 @@ class AgentNotFoundError(AgentError):
 
 
 class AgentReferencedError(AgentError):
-    """Raised when a rename targets an Agent id that references still name.
+    """Raised when a rename or a new Agent takes an Agent id that references still name.
 
-    ``references`` names each one as ``<kind>:<id>``, such as ``channel:tg-main``
-    or ``cron:<job id>``.
+    ``references`` names each one as ``<kind>:<id>``, such as ``channel:tg-main``,
+    ``cron:<job id>`` or ``secret:<name>``. A new Agent is refused only for
+    Agent Secret grants, which an archived Agent of that id keeps for its restore.
     """
 
-    def __init__(self, agent_id: str, references: Iterable[str]) -> None:
+    def __init__(self, agent_id: str, references: Iterable[str], *, creating: bool = False) -> None:
         self.agent_id = agent_id
         self.references = tuple(sorted(references))
-        super().__init__(
-            f"Cannot rename an Agent to {agent_id} while {', '.join(self.references)} "
-            "still reference it; change or remove these references first"
-        )
+        if creating:
+            message = (
+                f"Cannot create Agent {agent_id}: Agent Secrets still grant access to "
+                f"that id ({', '.join(self.references)}), usually because an archived "
+                f"Agent {agent_id} keeps them for its restore. Restore that Agent, or "
+                "remove these grants under Settings -> Secrets first"
+            )
+        else:
+            message = (
+                f"Cannot rename an Agent to {agent_id} while {', '.join(self.references)} "
+                "still reference it; change or remove these references first"
+            )
+        super().__init__(message)
 
 
 class InvalidAgentIdError(AgentError):

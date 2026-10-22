@@ -61,6 +61,7 @@ from core.sessions import (
     SeenSkillsUpdate,
     SessionAddress,
 )
+from core.tools.file_state import FileRead
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -210,7 +211,7 @@ class RequestBuilder:
         inputs = RequestBuildInputs.from_context(context, context.primary_target)
         failed_blocks: set[str] = set()
         session_blocks = await self._session_prompt_blocks(inputs, failed_blocks=failed_blocks)
-        read_paths: list[Path] = []
+        read_paths: list[FileRead] = []
         note = await _CHAT_TRANSFORM_WORKERS.run(
             self._plan_prompt_block_change,
             context.agent,
@@ -237,7 +238,7 @@ class RequestBuilder:
         messages: list[ChatMessage],
         session_blocks: Sequence[BlockDefinition],
         failed_blocks: set[str],
-        read_paths: list[Path],
+        read_paths: list[FileRead],
     ) -> str | None:
         sessions = self._dependencies.sessions
         pin = PromptBlockPin.from_payload(sessions.prompt_pin(address, PINNED_DYNAMIC_BLOCKS_SLOT))
@@ -351,7 +352,7 @@ class RequestBuilder:
         *,
         fresh: bool,
         session_blocks: Sequence[BlockDefinition],
-        read_paths: list[Path],
+        read_paths: list[FileRead],
     ) -> PromptBlockPin:
         """Return the prompt epoch's immutable block inventory, texts and layout order.
 
@@ -360,7 +361,7 @@ class RequestBuilder:
         """
         system_prompts = self._dependencies.get_system_prompts()
         captured: PromptBlockPin | None = None
-        captured_reads: list[Path] = []
+        captured_reads: list[FileRead] = []
 
         def render(previously_pinned: Collection[str] | None) -> PromptBlockPin:
             nonlocal captured
@@ -494,7 +495,7 @@ class RequestBuilder:
             )
         )
         render_inputs = self._block_render_inputs(inputs, pin, prompt_effort=effort_pin.effort)
-        prompt_read_paths: list[Path] = []
+        prompt_read_paths: list[FileRead] = []
         request_block_definitions = await self._session_prompt_blocks(inputs)
         prompt_blocks = await _CHAT_TRANSFORM_WORKERS.run(
             partial(

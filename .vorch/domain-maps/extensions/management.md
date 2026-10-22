@@ -16,6 +16,8 @@ A registration that cancels itself fails only its Extension. Cancelling the live
 
 The load path must preserve first-wins root shadowing before import. Overridden copies are not imported and their manifests are not read. Disabled winners are recorded without import but still shadow later roots.
 
+A missing `extension.json` is optional; an unavailable or unreadable manifest fails its Extension before import, so its API-version requirement cannot disappear on an I/O failure.
+
 ## API versions
 
 What each `API_VERSION` (`extensions.md` -> Loading and identity invariants) added:
@@ -25,6 +27,9 @@ What each `API_VERSION` (`extensions.md` -> Loading and identity invariants) add
 - v12: server folder listing for pages (`extensionPageClient.listDirectory`, `webui/extension-pages.md` -> Capabilities). v13: Tool summaries (`api.register_tool(..., summary=...)`, `tools/load_tools.md` -> Tool summaries). v14: replaces `definition_change_note` with declared Tool-change announcements (`announce_changes`, `tools.md` -> Tool changes in a Session): a changed Tool definition reaches a Session mid-epoch only for the parts its Tool names. v15: asynchronous Tool-Agent resolution, canonical deferred-call receipts (`extensions/host.md` -> Deferred Tool outcomes) and manifest-declared offline document validators (below).
 - v16: windowed Run steps for pages (`history.read` `query.child_limit`, `run.subscribe` `child_limit`, `extensionPageClient.readRunChildren`; `webui/extension-pages.md` -> Run streams and history).
 - v17: Secret Sources for Agent Secrets (`api.register_secret_source`, a `core.secrets.sources.SecretSource`; `secrets/agent-secrets.md` -> Secret Sources).
+- v18: `host.resolve_permissions(project_id, agent_id)`, the Permission Boundary of a new Session of an Agent, for Tool calls an Extension makes as that Agent outside any Session (`extensions/host.md`).
+- v19: Tool rows of page History and Run streams carry bounded previews of their call (`rawTruncated`); `history.tool_call` (`extensionPageClient.readToolCall`) reads the whole call (`webui/extension-pages.md` -> Run streams and history).
+- v20: argument hints on slash Commands (`api.register_command(..., argument_hint=...)`, `chat/commands.md`).
 
 ## Offline document validation
 

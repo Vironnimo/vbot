@@ -470,34 +470,68 @@ async def test_desktop_control_lasts_from_the_first_call_until_release_run_end_o
 
     # A Run that stops calling loses control after the idle time.
     monkeypatch.setattr(computer_use, "CONTROL_IDLE_SECONDS", 0)
-    await computer.computer(action="screenshot")
+    await computer.computer(action="left_mouse_down")
     await asyncio.sleep(0.01)
+    await computer.service._on_worker(lambda: None)  # drain the idle release
     assert computer.target.activity == [True, False, True, False, True, False]
+    assert computer.target.released == 1
+    assert computer.service._held_run is None
 
 
+@pytest.mark.parametrize("stop", ["double_escape", "control"])
 async def test_a_user_stop_between_calls_refuses_the_run_until_it_ends(
     computer: Harness,
+    stop: str,
 ) -> None:
     computer.target.pointer = (200, 150)
     assert (await computer.computer(action="left_mouse_down"))["ok"]
     computer.target.inputs.clear()
-    computer.hotkey.press_double_escape()
+    if stop == "double_escape":
+        computer.hotkey.press_double_escape()
+    else:
+        await computer.api.operations.invoke(
+            "control", {"action": "stop", "control_id": computer.hotkey.armed}
+        )
+    await computer.service._on_worker(lambda: None)  # release must not wait for Run end
+    assert computer.target.released == 1
+    assert computer.service._held_run is None
     assert computer.target.activity == [True, False]
     assert computer.hotkey.armed is None
 
     refused = await computer.computer(action="left_click", coordinate=[10, 10])
     assert refused["error"]["code"] == "computer_use_interrupted"
-    assert refused["error"]["message"].startswith(
-        "The user stopped Computer Use by pressing Esc twice. Nothing was done. Computer Use "
-        "stays off until the user's next message"
-    )
+    assert refused["error"]["message"].startswith("The user stopped Computer Use")
+    assert "Nothing was done" in refused["error"]["message"]
     opened = await computer.call("computer_apps", {"action": "open", "app": "Notepad"})
     assert opened["error"]["code"] == "computer_use_interrupted"
     assert computer.target.inputs == []
     assert computer.target.activity == [True, False]
 
-    # The Run's end releases the held button, and the next Run may take control.
+    # The button is already released; the Run's end lets the next Run take control.
     await computer.service.run_end(SimpleNamespace(run_id="run"))
     assert computer.target.released == 1
     assert (await computer.computer(action="screenshot"))["ok"]
     assert computer.target.activity == [True, False, True]
+
+
+@pytest.mark.parametrize("stop", ["double_escape", "run_cancel"])
+async def test_stopping_a_wait_releases_a_button_from_the_earlier_step(
+    computer: Harness, monkeypatch: pytest.MonkeyPatch, stop: str
+) -> None:
+    async def stopped_pause(seconds: float, stopped: asyncio.Event) -> bool:
+        if stop == "double_escape":
+            computer.hotkey.press_double_escape()
+        else:
+            computer.service.interrupt(source="run_cancel")
+        return True
+
+    monkeypatch.setattr(computer_use, "_sleep", stopped_pause)
+    result = await computer.call(
+        "computer_batch",
+        {"actions": [{"action": "left_mouse_down"}, {"action": "wait", "duration": 1}]},
+    )
+    assert result["error"]["code"] == "computer_use_interrupted"
+    assert computer.target.inputs == [("button", "left", True)]
+    await computer.service._on_worker(lambda: None)
+    assert computer.target.released == 1
+    assert computer.service._held_run is None

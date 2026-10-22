@@ -17,6 +17,7 @@ from core.chat import ChatMessage
 from core.chat.messages import ToolCall
 from core.database import open_offline_database
 from core.extensions.databases import Database, extension_database_spec
+from core.permissions import PermissionBoundary
 from core.providers._tool_result_text import tool_result_text
 from core.runs import RunExecutionOwner
 from core.tools import ToolContext, ToolContractError, tool_failure
@@ -336,6 +337,7 @@ async def participant_post(env: Any, swarm_id: str, participant_id: str, text: s
             generation_id=binding.generation_id,
         ),
         delivery_receipt_hook=lambda *_: None,
+        permissions=PermissionBoundary.UNRESTRICTED,
     )
     result = await env.tools.get("swarm_board").handler(context, {"action": "post", "text": text})
     assert result["ok"], result

@@ -679,6 +679,12 @@ class ConversationApp(App[int]):
                 lambda: self.navigation.load_run_history(view, event.item), group="run-history"
             )
 
+    @on(Transcript.LoadToolCall)
+    def tool_call_requested(self, event: Transcript.LoadToolCall) -> None:
+        view = self.conversation
+        if view is not None:
+            self._start(lambda: self.navigation.load_tool_call(view, event.item), group="tool-call")
+
     @on(Transcript.Leave)
     def transcript_left(self) -> None:
         self.query_one("#composer", TextArea).focus()

@@ -311,14 +311,11 @@ async def _reveal(state: Any, params: JsonObject) -> JsonObject:
 async def _answer(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"id", "values", "lifetime", "expires_at"}, "agent_secrets.answer")
     requests = state.runtime.secret_requests
-    lifetime = params.get("lifetime")
-    if lifetime is not None and lifetime not in LIFETIMES:
-        raise _invalid(f"params.lifetime must be one of: {', '.join(LIFETIMES)}")
     try:
         secret = await requests.answer(
             _text(params, "id"),
             _values(params) or {},
-            lifetime=lifetime,
+            lifetime=_optional_lifetime(params),
             expires_at=_time(params, "expires_at"),
         )
     except SecretRecordError as error:
@@ -345,13 +342,25 @@ async def _give(state: Any, params: JsonObject) -> JsonObject:
             name=_text(params, "name"),
             kind=_choice(params, "kind", SECRET_KINDS, None),
             values=_values(params) or {},
-            lifetime=_choice(params, "lifetime", LIFETIMES, "session"),
+            lifetime=_optional_lifetime(params),
             expires_at=_time(params, "expires_at"),
             description=description,
         )
     except SecretRecordError as error:
         raise _invalid(str(error)) from None
-    return {"secret": _describe(_secrets(state), given.secret), "replaced": given.replaced}
+    return {
+        "secret": _describe(_secrets(state), given.secret),
+        "replaced": given.replaced,
+        "previous_lifetime": given.previous_lifetime,
+    }
+
+
+def _optional_lifetime(params: JsonObject) -> Any:
+    """``lifetime``, or None when omitted: a replaced Secret then keeps its own."""
+    lifetime = params.get("lifetime")
+    if lifetime is not None and lifetime not in LIFETIMES:
+        raise _invalid(f"params.lifetime must be one of: {', '.join(LIFETIMES)}")
+    return lifetime
 
 
 async def _decline(state: Any, params: JsonObject) -> JsonObject:

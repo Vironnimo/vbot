@@ -68,9 +68,10 @@ class RuntimeAgent(Protocol):
     - ``permission_ceiling`` — a ceiling the Agent itself carries (a temporary
       Agent's Extension); ``None`` for every other Agent. A Session's inherited
       ceiling lives in its :class:`AgentOverrides`.
-    - ``rule_files`` — repository files the Agent's rules and settings come from
-      (a Team member's profile and settings files); empty for others. Restricted
-      Sessions never change them.
+    - ``rule_files`` — repository locations the Agent's rules and settings come
+      from (a Team member's profile and settings files, and where a definition
+      could replace its profile); empty for others. Restricted Sessions never
+      change them.
     """
 
     @property
@@ -310,7 +311,8 @@ class ConfigAgent:
     # Permission Rules resolved per part: the vBot override, then the repository
     # translation, then ``defaults.agent.permission_rules``; ``None`` is full access.
     permission_rules: PermissionRules | None = None
-    # The profile and the repository files its rules come from (``AgentProfile.rule_files``).
+    # The profile, the repository files its rules come from (``AgentProfile.rule_files``)
+    # and where a definition could replace the profile (``definition_locations``).
     rule_files: tuple[Path, ...] = ()
     preload_skills: tuple[str, ...] = ()
     model_inherit: bool = False

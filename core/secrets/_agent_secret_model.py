@@ -227,6 +227,11 @@ def normalize_secret_name(raw: str) -> str:
     return text
 
 
+def main_field_name(kind: SecretKind) -> str:
+    """The field one value given without a field name fills in a new Secret of ``kind``."""
+    return "password" if kind == "login" else VALUE_FIELD
+
+
 def normalize_field_name(raw: str) -> str:
     text = re.sub(r"[\s.\-]+", "_", str(raw).strip()).lower()
     if FIELD_NAME_PATTERN.fullmatch(text) is None:
@@ -251,10 +256,6 @@ def check_description(description: str) -> str:
     if len(text) > _MAX_DESCRIPTION:
         raise SecretRecordError(f"Descriptions have at most {_MAX_DESCRIPTION} characters.")
     return text
-
-
-def kind_fields(kind: SecretKind) -> tuple[tuple[str, bool], ...]:
-    return KIND_FIELDS[kind]
 
 
 def check_sinks(sinks: Iterable[str]) -> frozenset[SinkClass]:

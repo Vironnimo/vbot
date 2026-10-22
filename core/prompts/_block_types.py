@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal, Protocol
 
+from core.tools.file_state import FileRead
 from core.utils.errors import VBotError
 
 if TYPE_CHECKING:
@@ -131,11 +131,11 @@ class BlockRenderContext:
     # Optional side channel for build-time file reads. When set, every prompt file
     # whose content actually reaches the prompt (a workspace ``{include:…}``, SOUL,
     # the project auto-load files, the pinned-memory files) reports its resolved
-    # absolute path here. The chat loop uses it to stamp those files as read in the
+    # absolute path and pre-read metadata here. Chat records these captured stamps in the
     # read-before-write guard, so an agent can edit a file it was auto-shown without
     # a separate read call. ``None`` = no observer — the assembly output is byte-for-
     # byte identical either way, so preview/tests and the prompt cache are unaffected.
-    read_observer: Callable[[Path], None] | None = None
+    read_observer: Callable[[FileRead], None] | None = None
     # Which Tools the Agent receiving this prompt can call. A notice that stands in
     # for an oversized file names ``read`` only when it answers ``True`` for it; the
     # default names no Tool.

@@ -477,61 +477,6 @@ class TestOccurrencesInWindow:
         assert (urlaub.start, urlaub.end, urlaub.all_day) == ("2026-09-14", "2026-09-17", True)
         assert urlaub.start_utc == datetime(2026, 9, 13, 22, tzinfo=UTC)
 
-    @pytest.mark.parametrize(
-        ("fields", "removed", "instant", "next_start"),
-        [
-            # Berlin midnight on 2026-09-14 is 22:00 UTC the day before.
-            pytest.param(
-                {"start": "2026-09-14"}, [], "2026-09-13T21:59", "2026-09-13T22:00", id="ahead"
-            ),
-            pytest.param({"start": "2026-09-14"}, [], "2026-09-13T22:01", None, id="started"),
-            pytest.param(
-                {"start": "2026-09-14", "rrule": "FREQ=DAILY;COUNT=3"},
-                [],
-                "2026-09-16T12:00",
-                None,
-                id="series-ended",
-            ),
-            pytest.param(
-                {"start": "2026-09-14", "rrule": "FREQ=DAILY;COUNT=3"},
-                ["2026-09-16"],
-                "2026-09-15T12:00",
-                None,
-                id="rest-removed",
-            ),
-            pytest.param(
-                {"start": "2026-09-07T09:00:00", "rrule": "FREQ=WEEKLY;UNTIL=20260921"},
-                [],
-                "2026-09-21T06:59",
-                "2026-09-21T07:00",
-                id="last-occurrence-ahead",
-            ),
-            pytest.param(
-                {"start": "2026-09-07T09:00:00", "rrule": "FREQ=MONTHLY"},
-                [],
-                "2031-01-01T00:00",
-                "2031-01-07T08:00",
-                id="series-without-end",
-            ),
-        ],
-    )
-    def test_next_start_follows_expansion(
-        self,
-        service: CalendarService,
-        fields: dict[str, Any],
-        removed: list[str],
-        instant: str,
-        next_start: str | None,
-    ) -> None:
-        event = service.create_event(title="Event", **fields)
-        for key in removed:
-            asyncio.run(service.delete_occurrence(occurrence_id(event.id, key)))
-        event = service.get_event(event.id)
-
-        at = datetime.fromisoformat(instant).replace(tzinfo=UTC)
-        expected = datetime.fromisoformat(next_start).replace(tzinfo=UTC) if next_start else None
-        assert service.next_start(event, at) == expected
-
     def test_rejects_inverted_window(self, service: CalendarService) -> None:
         with pytest.raises(CalendarValidationError, match="after"):
             service.occurrences_in_window(

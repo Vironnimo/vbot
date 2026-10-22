@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
 from typing import Any
 
 import pytest
@@ -28,9 +27,6 @@ from core.providers.reasoning import (
     ReasoningIntent,
     closest_supported_effort,
     effort_to_budget,
-    model_reasoning_budget_max,
-    model_reasoning_control,
-    model_reasoning_levels,
     model_reasoning_supported,
     reasoning_token_count,
     resolve_reasoning_intent,
@@ -85,68 +81,20 @@ def test_closest_supported_effort_snaps_to_the_nearest_known_level(
     assert closest_supported_effort(effort, supported) == expected
 
 
-_Accessor = Callable[[Callable[[str], Model | None] | None, str], Any]
-_ACCESSORS: tuple[_Accessor, ...] = (
-    model_reasoning_supported,
-    model_reasoning_levels,
-    model_reasoning_control,
-    model_reasoning_budget_max,
-)
-
-
-@pytest.mark.parametrize(
-    ("accessor", "reasoning", "expected"),
-    [
-        pytest.param(
-            model_reasoning_supported, ReasoningCapabilities(supported=False), False, id="supported"
-        ),
-        pytest.param(
-            model_reasoning_levels,
-            ReasoningCapabilities(supported=True, control="levels", levels=("high", "xhigh")),
-            ("high", "xhigh"),
-            id="levels",
-        ),
-        pytest.param(
-            model_reasoning_levels,
-            ReasoningCapabilities(supported=True),
-            None,
-            id="levels-empty-ladder-falls-back",
-        ),
-        pytest.param(
-            model_reasoning_control,
-            ReasoningCapabilities(supported=True, control=REASONING_CONTROL_BUDGET),
-            REASONING_CONTROL_BUDGET,
-            id="control",
-        ),
-        pytest.param(
-            model_reasoning_budget_max,
-            ReasoningCapabilities(
-                supported=True, control=REASONING_CONTROL_BUDGET, budget_max=24576
-            ),
-            24576,
-            id="budget-max",
-        ),
-    ],
-)
-def test_model_reasoning_accessors_read_the_catalog_model_without_connection_suffix(
-    accessor: _Accessor, reasoning: ReasoningCapabilities, expected: Any
-) -> None:
+def test_model_reasoning_support_reads_the_catalog_model_without_connection_suffix() -> None:
     looked_up: list[str] = []
 
     def model_lookup(model_id: str) -> Model | None:
         looked_up.append(model_id)
-        return _model_with_reasoning(reasoning)
+        return _model_with_reasoning(ReasoningCapabilities(supported=False))
 
-    assert accessor(model_lookup, "vendor/model::api-key") == expected
+    assert model_reasoning_supported(model_lookup, "vendor/model::api-key") is False
     assert looked_up == ["vendor/model"]
 
 
-@pytest.mark.parametrize("accessor", _ACCESSORS)
-def test_model_reasoning_accessors_are_unknown_without_lookup_or_model(
-    accessor: _Accessor,
-) -> None:
-    assert accessor(None, "anything") is None
-    assert accessor(lambda _model_id: None, "missing") is None
+def test_model_reasoning_support_is_unknown_without_lookup_or_model() -> None:
+    assert model_reasoning_supported(None, "anything") is None
+    assert model_reasoning_supported(lambda _model_id: None, "missing") is None
 
 
 # ---------------------------------------------------------------------------

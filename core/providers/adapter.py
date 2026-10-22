@@ -65,6 +65,7 @@ __all__ = [
     "ModelLookup",
     "ProviderAdapter",
     "RESPONSES_TOOL_CALL_ID_PROFILE",
+    "RequestContextText",
     "TERMINAL_OUTCOMES",
     "TERMINAL_OUTCOME_CONTENT_FILTERED",
     "TERMINAL_OUTCOME_ERROR",
@@ -80,6 +81,7 @@ __all__ = [
     "ToolCallIdProfile",
     "canonical_tool_result_is_error",
     "estimate_wire_request_input_tokens",
+    "is_request_context_message",
     "neutralize_system_reminder_tags",
     "normalize_tool_call_candidate",
     "normalize_tool_call_candidates",
@@ -128,6 +130,26 @@ TERMINAL_OUTCOMES: Final[frozenset[TerminalOutcome]] = frozenset(
 )
 
 IMAGE_WIRE_MEDIA_TYPES = frozenset({"image/jpeg", "image/png", "image/gif", "image/webp"})
+
+
+class RequestContextText(str):
+    """Content of a user-role request message that Chat renders as context, not a user turn.
+
+    Chat marks the System Reminders and quoted Channel observations it renders
+    from Session notes with this type, so an Adapter can tell them from the
+    user's own messages (GitHub Copilot's ``x-initiator``). Every string
+    operation returns a plain ``str``, so content rewritten after rendering
+    loses the mark and counts as a user turn again.
+    """
+
+    __slots__ = ()
+
+
+def is_request_context_message(message: Mapping[str, Any]) -> bool:
+    """Return whether ``message`` is Chat-rendered context rather than a user turn."""
+
+    return message.get("role") == "user" and isinstance(message.get("content"), RequestContextText)
+
 
 _REQUEST_INPUT_BUDGET: ContextVar[tuple[str, RequestInput] | None] = ContextVar(
     "provider_request_input_budget", default=None

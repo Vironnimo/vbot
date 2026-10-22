@@ -63,7 +63,7 @@ _AGENT: Final = _Voice(
         "cron": "inherited from the Session that scheduled this job",
         "extension": "set by the Extension that runs you",
     },
-    rule_file="it is a file your permission rules come from",
+    rule_file="what is written there decides your permission rules",
     scratch_only="you can change files only in your scratch folder",
     outside={
         "read": "it is outside the folders you can read",
@@ -77,7 +77,7 @@ _WATCH: Final = _Voice(
     inherited=dict.fromkeys(
         ("parent", "cron", "extension"), "inherited from the Session that scheduled this job"
     ),
-    rule_file="it is a file the Agent's permission rules come from",
+    rule_file="what is written there decides the Agent's permission rules",
     scratch_only="these rules allow changes only in a scratch folder",
     outside={
         "read": "it is outside the folders these rules allow reading",
@@ -192,7 +192,7 @@ class PermissionRefusal:
                 return f"the rule {self.rule}, {inherited}, denies it"
             return f"the rule {self.rule} denies it"
         if self.reason == "protected_location":
-            # Also a Team member's repository files: they hold its rules as well.
+            # Also a Team member's repository locations: they decide its rules as well.
             if self.location == "agent_config":
                 return voice.rule_file
             return _PROTECTED.get(self.location or "", "it is a protected location")

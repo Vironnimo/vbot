@@ -204,6 +204,7 @@ def test_normalize_response_accepts_a_collapsed_single_tool_use_block() -> None:
         ("end_turn", "stop"),
         ("tool_use", "tool_calls"),
         ("max_tokens", "output_truncated"),
+        ("model_context_window_exceeded", "output_truncated"),
         ("refusal", "content_filtered"),
         ("pause_turn", "error"),
         ("provider_added_reason", "unknown"),

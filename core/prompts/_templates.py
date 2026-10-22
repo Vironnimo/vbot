@@ -17,6 +17,7 @@ from core.prompts._block_types import (
     ToolAvailability,
 )
 from core.tools import READ_TOOL_NAME, model_tool_name
+from core.tools.file_state import FileRead
 from core.utils.log_conditions import LoggedConditions
 from core.utils.logging import get_logger
 from core.utils.paths import model_path
@@ -65,7 +66,7 @@ def _render_generated_marker(
 def _render_workspace_include(
     filename: str,
     workspace: str,
-    on_read: Callable[[Path], None] | None,
+    on_read: Callable[[FileRead], None] | None,
     tool_available: ToolAvailability,
 ) -> str:
     """Return one ``{include:filename}`` expansion, fail-soft.
@@ -141,7 +142,7 @@ def expand_workspace_includes(
     workspace: str,
     *,
     tool_available: ToolAvailability,
-    on_read: Callable[[Path], None] | None = None,
+    on_read: Callable[[FileRead], None] | None = None,
 ) -> str:
     """Replace every ``{include:filename}`` with the workspace file, fail-soft.
 
@@ -150,7 +151,7 @@ def expand_workspace_includes(
     :func:`_render_workspace_include` for the empty-workspace, missing/unreadable
     and unsafe-path rules, and :func:`render_prompt_file` for the size limit.
 
-    ``on_read``, when given, is called with the resolved absolute path of every file
+    ``on_read``, when given, receives the resolved path and pre-read metadata of every file
     whose content is actually inlined (never for a missing/unreadable/oversized
     one), so a caller can register the inlined file as read-before-write.
     """
@@ -198,7 +199,7 @@ def render_prompt_file(
     name: str,
     *,
     tool_available: ToolAvailability,
-    on_read: Callable[[Path], None] | None = None,
+    on_read: Callable[[FileRead], None] | None = None,
     warn_missing: bool = False,
     on_issue: Callable[[PromptFileIssue], None] | None = None,
 ) -> str | None:
@@ -219,7 +220,7 @@ def render_prompt_file(
 
     Each condition logs once when it starts or changes and once when the file
     loads whole again, never on every render, and never with file content.
-    *on_read*, when given, receives the resolved absolute path only when the
+    *on_read*, when given, receives the resolved path and pre-read metadata only when the
     content is inlined whole, so the caller can stamp it as read-before-write.
     *on_issue* reports omitted content without changing fail-soft rendering.
     """
@@ -228,6 +229,8 @@ def render_prompt_file(
     condition = (warn_missing, str(path))
     try:
         with path.open("rb") as handle:
+            status = os.fstat(handle.fileno())
+            stamp = (status.st_mtime, status.st_size)
             raw = handle.read(INLINE_FILE_MAX_BYTES + 1)
             size = max(os.fstat(handle.fileno()).st_size, len(raw))
         # Text mode's universal newlines, exactly as ``read_text`` applies them.
@@ -287,7 +290,7 @@ def render_prompt_file(
     if _FILE_CONDITIONS.ended(condition):
         _LOGGER.info("Loaded prompt file whole again (path=%s)", path)
     if on_read is not None:
-        on_read(path.resolve())
+        on_read((path.resolve(), stamp))
     return wrap_include_file(name, content)
 
 

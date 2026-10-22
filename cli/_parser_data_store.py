@@ -187,6 +187,18 @@ def _add_data_store_parsers(
         help="Confirm moving the database files to quarantine and dropping the registration",
     )
 
+    convert_parser = _add_command_parser(
+        commands,
+        "convert",
+        DATA_STORE_HELP["convert"],
+        example="data-store convert --yes",
+    )
+    convert_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Confirm the conversion while the exact server target is stopped",
+    )
+
     secrets_parser = commands.add_parser(
         "secrets",
         help=DATA_STORE_HELP["secrets"],
@@ -223,13 +235,13 @@ def _add_data_store_parsers(
         DATA_STORE_SECRETS_HELP["status"],
         example="data-store secrets status",
     )
-    convert_parser = _add_command_parser(
+    secrets_convert_parser = _add_command_parser(
         secrets_commands,
         "convert",
         DATA_STORE_SECRETS_HELP["convert"],
         example="data-store secrets convert --yes",
     )
-    convert_parser.add_argument(
+    secrets_convert_parser.add_argument(
         "--yes",
         action="store_true",
         help="Confirm the conversion while the exact server target is stopped",

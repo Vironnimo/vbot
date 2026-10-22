@@ -17,7 +17,8 @@ from core.recall import (
     SqliteFtsRecallBackend,
 )
 from core.runs import RunKind
-from core.sessions import ChatSessionManager
+from core.sessions import ChatSessionManager, SessionAddress
+from core.subagents.links import link_session
 from core.tools.session_search import SESSION_SEARCH_TOOL_NAME, register_session_search_tool
 from core.tools.tools import ToolRegistry
 from scripts.provider_probe.choices import SESSION_SEARCH_CASES
@@ -101,6 +102,57 @@ async def test_a_restricted_session_searches_only_its_own_agent(tmp_path: Path) 
 
     assert [item["agent_id"] for item in success(own)["items"]] == ["coder"]
     assert "Omit agent_id" in failure(other, "permission_denied")["message"]
+
+
+async def test_an_inherited_ceiling_confines_search_to_the_conversation_tree(
+    tmp_path: Path,
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    root = SessionAddress(project_id=None, agent_id="lead", session_id="root")
+    current = SessionAddress(project_id=None, agent_id="coder", session_id="current-session")
+    sessions.create("lead", session_id="root").append(ChatMessage.user("needle root"))
+    for session_id, parent in (
+        ("current-session", root),
+        ("child", current),
+        ("sibling", root),
+        ("past", None),
+    ):
+        sessions.create("coder", session_id=session_id).append(
+            ChatMessage.user(f"needle {session_id}")
+        )
+        if parent is not None:
+            link_session(
+                sessions,
+                SessionAddress(project_id=None, agent_id="coder", session_id=session_id),
+                subagent_id=f"sub_{session_id}",
+                parent=parent,
+                run_id="run",
+                tool_call_id=None,
+                tool_call_index=None,
+            )
+    backend = CanonicalSessionRecallBackend(sessions)
+    context = BoundaryContext(workdir=tmp_path / "work", home=tmp_path / "home", data_dir=tmp_path)
+    parent_rules = PermissionBoundary.build(
+        normalize_permission_rules({"read": "work_area"}), context
+    )
+    ceiling = parent_rules.ceiling(source="parent")
+    assert ceiling is not None
+    inherited = PermissionBoundary.build(None, context, ceilings=(ceiling,))
+
+    found = success(await search(tmp_path, {"query": "needle"}, backend, permissions=inherited))
+    outside = await search(
+        tmp_path, {"query": "needle", "session_id": "past"}, backend, permissions=inherited
+    )
+    other = await search(
+        tmp_path, {"query": "needle", "agent_id": "lead"}, backend, permissions=inherited
+    )
+
+    assert sorted(item["session_id"] for item in found["items"]) == ["child", "sibling"]
+    assert "Omit session_id" in failure(outside, "permission_denied")["message"]
+    assert "Omit agent_id" in failure(other, "permission_denied")["message"]
+    # The Agent's own rules alone keep every Session of the Agent searchable.
+    own = success(await search(tmp_path, {"query": "needle"}, backend, permissions=parent_rules))
+    assert [item["session_id"] for item in own["items"]] == ["past"]
 
 
 async def test_search_can_restrict_query_to_one_past_session(tmp_path: Path) -> None:

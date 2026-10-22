@@ -20,7 +20,8 @@ from core.extensions.databases import ExtensionDatabases
 from core.extensions.operations import ExtensionHost
 from core.models.models import ModelRegistry
 from core.models.query import ModelQuery
-from core.projects import AgentResolver, ProjectStore
+from core.permissions import PermissionBoundary, PermissionCeiling
+from core.projects import AgentResolver, ProjectStore, RuntimeAgent
 from core.projects.resolver import effective_project_allowed_skills
 from core.prompts import SystemPromptManager
 from core.prompts.prompts import ProjectPromptContext
@@ -47,6 +48,7 @@ from core.tools.availability import (
     normalize_tool_access,
 )
 from core.tools.command_manager import CommandManager
+from core.tools.portal_registry import PortalRegistry
 from core.tools.scratch_areas import ScratchAreas
 from core.tools.terminal_manager import TerminalManager, TerminalOwner
 from core.tools.tools import ToolContext, ToolRegistry
@@ -103,6 +105,15 @@ def _validate_temporary_tool_configuration(
         raise RuntimeError("temporary Tool configuration refers to an unavailable Tool")
 
 
+# Blocking: the Permission Boundary of an Agent's work outside a Run, from the
+# Agent, its Working Project's directory, the Session's stored ceiling and the
+# Session whose temporary files it may read (Runtime._session_boundary).
+type SessionBoundaryBuilder = Callable[
+    [RuntimeAgent, Path | None, PermissionCeiling | None, SessionAddress | None],
+    PermissionBoundary,
+]
+
+
 class ExtensionHostFactory:
     """Own temporary execution groups and Extension catalog/inspection capabilities."""
 
@@ -132,9 +143,11 @@ class ExtensionHostFactory:
         resources: Sequence[ExecutionResources],
         terminals: TerminalManager,
         commands: CommandManager,
+        portals: PortalRegistry | None,
         scratch_areas: ScratchAreas,
         get_change_publisher: Callable[[], Callable[[str, str, Sequence[str], int], None] | None],
         get_title_service: Callable[[], SessionTitleService | None],
+        session_boundary: SessionBoundaryBuilder,
         logger: LoggerProtocol | None,
     ) -> None:
         self._host = host
@@ -160,9 +173,11 @@ class ExtensionHostFactory:
         self._resources = resources
         self._terminals = terminals
         self._commands = commands
+        self._portals = portals
         self._scratch_areas = scratch_areas
         self._get_change_publisher = get_change_publisher
         self._get_title_service = get_title_service
+        self._session_boundary = session_boundary
         self.logger = logger
         self._temporary_groups: list[TemporaryExecutionGroups] = []
         self._statistics_service: StatisticsService | None = None
@@ -224,6 +239,11 @@ class ExtensionHostFactory:
                 if self._host.resolve_cwd is not None
                 else None
             ),
+            resolve_permissions=(
+                self._guard_host_async_call(identity, self._host.resolve_permissions)
+                if self._host.resolve_permissions is not None
+                else None
+            ),
             for_owner=self._guard_host_call(
                 identity, lambda _identity: self._extension_owner_host(identity)
             ),
@@ -271,6 +291,8 @@ class ExtensionHostFactory:
             TerminalOwner(address.project_id, address.agent_id, address.session_id)
         )
         await self._commands.close_scope(address)
+        if self._portals is not None:
+            self._portals.close_sessions([address])
 
     async def archive_uninstalled_owner_groups(self, installed: frozenset[str]) -> None:
         """Archive the live owner-managed Sessions of every owner not in *installed*.
@@ -533,9 +555,13 @@ class ExtensionHostFactory:
             execution_owner=RunExecutionOwner(**record["execution_owner"])
             if record["execution_owner"]
             else None,
+            # Placeholder until the Session's own boundary replaces it below;
+            # the context leaves this method only with that boundary.
+            permissions=PermissionBoundary.UNRESTRICTED,
         )
         assert self._host.resolve_tool_agent_async is not None
         agent = await self._host.resolve_tool_agent_async(context)
+        address = SessionAddress(context.project_id, context.agent_id, context.session_id)
         working_project = await self.agent_resolver.resolve_working_project_async(
             context.project_id, agent, session_id=context.session_id
         )
@@ -544,6 +570,16 @@ class ExtensionHostFactory:
             if working_project
             else None
         )
+        # The Session's boundary as its Runs compose it, so a recovered call
+        # (MCP roots, for example) reaches no more than the original call could.
+        ceiling = (await self.agent_resolver.session_overrides_async(address)).ceiling()
+        permissions = await _RUNTIME_WORKERS.run(
+            self._session_boundary,
+            agent,
+            Path(project.cwd) if project else None,
+            ceiling,
+            address,
+        )
         self._require_registration(identity)
         return replace(
             context,
@@ -551,6 +587,7 @@ class ExtensionHostFactory:
             cwd=Path(project.cwd) if project else Path(agent.workspace),
             working_project_id=working_project,
             skill_project_id=working_project,
+            permissions=permissions,
         )
 
     async def _deliver_tool_outcome(self, identity: Any, receipt: str, content: str) -> bool:

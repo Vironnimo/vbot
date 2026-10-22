@@ -163,7 +163,9 @@ _PROJECT_CONFIG_FIELDS = frozenset(
         "updated_at",
     }
 )
-PROJECT_FORMAT_VERSION = 1
+# Version 2 changed the meaning of the instruction settings; version 1 documents
+# are converted by ``core/projects/conversion.py``, never read.
+PROJECT_FORMAT_VERSION = 2
 
 
 @cache
@@ -245,7 +247,12 @@ def validate_project_data(data: Any) -> list[JsonDiagnostic]:
     diagnostics: list[JsonDiagnostic] = []
     if not isinstance(data, dict):
         return [error_diagnostic("$", f"Expected a JSON object, got {type(data).__name__}")]
-    if not validate_format_version(diagnostics, data, PROJECT_FORMAT_VERSION):
+    if not validate_format_version(
+        diagnostics,
+        data,
+        PROJECT_FORMAT_VERSION,
+        older_hint="convert it with `vbot data-store convert --yes`",
+    ):
         return diagnostics
 
     warn_unknown_keys(diagnostics, "$", data, project_shape().fields, "project field")

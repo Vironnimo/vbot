@@ -425,6 +425,8 @@ class ShellTool:
 
         async def progress(output: str) -> None:
             command_id = await started
+            if self._secrets is not None:
+                output = self._secrets.masker.mask_growing(output)
             await context.emit(
                 TOOL_CALL_OUTPUT_EVENT,
                 {"tool_call_id": context.tool_call_id, "command_id": command_id, "output": output},

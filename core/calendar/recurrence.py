@@ -13,6 +13,7 @@ refused instead of being stored.
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Iterator
 from datetime import UTC, date, datetime, time, timedelta
@@ -54,6 +55,7 @@ _PREFIX = "RRULE:"
 _END_OF_DAY = time(23, 59, 59)
 # The Gregorian calendar repeats every 400 years, weekdays included.
 _CYCLE_YEARS = 400
+_CYCLE_PERIODS = {"DAILY": 146097, "WEEKLY": 20871, "MONTHLY": 4800, "YEARLY": 400}
 _MAX_YEAR = 9999
 _RULE_EXAMPLE = "such as FREQ=WEEKLY;BYDAY=MO,WE"
 
@@ -241,16 +243,18 @@ def _check_first_occurrence(
     """Refuse a rule without any occurrence from the event's start on.
 
     dateutil looks for the next occurrence until the year 9999, which takes
-    seconds for a rule that has none. The calendar repeats every 400 years, so
-    the probe moves the start by whole cycles towards that year and looks at
-    the rule there; its first occurrence, moved back, is the rule's first one.
+    seconds for a rule that has none. Move the start by whole Gregorian cycles,
+    keeping enough years for both the calendar and the rule's interval phase
+    to repeat. Large intervals can need more than one 400-year cycle to match.
     """
     if not FIRST_EVENT_YEAR <= start.year <= LAST_EVENT_YEAR:
         raise CalendarValidationError(
             f"a repeating event must start between the years {FIRST_EVENT_YEAR} and "
             f"{LAST_EVENT_YEAR}"
         )
-    shift = (_MAX_YEAR - 2 * _CYCLE_YEARS - start.year) // _CYCLE_YEARS * _CYCLE_YEARS
+    interval = int(parts.get("INTERVAL", "1"))
+    cycle_years = _CYCLE_YEARS * interval // math.gcd(_CYCLE_PERIODS[parts["FREQ"]], interval)
+    shift = max(0, (_MAX_YEAR - 2 * cycle_years - start.year) // _CYCLE_YEARS * _CYCLE_YEARS)
     unbounded = {key: item for key, item in parts.items() if key not in {"COUNT", "UNTIL"}}
     probe = _build(unbounded, start.replace(year=start.year + shift), zone)
     first = next(iter(probe), None)

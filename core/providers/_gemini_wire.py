@@ -252,88 +252,120 @@ def _normalize_gemini_response(response: Mapping[str, Any]) -> dict[str, Any]:
     return result
 
 
-def _normalize_gemini_stream_chunk(
-    chunk: Mapping[str, Any],
-    replay_parts: list[dict[str, Any]],
-    *,
-    has_tool_calls: bool,
-) -> tuple[list[dict[str, Any]], bool, bool]:
-    error = chunk.get("error")
-    if error is not None:
-        detail = error.get("message") or error if isinstance(error, Mapping) else error
-        raise ProviderError(
-            f"OpenCode Zen Gemini stream error: {detail}",
-            retryable=False,
-        )
-    deltas: list[dict[str, Any]] = []
-    chunk_has_tools = False
-    candidates = chunk.get("candidates")
-    candidate = candidates[0] if isinstance(candidates, list) and candidates else {}
-    candidate = candidate if isinstance(candidate, Mapping) else {}
-    content = candidate.get("content")
-    parts = content.get("parts") if isinstance(content, Mapping) else []
-    part_values = (
-        parts if isinstance(parts, list) else [parts] if isinstance(parts, Mapping) else []
-    )
-    for raw_part in part_values:
-        if not isinstance(raw_part, Mapping):
-            continue
-        part = copy.deepcopy(dict(raw_part))
-        replay_parts.append(part)
-        text = part.get("text")
-        if isinstance(text, str) and text:
-            deltas.append(
-                {
-                    "type": "reasoning_delta" if part.get("thought") is True else "content_delta",
-                    "text": text,
-                }
+_PLAIN_TEXT_PART_KEYS = frozenset({"text", "thought"})
+"""Keys of a part whose replay state its text deltas already carry."""
+
+
+class GeminiStreamDecoder:
+    """Decode one ``streamGenerateContent`` SSE stream into canonical Provider deltas.
+
+    Every streamed part is kept, in order, for replay as ``reasoning_meta.gemini_parts``.
+    Chat keeps only the newest snapshot, so the decoder sends one where it is needed:
+    after a part that carries more than text (a thought signature, a function call),
+    once the stream finished, and through :meth:`pending_replay` before a stream error.
+    A snapshot per text chunk would copy the growing list on both sides of the
+    Adapter boundary, quadratic in the length of the answer.
+    """
+
+    def __init__(self) -> None:
+        self.replay_parts: list[dict[str, Any]] = []
+        self.has_tool_calls = False
+        self.finished = False
+        self._sent_parts = 0
+
+    def normalize(self, chunk: Mapping[str, Any]) -> list[dict[str, Any]]:
+        """Return the deltas of one parsed stream chunk."""
+
+        error = chunk.get("error")
+        if error is not None:
+            detail = error.get("message") or error if isinstance(error, Mapping) else error
+            raise ProviderError(
+                f"OpenCode Zen Gemini stream error: {detail}",
+                retryable=False,
             )
-        function_call = part.get("functionCall")
-        if isinstance(function_call, Mapping):
-            chunk_has_tools = True
-            name = function_call.get("name")
-            arguments = function_call.get("args")
+        deltas: list[dict[str, Any]] = []
+        replay_state = False
+        candidates = chunk.get("candidates")
+        candidate = candidates[0] if isinstance(candidates, list) and candidates else {}
+        candidate = candidate if isinstance(candidate, Mapping) else {}
+        content = candidate.get("content")
+        parts = content.get("parts") if isinstance(content, Mapping) else []
+        part_values = (
+            parts if isinstance(parts, list) else [parts] if isinstance(parts, Mapping) else []
+        )
+        for raw_part in part_values:
+            if not isinstance(raw_part, Mapping):
+                continue
+            part = copy.deepcopy(dict(raw_part))
+            self.replay_parts.append(part)
+            replay_state = replay_state or not part.keys() <= _PLAIN_TEXT_PART_KEYS
+            text = part.get("text")
+            if isinstance(text, str) and text:
+                deltas.append(
+                    {
+                        "type": "reasoning_delta"
+                        if part.get("thought") is True
+                        else "content_delta",
+                        "text": text,
+                    }
+                )
+            function_call = part.get("functionCall")
+            if isinstance(function_call, Mapping):
+                self.has_tool_calls = True
+                name = function_call.get("name")
+                arguments = function_call.get("args")
+                deltas.append(
+                    {
+                        "type": "tool_call_delta",
+                        "id": _gemini_tool_call_id(
+                            function_call, chunk, len(self.replay_parts) - 1
+                        ),
+                        "name_delta": name if isinstance(name, str) else "",
+                        "arguments_delta": arguments
+                        if isinstance(arguments, str)
+                        else json.dumps(
+                            arguments if arguments is not None else {},
+                            separators=(",", ":"),
+                        ),
+                    }
+                )
+        finish_reason = candidate.get("finishReason")
+        prompt_feedback = chunk.get("promptFeedback")
+        prompt_blocked = isinstance(prompt_feedback, Mapping) and bool(
+            prompt_feedback.get("blockReason")
+        )
+        chunk_finished = finish_reason is not None or prompt_blocked
+        self.finished = self.finished or chunk_finished
+        if replay_state or self.finished:
+            snapshot = self.pending_replay()
+            if snapshot is not None:
+                deltas.append(snapshot)
+        if chunk_finished:
             deltas.append(
                 {
-                    "type": "tool_call_delta",
-                    "id": _gemini_tool_call_id(function_call, chunk, len(replay_parts) - 1),
-                    "name_delta": name if isinstance(name, str) else "",
-                    "arguments_delta": arguments
-                    if isinstance(arguments, str)
-                    else json.dumps(
-                        arguments if arguments is not None else {},
-                        separators=(",", ":"),
+                    "type": "finish",
+                    "reason": _gemini_finish_reason(
+                        finish_reason,
+                        has_tool_calls=self.has_tool_calls,
+                        prompt_feedback=prompt_feedback,
                     ),
                 }
             )
-    if replay_parts:
-        deltas.append(
-            {
-                "type": "reasoning_meta",
-                "reasoning_meta": {"gemini_parts": copy.deepcopy(replay_parts)},
-            }
-        )
-    finish_reason = candidate.get("finishReason")
-    prompt_feedback = chunk.get("promptFeedback")
-    prompt_blocked = isinstance(prompt_feedback, Mapping) and bool(
-        prompt_feedback.get("blockReason")
-    )
-    finished = finish_reason is not None or prompt_blocked
-    if finished:
-        deltas.append(
-            {
-                "type": "finish",
-                "reason": _gemini_finish_reason(
-                    finish_reason,
-                    has_tool_calls=has_tool_calls or chunk_has_tools,
-                    prompt_feedback=prompt_feedback,
-                ),
-            }
-        )
-    usage = _normalize_gemini_usage(chunk.get("usageMetadata"))
-    if usage is not None:
-        deltas.append({"type": "usage", **usage})
-    return deltas, chunk_has_tools, finished
+        usage = _normalize_gemini_usage(chunk.get("usageMetadata"))
+        if usage is not None:
+            deltas.append({"type": "usage", **usage})
+        return deltas
+
+    def pending_replay(self) -> dict[str, Any] | None:
+        """Return the replay snapshot delta when parts arrived since the last one, else ``None``."""
+
+        if len(self.replay_parts) == self._sent_parts:
+            return None
+        self._sent_parts = len(self.replay_parts)
+        return {
+            "type": "reasoning_meta",
+            "reasoning_meta": {"gemini_parts": copy.deepcopy(self.replay_parts)},
+        }
 
 
 def _normalize_gemini_usage(raw: Any) -> dict[str, int] | None:

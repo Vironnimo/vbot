@@ -11,11 +11,11 @@ slice declared by :class:`PinnedContextDependencies`.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 from core.memory import DEFAULT_MEMORY_PROMPT_MODE
 from core.prompts.prompts import PinnedSkillCatalog
+from core.tools.file_state import FileRead
 
 if TYPE_CHECKING:
     from core.prompts.prompts import ProjectPromptContext, SystemPromptManager
@@ -85,7 +85,7 @@ class PinnedContextDependencies(Protocol):
 def stamp_prompt_files_read(
     file_state: FileReadState,
     session_id: str,
-    paths: list[Path],
+    paths: list[FileRead],
 ) -> None:
     """Register auto-injected prompt files as read-before-write for a session.
 
@@ -95,14 +95,14 @@ def stamp_prompt_files_read(
     full-file replacement without a redundant ``read`` call.
     The guard still forces a re-read if such a file changes on disk afterwards
     (its ``(mtime, size)`` no longer matches), so the "only while unchanged"
-    contract holds. ``paths`` is the resolved-absolute-path list the prompt build
-    reported; empty is a no-op. The explicit Project Tool stamps its own result
-    files directly through the same ``FileReadState`` instance.
+    contract holds. ``paths`` carries resolved paths and metadata captured before
+    reading the prompt bytes; registering it never stats the files again. The explicit
+    Project Tool stamps its own result files through the same ``FileReadState`` instance.
     """
     if not paths:
         return
-    for path in paths:
-        file_state.record_read(session_id, path)
+    for path, stamp in paths:
+        file_state.record_stamp(session_id, path, stamp)
 
 
 def pinned_skill_catalog(
@@ -192,6 +192,7 @@ def _pinned_epoch_text(
     *,
     attributes: Mapping[str, str | None] | None = None,
     text_key: str = "text",
+    read_paths: list[FileRead] | None = None,
 ) -> str:
     """Return the prompt epoch's pinned text in *slot*, snapshotting on first build.
 
@@ -233,6 +234,9 @@ def _pinned_epoch_text(
         lambda current: matching_text(current) is not None,
     )
     winner = matching_text(pinned)
+    if winner is not None and winner != text and read_paths is not None:
+        # These reads belong to the discarded render, not the text this request shows.
+        read_paths.clear()
     return text if winner is None else winner
 
 
@@ -260,7 +264,7 @@ def pinned_working_project_context(
     if prompt_project is None or project_context is None:
         return None
 
-    read_paths: list[Path] = []
+    read_paths: list[FileRead] = []
     text = _pinned_epoch_text(
         dependencies,
         PINNED_WORKING_PROJECT_CONTEXT_SLOT,
@@ -273,6 +277,7 @@ def pinned_working_project_context(
             on_read=read_paths.append,
         ),
         attributes={PINNED_PROJECT_ATTRIBUTE: project_context.project_id},
+        read_paths=read_paths,
     )
     stamp_prompt_files_read(dependencies.file_read_state, session_id, read_paths)
     return text
@@ -292,7 +297,7 @@ def pinned_soul_context(
     """
     if not getattr(agent, "workspace", None):
         return None
-    read_paths: list[Path] = []
+    read_paths: list[FileRead] = []
 
     def render() -> str:
         return dependencies.get_system_prompts().render_soul(
@@ -307,6 +312,7 @@ def pinned_soul_context(
         session_id,
         project_id,
         render,
+        read_paths=read_paths,
     )
     stamp_prompt_files_read(dependencies.file_read_state, session_id, read_paths)
     return text
@@ -362,7 +368,7 @@ def pinned_memory_files(
     """
     if not getattr(agent, "workspace", None):
         return None
-    read_paths: list[Path] = []
+    read_paths: list[FileRead] = []
 
     def render() -> str:
         return dependencies.get_system_prompts().render_memory_files(
@@ -378,6 +384,7 @@ def pinned_memory_files(
         project_id,
         render,
         attributes={"mode": getattr(agent, "memory_prompt_mode", DEFAULT_MEMORY_PROMPT_MODE)},
+        read_paths=read_paths,
     )
     stamp_prompt_files_read(dependencies.file_read_state, session_id, read_paths)
     return text

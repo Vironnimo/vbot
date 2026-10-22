@@ -24,6 +24,7 @@ from core.database import (
     DatabaseError,
     SnapshotRestore,
     UnregisteredDatabase,
+    canonical_database_path,
     describe_config_backup,
     list_config_backups,
     open_database,
@@ -628,6 +629,81 @@ def data_store_secrets_convert(instance: ServerInstance, confirm: bool) -> Comma
     )
 
 
+def data_store_convert(instance: ServerInstance, confirm: bool) -> CommandResult:
+    """Convert the documents an older vBot wrote to the current format.
+
+    Today these are the Project configurations of format version 1, live and
+    archived (``core/projects/conversion.py``). The application updater converts
+    them in its verification start; this serves data directories it does not
+    update, such as a checkout's. The exact target is stopped meanwhile and
+    started again if it ran.
+    """
+    if instance.host not in _LOOPBACK_HOSTS:
+        return CommandResult(ok=False, message=_LOCAL_ONLY_MESSAGE, instance=instance)
+    if not confirm:
+        return CommandResult(
+            ok=False,
+            message=(
+                "refusing to convert the data directory without confirmation; the server is "
+                "stopped meanwhile; re-run with --yes"
+            ),
+            instance=instance,
+        )
+    from core.archive import archived_projects_need_conversion, convert_archived_projects
+    from core.projects.conversion import convert_project_documents, pending_project_documents
+    from core.sessions import SessionArchiveLedger
+    from core.sessions.store import SessionStore
+    from core.utils.file_status import exists_strict
+
+    data_dir = instance.data_dir
+    try:
+        # Check before stopping the server: nothing changes yet.
+        pending = bool(pending_project_documents(data_dir)) or archived_projects_need_conversion(
+            data_dir
+        )
+    except OSError as exc:
+        return CommandResult(
+            ok=False, message=f"the data directory cannot be checked: {exc}", instance=instance
+        )
+    if not pending:
+        return CommandResult(
+            ok=True,
+            message="every document has the current format; nothing to convert",
+            instance=instance,
+        )
+
+    def convert() -> str:
+        live = convert_project_documents(data_dir)
+        archived: tuple[str, ...] = ()
+        sessions_path = canonical_database_path(data_dir, "sessions")
+        if exists_strict(sessions_path):
+            store = SessionStore(sessions_path)
+            try:
+                archived = convert_archived_projects(data_dir, SessionArchiveLedger(store))
+            finally:
+                store.close()
+        parts: list[str] = []
+        if live.converted:
+            parts.append("converted " + ", ".join(live.converted))
+        if archived:
+            parts.append(f"converted {len(archived)} archived Projects")
+        if live.invalid:
+            parts.append(
+                "left "
+                + ", ".join(live.invalid)
+                + " unchanged: not readable as JSON; `vbot doctor config` names the problem"
+            )
+        return "; ".join(parts) or "nothing changed"
+
+    return _change_while_stopped(
+        instance,
+        convert,
+        action="conversion",
+        subject="data directory",
+        done="converted the data directory",
+    )
+
+
 def data_store_secrets_reset(instance: ServerInstance, confirm: bool) -> CommandResult:
     """Replace an unavailable Secret Store with a new empty one.
 
@@ -844,21 +920,31 @@ def _change_while_stopped(
 def _lifecycle(
     instance: ServerInstance,
 ) -> tuple[Callable[[], CommandResult], Callable[[], CommandResult]]:
-    """Stop and start *instance* the way its owner does."""
+    """Stop and start *instance* the way its owner does.
+
+    A packaged installation's refusal, such as another application operation
+    holding its lock, is a failed result, so the caller can report what the change
+    already did and how the server was left.
+    """
     from cli.application import processes
-    from cli.application.state import exclusive
+    from cli.application.state import ApplicationError, exclusive
 
     install = processes.owning_installation(instance)
     if install is None:
         return (lambda: stop_server(instance)), (lambda: start_server(instance))
 
+    def locked(action: Callable[[], CommandResult]) -> CommandResult:
+        try:
+            with exclusive(install.root):
+                return action()
+        except ApplicationError as exc:
+            return CommandResult(ok=False, message=str(exc), instance=instance)
+
     def stop() -> CommandResult:
-        with exclusive(install.root):
-            return processes.stop(install)
+        return locked(lambda: processes.stop(install))
 
     def start() -> CommandResult:
-        with exclusive(install.root):
-            return processes.start(install)
+        return locked(lambda: processes.start(install))
 
     return stop, start
 

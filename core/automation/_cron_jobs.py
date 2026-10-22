@@ -15,12 +15,16 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from croniter import CroniterBadDateError, croniter  # type: ignore[import-untyped]
 from tzlocal import get_localzone
 
-from core.automation._cron_notification_model import NOTIFICATION_FIELDS, CronNotification
+from core.automation._cron_notification_model import (
+    ALERT_FIELDS,
+    NOTIFICATION_FIELDS,
+    CronAlert,
+    CronNotification,
+)
 from core.automation._cron_timing import _utc_now_iso
 from core.config_validation import (
     JsonConfigValidationError,
     JsonDiagnostic,
-    JsonObject,
     JsonValidationReport,
     add_error,
     load_validated_json_file,
@@ -36,7 +40,6 @@ from core.json_documents import (
     json_document,
     json_list,
     json_object,
-    strip_unknown_fields,
     validate_collection_root,
 )
 from core.permissions import PermissionCeiling, PermissionRulesError
@@ -164,6 +167,8 @@ _CRON_JOB_FIELDS = _MUTABLE_FIELDS | {
     "last_run_silent",
     "notifications",
     "last_delivered_at",
+    "dropped_notifications",
+    "unread_alert",
 }
 
 CRON_JOBS_FORMAT_VERSION = 1
@@ -180,6 +185,7 @@ CRON_JOB_SHAPE = json_object(
         "last_result": json_object(_LAST_RESULT_FIELDS),
         "watch": json_object(_WATCH_FIELDS),
         "notifications": json_list(json_object(NOTIFICATION_FIELDS), key="id"),
+        "unread_alert": json_object(ALERT_FIELDS),
     },
 )
 
@@ -263,17 +269,6 @@ def _target_validation_error(job: CronJob, error: Exception) -> CronTargetError:
 def validate_cron_jobs_file(jobs_path: str | Path) -> JsonValidationReport:
     """Validate persisted ``cron/jobs.json`` without consuming it."""
     return validate_json_file(jobs_path, validate_cron_jobs_data, missing_ok=True)
-
-
-def load_validated_cron_jobs_json(jobs_path: str | Path) -> list[JsonObject]:
-    """Load the modeled fields of schema-valid Cron jobs; a missing file has none."""
-    try:
-        data = load_validated_json_file(jobs_path, validate_cron_jobs_data, missing_ok=True)
-    except JsonConfigValidationError as error:
-        raise CronStorageError(str(error)) from error
-    if data is None:
-        return []
-    return cast("list[JsonObject]", strip_unknown_fields(data, CRON_JOBS_SHAPE)["jobs"])
 
 
 def _load_cron_jobs_payload(jobs_path: str | Path) -> list[Any]:
@@ -460,6 +455,23 @@ def _validate_cron_job_data(diagnostics: list[JsonDiagnostic], item_path: str, i
     validate_optional_string(
         diagnostics, f"{item_path}.last_delivered_at", item.get("last_delivered_at")
     )
+    dropped = item.get("dropped_notifications")
+    if dropped is not None and (
+        isinstance(dropped, bool) or not isinstance(dropped, int) or dropped < 0
+    ):
+        add_error(
+            diagnostics, f"{item_path}.dropped_notifications", "must be a non-negative integer"
+        )
+    alert = item.get("unread_alert")
+    if alert is not None:
+        try:
+            CronAlert.from_dict(alert)
+        except ValueError as error:
+            add_error(diagnostics, f"{item_path}.unread_alert", str(error))
+        if isinstance(alert, dict):
+            warn_unknown_keys(
+                diagnostics, f"{item_path}.unread_alert", alert, ALERT_FIELDS, "alert field"
+            )
     silent = item.get("last_run_silent")
     if silent is not None and not isinstance(silent, bool):
         add_error(diagnostics, f"{item_path}.last_run_silent", "must be a boolean")
@@ -589,6 +601,10 @@ class CronJob:
     last_check_error: str | None = None
     notifications: tuple[CronNotification, ...] = ()
     last_delivered_at: str | None = None
+    # Chat messages dropped unsent because the job held too many; the next sent one says so.
+    dropped_notifications: int = 0
+    # The latest alert no Run reports, until the user acknowledges it or it is resolved.
+    unread_alert: CronAlert | None = None
     # The boundary of the restricted Session that created or last changed the job
     # through the ``cron`` Tool, in its stored ceiling form; every fire applies it.
     # ``None``: the job was set up by the user or a full-access Session.
@@ -652,6 +668,10 @@ class CronJob:
             data["notifications"] = [item.to_dict() for item in self.notifications]
         if self.last_delivered_at is not None:
             data["last_delivered_at"] = self.last_delivered_at
+        if self.dropped_notifications:
+            data["dropped_notifications"] = self.dropped_notifications
+        if self.unread_alert is not None:
+            data["unread_alert"] = self.unread_alert.to_dict()
         if self.permission_ceiling is not None:
             data["permission_ceiling"] = deepcopy(self.permission_ceiling)
         return data
@@ -723,6 +743,12 @@ class CronJob:
                 CronNotification.from_dict(item) for item in payload.get("notifications", [])
             ),
             last_delivered_at=payload.get("last_delivered_at"),
+            dropped_notifications=int(payload.get("dropped_notifications") or 0),
+            unread_alert=(
+                None
+                if payload.get("unread_alert") is None
+                else CronAlert.from_dict(payload["unread_alert"])
+            ),
             permission_ceiling=(
                 None
                 if payload.get("permission_ceiling") is None

@@ -559,7 +559,7 @@ def _render_path(
         known_total = count_lines(resolved, log=log, encoding=encoding)
         if not known_total:
             return ReadPage(""), range(0)
-        position = ReadPosition(_start_line(position.line, known_total))
+        position = ReadPosition(_start_line(position.line, known_total), position.character)
     rendered_lines: list[str] = []
     rendered_bytes = 0
     source_line = 1

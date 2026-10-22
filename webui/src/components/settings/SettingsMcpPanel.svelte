@@ -78,7 +78,12 @@
   $effect(() => subscribeInvalidations?.(controller.handleInvalidation));
   onDestroy(() => controller.dispose());
 
+  // Counts opened editors, so a fill answered after its editor closed or
+  // gave way to another one changes nothing.
+  let editorGeneration = 0;
+
   function edit(connection = null) {
+    editorGeneration += 1;
     original = connection
       ? JSON.parse(JSON.stringify(connection.configuration))
       : null;
@@ -88,7 +93,9 @@
   // Fills the new connection from a command line or URL; setup text with
   // several servers or a secret to store goes to the import dialog.
   async function quickFill(text) {
+    const generation = editorGeneration;
     const { servers } = await controller.previewImport(text);
+    if (!draft || generation !== editorGeneration) return;
     const [server] = servers;
     if (
       servers.length !== 1 ||

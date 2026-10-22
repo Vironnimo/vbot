@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Hashable
 from dataclasses import replace
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 from core.agents import SKILL_AGENT_CREATED_AT_KEY
@@ -66,7 +67,12 @@ from core.projects._session_resolution import (
 from core.projects._team_resolution import TeamResolution, _profile_skill_allowed
 from core.projects._temporary_resolution import TemporaryResolution
 from core.projects.projects import ProjectError, ProjectNotFoundError
-from core.projects.sources import AgentAdapter, AgentProfile, ScanResult
+from core.projects.sources import (
+    AgentAdapter,
+    AgentProfile,
+    ScanResult,
+    definition_locations,
+)
 from core.sessions import AGENT_DEFAULT_PROJECT
 from core.settings import AgentDefaults
 from core.tools.tool_loading import complete_tool_loading, inherit_tool_loading
@@ -594,6 +600,11 @@ class AgentResolver:
             permission_rules=resolve_permission_rules(
                 (_override_permission_rules(project, agent_id), scanned.permission_rules),
                 global_defaults,
+            ),
+            # A restricted member must not loosen its rules through a definition
+            # that would replace its own.
+            definition_locations=definition_locations(
+                Path(project.cwd), project.sources, scanned.source
             ),
         )
         return replace(

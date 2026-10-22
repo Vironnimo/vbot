@@ -21,7 +21,11 @@ def format_canonical_timestamp(value: datetime) -> str:
     """Format an aware *value* as a canonical UTC timestamp."""
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("timestamp must include timezone information")
-    return value.astimezone(UTC).strftime(_CANONICAL_FORMAT)
+    try:
+        utc_value = value.astimezone(UTC)
+    except OverflowError as exc:
+        raise ValueError("timestamp is outside the supported UTC range") from exc
+    return utc_value.strftime(_CANONICAL_FORMAT)
 
 
 def parse_timestamp(value: str) -> datetime:
@@ -38,7 +42,10 @@ def parse_timestamp(value: str) -> datetime:
         raise ValueError(f"invalid ISO 8601 timestamp: {value!r}") from exc
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise ValueError(f"timestamp must include timezone information: {value!r}")
-    return parsed.astimezone(UTC)
+    try:
+        return parsed.astimezone(UTC)
+    except OverflowError as exc:
+        raise ValueError("timestamp is outside the supported UTC range") from exc
 
 
 def parse_canonical_timestamp(value: str) -> datetime:

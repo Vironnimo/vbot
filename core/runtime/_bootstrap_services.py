@@ -174,6 +174,14 @@ def _archive_services(runtime: Runtime) -> ArchiveServices:
         for address in addresses:
             await asyncio.to_thread(secrets.remove_session, address)
 
+    def move_agent_secrets(agent_id: str, new_agent_id: str) -> None:
+        if runtime._agent_secrets is not None:
+            runtime._agent_secrets.retarget_agent(agent_id, new_agent_id)
+
+    def release_agent_secrets(agent_id: str) -> None:
+        if runtime._agent_secrets is not None:
+            runtime._agent_secrets.remove_identity_agent(agent_id)
+
     async def close_session_transports(addresses: Sequence[SessionAddress]) -> None:
         if runtime._portals is not None:
             runtime._portals.close_sessions(addresses)
@@ -210,6 +218,8 @@ def _archive_services(runtime: Runtime) -> ArchiveServices:
         retention_days=retention_days,
         close_session_transports=close_session_transports,
         remove_session_secrets=remove_session_secrets,
+        move_agent_secrets=move_agent_secrets,
+        release_agent_secrets=release_agent_secrets,
     )
 
 

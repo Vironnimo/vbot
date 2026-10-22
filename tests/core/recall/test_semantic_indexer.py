@@ -461,8 +461,9 @@ async def test_batch_whose_every_text_fails_alone_stops_without_skipping(
     assert status.next_attempt_at == _at(30)
 
 
+@pytest.mark.parametrize("prior_failures", [0, 1024])
 async def test_transient_failures_back_off_and_honor_retry_after(
-    index: PassageIndex, sessions: ChatSessionManager
+    index: PassageIndex, sessions: ChatSessionManager, prior_failures: int
 ) -> None:
     _conversation(sessions, "one", "fruit a", 1)
     failures = [
@@ -472,6 +473,7 @@ async def test_transient_failures_back_off_and_honor_retry_after(
     ]
     embeddings = _Embeddings(reject=lambda _texts: failures.pop(0) if failures else None)
     indexer = _indexer(index, sessions, embeddings)
+    indexer._failures = prior_failures
     observed: list[tuple[str, str | None, str | None]] = []
 
     for _attempt in range(4):
@@ -485,9 +487,9 @@ async def test_transient_failures_back_off_and_honor_retry_after(
             assert (await indexer.status()).next_attempt_at == status.next_attempt_at
 
     assert observed == [
-        ("retrying", "provider_unavailable", _at(30)),
-        ("retrying", "provider_unavailable", _at(60)),
-        ("retrying", "provider_rate_limited", _at(300)),
+        ("retrying", "provider_unavailable", _at(1800 if prior_failures else 30)),
+        ("retrying", "provider_unavailable", _at(1800 if prior_failures else 60)),
+        ("retrying", "provider_rate_limited", _at(1800 if prior_failures else 300)),
         ("idle", None, _at(600)),
     ]
     assert (await indexer.status()).indexed == 1

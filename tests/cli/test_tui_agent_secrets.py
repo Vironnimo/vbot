@@ -112,11 +112,14 @@ async def _open_request(app: ConversationApp, server: SecretServer, pilot: Any) 
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("flow", ["store", "decline", "leave"])
+@pytest.mark.parametrize("flow", ["store", "replace", "decline", "leave"])
 async def test_waiting_request_outranks_the_run_and_its_masked_form_answers_it(flow: str) -> None:
     server = SecretServer()
     server.active = True
-    server.secret_requests = [_request(), _request(id="sreq_other", session_id="session-two")]
+    server.secret_requests = [
+        _request(replaces=flow == "replace"),
+        _request(id="sreq_other", session_id="session-two"),
+    ]
     app = ConversationApp(server, agent_id="main")
     async with app.run_test(size=(120, 45)) as pilot:
         await pilot.pause()
@@ -131,8 +134,11 @@ async def test_waiting_request_outranks_the_run_and_its_masked_form_answers_it(f
         username = dialog.query_one("#field-login-username", Input)
         password = dialog.query_one("#field-login-password", Input)
         assert not username.password and password.password
-        assert dialog.query_one("#secret-lifetime", Select).value == "permanent"
-        if flow == "store":
+        # A replacing answer keeps the stored Secret's lifetime unless one is picked.
+        assert dialog.query_one("#secret-lifetime", Select).value == (
+            "keep" if flow == "replace" else "permanent"
+        )
+        if flow in {"store", "replace"}:
             username.value = "ada"
             password.value = "correct horse"
             await pilot.click("#store")
@@ -151,6 +157,12 @@ async def test_waiting_request_outranks_the_run_and_its_masked_form_answers_it(f
                         "values": {"username": "ada", "password": "correct horse"},
                         "lifetime": "permanent",
                     },
+                )
+            ],
+            "replace": [
+                (
+                    "agent_secrets.answer",
+                    {"id": "sreq_one", "values": {"username": "ada", "password": "correct horse"}},
                 )
             ],
             "decline": [("agent_secrets.decline", {"id": "sreq_one"})],

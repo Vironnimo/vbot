@@ -255,6 +255,11 @@ class _Hunk:
     bare: list[int] = field(default_factory=list)
     # That *** End of File also ends a patch without *** End Patch, so it may only close it.
     closing_eof: bool = False
+    # The same change with Secret values read back as the reference texts they
+    # replaced, for a file that holds those texts (``_edit_engine.with_literal_readings``).
+    literal: _Hunk | None = field(default=None, repr=False, compare=False)
+    # In a literal reading: the reference texts it keeps as text.
+    kept_references: tuple[str, ...] = ()
 
     def changes_text(self) -> bool:
         if self.replacement is not None:

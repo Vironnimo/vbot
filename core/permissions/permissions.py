@@ -132,9 +132,10 @@ class BoundaryContext:
     (vBot-owned folders this Session may read, such as its Skill directories and
     artifact folders); ``agent_config`` (the Agent's ``agent.json``) is never
     readable or writable, ``install_dirs`` (installation and interpreter) never
-    writable. ``rule_files`` are the repository files a Team member's rules come
-    from (its profile and the settings files its translation reads, also missing
-    ones): readable where the rules allow, never writable, also under every Run
+    writable. ``rule_files`` are the repository locations a Team member's rules come
+    from (its profile, the settings files its translation reads and every location
+    where a definition could replace its profile, also missing ones): readable
+    where the rules allow, never writable, also under every Run
     that inherits this boundary as a ceiling. ``loopback_port`` is the vBot
     server's own port on loopback; ``own_hosts`` are the further names and
     addresses that reach it on that port when it listens beyond loopback (this
@@ -398,9 +399,12 @@ class PermissionBoundary:
         ``reach`` is the pattern of what it reaches below the folder, as segments.
         """
         protected: list[tuple[ProtectedLocation, _Area | None]] = [
-            ("agent_config", self._agent_config),
-            ("data_dir", self._data_dirs),
+            ("agent_config", self._agent_config)
         ]
+        # A folder in a part of the data directory the access may reach (the
+        # Scratch Area, the Workspace, a readable folder) has only such parts below.
+        if not all(self._data_dir_allowed(key, access) for key in keys):
+            protected.append(("data_dir", self._data_dirs))
         if access == "write" and not git:
             protected.append(("agent_config", self._rule_files))
         if access == "write":
@@ -677,7 +681,8 @@ class PermissionBoundary:
         return any(area.contains(key) for area in (*self._readable, self._workspace) if area)
 
     def _names_exactly(self, key: str, access: PathAccess) -> bool:
-        return any(layer.names_exactly(key, access) for layer in self._compiled)
+        # Every layer refuses unsafe forms by itself, so each must name the path.
+        return all(layer.names_exactly(key, access) for layer in self._compiled)
 
     def _protected(self, keys: tuple[str, ...], access: PathAccess) -> ProtectedLocation | None:
         for key in keys:

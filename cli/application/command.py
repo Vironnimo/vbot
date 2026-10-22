@@ -355,22 +355,25 @@ def _dispatch_installed(args: argparse.Namespace, install: Installation) -> int 
             raise ApplicationError(
                 "An operation id is only valid with update status or update activate"
             )
-        package: Path | None
+        package: Path | None = None
+        prepared_version: str | None = None
         if args.update_action == "activate":
             prepared = operations.status(install, args.operation_id)
             if prepared is None or prepared.phase != "prepared" or not prepared.candidate_version:
                 raise ApplicationError("Select a prepared update operation to activate")
-            from cli.application.install import archive_payload
-
-            package = archive_payload(install, prepared.candidate_version)
-        else:
-            package = Path(args.package) if args.package else None
+            prepared_version = prepared.candidate_version
+        elif args.package:
+            package = Path(args.package)
         handoff = os.environ.get("VBOT_UPDATE_HANDOFF") if not args.no_restart else None
         if handoff and not install.owns_server:
             # An Agent on another server updating a client has no local Run to resume.
             handoff = None
         operation = operations.request_update(
-            install, package=package, restart=not args.no_restart, handoff_token=handoff
+            install,
+            package=package,
+            prepared_version=prepared_version,
+            restart=not args.no_restart,
+            handoff_token=handoff,
         )
         if args.detach or handoff:
             _print_update_result(install, operation, handoff=bool(handoff))

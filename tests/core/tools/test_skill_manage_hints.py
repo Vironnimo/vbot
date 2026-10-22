@@ -8,6 +8,7 @@ from typing import Any, cast
 
 import pytest
 
+from core.permissions import PermissionBoundary
 from core.runs import RunKind
 from core.skills.authoring import SkillAuthoringService
 from core.tools import SKILL_MANAGE_TOOL_NAME, ToolContext, ToolRegistry, register_skill_manage_tool
@@ -60,6 +61,7 @@ class _Tool:
             data_root=self.root,
             cwd=self.root,
             run_kind=run_kind,
+            permissions=PermissionBoundary.UNRESTRICTED,
         )
         result = cast(
             dict[str, Any],

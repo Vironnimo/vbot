@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from core.permissions import PermissionBoundary
 from core.runtime.runtime import Runtime
 from core.skills.skills import SKILL_ORIGIN_AGENT, SKILL_ORIGIN_GLOBAL, SkillRegistry
 from core.tools import ToolContext, tool_failure
@@ -404,6 +405,7 @@ def test_agent_authored_skill_changes_reach_subscribers(runtime: Runtime, tmp_pa
         vbot_root=tmp_path,
         data_root=runtime.storage.data_dir,
         cwd=tmp_path,
+        permissions=PermissionBoundary.UNRESTRICTED,
     )
 
     def manage(arguments: dict[str, object]) -> dict[str, object]:
@@ -435,6 +437,7 @@ def test_skill_tools_in_a_session_of_a_missing_project_refuse_or_miss(
             vbot_root=tmp_path,
             data_root=runtime.storage.data_dir,
             skill_project_id="gone",
+            permissions=PermissionBoundary.UNRESTRICTED,
         )
         return asyncio.run(runtime.tools.dispatch(context, arguments, [tool_name]))
 

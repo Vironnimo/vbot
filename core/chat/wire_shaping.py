@@ -87,6 +87,7 @@ from core.chat.messages import (
 )
 from core.providers.adapter import (
     TOOL_RESULT_CONTENT_BLOCKS_FIELD,
+    RequestContextText,
     neutralize_system_reminder_tags,
 )
 from core.providers.effort_updates import (
@@ -141,13 +142,14 @@ SYSTEM_REMINDER_OPEN_TAG = "<system-reminder>"
 SYSTEM_REMINDER_CLOSE_TAG = "</system-reminder>"
 
 
-class _SystemReminderContent(str):
+class _SystemReminderContent(RequestContextText):
     """Request content that Chat rendered as System Reminders.
 
     The type marks provenance for ``model_facing_request``: only content of
     this type keeps real System Reminder tags. Every string operation returns
     a plain ``str``, so content that anything rewrites, such as an Extension
     ``context`` hook, loses the mark and is neutralized like any other text.
+    As request context, it is no user turn for an Adapter either.
     """
 
     __slots__ = ()
@@ -332,7 +334,11 @@ def _masked_text(value: Any, masker: SecretMasker) -> Any:
     """Mask a string, or the ``text`` of each block in a content list; ``value`` if unchanged."""
 
     if isinstance(value, str):
-        return value if not masker.contains(value) else masker.mask(value)
+        if not masker.contains(value):
+            return value
+        masked = masker.mask(value)
+        # Masking only swaps Secret values for references: rendered context keeps its mark.
+        return type(value)(masked) if isinstance(value, RequestContextText) else masked
     if not isinstance(value, list):
         return value
     blocks = list(value)
@@ -1033,7 +1039,7 @@ def _untrusted_channel_messages_request(notes: list[ChatMessage]) -> JsonObject:
         content = note.content if isinstance(note.content, str) else ""
         quoted = content.removeprefix(CHANNEL_MESSAGE_NOTE_PREFIX)
         lines.append(_quote_external_json({"quoted_group_message": quoted}))
-    return {"role": "user", "content": "\n".join(lines)}
+    return {"role": "user", "content": RequestContextText("\n".join(lines))}
 
 
 def _quote_external_json(value: JsonObject) -> str:

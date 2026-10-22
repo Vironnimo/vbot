@@ -205,6 +205,12 @@ def test_stamp_puts_text_or_matching_overlay_pages_on_the_pages(pdf: Run, tmp_pa
     texts = [page.extract_text() for page in PdfReader(tmp_path / "under.pdf").pages]
     assert ["ENTWURF" in text for text in texts] == [False, True, False]
 
+    overlay = tmp_path / "draft.pdf"
+    original = overlay.read_bytes()
+    code, _ = pdf("stamp", source, overlay, "--overlay", overlay)
+    assert code == 1
+    assert overlay.read_bytes() == original
+
 
 def test_form_fill_validates_everything_before_writing(pdf: Run, tmp_path: Path) -> None:
     form = _form_pdf(tmp_path / "form.pdf")

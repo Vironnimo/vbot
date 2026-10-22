@@ -9,7 +9,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
@@ -35,6 +35,60 @@ from server.events import ServerEventBus
 from tests.server.app_test_support import ServerStubRuntime
 
 JsonObject = dict[str, Any]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stage", "cleanup_fails"),
+    [
+        ("runtime", False),
+        ("log_viewer", False),
+        ("state", False),
+        ("access", False),
+        ("ready", False),
+        ("ready", True),
+    ],
+)
+async def test_startup_failure_closes_initialized_services_without_hiding_the_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stage: str, cleanup_fails: bool
+) -> None:
+    error = RuntimeError("startup failed")
+    runtime = _AsyncCloseRuntime(tmp_path)
+    log_viewer = SimpleNamespace(
+        aclose=AsyncMock(side_effect=RuntimeError("cleanup failed") if cleanup_fails else None)
+    )
+    build_viewer = AsyncMock(
+        return_value=log_viewer, side_effect=error if stage == "log_viewer" else None
+    )
+    access_start = AsyncMock(side_effect=error if stage == "access" else None)
+    access_close = AsyncMock()
+    monkeypatch.setattr("server._log_sources.build_log_viewer", build_viewer)
+    monkeypatch.setattr("server.app.AccessService.start", access_start)
+    monkeypatch.setattr("server.app.AccessService.close", access_close)
+    if stage == "runtime":
+        monkeypatch.setattr(runtime, "start", Mock(side_effect=error))
+    if stage == "state":
+        monkeypatch.setattr("server.app._initialize_app_state", Mock(side_effect=error))
+    on_stopped = Mock()
+    app = create_app(
+        runtime=runtime,
+        safe_startup_mode="test",
+        on_ready=Mock(side_effect=error if stage == "ready" else None),
+        on_stopped=on_stopped,
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        async with app.router.lifespan_context(app):
+            pytest.fail("startup should fail before serving requests")
+
+    assert raised.value is error
+    assert runtime.aclose_called is (stage != "runtime")
+    assert log_viewer.aclose.await_count == int(stage not in {"runtime", "log_viewer"})
+    assert access_close.await_count == int(stage in {"access", "ready"})
+    if stage == "runtime":
+        on_stopped.assert_not_called()
+    else:
+        on_stopped.assert_called_once_with(not cleanup_fails)
 
 
 def test_real_runtime_serves_a_fresh_data_directory_and_stops_with_the_app(

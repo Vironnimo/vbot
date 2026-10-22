@@ -44,8 +44,7 @@ raises ``ValueError``.
 **Background Sessions are not use.** A Session whose Runs are all unattended
 kinds (``core.runs.UNATTENDED_RUN_KINDS``: reflection reviews and Librarian
 passes) contributes no offers and no activations: :func:`counts_as_skill_use`
-is the one rule the report and the per-Agent :func:`load_skill_use` query
-share.
+is the one rule the report and the package-use query share.
 """
 
 from __future__ import annotations
@@ -211,42 +210,6 @@ def counts_as_skill_use(summary: Mapping[str, object]) -> bool:
     if not isinstance(kinds, list) or not kinds:
         return True
     return not all(isinstance(kind, str) and is_unattended_run_kind(kind) for kind in kinds)
-
-
-def load_skill_use(
-    connection: sqlite3.Connection, owners: Mapping[int, str]
-) -> dict[tuple[str, str], SkillUse]:
-    """Return Skill use by ``(agent id, Skill name)`` from the reconciled index.
-
-    ``owners`` maps the index key of each Session that counts as use (see
-    :func:`counts_as_skill_use`) to its Agent id; activations of other Sessions
-    are ignored.
-    """
-    latest: dict[tuple[str, str], tuple[int, str, int]] = {}
-    for session_key, name, instant, timestamp in connection.execute(
-        # SQLite takes the bare ``timestamp`` from the row holding MAX(instant).
-        """
-        SELECT k.session_key, k.name, MAX(r.instant), r.timestamp
-        FROM stat_skills k
-        JOIN stat_records r ON r.session_key = k.session_key AND r.seq = k.seq
-        GROUP BY k.session_key, k.name
-        """
-    ):
-        agent_id = owners.get(session_key)
-        if agent_id is None:
-            continue
-        key = (agent_id, name)
-        current = latest.get(key)
-        if current is None:
-            latest[key] = (instant, timestamp, 1)
-        elif instant > current[0]:
-            latest[key] = (instant, timestamp, current[2] + 1)
-        else:
-            latest[key] = (current[0], current[1], current[2] + 1)
-    return {
-        key: SkillUse(last_activated=timestamp, count=count)
-        for key, (_instant, timestamp, count) in latest.items()
-    }
 
 
 # ---------------------------------------------------------------------------

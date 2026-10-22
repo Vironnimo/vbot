@@ -30,6 +30,7 @@ import {
   disableCronJob,
   enableCronJob,
   retryCronDelivery,
+  acknowledgeCronAlert,
   deleteCronJob,
   getCronWebhookSecret,
   rotateCronWebhookSecret,
@@ -460,6 +461,19 @@ export function createCronEditor(context) {
     }
   }
 
+  async function acknowledgeAlert(job) {
+    if (!job?.id || mutatingJobId) return;
+    mutatingJobId = job.id;
+    try {
+      await acknowledgeCronAlert(job.id);
+      await context.loadJobs({ silent: true });
+    } catch (error) {
+      context.showToast(t('cron.alert.acknowledgeError'), 'error', error);
+    } finally {
+      mutatingJobId = '';
+    }
+  }
+
   async function toggleJob(job) {
     if (
       !job?.id ||
@@ -691,6 +705,9 @@ export function createCronEditor(context) {
     },
     get retryDelivery() {
       return retryDelivery;
+    },
+    get acknowledgeAlert() {
+      return acknowledgeAlert;
     },
     get toggleJob() {
       return toggleJob;

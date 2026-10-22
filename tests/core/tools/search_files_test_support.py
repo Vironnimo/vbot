@@ -6,11 +6,14 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
+from core.permissions import PermissionBoundary
 from core.tools.search_files import register_search_files_tool
 from core.tools.tools import ToolContext, ToolRegistry
 
 
-def context(root: Path, **kwargs: Any) -> ToolContext:
+def context(
+    root: Path, *, permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED, **kwargs: Any
+) -> ToolContext:
     return ToolContext(
         agent_id="a",
         session_id="s",
@@ -21,6 +24,7 @@ def context(root: Path, **kwargs: Any) -> ToolContext:
         workspace=root,
         vbot_root=root,
         data_root=root,
+        permissions=permissions,
         **kwargs,
     )
 

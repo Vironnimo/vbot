@@ -128,6 +128,31 @@ def test_pending_update_rejects_incompatible_request(
         operations.request_update(install, restart=False)
 
 
+def test_a_prepared_version_is_selected_in_place_and_a_repeat_joins_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # `update activate` writes no copy of the prepared version that a worker could be
+    # reading, so a repeated activation joins the running one.
+    install = _install(tmp_path)
+    prepared = tmp_path / "versions" / "rel_prepared"
+    prepared.mkdir()
+    (prepared / "release.json").write_text("{}", encoding="utf-8")
+    spawned: list[str] = []
+    monkeypatch.setattr(operations, "spawn_worker", lambda _install, item: spawned.append(item.id))
+    monkeypatch.setattr(operations, "worker_alive", lambda _operation: True)
+
+    accepted = operations.request_update(install, prepared_version="rel_prepared")
+
+    assert (accepted.package, accepted.local_package) == (str(prepared.resolve()), True)
+    assert not (tmp_path / "staging").exists()
+    assert operations.request_update(install, prepared_version="rel_prepared").id == accepted.id
+    with pytest.raises(ApplicationError, match="different options"):
+        operations.request_update(install)
+    assert spawned == [accepted.id]
+    with pytest.raises(ApplicationError):
+        operations.request_update(install, prepared_version="rel_retired")
+
+
 def test_operation_is_persisted_before_spawn_and_spawn_failure_is_saved(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

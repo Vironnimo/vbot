@@ -202,7 +202,7 @@ describe('ChatAssistantRun', () => {
         status,
         streaming: preparing,
         previewArguments: preparing ? { path: 'f.txt' } : null,
-        ...(preparing ? { startedEvent: null } : {}),
+        ...(preparing ? { started: false } : {}),
       });
     }
 
@@ -272,7 +272,7 @@ describe('ChatAssistantRun', () => {
               streaming: true,
               previewArguments: { command },
               partialArgumentsText: JSON.stringify({ command }),
-              startedEvent: null,
+              started: false,
             }),
           ],
         }),

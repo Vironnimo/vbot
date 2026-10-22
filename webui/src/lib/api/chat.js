@@ -43,6 +43,11 @@ export function loadChatTimelineChildren(params, options = {}) {
   return rpc('chat.timeline_children', params, options);
 }
 
+// The complete arguments and result of one Tool row, which the row previews.
+export function loadChatToolCall(params, options = {}) {
+  return rpc('chat.tool_call', params, options);
+}
+
 export function loadReflectionRuns(params = {}, options = {}) {
   requirePlainObject(
     params,

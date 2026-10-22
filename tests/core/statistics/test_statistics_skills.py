@@ -24,7 +24,6 @@ from core.statistics.skills import (
     SkillsSection,
     SkillUsageAccumulator,
     SkillUsageStat,
-    SkillUse,
     offered_skill_names,
     resolve_inventory,
 )
@@ -363,7 +362,7 @@ def test_report_window_filters_offers_by_session_start_and_activations_by_note_t
     assert deploy["usage_rate"] is None
 
 
-def test_skill_usage_returns_each_agents_last_activation_and_count(
+def test_package_usage_selects_surviving_attended_sessions_across_scopes(
     manager: ChatSessionManager, statistics: StatisticsFactory
 ) -> None:
     later = BASE + timedelta(hours=1)
@@ -378,16 +377,22 @@ def test_skill_usage_returns_each_agents_last_activation_and_count(
     mixed.start_run("run-user")
     service = statistics(["main", "builder"], projects={"vbot": ["builder"]})
 
-    usage = service.skill_usage()
+    usage = service.skill_package_usage()
 
-    assert usage == {
-        ("main", "deploy"): SkillUse(last_activated=format_canonical_timestamp(later), count=2),
-        ("main", "review"): SkillUse(last_activated=format_canonical_timestamp(BASE), count=1),
-        ("builder", "deploy"): SkillUse(last_activated=format_canonical_timestamp(BASE), count=1),
-    }
+    assert sorted((use.agent_id, use.name, use.last_activated) for use in usage) == [
+        ("builder", "deploy", format_canonical_timestamp(BASE)),
+        ("main", "deploy", format_canonical_timestamp(BASE)),
+        ("main", "deploy", format_canonical_timestamp(later)),
+        ("main", "review", format_canonical_timestamp(BASE)),
+    ]
+    assert len({use.session_key for use in usage}) == 4
     # A deleted Session no longer counts; the query refreshes the projection.
     manager.delete(first.address)
-    assert asyncio.run(service.skill_usage_async())[("main", "deploy")].count == 1
+    remaining = asyncio.run(service.skill_package_usage_async())
+    assert len(remaining) == 3
+    assert [
+        use.last_activated for use in remaining if use.agent_id == "main" and use.name == "deploy"
+    ] == [format_canonical_timestamp(later)]
 
 
 def test_package_usage_preserves_loaded_identity_and_follows_owner_rename(
