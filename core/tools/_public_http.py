@@ -538,7 +538,8 @@ async def _validate_public_target(scheme: str, host: str | None, port: int) -> t
     literal_address = _parse_ip_literal(normalized_host)
     if literal_address is not None:
         if _is_blocked_ip(literal_address):
-            raise _BlockedUrlError(_private_address(normalized_host))
+            # Name the address as the URL wrote it; an IPv4-mapped one compares as IPv4.
+            raise _BlockedUrlError(_private_address((host or "").strip().strip("[]").lower()))
         return str(literal_address), str(literal_address)
 
     resolved_addresses = await _resolve_host_addresses(normalized_host, port)
