@@ -7,13 +7,14 @@ import json
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, quote_plus
 
 import pytest
 
 from core.secrets.agent_secrets import (
     AgentSecrets,
     Lifetime,
+    SecretMasker,
     SecretRecordError,
     SecretUse,
     SecretUseError,
@@ -424,6 +425,20 @@ def test_masking_replaces_known_values_and_their_encodings_with_references(
     assert "{{secret:GITHUB.password}}" in masker.mask(json.dumps({"p": PASSWORD + '"'}))
     assert masker.mask(quote(PASSWORD + "/", safe="")) == "{{secret:GITHUB.password}}%2F"
     assert "{{secret:GITHUB.password}}" in masker.mask(encoded)
+    # Partial, lowercase and form percent-encoding, and GNU base64's wrapped lines.
+    special = "p@ss w/rd*(x)!"
+    long_value = "k" * 40 + "-" + "z" * 40
+    masker = SecretMasker({special: "{{secret:S}}", long_value: "{{secret:L}}"})
+    for text in (
+        quote(special, safe="!~*'()"),
+        quote(special, safe=""),
+        quote(special, safe="").lower(),
+        quote_plus(special, safe=""),
+    ):
+        assert masker.mask(text) == "{{secret:S}}", text
+    wrapped = base64.encodebytes(long_value.encode()).decode()
+    assert wrapped.count("\n") == 2
+    assert set(masker.mask(wrapped).split()) == {"{{secret:L}}"}
     # Too short to recognize safely.
     assert masker.mask("abc") == "abc"
     assert masker.mask_value(untouched) is untouched
