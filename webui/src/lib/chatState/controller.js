@@ -349,6 +349,7 @@ export function createChatController({
           description: item.description ?? '',
           type: item.type,
           argument: item.argument,
+          argument_hint: item.argument_hint ?? '',
           output: item.output,
         }))
         .filter((item) => item.name.length > 0);

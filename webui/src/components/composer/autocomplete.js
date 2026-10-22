@@ -20,6 +20,10 @@ function normalizeSkills(items) {
       // (insert token and wait) when one is selected.
       type: skill.type,
       argument: skill.argument,
+      argumentHint:
+        skill.type === 'command' && typeof skill.argument_hint === 'string'
+          ? skill.argument_hint.trim()
+          : '',
       searchName: skill.name.toLowerCase(),
       searchText: `${skill.name} ${skill.description ?? ''}`.toLowerCase(),
     }));

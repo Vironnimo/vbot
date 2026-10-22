@@ -280,8 +280,12 @@ class ExtensionAPI:
         execution_mode: str = "serialized",
         argument_execution_mode: str | None = None,
         unavailable_surfaces: frozenset[str] | set[str] | tuple[str, ...] = (),
+        argument_hint: str = "",
     ) -> None:
         """Declare a slash command for later application by Chat.
+
+        ``argument_hint`` says what may follow the name (``<profile> <goal>``);
+        accessors show it after the typed command.
 
         Declaration is intentionally inert here. ``CommandDispatcher`` validates
         the metadata and installs the handler after Runtime has created its
@@ -298,6 +302,7 @@ class ExtensionAPI:
                 execution_mode=execution_mode,
                 argument_execution_mode=argument_execution_mode,
                 unavailable_surfaces=unavailable_surfaces,
+                argument_hint=argument_hint,
             )
         )
 

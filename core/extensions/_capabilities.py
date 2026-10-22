@@ -165,6 +165,7 @@ class ExtensionCapabilityInstaller:
                         execution_mode=declaration.execution_mode,
                         argument_execution_mode=declaration.argument_execution_mode,
                         unavailable_surfaces=declaration.unavailable_surfaces,
+                        argument_hint=declaration.argument_hint,
                         page_ids=frozenset(page.page_id for page in record.declarations.pages),
                     )
                 except ValueError as exc:

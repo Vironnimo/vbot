@@ -64,7 +64,13 @@ def test_a_command_without_an_argument_is_submitted_when_it_is_chosen() -> None:
     rows = command_suggestions(
         [
             {"name": "/help", "description": "Show it.", "type": "command", "argument": "none"},
-            {"name": "model", "description": "Set it.", "type": "command", "argument": "required"},
+            {
+                "name": "model",
+                "description": "Set it.",
+                "type": "command",
+                "argument": "required",
+                "argument_hint": "[model] | reset",
+            },
             {"name": "debugging", "description": "A Skill.", "type": "skill"},
         ]
     )
@@ -74,7 +80,10 @@ def test_a_command_without_an_argument_is_submitted_when_it_is_chosen() -> None:
         ("model", "command", False),
         ("debugging", "skill", False),
     ]
-    assert rows[0].label == "/help · Show it."
+    assert [row.label for row in rows[:2]] == [
+        "/help · Show it.",
+        "/model [model] | reset · Set it.",
+    ]
 
 
 def test_models_offer_the_reference_a_model_message_needs() -> None:

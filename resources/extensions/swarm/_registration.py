@@ -101,6 +101,7 @@ def register(api: ExtensionAPI) -> None:
         service.command,
         argument="optional",
         execution_mode="immediate",
+        argument_hint="[<profile> <goal>]",
     )
     descriptions = {
         "wiki": (

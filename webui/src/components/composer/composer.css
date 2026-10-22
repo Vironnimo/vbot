@@ -16,6 +16,32 @@
   height: 22px;
 }
 
+/* The textarea's box, shared with the ghost line that shows a typed
+   command's argument hint behind it in the same type. */
+.input-area .msg-input-field {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  flex: 1;
+}
+
+.input-area .msg-input-ghost {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  color: var(--text-lo);
+  font-family: var(--font-ui);
+  font-size: var(--fs-body-lg);
+  line-height: 1.5;
+  pointer-events: none;
+  text-overflow: ellipsis;
+  white-space: pre;
+}
+
+.input-area .msg-input-ghost__typed {
+  color: transparent;
+}
+
 /* The context ring (chat/ContextUsageRing.svelte, which styles the ring and
      its card) sits at the bottom-right of the input box, between the textarea
      and the action buttons, aligned to the button row. */
