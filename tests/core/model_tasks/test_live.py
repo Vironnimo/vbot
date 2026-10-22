@@ -434,28 +434,54 @@ async def test_a_failed_usage_update_keeps_the_call_live(caplog: Any) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("operation", "stage"),
+    [
+        ("close", "request"),
+        ("close", "confirmation"),
+        ("close", "cleanup"),
+        ("abort", "request"),
+        ("abort", "cleanup"),
+    ],
+)
 async def test_a_cancelled_close_still_ends_the_call_and_stays_cancelled(
+    operation: str,
+    stage: str,
     monkeypatch: pytest.MonkeyPatch,
 ):
     wire, host = FakeWire(confirm_close=False), FakeHost()
-    cleanup_started = asyncio.Event()
+    entered, release = asyncio.Event(), asyncio.Event()
+    request_close, close_transport = wire.request_close, wire.aclose
 
-    async def close_transport() -> None:
-        cleanup_started.set()
-        await asyncio.Event().wait()
+    async def request() -> None:
+        await request_close()
+        if stage in {"request", "confirmation"}:
+            entered.set()
+        if stage == "request":
+            await release.wait()
 
-    monkeypatch.setattr(wire, "aclose", close_transport)
-    monkeypatch.setattr(live_call_module, "_TEARDOWN_TIMEOUT_SECONDS", 5)
-    call, _voice = _call(wire, host, close_timeout=0.01)
+    async def cleanup() -> None:
+        if stage == "cleanup":
+            entered.set()
+            await release.wait()
+        await close_transport()
+
+    monkeypatch.setattr(wire, "request_close", request)
+    monkeypatch.setattr(wire, "aclose", cleanup)
+    call, voice = _call(wire, host, close_timeout=0 if stage == "cleanup" else 30)
     wire.push(WireStarted(None))
-    closing = asyncio.create_task(call.close())
-    await asyncio.wait_for(cleanup_started.wait(), 1)
-    monkeypatch.setattr(live_call_module, "_TEARDOWN_TIMEOUT_SECONDS", 0.01)
+    closing = asyncio.create_task(call.close() if operation == "close" else call.abort())
+    await asyncio.wait_for(entered.wait(), 1)
     closing.cancel()
+    release.set()
 
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(closing, 1)
-    assert host.of_type("closed") == [{"type": "closed", "reason": "closed", "usage": None}]
+    assert wire.closed
+    assert voice.finished == [None]
+    assert host.of_type("closed") == [
+        {"type": "closed", "reason": "closed" if operation == "close" else "aborted", "usage": None}
+    ]
 
 
 @pytest.mark.asyncio

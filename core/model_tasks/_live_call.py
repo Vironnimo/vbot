@@ -60,6 +60,7 @@ from core.tools import called_tool_name
 from core.tools.live import TOOL_END_CALL, TOOL_VBOT_REQUEST, LiveToolHost, LiveToolHosts
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
+from core.utils.workers import finish_despite_cancel
 
 if TYPE_CHECKING:
     from core.chat import ExternalRun
@@ -250,6 +251,9 @@ class LiveCallSession:
                         await self._done.wait()
             except TimeoutError:
                 _LOGGER.warning("Live call close was not confirmed in time (call=%s)", self._log_id)
+            except asyncio.CancelledError:
+                await finish_despite_cancel(self._teardown())
+                raise
         if not self._done.is_set():
             await self._teardown()
         await self.wait_closed()
@@ -628,6 +632,9 @@ class LiveCallSession:
                     await self._send_command(self._wire.request_close)
             except TimeoutError:
                 pass
+            except asyncio.CancelledError:
+                await finish_despite_cancel(self._teardown())
+                raise
             await self._teardown()
         await self.wait_closed()
 
