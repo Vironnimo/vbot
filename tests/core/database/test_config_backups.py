@@ -298,9 +298,13 @@ def test_a_backup_repairs_a_stored_copy_altered_to_the_same_size(
     assert _read(data_dir, NOTE) == "KEY=one\n"
 
 
-@pytest.mark.parametrize("wrote_every_file", [False, True], ids=["mid-write", "after writing"])
+@pytest.mark.parametrize(
+    ("wrote_every_file", "state_backed_up"),
+    [(False, False), (True, False), (False, True)],
+    ids=["mid-write", "after writing", "state already backed up"],
+)
 def test_an_interrupted_restore_holds_the_maintenance_guard_until_it_is_repeated(
-    data_dir: Path, monkeypatch: pytest.MonkeyPatch, wrote_every_file: bool
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch, wrote_every_file: bool, state_backed_up: bool
 ) -> None:
     # Only the newest-backups rule holds the restored backup: the before-restore
     # backup would push it out, and the restore could never be repeated.
@@ -310,8 +314,10 @@ def test_an_interrupted_restore_holds_the_maintenance_guard_until_it_is_repeated
     backup_id = _backup(data_dir)
     _write(data_dir, "settings.json", _settings("Asia/Tokyo"))
     other_id = _backup(data_dir, now=NOW + timedelta(minutes=5))
-    _write(data_dir, "settings.json", _settings("UTC"))
-    _write(data_dir, NOTE, "KEY=two\n")
+    if not state_backed_up:
+        # A state no backup holds yet: the restore backs it up first.
+        _write(data_dir, "settings.json", _settings("UTC"))
+        _write(data_dir, NOTE, "KEY=two\n")
     real_write = config_backups_module.atomic_write_bytes
 
     def fail_on_settings(target: Path, *args: object, **kwargs: object) -> None:
@@ -326,8 +332,12 @@ def test_an_interrupted_restore_holds_the_maintenance_guard_until_it_is_repeated
         patched.setattr(config_backups_module, "atomic_write_bytes", fail_on_settings)
         with pytest.raises(OSError, match="injected"):
             restore_config_backup(data_dir, backup_id, now=NOW + timedelta(minutes=10))
-    first_before = list_config_backups(data_dir)[0]
-    assert first_before.reason == f"before restore {backup_id}"
+    # The backup that holds the replaced state, the undo point of the restore.
+    undo_point = list_config_backups(data_dir)[0]
+    if state_backed_up:
+        assert undo_point.backup_id == other_id
+    else:
+        assert undo_point.reason == f"before restore {backup_id}"
     assert read_maintenance(data_dir) is not None
     with pytest.raises(DatabaseFormatError, match="maintenance"):
         capture_config_backup(data_dir, reason="test")
@@ -339,7 +349,7 @@ def test_an_interrupted_restore_holds_the_maintenance_guard_until_it_is_repeated
 
     assert read_maintenance(data_dir) is None
     assert repeated.restored == (() if wrote_every_file else ("settings.json",))
-    assert repeated.before_restore == first_before.backup_id
+    assert repeated.before_restore == undo_point.backup_id
     assert _read(data_dir, NOTE) == "KEY=one\n"
     assert _read(data_dir, "settings.json") == _settings("Europe/Berlin")
 

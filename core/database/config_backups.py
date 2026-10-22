@@ -945,16 +945,14 @@ def _before_restore_backup(
     Its retention keeps the backup being restored, which an interrupted restore needs
     to be repeated: only that ends its maintenance guard.
     """
-    reason = f"before restore {backup_id}"
-    if interrupted:
-        # A repeated restore: the interrupted attempt took the backup already.
-        earlier = [backup for backup in list_config_backups(data_dir) if backup.reason == reason]
-        return earlier[0].backup_id if earlier else None
-    taken = _capture_config_backup_locked(
-        data_dir, reason=reason, now=now, keep=frozenset({backup_id})
-    )
-    if taken is not None:
-        return taken.backup_id
-    # The current state equals the newest backup, which therefore holds it.
+    if not interrupted:
+        taken = _capture_config_backup_locked(
+            data_dir, reason=f"before restore {backup_id}", now=now, keep=frozenset({backup_id})
+        )
+        if taken is not None:
+            return taken.backup_id
+    # The newest backup holds the replaced state: the current state equals it, or,
+    # for a repeated restore, the interrupted attempt took it or found the state
+    # equal to it, and no backup is created while that attempt's guard stands.
     newest = list_config_backups(data_dir)
     return newest[0].backup_id if newest else None
