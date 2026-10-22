@@ -738,11 +738,18 @@ async def test_secret_stores_the_value_and_tells_the_agent_only_its_reference(
     assert outcome.secret.lifetime == "permanent" and answered.feedback is not None
     assert usage.feedback is not None and usage.feedback.text.startswith("/secret NAME VALUE")
 
-    # A value without a kind replaces the login's password, not a new field.
-    await _execute(dispatcher, "/secret github new-password-456")
+    # A value without a kind replaces the login's password, not a new field, and
+    # without a lifetime option the Secret stays permanent.
+    kept = await _execute(dispatcher, "/secret github new-password-456")
     replaced = secrets.lookup(SessionAddress(None, "coder", "session-one"), "GITHUB")
-    assert replaced is not None
+    assert replaced is not None and replaced.lifetime == "permanent"
     assert [item.name for item in replaced.fields] == ["username", "password"]
+    narrowed = await _execute(dispatcher, "/secret github --session new-password-456")
+    narrowed_secret = secrets.get(replaced.id)
+    assert narrowed_secret is not None and narrowed_secret.lifetime == "session"
+    # The feedback says when the lifetime changed.
+    assert kept.feedback is not None and narrowed.feedback is not None
+    assert "session" not in kept.feedback.text and "session" in narrowed.feedback.text
     assert (
         secrets.substitute(
             SessionAddress(None, "coder", "session-one"), "{{secret:GITHUB}}", "terminal"

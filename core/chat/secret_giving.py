@@ -43,6 +43,8 @@ class GivenSecret:
     secret: AgentSecret
     replaced: bool
     answered_request: bool
+    # The lifetime the replaced Secret had, when the replacement changed it.
+    previous_lifetime: Lifetime | None = None
 
 
 async def give_secret(
@@ -54,7 +56,7 @@ async def give_secret(
     name: str,
     kind: SecretKind,
     values: Mapping[str, str],
-    lifetime: Lifetime = "session",
+    lifetime: Lifetime | None = None,
     expires_at: datetime | None = None,
     description: str = "",
     value: str | None = None,
@@ -63,8 +65,13 @@ async def give_secret(
 
     ``value`` is one value given without a field name (``/secret``): it goes to
     the main field of the Secret it replaces, or of a new Secret of ``kind``.
+    Without ``lifetime`` and ``expires_at``, a replaced Secret keeps its
+    lifetime and grants, and a new one lasts for the Session (user decision
+    2026-10-22).
     """
     secret_name = normalize_secret_name(name)
+    if lifetime is None and expires_at is not None:
+        lifetime = "until"
     pending = requests.pending_for(address, secret_name)
     if pending is not None:
         current = secrets.get(pending.replaces) if pending.replaces else None
@@ -74,7 +81,12 @@ async def give_secret(
             lifetime=lifetime,
             expires_at=expires_at,
         )
-        return GivenSecret(secret, replaced=pending.replaces is not None, answered_request=True)
+        return GivenSecret(
+            secret,
+            replaced=pending.replaces is not None,
+            answered_request=True,
+            previous_lifetime=_changed_lifetime(current, secret),
+        )
     passed_only = sessions is not None and await asyncio.to_thread(
         is_subagent_session, sessions, address
     )
@@ -86,10 +98,15 @@ async def give_secret(
             actor="user",
             values=_with_value(values, value, existing, kind),
             lifetime=lifetime,
-            given_to=address,
+            given_to=address if lifetime is not None else None,
             expires_at=expires_at,
         )
-        given = GivenSecret(secret, replaced=True, answered_request=False)
+        given = GivenSecret(
+            secret,
+            replaced=True,
+            answered_request=False,
+            previous_lifetime=_changed_lifetime(existing, secret),
+        )
     else:
         secret = await asyncio.to_thread(
             secrets.create,
@@ -97,7 +114,7 @@ async def give_secret(
             kind=kind,
             values=_with_value(values, value, None, kind),
             actor="user",
-            lifetime=lifetime,
+            lifetime=lifetime or "session",
             session_id=address.session_id,
             expires_at=expires_at,
             agents=[format_agent_address(address.agent_id, address.project_id)],
@@ -106,6 +123,12 @@ async def give_secret(
         given = GivenSecret(secret, replaced=False, answered_request=False)
     await _tell_agent(sessions, address, given, passed_only=passed_only)
     return given
+
+
+def _changed_lifetime(before: AgentSecret | None, after: AgentSecret) -> Lifetime | None:
+    if before is None or before.lifetime == after.lifetime:
+        return None
+    return before.lifetime
 
 
 def _with_value(

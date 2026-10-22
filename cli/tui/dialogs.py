@@ -716,28 +716,40 @@ class SecretDialog(ModalScreen[JsonObject | None]):
                                 classes="note",
                                 markup=False,
                             )
-                if request is None or not request.get("replaces"):
-                    lifetime = str(
-                        self.form.get("lifetime") or (request or {}).get("lifetime") or "session"
+                # A value for a Secret the Agent has keeps that Secret's
+                # lifetime unless the operator picks another.
+                if request is None:
+                    keep: tuple[tuple[str, str], ...] = (
+                        ("As it is now, or for this Session if new", "keep"),
                     )
-                    if lifetime not in {value for _, value in _SECRET_LIFETIMES}:
-                        lifetime = "session"
-                    yield Label("Lifetime", markup=False)
-                    yield Select(
-                        _SECRET_LIFETIMES,
-                        value=lifetime,
-                        allow_blank=False,
-                        id="secret-lifetime",
-                        compact=True,
-                    )
-                    duration = Input(
-                        value=str(self.form.get("duration") or ""),
-                        placeholder="Duration: 30m, 2h, 7d or 2w",
-                        id="secret-duration",
-                        compact=True,
-                    )
-                    duration.display = lifetime == "until"
-                    yield duration
+                elif request.get("replaces"):
+                    keep = (("As it is now", "keep"),)
+                else:
+                    keep = ()
+                choices = (*keep, *_SECRET_LIFETIMES)
+                lifetime = str(
+                    self.form.get("lifetime")
+                    or ("keep" if keep else (request or {}).get("lifetime"))
+                    or "session"
+                )
+                if lifetime not in {value for _, value in choices}:
+                    lifetime = "session"
+                yield Label("Lifetime", markup=False)
+                yield Select(
+                    choices,
+                    value=lifetime,
+                    allow_blank=False,
+                    id="secret-lifetime",
+                    compact=True,
+                )
+                duration = Input(
+                    value=str(self.form.get("duration") or ""),
+                    placeholder="Duration: 30m, 2h, 7d or 2w",
+                    id="secret-duration",
+                    compact=True,
+                )
+                duration.display = lifetime == "until"
+                yield duration
                 if request is None:
                     yield Label("Description (optional)", markup=False)
                     yield Input(
@@ -832,9 +844,9 @@ class SecretDialog(ModalScreen[JsonObject | None]):
                 raise _FormError(f"{label} is required.", widget)
             values[name] = value
         result["values"] = values
-        if self.request is not None and self.request.get("replaces"):
-            return result
         lifetime = str(self.query_one("#secret-lifetime", Select).value)
+        if lifetime == "keep":
+            return result
         result["lifetime"] = lifetime
         if lifetime == "until":
             duration_input = self.query_one("#secret-duration", Input)

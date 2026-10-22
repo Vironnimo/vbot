@@ -2,7 +2,8 @@
 
 ``/secret NAME [options] VALUE`` stores a Secret; options come before the value,
 and everything after them is the value, spaces included. ``--`` ends the
-options when a value starts with ``--``.
+options when a value starts with ``--``. Without a lifetime option a new Secret
+lasts for the Session and a replaced value keeps its Secret's lifetime.
 """
 
 from __future__ import annotations
@@ -22,9 +23,10 @@ __all__ = [
 ]
 
 SECRET_COMMAND_USAGE: Final = (
-    "/secret NAME VALUE stores a Secret for this session. Options before the value: "
-    "--permanent, --for 2h (or 30m, 7d), --once, --kind login --user NAME, "
-    "--kind text, --description TEXT."
+    "/secret NAME VALUE stores a Secret for this session; a new value for a Secret "
+    "keeps its lifetime. Options before the value: --permanent, --session, "
+    "--for 2h (or 30m, 7d), --once, --kind login --user NAME, --kind text, "
+    "--description TEXT."
 )
 _DURATION = re.compile(r"(\d+)\s*([mhdw])", re.IGNORECASE)
 _DURATION_UNITS: Final = {"m": "minutes", "h": "hours", "d": "days", "w": "weeks"}
@@ -43,7 +45,9 @@ class SecretCommand:
     value: str
     kind: SecretKind | None = None
     username: str | None = None
-    lifetime: Lifetime = "session"
+    # None when no option chose one: new Secrets last for the Session,
+    # replaced values keep their Secret's lifetime.
+    lifetime: Lifetime | None = None
     duration: timedelta | None = None
     description: str = ""
 
@@ -76,7 +80,7 @@ def parse_secret_command(arguments: str) -> SecretCommand:
             if not argument:
                 raise SecretCommandError(f"{option} needs a value. {SECRET_COMMAND_USAGE}")
             options[option] = argument
-        elif option in {"--permanent", "--once"}:
+        elif option in {"--permanent", "--session", "--once"}:
             flags.add(option)
         else:
             # The token may be a value that starts with --: never repeat it.
@@ -84,13 +88,19 @@ def parse_secret_command(arguments: str) -> SecretCommand:
                 "An option before the value is unknown; write -- before a value that "
                 f"starts with --. {SECRET_COMMAND_USAGE}"
             )
-    lifetime: Lifetime = "session"
+    lifetime: Lifetime | None = None
     duration = None
-    chosen = [item for item in ("--permanent", "--once", "--for") if item in flags | set(options)]
+    chosen = [
+        item
+        for item in ("--permanent", "--session", "--once", "--for")
+        if item in flags | set(options)
+    ]
     if len(chosen) > 1:
         raise SecretCommandError(f"Use only one of {', '.join(chosen)}.")
     if "--permanent" in flags:
         lifetime = "permanent"
+    elif "--session" in flags:
+        lifetime = "session"
     elif "--once" in flags:
         lifetime = "once"
     elif "--for" in options:
