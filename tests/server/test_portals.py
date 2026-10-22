@@ -37,6 +37,7 @@ class _App(BaseHTTPRequestHandler):
         body = b"app page"
         self.send_response(200)
         self.send_header("Set-Cookie", "sid=42; Domain=localhost; Path=/; HttpOnly")
+        self.send_header("Clear-Site-Data", '"cookies", "storage"')
         self.send_header("Content-Type", "text/plain")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -128,6 +129,8 @@ def test_an_agent_portal_reaches_the_app_only_with_the_cards_credential(
     assert page.status_code == 200 and page.text == "app page"
     # The app's cookie is namespaced for this Portal; vBot's never reach the app.
     assert page.headers["set-cookie"] == f"vp_{portal['id']}_sid=42; Path=/; HttpOnly"
+    # Its Clear-Site-Data would clear them all, port or not.
+    assert "clear-site-data" not in page.headers
     [seen] = _App.seen
     assert seen["path"] == "/cart?step=2"
     assert seen["host"] == f"localhost:{app_port}"

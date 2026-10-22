@@ -66,6 +66,9 @@ _HOP_BY_HOP = frozenset(
 )
 # Headers the forwarder sets itself, and the client's own forwarding claims.
 _REPLACED_REQUEST_HEADERS = frozenset({b"host", b"cookie", b"origin", b"referer", b"forwarded"})
+# Response headers the app may not send through: cookies ignore ports, so the
+# app's Clear-Site-Data would clear vBot's Device cookie and other Portals' cookies.
+_DROPPED_RESPONSE_HEADERS = _HOP_BY_HOP | {b"clear-site-data"}
 
 
 def app_cookie_prefix(portal_id: str) -> str:
@@ -336,7 +339,7 @@ class _PortalApp:
         )
         for raw_name, raw_value in headers.raw:
             name = raw_name.lower()
-            if name in _HOP_BY_HOP:
+            if name in _DROPPED_RESPONSE_HEADERS:
                 continue
             value = raw_value
             if name == b"set-cookie":
