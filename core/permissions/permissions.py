@@ -680,7 +680,8 @@ class PermissionBoundary:
         return any(area.contains(key) for area in (*self._readable, self._workspace) if area)
 
     def _names_exactly(self, key: str, access: PathAccess) -> bool:
-        return any(layer.names_exactly(key, access) for layer in self._compiled)
+        # Every layer refuses unsafe forms by itself, so each must name the path.
+        return all(layer.names_exactly(key, access) for layer in self._compiled)
 
     def _protected(self, keys: tuple[str, ...], access: PathAccess) -> ProtectedLocation | None:
         for key in keys:

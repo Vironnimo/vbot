@@ -68,7 +68,7 @@ Rule language, presets, resolution, descriptions and editor data: `permissions/r
 ## Decision order
 
 For a path, in this order (normalization, unsafe forms and links in detail: `permissions/paths.md`):
-1. Normalize the path; refuse unsafe forms (network, device, alternate-stream and drive-relative paths) unless an allow rule without wildcards names them.
+1. Normalize the path; refuse unsafe forms (network, device, alternate-stream and drive-relative paths) unless an allow rule without wildcards in every layer names them.
 2. Resolve links and junctions; the lexical and the resolved form must both pass every later step.
 3. Protected locations: the Agent's `agent.json` (always); the files a Team member's rules come from and install and interpreter dirs (writes); the data directory, except the Workspace, the Scratch Area and `readable_dirs` (the Run's own artifact folders and Skill folders) for reading, and the Scratch Area or a Workspace that is the working directory for writing.
 4. A deny rule of any layer refuses: `Read` deny covers reads and writes, `Edit` deny writes.

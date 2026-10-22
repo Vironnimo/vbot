@@ -116,6 +116,16 @@ def test_an_allow_rule_that_names_a_network_path_permits_it(tmp_path: Path) -> N
     assert boundary.check_path("\\\\fileserver\\share\\docs\\a.txt", "read") is None
     assert boundary.check_path("\\\\fileserver\\share\\other.txt", "read") is not None
     assert boundary.check_path("\\\\fileserver\\share\\docs\\a.txt", "write") is not None
+    # Every layer must name it: a Sub-Agent's own rule does not lift its parent's refusal.
+    child_rules = normalize_permission_rules(
+        {"read": "work_area", "allow": ["Read(//fileserver/share)"]}
+    )
+    for parent, permitted in ((_boundary(tmp_path, {"web": "listed"}), False), (boundary, True)):
+        ceiling = parent.ceiling(source="parent")
+        assert ceiling is not None and parent.context is not None
+        child = PermissionBoundary.build(child_rules, parent.context, ceilings=[ceiling])
+        refusal = child.check_path("\\\\fileserver\\share\\docs\\a.txt", "read")
+        assert (refusal is None) == permitted
 
 
 @pytest.mark.parametrize(
