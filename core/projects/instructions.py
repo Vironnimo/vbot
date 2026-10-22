@@ -96,12 +96,18 @@ class FolderInstructions:
         :data:`FOLDER_INSTRUCTION_FILES`. Paths outside the repository contribute
         nothing, and neither do folders inside a package or version-control folder.
         A file in *seen* or among *paths* is left out: the Agent already has it.
+        So is every :data:`MAIN_INSTRUCTION_FILES` location (``.claude/CLAUDE.md``):
+        it is a repository-wide file, never the instructions of its folder.
         Blocking: checks the filesystem.
         """
         root_key = _identity(self.root)
         depth = len(Path(os.path.normpath(self.root)).parts)
         found: list[Path] = []
-        known = set(self.loaded) | {_identity(path) for path in (*seen, *paths)}
+        known = (
+            set(self.loaded)
+            | {_identity(self.root / name) for name in MAIN_INSTRUCTION_FILES}
+            | {_identity(path) for path in (*seen, *paths)}
+        )
         checked: set[str] = set()
         for path in paths:
             folders: list[Path] = []
