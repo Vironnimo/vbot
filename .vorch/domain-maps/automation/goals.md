@@ -18,7 +18,7 @@ does not carry it. Session summaries (`session.get`, `session.list`) expose
 | Status | Meaning | Leaves it |
 |---|---|---|
 | `active` | Automatic Runs continue. | `update_goal`, a kernel pause, `/goal pause`, `/goal clear` |
-| `blocked` | The Agent needs the user. | The next completed `user` or `channel` Run that is not internal and is not the Run that blocked it: `active` with `turns` 0 |
+| `blocked` | The Agent needs the user. | Explicit `/goal resume`, or the next completed `user` or `channel` Run that is not internal and is not the Run that blocked it: `active` with `turns` 0 |
 | `paused` | Stopped until `/goal resume`; `pause_reason` says why. | `/goal resume` (`turns` 0) |
 | `complete` | The Agent reported it done. | `/goal resume`, a new `/goal <objective>` |
 
@@ -100,7 +100,7 @@ conversations (user decision 2026-10-15).
 - `/goal` reports `Goal (<status or pause reason>): <objective>` and
   `Automatic turns: N of M.`
 - `/goal pause`, `/goal resume`, `/goal clear` are immediate and each writes
-  its row. `resume` works from `paused` and `complete`; when the Session is
+  its row. `resume` works from `paused`, `blocked` and `complete`; when the Session is
   idle it starts a visible `user` Run like a set, with `GOAL_RESUMED_TEXT` as
   the context note, otherwise it writes the row alone and the current Run
   continues the goal when it ends.
@@ -164,7 +164,7 @@ in the `update_goal` definition; reasons for those sentences:
 - Grant and Compaction retention: `core/chat/_run_state.py`,
   `core/chat/_request_builder.py`, `core/chat/_scratch_context.py`;
   `tests/core/chat/test_chat_goal_session.py`.
-- Wiring: `core/runtime/_bootstrap.py` (`_goal_work_pending`), shutdown step
+- Wiring: `core/runtime/_bootstrap_services.py` (`_goal_work_pending`), shutdown step
   `goals`, server bridge in `server/_app_lifecycle.py`.
 - WebUI: `webui/src/components/chat/ComposerGoal.svelte`,
   `ChatView.sessionSettings.test.js`; rows: `goalEventLabel`

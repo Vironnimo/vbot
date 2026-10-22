@@ -38,7 +38,7 @@ The 2026-10-14 gateway integration moved the existing typed-content handling int
 
 ## Prompt Caching
 
-- **Automatic upstream - no lever, no marker.** la Plateforme prompt-caches on its own; vBot sends no cache directive and needs none. Reads come back as `usage.prompt_tokens_details.cached_tokens` and are folded into `usage.cache_read_tokens` by the shared `_openai_cached_prompt_tokens` (`openai_compatible.py`). There is no conversation-identity header (no Codex-style trap): the cache keys off prompt-prefix content + the API key.
+- **Automatic upstream - no lever, no marker.** la Plateforme prompt-caches on its own; vBot sends no cache directive and needs none. Reads come back as `usage.prompt_tokens_details.cached_tokens` and are folded into `usage.cache_read_tokens` by the shared `_openai_cached_prompt_tokens` (`_chat_completions_wire.py`). There is no conversation-identity header (no Codex-style trap): the cache keys off prompt-prefix content + the API key.
 - **Verified live 2026-07-09** (`open-mistral-nemo`, stable ~13.5k-token prefix, 5 spaced turns, real `MistralAdapter.stream`): cold miss on turn 1, then `cached_tokens = 13504` on **3/4** later turns (one turn missed - the automatic cache is best-effort, warms/evicts server-side; not a vBot gap). No `cache_control` markers are sent or needed.
 
 ## Constraints & Gotchas

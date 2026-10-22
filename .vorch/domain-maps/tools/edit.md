@@ -42,9 +42,9 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
   (`apply_patch`, then `edit`, through `ToolContext.offers`; `read`'s change-command
   refusal and `search_files`' `--replace` note use it).
 - **Schema:** `path` plus `edits` (at least one item of `old_string`, `new_string`,
-  optional `replace_all`), open model-facing schema; unknown root parameters fail
-  at dispatch (`edit was not run: ... edit parameters: path (required), edits
-  (required).`).
+  optional `replace_all`), open model-facing schema. Unknown root fields follow
+  the shared rule (`tools.md` -> Unknown fields): inert fields run without effect
+  with a note; fields whose meaning could change the call fail before mutation.
 - **Argument repair** (`normalize_edit_arguments`, wrapped by `_refusing`, so every
   refusal is `invalid_arguments` opening with `No file was changed.`): `file_path`/
   `filename` -> `path`, `old_str`/`old_text`/`oldText` and the `new_*` twins,

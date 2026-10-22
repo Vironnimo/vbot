@@ -21,7 +21,7 @@ Desktop Voice (`desktop/wakeword/`) and Desktop dictation (`desktop/dictation/`)
 Domain-specific vocabulary for the Desktop accessor.
 
 ### Desktop Client
-**Definition:** A server-less Desktop install: the pywebview accessor installed alone (`.[cli,desktop]`) with no server stack, no local WebUI build, no data-dir, and no autostart, meant to connect to a *remote* vBot server. Created by `install.ps1 -DesktopClient` / `install.sh --desktop-client`; a Desktop add-on (`-Desktop` / `--desktop`) instead bolts the same accessor onto a full server install.
+**Definition:** A Windows packaged installation of the Desktop accessor alone, with no server stack, local WebUI build, server data directory or server autostart, meant to connect to a *remote* vBot server. `install.ps1 -DesktopClient` selects this `desktop-client` shape; `-Desktop` selects the combined `server-desktop` shape (`cli/application.md`).
 **Not:** A full install that happens to include the Desktop, and not the running window itself. The Desktop Client is the *install shape* - the absence of the whole server side - not the GUI process.
 
 ### Connection screen
@@ -70,7 +70,7 @@ All ship in the `[desktop]` optional group: pywebview (window and Connection scr
 
 ## Constraints & Gotchas
 
-- Desktop-local preferences must never live in the shared server `data_dir` (it belongs to the selected instance); they live in the OS per-user config dir, which survives package/venv reinstalls - a real install puts the program in a non-user-writable venv.
+- Desktop-local preferences must never live in the shared server `data_dir` (it belongs to the selected instance); they live in the OS per-user config dir, which survives application updates and reinstalls.
 - pywebview is imported lazily so backend tests and non-desktop workflows never require the GUI package. `load_url`/`load_html` run only once the GUI loop is live, and never synchronously inside a `js_api` method invoked by the document being replaced - return the `PreparedConnection` payload first and let that document apply it after its Promise resolves. The native `shown` startup callback is exempt and proceeds through `ConnectionController.launch_connect` / `auto_connect` before optional Voice startup.
 - Never call `Window.evaluate_js` from a bridge method or the GUI thread; push through `PageEventDispatcher`. Voice callbacks that reach the page (`live_requests`, the event sink) and `DetectionLoop.on_detection` must return promptly: they run on the capture/detection path.
 - Keep Voice imports lazy: with Voice disabled, startup never imports the capture, detection, command, echo, or speech-detection modules or their native packages; they load only when a real listener is built (`desktop/wakeword/listener.py`, `ListenerFactory.build`). The fresh-process test in `tests/desktop/test_main.py` fails when disabled Voice loads them.

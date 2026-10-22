@@ -55,7 +55,7 @@ Domain vocabulary. The core Tool term lives in `.vorch/GLOSSARY.md`.
 
 ## Constraints & Gotchas
 
-- Tool execution normally consumes the shared 500-slot semaphore (also the default per-batch limit). `subagent` and `secrets` opt out via `execution_slot_required=False`, so waiting for a child Run or the user holds no slot; `update_goal` too. Per-batch concurrency and Sub-Agent admission limits still apply.
+- Tool execution normally consumes the shared 500-slot semaphore (also the default per-batch limit). `subagent`, `message_parent`, `secrets` and `update_goal` opt out via `execution_slot_required=False`; waiting for a user holds no slot. Per-batch concurrency and Sub-Agent admission limits still apply.
 - Chat alone derives Session Grants during request building; static restrictions and live denials stay dispatch-only and must never filter provider definitions or mutate prompt assembly. Disallowed normal Tools fail at dispatch (`tool_not_allowed`, no side effects) even if a provider asks for them.
 
 ## Agent-facing text

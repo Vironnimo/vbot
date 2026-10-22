@@ -10,10 +10,10 @@ Tool shares only its name.
 
 - Registered by `register_edit_tools` with `edit`: `files` family, follows
   `apply_patch`, hidden from `tool.list`.
-- **Schema:** `path` and `content`, both required; unknown root parameters fail at
-  dispatch (`write was not run: ... write parameters: path (required), content
-  (required).`).
-- **Argument repair** (`normalize_write_arguments`, refusals end `No file was
+- **Schema:** `path` and `content`, both required. Unknown root fields follow
+  the shared rule (`tools.md` -> Unknown fields): inert fields run without effect
+  with a note; fields whose meaning could change the call fail before mutation.
+- **Argument repair** (`normalize_write_arguments`, refusals open with `No file was
   changed.`): `file_path`/`filename` -> `path`; `text`/`contents`/`file_text` ->
   `content`, any case or separator spelling. `old_string`, `new_string`,
   `replace_all` or `edits` without `content` refuse naming `edit`; a missing path

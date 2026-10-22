@@ -17,9 +17,10 @@ precise matching/replacement; `_fuzzy_text.py` owns normalization and indentatio
 diagnostics, and `_fuzzy_types.py` shared result records.
 A step is the pipeline's unit that is written at once: `apply_patch` runs each
 hunk, Add, Delete and Move as its own step (partial success below), `edit` runs its
-whole call as one step that writes the file once (`run_operations(...,
+canonical one-file call as one step that writes the file once (`run_operations(...,
 one_write=True)`; its text changes that fail are skipped and reported, the others
-written, `tools/edit.md` -> Semantics), `write` one Add.
+written, `tools/edit.md` -> Semantics; explicit multi-file calls run one step per
+item), `write` one Add.
 Shared failure messages are worded per Tool through `ChangeBatch.templates`
 (`change_batch(context, templates)`) over `apply_patch`'s defaults (`_patch_syntax._MESSAGES`).
 
@@ -28,8 +29,9 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
 - `register_apply_patch_tool(registry, *, file_state)` registers `apply_patch`
   in the `files` family with one required `patch` string. It is an ordinary
   Provider-neutral function Tool, not a Provider-native patch operation. The
-  open model-facing schema's parameter list is enforced at dispatch: unknown
-  arguments fail before the handler.
+  open model-facing schema follows the shared unknown-field rule (`tools.md` ->
+  Unknown fields): inert fields run without effect with a note; fields whose
+  meaning could change the call fail before the handler.
 - The owner-selected argument repair (`normalize_patch_arguments`) accepts patch-text
   aliases (`input`, `patch_text`, `diff`, ...), ordinary field formatting and shared
   call wrappers. Equal aliases coalesce; a placeholder alias (`""`, `null`, `...`)
@@ -39,8 +41,8 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   must agree with the patch's file headers (Sessions, 2026-09). Conflicting aliases
   fail before mutation, naming both keys and values (`Conflicting values for patch:
   patch is "..." and input is "...". Send only the intended one.`; shared
-  `normalize_call_arguments` wording). Unsupported fields fail as well. Patch
-  contents remain literal. Normalizer refusals open with `No file was changed.`
+  `normalize_call_arguments` wording). Patch contents remain literal. Normalizer
+  refusals open with `No file was changed.`
   (`_normalize_call`). The advertised schema stays `patch` only.
 - Other harnesses' edit shapes run when they name one exact change. Unadvertised
   root fields (`PATCH_HIDDEN_PARAMETERS`: `path`, `old_string`, `new_string`,
@@ -70,7 +72,7 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   Results). `patch_targets(arguments)` lists every named path for callers that
   vet targets first (the provider probe).
 - The definition is minimal (user decision 2026-10-04): the description names
-  its effects, and `patch` names its frame and that Add File replaces an existing file. The patch route is offered only to
+  its effects, and `patch` names its frame. The patch route is offered only to
   GPT families, which know V4A from Codex, so the format, the hunk rules and the
   partial semantics are taught by results and errors, not by definition text.
   `test_apply_patch_has_a_minimal_definition` pins it. Other harnesses' fields are
@@ -285,7 +287,7 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   9. Lines a precise strategy finds several times are ordered as in Codex:
      after a hint, the first occurrence from the hint on is changed; a hunk
      without hints takes the first occurrence from the line where the same
-     Update's last completed change ended (`_Batch.change_ends`,
+     Update's last completed change ended (`ChangeBatch.change_ends`,
      `replace_fuzzy(first=True)`), and fails with `ambiguous_match` when none
      follows. A note names the count and the changed line. Without a hint or an
      earlier change of that Update, and for `copy_match` passages, several

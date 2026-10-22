@@ -42,7 +42,7 @@ Read when changing Cron jobs of schedule type `webhook`: the route `POST /api/ho
 
 - `_cron_context.run_context` puts the webhook note after any event, late or change part and before the delivery note: which requests started the Run, how many earlier ones were dropped unseen, which bodies are cut, then one JSON record per request (`received_at` in local time, `headers`, `body`), oldest first, pretty-printed with `<` and `>` escaped and labeled as data from whoever called the webhook. Wording and reasons: `../tools/cron.md` -> Agent-facing text.
 - A webhook Run gets no late notice; a webhook job has no `next_fire_at`, no calendar projection and refuses `watch` (`WATCH_SCHEDULE_TYPES`). The INFO `Cron job fired` line ends in `webhook_requests=<n> webhook_dropped=<n>`.
-- The request's content reaches the Run only as labeled data, but it steers what an Agent with all its Tools reads; jobs run with no sandbox (user decision 2026-10-06), so the prompt decides what to do with a request.
+- The request's content reaches the Run only as labeled data, but it steers what the Agent reads; the prompt decides what to do with it. Jobs have no OS sandbox (user decision 2026-10-06; `../permissions.md` -> Requirements). As with other Cron jobs, Agent permissions and the job's persisted permission ceiling apply (`cron.md` -> Validation and schedules; user decision 2026-10-21).
 
 ## Logging
 

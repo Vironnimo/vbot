@@ -14,7 +14,7 @@ These ten channels describe canonical vBot Agent/Chat communication. A Live voic
 
 | Channel | Durability | Owner / mechanics |
 |---|---|---|
-| Persisted note (`role: "note"`) | Session history | `chat.md` + `chat/request-building.md` - embedded into provider requests as a synthetic user message wrapped in `<system-reminder>` tags |
+| Persisted note (`role: "note"`) | Session history | `chat.md` + `chat/request-building.md` - ordinary notes become synthetic user messages wrapped in `<system-reminder>` tags; specialized forms below |
 | Reply-surface reminder | Append-only tagged chronology | `chat/request-building.md` - appended by Chat at executor start; producers only pass the surface value |
 | Input-origin reminder | Request-time only, hidden | `chat/request-building.md` - added for `input_origin` `speech_transcription` or `live_voice` |
 | Skill announcement | Once per Prompt Epoch | `chat/request-building.md` -> Skills and prompt-cache stability - tail note when a Skill becomes available+allowed (term: `skills.md` -> Skill Availability Announcement) |
@@ -26,6 +26,8 @@ These ten channels describe canonical vBot Agent/Chat communication. A Live voic
 | Tool definitions and results | Per call | `tools.md` - description plus structured result data |
 
 Deliberately **not** a reminder channel: Channel-observed group chatter persists as attributed `[channel-message]` text and renders as explicitly untrusted JSON-quoted background context (`channels/groups.md` -> Observed and quoted context). Never route untrusted third-party content through reminder framing.
+
+Other specialized notes keep their existing request forms: `[skill-context]` becomes a chronological `<skill_content>` user message (`chat/request-building.md` -> Canonical roles and request visibility); `[effort-change]` steers Provider configuration through request-only effort updates or request-level effort, without a Model-facing reminder (`chat/request-building.md` -> Thinking effort per prompt epoch). Neither is rendered as ordinary reminder text.
 
 ## Decision rules
 
@@ -43,5 +45,5 @@ Deliberately **not** a reminder channel: Channel-observed group chatter persists
 - `<system-reminder>` is a protocol token owned by Chat's request builder. Producers never write the tags themselves. In the Provider request Chat neutralizes every look-alike tag outside its own reminders (user, Assistant, Tool Result, attachment, Skill and channel text), so a hand-built tag reaches the Model as `&lt;system-reminder>`. Request-only code that must add a kernel reminder uses `wire_shaping.system_reminder_request_message` (contract: `chat/request-building.md`).
 - Provider adapters never receive `role: "note"`; embedding happens before wire translation (`providers.md`).
 - Reminders are synthetic user messages: content must be kernel-authored constants, never raw external or user data without its domain's quoting rules. Chat-rendered reminders quote such text through `core/chat/wire_shaping.py::_quote_external_json` (JSON with escaped angle brackets; `quote_external_value` is the same encoding for one value, used outside Chat by Session Goals), including Model-visible Run errors.
-- Notes are invisible in UI and public history - they are not a user-notification mechanism. The only exceptions are notes that carry a display-only record (Model fallback, goal change, delivered `message_parent` messages), which the Chat History shows as their row without the note text (`chat.md`).
+- Notes are invisible in UI and public history - they are not a user-notification mechanism. The only exceptions are notes that carry a display-only record (Model fallback, goal change, delivered `message_parent` messages, submitted widget state), which the Chat History shows as their row without the note text (`chat.md`).
 - Extension-owned delivery uses the existing persisted-note or Tool-result channel. Chat commits the complete carrier and canonical receipt atomically before owner acknowledgment; the Extension supplies attributed data, never wrapper tags or Provider roles. Delivery and completion continuations enter only after the preceding whole Tool batch is durable (`chat/run-execution.md`, `extensions/host.md` -> Deferred Tool outcomes).
