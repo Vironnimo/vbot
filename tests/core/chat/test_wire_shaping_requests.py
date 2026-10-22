@@ -34,7 +34,11 @@ from core.chat.wire_shaping import (
     _repair_dangling_tool_calls,
     model_facing_request,
 )
-from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD, tool_result_text
+from core.providers.adapter import (
+    TOOL_RESULT_CONTENT_BLOCKS_FIELD,
+    is_request_context_message,
+    tool_result_text,
+)
 from core.secrets.agent_secrets import SecretMasker
 from core.sessions import TOOL_CHANGE_NOTE_PREFIX
 from core.skills.policy import SkillPackageRef
@@ -457,6 +461,7 @@ def test_known_secret_values_reach_the_model_only_as_references() -> None:
     masker = SecretMasker({value: "{{secret:GITHUB.password}}"})
     arguments = {"text": f"echo {value}"}
     clean = {"role": "user", "content": "nothing secret"}
+    [reminder] = _embed_notes_into_request([ChatMessage.note(f"Sub-Agent answered: {value}")])
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": f"Prompt {value}"},
         clean,
@@ -480,6 +485,7 @@ def test_known_secret_values_reach_the_model_only_as_references() -> None:
             "content": json.dumps(tool_success({"content": value})),
             TOOL_RESULT_CONTENT_BLOCKS_FIELD: [{"type": "text", "text": value}],
         },
+        reminder,
     ]
     before = json.dumps(messages)
 
@@ -491,6 +497,12 @@ def test_known_secret_values_reach_the_model_only_as_references() -> None:
     assert projected[2]["content"][1] == messages[2]["content"][1]
     assert projected[3]["tool_calls"][0]["arguments"] == {"text": "echo {{secret:GITHUB.password}}"}
     assert tool_result_text(projected[4]["content"]) == "{{secret:GITHUB.password}}"
+    # A masked reminder is still Chat's own context, real tags and all.
+    assert projected[5]["content"] == (
+        "<system-reminder>\nSub-Agent answered: {{secret:GITHUB.password}}\n</system-reminder>"
+    )
+    assert is_request_context_message(projected[5])
+    assert model_facing_request(projected, [])[0][5] is projected[5]
 
 
 @pytest.mark.asyncio
