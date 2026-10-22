@@ -39,6 +39,13 @@ class _Sums(NamedTuple):
     samples: int
 
 
+class LearnedSample(NamedTuple):
+    """A written sample: the calibrated Model and its new sums, adopted after commit."""
+
+    model: str
+    sums: _Sums
+
+
 def model_key(model: str) -> str:
     """The calibrated identity: ``provider/model`` without its Connection scope."""
     return model.split("::", 1)[0]
@@ -80,48 +87,64 @@ class InputEstimateCalibration:
 
     def record(self, model: str, measured: int, estimated: int) -> None:
         """Add one sample; blocking (database write), so call it off the Event Loop."""
+        if is_usable_sample(measured, estimated):
+            self.adopt(
+                self._database.write(
+                    lambda connection: self.write(connection, model, measured, estimated)
+                )
+            )
+
+    def write(
+        self, connection: sqlite3.Connection, model: str, measured: int, estimated: int
+    ) -> LearnedSample | None:
+        """Add one sample inside the caller's write transaction.
+
+        Pass the result to :meth:`adopt` once that transaction committed;
+        ``None`` means the sample was not usable and nothing was written.
+        """
         if not is_usable_sample(measured, estimated):
-            return
+            return None
         key = model_key(model)
+        row = connection.execute(
+            "SELECT measured_tokens,estimated_tokens,samples "
+            "FROM input_estimate_calibration WHERE model=? AND estimator_version=?",
+            (key, ESTIMATOR_VERSION),
+        ).fetchone()
+        previous = (
+            _Sums(0.0, 0.0, 0)
+            if row is None
+            else _Sums(row["measured_tokens"], row["estimated_tokens"], row["samples"])
+        )
+        sums = _Sums(
+            previous.measured * _DECAY + measured,
+            previous.estimated * _DECAY + estimated,
+            previous.samples + 1,
+        )
+        connection.execute(
+            "INSERT INTO input_estimate_calibration "
+            "(model,measured_tokens,estimated_tokens,samples,updated_at,estimator_version) "
+            "VALUES (?,?,?,?,?,?) ON CONFLICT(model) DO UPDATE SET "
+            "measured_tokens=excluded.measured_tokens,"
+            "estimated_tokens=excluded.estimated_tokens,"
+            "samples=excluded.samples,updated_at=excluded.updated_at,"
+            "estimator_version=excluded.estimator_version",
+            (
+                key,
+                sums.measured,
+                sums.estimated,
+                sums.samples,
+                utc_now_timestamp(),
+                ESTIMATOR_VERSION,
+            ),
+        )
+        return LearnedSample(key, sums)
 
-        def operation(connection: sqlite3.Connection) -> _Sums:
-            row = connection.execute(
-                "SELECT measured_tokens,estimated_tokens,samples "
-                "FROM input_estimate_calibration WHERE model=? AND estimator_version=?",
-                (key, ESTIMATOR_VERSION),
-            ).fetchone()
-            previous = (
-                _Sums(0.0, 0.0, 0)
-                if row is None
-                else _Sums(row["measured_tokens"], row["estimated_tokens"], row["samples"])
-            )
-            sums = _Sums(
-                previous.measured * _DECAY + measured,
-                previous.estimated * _DECAY + estimated,
-                previous.samples + 1,
-            )
-            connection.execute(
-                "INSERT INTO input_estimate_calibration "
-                "(model,measured_tokens,estimated_tokens,samples,updated_at,estimator_version) "
-                "VALUES (?,?,?,?,?,?) ON CONFLICT(model) DO UPDATE SET "
-                "measured_tokens=excluded.measured_tokens,"
-                "estimated_tokens=excluded.estimated_tokens,"
-                "samples=excluded.samples,updated_at=excluded.updated_at,"
-                "estimator_version=excluded.estimator_version",
-                (
-                    key,
-                    sums.measured,
-                    sums.estimated,
-                    sums.samples,
-                    utc_now_timestamp(),
-                    ESTIMATOR_VERSION,
-                ),
-            )
-            return sums
-
-        sums = self._database.write(operation)
+    def adopt(self, learned: LearnedSample | None) -> None:
+        """Serve a committed sample's sums from memory."""
+        if learned is None:
+            return
         with self._lock:
             # Concurrent Runs may finish their writes out of order.
-            current = self._sums.get(key)
-            if current is None or sums.samples > current.samples:
-                self._sums[key] = sums
+            current = self._sums.get(learned.model)
+            if current is None or learned.sums.samples > current.samples:
+                self._sums[learned.model] = learned.sums

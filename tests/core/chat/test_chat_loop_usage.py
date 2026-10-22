@@ -440,6 +440,10 @@ async def test_empty_or_restarted_attempt_keeps_reported_usage_and_links_saved_s
         "session-one",
         last_run(runtime).id,
     )
+    # The Run's Session generation is recorded with every attempt, without a lookup.
+    address = session_address("coder", "session-one")
+    generation = runtime.chat_sessions.list_history_versions([address])[address][0]
+    assert failed["session_generation_id"] == completed["session_generation_id"] == generation
     # Only the saved step's measured input teaches the input estimate calibration.
     assert [
         (model.split("::")[0], measured) for model, measured, _ in recorder.input_estimates

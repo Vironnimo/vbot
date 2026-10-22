@@ -535,6 +535,9 @@ class AgenticProgression:
                             message_id=assistant_message_id,
                             on_tool_calls=start_tool_calls if tool_round is not None else None,
                             effort=state.effort,
+                            # Run Admission Guards keep the Session in this
+                            # generation while the Run is active.
+                            session_generation_id=context.session_snapshot.cursor.generation_id,
                         )
                 except ProviderRequestTooLargeError as exc:
                     smaller = await _CHAT_TRANSFORM_WORKERS.run(
