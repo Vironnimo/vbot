@@ -632,11 +632,14 @@ class LocalEmbeddingExecutor:
         _LOGGER.info("Loaded local embedding model (model=%s threads=%d)", model.id, key[1])
         return child
 
-    def _unload(self) -> None:
+    def _unload(self, *, local_id: str | None = None) -> bool:
         with self._child_lock:
+            if local_id is not None and (self._child_key is None or self._child_key[0] != local_id):
+                return False
             child, self._child, self._child_key = self._child, None, None
         if child is not None:
             child.close()
+        return child is not None
 
     def _kill_child(self) -> None:
         with self._child_lock:
@@ -685,11 +688,12 @@ class LocalEmbeddingExecutor:
             return {**self.memory_status(), "released": False}
         self._pending[local_id] += 1
         try:
-            await self._workers.run(self._unload)
-            _LOGGER.info("Unloaded local embedding model (target=%s)", target)
+            released = await self._workers.run(self._unload, local_id=local_id)
+            if released:
+                _LOGGER.info("Unloaded local embedding model (target=%s)", target)
         finally:
             self._pending[local_id] -= 1
-        return {**self.memory_status(), "released": True}
+        return {**self.memory_status(), "released": released}
 
     def close(self) -> None:
         if self._closed:
