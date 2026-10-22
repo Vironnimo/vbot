@@ -1,8 +1,8 @@
 """Shared stateless ``/responses`` protocol helpers.
 
-The helpers preserve the complete Responses item stream so OpenAI, OpenRouter,
-and GitHub Copilot adapters can replay provider-owned reasoning, phase, and
-future item kinds without reconstructing a lossy approximation."""
+The helpers preserve the complete Responses item stream so every Responses
+adapter can replay provider-owned reasoning, phase, and future item kinds
+without reconstructing a lossy approximation."""
 
 from __future__ import annotations
 
@@ -601,13 +601,6 @@ def _apply_remaining_kwargs(
 
 
 def _supports_responses_temperature(policy: ResponsesRequestPolicy) -> bool:
-    """Return whether this Copilot Responses route should forward ``temperature``.
-
-    GPT-5 reasoning models on the Responses API reject temperature changes, so
-    Copilot should omit that field unless the routed model is known to support
-    it. The current runtime policy does not expose positive temperature support
-    for any Responses-routed Copilot model, so this helper stays conservative
-    and omits the field for that endpoint family.
-    """
+    """Return whether this route's request policy allows ``temperature``."""
 
     return policy.supports_request_parameter("temperature")

@@ -9,7 +9,7 @@ GitHub Copilot provider with OAuth Device Flow, endpoint-aware runtime policy, a
 - Adapter class: `GitHubCopilotAdapter`
 - OAuth connection: `github-copilot:oauth`
 - Wire profile: `resources/wire/github-copilot.json` selects each Model's protocol and holds the request quirks.
-- Runtime helpers: `github_copilot_responses.py` (the shared Responses codec) and `github_copilot_messages.py` build and normalize non-chat endpoint payloads; `_responses_profile.py` derives the Responses request policy and the kwarg filter from the profile and the catalog Model.
+- Runtime helpers: `_responses_wire.py` (the shared Responses codec) and `github_copilot_messages.py` build and normalize non-chat endpoint payloads; `_responses_profile.py` derives the Responses request policy and the kwarg filter from the profile and the catalog Model.
 
 ## OAuth
 

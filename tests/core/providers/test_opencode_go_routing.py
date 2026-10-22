@@ -10,9 +10,9 @@ from unittest.mock import AsyncMock
 import pytest
 import respx
 
+from core.providers._responses_wire import estimate_responses_input_tokens
 from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES
 from core.providers.anthropic_compatible import ANTHROPIC_VERSION
-from core.providers.github_copilot_responses import estimate_responses_input_tokens
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.opencode_go import (
     OPENCODE_SESSION_HEADER,

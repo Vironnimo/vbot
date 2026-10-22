@@ -1,7 +1,7 @@
 """Helpers for the shared stateless Responses codec tests.
 
 OpenAI, GitHub Copilot, OpenCode Go, OpenCode Zen, OpenRouter and xAI build and decode
-``/responses`` traffic through the same codec (``github_copilot_responses.py``).
+``/responses`` traffic through the same codec (``_responses_wire.py``).
 These helpers drive it directly, without an Adapter or HTTP transport.
 """
 
@@ -12,7 +12,7 @@ from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
 from core.providers._responses_profile import ProfileResponsesPolicy
-from core.providers.github_copilot_responses import (
+from core.providers._responses_wire import (
     ResponsesRequestPolicy,
     ResponsesStreamState,
     iter_responses_sse_deltas_with_state,

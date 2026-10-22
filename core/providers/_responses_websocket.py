@@ -46,13 +46,13 @@ from core.providers._openai_constants import (
     ResponsesWebSocketConnector,
     ResponsesWebSocketRoute,
 )
+from core.providers._responses_wire import (
+    ResponsesStreamState,
+    normalize_responses_stream_event,
+)
 from core.providers.errors import (
     NetworkError,
     ProviderError,
-)
-from core.providers.github_copilot_responses import (
-    ResponsesStreamState,
-    normalize_responses_stream_event,
 )
 from core.providers.http import _REQUEST_BODY_WORKERS
 from core.utils.logging import get_logger

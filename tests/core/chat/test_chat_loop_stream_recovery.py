@@ -10,11 +10,11 @@ import pytest
 
 from core.chat import ChatMessage
 from core.chat.streaming import StreamingChunkTimeoutError
-from core.providers.errors import NetworkError, ProviderStreamingUnsupportedError
-from core.providers.github_copilot_responses import (
+from core.providers._responses_wire import (
     ResponsesStreamState,
     normalize_responses_stream_event,
 )
+from core.providers.errors import NetworkError, ProviderStreamingUnsupportedError
 from core.runs import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
     MODEL_STEP_USAGE_EVENT,

@@ -14,7 +14,7 @@ from typing import Any, ClassVar, override
 import httpx
 
 from core.models.pricing import nonnegative_amount
-from core.providers.github_copilot_responses import ResponsesStreamState
+from core.providers._responses_wire import ResponsesStreamState
 from core.providers.openai import OpenAIAdapter
 from core.providers.providers import ConnectionConfig
 from core.providers.wire_profile import Protocol

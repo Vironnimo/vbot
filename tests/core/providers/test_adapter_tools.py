@@ -16,6 +16,7 @@ import httpx
 import pytest
 import respx
 
+from core.providers._responses_wire import build_responses_payload
 from core.providers.adapter import (
     ANTHROPIC_MESSAGES_TOOL_CALL_ID_PROFILE,
     MISTRAL_TOOL_CALL_ID_PROFILE,
@@ -34,7 +35,6 @@ from core.providers.adapter import (
 )
 from core.providers.anthropic_compatible import AnthropicCompatibleAdapter
 from core.providers.github_copilot_messages import build_copilot_messages_payload
-from core.providers.github_copilot_responses import build_responses_payload
 from core.providers.mistral import MistralAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.tool_schema import render_tool_definitions

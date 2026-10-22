@@ -65,6 +65,14 @@ from core.providers._responses_profile import (
     profile_responses_policy,
     take_reasoning_renderer,
 )
+from core.providers._responses_wire import (
+    ResponsesStreamState,
+    build_responses_payload,
+    estimate_responses_input_tokens,
+    iter_responses_sse_deltas_with_state,
+    normalize_responses_response,
+    responses_returned_reasoning,
+)
 from core.providers._wire_learning import (
     execute_learning_from_rejections,
     stream_learning_from_rejections,
@@ -73,14 +81,6 @@ from core.providers.errors import (
     NetworkError,
     ProviderRateLimitError,
     classify_in_band_provider_error,
-)
-from core.providers.github_copilot_responses import (
-    ResponsesStreamState,
-    build_responses_payload,
-    estimate_responses_input_tokens,
-    iter_responses_sse_deltas_with_state,
-    normalize_responses_response,
-    responses_returned_reasoning,
 )
 from core.providers.http import (
     PreparedRequest,

@@ -13,6 +13,7 @@ from contextlib import AbstractAsyncContextManager, suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
+from core.agents.description import suggest_agent_description
 from core.chat.errors import ChatError
 from core.chat.status_report import StatusWireProfile
 from core.database import SnapshotBarrier, UnregisteredDatabase
@@ -36,7 +37,6 @@ from core.providers.wire_observations import ObservedFacts
 from core.providers.wire_profile import ProfileStatus, Verification, WireProfile
 from core.runs import RunNotFoundError
 from core.runtime import _settings
-from core.runtime._agent_description import suggest_agent_description
 from core.runtime._agent_rename import (
     AgentRenameOutcome,
     AgentRenameServices,
@@ -340,7 +340,18 @@ class Runtime(RuntimeServiceGraph):
 
     async def suggest_agent_description(self, agent_id: str) -> str:
         """Draft a description of an Identity Agent with its own Model; nothing is saved."""
-        return await suggest_agent_description(self, agent_id)
+        from core.chat.model_resolution import resolve_model_target
+
+        agent = await self.agents.get_async(agent_id)
+        return await suggest_agent_description(
+            agent,
+            sessions=self.chat_sessions,
+            skills_for=lambda identifier: self.skills_for(None, identifier),
+            resolve_model=lambda model: resolve_model_target(self, model),
+            get_adapter=self.get_adapter,
+            usage_recorder=self.usage_recorder,
+            workers=_RUNTIME_WORKERS,
+        )
 
     def activate_bootstrap(self) -> None:
         """Start eligible Bootstrap Runs after the serving lifespan is ready."""

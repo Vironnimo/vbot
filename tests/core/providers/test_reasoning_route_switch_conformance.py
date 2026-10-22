@@ -13,9 +13,9 @@ import respx
 
 from core.chat import ChatMessage, ToolCall
 from core.models.models import Model, ModelRegistry
+from core.providers._responses_wire import build_responses_payload
 from core.providers.adapter import ProviderAdapter
 from core.providers.anthropic_compatible import AnthropicCompatibleAdapter
-from core.providers.github_copilot_responses import build_responses_payload
 from core.providers.mistral import MistralAdapter
 from core.providers.ollama import OLLAMA_CLOUD_MODE, OllamaAdapter, OllamaCloudAdapter
 from core.providers.openai import CODEX_RESPONSES_MODE, OpenAIAdapter

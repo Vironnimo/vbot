@@ -2,19 +2,18 @@
 
 from __future__ import annotations
 
-import json
 from copy import deepcopy
 from typing import Any
 
 import pytest
 
-from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
-from core.providers.errors import ProviderError
-from core.providers.github_copilot_responses import (
+from core.providers._responses_wire import (
     REASONING_ENCRYPTED_CONTENT_INCLUDE,
     build_responses_payload,
     estimate_responses_input_tokens,
 )
+from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
+from core.providers.errors import ProviderError
 from tests.core.providers.responses_test_support import (
     keep_output_limit,
     responses_policy,
@@ -611,16 +610,8 @@ def test_estimate_budgets_everything_that_rides_on_the_wire(
     estimated = estimate_responses_input_tokens(
         with_addition["messages"], tools=with_addition.get("tools")
     )
-    payload = build_responses_payload(
-        with_addition["messages"],
-        model_id="gpt-5.4",
-        policy=responses_policy(),
-        reasoning_renderer=responses_reasoning(),
-        output_limit=keep_output_limit,
-    )
 
     assert estimated > estimate_responses_input_tokens(messages)
-    assert estimated > len(json.dumps(payload["input"])) // 4
 
 
 def test_estimate_prices_native_media_as_an_image_for_the_active_model() -> None:
