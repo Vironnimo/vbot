@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -25,6 +26,7 @@ from core.database import (
     purge_config_backup_files,
     read_config_backup,
     read_maintenance,
+    reserve_config_backup,
     restore_config_backup,
 )
 from core.database import config_backups as config_backups_module
@@ -180,6 +182,48 @@ def test_retention_keeps_the_newest_backups_and_the_newest_of_each_hour_day_and_
     assert future in _objects(data_dir)
 
 
+def test_a_reserved_backup_outlives_retention_until_released_or_expired(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch, deny_access: Callable[[Path], None]
+) -> None:
+    # Only the newest backup is retained, so each further backup drops the older one.
+    monkeypatch.setattr(config_backups_module, "CONFIG_BACKUP_KEEP_LATEST", 1)
+
+    def backed_up(timezone: str, at: datetime) -> str:
+        _write(data_dir, "settings.json", _settings(timezone))
+        return _backup(data_dir, now=at)
+
+    def kept() -> set[str]:
+        return {backup.backup_id for backup in list_config_backups(data_dir)}
+
+    minute = timedelta(minutes=1)
+    chosen = backed_up("Europe/Berlin", NOW)
+    with pytest.raises(ValueError, match="no configuration backup"):
+        reserve_config_backup(data_dir, "20260101T000000Z-00000000", now=NOW)
+    reservation = reserve_config_backup(data_dir, chosen, now=NOW)
+    # The server's last backup before it stops, between the check and the restore.
+    backed_up("UTC", NOW + minute)
+    assert chosen in kept()
+    restore_config_backup(data_dir, chosen, now=NOW + 2 * minute)
+    reservation.release()
+    backed_up("Asia/Tokyo", NOW + 3 * minute)
+    assert chosen not in kept()
+
+    # A holder that died never releases its reservation; it expires.
+    stale = backed_up("America/Chicago", NOW + 4 * minute)
+    reserve_config_backup(data_dir, stale, now=NOW + 4 * minute)
+    paris = backed_up("Europe/Paris", NOW + 5 * minute)
+    assert stale in kept()
+    expired = NOW + 4 * minute + config_backups_module.CONFIG_BACKUP_RESERVATION_TIME
+    rome = backed_up("Europe/Rome", expired)
+    assert stale not in kept()
+    assert not any((config_backup_root(data_dir) / "reservations").iterdir())
+
+    # A reservation that cannot be read may name any backup: retention waits for it.
+    deny_access(reserve_config_backup(data_dir, paris, now=expired).path)
+    backed_up("Europe/Madrid", expired + minute)
+    assert rome in kept()
+
+
 def test_a_restore_replaces_the_named_files_after_backing_up_the_state_it_replaces(
     data_dir: Path,
 ) -> None:
@@ -298,13 +342,18 @@ def test_a_backup_repairs_a_stored_copy_altered_to_the_same_size(
     assert _read(data_dir, NOTE) == "KEY=one\n"
 
 
+@pytest.mark.parametrize("ending", ["repeated", "replaced"])
 @pytest.mark.parametrize(
     ("wrote_every_file", "state_backed_up"),
     [(False, False), (True, False), (False, True)],
     ids=["mid-write", "after writing", "state already backed up"],
 )
-def test_an_interrupted_restore_holds_the_maintenance_guard_until_it_is_repeated(
-    data_dir: Path, monkeypatch: pytest.MonkeyPatch, wrote_every_file: bool, state_backed_up: bool
+def test_an_interrupted_restore_holds_the_maintenance_guard_until_repeated_or_replaced(
+    data_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    wrote_every_file: bool,
+    state_backed_up: bool,
+    ending: str,
 ) -> None:
     # Only the newest-backups rule holds the restored backup: the before-restore
     # backup would push it out, and the restore could never be repeated.
@@ -341,17 +390,41 @@ def test_an_interrupted_restore_holds_the_maintenance_guard_until_it_is_repeated
     assert read_maintenance(data_dir) is not None
     with pytest.raises(DatabaseFormatError, match="maintenance"):
         capture_config_backup(data_dir, reason="test")
+    # Restoring named files of another backup would keep the half-restored state.
     with pytest.raises(DatabaseFormatError, match=f"backup {backup_id} did not finish"):
-        restore_config_backup(data_dir, other_id, check_only=True)
+        restore_config_backup(data_dir, other_id, paths=["settings.json"], check_only=True)
     assert restore_config_backup(data_dir, backup_id, check_only=True).interrupted
+    assert restore_config_backup(data_dir, other_id, check_only=True).replaced == backup_id
 
-    repeated = restore_config_backup(data_dir, backup_id)
+    if ending == "repeated":
+        repeated = restore_config_backup(data_dir, backup_id)
+
+        assert read_maintenance(data_dir) is None
+        assert repeated.restored == (() if wrote_every_file else ("settings.json",))
+        assert repeated.before_restore == undo_point.backup_id
+        assert _read(data_dir, NOTE) == "KEY=one\n"
+        assert _read(data_dir, "settings.json") == _settings("Europe/Berlin")
+        return
+    # Once the restored backup is lost, its restore can no longer be repeated.
+    (config_backup_root(data_dir) / "backups" / f"{backup_id}.json").unlink()
+    with pytest.raises(DatabaseFormatError):
+        reserve_config_backup(data_dir, backup_id)
+    with pytest.raises(DatabaseFormatError):
+        restore_config_backup(data_dir, backup_id)
+    half_restored = {path: _read(data_dir, path) for path in ("settings.json", NOTE)}
+
+    replaced = restore_config_backup(data_dir, other_id, now=NOW + timedelta(minutes=15))
 
     assert read_maintenance(data_dir) is None
-    assert repeated.restored == (() if wrote_every_file else ("settings.json",))
-    assert repeated.before_restore == undo_point.backup_id
+    assert replaced.replaced == backup_id
+    assert _read(data_dir, "settings.json") == _settings("Asia/Tokyo")
     assert _read(data_dir, NOTE) == "KEY=one\n"
-    assert _read(data_dir, "settings.json") == _settings("Europe/Berlin")
+    # The half-restored state is backed up first, like any state a restore replaces.
+    assert replaced.before_restore is not None
+    before = read_config_backup(data_dir, replaced.before_restore)
+    assert {path: before.files[path].sha256 for path in half_restored} == {
+        path: hashlib.sha256(text.encode()).hexdigest() for path, text in half_restored.items()
+    }
 
 
 def test_a_backup_does_not_wait_long_for_another_data_store_operation(

@@ -30,6 +30,7 @@ from core.database import (
     open_database,
     read_marker,
     read_verified_manifest,
+    reserve_config_backup,
     restore_config_backup,
     restore_data_snapshot,
     snapshot_root,
@@ -343,35 +344,49 @@ def data_store_config_backup_restore(
             instance.data_dir, backup_id, paths=paths, check_only=check_only
         )
 
-    try:
-        # Check before stopping the server: nothing changes yet.
-        plan = restore(check_only=True)
-    except (OSError, ValueError, DatabaseError) as exc:
+    def refused(exc: Exception) -> CommandResult:
         return CommandResult(
             ok=False,
             message=f"configuration backup cannot be restored: {backup_id}: {exc}",
             instance=instance,
         )
-    # An interrupted restore of this backup still has to finish, even with every file equal.
-    if not plan.restored and not plan.interrupted:
-        return CommandResult(
-            ok=True,
-            message=f"nothing to restore from configuration backup {backup_id} ("
-            + _describe_config_restore(plan)
-            + ")",
-            instance=instance,
+
+    try:
+        # The server backs up once more when it stops, and the retention after that
+        # backup must not remove this one before it is restored.
+        reservation = reserve_config_backup(instance.data_dir, backup_id)
+    except (OSError, ValueError, DatabaseError) as exc:
+        return refused(exc)
+    with reservation:
+        try:
+            # Check before stopping the server: nothing changes yet.
+            plan = restore(check_only=True)
+        except (OSError, ValueError, DatabaseError) as exc:
+            return refused(exc)
+        # An unfinished restore, of this backup or of the one a restore of every file
+        # replaces, still has to end, even with every file equal.
+        if not (plan.restored or plan.interrupted or plan.replaced):
+            return CommandResult(
+                ok=True,
+                message=f"nothing to restore from configuration backup {backup_id} ("
+                + _describe_config_restore(plan)
+                + ")",
+                instance=instance,
+            )
+        return _change_while_stopped(
+            instance,
+            lambda: _describe_config_restore(restore(check_only=False)),
+            action="restore",
+            subject=f"configuration backup {backup_id}",
+            done=f"restored configuration backup {backup_id}",
         )
-    return _change_while_stopped(
-        instance,
-        lambda: _describe_config_restore(restore(check_only=False)),
-        action="restore",
-        subject=f"configuration backup {backup_id}",
-        done=f"restored configuration backup {backup_id}",
-    )
 
 
 def _describe_config_restore(restored: ConfigRestore) -> str:
-    parts = [f"{len(restored.restored)} restored: " + ", ".join(restored.restored)]
+    parts = [
+        f"{len(restored.restored)} restored"
+        + (": " + ", ".join(restored.restored) if restored.restored else "")
+    ]
     if restored.unchanged:
         parts.append(f"{len(restored.unchanged)} already equal")
     parts.extend(f"{path} left alone: {reason}" for path, reason in restored.skipped.items())
@@ -379,6 +394,10 @@ def _describe_config_restore(restored: ConfigRestore) -> str:
         parts.append("created after the backup and kept: " + ", ".join(restored.created_after))
     if restored.interrupted:
         parts.append("the interrupted restore of this backup is finished")
+    if restored.replaced is not None:
+        parts.append(
+            f"it replaces the unfinished restore of configuration backup {restored.replaced}"
+        )
     if restored.before_restore is not None:
         parts.append(
             f"the replaced state is configuration backup {restored.before_restore}; "
