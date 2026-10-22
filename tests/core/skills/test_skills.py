@@ -244,6 +244,30 @@ def oversized_instructions(kilobytes: int, lines: int) -> str:
             ["YAML front matter was read with the simple key: value fallback."],
             id="unrepairable-yaml",
         ),
+        pytest.param(
+            "declared-name",
+            "---\nname: declared-name\ndescription: Use it.\nmetadata:\n"
+            "  name: nested-name\n  description: Nested text.\nbroken: [\n---\n",
+            "declared-name",
+            "Use it.",
+            ["YAML front matter was read with the simple key: value fallback."],
+            id="fallback-keeps-only-top-level-metadata",
+        ),
+        *[
+            pytest.param(
+                "bad-scalar",
+                f"---\nname: bad-scalar\ndescription: {description}\ncreated: {value}\n---\n",
+                "bad-scalar",
+                description,
+                ["YAML front matter was read with the simple key: value fallback."],
+                id=case,
+            )
+            for value, description, case in (
+                ("2020-13-45", "Use it.", "invalid-calendar-date"),
+                ("!!timestamp soon", "Use it.", "invalid-tagged-timestamp"),
+                ("!!timestamp soon", "Use mode: careful", "invalid-scalar-after-repair"),
+            )
+        ],
         # libyaml reads these two without an error; the pure-Python reading decides.
         pytest.param(
             "tabbed",
