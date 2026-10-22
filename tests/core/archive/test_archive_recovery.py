@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,7 @@ import pytest
 from core.agents import AgentError
 from core.sessions import (
     ARCHIVE_KIND_AGENT,
+    ARCHIVE_KIND_FILES,
     ARCHIVE_KIND_PROJECT,
     ARCHIVE_ORIGIN_RECOVERED,
     ARCHIVE_TREE_AGENT,
@@ -456,7 +458,10 @@ async def test_a_purging_entry_waits_for_the_next_purge(world: ArchiveWorld) -> 
 
 @pytest.mark.asyncio
 async def test_orphan_entry_payloads_are_adopted_and_nothing_else_under_archive(
-    world: ArchiveWorld, monkeypatch: pytest.MonkeyPatch, deny_access: Callable[[Path], None]
+    world: ArchiveWorld,
+    monkeypatch: pytest.MonkeyPatch,
+    deny_access: Callable[[Path], None],
+    tmp_path: Path,
 ) -> None:
     world.agents.create("coder", "Coder Agent")
     world.agents.create("locked", "Locked Agent")
@@ -473,10 +478,37 @@ async def test_orphan_entry_payloads_are_adopted_and_nothing_else_under_archive(
     for path in user_files:
         path.parent.mkdir(parents=True)
         path.write_text("mine", encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    outside_file = outside / "keep.txt"
+    outside_file.write_text("mine", encoding="utf-8")
+    shutil.copytree(archive / "entries" / "arc_orphan" / "agent", outside / "agent")
+    linked = archive / "entries" / "arc_linked"
+    links = [linked]
+    for role in ("agent", "project"):
+        payload_link = archive / "entries" / f"arc_{role}_link" / role
+        payload_link.parent.mkdir()
+        links.append(payload_link)
+    for link in links:
+        target = outside if link == linked else outside / "agent"
+        if sys.platform == "win32":
+            import _winapi
+
+            _winapi.CreateJunction(str(target), str(link))
+        else:
+            link.symlink_to(target, target_is_directory=True)
 
     world.service.recover()
 
-    [listing] = (await world.service.list(ArchiveEntryFilter())).entries
+    listings = {
+        listing.entry.entry_id: listing
+        for listing in (await world.service.list(ArchiveEntryFilter())).entries
+    }
+    assert set(listings) == {"arc_orphan", "arc_agent_link", "arc_project_link"}
+    for entry_id in ("arc_agent_link", "arc_project_link"):
+        assert listings[entry_id].entry.kind == ARCHIVE_KIND_FILES
+        assert not listings[entry_id].restorable
+    listing = listings["arc_orphan"]
     assert (listing.entry.entry_id, listing.entry.kind, listing.entry.subject_id) == (
         "arc_orphan",
         ARCHIVE_KIND_AGENT,
@@ -489,6 +521,8 @@ async def test_orphan_entry_payloads_are_adopted_and_nothing_else_under_archive(
     )
     assert not (archive / "entries" / "arc_empty").exists()
     assert all(path.read_text(encoding="utf-8") == "mine" for path in user_files)
+    assert outside_file.read_text(encoding="utf-8") == "mine"
+    assert all(link.is_symlink() or link.is_junction() for link in links)
     await world.service.restore("arc_orphan")
     assert world.agents.get("coder").name == "Coder Agent"
     monkeypatch.undo()
@@ -496,3 +530,4 @@ async def test_orphan_entry_payloads_are_adopted_and_nothing_else_under_archive(
     world.service.recover()
 
     assert world.entry("arc_locked").subject_id == "locked"
+    assert world.sessions.archive_ledger.entry("arc_linked") is None
