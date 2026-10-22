@@ -669,21 +669,22 @@ describe('ChatTimeline Runs', () => {
     expect(
       lastTool.querySelector('.te-dot').classList.contains('running'),
     ).toBe(true);
+    const finished = toolItem({
+      id: 'bash',
+      name: 'bash',
+      arguments: { command: 'echo done' },
+      result: { ok: true, data: { output: 'finished output' } },
+    });
     applyTimelineEvent(sessionState, 'timeline_update', {
       run_id: 'run-stream',
       sequence: 7,
       base_sequence: 6,
       run: { id: 'assistant-run-run-stream' },
-      children: [
-        toolItem({
-          id: 'bash',
-          name: 'bash',
-          arguments: { command: 'echo done' },
-          result: { ok: true, data: { output: 'finished output' } },
-        }),
-      ],
+      children: [finished],
     });
     flushSync();
+    // Rows stay raw inside the reactive Chat state: identity is the change signal.
+    expect(sessionState.timelineItems[0].items.at(-1)).toBe(finished);
     expect(lastTool.querySelector('.te-dot').classList.contains('done')).toBe(
       true,
     );
