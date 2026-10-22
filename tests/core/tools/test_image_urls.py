@@ -133,7 +133,8 @@ async def test_image_urls_and_local_files_are_analyzed_in_their_order(
     assert call.contents() == [PNG, PNG, JPEG]
     assert call.service.analyzed is not None
     assert call.service.analyzed["paths"][1] == (workspace / "photos" / "cat.png").resolve()
-    assert [url for url, _ in web.requested] == [
+    # Downloads run concurrently; only the analysis and display preserve input order.
+    assert sorted(url for url, _ in web.requested) == [
         "https://example.com/cat.png",
         "https://example.com/img/dog.jpg",
     ]
