@@ -585,19 +585,22 @@ class SemanticIndexer:
         return min(self._batch_size, preferred) if preferred else self._batch_size
 
     async def _refresh_catalog(self) -> None:
-        """Bring every live scope's Recall-visible Sessions into the catalog."""
+        """Bring every live scope's Recall-visible Sessions into the catalog.
+
+        One Session read lists them all and one stamp read compares them with
+        the catalog, so only scopes that changed are reread and written.
+        """
         sessions = self._sessions
-        live = await sessions.run_async(sessions.list_live_scopes)
-        for project_id, agent_id in live:
-            if not self._enabled or self._closed:
-                return
-            scope = await sessions.run_async(_index_scope, sessions, agent_id, project_id)
-            await self._index.recovering(
-                functools.partial(self._index.refresh, sessions, agent_id, project_id, scope),
-                warning=self._warn_index_failure,
-            )
-        for project_id, agent_id in await self._index.indexed_scopes() - set(live):
-            await self._index.remove_scope(agent_id, project_id)
+        scopes = await sessions.run_async(_index_scopes, sessions)
+        await self._index.recovering(
+            functools.partial(
+                self._index.refresh_scopes, sessions, scopes, proceed=self._proceeding
+            ),
+            warning=self._warn_index_failure,
+        )
+
+    def _proceeding(self) -> bool:
+        return self._enabled and not self._closed
 
     async def _drain(self, binding: VectorHeader, batch_size: int, totals: _PassTotals) -> None:
         started_at = self._monotonic()
@@ -788,27 +791,34 @@ class SemanticIndexer:
             self.logger.debug(message, *args)
 
 
-def _index_scope(
-    sessions: ChatSessionManager, agent_id: str, project_id: str | None
-) -> RecallScope:
-    """Every Recall-visible live Session of one scope as refresh candidates.
+def _index_scopes(sessions: ChatSessionManager) -> dict[tuple[str | None, str], RecallScope]:
+    """Every Recall-visible live Session as refresh candidates, by ``(project_id, agent_id)``.
 
-    Hidden Sessions count as gone, so the catalog prunes any it still holds.
+    Hidden Sessions count as gone, so the catalog prunes any it still holds,
+    and a scope without a Recall-visible Session is evicted. Blocking.
     """
     admitted = recall_visibilities(include_subagents=True)
-    candidates: dict[str, tuple[str, int]] = {}
-    creation_orders: dict[str, int] = {}
-    for revision in sessions.list_history_revisions(agent_id, project_id):
-        if revision.recall_visibility in admitted:
-            session_id = revision.address.session_id
-            candidates[session_id] = (revision.generation_id, revision.history_revision)
-            creation_orders[session_id] = revision.creation_order
-    return RecallScope(
-        live_session_ids=frozenset(candidates),
-        candidates=candidates,
-        snapshot_id="",
-        creation_orders=creation_orders,
-    )
+    candidates: dict[tuple[str | None, str], dict[str, tuple[str, int]]] = {}
+    creation_orders: dict[tuple[str | None, str], dict[str, int]] = {}
+    for revision in sessions.list_all_history_revisions():
+        if revision.recall_visibility not in admitted:
+            continue
+        address = revision.address
+        scope = (address.project_id, address.agent_id)
+        candidates.setdefault(scope, {})[address.session_id] = (
+            revision.generation_id,
+            revision.history_revision,
+        )
+        creation_orders.setdefault(scope, {})[address.session_id] = revision.creation_order
+    return {
+        scope: RecallScope(
+            live_session_ids=frozenset(versions),
+            candidates=versions,
+            snapshot_id="",
+            creation_orders=creation_orders[scope],
+        )
+        for scope, versions in candidates.items()
+    }
 
 
 def _classify(error: BaseException, *, local: bool = False) -> _Classified:

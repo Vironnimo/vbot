@@ -388,6 +388,13 @@ class _RunExecutionContext:
     # perf_counter() at which the first step's request assembly began; the
     # progression consumes it for the ``chat.request_build`` measurement.
     request_build_started: float | None = None
+    # Automatic Compaction attempts this Run started (the coordinator counts
+    # them, whatever their outcome); an attempt's time is ``chat.compaction``'s,
+    # so the progression restarts ``chat.request_build`` after one.
+    compaction_attempts: int = 0
+    # The Compaction coordinator's settings for this Run's decisions with the
+    # revisions they were resolved at (its own format).
+    compaction_settings: Any = None
     stream_draft: StreamDraft = field(init=False)
 
     def __post_init__(self) -> None:

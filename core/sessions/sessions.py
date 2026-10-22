@@ -338,6 +338,11 @@ class ChatSessionManager:
         """Read one metadata value (``None`` when absent) from the Session row alone."""
         return self._store.metadata_value(address, key)
 
+    @property
+    def metadata_revision(self) -> int:
+        """Changes after every metadata write of this process (``SessionStore``)."""
+        return self._store.metadata_revision
+
     async def metadata_value_async(self, address: SessionAddress, key: str) -> Any:
         return await self._store.run_async(self.metadata_value, address, key)
 
@@ -515,10 +520,6 @@ class ChatSessionManager:
             address, delivery_id, notes, generation_id=generation_id
         )
 
-    def list_live_scopes(self) -> builtins.list[tuple[str | None, str]]:
-        """Return every ``(project_id, agent_id)`` scope with a live Session, sorted."""
-        return self._store.list_live_scopes()
-
     def list_agent_ids(
         self, project_id: str | None = None, *, exclude_owner_managed: bool = False
     ) -> builtins.list[str]:
@@ -624,6 +625,14 @@ class ChatSessionManager:
         """Return every live Session version of one scope with its Recall visibility."""
         return self._store.list_history_revisions(project_id, agent_id)
 
+    def list_all_history_revisions(self) -> builtins.list[SessionHistoryRevision]:
+        """Return every live Session version of every scope with its Recall visibility.
+
+        One read, ordered by scope and Session id: a projection that follows
+        every scope compares its freshness stamps without a read per scope.
+        """
+        return self._store.list_all_history_revisions()
+
     def list_history_versions(
         self, addresses: Sequence[SessionAddress]
     ) -> dict[SessionAddress, tuple[str, int]]:
@@ -659,6 +668,17 @@ class ChatSessionManager:
 
     def temporary_binding(self, address: SessionAddress) -> TemporarySessionBinding | None:
         return self._store.execution.temporary_binding(address)
+
+    def temporary_agent_binding(
+        self, project_id: str | None, agent_id: str
+    ) -> TemporarySessionBinding | None:
+        """Return the live binding of the temporary Agent *agent_id*, or ``None``.
+
+        Every Session under a temporary Agent's id runs as that Agent: its bound
+        Session and the child Sessions it delegated to itself, which have no
+        binding of their own. Bindings that share an id name no single Agent.
+        """
+        return self._store.execution.temporary_agent_binding(project_id, agent_id)
 
     def temporary_binding_by_participant(
         self, *, owner_name: str, group_id: str, participant_id: str

@@ -10,7 +10,7 @@ Read this reference when you change semantic indexing: triggers, passes, batchin
 
 ## Passes and batching
 
-- A pass refreshes the catalog for every scope with live Sessions (`ChatSessionManager.list_live_scopes`), over conversation and Sub-Agent Sessions only, evicts indexed scopes without live Sessions, then drains `pending_texts` newest first in batches of `BATCH_SIZE` (64 distinct texts, or the smaller `EmbeddingService.document_batch_size()` of a local Model, 8), one embedding call at a time, each followed by one short write. Usage of each stored batch adds to `indexer_state`, with the length of its texts.
+- A pass refreshes the catalog over every live scope's conversation and Sub-Agent Sessions (`PassageIndex.refresh_scopes`, `recall/passage-index.md` -> Refresh): one Session read lists them all (`ChatSessionManager.list_all_history_revisions`) and one stamp read compares them with the catalog, so a pass over unchanged Sessions costs those two reads whatever the number of scopes, and only scopes with a changed, new or departed Session are reread and written; indexed scopes without a Recall-visible Session are evicted. It then drains `pending_texts` newest first in batches of `BATCH_SIZE` (64 distinct texts, or the smaller `EmbeddingService.document_batch_size()` of a local Model, 8), one embedding call at a time, each followed by one short write. Usage of each stored batch adds to `indexer_state`, with the length of its texts.
 - Queue selection and waiting-text estimates start from `pending_vectors`, not the complete Passage catalog. Selection groups narrow hash/ref/timestamp rows before loading the limited batch's text; estimates group precomputed lengths. Keep full text out of these sorts: forcing a queue-first join alone makes a full rebuild more expensive.
 
 ## Failures and backoff
@@ -32,4 +32,4 @@ A pass whose binding names another space than the pinned header drops every vect
 ## Source and tests
 
 - `core/recall/semantic_indexer.py`; Runtime wiring `core/runtime/_recall.py` (`RecallIntegration`)
-- `tests/core/recall/test_semantic_indexer.py` covers the indexer (order, status, visibility, bisection, backoff, configuration errors, space thrash, scheduling with injected clocks and zero delays); Runtime wiring (stale files, deletion under any backend, Run nudge) is in `tests/core/runtime/test_runtime_recall.py`.
+- `tests/core/recall/test_semantic_indexer.py` covers the indexer (order, status, visibility, rereading only changed Sessions, bisection, backoff, configuration errors, space thrash, scheduling with injected clocks and zero delays); Runtime wiring (stale files, deletion under any backend, Run nudge) is in `tests/core/runtime/test_runtime_recall.py`.

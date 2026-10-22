@@ -10,8 +10,6 @@ const rpcMock = vi.fn();
 
 const listProjectsMock = vi.fn();
 
-const showProjectMock = vi.fn();
-
 vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
 });
@@ -19,7 +17,6 @@ vi.mock('svelte', async () => {
 vi.mock('$lib/api.js', () =>
   rpcBackedApiMock(rpcMock, {
     listProjects: (...args) => listProjectsMock(...args),
-    showProject: (...args) => showProjectMock(...args),
   }),
 );
 
@@ -328,9 +325,7 @@ function setupSystemPromptViewSuite() {
     init('en');
     rpcMock.mockReset();
     listProjectsMock.mockReset();
-    showProjectMock.mockReset();
     listProjectsMock.mockResolvedValue({ projects: [] });
-    showProjectMock.mockResolvedValue({ project: {}, scan: { team: [] } });
     mountedComponent = null;
   });
   afterEach(async () => {
@@ -356,7 +351,6 @@ function setupSystemPromptViewSuite() {
 export {
   rpcMock,
   listProjectsMock,
-  showProjectMock,
   SystemPromptView,
   baseBlocks,
   createRpcMock,

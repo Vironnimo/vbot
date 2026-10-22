@@ -2,6 +2,9 @@ import { workingSpanStarts } from './chatTimelinePresentation.js';
 
 // The server owns conversation semantics. This module applies its keyed
 // projections, preserving unchanged objects so streaming touches only its tail.
+// Items are immutable: every change replaces the changed objects up to a new
+// `timelineItems` array, which Chat keeps outside its deep `$state` proxy
+// (`chatState/timelineItems.svelte.js`) and renders by identity.
 export function visibleTimelineItemsForRender(sessionState) {
   return (sessionState?.timelineItems ?? []).flatMap((item) =>
     item.type === 'assistant_run' &&
@@ -13,40 +16,47 @@ export function visibleTimelineItemsForRender(sessionState) {
   );
 }
 
+// Parts of each long Run, per Run object and Working mode. Patches replace a
+// changed Run and keep unchanged ones, so an unchanged Run keeps its part
+// objects and their rows do not render again while another Run streams.
+const longRunParts = new WeakMap();
+
 // Run is a semantic unit, not an indivisible DOM row. Stable position buckets
 // let the existing viewport unmount old parts of one unusually long Run. In
 // compact Work details a Working span stays in its first row's part, so its
 // group is never cut apart. Every part carries the whole Run as `runItems`.
 export function timelineRowsForViewport(items, workingMode = 'normal') {
+  const mode = workingMode === 'compact' ? 'compact' : 'normal';
   return items.flatMap((item) => {
     if (item.type !== 'assistant_run' || item.items.length <= 60) return [item];
-    const spanStarts =
-      workingMode === 'compact' ? workingSpanStarts(item) : new Map();
-    const positions = new Map(
-      item.items.map((child, index) => [child.id, child.position ?? index]),
-    );
-    const groups = new Map();
-    for (const child of item.items) {
-      const anchor = spanStarts.get(child.id) ?? child;
-      const part = Math.floor(positions.get(anchor.id) / 30);
-      if (!groups.has(part)) groups.set(part, []);
-      groups.get(part).push(child);
-    }
-    const parts = [...groups];
-    return parts.map(([part, children], index) => ({
-      ...item,
-      id: `${item.id}:part:${part}`,
-      sourceItemId: item.id,
-      runItems: item.items,
-      items: children,
-      segment_first: index === 0,
-      segment_tail: index === parts.length - 1,
-    }));
+    let parts = longRunParts.get(item);
+    if (!parts) longRunParts.set(item, (parts = {}));
+    return (parts[mode] ??= longRunViewportParts(item, mode));
   });
 }
 
-export function assistantRunChildProgressKey(child) {
-  return `${child?.revision ?? child?.sequence ?? ''}:${child?.content?.length ?? 0}:${child?.partialArgumentsText?.length ?? 0}:${child?.output?.length ?? 0}:${child?.status ?? ''}:${Boolean(child?.finished)}:${child?.message?.content?.length ?? 0}`;
+function longRunViewportParts(item, mode) {
+  const spanStarts = mode === 'compact' ? workingSpanStarts(item) : new Map();
+  const positions = new Map(
+    item.items.map((child, index) => [child.id, child.position ?? index]),
+  );
+  const groups = new Map();
+  for (const child of item.items) {
+    const anchor = spanStarts.get(child.id) ?? child;
+    const part = Math.floor(positions.get(anchor.id) / 30);
+    if (!groups.has(part)) groups.set(part, []);
+    groups.get(part).push(child);
+  }
+  const parts = [...groups];
+  return parts.map(([part, children], index) => ({
+    ...item,
+    id: `${item.id}:part:${part}`,
+    sourceItemId: item.id,
+    runItems: item.items,
+    items: children,
+    segment_first: index === 0,
+    segment_tail: index === parts.length - 1,
+  }));
 }
 
 function runIdOf(item) {
@@ -197,16 +207,17 @@ export function loadTimelineItems(sessionState, items, options = {}) {
     const known = new Map(
       (options.reset ? [] : previous).map((item) => [item.id, item]),
     );
-    sessionState.timelineItems = incoming.map((item) =>
-      reuse(
-        known.get(item.id),
-        withCollections(retainWindowPrefix(known.get(item.id), item)),
+    sessionState.timelineItems = [
+      ...incoming.map((item) =>
+        reuse(
+          known.get(item.id),
+          withCollections(retainWindowPrefix(known.get(item.id), item)),
+        ),
       ),
-    );
-    if (newerLive)
-      sessionState.timelineItems.push(
-        ...previous.filter((item) => runIdOf(item) === activeRunId),
-      );
+      ...(newerLive
+        ? previous.filter((item) => runIdOf(item) === activeRunId)
+        : []),
+    ];
   }
   if (options.reset) sessionState.timelineSequences = {};
   if (activeRunId && Number.isInteger(options.timelineSequence) && !newerLive) {

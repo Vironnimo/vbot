@@ -463,9 +463,11 @@ class ChatLoop:
     ) -> Run:
         """Start manual Compaction as the Session's active observable Run.
 
-        An owner-managed Session compacts as its temporary Agent: the admitted
-        configuration of its binding, with the Extension's Session Tools and
-        prompt blocks in the compacted request and the next prompt epoch.
+        A Session of a temporary Agent compacts as that Agent, from the admitted
+        configuration of its binding, as the Session's own Runs run. The
+        owner-managed Session itself keeps the Extension's Session Tools and
+        prompt blocks in the compacted request and the next prompt epoch; a
+        child Session the Agent delegated to itself has neither.
         """
         compaction_service = self._compaction_service
         if compaction_service is None:
@@ -475,12 +477,15 @@ class ChatLoop:
             agent_id, session_id, create_missing=False, project_id=project_id
         )
         resolver = self._dependencies.agent_resolver
-        binding = await _CHAT_TRANSFORM_WORKERS.run(
-            self._dependencies.sessions.temporary_binding, session.address
-        )
+        sessions = self._dependencies.sessions
+        binding = await _CHAT_TRANSFORM_WORKERS.run(sessions.temporary_binding, session.address)
+        if binding is None:
+            binding = await _CHAT_TRANSFORM_WORKERS.run(
+                sessions.temporary_agent_binding, project_id, agent_id
+            )
         agent = (
             await resolver.resolve_temporary_agent_async(
-                binding.address, generation_id=binding.generation_id, session=binding.address
+                binding.address, generation_id=binding.generation_id, session=session.address
             )
             if binding is not None
             else await resolver.resolve_agent_async(project_id, agent_id, session_id=session_id)
@@ -496,7 +501,9 @@ class ChatLoop:
                 session,
                 compaction_service,
                 instruction=instruction,
-                temporary_binding=binding,
+                temporary_binding=(
+                    binding if binding is not None and binding.address == session.address else None
+                ),
             ),
             admission=RunAdmission(
                 working_project_id=working_project_id,

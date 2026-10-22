@@ -192,10 +192,22 @@ class ModelStepBoundary:
         )
         recorder = self._dependencies.usage_recorder
         call_id = (assistant_message.usage or {}).get("usage_call_id")
+        # The recorder learns the step's measured input together with its
+        # enrichment, in one transaction, when it is this Run's calibration.
+        calibrated = False
         if recorder is not None and isinstance(call_id, str):
+            calibrated = context.context_usage.calibration is recorder
             assistant_message = replace(
                 assistant_message,
-                usage=await recorder.update(call_id, assistant_message.usage),
+                usage=await recorder.update(
+                    call_id,
+                    assistant_message.usage,
+                    input_estimate=(
+                        (request_estimate.model_reference, request_estimate.tokens)
+                        if calibrated
+                        else None
+                    ),
+                ),
             )
         return await _CHAT_TRANSFORM_WORKERS.run(
             _prepare_assistant_context,
@@ -204,6 +216,7 @@ class ModelStepBoundary:
             request_estimate,
             replay_policy=target.replay_policy,
             accounting=context.context_usage,
+            calibrated=calibrated,
             target=target,
             tools=request_tools,
             scope=context.prompt_cache_affinity_id,

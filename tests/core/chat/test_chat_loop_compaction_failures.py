@@ -5,12 +5,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
 
-from core.chat import ChatMessage
+from core.chat import ChatMessage, _agentic_progression
 from core.chat._message_history import effective_compaction_messages
 from core.chat._run_state import _RequestState
 from core.chat.wire_shaping import _embed_notes_into_request
@@ -133,11 +135,37 @@ async def test_failed_compaction_logs_and_keeps_the_request(
 
 
 @pytest.mark.asyncio
-async def test_failed_auto_compaction_retries_at_the_next_boundary(tmp_path: Path) -> None:
+async def test_failed_auto_compaction_retries_at_the_next_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     compactions_at_tool_boundary: list[int] = []
     service = StubCompactionService(
         should_auto=True, compact_error=RuntimeError("summary unavailable")
     )
+    # Each failed attempt takes a minute on the progression's clock; that time
+    # is the attempt's (``chat.compaction``), never the request build's.
+    clock = SimpleNamespace(offset=0.0)
+    monkeypatch.setattr(
+        _agentic_progression,
+        "time",
+        SimpleNamespace(perf_counter=lambda: time.perf_counter() + clock.offset),
+    )
+    failing_compact = service.compact
+
+    async def slow_failing_compact(*args: Any, **kwargs: Any) -> Any:
+        clock.offset += 60.0
+        return await failing_compact(*args, **kwargs)
+
+    monkeypatch.setattr(service, "compact", slow_failing_compact)
+    request_builds: list[float] = []
+    record_span = _agentic_progression.record_span
+
+    def recording_span(metric: str, started: float, **kwargs: Any) -> None:
+        if metric == "chat.request_build":
+            request_builds.append(kwargs["ended"] - started)
+        record_span(metric, started, **kwargs)
+
+    monkeypatch.setattr(_agentic_progression, "record_span", recording_span)
 
     async def probe(_context: Any, _arguments: Any) -> Any:
         compactions_at_tool_boundary.append(len(service.compact_calls))
@@ -169,6 +197,8 @@ async def test_failed_auto_compaction_retries_at_the_next_boundary(tmp_path: Pat
     assert compactions_at_tool_boundary == [1]
     assert len(service.compact_calls) == 2
     assert "compaction_checkpoint" not in persisted_roles(session.load())
+    assert len(request_builds) == 2
+    assert all(duration < 60.0 for duration in request_builds)
 
 
 @pytest.mark.asyncio

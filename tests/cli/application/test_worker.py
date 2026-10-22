@@ -186,21 +186,32 @@ def test_current_version_finishes_without_stop_snapshot_or_handoff(tmp_path, mon
     assert operation.previous_version == operation.candidate_version == install.version().name
 
 
+@pytest.mark.parametrize("older", [False, True], ids=["active-version", "older-version"])
 def test_a_channel_publishing_the_active_version_completes_without_download(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, older: bool
 ):
     install = _install(tmp_path)
     operation = Operation(id="upd_current", previous_version="rel_old")
-    monkeypatch.setattr(worker, "download_release", lambda *_args, **_kwargs: None)
+
+    def download(*_args, **_kwargs):
+        if older:
+            raise worker.OlderReleaseError("The release channel offers an older vBot")
+
+    monkeypatch.setattr(worker, "download_release", download)
     monkeypatch.setattr(
         worker, "stage_package", lambda *_args, **_kwargs: pytest.fail("must not stage")
     )
     monkeypatch.setattr(worker.processes, "target", lambda _install: pytest.fail("must not target"))
+    monkeypatch.setattr(
+        worker.processes, "server_state", lambda *_a, **_kw: pytest.fail("must not stop")
+    )
 
     worker.execute(install, operation)
 
-    assert operation.phase == "completed"
-    assert operation.candidate_version == "rel_old"
+    # A channel offering an older version fails the update before anything changed.
+    assert operation.phase == ("failed" if older else "completed")
+    assert operation.error == ("The release channel offers an older vBot" if older else None)
+    assert operation.candidate_version == (None if older else "rel_old")
     assert install.version().name == "rel_old"
 
 

@@ -218,6 +218,21 @@ class AutoCompaction:
     rebuilt: list[JsonObject]
 
 
+async def boundary_context(
+    loop: ChatLoop, run: Run, session: Any, request: list[JsonObject]
+) -> Any:
+    """A production Run context whose request state is exactly ``request``."""
+    context = await create_run_execution_context(
+        loop._dependencies,
+        loop._requests,
+        run,
+        _RunRequest(content="test"),
+        session=session,
+    )
+    context.request_state = _RequestState(request, [], (), ())
+    return context
+
+
 async def auto_compact(
     loop: ChatLoop,
     agent: Any,
@@ -237,14 +252,7 @@ async def auto_compact(
     run = Run(run_id=run_id, agent_id=agent.id, session_id=session.id)
     if compaction_requested:
         run.set_compaction_state("pending")
-    context = await create_run_execution_context(
-        loop._dependencies,
-        loop._requests,
-        run,
-        _RunRequest(content="test"),
-        session=session,
-    )
-    context.request_state = _RequestState(request, [], (), ())
+    context = await boundary_context(loop, run, session, request)
     if usage is not None:
         context.context_usage.observe(
             usage,

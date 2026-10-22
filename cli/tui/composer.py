@@ -38,9 +38,11 @@ async def complete(app: ConversationApp, *, commands: bool = False) -> None:
     )
     if app.conversation is not view or view.key != key or editor.text != draft:
         return
+    # A Skill a command shadows runs only as `$name`, never as the `/name` inserted here.
     choices = [
         (f"/{item['name']} · {item['type']} · {item.get('description', '')}", item["name"])
         for item in response.get("items", [])
+        if item.get("slash") is not False
     ]
     value = await app.push_screen_wait(
         Picker(

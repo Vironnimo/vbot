@@ -66,6 +66,8 @@ def test_a_command_without_an_argument_is_submitted_when_it_is_chosen() -> None:
             {"name": "/help", "description": "Show it.", "type": "command", "argument": "none"},
             {"name": "model", "description": "Set it.", "type": "command", "argument": "required"},
             {"name": "debugging", "description": "A Skill.", "type": "skill"},
+            # `/help` runs the command, so its namesake Skill is not offered.
+            {"name": "help", "description": "A Skill.", "type": "skill", "slash": False},
         ]
     )
 

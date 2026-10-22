@@ -571,13 +571,27 @@ def test_subagent_links_find_live_children_of_a_parent_and_a_session_by_its_id(m
     assert manager.subagent_session("sa_missing") is None
 
 
-def test_live_scopes_name_each_scope_that_still_has_a_live_session(manager) -> None:
-    manager.create("coder", session_id="one")
+def test_all_history_revisions_list_every_live_session_of_every_scope(manager) -> None:
     manager.create("coder", session_id="two")
+    manager.create("coder", session_id="one")
     manager.create("coder", session_id="project-one", project_id="alpha")
     manager.create("writer", session_id="draft").delete()
+    manager.create("writer", session_id="kept")
 
-    assert manager.list_live_scopes() == [(None, "coder"), ("alpha", "coder")]
+    revisions = manager.list_all_history_revisions()
+
+    # Ordered by scope and Session id; each record equals its scope's own read.
+    assert [revision.address for revision in revisions] == [
+        _address("coder", "one"),
+        _address("coder", "two"),
+        _address("writer", "kept"),
+        _address("coder", "project-one", "alpha"),
+    ]
+    assert revisions == [
+        *manager.list_history_revisions("coder"),
+        *manager.list_history_revisions("writer"),
+        *manager.list_history_revisions("coder", "alpha"),
+    ]
 
 
 @pytest.mark.parametrize("include_channels", [False, True])

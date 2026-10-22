@@ -52,7 +52,6 @@
     listChannels,
     listCronJobs,
     listProjects,
-    showProject,
   } from '$lib/api.js';
   import { createAgentTargetCatalogLoader } from '$lib/agentTargetOptions.js';
   import { createCronEditor, NEW_JOB_PLACE } from './cron/editor.svelte.js';
@@ -108,14 +107,13 @@
   let viewState = $state(createCronViewState());
 
   // Project teams power the project-agent options in the cron dropdown. They are
-  // loaded lazily the first time the detail pane renders a form and cached for
-  // the lifetime of the view, so the N+1 `project.show` scan (one per project)
-  // never runs on every render — only once, on demand.
+  // loaded lazily the first time the detail pane renders a form (one
+  // `project.list` with the cached Teams) and kept for the lifetime of the
+  // view, so they are never read again on every render.
   let projectTeams = $state([]);
   let projectTeamsLoaded = false;
   const targetCatalog = createAgentTargetCatalogLoader({
     listProjects,
-    showProject,
   });
 
   // The Channels a job can deliver to, from `channel.list`. Loaded with the
@@ -340,11 +338,11 @@
     }
   }
 
-  // Lazily scan project teams the first time the cron detail form renders (and
-  // cache the result), so the dropdown can offer project agents as
-  // `agent@projekt` without an N+1 `project.show` per render. A failure is
-  // non-fatal: the dropdown still shows identity agents, and the team scan can
-  // be retried on the next render.
+  // Lazily load project teams the first time the cron detail form renders (and
+  // keep the result), so the dropdown can offer project agents as
+  // `agent@projekt` without a read per render. A failure is non-fatal: the
+  // dropdown still shows identity agents, and the load can be retried on the
+  // next render.
   async function loadProjectTeams() {
     if (projectTeamsLoaded) return;
     const catalog = await targetCatalog.load();

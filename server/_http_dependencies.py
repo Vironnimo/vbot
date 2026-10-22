@@ -21,6 +21,8 @@ try:
         StreamingResponse,
     )
     from fastapi.staticfiles import StaticFiles  # type: ignore[import-not-found]
+    from pydantic import TypeAdapter
+    from pydantic_core import PydanticSerializationError
     from starlette.datastructures import (  # type: ignore[import-not-found]
         UploadFile as StarletteUploadFile,
     )
@@ -45,6 +47,8 @@ except ModuleNotFoundError as exc:  # pragma: no cover - exercised when server e
     WebSocketDisconnect = Exception  # type: ignore[misc,assignment]
     MultiPartException = Exception  # type: ignore[misc,assignment]
     MultiPartParser = object  # type: ignore[misc,assignment]
+    TypeAdapter = None  # type: ignore[assignment,misc]
+    PydanticSerializationError = Exception  # type: ignore[misc,assignment]
 else:
     _FASTAPI_IMPORT_ERROR = None
 
@@ -70,6 +74,8 @@ __all__ = [
     "MultiPartException",
     "MultiPartParser",
     "WebSocketDisconnect",
+    "TypeAdapter",
+    "PydanticSerializationError",
     "FastAPIType",
     "_FASTAPI_IMPORT_ERROR",
 ]
