@@ -124,7 +124,9 @@ def _page(
     expected_generation_id: str | None,
     excluded_roles: Sequence[str],
     complete_run_segment: bool,
+    rows_only: bool,
 ) -> tuple[_store_codec.EntryBatch, bool, frozenset[str], int | None]:
+    """Read one page; with ``rows_only`` just its entry rows, for a caller that rereads them."""
     where, params = _role_filter(excluded_roles)
     cutoff = int(state["next_seq"])
     if before_sequence is not None:
@@ -180,9 +182,9 @@ def _page(
                     lower=int(start[0]),
                     upper=cutoff,
                 )
+    if rows_only or not rows:
+        return _store_codec.EntryBatch(rows), False, frozenset(), None
     batch = _store_codec.select_batch(connection, rows)
-    if not rows:
-        return batch, False, frozenset(), None
     page_floor = int(rows[0]["seq"])
     has_more = (
         _store_history.view_seq(connection, ranges, where=where, params=params, upper=page_floor)
@@ -330,14 +332,26 @@ def chat_history_snapshot(
         where, params = _role_filter(excluded_roles)
         # Bound raw entries, hidden Notes included: an empty visible batch still
         # advances the cursor, and every continuation has a finite amount of work.
-        batch = _store_history.view_batch(
-            connection, ranges, where=where, params=params, lower=after[1], upper=through
+        rows = _store_lineage.ordered_rows(
+            connection,
+            ranges,
+            columns=_store_codec.ENTRY_COLUMNS,
+            where=where,
+            params=params,
+            lower=after[1],
+            upper=through,
         )
         has_more, page_floor = False, None
-        takeover = latest_takeover(connection, ranges)
-        editable = frozenset(
-            str(row["entry_id"]) for row in batch.rows if _editable(batch, row, takeover)
-        )
+        if complete_runs:
+            # The Runs these rows touch are read below, with their side rows.
+            batch = _store_codec.EntryBatch(rows)
+            editable: frozenset[str] = frozenset()
+        else:
+            batch = _store_codec.select_batch(connection, rows)
+            takeover = latest_takeover(connection, ranges)
+            editable = frozenset(
+                str(row["entry_id"]) for row in batch.rows if _editable(batch, row, takeover)
+            )
     else:
         batch, has_more, editable, page_floor = _page(
             connection,
@@ -349,6 +363,8 @@ def chat_history_snapshot(
             expected_generation_id=expected_generation_id,
             excluded_roles=excluded_roles,
             complete_run_segment=complete_run_segment,
+            # The Runs the page touches are read below, with their side rows.
+            rows_only=complete_runs,
         )
     if complete_runs and batch.rows:
         # A semantic element replaces its entire Run. Expand either page edge

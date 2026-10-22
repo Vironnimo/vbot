@@ -441,6 +441,11 @@ def test_compaction_abort_cannot_leave_a_running_separator(
         item for item in block(timeline)["items"] if item["type"] == "compaction_separator"
     ]
     assert [item["status"] for item in separators] == ([] if remaining is None else [remaining])
+    # A failed separator has no checkpoint message; a repeated steer still shows once.
+    steer = {"id": "steer", "role": "user", "content": "Also check the tests"}
+    for _ in range(2):
+        emit(timeline, "user_message_persisted", {"message": steer})
+    assert [item["type"] for item in block(timeline)["items"]].count("user_message") == 1
 
 
 def test_compaction_restart_and_completion_keep_the_checkpoint_between_output_steps() -> None:

@@ -739,7 +739,7 @@ class ChatMessage:
             completion_reason=_message_validation._optional_string(data, "completion_reason"),
             target_message_id=_message_validation._optional_string(data, "target_message_id"),
             sender=MessageSender.from_dict(sender_data) if sender_data is not None else None,
-            input_origin=cast(InputOrigin | None, input_origin),
+            input_origin=cast("InputOrigin | None", input_origin),
             interrupted=interrupted,
             interruption_cause=interruption_cause,
             output_files=output_files,

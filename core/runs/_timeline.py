@@ -22,6 +22,10 @@ _TERMINAL = {"completed", "cancelled", "failed", "interrupted"}
 _MESSAGE_KEYS_SHOWN_ELSEWHERE = frozenset(
     {"tool_calls", "reasoning", "reasoning_summary", "reasoning_meta", "reasoning_timing"}
 )
+_TEXT_KINDS = ("reasoning", "assistant_output")
+# Only these events make a row stream; until one arrives, as when folding
+# durable History, no row streams.
+_STREAMING_EVENTS = frozenset({"reasoning_delta", "assistant_output_delta", "tool_call_delta"})
 
 
 class RunTimeline:
@@ -62,24 +66,41 @@ class RunTimeline:
         # The complete arguments and result of each Tool row, which the row
         # itself only previews; read through `raw_tool_call`.
         self._raw_calls: dict[str, JsonObject] = {}
+        # Lookups scan the rows, which makes folding a long Run quadratic.
+        # These sets hold every value a row ever had, never fewer: a value
+        # outside them matches no row, so the scan is skipped; one inside
+        # still scans.
+        self._streamed = False
+        self._text_message_ids: set[tuple[str, Any]] = set()
+        self._tool_keys: set[str] = set()
+        self._row_message_ids: set[Any] = set()
+        self._note_row_ids: set[str] = set()
+        # Reasoning rows a delta streamed, which `_freeze_reasoning` may time.
+        self._unfrozen_reasoning: dict[str, JsonObject] = {}
 
     def _new_id(self, kind: str) -> str:
         count = self._counts.get(kind, 0)
         self._counts[kind] = count + 1
         return f"{self.run['id']}-{kind}-{count}"
 
-    def snapshot(self) -> list[JsonObject]:
-        """Return an isolated snapshot; subsequent events cannot mutate it."""
+    def snapshot(self, *, isolated: bool = True) -> list[JsonObject]:
+        """Return an isolated snapshot; subsequent events cannot mutate it.
+
+        ``isolated=False`` returns the projection's own elements instead of
+        copies, for a caller that discards this projection, such as a fold of
+        durable History.
+        """
+        if not isolated:
+            for child in self.run["items"]:
+                self._join_parts(child)
+            row = {key: value for key, value in self.run.items() if key != "items"}
+            row["items"] = list(self.run["items"])
+            return [*self.before, row, *self.after]
         if self._snapshot is None:
             children = []
             for child in self.run["items"]:
                 child_id = child["id"]
-                if parts := self._text_parts.pop(child_id, None):
-                    child["content"] += "".join(parts)
-                if parts := self._argument_parts.pop(child_id, None):
-                    child["partialArgumentsText"] = (
-                        child.get("partialArgumentsText") or ""
-                    ) + "".join(parts)
+                self._join_parts(child)
                 if child_id in self._dirty_children or child_id not in self._child_snapshots:
                     self._child_snapshots[child_id] = copy.deepcopy(child)
                 children.append(self._child_snapshots[child_id])
@@ -89,6 +110,15 @@ class RunTimeline:
             row["items"] = children
             self._snapshot = [*copy.deepcopy(self.before), row, *copy.deepcopy(self.after)]
         return self._snapshot
+
+    def _join_parts(self, child: JsonObject) -> None:
+        """Move a row's pending streamed text into it."""
+        if parts := self._text_parts.pop(child["id"], None):
+            child["content"] += "".join(parts)
+        if parts := self._argument_parts.pop(child["id"], None):
+            child["partialArgumentsText"] = (child.get("partialArgumentsText") or "") + "".join(
+                parts
+            )
 
     def raw_tool_call(self, child_id: str) -> JsonObject | None:
         """Return the complete arguments and result of one Tool row, or None.
@@ -109,6 +139,8 @@ class RunTimeline:
         self.sequence = max(self.sequence, int(event.get("sequence") or 0))
         self._snapshot = None
         kind = event.get("type", "")
+        if kind in _STREAMING_EVENTS:
+            self._streamed = True
         payload = event.get("payload") or {}
         timestamp = event.get("timestamp")
         message = payload.get("message") or {}
@@ -249,8 +281,12 @@ class RunTimeline:
         if message["id"] == self._first_user:
             self._message(self.before, message)
             return
-        if any(item.get("message", {}).get("id") == message["id"] for item in self.run["items"]):
+        # A compaction row holds no message until its checkpoint arrives.
+        if message["id"] in self._row_message_ids and any(
+            (item.get("message") or {}).get("id") == message["id"] for item in self.run["items"]
+        ):
             return
+        self._row_message_ids.add(message["id"])
         self.run["items"].append(
             {
                 "id": f"steer-{message['id']}",
@@ -270,6 +306,16 @@ class RunTimeline:
         """
         items = self.run["items"]
         message_id = message.get("id")
+        if not self._streamed and not any(
+            (kind, message_id) in self._text_message_ids for kind in _TEXT_KINDS
+        ):
+            # No row streams and none holds this message: the phase is empty,
+            # and the canonical sections append in order.
+            for kind, content in zip(
+                _TEXT_KINDS, (message.get("reasoning"), message.get("content")), strict=True
+            ):
+                self._text(kind, content, event, streaming=False)
+            return
         phase = [
             item
             for item in items
@@ -289,6 +335,7 @@ class RunTimeline:
             child = next((item for item in phase if item["type"] == kind), None)
             if child is not None:
                 child["messageId"] = message_id
+                self._text_message_ids.add((kind, message_id))
                 child["streaming"] = True
                 self.run["items"].append(child)
             self._text(kind, content, event, streaming=False)
@@ -298,6 +345,7 @@ class RunTimeline:
         for child_id in phase_ids - retained_ids:
             self._text_parts.pop(child_id, None)
             self._dirty_children.discard(child_id)
+            self._unfrozen_reasoning.pop(child_id, None)
 
     def _text(self, kind: str, content: Any, event: JsonObject, *, streaming: bool) -> None:
         if not isinstance(content, str) or not content:
@@ -305,7 +353,14 @@ class RunTimeline:
         message = (event.get("payload") or {}).get("message") or {}
         message_id = message.get("id")
         items = self.run["items"]
-        matching = [item for item in items if item["type"] == kind]
+        # While no row streams, only a row of this message can be reused.
+        matching = (
+            []
+            if not streaming
+            and not self._streamed
+            and (kind, message_id) not in self._text_message_ids
+            else [item for item in items if item["type"] == kind]
+        )
         child = next(
             (
                 item
@@ -348,8 +403,11 @@ class RunTimeline:
             child["content"] = content
         child["streaming"] = streaming
         child["interrupted"] = bool(message.get("interrupted"))
+        if streaming and kind == "reasoning":
+            self._unfrozen_reasoning[child["id"]] = child
         if message:
             child["messageId"] = message_id
+            self._text_message_ids.add((kind, message_id))
             if kind == "assistant_output":
                 # The public projection signs the answer's delivered files
                 # through this message; its calls and Reasoning have rows.
@@ -382,10 +440,11 @@ class RunTimeline:
         assistant_id = payload.get("assistant_message_id")
         key = f"id-{call_id}" if call_id else f"index-{call.get('index', 0)}"
         previous_key = f"id-{payload.get('previous_tool_call_id')}"
+        known = key in self._tool_keys or previous_key in self._tool_keys
         child = next(
             (
                 item
-                for item in reversed(self.run["items"])
+                for item in (reversed(self.run["items"]) if known else ())
                 if item["type"] == "tool_call"
                 and item["key"] in {key, previous_key}
                 and (
@@ -424,6 +483,7 @@ class RunTimeline:
         child["toolCallId"] = call_id or child.get("toolCallId")
         self._dirty_children.add(child["id"])
         child["key"] = key
+        self._tool_keys.add(key)
         child["identityKey"] = key
         if assistant_id:
             child["assistantMessageId"] = assistant_id
@@ -520,7 +580,7 @@ class RunTimeline:
         payload = event.get("payload") or {}
         note_id = payload.get("id")
         child_id = f"goal-{note_id}" if note_id else self._new_id("goal_event")
-        if any(item["id"] == child_id for item in self.run["items"]):
+        if self._has_note_row(child_id):
             return
         self.run["items"].append(
             {
@@ -540,7 +600,7 @@ class RunTimeline:
         payload = event.get("payload") or {}
         note_id = payload.get("id")
         child_id = f"subagent-message-{note_id}" if note_id else self._new_id("subagent_message")
-        if any(item["id"] == child_id for item in self.run["items"]):
+        if self._has_note_row(child_id):
             return
         self.run["items"].append(
             {
@@ -556,7 +616,7 @@ class RunTimeline:
         payload = event.get("payload") or {}
         note_id = payload.get("id")
         child_id = f"widget-state-{note_id}" if note_id else self._new_id("widget_state")
-        if any(item["id"] == child_id for item in self.run["items"]):
+        if self._has_note_row(child_id):
             return
         self.run["items"].append(
             {
@@ -567,6 +627,15 @@ class RunTimeline:
                 "events": [copy.deepcopy(event)],
             }
         )
+
+    def _has_note_row(self, child_id: str) -> bool:
+        """Whether a note's row exists; if not, its id is recorded for the new row."""
+        if child_id in self._note_row_ids and any(
+            item["id"] == child_id for item in self.run["items"]
+        ):
+            return True
+        self._note_row_ids.add(child_id)
+        return False
 
     def _compaction(self, event: JsonObject) -> None:
         payload = event.get("payload") or {}
@@ -628,6 +697,7 @@ class RunTimeline:
         child["durationMs"] = payload.get("duration_ms", usage.get("compaction_duration_ms"))
         if message:
             child["message"] = copy.deepcopy(message)
+            self._row_message_ids.add(message.get("id"))
 
     def _finish(self, event: JsonObject) -> None:
         payload = event.get("payload") or {}
@@ -702,18 +772,20 @@ class RunTimeline:
         self._tool_previews = {
             key: value for key, value in self._tool_previews.items() if key in retained
         }
+        self._unfrozen_reasoning = {
+            key: value for key, value in self._unfrozen_reasoning.items() if key in retained
+        }
         self._forget_dropped_calls()
 
     def _freeze_reasoning(self, timestamp: str | None) -> None:
         if not timestamp:
             return
-        for child in self.run["items"]:
-            if (
-                child["type"] != "reasoning"
-                or not child.get("streaming")
-                or child.get("durationEstimateMs") is not None
-                or not child.get("timestamp")
-            ):
+        for child_id, child in list(self._unfrozen_reasoning.items()):
+            if not child.get("streaming") or child.get("durationEstimateMs") is not None:
+                # Only a new delta, which records it again, can make it stream.
+                del self._unfrozen_reasoning[child_id]
+                continue
+            if not child.get("timestamp"):
                 continue
             try:
                 duration = (

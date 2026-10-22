@@ -115,7 +115,11 @@ async def _reorder_agents(state: Any, params: JsonObject) -> JsonObject:
 def _agent_list_response(state: Any, listing: Any) -> JsonObject:
     """Blocking: an Agent payload resolves its Model's Connection."""
     return {
-        "agents": [_agent_response(state, agent) for agent in listing.agents],
+        # The roster read holds each Agent's persisted values: no file is read again.
+        "agents": [
+            _agent_response(state, agent, listing.persisted.get(agent.id))
+            for agent in listing.agents
+        ],
         "order_revision": listing.order_revision,
     }
 
@@ -363,15 +367,13 @@ async def _archive_agent(state: Any, params: JsonObject) -> JsonObject:
                 f"cannot delete agent with active or queued runs: {agent_id}",
             ) from exc
         # Read after the archive: it removed the Agent from their delegation lists.
-        remaining_agents = await chat_sessions.run_async(state.runtime.agents.list)
+        roster = await chat_sessions.run_async(state.runtime.agents.list_with_order)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    remaining = await _run_agent_operation(
-        state, lambda: [_agent_response(state, agent) for agent in remaining_agents]
-    )
+    remaining = await _run_agent_operation(state, _agent_list_response, state, roster)
     result = {
         "agent_id": agent_id,
-        "remaining_agents": remaining,
+        "remaining_agents": remaining["agents"],
         "archive_entry_id": outcome.entry_id,
         "session_count": outcome.session_count,
         "external_workspace": outcome.external_workspace,

@@ -168,6 +168,9 @@ def project_timeline_history(
             message = item.get("message")
             if item.get("type") == "message" and message and message["id"] in messages:
                 item["message"] = {**message, **messages[message["id"]]}
+    if child_limit:
+        # Only the delivered steps need their public text.
+        items = window_timeline_items(items, child_limit)
     _synchronize_public_text(items)
     response["items"] = items
     response["replace_run_ids"] = list(
@@ -177,7 +180,6 @@ def project_timeline_history(
         )
     )
     if child_limit:
-        response["items"] = window_timeline_items(items, child_limit)
         # The semantic rows carry the visible bodies. Raw User records remain
         # for existing edit admission bookkeeping; Tool payloads are not sent twice.
         response["messages"] = [

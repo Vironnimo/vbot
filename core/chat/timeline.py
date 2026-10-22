@@ -56,9 +56,10 @@ def _project(messages: Sequence[JsonObject]) -> tuple[list[JsonObject], list[Run
     def flush() -> None:
         nonlocal run
         if run is not None:
+            # This fold is discarded: its elements need no isolating copies.
             items.extend(
                 item
-                for item in run.snapshot()
+                for item in run.snapshot(isolated=False)
                 if item["type"] != "assistant_run"
                 or item.get("items")
                 or item.get("status") in {"cancelled", "interrupted", "failed"}
