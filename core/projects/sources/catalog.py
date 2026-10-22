@@ -81,6 +81,28 @@ def source_definition(source_id: str) -> SourceDefinition | None:
     return SOURCE_CATALOG.get(source_id)
 
 
+def definition_locations(
+    root: Path, selections: list[SourceSelection], ecosystem: str
+) -> tuple[Path, ...]:
+    """Where a definition could replace a Team member's that comes from *ecosystem*'s Source.
+
+    Every location of each switched-on Agent Source up to and including the
+    member's own, in priority order, also those not created yet: a definition of
+    the member's name there wins over or ties with its current one at the next
+    Team rescan (the name can come from a file's content, so whole folders
+    count). Later Sources never win. A restricted member never changes them.
+    """
+    found: list[Path] = []
+    for selection in selections:
+        definition = source_definition(selection.id)
+        if not selection.enabled or definition is None or definition.kind != "agents":
+            continue
+        found.extend(root / path for path in definition.paths)
+        if definition.ecosystem == ecosystem:
+            break
+    return tuple(found)
+
+
 def default_adapters() -> dict[str, AgentAdapter]:
     from core.projects.sources.codex import CodexAdapter
     from core.projects.sources.markdown import MarkdownAdapter

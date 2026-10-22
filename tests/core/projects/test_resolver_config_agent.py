@@ -9,7 +9,7 @@ import pytest
 
 from core.agents.temporary import TemporaryAgent, TemporaryAgentConfig, TemporaryAgentRegistry
 from core.database import DatabaseUnavailableError
-from core.permissions import normalize_permission_rules
+from core.permissions import BoundaryContext, PermissionBoundary, normalize_permission_rules
 from core.projects import AgentOverrides, AgentResolutionError, ModelConfigurationError
 from core.projects.projects import ProjectError
 from core.projects.resolver import AgentResolver
@@ -433,6 +433,34 @@ def test_permission_rules_resolve_each_part_from_override_then_repository_then_d
 
     assert resolver.resolve_agent("vbot", "builder").permission_rules is None
     assert resolver.effective_config("vbot", "builder")["permission_rules"]["value"] is None
+
+
+def test_a_restricted_member_cannot_write_a_definition_that_would_replace_its_own(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    _write_agent(
+        repo, "builder.md", model="openai/gpt-5.2", permission={"external_directory": "deny"}
+    )
+    _project(projects, repo)
+    # Claude outranks the member's OpenCode Source, also before its folder exists;
+    # Cursor comes later and can never win.
+    projects.update(
+        "vbot",
+        sources=[{"id": "claude.agents"}, {"id": "opencode.agents"}, {"id": "cursor.agents"}],
+    )
+    agent = _resolver(agents, projects, _openai_configured()).resolve_agent("vbot", "builder")
+    boundary = PermissionBoundary.build(
+        agent.permission_rules,
+        BoundaryContext(
+            workdir=repo, home=repo / "home", data_dir=repo / "data", rule_files=agent.rule_files
+        ),
+    )
+
+    for protected in (".claude/agents/builder.md", ".opencode/agents/a.md", "opencode.json"):
+        refusal = boundary.check_path(str(repo / protected), "write")
+        assert refusal is not None and refusal.location == "agent_config", protected
+    assert boundary.check_path(str(repo / ".cursor/agents/builder.md"), "write") is None
+    assert boundary.check_path(str(repo / ".claude/agents/builder.md"), "read") is None
 
 
 @pytest.mark.parametrize(

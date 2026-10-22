@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 from dataclasses import replace
 from fnmatch import fnmatchcase
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from core.permissions import (
@@ -164,7 +165,11 @@ def _build_config_agent(
     resolved_top_p: float | None = None,
     tool_loading: Any = None,
     permission_rules: PermissionRules | None = None,
+    definition_locations: tuple[Path, ...] = (),
 ) -> ConfigAgent:
+    """``definition_locations`` are where a definition could replace this one
+    (``core.projects.sources.definition_locations``); they join ``rule_files``.
+    """
     return ConfigAgent(
         id=scanned.agent_id,
         project_id=project_id,
@@ -176,7 +181,9 @@ def _build_config_agent(
         body=scanned.body,
         source_path=scanned.source_path,
         source=scanned.source,
-        rule_files=tuple(dict.fromkeys((scanned.source_path, *scanned.rule_files))),
+        rule_files=tuple(
+            dict.fromkeys((scanned.source_path, *scanned.rule_files, *definition_locations))
+        ),
         preload_skills=scanned.preload_skills,
         model_inherit=scanned.model == "inherit",
         tool_access=tool_access,

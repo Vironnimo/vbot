@@ -132,9 +132,10 @@ class BoundaryContext:
     (vBot-owned folders this Session may read, such as its Skill directories and
     artifact folders); ``agent_config`` (the Agent's ``agent.json``) is never
     readable or writable, ``install_dirs`` (installation and interpreter) never
-    writable. ``rule_files`` are the repository files a Team member's rules come
-    from (its profile and the settings files its translation reads, also missing
-    ones): readable where the rules allow, never writable, also under every Run
+    writable. ``rule_files`` are the repository locations a Team member's rules come
+    from (its profile, the settings files its translation reads and every location
+    where a definition could replace its profile, also missing ones): readable
+    where the rules allow, never writable, also under every Run
     that inherits this boundary as a ceiling. ``loopback_port`` is the vBot
     server's own port on loopback; ``own_hosts`` are the further names and
     addresses that reach it on that port when it listens beyond loopback (this
