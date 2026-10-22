@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock, Mock, call
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -238,39 +238,6 @@ async def test_trigger_run_forwards_options_to_start_and_to_the_queue(
         "coder", "Work", session_id="session-one", **forwarded
     )
     chat_run_manager.active_run.assert_not_called()
-
-
-@pytest.mark.parametrize("active", [True, False])
-async def test_has_active_run_reports_the_session_state(active: bool) -> None:
-    chat_run_manager = Mock()
-    chat_run_manager.active_run = Mock(
-        return_value=make_run("active-run", "coder", "session-one") if active else None
-    )
-    trigger_service = TriggerService(
-        cast(Any, SimpleNamespace()), cast(Any, chat_run_manager), cast(Any, Mock())
-    )
-
-    assert trigger_service.has_active_run("coder", "session-one") is active
-    chat_run_manager.active_run.assert_called_once_with(
-        agent_id="coder", session_id="session-one", project_id=None
-    )
-
-
-async def test_compact_session_delegates_to_the_chat_loop() -> None:
-    chat_loop = SimpleNamespace(compact_session=AsyncMock(return_value="Context compacted."))
-    trigger_service = TriggerService(cast(Any, chat_loop), cast(Any, Mock()), cast(Any, Mock()))
-
-    reply = await trigger_service.compact_session("coder", "session-one")
-    # A /compact in a project chat keeps its instruction and project scope.
-    await trigger_service.compact_session(
-        "coder", "session-one", "keep the API design", project_id="proj"
-    )
-
-    assert reply == "Context compacted."
-    assert chat_loop.compact_session.await_args_list == [
-        call("coder", "session-one", None, project_id=None),
-        call("coder", "session-one", "keep the API design", project_id="proj"),
-    ]
 
 
 async def test_start_compaction_run_delegates_to_the_chat_loop() -> None:

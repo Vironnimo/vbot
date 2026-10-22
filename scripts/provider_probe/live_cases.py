@@ -248,16 +248,6 @@ def describe(expected: Expected | None) -> str:
     return f"{expected.tool}({', '.join(parts)})"
 
 
-def example_arguments(expected: Expected) -> JsonObject:
-    """Arguments that satisfy *expected*, to check that it is a valid call."""
-
-    return {
-        key: value.text if isinstance(value, Contains) else value
-        for key, value in expected.arguments.items()
-        if value is not ABSENT
-    }
-
-
 def _value_matches(want: Any, have: Any) -> bool:
     if want is ABSENT:
         return have is ABSENT or have is None or have == ""

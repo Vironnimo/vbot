@@ -1,6 +1,6 @@
 """Tests for debug-trace redaction utilities.
 
-Header names, URL query-parameter names and JSON object keys share one rule:
+Header names and URL query-parameter names share one rule:
 a name is sensitive when it is ``Authorization``/``x-api-key`` or contains a
 sensitive whole word, split on hyphens, underscores and dots, in any case.
 Values are never scanned for secrets.
@@ -8,7 +8,7 @@ Values are never scanned for secrets.
 
 import pytest
 
-from core.debug.redaction import redact_headers, redact_json_body, redact_url
+from core.debug.redaction import redact_headers, redact_url
 
 _REDACTED = "[REDACTED]"
 
@@ -100,40 +100,3 @@ def test_redact_url_returns_a_url_without_sensitive_values_unchanged(url: str):
 @pytest.mark.parametrize("url", ["http://[::1/api", "http://[::1/api?token=secret"])
 def test_redact_url_hides_unparseable_urls(url: str):
     assert redact_url(url) == _REDACTED
-
-
-# ---------------------------------------------------------------------------
-# redact_json_body
-# ---------------------------------------------------------------------------
-
-
-def test_redact_json_body_redacts_sensitive_keys_at_every_depth():
-    body = {
-        "password": "hunter2",
-        "username": "alice",
-        "auth": {"TOKEN": "abc123", "type": "bearer"},
-        "messages": [
-            {"role": "user", "client_secret": {"nested": "x"}},
-            {"role": "assistant", "content": "my token is abc123 and secret is xyz"},
-        ],
-        "level1": {"level2": {"level3": {"api.key": "hidden"}}},
-    }
-
-    assert redact_json_body(body) == {
-        "password": _REDACTED,
-        "username": "alice",
-        "auth": {"TOKEN": _REDACTED, "type": "bearer"},
-        "messages": [
-            {"role": "user", "client_secret": _REDACTED},
-            # String values are never inspected for secrets.
-            {"role": "assistant", "content": "my token is abc123 and secret is xyz"},
-        ],
-        "level1": {"level2": {"level3": {"api.key": _REDACTED}}},
-    }
-    assert body["password"] == "hunter2"
-    assert body["auth"]["TOKEN"] == "abc123"
-
-
-@pytest.mark.parametrize("value", ["hello", 42, None, True, {}, []])
-def test_redact_json_body_returns_values_without_sensitive_keys_unchanged(value: object):
-    assert redact_json_body(value) == value

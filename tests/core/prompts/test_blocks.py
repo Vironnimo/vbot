@@ -8,7 +8,6 @@ from pathlib import Path
 import pytest
 
 from core.memory import MEMORY_PROMPT_MODE_AGENT_USER, MemoryPromptMode
-from core.prompts import PromptAgent
 from core.prompts.blocks import (
     BLOCK_KIND_DATA,
     BLOCK_KIND_TEXT,
@@ -31,7 +30,6 @@ from core.prompts.blocks import (
     no_tools_available,
     normalize_blocks,
     parse_block_source,
-    passes_gates,
     resolve_block_text,
     resolve_layout,
     validate_workspace_include,
@@ -237,36 +235,6 @@ def test_resolve_layout_orders_and_enables_blocks(
 
 
 # --- Gates and normalization ------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    ("enabled", "owner_active", "text", "expected"),
-    [
-        (False, True, "text", False),
-        (True, False, "text", False),
-        (True, True, "   \n  ", False),
-        (True, True, "text", True),
-    ],
-    ids=["user-disabled", "owner-inactive", "blank-text", "all-gates-pass"],
-)
-def test_block_renders_only_when_all_three_gates_pass(
-    enabled: bool, owner_active: bool, text: str, expected: bool
-) -> None:
-    seen: list[tuple[str, str]] = []
-
-    def predicate(owner: str, agent: PromptAgent) -> bool:
-        seen.append((owner, agent.id))
-        return owner_active
-
-    block = ResolvedBlock(
-        definition=_text_block("tool:bash", "text", owner="tool:bash"), enabled=enabled
-    )
-
-    assert (
-        passes_gates(block, StubAgent(id="builder"), CallableOwnerActivity(predicate), text)
-        is expected
-    )
-    assert seen == ([("tool:bash", "builder")] if enabled else [])
 
 
 @pytest.mark.parametrize(

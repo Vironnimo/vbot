@@ -1,7 +1,7 @@
 """Tests for the async retry utility.
 
 Verifies the shared backoff math, which errors are retried, retry exhaustion,
-server Retry-After hints, retry logging, retry observers and caller-owned retries.
+server Retry-After hints, retry logging and caller-owned retries.
 """
 
 import asyncio
@@ -25,7 +25,6 @@ from core.utils.retry import (
     MAX_RETRIES,
     caller_owns_retries,
     compute_retry_delay,
-    observe_retries,
     retry_async,
 )
 
@@ -202,46 +201,6 @@ async def test_retry_honors_a_server_retry_after_hint_and_logs_it(
     messages = _retry_log(caplog, "Retryable error")
     assert len(messages) == MAX_RETRIES
     assert all("honoring the server's requested wait" in message for message in messages)
-
-
-@pytest.mark.asyncio
-async def test_retry_observers_are_isolated_and_reset_after_failure():
-    notices = [[], []]
-
-    async def request(index):
-        failure = ProviderTimeoutError(f"request-{index}")
-        operation = AsyncMock(side_effect=[failure, "done"])
-        with observe_retries(notices[index].append):
-            assert await retry_async(operation, initial_delay=0) == "done"
-        return failure
-
-    failures = await asyncio.gather(request(0), request(1))
-    for index, entries in enumerate(notices):
-        assert len(entries) == 2
-        assert all(entry.error is failures[index] for entry in entries)
-        assert [(entry.attempt, entry.max_attempts, entry.waiting) for entry in entries] == [
-            (2, 4, True),
-            (2, 4, False),
-        ]
-    with pytest.raises(ProviderAuthError), observe_retries(notices[0].append):
-        await retry_async(AsyncMock(side_effect=ProviderAuthError("rejected")))
-    await retry_async(AsyncMock(side_effect=[ProviderTimeoutError(), "done"]), initial_delay=0)
-    assert len(notices[0]) == 2
-
-
-@pytest.mark.asyncio
-async def test_retry_observer_failure_does_not_change_request_outcome(caplog):
-    def broken(_notice):
-        raise RuntimeError("observer sentinel")
-
-    with observe_retries(broken):
-        assert (
-            await retry_async(
-                AsyncMock(side_effect=[ProviderTimeoutError(), "done"]), initial_delay=0
-            )
-            == "done"
-        )
-    assert any(record.exc_info for record in caplog.records)
 
 
 @pytest.mark.asyncio

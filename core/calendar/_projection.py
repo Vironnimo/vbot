@@ -29,7 +29,6 @@ from core.calendar._time import (
     _merge_intervals,
     _parse_iso_datetime,
     _round_up_to_minutes,
-    _utc_now,
 )
 from core.calendar.errors import (
     CalendarEventNotFoundError,
@@ -38,7 +37,7 @@ from core.calendar.errors import (
 from core.calendar.recurrence import (
     parse_date_string,
 )
-from core.calendar.when import looks_like_date, parse_when
+from core.calendar.when import looks_like_date
 
 
 class CalendarProjection:
@@ -102,18 +101,6 @@ class CalendarProjection:
         occurrences.sort(key=lambda item: (item.start_utc, item.event_id, item.id))
         return occurrences
 
-    def event_occurrences(
-        self, event: CalendarEvent, window_start: datetime, window_end: datetime
-    ) -> list[EventOccurrence]:
-        """The occurrences of one event overlapping the half-open UTC window."""
-        return window_occurrences(
-            event,
-            _as_utc(window_start),
-            _as_utc(window_end),
-            self._timezone,
-            MAX_OCCURRENCES_PER_EVENT,
-        )
-
     def iter_occurrences(self, event: CalendarEvent, after: datetime) -> Iterator[EventOccurrence]:
         """Yield the occurrences of ``event`` that end after ``after``, in start order.
 
@@ -121,14 +108,6 @@ class CalendarProjection:
         when they have what they need.
         """
         return iter_occurrences(event, _as_utc(after), self._timezone)
-
-    def next_start(self, event: CalendarEvent, instant: datetime) -> datetime | None:
-        """The UTC start of ``event``'s first occurrence at or after ``instant``, if any."""
-        instant = _as_utc(instant)
-        for occurrence in self.iter_occurrences(event, instant):
-            if occurrence.start_utc >= instant:
-                return occurrence.start_utc
-        return None
 
     def find_free_slots(
         self,
@@ -205,12 +184,6 @@ class CalendarProjection:
         window_start = self.parse_window_bound(window_start_value, is_end=False)
         window_end = self.parse_window_bound(window_end_value, is_end=True)
         return _checked_window(window_start, window_end)
-
-    def resolve_when(
-        self, value: str, *, now_utc: datetime | None = None
-    ) -> tuple[datetime, datetime]:
-        """Resolve one ``when`` expression (see core.calendar.when) to a UTC window."""
-        return parse_when(value, now_utc=now_utc or _utc_now(), tz=self._timezone)
 
     def _event(self, event_id: str) -> CalendarEvent:
         event = self._events.get(event_id)

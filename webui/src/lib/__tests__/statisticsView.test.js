@@ -36,8 +36,6 @@ import {
   skillCandidates,
   skillConversionTooltip,
   StatisticsReportQuery,
-  statisticsReportKey,
-  statisticsReportParams,
   statisticsTabForPlace,
   statisticsTabSections,
   statisticsWindow,
@@ -89,18 +87,20 @@ describe('statisticsView tabs and windows', () => {
       expect(statisticsWindow('7d', zone, Date.parse(end))).toEqual({ since });
     }
 
-    expect(statisticsReportParams('tools', '7d', 'UTC', now)).toEqual({
-      since: '2026-03-24T00:00:00.000Z',
-      timezone: 'UTC',
-      sections: ['tools', 'skills'],
-    });
+    expect(new StatisticsReportQuery('tools', '7d', 'UTC').params(now)).toEqual(
+      {
+        since: '2026-03-24T00:00:00.000Z',
+        timezone: 'UTC',
+        sections: ['tools', 'skills'],
+      },
+    );
     const query = new StatisticsReportQuery('tools', '7d', 'Europe/Berlin');
     expect(query.params(now)).toEqual({
       since: '2026-03-23T23:00:00.000Z',
       timezone: 'Europe/Berlin',
       sections: ['tools', 'skills'],
     });
-    expect(query.key).toBe(statisticsReportKey('tools', '7d', 'Europe/Berlin'));
+    expect(query.key).toBe('tools+skills|7d|Europe/Berlin');
     expect(query.params(now + 86_400_000).since).toBe(
       '2026-03-24T23:00:00.000Z',
     );
@@ -109,8 +109,8 @@ describe('statisticsView tabs and windows', () => {
     });
 
     // The time zone is part of the cache key: a changed zone refetches.
-    expect(statisticsReportKey('tools', '7d', 'UTC')).not.toBe(
-      statisticsReportKey('tools', '7d', 'Europe/Berlin'),
+    expect(new StatisticsReportQuery('tools', '7d', 'UTC').key).not.toBe(
+      query.key,
     );
   });
 });

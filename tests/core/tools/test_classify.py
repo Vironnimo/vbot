@@ -7,7 +7,7 @@ from typing import Any, cast
 import pytest
 
 from core.model_tasks import TaskUsageContext
-from core.model_tasks.decision_types import DecisionError, validate_input
+from core.model_tasks.decision_types import DecisionError, json_copy, validate_questions
 from core.model_tasks.decisions import DecisionService
 from core.permissions import PermissionBoundary
 from core.providers.adapter import tool_result_text
@@ -59,7 +59,7 @@ class Classify:
             outcomes: list[dict[str, Any] | DecisionError] = []
             for index, item in enumerate(items):
                 state = item if context is None else {"context": context, "item": item}
-                state, checked = validate_input(state, questions)
+                state, checked = json_copy(state), validate_questions(questions)
                 self.received.append((state, checked))
                 if errors and index in errors:
                     outcomes.append(errors[index])

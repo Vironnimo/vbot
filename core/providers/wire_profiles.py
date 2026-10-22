@@ -214,9 +214,6 @@ class WireProfiles:
         """The current profile data by Provider id (bundled files plus Custom Provider blocks)."""
         return self._files
 
-    def file_for(self, provider_id: str) -> WireProfileFile | None:
-        return self._files.get(provider_id)
-
     def resolve(self, provider_id: str, connection_id: str, model_id: str) -> WireProfile:
         """Return the wire profile for one Model id on one local Connection id.
 

@@ -459,10 +459,6 @@ class ToolRegistry:
         except KeyError:
             raise ValueError(f"Tool family not found: {family_id}") from None
 
-    def list_families(self) -> list[ToolFamily]:
-        """Return registered family definitions in stable id order."""
-        return sorted(self._families.values(), key=lambda family: family.id)
-
     def display_for_call(
         self,
         name: str,

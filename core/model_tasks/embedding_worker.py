@@ -38,7 +38,6 @@ from pathlib import Path
 from typing import Any
 
 _BELOW_NORMAL_PRIORITY_CLASS = 0x00004000
-_PROGRESS_INTERVAL_S = 0.25
 
 
 class InputTooLongError(Exception):

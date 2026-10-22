@@ -497,9 +497,6 @@ class _Limits:
         return ", ".join(sorted(self.connection_ids or ()))
 
 
-_NO_LIMITS = _Limits()
-
-
 def parse_wire_profile_file(
     provider_id: str,
     raw: Any,

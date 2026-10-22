@@ -89,8 +89,6 @@ CAPTURE_FAILED = "failed"
 
 ECHO_OFF = "off"
 ECHO_STARTING = "starting"
-ECHO_ACTIVE = "active"
-ECHO_NO_REFERENCE = "no_reference"
 ECHO_UNAVAILABLE = "unavailable"
 
 ERROR_MICROPHONE_UNAVAILABLE = "microphone_unavailable"

@@ -33,18 +33,6 @@ def render_tool_definitions(
     ]
 
 
-def sanitize_anthropic_tool_input_schema(
-    schema: Any,
-    *,
-    tool_name: str = "",
-) -> JsonObject:
-    """Return an unchanged object-root schema or reject an invalid definition."""
-    if not isinstance(schema, dict) or schema.get("type") != "object":
-        suffix = f" for {tool_name!r}" if tool_name else ""
-        raise ValueError(f"Anthropic Tool input schema must have an object root{suffix}")
-    return copy.deepcopy(schema)
-
-
 def _normalized_tool(tool: Mapping[str, Any]) -> JsonObject:
     """Return the canonical fields with an independent copy of the schema."""
     name = tool.get("name")
@@ -74,5 +62,4 @@ def _normalized_tool(tool: Mapping[str, Any]) -> JsonObject:
 __all__ = [
     "ToolSchemaProfile",
     "render_tool_definitions",
-    "sanitize_anthropic_tool_input_schema",
 ]

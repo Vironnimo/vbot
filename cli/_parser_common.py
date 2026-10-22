@@ -509,16 +509,6 @@ MEMORY_HELP = {
 }
 
 
-EXTENSIONS_HELP = {
-    "list": "List loaded, failed, and disabled extensions",
-    "reload": "Reload all extensions from disk (applies code changes, applied live)",
-    "enable": "Enable a disabled extension (applied live)",
-    "disable": "Disable an extension (applied live)",
-    "show": "Show one extension's settings (schema, current values, secret set-state)",
-    "set": "Set one extension setting (secret -> Secret Store, other fields -> live config)",
-}
-
-
 class _TargetArgument(argparse.Action):
     """A repeated instance selector must name the same target."""
 

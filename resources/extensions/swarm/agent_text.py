@@ -380,7 +380,6 @@ BOARD_WAIT = {
     "at once.",
     "paced": f"{WAIT_FOR_OTHERS}; {{routes}} start your next Run within {{minutes}} minutes.",
 }
-BOARD_ONE_POST = "Post {post_id} in {discussion}."
 BOARD_OLDER = "Older posts exist. Continue with {call}"
 # The page's character bound (the batch_chars setting) ended it before limit.
 BOARD_OLDER_CUT = (

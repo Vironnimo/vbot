@@ -92,11 +92,6 @@ def digest_files(paths: Iterable[Path]) -> list[str]:
     return _concurrently(digest, paths)
 
 
-def copy_files(pairs: Iterable[tuple[Path, Path]]) -> None:
-    """Copy each ``(source, destination)`` file with its metadata; parents must exist."""
-    _concurrently(lambda pair: shutil.copy2(*pair), pairs)
-
-
 def relative_path(name: str) -> str:
     path = PurePosixPath(name)
     if (

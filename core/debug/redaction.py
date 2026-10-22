@@ -3,8 +3,8 @@
 Redacts credentials, secrets, and identifying values (Provider Account
 ids, organization ids, cookies) from provider wire captures before they
 are written to disk.  The rules are intentionally conservative: exact
-header-name matches plus whole-word patterns on header names, URL query
-parameters, and JSON object keys. URL userinfo is always redacted in full.
+header-name matches plus whole-word patterns on header names and URL query
+parameters. URL userinfo is always redacted in full.
 
 Free-text redaction inside string values is intentionally out of scope —
 only structured credentials and keys are checked.
@@ -12,14 +12,13 @@ only structured credentials and keys are checked.
 
 from __future__ import annotations
 
-from typing import Any
 from urllib.parse import parse_qs, quote, urlencode, urlparse, urlunparse
 
 # Header names that are always redacted (case-insensitive).
 _SENSITIVE_HEADERS = {"authorization", "x-api-key"}
 
 # Header/keyword fragments that trigger redaction when they appear as
-# a whole word inside a header name, query-param name, or JSON key:
+# a whole word inside a header name or query-param name:
 # credential-like words plus identifying words (``chatgpt-account-id``,
 # ``openai-organization``, ``cookie``/``set-cookie``, ``account_id``).
 _SENSITIVE_WORDS = {
@@ -83,28 +82,6 @@ def redact_url(url: str) -> str:
 
     new_query = urlencode(redacted_params, doseq=True)
     return urlunparse(parsed._replace(query=new_query))
-
-
-def redact_json_body(body: Any) -> Any:
-    """Recursively redact sensitive keys in a JSON-like structure.
-
-    Only *keys* are inspected — string *values* are never scanned for
-    secrets.  When a key is flagged as sensitive its associated value
-    is replaced with the literal string ``"[REDACTED]"``, regardless
-    of the original value's type.
-
-    Returns:
-        The redacted structure (*body* is not mutated), or *body*
-        unchanged when it is not a ``dict`` or ``list``.
-    """
-    if isinstance(body, dict):
-        return {
-            key: _REDACTED if _is_sensitive_key(key) else redact_json_body(value)
-            for key, value in body.items()
-        }
-    if isinstance(body, list):
-        return [redact_json_body(item) for item in body]
-    return body
 
 
 # ---------------------------------------------------------------------------

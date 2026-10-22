@@ -76,7 +76,6 @@ READINESS_RECHECK_SECONDS = 30.0
 # releases it, its Run ends, or no call came for this long.
 CONTROL_IDLE_SECONDS = 120.0
 ASK_SETTING = "ask_per_app"
-_USER_STOPS = ("control", "double_escape")
 _STOPPED_BY = {
     "control": "The user stopped Computer Use",
     "double_escape": "The user stopped Computer Use by pressing Esc twice",

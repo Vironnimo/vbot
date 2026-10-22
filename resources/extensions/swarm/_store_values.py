@@ -74,20 +74,6 @@ _DELIVERY_ROUTES = frozenset({"main", "discussion", "ping"})
 
 _DELIVERY_MODES = frozenset({"all", "idle", "pull"})
 
-_SWARM_STATES = frozenset(
-    {
-        "preparing",
-        "running",
-        "idle",
-        "needs_attention",
-        "stopping",
-        "stopped",
-        "deleting",
-        "cancelled",
-        "interrupted",
-    }
-)
-
 _MUTABLE_SWARM_STATES = frozenset({"preparing", "running", "idle", "needs_attention"})
 
 _PARTICIPANT_STATES = frozenset({"idle", "running", "failed", "cancelled", "interrupted"})

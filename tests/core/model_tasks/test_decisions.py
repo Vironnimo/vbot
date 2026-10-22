@@ -75,14 +75,22 @@ async def test_each_item_is_one_bounded_request_answered_in_item_order(monkeypat
         return {"answers": {"q": {"type": "noul", "noul": len(state["item"]) / 10}}}
 
     monkeypatch.setattr(owner, "_evaluate", evaluate)
-    items = ["a", "broken", *[f"item {n}" for n in range(20)]]
+    structured = {
+        "type": "TRUE",
+        "score": "3.0",
+        "image": "just a field",
+        "nested": [{"false": False}],
+    }
+    items = [structured, "broken", *[f"item {n}" for n in range(20)]]
 
     outcomes = await owner.classify(items, QUESTIONS, context="the task")
 
     assert sorted(states, key=lambda state: items.index(state["item"])) == [
         {"context": "the task", "item": item} for item in items
     ]
-    assert outcomes[0] == {"answers": {"q": {"type": "noul", "noul": 0.1}}}
+    copied = next(state["item"] for state in states if isinstance(state["item"], dict))
+    assert copied is not structured and copied["nested"] is not structured["nested"]
+    assert outcomes[0] == {"answers": {"q": {"type": "noul", "noul": 0.4}}}
     assert isinstance(outcomes[1], DecisionError) and outcomes[1].code == "provider_error"
     assert [outcome["answers"]["q"]["noul"] for outcome in outcomes[2:]] == [0.6] * 10 + [0.7] * 10
     assert 1 < peak <= 8
@@ -102,7 +110,15 @@ class _Calibration:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("window", [1_000, None], ids=["reported-window", "no-reported-window"])
-async def test_an_item_beyond_the_reported_context_window_fails_alone_unsent(monkeypatch, window):
+@pytest.mark.parametrize(
+    ("item", "code", "needs_window"),
+    [
+        pytest.param("word " * 2_000, "too_large", True, id="context-window"),
+        pytest.param({"x": float("nan")}, "invalid_request", False, id="non-finite-json"),
+        pytest.param("x" * 1_000_001, "too_large", False, id="input-byte-limit"),
+    ],
+)
+async def test_an_invalid_item_fails_alone_unsent(monkeypatch, window, item, code, needs_window):
     owner = service(window=window)
     sent: list[Any] = []
 
@@ -111,20 +127,19 @@ async def test_an_item_beyond_the_reported_context_window_fails_alone_unsent(mon
         return {"answers": {"q": {"type": "noul", "noul": 0.5}}}
 
     monkeypatch.setattr(owner, "_evaluate", evaluate)
-    long = "word " * 2_000
-
-    small, beyond = await owner.classify(["small", long], QUESTIONS)
+    small, beyond = await owner.classify(["small", item], QUESTIONS)
 
     assert small["answers"]["q"]["noul"] == 0.5
-    if window is None:
+    if needs_window and window is None:
         # Without a reported window the Provider decides what is too large.
         # Worker preparation may complete in either order; both requests must be sent.
-        assert sorted(sent) == sorted(["small", long])
+        assert sorted(sent) == sorted(["small", item])
         assert beyond["answers"]["q"]["noul"] == 0.5
     else:
         assert sent == ["small"]
-        assert isinstance(beyond, DecisionError) and beyond.code == "too_large"
-        assert "at most 1000 tokens" in str(beyond)
+        assert isinstance(beyond, DecisionError) and beyond.code == code
+        if needs_window:
+            assert "at most 1000 tokens" in str(beyond)
 
 
 @pytest.mark.asyncio
@@ -189,6 +204,9 @@ async def test_reported_input_tokens_correct_the_size_check(monkeypatch):
     [
         (service(), ["x"] * (ITEM_LIMIT + 1), QUESTIONS, "invalid_request"),
         (service(), [], QUESTIONS, "invalid_request"),
+        (service(), [None], QUESTIONS, "invalid_request"),
+        (service(), [True], QUESTIONS, "invalid_request"),
+        (service(), [1], QUESTIONS, "invalid_request"),
         (service(), ["x"], [{"id": "q", "type": "noul"}], "invalid_request"),
         (
             service(),
@@ -202,6 +220,9 @@ async def test_reported_input_tokens_correct_the_size_check(monkeypatch):
     ids=[
         "too-many-items",
         "no-items",
+        "null-item",
+        "boolean-item",
+        "integer-item",
         "no-instructions",
         "one-level",
         "unusable",
