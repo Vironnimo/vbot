@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import os
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -292,6 +294,52 @@ def test_webui_build_serves_the_app_shell_without_shadowing_server_routes(
     monkeypatch.setattr(server_app, "WEBUI_DIST_DIR", tmp_path / "missing-dist")
     with TestClient(create_app(runtime=ServerStubRuntime(tmp_path / "data"))) as client:
         assert client.get("/").status_code == 404
+
+
+@pytest.mark.parametrize(
+    ("path", "status"),
+    [
+        # Decoded, these name a UNC path, which Windows would contact while resolving it.
+        ("/%5C%5Cattacker.invalid%5Cshare%5Cx", 200),
+        ("/%2F%2Fattacker.invalid/share/x", 200),
+        ("/%5C%5C%3F%5CUNC%5Cattacker.invalid%5Cshare%5Cx", 200),
+        ("/C:%5CWindows%5Cwin.ini", 200),
+        ("/%2E%2E/%2E%2E/outside.txt", 200),
+        ("/assets/%5C%5Cattacker.invalid%5Cshare%5Capp.js", 404),
+        ("/assets/%2F%2Fattacker.invalid%2Fshare%2Fapp.js", 404),
+        ("/assets/C:app.js", 404),
+        ("/assets/..%2F..%2Foutside.txt", 404),
+    ],
+)
+def test_webui_paths_that_could_leave_the_build_touch_no_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, path: str, status: int
+) -> None:
+    monkeypatch.setattr(server_app, "WEBUI_DIST_DIR", _write_webui_build(tmp_path))
+    (tmp_path / "outside.txt").write_text("outside", encoding="utf-8")
+    touched: list[str] = []
+    realpath, stat = os.path.realpath, os.stat
+
+    def unless_foreign(call: Callable[..., Any]) -> Callable[..., Any]:
+        def checked(target: Any, *args: Any, **kwargs: Any) -> Any:
+            text = os.fspath(target)
+            if text.startswith(("\\\\", "//")) or "outside" in text:
+                touched.append(text)
+                raise OSError("a foreign path was touched")
+            return call(target, *args, **kwargs)
+
+        return checked
+
+    with TestClient(create_app(runtime=ServerStubRuntime(tmp_path / "data"))) as client:
+        monkeypatch.setattr(os.path, "realpath", unless_foreign(realpath))
+        monkeypatch.setattr(os, "stat", unless_foreign(stat))
+        response = client.get(path)
+        monkeypatch.undo()
+
+    assert touched == []
+    assert response.status_code == status
+    if status == 200:
+        # The app shell answers every other path, as for any unknown client route.
+        assert '<div id="app"></div>' in response.text
 
 
 def _write_webui_build(tmp_path: Path) -> Path:
