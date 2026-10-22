@@ -351,6 +351,9 @@ export function createChatController({
           argument: item.argument,
           argument_hint: item.argument_hint ?? '',
           output: item.output,
+          // False for a Skill a command of its name shadows: `/name` runs
+          // the command, so the Skill is offered only under `$`.
+          slash: item.slash !== false,
         }))
         .filter((item) => item.name.length > 0);
       return true;

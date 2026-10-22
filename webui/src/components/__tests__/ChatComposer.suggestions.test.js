@@ -105,12 +105,33 @@ describe('ChatComposer suggestions', () => {
             type: 'command',
           },
           ...skillFixtures(),
+          // `/stop` runs the command, so this Skill is offered only as `$stop`.
+          {
+            name: 'stop',
+            description: 'How to stop a deployment.',
+            type: 'skill',
+            slash: false,
+          },
         ],
         onSendMessage,
       });
 
+      typeInComposer('/');
+      expect(suggestionNames()).toEqual([
+        'stop',
+        'debugging',
+        'frontend-design',
+      ]);
+      expect(suggestionOptions()[0].textContent).toContain(
+        'Cancel the active run.',
+      );
+
       typeInComposer('Please use $', 12);
-      expect(suggestionNames()).toEqual(['debugging', 'frontend-design']);
+      expect(suggestionNames()).toEqual([
+        'debugging',
+        'frontend-design',
+        'stop',
+      ]);
       expect(
         document.body.querySelector('.skill-autocomplete__eyebrow').textContent,
       ).toContain(t('skillAutocomplete.eyebrow.skills'));

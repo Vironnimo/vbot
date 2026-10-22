@@ -266,7 +266,8 @@ export function createComposerPicker(context) {
       return triggerItems.filter((item) => item.type !== 'command');
     }
 
-    return triggerItems;
+    // `/name` runs the command of that name, never a Skill it shadows.
+    return triggerItems.filter((item) => item.slash !== false);
   }
 
   const updateTriggerContext = () => {

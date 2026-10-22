@@ -107,10 +107,14 @@ def matching(suggestions: list[Suggestion], query: str) -> list[Suggestion]:
 
 
 def command_suggestions(items: list[JsonObject]) -> list[Suggestion]:
-    """Offer Commands and Skills as `/<name>` with their description."""
+    """Offer Commands and Skills as `/<name>` with their description.
+
+    A Skill a command shadows (`slash` false) is left out: `/<name>` runs the
+    command, so only `$<name>` triggers that Skill.
+    """
     result: list[Suggestion] = []
     for item in items:
-        if not isinstance(item, dict) or not item.get("name"):
+        if not isinstance(item, dict) or not item.get("name") or item.get("slash") is False:
             continue
         name = str(item["name"]).lstrip(_COMMAND_MARKER)
         kind = str(item.get("type") or "command")
