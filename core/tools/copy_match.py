@@ -56,6 +56,10 @@ text the edit writes may hold neither a backslash nor a character the file escap
 where the copy does not, even on another line: a copy that drops the file's escapes
 comes with new text that drops them too. A backslash only the file holds must not
 border a change: it would escape the new text.
+
+Characters with marks compare composed, so a copy in the other Unicode normalization
+form (NFC or NFD) copies them correctly; the text the edit writes then takes the
+passage's form.
 """
 
 from __future__ import annotations
@@ -63,7 +67,7 @@ from __future__ import annotations
 from bisect import bisect_right
 from collections import Counter
 from collections.abc import Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from difflib import SequenceMatcher
 
 from core.tools._copy_tokens import (
@@ -99,11 +103,13 @@ from core.tools._copy_tokens import (
     _tolerated,
 )
 from core.tools._fuzzy_text import (
+    _in_form,
     _indent_unit,
     _line_number_at,
     _meaningful_indents,
     _reindent_replacement,
     _split_lines_preserving_endings,
+    _written_form,
 )
 from core.tools.arguments import TEXT_LINE_BREAK
 from core.tools.fuzzy_match import AmbiguousFuzzyMatch, FuzzyReplacement, dominant_line_ending
@@ -134,9 +140,9 @@ def replace_copied(
         lines.extend(("+", line) for line in new_lines[j1:j2])
     file = _File(content)
     found = _match_lines(file, lines, at_eof=False, drop_breaks=True)
-    if found is not None or len(old_lines) > 1 or whole:
-        return found
-    return _match_fragment(file, old, new)
+    if found is None and len(old_lines) == 1 and not whole:
+        found = _match_fragment(file, old, new)
+    return _in_file_form(content, old, found)
 
 
 def match_copied_edit(
@@ -149,7 +155,33 @@ def match_copied_edit(
     """
     if not any(text.strip() for prefix, text in lines if prefix in " -"):
         return None
-    return _match_lines(_File(content), lines, at_eof=at_eof)
+    found = _match_lines(_File(content), lines, at_eof=at_eof)
+    old = "\n".join(text for prefix, text in lines if prefix in " -")
+    return _in_file_form(content, old, found)
+
+
+def _in_file_form(
+    content: str, old: str, found: FuzzyReplacement | AmbiguousFuzzyMatch | None
+) -> FuzzyReplacement | AmbiguousFuzzyMatch | None:
+    """Write the edit in the Unicode normalization form of the passage it replaces.
+
+    Only when the copy came in the other form (``_written_form``); text the edit
+    keeps already has the passage's form.
+    """
+    if not isinstance(found, FuzzyReplacement):
+        return found
+    (start, end), (after_start, after_end) = found.before_spans[0], found.after_spans[0]
+    written = found.new_content[after_start:after_end]
+    text = _in_form(written, _written_form(content[start:end], old))
+    if text == written:
+        return found
+    new_content = content[:start] + text + content[end:]
+    return replace(
+        found,
+        new_content=new_content,
+        last_changed_line=_line_number_at(new_content, max(start, start + len(text) - 1)),
+        after_spans=((start, start + len(text)),),
+    )
 
 
 def copy_warnings(found: FuzzyReplacement, *, line_shift: int = 0) -> list[str]:

@@ -57,6 +57,10 @@ def test_unicode_line_separator_is_line_content_not_a_line_ending() -> None:
         ("alpha\r\nbeta\r\ngamma\r\n", "alpha\nbeta", "one\ntwo", "one\r\ntwo\r\ngamma\r\n"),
         # One that starts with a line break takes the whole CRLF, never only its LF.
         ("a = 1\r\nb = 2\r\nc = 3\r\n", "\nb = 2", "", "a = 1\r\nc = 3\r\n"),
+        # Composed letters sent for decomposed ones, and the reverse: the new text,
+        # its own new letters included, takes the file's normalization form.
+        ("Café noir\n", "Café noir", "Café crème", "Café crème\n"),
+        ("Café noir\n", "Café noir", "Café crème", "Café crème\n"),
     ],
 )
 def test_normalized_matches_typography_and_line_endings(

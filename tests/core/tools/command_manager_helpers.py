@@ -55,6 +55,8 @@ class FakeTree:
         self.cpu_seconds = 0.0
         self.started = 1
         self.exits: list[ProgramExit] = []
+        # PowerShell job hosts that ended.
+        self.jobs_ended = 0
         # Raised by the process queries instead of answering.
         self.facts_error: OSError | None = None
         self.terminate_error: OSError | None = None
@@ -65,7 +67,7 @@ class FakeTree:
         if self.facts_error is not None:
             raise self.facts_error
         return ProcessTreeFacts(
-            tuple(self.running), self.cpu_seconds, self.started, tuple(self.exits)
+            tuple(self.running), self.cpu_seconds, self.started, tuple(self.exits), self.jobs_ended
         )
 
     def exit_count(self) -> int:

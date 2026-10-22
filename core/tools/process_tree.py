@@ -10,7 +10,9 @@ root starts:
   creates; children that explicitly break away (``CREATE_BREAKAWAY_FROM_JOB``)
   leave it, which the vBot update handoff needs. Job notifications record the
   exit codes of the root's direct children, so a native program's failure is a
-  fact even when PowerShell reduces it to exit code 1. A root that already runs
+  fact even when PowerShell reduces it to exit code 1. PowerShell's job hosts
+  (``&``, ``Start-Job``) are counted apart: PowerShell ends them as it exits,
+  always with code 0xFFFFFFFF, which is no failure of theirs. A root that already runs
   when it is tracked can create a process in the moment before the job
   assignment, which escapes; a root created suspended and resumed only after
   tracking has no such moment.
@@ -92,6 +94,8 @@ class ProcessTreeFacts:
     # Processes ever started in the tree; a change means new activity.
     started: int
     nonzero_exits: tuple[ProgramExit, ...]
+    # PowerShell job hosts of the root that ended, whatever their exit code.
+    jobs_ended: int = 0
 
 
 class KillNotConfirmedError(OSError):
@@ -496,8 +500,10 @@ class _WindowsJobTree:
         self._k = k = kernel.kernel32
         self._root_pid = root_pid
         self._lock = threading.Lock()
-        self._children: dict[int, tuple[Any, str, str]] = {}
+        # Per child: its handle, image name, invocation and whether it is a job host.
+        self._children: dict[int, tuple[Any, str, str, bool]] = {}
         self._exits: list[ProgramExit] = []
+        self._jobs_ended = 0
         self._empty = threading.Event()
         self._closed = False
         job = k.CreateJobObjectW(None, None)
@@ -556,11 +562,12 @@ class _WindowsJobTree:
             return
         name = _image_name(self._k, handle) or f"process {pid}"
         invocation = _invocation(pid, name)
+        job_host = _job_host(pid, name)
         with self._lock:
             if self._closed:
                 self._k.CloseHandle(handle)
                 return
-            self._children[pid] = (handle, name, invocation)
+            self._children[pid] = (handle, name, invocation, job_host)
 
     def _record_exit(self, pid: int) -> None:
         from ctypes import wintypes
@@ -569,10 +576,13 @@ class _WindowsJobTree:
             child = self._children.pop(pid, None)
         if child is None:
             return
-        handle, name, invocation = child
+        handle, name, invocation, job_host = child
         code = wintypes.DWORD()
         try:
-            if self._k.GetExitCodeProcess(handle, ctypes.byref(code)):
+            if job_host:
+                with self._lock:
+                    self._jobs_ended += 1
+            elif self._k.GetExitCodeProcess(handle, ctypes.byref(code)):
                 value = int(code.value)
                 if value not in (0, _STILL_ACTIVE):
                     with self._lock:
@@ -593,11 +603,13 @@ class _WindowsJobTree:
         running = self._running() if accounting.ActiveProcesses else ()
         with self._lock:
             exits = tuple(self._exits)
+            jobs_ended = self._jobs_ended
         return ProcessTreeFacts(
             running=running,
             cpu_seconds=(accounting.TotalUserTime + accounting.TotalKernelTime) / 10_000_000,
             started=int(accounting.TotalProcesses),
             nonzero_exits=exits,
+            jobs_ended=jobs_ended,
         )
 
     def exit_count(self) -> int:
@@ -672,7 +684,7 @@ class _WindowsJobTree:
             self._closed = True
             children, self._children = self._children, {}
         self._notifications.unregister(self._key)
-        for handle, _name, _invocation in children.values():
+        for handle, *_identity in children.values():
             self._k.CloseHandle(handle)
         self._k.CloseHandle(self._job)
 
@@ -693,6 +705,9 @@ def _image_name(kernel32: Any, handle: Any) -> str:
 
 _PYTHON_IMAGE = re.compile(r"pythonw?(?:\d+(?:\.\d+)*)?(?:\.exe)?", re.IGNORECASE)
 _NODE_IMAGE = re.compile(r"node(?:\.exe)?", re.IGNORECASE)
+_POWERSHELL_IMAGE = re.compile(r"(?:pwsh|powershell)(?:\.exe)?", re.IGNORECASE)
+# How PowerShell starts the process that runs a job (``pwsh -s -NoLogo -NoProfile``).
+_JOB_HOST_OPTIONS = frozenset({"-s", "-servermode"})
 # Node options that take the next argument as their value.
 _NODE_VALUE_OPTIONS = frozenset(
     {
@@ -738,6 +753,17 @@ _NPM_TEST = frozenset({"test", "t", "tst"})
 _NPM_SCRIPT = re.compile(r"[\w:.-]{1,100}")
 # A registry package with an optional version, never a URL or a path.
 _NPM_PACKAGE = re.compile(r"(?:@[\w.-]{1,50}/)?[\w.-]{1,60}(?:@[\w.^~-]{1,30})?")
+
+
+def _job_host(pid: int, name: str) -> bool:
+    """Whether a PowerShell child is the host of a background job (``&``, ``Start-Job``)."""
+    if not _POWERSHELL_IMAGE.fullmatch(name):
+        return False
+    try:
+        arguments = psutil.Process(pid).cmdline()
+    except psutil.Error, OSError:
+        return False
+    return any(argument.casefold() in _JOB_HOST_OPTIONS for argument in arguments[1:])
 
 
 def _invocation(pid: int, name: str) -> str:

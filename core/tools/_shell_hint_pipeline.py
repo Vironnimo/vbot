@@ -273,6 +273,31 @@ def _hint_skipped_after_pipeline(
     return None
 
 
+# PowerShell's background operator: an & that is not doubled (&&), escaped (`&) or
+# part of a redirection (2>&1). After a pipeline's opening it is the call operator.
+_AMPERSAND = re.compile(r"(?<![&`>])&(?!&)")
+_PIPELINE_OPENINGS = frozenset("\n;{(|=,")
+
+
+def ended_jobs_hint(command: str) -> str | None:
+    """Say that jobs the PowerShell *command* started with & ended with it.
+
+    PowerShell runs a pipeline that ends with & as a job, whose host process it
+    ends as it exits; Agents wrote a trailing & to keep a server running, as in
+    bash. ``None`` when the command has no such &, such as one that started
+    its jobs with Start-Job and waited for them.
+    """
+    flat = _powershell_code(command).flat
+    for found in _AMPERSAND.finditer(flat):
+        before = flat[: found.start()].rstrip(" \t\r")
+        if before and before[-1] not in _PIPELINE_OPENINGS:
+            return (
+                "Jobs started with & ended when the command ended. To keep a program running "
+                "after the command, run it without & and with run_in_background."
+            )
+    return None
+
+
 # A shell command that waits, then reads the log file of a vBot background command.
 _SLEEP = re.compile(r"(?<![\w-])(?:Start-Sleep|sleep)(?![\w-])", re.I)
 _COMMAND_LOG = re.compile(r"[/\\]commands[/\\]tmp_[0-9a-z]{12}\.log", re.I)

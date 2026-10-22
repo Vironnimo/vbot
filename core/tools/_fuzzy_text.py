@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import math
 import re
+import unicodedata
 from bisect import bisect_right
 from collections import Counter
 from collections.abc import Callable, Iterable
 from functools import cache
+from typing import Literal
 
 from core.tools.arguments import TEXT_LINE_BREAK
 
@@ -51,6 +53,10 @@ _TYPOGRAPHIC_GLYPH_RE = re.compile(_TYPOGRAPHIC_GLYPHS)
 # What ``_normalize_with_spans`` changes: a CRLF or CR line ending, or a mapped glyph.
 _UNICODE_SPECIAL_RE = re.compile("\r\n?|" + _UNICODE_GLYPHS)
 _TYPOGRAPHIC_SPECIAL_RE = re.compile("\r\n?|" + _TYPOGRAPHIC_GLYPHS)
+# A run of characters beyond ASCII with the ASCII character before it, which can
+# carry the run's marks: the only text Unicode normalization changes.
+_MARKED_RUN_RE = re.compile(r"[\x00-\x7f]?[^\x00-\x7f]+")
+_Form = Literal["NFC", "NFD"]
 
 
 def _normalize_newlines(text: str) -> str:
@@ -117,6 +123,117 @@ def _line_starts(content: str) -> list[int]:
     return [0, *(found.end() for found in _LINE_BREAK_RE.finditer(content))]
 
 
+def _combines(character: str) -> bool:
+    """Whether ``character`` joins the character before it under normalization."""
+    code = ord(character)
+    # Marks, and the vowel and final consonant jamo of a decomposed Hangul syllable.
+    return (
+        unicodedata.category(character).startswith("M")
+        or 0x1160 <= code <= 0x11FF
+        or 0xD7B0 <= code <= 0xD7FF
+    )
+
+
+def _clusters(text: str) -> list[str]:
+    """Split ``text`` into characters, each with the marks that combine with it."""
+    clusters: list[str] = []
+    for character in text:
+        if clusters and _combines(character):
+            clusters[-1] += character
+        else:
+            clusters.append(character)
+    return clusters
+
+
+def _swaps_character(cluster: str) -> bool:
+    """Whether normalizing ``cluster`` replaces a character with another one.
+
+    A singleton such as a CJK compatibility ideograph or the Angstrom sign has
+    a canonical decomposition of one other character: both forms (NFC and NFD)
+    replace it, so it is a character of its own, not a spelling of one.
+    """
+    for character in cluster:
+        decomposition = unicodedata.decomposition(character)
+        if decomposition and not decomposition.startswith("<") and " " not in decomposition:
+            return True
+    return False
+
+
+def _composed_cluster(cluster: str) -> str:
+    return cluster if _swaps_character(cluster) else unicodedata.normalize("NFC", cluster)
+
+
+def _composed_with_spans(text: str) -> tuple[str, list[tuple[int, int]]] | None:
+    """Spell characters with marks composed (NFC) and record each one's origin span.
+
+    Only the differences between the two normalization forms fold: a decomposed
+    ``e`` with a combining acute accent reads as ``é``. ``None`` when nothing
+    changes, which a text already in NFC answers without a scan.
+    """
+    if unicodedata.is_normalized("NFC", text):
+        return None
+    chars: list[str] = []
+    spans: list[tuple[int, int]] = []
+    cursor = 0
+    for run in _MARKED_RUN_RE.finditer(text):
+        begin = run.start()
+        chars.append(text[cursor:begin])
+        spans.extend(zip(range(cursor, begin), range(cursor + 1, begin + 1), strict=True))
+        position = begin
+        for cluster in _clusters(run.group()):
+            end = position + len(cluster)
+            composed = _composed_cluster(cluster)
+            chars.append(composed)
+            if composed == cluster:
+                spans.extend(zip(range(position, end), range(position + 1, end + 1), strict=True))
+            else:
+                spans.extend([(position, end)] * len(composed))
+            position = end
+        cursor = run.end()
+    chars.append(text[cursor:])
+    spans.extend(zip(range(cursor, len(text)), range(cursor + 1, len(text) + 1), strict=True))
+    return "".join(chars), spans
+
+
+def _composed(text: str) -> str:
+    """Return the text ``_composed_with_spans`` produces, without its span map."""
+    if unicodedata.is_normalized("NFC", text):
+        return text
+    return _MARKED_RUN_RE.sub(
+        lambda run: "".join(_composed_cluster(cluster) for cluster in _clusters(run.group())), text
+    )
+
+
+def _written_form(matched: str, old: str) -> _Form | None:
+    """Return the normalization form an edit writes its new text in, or ``None``.
+
+    When the file text an edit matched spells its characters in one form (NFC
+    or NFD) and the caller's old text does not, the caller's text came in the
+    other form, and so did its new text: that then takes the file's form.
+    """
+    if old.isascii():
+        return None
+    forms: tuple[tuple[_Form, _Form], ...] = (("NFC", "NFD"), ("NFD", "NFC"))
+    for form, other in forms:
+        if (
+            unicodedata.is_normalized(form, matched)
+            and not unicodedata.is_normalized(other, matched)
+            and not unicodedata.is_normalized(form, old)
+        ):
+            return form
+    return None
+
+
+def _in_form(text: str, form: _Form | None) -> str:
+    """Spell ``text`` in normalization ``form``, keeping characters of their own."""
+    if form is None or unicodedata.is_normalized(form, text):
+        return text
+    return "".join(
+        cluster if _swaps_character(cluster) else unicodedata.normalize(form, cluster)
+        for cluster in _clusters(text)
+    )
+
+
 def _normalize_with_spans(
     text: str, *, typographic: bool = False
 ) -> tuple[str, list[tuple[int, int]]]:
@@ -126,7 +243,10 @@ def _normalize_with_spans(
     normalized character, so a match found in the normalized string maps back to
     the exact original characters. Expanded glyphs share one origin span for
     every normalized character, so the character and span lists stay aligned.
+    Characters with marks fold to their composed form (``_composed_with_spans``).
     """
+    composed = _composed_with_spans(text)
+    source = text if composed is None else composed[0]
     # Only line endings and mapped glyphs change; the runs between them are
     # copied with one-character spans built in C, not per character in Python.
     mapping = _TYPOGRAPHIC_NORMALIZATION if typographic else _UNICODE_NORMALIZATION
@@ -134,31 +254,36 @@ def _normalize_with_spans(
     chars: list[str] = []
     spans: list[tuple[int, int]] = []
     cursor = 0
-    for found in special.finditer(text):
+    for found in special.finditer(source):
         start, end = found.span()
         if start > cursor:
-            chars.append(text[cursor:start])
+            chars.append(source[cursor:start])
             spans.extend(zip(range(cursor, start), range(cursor + 1, start + 1), strict=True))
         glyph = found.group()
         folded = "\n" if glyph[0] == "\r" else mapping[glyph]
         chars.append(folded)
         spans.extend([(start, end)] * len(folded))
         cursor = end
-    if cursor < len(text):
-        chars.append(text[cursor:])
-        spans.extend(zip(range(cursor, len(text)), range(cursor + 1, len(text) + 1), strict=True))
+    if cursor < len(source):
+        chars.append(source[cursor:])
+        spans.extend(
+            zip(range(cursor, len(source)), range(cursor + 1, len(source) + 1), strict=True)
+        )
+    if composed is not None:
+        origins = composed[1]
+        spans = [(origins[start][0], origins[end - 1][1]) for start, end in spans]
     return "".join(chars), spans
 
 
 def _normalize_text(text: str) -> str:
-    return _normalize_newlines(text).translate(_UNICODE_TRANSLATION)
+    return _normalize_newlines(_composed(text)).translate(_UNICODE_TRANSLATION)
 
 
 def _folded(text: str, *, typographic: bool) -> str:
     """Return the text ``_normalize_with_spans`` produces, without its span map."""
     mapping = _TYPOGRAPHIC_NORMALIZATION if typographic else _UNICODE_NORMALIZATION
     glyphs = _TYPOGRAPHIC_GLYPH_RE if typographic else _UNICODE_GLYPH_RE
-    return glyphs.sub(lambda found: mapping[found.group()], _normalize_newlines(text))
+    return glyphs.sub(lambda found: mapping[found.group()], _normalize_newlines(_composed(text)))
 
 
 def _found_with_crlf(content: str, pattern: str, *, typographic: bool) -> list[tuple[int, int]]:
@@ -239,7 +364,10 @@ def _apply_replacements(
             )
         else:
             replacement_lf = replacement_text
-        replacement = _to_line_ending(replacement_lf, file_ending)
+        replacement = _in_form(
+            _to_line_ending(replacement_lf, file_ending),
+            _written_form(content[start:end], old_string_lf),
+        )
         after_start = start + offset_shift
         parts += (content[cursor:start], replacement)
         cursor = end

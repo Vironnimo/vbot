@@ -390,7 +390,8 @@ def pattern_retry(
     """Return the evident reading of patterns the regex engine rejected, if any.
 
     Returns the patterns to search, a flag to add, and a note for the Agent.
-    A rejected newline needs multiline unless the call explicitly disabled it.
+    A rejected newline needs multiline unless the call explicitly disabled it;
+    its line feeds then match CRLF line ends too (``crlf_line_breaks``).
     A pattern that uses look-around or backreferences needs PCRE2. An
     unmatched parenthesis, a brace that starts no repetition, or a repetition
     operator with nothing to repeat cannot be regex syntax, so those characters
@@ -404,7 +405,7 @@ def pattern_retry(
         and "--no-multiline" not in query.rg_args
     ):
         return (
-            patterns,
+            crlf_line_breaks(patterns, query),
             "--multiline",
             "The pattern matches across lines, so the search ran with -U.",
         )
@@ -435,6 +436,68 @@ def pattern_retry(
         None,
         explanation + f'searched {described}. Add "-F" to args to search plain text.',
     )
+
+
+# A line feed written as an escape: \n, \x0A, \x{A}, \u000A, \u{A}, \U0000000A, \U{A}.
+_LINE_FEED_ESCAPE = re.compile(r"\\(?:n|x0[aA]|[xuU]\{0*[aA]\}|u000[aA]|U0000000[aA])")
+# A flag group that turns on verbose mode, where raw whitespace is not matched.
+_VERBOSE_FLAGS = re.compile(r"\(\?[a-zA-Z]*x")
+_CARRIAGE_RETURNS = frozenset({"\\r", "\r"})
+
+
+def crlf_line_breaks(patterns: list[str], query: SearchQuery) -> list[str]:
+    """Return the patterns with each line feed widened to ``\\r?\\n`` while --crlf applies.
+
+    ``--crlf`` only moves ``^`` and ``$``; a line feed in a multi-line pattern
+    still matches LF alone, so text copied from a CRLF file would never match.
+    Line feeds inside character classes, after an explicit carriage return, and
+    raw line breaks under verbose mode keep their meaning. Returns ``patterns``
+    itself when nothing changes, including after an explicit ``--no-crlf``.
+    """
+    crlf = False
+    for argument in [*DEFAULT_ARGUMENTS, *query.rg_args]:
+        if argument in {"--crlf", "--no-crlf"}:
+            crlf = argument == "--crlf"
+    widened = [_widen_line_feeds(pattern) for pattern in patterns] if crlf else patterns
+    return patterns if widened == patterns else widened
+
+
+def _widen_line_feeds(pattern: str) -> str:
+    verbose = _VERBOSE_FLAGS.search(pattern) is not None
+    tokens: list[str] = []
+    class_depth = 0
+    index = 0
+    while index < len(pattern):
+        escape = _LINE_FEED_ESCAPE.match(pattern, index)
+        if escape is not None:
+            token, line_feed = escape.group(), True
+        elif pattern[index] == "\\":
+            token, line_feed = pattern[index : index + 2], False
+        else:
+            token = pattern[index]
+            line_feed = token == "\n" and not verbose
+        index += len(token)
+        if class_depth:
+            class_depth += {"[": 1, "]": -1}.get(token, 0)
+        elif token == "[":
+            class_depth = 1
+            for literal in ("^", "]"):
+                if pattern.startswith(literal, index):
+                    token += literal
+                    index += 1
+        elif line_feed and not _after_carriage_return(tokens):
+            # A repetition applies to the whole line break.
+            repeated = pattern.startswith(("*", "+", "?", "{"), index)
+            token = "(?:\\r?\\n)" if repeated else "\\r?\\n"
+        tokens.append(token)
+    return "".join(tokens)
+
+
+def _after_carriage_return(tokens: list[str]) -> bool:
+    """Whether the tokens end with ``\\r``, optionally repeated, such as ``\\r?``."""
+    if tokens and tokens[-1] in {"?", "*", "+"}:
+        tokens = tokens[:-1]
+    return bool(tokens) and tokens[-1] in _CARRIAGE_RETURNS
 
 
 def _unescape_unicode_punctuation(pattern: str) -> str:

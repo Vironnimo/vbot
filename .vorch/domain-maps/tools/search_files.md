@@ -172,7 +172,8 @@ Modes:
     `-F`: `As a regular expression, pattern matches nothing ("?" is an operator);
     as literal text it occurs in 1 file. Add -F to args to search for it
     literally.` The call keeps its empty result. A pattern already under `-F`,
-    or one `pattern_retry` repaired, gets no note. A Swarm Agent searched a URL
+    or one `pattern_retry` repaired, gets no note; one that only ran with `-U`
+    after a rejected newline still gets it. A Swarm Agent searched a URL
     with `?ele=` in it, got `No matches` and went on as if the URL were absent
     (Swarm run 2026-10-12, one call).
   - **Across lines.** Otherwise a regex without `-U` that holds `\s` (also in
@@ -347,8 +348,10 @@ Every ripgrep run gets `DEFAULT_ARGUMENTS`
 query's rg arguments, so later `args` override them (`--no-hidden`,
 `--no-glob-case-insensitive`, `--no-crlf`). `--crlf` lets `^` and `$` match at CRLF
 line ends, which `read` shows as plain lines and its `pattern` filter matches
-(review 2026-10-22: `needle$` found only the LF copy of a file); a literal line
-break in a multi-line pattern still matches only LF. `--glob=!.git` always comes last, preceded by
+(review 2026-10-22: `needle$` found only the LF copy of a file). A line feed in a
+multi-line pattern matches only LF, except in the automatic `-U` retry below, which
+widens it to `\r?\n`; an explicit `-U` or `-P` pattern keeps it as written.
+`--glob=!.git` always comes last, preceded by
 `--glob=!__pycache__` unless the call asks for the caches (`skips_caches`). This
 gives the following selection:
 
@@ -489,8 +492,14 @@ Diagnostics (`_judge`):
   once:
   - a rejected newline in a content search reruns with `--multiline` unless
     `--no-multiline` was explicit (also `multiline: false` or `-U: false`);
-    the pattern and dotall setting stay unchanged, and name matching never
-    enables multiline implicitly;
+    the dotall setting stays unchanged, and name matching never enables
+    multiline implicitly. While `--crlf` applies (no later `--no-crlf`), each
+    line feed of the pattern (raw, `\n`, `\x0A`, `\u000A` and their brace forms)
+    becomes `\r?\n`, wrapped in `(?:...)` before a repetition, so text copied
+    from a CRLF file matches (`crlf_line_breaks`; deep bug hunt 2026-10-22,
+    `hunt-tools-fs/p07_search_crlf.py`). Line feeds inside character classes,
+    after an explicit `\r`, and raw line breaks under `(?x)` stay as written.
+    The rewrite is silent: the `-U` note covers the retry;
   - look-around or backreferences rerun with PCRE2;
   - unbalanced parentheses, braces and dangling repetition operators are escaped;
   - unnecessary escapes before Unicode punctuation are removed;
