@@ -100,11 +100,6 @@ def scope_confinement(scope: Scope, permissions: PermissionBoundary) -> Confinem
     return Confinement(list(dict.fromkeys(globs)), filtered)
 
 
-# Without a count: what an excluding glob keeps ripgrep from reading is never
-# touched, so the search cannot tell whether anything was there.
-CONFINED_NOTE = "Paths the permission rules refuse to read are left out of this search."
-
-
 def permitted(permissions: PermissionBoundary, scope: Scope, reported: str | bytes) -> bool:
     """Whether a path a run reported, relative to its scope, may be read."""
     name = os.fsdecode(reported)

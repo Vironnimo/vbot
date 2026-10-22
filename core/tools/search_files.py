@@ -15,13 +15,14 @@ from pathlib import Path
 from typing import Any
 
 from core.permissions import PermissionBoundary
+from core.tools._refused_notes import search_note
 from core.tools._search_arguments import (
     interpret_search_call as interpret_search_call,
 )
 from core.tools._search_arguments import (
     normalize_search_arguments as normalize_search_arguments,
 )
-from core.tools._search_confinement import CONFINED_NOTE, confine_flags
+from core.tools._search_confinement import confine_flags
 from core.tools._search_definition import (
     HELP_EXAMPLES as HELP_EXAMPLES,
 )
@@ -752,6 +753,30 @@ def _search(execution: SearchExecution, query: SearchQuery, roots: list[Path]) -
     return _Outcome(page, found, lines_total, lines_total)
 
 
+def _left_out_note(roots: list[Path], cwd: Path, permissions: PermissionBoundary) -> str | None:
+    """Name what the rules leave out below the searched folders, or ``None``.
+
+    Without a count: what an excluding glob keeps ripgrep from reading is never
+    touched, so the search cannot tell whether anything was there. The note
+    names the deny rules' parts instead, relative to the working directory.
+    """
+    if not permissions.restricted:
+        return None
+    parts: dict[str, None] = {}
+    protected = False
+    for root in roots:
+        if not root.is_dir():
+            continue
+        refused = permissions.refused_below(root, "read")
+        protected = protected or refused.protected
+        shown = path_label(root, cwd)
+        for pattern in refused.rules:
+            parts.setdefault(pattern if shown == "." else f"{shown}/{pattern}")
+    if not parts and not protected:
+        return None
+    return search_note(list(parts), protected=protected)
+
+
 def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
     try:
         query = interpret_search_call(arguments, edit_tool=offered_edit_tool(context))
@@ -782,8 +807,9 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
             return tool_failure("path_not_found", _nothing_searched(missing, roots, query))
         _directory_globs(query, roots.paths, cwd, context.permissions)
         outcome = _search(execution, query, roots.paths)
-        if execution.confined:
-            query.notes.append(CONFINED_NOTE)
+        left_out = _left_out_note(roots.paths, cwd, context.permissions)
+        if left_out:
+            query.notes.append(left_out)
     except (SearchArgumentError, ToolContractError, ValueError) as error:
         return tool_failure("invalid_arguments", str(error))
     except SearchRefusedError as error:

@@ -23,7 +23,7 @@ import os
 import re
 import socket
 import sys
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, replace
 from typing import ClassVar, Final, cast
 from urllib.parse import urlsplit
@@ -50,6 +50,7 @@ from core.permissions._paths import (
     pruned_away,
     reaches,
     resolve_text,
+    spelled_like,
     split_lexical,
 )
 from core.permissions._presets import (
@@ -102,6 +103,22 @@ from core.permissions._rules import (
 type PathLike = str | os.PathLike[str]
 
 _DEFAULT_PORTS: Final = {"http": 80, "https": 443}
+
+
+@dataclass(frozen=True, slots=True)
+class RefusedBelow:
+    """What below a folder a boundary may refuse, in the form a Tool result names it.
+
+    ``rules``: the parts of deny rules below the folder, relative to it and
+    spelled as the rules write them. ``protected``: protected locations lie
+    below it as well.
+    """
+
+    rules: tuple[str, ...] = ()
+    protected: bool = False
+
+    def __bool__(self) -> bool:
+        return bool(self.rules) or self.protected
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -425,28 +442,50 @@ class PermissionBoundary:
         links, which a caller checks with :meth:`check_path`. Empty for full
         access and for a folder below which nothing but links can be refused.
         """
+        return tuple(dict.fromkeys(pattern for pattern, _ in self._refusable(folder, access)))
+
+    def refused_below(self, folder: PathLike, access: PathAccess) -> RefusedBelow:
+        """What below ``folder`` may be refused, as a Tool result names it to the Agent.
+
+        The deny rules' parts as :meth:`refusable_below` gives them, but spelled
+        as the rules write them; protected locations only as a flag, since the
+        System Prompt names no path of vBot's own.
+        """
+        rules: dict[str, None] = {}
+        protected = False
+        for _, spelled in self._refusable(folder, access):
+            if spelled is None:
+                protected = True
+            else:
+                rules.setdefault(spelled)
+        return RefusedBelow(tuple(rules), protected)
+
+    def _refusable(self, folder: PathLike, access: PathAccess) -> Iterator[tuple[str, str | None]]:
+        """Each refusable pattern below ``folder``, with its deny rule's spelling.
+
+        The spelling is ``None`` for a protected location.
+        """
         if not self._layers:
-            return ()
+            return
         normalized = normalize_access_path(
             folder, base=self._workdir, home=self._home, windows=self._windows
         )
         folders = tuple(
             dict.fromkeys((self._key(normalized.lexical), self._key(normalized.resolved)))
         )
-        keys: list[str] = []
+        sources: list[tuple[str, str | None]] = []
         for layer in self._compiled:
             rules = layer.read_deny + layer.edit_deny if access == "write" else layer.read_deny
-            keys.extend(key for rule in rules for key in rule.keys)
+            sources.extend((key, rule.rule.pattern) for rule in rules for key in rule.keys)
         writes = (self._rule_files, *self._install_dirs) if access == "write" else ()
         for area in (self._agent_config, *writes):
-            keys.extend(area.keys if area is not None else ())
+            sources.extend((key, None) for key in (area.keys if area is not None else ()))
         if not all(self._data_dir_allowed(key, access) for key in folders):
-            keys.extend(self._data_dirs.keys)
-        found: dict[str, None] = {}
-        for key in keys:
+            sources.extend((key, None) for key in self._data_dirs.keys)
+        for key, written in sources:
             for below in folders:
-                found.update(dict.fromkeys(sorted(patterns_below(key, below))))
-        return tuple(found)
+                for pattern in sorted(patterns_below(key, below)):
+                    yield pattern, None if written is None else spelled_like(pattern, key, written)
 
     def readable_entries(
         self, folder: PathLike, entries: Iterable[os.DirEntry[str]]

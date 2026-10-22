@@ -314,15 +314,18 @@ async def test_permission_rules_refuse_a_read_before_the_file_is_touched(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("missing", ["plan.md", "secret"])
-async def test_permission_rules_hide_refused_entries_from_listings_and_suggestions(
+async def test_permission_rules_name_refused_entries_in_listings_and_suggestions(
     tmp_path: Path, missing: str
 ) -> None:
     work = tmp_path / "work"
     (work / "secrets").mkdir(parents=True)
     (work / "secrets" / "plan.md").write_text("x", encoding="utf-8")
     (work / "notes.txt").write_text("x", encoding="utf-8")
+    for index in range(6):
+        (work / f"{index}.key").write_text("x", encoding="utf-8")
+    rules = {"read": "work_area", "deny": ["Read({workdir}/secrets/**)", "Read({workdir}/*.key)"]}
     boundary = PermissionBoundary.build(
-        normalize_permission_rules({"read": "work_area", "deny": ["Read({workdir}/secrets/**)"]}),
+        normalize_permission_rules(rules),
         BoundaryContext(workdir=work, home=tmp_path / "home", data_dir=tmp_path / "data"),
     )
     restricted = replace(make_context(work, cwd=work), permissions=boundary)
@@ -332,11 +335,20 @@ async def test_permission_rules_hide_refused_entries_from_listings_and_suggestio
     hidden = failure(await read(work, {"path": missing}, context=restricted), "file_not_found")
     shown = failure(await read(work, {"path": missing}, context=full), "file_not_found")
 
-    assert "notes.txt" in listing and "secrets" not in listing
-    assert "permission rules" in listing
+    entries, note = listing.rsplit("\n", 1)
+    assert "notes.txt" in entries and "secrets" not in entries
+    # The note names the refused entries, so the Agent knows they exist but are refused;
+    # past its bound it counts the rest and still names the folder.
+    assert "secrets/" in note and "0.key" in note and "5.key" not in note
+    assert "more" in note and "permission rules" in note
     assert "secrets" in content(await read(work, {"path": "."}, context=full))
-    # Full access suggests the refused folder's entries; the restricted Session never learns them.
-    assert "secrets" in shown and "secrets" not in hidden
+    assert "secrets" in shown
+    if missing == "secret":
+        # A similar entry beside the missing path is named as refused, as the listing names it.
+        assert "secrets" in hidden and "permission rules" in hidden
+    else:
+        # What lies inside the refused folder stays unknown to the restricted Session.
+        assert "secrets" not in hidden
 
 
 _ELEVEN = "".join(f"line{i}\n" for i in range(1, 12))

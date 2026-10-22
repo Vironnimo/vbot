@@ -245,6 +245,24 @@ def patterns_below(pattern_key: str, folder_key: str) -> set[str]:
     return {pattern.removesuffix("/**") for pattern in found}
 
 
+def spelled_like(relative: str, pattern_key: str, written: str) -> str:
+    """``relative``, a :func:`patterns_below` result for ``pattern_key``, spelled as ``written``.
+
+    ``written`` is the pattern the key was made from. Keys fold case on
+    Windows, and the Agent should read a rule's part as the rule writes it, with
+    its closing ``/**``. A result that is not the tail of the key keeps the
+    key's spelling.
+    """
+    tail = relative.split("/")
+    core = pattern_key.rstrip("/").removesuffix("/**").split("/")
+    text = written.replace("\\", "/").rstrip("/")
+    segments = text.removesuffix("/**").split("/")
+    if relative == "**" or core[-len(tail) :] != tail or len(segments) < len(tail):
+        return relative
+    spelled = "/".join(segments[-len(tail) :])
+    return f"{spelled}/**" if text.endswith("/**") else spelled
+
+
 def reaches(folder_key: str, reach: tuple[str, ...], pattern_key: str) -> bool:
     """Whether an access to ``reach`` below ``folder_key`` can touch what ``pattern_key`` covers.
 

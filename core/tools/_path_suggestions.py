@@ -2,7 +2,9 @@
 
 Every function takes the Run's ``PermissionBoundary``: a restricted Session gets
 only entries it may read, and directories it may not read are never listed or
-checked, so a suggestion never reveals what lies outside its readable area.
+checked, so a suggestion never reveals what lies outside its readable area. A
+refused entry of a readable folder whose name is close is named as refused
+(``refused_note``), as a listing of that folder names it.
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ from pathlib import Path
 from typing import Literal
 
 from core.permissions import PermissionBoundary
+from core.tools._refused_notes import similar_note
 from core.tools.model_names import model_tool_name
 from core.tools.search import display_search_path
 from core.utils.edit_distance import edit_distance
@@ -99,6 +102,38 @@ def similar_entries(
         return []
     candidates.sort(key=lambda item: (-item[0][0], -item[0][1], item[1]))
     return [entry for _, _, entry in candidates[:limit]]
+
+
+def refused_similar(missing: Path, permissions: PermissionBoundary) -> list[Path]:
+    """Entries the rules refuse to read whose names are close to the first missing part.
+
+    Only entries of the deepest existing folder, and only when the rules let
+    the Session read that folder: their names are what a listing of it names
+    too, never what lies inside a refused folder. Best match first.
+    """
+    if not permissions.restricted:
+        return []
+    first = missing
+    while first.parent != first and not first.parent.exists():
+        first = first.parent
+    folder = first.parent
+    if folder == first or not _readable(permissions, folder):
+        return []
+    try:
+        with os.scandir(folder) as listing:
+            scan = list(islice(listing, _SCAN_LIMIT))
+    except OSError:
+        return []
+    kept = {entry.path for entry in permissions.readable_entries(folder, scan)}
+    candidates: list[tuple[tuple[int, float], str, Path]] = []
+    for entry in scan:
+        if entry.path in kept:
+            continue
+        score = _score(first, Path(entry.path))
+        if score is not None:
+            candidates.append((score, entry.name.casefold(), Path(entry.path)))
+    candidates.sort(key=lambda item: (-item[0][0], -item[0][1], item[1]))
+    return [path for _, _, path in candidates[:_RESULT_LIMIT]]
 
 
 def corrected_paths(missing: Path, cwd: Path, *, permissions: PermissionBoundary) -> list[Path]:
@@ -206,17 +241,26 @@ def missing_file_message(
     """
     label = display_search_path(missing, cwd=cwd)
     suggestions = corrected_paths(missing, cwd, permissions=permissions)
+    refused = refused_note(missing, cwd, permissions, also=bool(suggestions))
     if suggestions:
         similar = ", ".join(display_search_path(candidate, cwd=cwd) for candidate in suggestions)
-        message = f"File not found: {label} (similar: {similar})."
+        message = f"File not found: {label} (similar: {similar}).{refused}"
         return f"{message} {elsewhere}" if elsewhere else message
     if elsewhere:
-        return f"{label} is not a file. {elsewhere}"
+        return f"{label} is not a file.{refused} {elsewhere}"
     parent = missing.parent
     shown = display_search_path(parent, cwd=cwd)
     if not _readable(permissions, parent):
         return f"File not found: {label}."
     if parent.is_dir():
         call = f"{model_tool_name('read')}(path={json.dumps(shown, ensure_ascii=False)})"
-        return f"File not found: {label}. {call} lists its directory."
-    return f"File not found: {label}. Its directory {shown} does not exist."
+        return f"File not found: {label}.{refused} {call} lists its directory."
+    return f"File not found: {label}. Its directory {shown} does not exist.{refused}"
+
+
+def refused_note(missing: Path, cwd: Path, permissions: PermissionBoundary, *, also: bool) -> str:
+    """The sentence naming refused entries similar to ``missing``, with a leading space, or ""."""
+    refused = refused_similar(missing, permissions)
+    if not refused:
+        return ""
+    return " " + similar_note([display_search_path(path, cwd=cwd) for path in refused], also=also)
