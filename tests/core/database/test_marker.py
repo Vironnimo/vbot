@@ -241,14 +241,18 @@ def test_the_maintenance_block_keeps_the_guard_when_the_operation_fails(data_dir
     assert guard.operation == "convert"
 
 
-def test_a_malformed_guard_still_blocks(data_dir: Path) -> None:
+def test_a_malformed_guard_still_blocks_and_names_the_way_out(data_dir: Path) -> None:
     (data_dir / MAINTENANCE_GUARD_FILE_NAME).write_text("{}", encoding="utf-8")
 
     guard = read_maintenance(data_dir)
     assert guard is not None
-    assert guard.operation == "unknown"
-    with pytest.raises(DatabaseFormatError, match="maintenance is incomplete"):
+    assert (guard.operation, guard.damaged) == ("unknown", True)
+    # No operation can resume a guard that names none: deleting it by hand is the way out.
+    way_out = "maintenance is incomplete, but its guard is damaged.*Delete that file by hand"
+    with pytest.raises(DatabaseFormatError, match=way_out):
         open_database(notes_spec(data_dir))
+    with pytest.raises(DatabaseFormatError, match=way_out):
+        begin_maintenance(data_dir, "restore", resume=True)
 
 
 def test_the_operation_lock_is_exclusive_and_never_broken_by_age(
