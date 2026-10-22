@@ -53,8 +53,10 @@ class _Web:
         self.requested: list[tuple[str, int]] = []
         self.accept: list[str] = []
 
-        async def http_get(session: object, url: str, max_bytes: int) -> PublicResponse:
-            del session
+        async def http_get(
+            session: object, url: str, max_bytes: int, *, truncate: bool = False
+        ) -> PublicResponse:
+            del session, truncate
             self.requested.append((url, max_bytes))
             response = self.responses.get(url, make_result(status_code=404, url=url))
             if isinstance(response, Exception):
