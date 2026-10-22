@@ -586,11 +586,26 @@ def test_clamp_percent_bounds_and_rejects_non_numbers() -> None:
 )
 @pytest.mark.asyncio
 async def test_report_fails_open_into_an_error_snapshot(
-    provider_id: str, transport: UsageTransport, error: str
+    provider_id: str,
+    transport: UsageTransport,
+    error: str,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    report = await _report(transport, provider_id, timeout=0.01)
+    runtime = usage_runtime(provider_id)
+    account_id = "default" if provider_id == "openai" else "private_account_sentinel"
+    monkeypatch.setattr(
+        runtime.provider_credentials, "resolve_account_id", lambda *args: account_id
+    )
+    service = ProviderUsageService(runtime, transport=transport, timeout=0.01)
+    try:
+        report = await service.report()
+    finally:
+        await service.aclose()
 
     assert [snapshot.error for snapshot in report.providers] == [error]
+    assert all(snapshot.account == account_id for snapshot in report.providers)
+    assert account_id not in caplog.text
 
 
 @pytest.mark.asyncio
