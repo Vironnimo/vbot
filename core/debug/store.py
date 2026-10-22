@@ -24,6 +24,7 @@ from typing import Any
 from core.storage.layout import DataDirectoryLayout
 from core.utils.atomic import atomic_write_text
 from core.utils.logging import get_logger
+from core.utils.surrogates import replace_lone_surrogates, without_lone_surrogates
 from core.utils.workers import OrderedWorker
 
 _logger = get_logger("debug")
@@ -200,7 +201,9 @@ class DebugTraceStore:
     # ------------------------------------------------------------------
 
     def _save(self, trace_path: Path, trace_id: str, trace_data: dict[str, Any]) -> None:
-        trace_json = json.dumps(trace_data, ensure_ascii=False, indent=2)
+        # A Provider's JSON can decode to a lone surrogate, which UTF-8 cannot
+        # write; the capture keeps U+FFFD in its place instead of failing.
+        trace_json = replace_lone_surrogates(json.dumps(trace_data, ensure_ascii=False, indent=2))
         request = trace_data.get("request") or {}
         response = trace_data.get("response") or {}
         entry = _TraceIndexEntry(
@@ -219,7 +222,7 @@ class DebugTraceStore:
         previous = self._read_index() or []
         self._remove_unindexed_files(previous)
         entries = [item for item in previous if item.get("trace_id") != trace_id]
-        entries.append(asdict(entry))
+        entries.append(without_lone_surrogates(asdict(entry)))
         entries = self._prune_oldest(entries)
         try:
             atomic_write_text(trace_path, trace_json)

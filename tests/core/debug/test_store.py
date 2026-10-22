@@ -255,6 +255,17 @@ class TestSaveTrace:
             }
         ]
 
+    def test_replaces_lone_surrogates_instead_of_losing_the_capture(self, tmp_path: Path) -> None:
+        store = DebugTraceStore(tmp_path, trace_limit=10)
+        trace_data = _make_trace_data(TRACE_ID_1, "2025-06-01T12:00:00Z", model_id="gpt-\udc00")
+        trace_data["response"]["body"] = {"choices": [{"message": {"content": "hi \ud83d"}}]}
+
+        store.save_trace(TRACE_ID_1, trace_data)
+
+        saved = store.get_trace(TRACE_ID_1)
+        assert saved["response"]["body"]["choices"][0]["message"]["content"] == "hi �"
+        assert [entry["model_id"] for entry in store.get_traces()] == ["gpt-�"]
+
 
 # ---------------------------------------------------------------------------
 # Get trace list (newest first)

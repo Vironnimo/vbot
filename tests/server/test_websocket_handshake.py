@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -354,8 +355,8 @@ async def test_shared_socket_closes_subscription_immediately(
         await asyncio.Event().wait()
         return {}
 
-    async def send_json(event: dict[str, Any]) -> None:
-        if event["type"] == "connection_ready":
+    async def send_text(text: str) -> None:
+        if json.loads(text)["type"] == "connection_ready":
             return
         assert bus.subscriber_count == 1
         if exit_mode == "send_cancel":
@@ -369,7 +370,7 @@ async def test_shared_socket_closes_subscription_immediately(
         scope={},
         accept=accept,
         receive=receive,
-        send_json=send_json,
+        send_text=send_text,
     )
     endpoint = next(
         cast(Any, route).endpoint for route in app.routes if getattr(route, "path", None) == "/ws"
