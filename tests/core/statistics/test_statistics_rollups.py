@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 from collections.abc import Iterator
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -18,6 +19,7 @@ from core.database import DatabaseUnavailableError
 from core.models.pricing import TokenPricing
 from core.runs import Run, RunExecutionOwner
 from core.sessions import ChatSessionManager, SessionAddress
+from core.statistics import index as index_module
 from core.statistics._projection import datetime_instant
 from core.statistics.index import IndexView, StatisticsIndex, StatisticsScope
 from core.tools import tool_failure, tool_success
@@ -26,6 +28,7 @@ from core.utils.timestamps import format_canonical_timestamp
 from tests.core.sessions.history_fixtures import append_tool_fixture, seed_history
 from tests.core.statistics.statistics_test_support import (
     BASE,
+    StatisticsFactory,
     _admit,
     _assistant,
     _call,
@@ -444,12 +447,16 @@ async def test_paged_revisions_and_new_run_origins_equal_a_full_rebuild(
     )
 
     def pages(after: int = 0) -> Iterator[UsagePage]:
-        if after == revision:
+        # A rebuild pages through the same changes: calls that changed while
+        # it read come back on later pages.
+        if after == 0:
+            yield UsagePage(revision, (old,))
+        if after in (0, revision):
             yield UsagePage(revision + 2, (fresh, middle))
             yield UsagePage(revision + 3, (replace(fresh, session_id="middle"),))
             yield UsagePage(revision + 5, (final_old, final_fresh))
         else:
-            yield UsagePage(revision + 5, (final_old, final_fresh) if after == 0 else ())
+            yield UsagePage(revision + 5, ())
 
     monkeypatch.setattr(ledger, "read_since", pages)
     incremental = _rollups(index, manager, ledger, prices)
@@ -750,3 +757,69 @@ async def test_money_sums_are_exact_nano_usd(
     assert usage["reported_nusd"] == 600_000_003
     assert usage["reported_calls"] == 5
     assert _runs(rows)[("session", "run")]["reported_nusd"] == 600_000_003
+
+
+_SESSION_JOIN = re.compile(r"\bstat_sessions s ON s\.generation_id\b")
+
+
+class _SessionJoinPlans:
+    """Delegate to the index connection; plan each request-to-Session join before it runs."""
+
+    def __init__(self, connection: sqlite3.Connection, plans: dict[str, list[str]]) -> None:
+        self._connection = connection
+        self._plans = plans
+
+    def execute(self, sql: str, params: Any = ()) -> sqlite3.Cursor:
+        if _SESSION_JOIN.search(sql):
+            self._plans[sql] = [
+                row[3] for row in self._connection.execute(f"EXPLAIN QUERY PLAN {sql}", params)
+            ]
+        return self._connection.execute(sql, params)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._connection, name)
+
+
+@pytest.mark.asyncio
+async def test_requests_find_their_session_through_the_generation_index(
+    manager: ChatSessionManager,
+    index: StatisticsIndex,
+    ledger: UsageRecorder,
+    statistics: StatisticsFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Planner guard: every request-to-Session join searches the partial generation index.
+
+    Only a join term on ``stat_sessions`` itself implies the index's
+    ``generation_id <> ''``; a term on the request side scans every Session
+    for each request.
+    """
+    plans: dict[str, list[str]] = {}
+    reconcile_and_consume = index_module._reconcile_and_consume
+    monkeypatch.setattr(
+        index_module,
+        "_reconcile_and_consume",
+        lambda connection, sources, consume: reconcile_and_consume(
+            cast(sqlite3.Connection, _SessionJoinPlans(connection, plans)), sources, consume
+        ),
+    )
+    session = manager.create("main", session_id="session")
+    _admit(manager, session.address, "run")
+    seed_history(
+        session, [_run_summary(status="completed", at=_at(1), duration_ms=1, run_id="run")]
+    )
+    service = statistics(index=index, usage_recorder=ledger)
+    await _call(ledger, {"input_tokens": 1}, address=session.address, run_id="run")
+    # A rebuild recomputes every request; a later request changes its Run and cube rows.
+    service.report()
+    await _call(ledger, {"input_tokens": 2}, address=session.address, run_id="run")
+    report = service.report()
+
+    assert report["usage"]["recent_calls"]
+    # The rebuild's usage and first-token totals, a changed request's cube
+    # rows, its Run, and the report's recent calls.
+    assert len(plans) >= 5
+    for sql, plan in plans.items():
+        sessions = [step for step in plan if re.match(r"(SCAN|SEARCH) s\b", step)]
+        assert sessions, (sql, plan)
+        assert all("stat_sessions_generation" in step for step in sessions), (sql, plan)
