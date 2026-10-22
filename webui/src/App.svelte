@@ -106,10 +106,7 @@
   } from '$lib/appController.js';
   import {
     debugStatus,
-    acknowledgeDataStoreIncident,
-    getDataStoreStatus,
     getServedWebuiBuild,
-    listBackgroundActivity,
     reportClientMetrics,
   } from '$lib/api.js';
   import { startClientMetrics } from '$lib/clientMetrics.js';
@@ -368,35 +365,9 @@
     },
   });
 
-  const loadDataStoreStatus = async () => {
-    try {
-      const result = await getDataStoreStatus();
-      appControllerState.dataStoreIncident = result?.incidents?.[0] ?? null;
-      appControllerState.secretStore = result?.secrets ?? null;
-    } catch {
-      // Preserve the last durable incident projection during a transient RPC failure.
-    }
-  };
-
-  const loadBackgroundActivity = async () => {
-    try {
-      const result = await listBackgroundActivity();
-      appControllerState.backgroundActivity = Array.isArray(result?.activities)
-        ? result.activities
-        : [];
-    } catch {
-      // The next `activity_status` push or connection brings the list.
-    }
-  };
-
   const acknowledgeDataStoreRecovery = async () => {
-    const incidentId = dataStoreIncident?.incident_id;
-    if (!incidentId) {
-      return;
-    }
     try {
-      const result = await acknowledgeDataStoreIncident(incidentId);
-      appControllerState.dataStoreIncident = result?.incidents?.[0] ?? null;
+      await appController.acknowledgeDataStoreRecovery();
     } catch (error) {
       desktop.showToast({
         title: t('dataStore.acknowledgeFailedTitle'),
@@ -507,8 +478,6 @@
     onReloadExtensionPages: extensions.loadExtensionPages,
     onExtensionChange: extensions.publishChange,
     onPortalsChanged: invalidatePortals,
-    onLoadDataStoreStatus: loadDataStoreStatus,
-    onLoadBackgroundActivity: loadBackgroundActivity,
     onCheckWebuiBuild: checkWebuiBuild,
   });
   const runEvents = appController.runEvents;
