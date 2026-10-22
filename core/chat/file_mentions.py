@@ -295,6 +295,7 @@ def _snapshot_mention(
         size_bytes = resolved.stat().st_size
         if size_bytes > MENTION_INLINE_MAX_BYTES:
             return _degraded(mention, "too_large", size_bytes)
+        stamp = file_state.stamp(resolved)
         raw = resolved.read_bytes()
     except OSError as error:
         _LOGGER.warning("Could not snapshot @-mentioned file %s: %s", resolved, error)
@@ -303,7 +304,8 @@ def _snapshot_mention(
     if not sniff_media_type(raw, resolved.name).startswith("text/"):
         return _degraded(mention, "not_text", len(raw))
 
-    file_state.record_read(session_id, resolved)
+    if stamp is not None:
+        file_state.record_stamp(session_id, resolved, stamp)
     return FileMentionBlock(
         type="file_mention",
         path=mention,

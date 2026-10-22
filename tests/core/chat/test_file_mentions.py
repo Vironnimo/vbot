@@ -28,7 +28,7 @@ from core.chat.file_mentions import (
 )
 from core.projects import AgentResolutionError, AgentResolver, WorkingProjectMissingError
 from core.sessions import SessionAddress, SessionNotFoundError, SessionWorkingProject
-from core.tools.file_state import FileReadState
+from core.tools.file_state import FileReadState, StaleReason
 from tests.directory_links import link_directory
 
 # ---------------------------------------------------------------------------
@@ -174,10 +174,23 @@ def test_no_mentions_returns_content_unchanged(tmp_path: Path) -> None:
     assert _expand("hello", [], tmp_path, FileReadState()) == "hello"
 
 
-def test_inlines_text_file_and_stamps_a_session_scoped_read(tmp_path: Path) -> None:
+@pytest.mark.parametrize("changed_during_read", [False, True], ids=["unchanged", "concurrent-edit"])
+def test_inlines_text_file_and_stamps_a_session_scoped_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, changed_during_read: bool
+) -> None:
     target = tmp_path / "notes.md"
     target.write_text("line one\nline two\n", encoding="utf-8", newline="\n")
     state = FileReadState()
+    if changed_during_read:
+        read_bytes = Path.read_bytes
+
+        def read_then_change(path: Path) -> bytes:
+            raw = read_bytes(path)
+            if path == target:
+                target.write_text("unseen concurrent replacement", encoding="utf-8")
+            return raw
+
+        monkeypatch.setattr(Path, "read_bytes", read_then_change)
 
     result = _expand("check @notes.md", ["notes.md"], tmp_path, state)
 
@@ -192,7 +205,9 @@ def test_inlines_text_file_and_stamps_a_session_scoped_read(tmp_path: Path) -> N
     )
     # The snapshot counts as a read: an edit without a prior read tool call
     # must pass the read-before-write guard, but only in this Session.
-    assert state.check_stale("s1", target.resolve()) is None
+    assert state.check_stale("s1", target.resolve()) == (
+        StaleReason.MODIFIED if changed_during_read else None
+    )
     assert state.check_stale("other-session", target.resolve()) is not None
 
 

@@ -38,6 +38,7 @@ from core.prompts.blocks import (
     wrap_include_file,
 )
 from core.tools.availability import ToolAccess
+from core.tools.file_state import FileRead
 from core.utils.paths import model_path
 
 # Every template marker kind, including an unsafe include that would fail the build if
@@ -353,7 +354,7 @@ def test_include_inlines_a_readable_workspace_file_and_reports_only_that_read(
         monkeypatch.chdir(tmp_path)
         soul.write_text("LEAKED", encoding="utf-8")
         workspace = ""
-    seen: list[Path] = []
+    seen: list[FileRead] = []
 
     with caplog.at_level(logging.WARNING):
         result = expand_workspace_includes(
@@ -363,7 +364,7 @@ def test_include_inlines_a_readable_workspace_file_and_reports_only_that_read(
     assert result == expected
     assert any(record.levelno == logging.WARNING for record in caplog.records) is warns
     # Only content that reached the prompt is reported, so the chat loop can stamp it read.
-    assert seen == ([soul.resolve()] if setup == "file" else [])
+    assert [path for path, _stamp in seen] == ([soul.resolve()] if setup == "file" else [])
 
 
 def test_an_include_condition_is_logged_when_it_starts_changes_and_ends_not_per_build(
@@ -397,7 +398,7 @@ def test_an_oversized_include_keeps_its_frame_with_a_notice_naming_read_only_whe
 ) -> None:
     soul = tmp_path / "SOUL.md"
     soul.write_bytes(b"SOUL-START " + b"x" * INLINE_FILE_MAX_BYTES)
-    seen: list[Path] = []
+    seen: list[FileRead] = []
     context = BlockRenderContext(
         agent=StubAgent(workspace=str(tmp_path)),
         read_observer=seen.append,
@@ -484,7 +485,7 @@ def test_template_expansion_inserts_expanded_values_verbatim(
 ) -> None:
     (tmp_path / "EXTRA.md").write_text(_MARKERS, encoding="utf-8")
     (tmp_path / "USER.md").write_text("PRIVATE-USER-FILE", encoding="utf-8")
-    seen: list[Path] = []
+    seen: list[FileRead] = []
     context = BlockRenderContext(
         agent=StubAgent(workspace=str(tmp_path)), scope="default", read_observer=seen.append
     )
@@ -494,7 +495,7 @@ def test_template_expansion_inserts_expanded_values_verbatim(
     )
 
     assert result == expected
-    assert seen == [(tmp_path / name).resolve() for name in reads]
+    assert [path for path, _stamp in seen] == [(tmp_path / name).resolve() for name in reads]
 
 
 def test_template_expansion_expands_every_marker_of_the_template_itself(tmp_path: Path) -> None:

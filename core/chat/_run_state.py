@@ -68,6 +68,7 @@ from core.sessions import (
     latest_project_tool_context_id,
 )
 from core.tools import ToolContract
+from core.tools.file_state import FileRead
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -554,7 +555,7 @@ class _CompactionPromptRefresh:
     skill_catalog: PinnedSkillCatalog
     # The Project whose Skill pool the refreshed catalog advertises (qualifies its pin).
     skill_project_id: str | None
-    prompt_read_paths: tuple[Path, ...]
+    prompt_read_paths: tuple[FileRead, ...]
     available_skill_names: tuple[str, ...]
     memory_prompt_mode: str | None = None
     # Whether ``agent_body`` is a prompt-epoch pin (a Workspace-less Agent's body).

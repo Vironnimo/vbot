@@ -19,6 +19,7 @@ from core.memory import (
 )
 from core.prompts import INLINE_FILE_MAX_BYTES
 from core.prompts.blocks import FILE_READ_HINT, FILE_TOO_LARGE_NOTICE
+from core.prompts.pinned_context import stamp_prompt_files_read
 from core.prompts.prompts import (
     SOUL_FRAMING,
     PinnedSkillCatalog,
@@ -26,6 +27,7 @@ from core.prompts.prompts import (
     SystemPromptManager,
 )
 from core.tools.availability import ToolAccess
+from core.tools.file_state import FileRead, FileReadState, StaleReason
 from core.utils.paths import model_path
 from tests.core.prompts.prompts_test_support import (
     StubChannels,
@@ -171,7 +173,7 @@ def test_memory_mode_selects_the_rendered_and_reported_memory_files(
 ) -> None:
     manager = _manager(tmp_path)
     agent = _agent(workspace, memory_prompt_mode=mode)
-    read_paths: list[Path] = []
+    read_paths: list[FileRead] = []
 
     prompt = manager.build_system_prompt(agent, read_paths=read_paths)
 
@@ -182,7 +184,17 @@ def test_memory_mode_selects_the_rendered_and_reported_memory_files(
     assert ("Memory text" in prompt) is ("MEMORY.md" in memory_files)
     assert ("User text" in prompt) is ("USER.md" in memory_files)
     # Every auto-injected file is reported so the chat loop can stamp it read-before-write.
-    assert set(read_paths) == {(workspace / name).resolve() for name in ("SOUL.md", *memory_files)}
+    assert {path for path, _stamp in read_paths} == {
+        (workspace / name).resolve() for name in ("SOUL.md", *memory_files)
+    }
+
+    # Prompt capture and admission/Compaction stamping can be separated by I/O.
+    # A rewrite in between must not mark unseen bytes as read by this Session.
+    for path, _stamp in read_paths:
+        path.write_text("Unseen replacement after prompt rendering", encoding="utf-8")
+    state = FileReadState()
+    stamp_prompt_files_read(state, "session", read_paths)
+    assert all(state.check_stale("session", path) == StaleReason.MODIFIED for path, _ in read_paths)
 
 
 def test_memory_block_renders_with_empty_memory_files(tmp_path: Path) -> None:
@@ -234,8 +246,8 @@ def test_agent_without_workspace_never_reads_server_cwd(
     monkeypatch.chdir(tmp_path)
     for name in ("SOUL.md", "MEMORY.md", "USER.md"):
         (tmp_path / name).write_text(f"- SERVER_{name}_SENTINEL", encoding="utf-8")
-    reads: list[Path] = []
-    read_paths: list[Path] = []
+    reads: list[FileRead] = []
+    read_paths: list[FileRead] = []
     agent = _agent("", memory_prompt_mode=mode)
 
     assert manager.render_memory_files(agent, on_read=reads.append) == ""
@@ -244,7 +256,7 @@ def test_agent_without_workspace_never_reads_server_cwd(
     assert "SENTINEL" not in prompt
     assert "<memory>" not in prompt
     assert reads == []
-    assert read_paths == []
+    assert [path for path, _stamp in read_paths] == []
 
 
 def test_channels_block_renders_only_with_an_enabled_channel_of_this_agent(
@@ -479,7 +491,7 @@ def test_project_files_render_readable_files_after_memory_and_report_them(
         repo,
         ["AGENTS.md", "MISSING.md", "ADIR", "BINARY.md", "HUGE.md", "CONTEXT.md"],
     )
-    read_paths: list[Path] = []
+    read_paths: list[FileRead] = []
 
     with caplog.at_level(logging.WARNING):
         prompt = manager.build_system_prompt(
@@ -514,7 +526,7 @@ def test_project_files_render_readable_files_after_memory_and_report_them(
     assert any("BINARY.md" in message for message in messages)
     # Default layout: memory before Working Project; AGENTS.md before CONTEXT.md.
     assert prompt.index("<memory>") < prompt.index("AGENTS.md") < prompt.index("CONTEXT.md")
-    assert set(read_paths) == {
+    assert {path for path, _stamp in read_paths} == {
         (workspace / "SOUL.md").resolve(),
         (workspace / "MEMORY.md").resolve(),
         (repo / "AGENTS.md").resolve(),
@@ -542,7 +554,7 @@ def test_epoch_snapshots_point_to_tools_only_when_the_agent_policy_offers_them(
     )
     context = ProjectPromptContext.from_project("vbot", "vBot", repo, ["AGENTS.md"])
     manager = _manager(tmp_path)
-    reads: list[Path] = []
+    reads: list[FileRead] = []
 
     soul = manager.render_soul(agent, on_read=reads.append)
     working_project = manager.render_working_project_context(agent, context, on_read=reads.append)
@@ -576,7 +588,7 @@ def test_working_project_context_uses_exact_rooted_agent_frame(tmp_path: Path) -
         repo,
         ["AGENTS.md", "wiki/index.md"],
     )
-    read_paths: list[Path] = []
+    read_paths: list[FileRead] = []
 
     snapshot = manager.render_working_project_context(agent, context, on_read=read_paths.append)
 
@@ -597,13 +609,13 @@ def test_working_project_context_uses_exact_rooted_agent_frame(tmp_path: Path) -
         " </file>\n"
         "</project_context>"
     )
-    assert read_paths == [
+    assert [path for path, _stamp in read_paths] == [
         (repo / "AGENTS.md").resolve(),
         (repo / "wiki" / "index.md").resolve(),
     ]
 
     (repo / "AGENTS.md").write_text("Changed rules", encoding="utf-8")
-    rebuild_reads: list[Path] = []
+    rebuild_reads: list[FileRead] = []
     prompt = manager.build_system_prompt(
         agent,
         project_context=context,

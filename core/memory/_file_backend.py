@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import threading
 import unicodedata
-from collections.abc import Collection, Iterator, Sequence
+from collections.abc import Callable, Collection, Iterator, Sequence
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import ClassVar
@@ -51,6 +51,7 @@ from core.memory._history import (
     revert_revisions,
     state_at,
 )
+from core.tools.file_state import FileRead
 from core.utils.atomic import atomic_write_bytes
 from core.utils.paths import model_path
 
@@ -407,7 +408,12 @@ class FilePinnedMemoryBackend:
         )
 
     def read_prompt_files(
-        self, workspace: Path, mode: MemoryPromptMode, *, memory_tool: str | None
+        self,
+        workspace: Path,
+        mode: MemoryPromptMode,
+        *,
+        memory_tool: str | None,
+        on_read: Callable[[FileRead], None] | None = None,
     ) -> str:
         """Return the rendered pinned-memory entries for a mode.
 
@@ -427,7 +433,7 @@ class FilePinnedMemoryBackend:
         """
         validated_mode = validate_memory_prompt_mode(mode)
         return "\n\n".join(
-            self._render_prompt_scope(Path(workspace), scope, memory_tool)
+            self._render_prompt_scope(Path(workspace), scope, memory_tool, on_read)
             for scope in MEMORY_PROMPT_MODE_SCOPES[validated_mode]
         )
 
@@ -442,16 +448,24 @@ class FilePinnedMemoryBackend:
         return _format_scope(scope, _total(entries), entries)
 
     def _render_prompt_scope(
-        self, workspace: Path, scope: MemoryScope, memory_tool: str | None
+        self,
+        workspace: Path,
+        scope: MemoryScope,
+        memory_tool: str | None,
+        on_read: Callable[[FileRead], None] | None,
     ) -> str:
         """Render one scope for the System Prompt, cut to the scope's budget."""
         path = self._path(workspace, scope)
-        entries = _read_entries(path)
+        reads: list[FileRead] = []
+        entries = _decode_entries(path, _read_file(path, on_read=reads.append))
         used = _total(entries)
         budget = _MAX_SCOPE_BUDGET[scope]
         shown, omitted = _fit_budget(entries, budget)
         condition = str(path)
         if not omitted:
+            if on_read is not None:
+                for read in reads:
+                    on_read(read)
             if _PROMPT_CUT_CONDITIONS.ended(condition):
                 _LOGGER.info("Showed all Memory entries in the prompt again (path=%s)", path)
             return _format_scope(scope, used, entries)
@@ -566,10 +580,12 @@ def _read_entries(path: Path) -> list[str]:
     return _decode_entries(path, _read_file(path))
 
 
-def _read_file(path: Path) -> bytes | None:
+def _read_file(path: Path, *, on_read: Callable[[FileRead], None] | None = None) -> bytes | None:
     """Return a memory file's content, or ``None`` when it does not exist yet."""
     try:
         with path.open("rb") as handle:
+            status = os.fstat(handle.fileno())
+            stamp = (status.st_mtime, status.st_size)
             content = handle.read(_MAX_FILE_BYTES + 1)
     except FileNotFoundError:
         return None
@@ -583,6 +599,8 @@ def _read_file(path: Path) -> bytes | None:
             "Nothing was changed. Inspect and shorten this file with file tools or a text "
             "editor before using Memory again."
         )
+    if on_read is not None:
+        on_read((path.resolve(), stamp))
     return content
 
 
