@@ -42,7 +42,14 @@ def _snapshot(path: Path) -> _Snapshot:
         return _Snapshot(None, link=os.readlink(path))
     if not stat.S_ISREG(info.st_mode):
         raise _PatchError("not_a_file", path=path)
-    return _Snapshot(path.read_bytes(), stat.S_IMODE(info.st_mode))
+    try:
+        payload = path.read_bytes()
+    except OSError as error:
+        # A failed read of the opened file names no file, unlike a failed open.
+        if error.filename is None:
+            error.filename = str(path)
+        raise
+    return _Snapshot(payload, stat.S_IMODE(info.st_mode))
 
 
 def _resolve(

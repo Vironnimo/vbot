@@ -256,9 +256,8 @@ def make_read_handler(
         context: ToolContext, arguments: JsonObject, resolved: Path, label: str
     ) -> JsonObject | _PreparedAudio:
         def read_error(error: OSError) -> JsonObject:
-            return tool_failure(
-                "file_read_error", f"Could not read {label}: {os_error_reason(error)}."
-            )
+            reason = os_error_reason(error, reading=resolved)
+            return tool_failure("file_read_error", f"Could not read {label}: {reason}.")
 
         filtering = arguments.get("pattern") is not None
 

@@ -362,11 +362,24 @@ _ERRNO_REASONS = {
 }
 
 
-def os_error_reason(error: OSError) -> str:
-    """Say why a file operation failed, in English and without the absolute path."""
+def os_error_reason(error: OSError, *, reading: Path | None = None) -> str:
+    """Say why a file operation failed, in English and without the absolute path.
+
+    ``reading`` names the file whose opening or reading failed. Windows reports
+    a sharing or lock violation there as a bare "permission denied" without its
+    Windows code, so another program holding the file open is checked for.
+    """
     if isinstance(error, ReadOnlyFileError):
         return "the file is read-only"
-    reason = _WINDOWS_REASONS.get(getattr(error, "winerror", None) or 0)
+    winerror = getattr(error, "winerror", None)
+    if (
+        reading is not None
+        and winerror is None
+        and isinstance(error, PermissionError)
+        and _held_open_elsewhere(reading)
+    ):
+        winerror = _SHARING_VIOLATION
+    reason = _WINDOWS_REASONS.get(winerror or 0)
     if reason is None and error.errno is not None:
         reason = _ERRNO_REASONS.get(error.errno) or os.strerror(error.errno).lower()
     return reason or error.strerror or str(error) or type(error).__name__

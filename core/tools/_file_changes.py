@@ -262,11 +262,15 @@ def change_batch(context: ToolContext, templates: Mapping[str, str] | None = Non
     )
 
 
-def _os_reason(error: OSError, batch: ChangeBatch) -> str:
-    """Describe a file-system error by its reason and shown path, never an absolute one."""
-    reason = os_error_reason(error)
-    if error.filename:
-        return f"{batch.shown(Path(error.filename))}: {reason}"
+def _os_reason(error: OSError, batch: ChangeBatch, *, reading: bool = False) -> str:
+    """Describe a file-system error by its reason and shown path, never an absolute one.
+
+    ``reading`` says the error came from reading the file it names.
+    """
+    path = Path(error.filename) if isinstance(error.filename, str) and error.filename else None
+    reason = os_error_reason(error, reading=path if reading else None)
+    if path is not None:
+        return f"{batch.shown(path)}: {reason}"
     return reason
 
 
@@ -303,7 +307,8 @@ def _write_failure(path: Path, error: OSError, batch: ChangeBatch) -> JsonObject
 
 def _error_data(error: _PatchError | OSError, batch: ChangeBatch) -> JsonObject:
     if not isinstance(error, _PatchError):
-        return {"code": "file_read_error", "message": f"Could not read {_os_reason(error, batch)}."}
+        reason = _os_reason(error, batch, reading=True)
+        return {"code": "file_read_error", "message": f"Could not read {reason}."}
     data: JsonObject = {"code": error.code, "message": batch.error_text(error), **error.details}
     path = error.values.get("path")
     if isinstance(path, Path):
@@ -386,7 +391,7 @@ def _commit(
             actual = _snapshot(path)
         except OSError as error:
             batch.blocked.update(before)
-            reason = os_error_reason(error)
+            reason = os_error_reason(error, reading=path)
             return completed, {
                 "code": "file_read_error",
                 "message": _UNCONFIRMED.format(path=batch.shown(path), reason=reason),

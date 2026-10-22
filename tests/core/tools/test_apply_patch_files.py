@@ -21,6 +21,7 @@ from core.tools._patch_report import edit_outcome
 from core.tools.change_tracker import ChangeTracker
 from core.tools.file_state import FileReadState
 from tests.core.tools.apply_patch_test_support import apply, call, context, registry, text, update
+from tests.core.tools.file_state_test_support import held_by_another_program
 
 BOM = b"\xef\xbb\xbf"
 
@@ -1172,6 +1173,23 @@ def test_replace_failure_is_bounded_and_keeps_other_operations(
     assert sorted(p.name for p in tmp_path.iterdir()) == (
         ["file.txt", "other.txt"] if other_file else ["file.txt"]
     )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows sharing and lock violations")
+@pytest.mark.parametrize("how", ["open", "lock"])
+def test_a_file_another_program_holds_is_named_with_that_reason(tmp_path, how):
+    path = tmp_path / "file.txt"
+    path.write_bytes(b"old\n")
+
+    # Windows reports both as "permission denied"; a failed read also names no file.
+    with held_by_another_program(path, how):
+        result = apply(tmp_path, "*** Update File: file.txt\n@@\n-old\n+new")
+
+    assert result["error"]["code"] == "file_read_error"
+    assert result["error"]["message"] == (
+        "No file was changed.\nCould not read file.txt: another program is using it."
+    )
+    assert path.read_bytes() == b"old\n"
 
 
 @pytest.mark.asyncio
