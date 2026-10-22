@@ -32,11 +32,14 @@ class SettingsChangeEffects:
     ``commands_changed``: the Extension layer was rebuilt or narrowed, so its
     Commands and page registrations may differ. ``skills_changed``: the Skill
     layer was rescanned (Skill directories, or Extension Skill folders), so the
-    Skill inventory may differ.
+    Skill inventory may differ. ``agents_changed``: the shared Agent defaults
+    (``defaults.agent``, the default Permission Rules included) changed, so
+    every Agent's effective configuration may differ.
     """
 
     commands_changed: bool = False
     skills_changed: bool = False
+    agents_changed: bool = False
 
 
 async def apply_settings_change(
@@ -99,7 +102,13 @@ async def apply_settings_change(
     return SettingsChangeEffects(
         commands_changed=extension_layer_changed,
         skills_changed=extension_layer_changed or skills_changed,
+        agents_changed=_agent_defaults(previous) != _agent_defaults(current),
     )
+
+
+def _agent_defaults(settings: Mapping[str, Any]) -> Any:
+    defaults = settings.get("defaults")
+    return defaults.get("agent") if isinstance(defaults, dict) else None
 
 
 def _debug_enabled(settings: Mapping[str, Any]) -> bool:
