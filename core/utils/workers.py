@@ -11,8 +11,9 @@ run in exactly the order the Event Loop submitted them, such as full-document
 snapshots written by a scheduler and by operator edits.
 
 Every pool records its admission wait and run durations
-(``worker_pool.<name>.wait`` / ``.run``) and its ``.active`` / ``.waiting``
-gauges; an ordered worker records ``worker_pool.<name>.run``. During a
+(``worker_pool.<name>.wait`` / ``.run``, the latter in the worker thread) and its
+``.active`` / ``.waiting`` gauges; an ordered worker records
+``worker_pool.<name>.run``. During a
 performance recording they also appear on the ``worker pool <name>`` track.
 """
 
@@ -103,8 +104,7 @@ class BoundedWorkerPool:
             )
             self._count_active(1)
             try:
-                with measure(self._run_metric, track=self._track, name=_callable_name(function)):
-                    return await self._run_admitted(function, arguments, keyword_arguments)
+                return await self._run_admitted(function, arguments, keyword_arguments)
             finally:
                 self._count_active(-1)
         finally:
@@ -117,12 +117,26 @@ class BoundedWorkerPool:
         keyword_arguments: dict[str, Any],
     ) -> WorkerResult:
         loop = asyncio.get_running_loop()
-        call = partial(function, *arguments, **keyword_arguments)
+        name = _callable_name(function)
+        call = partial(self._run_measured, name, function, arguments, keyword_arguments)
         # Settling first keeps a cancelled caller from releasing the semaphore early.
         return await settle_before_cancelling(
             loop.run_in_executor(self._executor, call),
-            on_late_failure=partial(_log_late_failure, _callable_name(function)),
+            on_late_failure=partial(_log_late_failure, name),
         )
+
+    def _run_measured[WorkerResult](
+        self,
+        name: str,
+        function: Callable[..., WorkerResult],
+        arguments: tuple[Any, ...],
+        keyword_arguments: dict[str, Any],
+    ) -> WorkerResult:
+        # Measured in the worker thread: the callable's own time, without the
+        # Event Loop's delay in taking the result back, which a busy loop
+        # stretches far beyond the work (``event_loop.lag`` shows that delay).
+        with measure(self._run_metric, track=self._track, name=name):
+            return function(*arguments, **keyword_arguments)
 
     def _count_waiting(self, delta: int) -> None:
         with self._counts_lock:

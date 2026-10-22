@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import threading
+import time
 from collections.abc import Iterator
 from concurrent.futures import Future
 from pathlib import Path
@@ -219,6 +220,19 @@ async def test_worker_pool_records_admission_wait_run_time_and_occupancy(
         "wait",
     ]
     assert {span["cat"] for span in spans} == {"worker_pool"}
+
+    # The run time is the callable's own, not the Event Loop's delay in taking
+    # its result back.
+    quick = BoundedWorkerPool(name="test-run-time", max_workers=1)
+    finished = threading.Event()
+    quick_task = asyncio.create_task(quick.run(finished.set))
+    await asyncio.sleep(0)
+    assert finished.wait(timeout=5)
+    time.sleep(0.1)  # The loop is busy while the result waits for it.
+    await quick_task
+    run = (await performance.snapshot())["metrics"]["worker_pool.test-run-time.run"]
+    assert run["count"] == 1
+    assert run["max_ms"] < 50
 
 
 @pytest.mark.asyncio
