@@ -380,6 +380,7 @@ def _difference_text(difference: JsonObject, after: str = "") -> list[str]:
         if difference.get("unprefixed")
         else []
     )
+    unprefixed = [*_forms_text(difference.get("forms"), source), *unprefixed]
     if difference.get("break"):
         return [_break_text(difference, source, after), *unprefixed]
     # A copy that starts or ends inside a line keeps the file's whitespace at its line breaks.
@@ -423,6 +424,36 @@ def _difference_text(difference: JsonObject, after: str = "") -> list[str]:
             else f"{label} character {start}: end of line."
         )
     return [*lines, *unprefixed]
+
+
+def _forms_text(forms: list[list[str]] | None, source: str) -> list[str]:
+    """Name the code points of a line that differs only in Unicode normalization.
+
+    Both forms look alike when quoted, and Models write the composed one. An
+    old_string matches a file's form written with \\u escapes (``edit.md``).
+    """
+    if not forms:
+        return []
+
+    def points(text: str) -> str:
+        return " ".join(f"U+{ord(character):04X}" for character in text)
+
+    def escaped(text: str) -> str:
+        return "".join(
+            character if ord(character) < 0xA0 else json.dumps(character)[1:-1]
+            for character in text
+        )
+
+    places = ", and ".join(
+        f"{points(file_form)} where {source} has {points(copy_form)}"
+        for file_form, copy_form in forms
+    )
+    text = f"This line differs only in Unicode normalization: the file has {places}."
+    if source != "old_string":
+        return [text]
+    spellings = " and ".join(escaped(file_form) for file_form, _ in forms)
+    their = "its place" if len(forms) == 1 else "their places"
+    return [f"{text} Send old_string with {spellings} in {their} to match the file."]
 
 
 def _break_text(difference: JsonObject, source: str, after: str) -> str:

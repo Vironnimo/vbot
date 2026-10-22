@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from difflib import SequenceMatcher
 from os.path import commonprefix
 
@@ -31,7 +32,7 @@ def first_difference(
     placed: bool = False,
     whole_lines: bool = False,
     character: int = 1,
-) -> dict[str, int | str | bool] | None:
+) -> dict[str, int | str | bool | list[list[str]]] | None:
     """Locate where ``copy`` first differs from ``content`` near line ``start``.
 
     ``start`` is the 1-based line of the closest candidate for ``copy``;
@@ -51,6 +52,8 @@ def first_difference(
     whitespace at its inner line breaks, so a line that differs there alone,
     such as a continuation line without its indentation, is the difference, and
     ``spacing`` names its side (``line_differences`` compares the same way).
+    ``forms`` lists, for a line that differs only in Unicode normalization, the
+    differing spellings as [file, copy] pairs (see ``_normalization_forms``).
     """
     file_lines = split_text_lines(content)
     wanted_lines = split_text_lines(copy)
@@ -114,7 +117,14 @@ def first_difference(
                 file_lines[number] if number < len(file_lines) else None,
                 wanted_lines[position + 1] if position + 1 < len(wanted_lines) else None,
             )
+            forms = _normalization_forms(
+                actual[skip:],
+                wanted,
+                start=position == first and (starts_inside or skip > 0),
+                end=position == last and ends_inside,
+            )
             return {
+                **({"forms": forms} if forms else {}),
                 "line": number,
                 "character": file_position + 1,
                 "copy_line": position + 1,
@@ -504,6 +514,56 @@ def _break_difference(
 
 def _loose(text: str) -> str:
     return " ".join(text.split())
+
+
+# A normalization difference names at most this many different spellings of a line.
+_FORMS_SHOWN = 3
+
+
+def _normalization_forms(held: str, copied: str, *, start: bool, end: bool) -> list[list[str]]:
+    """List how a copied line spells characters differently from its file line.
+
+    Each entry pairs the file's spelling of a character with its marks, such as
+    ``e`` with a combining acute accent, with the copy's, such as ``é``: two
+    forms of the same text under Unicode normalization (NFC). Empty unless that
+    is the only difference between the lines; ``start`` and ``end`` mean what
+    they mean for ``_paired_difference``.
+    """
+    held_clusters, copied_clusters = _clusters(_loose(held)), _clusters(_loose(copied))
+    count = len(copied_clusters)
+    if start and not end:
+        held_clusters = held_clusters[-count:] if count else []
+    elif end and not start:
+        held_clusters = held_clusters[:count]
+    if len(held_clusters) != count:
+        return []
+    forms: list[list[str]] = []
+    for file_form, copy_form in zip(held_clusters, copied_clusters, strict=True):
+        if file_form == copy_form:
+            continue
+        if unicodedata.normalize("NFC", file_form) != unicodedata.normalize("NFC", copy_form):
+            return []
+        if [file_form, copy_form] not in forms:
+            forms.append([file_form, copy_form])
+    return forms[:_FORMS_SHOWN]
+
+
+def _clusters(text: str) -> list[str]:
+    """Split ``text`` into characters, each with the marks that combine with it."""
+    clusters: list[str] = []
+    for character in text:
+        code = ord(character)
+        # Marks, and the vowel and final consonant jamo of a decomposed Hangul syllable.
+        combines = (
+            unicodedata.category(character).startswith("M")
+            or 0x1160 <= code <= 0x11FF
+            or 0xD7B0 <= code <= 0xD7FF
+        )
+        if clusters and combines:
+            clusters[-1] += character
+        else:
+            clusters.append(character)
+    return clusters
 
 
 def _difference_positions(actual: str, wanted: str) -> tuple[int, int]:
