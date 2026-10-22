@@ -273,6 +273,7 @@ class CommandDeclaration:
     execution_mode: str = "serialized"
     argument_execution_mode: str | None = None
     unavailable_surfaces: object = ()
+    argument_hint: str = ""
 
 
 @dataclass(frozen=True)
