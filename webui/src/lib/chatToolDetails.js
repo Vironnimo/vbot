@@ -2,11 +2,15 @@ import { getAttachmentUrl } from '$lib/api.js';
 import { t } from '$lib/i18n.js';
 import { isPlainObject } from '$lib/values.js';
 
-const TOOL_DETAIL_HIDDEN_KEYS = ['artifacts', 'description'];
+const TOOL_DETAIL_HIDDEN_KEYS = ['artifacts'];
 // `edit`, `write`, `glob` and `grep` are retired Tools; Sessions recorded before
-// 2026-09-14 still hold their calls, which these entries keep readable.
+// 2026-09-14 still hold their calls, which these entries keep readable. Their
+// rows and a Bash row show the call's `description` already.
 const TOOL_ARGUMENT_HIDDEN_KEYS = {
+  bash: ['description'],
   edit: ['edits', 'new_string', 'old_string'],
+  glob: ['description'],
+  grep: ['description'],
   write: ['content'],
 };
 const TOOL_ERROR_DETAIL_KEYS = [
@@ -77,7 +81,8 @@ export function toolDetailMedia(tool, result) {
 }
 
 // Rendering modes keep arguments, unfiltered raw arguments, literal display
-// text and a result payload distinct without combining competing flags.
+// text, a result payload and the unfiltered raw result distinct without
+// combining competing flags.
 export const toolDetailPresentation = (
   value,
   { mode = 'arguments', toolName = '', tool = null } = {},
@@ -87,15 +92,17 @@ export const toolDetailPresentation = (
       ? value
       : mode === 'result'
         ? preferredToolResultValue(value, toolName, tool)
-        : sanitizeToolDetailNode(
-            value,
-            mode === 'raw'
-              ? null
-              : tool
-                ? hiddenArgumentKeysForTool(tool, toolName)
-                : hiddenArgumentKeysForTool(toolName),
-            true,
-          );
+        : mode === 'raw-result'
+          ? rawToolResultValue(parseJsonValue(value))
+          : mode === 'raw'
+            ? parseJsonValue(value)
+            : sanitizeToolDetailNode(
+                value,
+                tool
+                  ? hiddenArgumentKeysForTool(tool, toolName)
+                  : hiddenArgumentKeysForTool(toolName),
+                true,
+              );
 
   if (!hasMeaningfulToolDetail(processed)) {
     const emptyText = t('chat.toolNoData');
@@ -225,6 +232,36 @@ function preferredToolResultValue(value, toolName = '', tool = null) {
   }
 
   return sanitizedValue;
+}
+
+// Every field of a result envelope: the data of a success, the error of a
+// failure, and artifacts when there are any. The envelope frame (`ok`, a null
+// `error`, empty `artifacts`) carries nothing the section does not show.
+function rawToolResultValue(value) {
+  if (!isToolResultEnvelope(value)) {
+    return value;
+  }
+  const body = value.ok === false ? value.error : value.data;
+  const artifacts = hasMeaningfulToolDetail(value.artifacts)
+    ? value.artifacts
+    : undefined;
+  if (artifacts === undefined) {
+    return body;
+  }
+  if (isPlainObject(body) && !('artifacts' in body)) {
+    return { ...body, artifacts };
+  }
+  return { [value.ok === false ? 'error' : 'data']: body, artifacts };
+}
+
+function isToolResultEnvelope(value) {
+  return (
+    isPlainObject(value) &&
+    typeof value.ok === 'boolean' &&
+    Object.keys(value).every((key) =>
+      ['ok', 'error', 'data', 'artifacts'].includes(key),
+    )
+  );
 }
 
 function preferredToolErrorValue(value) {

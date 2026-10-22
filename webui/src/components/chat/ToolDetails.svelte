@@ -5,10 +5,10 @@
   // A Tool whose display declares detail blocks shows those to the user
   // (texts such as its command and output, the files it changed, what it
   // found, the Memory entries it changed, notices),
-  // with the raw call and result behind a disclosure. The live Output (the
-  // command's newest output lines) takes the place of an Output block, or
-  // follows the blocks while the call runs. Any other Tool shows Args, live
-  // Output and its Result.
+  // with the unfiltered raw call and result behind a disclosure. The live
+  // Output (the command's newest output lines) takes the place of an Output
+  // block, or follows the blocks while the call runs. Any other Tool shows
+  // Args, live Output and its Result.
   import { toolDetailBlocks, toolDetailMedia } from '$lib/chatToolDetails.js';
   import { t } from '$lib/i18n.js';
   import CollapseRail from './CollapseRail.svelte';
@@ -59,6 +59,10 @@
     task: () => t('chat.toolDetailLabel.task'),
   };
 
+  // Readers mostly want a command's output, so its command starts at two
+  // lines and opens on request.
+  const CLAMPED_TEXT_LINES = { command: 2 };
+
   let blocks = $derived(toolDetailBlocks(tool, { args, result }));
   let media = $derived(toolDetailMedia(tool, result));
   let streamed = $derived(Boolean(output));
@@ -93,13 +97,13 @@
   {/if}
 {/snippet}
 
-{#snippet resultSection()}
+{#snippet resultSection(mode = 'result')}
   {#if showResult}
     <ToolDetailSection
       label={t('chat.toolResultLabel')}
       value={result}
       isError={resultFailed}
-      mode="result"
+      {mode}
       {toolName}
       {tool}
     />
@@ -116,10 +120,14 @@
           {#if block.label === 'output' && streamed}
             {@render outputSections()}
           {:else}
+            {@const clampKey = `${viewKey}:${block.label}:${index}`}
             <ToolDetailSection
               label={TEXT_LABELS[block.label]()}
               value={block.text}
               mode="literal"
+              clampLines={CLAMPED_TEXT_LINES[block.label] ?? 0}
+              expanded={viewState.isOpen(clampKey)}
+              onExpandedChange={(next) => viewState.setOpen(clampKey, next)}
             />
           {/if}
         {:else if block.type === 'file_changes'}
@@ -148,7 +156,7 @@
           {#if viewState.isOpen(rawKey)}
             <div class="tool-raw-call__body">
               {@render argsSection('raw')}
-              {@render resultSection()}
+              {@render resultSection('raw-result')}
             </div>
           {/if}
         </details>
