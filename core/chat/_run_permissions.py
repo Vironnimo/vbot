@@ -87,7 +87,8 @@ class SessionPermissions:
     are the Session's stored ceiling and the one a temporary Agent's Extension
     imposes. ``agent_config`` is an Identity Agent's ``agent.json``, which the
     Session may neither read nor change; ``rule_files`` are a Team member's
-    repository profile and settings files, readable but never writable.
+    repository profile and settings files and where a definition could replace
+    the profile, readable but never writable.
     """
 
     rules: PermissionRules | None
