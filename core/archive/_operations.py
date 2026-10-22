@@ -33,6 +33,7 @@ from core.sessions import (
     ArchiveScope,
     ArchiveTree,
 )
+from core.utils.file_status import exists_strict
 from core.utils.logging import get_logger
 from core.utils.timestamps import canonical_timestamp
 
@@ -340,10 +341,19 @@ def _abandon_unless_retained(
 ) -> None:
     """Delete the entry of a failed archive whose files went back.
 
-    When a payload tree still exists, its files did not go back: the entry
-    stays ``archiving`` and startup recovery returns them.
+    When a payload tree remains or cannot be checked, keep its ``archiving``
+    entry so startup recovery can return it. Never mask the archive failure.
     """
-    if any(tree.exists() for tree in trees):
+    try:
+        retained = any(exists_strict(tree, follow_symlinks=False) for tree in trees)
+    except OSError as error:
+        _LOGGER.warning(
+            "Archive left for recovery; its files could not be checked (entry=%s error=%s)",
+            ref.entry_id,
+            type(error).__name__,
+        )
+        return
+    if retained:
         _LOGGER.warning(
             "Archive left for recovery; its files did not go back (entry=%s)", ref.entry_id
         )
