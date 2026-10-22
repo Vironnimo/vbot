@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator, MutableMapping
 from contextlib import aclosing
 from pathlib import Path
 from typing import Any, cast, override
@@ -125,17 +126,27 @@ def test_websocket_forwards_run_lifecycle_without_deltas_or_provider_metadata(
 def test_websocket_forwards_bus_events_and_unsubscribes_on_disconnect(tmp_path: Path) -> None:
     app = create_app(runtime=cast(Any, StubRuntime(tmp_path, StubAdapter())))
 
-    with TestClient(app) as client:
+    async def utf8_server(scope: Any, receive: Any, send: Any) -> None:
+        # Like the real server, encode each text frame as UTF-8.
+        async def send_encoded(message: MutableMapping[str, Any]) -> None:
+            if message["type"] == "websocket.send" and message.get("text") is not None:
+                message["text"].encode()
+            await send(message)
+
+        await app(scope, receive, send_encoded)
+
+    with TestClient(utf8_server) as client:
         with client.websocket_connect("/ws") as websocket:
             assert websocket.receive_json()["type"] == "connection_ready"
-            app.state.event_bus.publish(APP_ERROR_EVENT, {"message": "Background task failed"})
+            # Half an emoji is a lone surrogate that UTF-8 cannot encode.
+            app.state.event_bus.publish(APP_ERROR_EVENT, {"message": "Task failed \ud83d"})
             event = websocket.receive_json()
 
         app.state.event_bus.publish(RUN_STARTED_SERVER_EVENT, {"run_id": "run-one"})
         wait_for_event_bus_subscribers(app, expected_count=0)
 
     assert event["type"] == APP_ERROR_EVENT
-    assert event["payload"] == {"message": "Background task failed"}
+    assert event["payload"] == {"message": "Task failed �"}
 
 
 def test_window_presence_roster_follows_connects_and_disconnects(tmp_path: Path) -> None:
@@ -205,7 +216,7 @@ async def test_websocket_disconnect_during_hello_unregisters_client(tmp_path: Pa
         async def accept(self) -> None:
             return None
 
-        async def send_json(self, _payload: Any) -> None:
+        async def send_text(self, _text: str) -> None:
             raise WebSocketDisconnect(code=1001)
 
     with TestClient(app):
@@ -247,8 +258,8 @@ async def test_websocket_receives_during_blocked_send_and_settles_both_direction
             finally:
                 send_settled.set()
 
-        async def send_json(self, data: Any) -> None:
-            sent.append(data)
+        async def send_text(self, data: str) -> None:
+            sent.append(json.loads(data))
 
     async def output() -> AsyncGenerator[bytes | dict[str, Any]]:
         try:
@@ -494,7 +505,7 @@ async def test_terminal_socket_bounds_backlogs_and_settles_overloaded_connection
                 "text": "[]" if blocked == "protocol_replies" else '{"type":"input","data":"x"}',
             }
 
-        async def send_json(self, _payload: Any) -> None:
+        async def send_text(self, _text: str) -> None:
             sending.set()
             await asyncio.Event().wait()
 

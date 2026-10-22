@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from core.chat._effort_epoch import EffortState
+from core.chat._message_history import effective_compaction_messages
 from core.chat._prompt_block_epoch import PromptBlockPin
 from core.chat._run_permissions import (
     RunPermissions,
@@ -31,7 +32,11 @@ from core.chat.messages import (
 )
 from core.chat.recovery import RecoveryBudget
 from core.chat.usage import RequestContextUsage
-from core.chat.wire_shaping import RequestImageBudget
+from core.chat.wire_shaping import (
+    RequestImageBudget,
+    notes_missing_from_request,
+    request_tail_notes,
+)
 from core.permissions import PermissionBoundary
 from core.projects import (
     FolderInstructions,
@@ -395,12 +400,19 @@ class _HistoryWrite(Protocol):
 
 @dataclass
 class _SessionSnapshot:
-    """Run-local canonical Session state refreshed through append-only deltas."""
+    """Run-local canonical Session state refreshed through append-only deltas.
+
+    Notes that reach the snapshot with a delta rather than through its own
+    appends are *arrived*: notes the Run added through its note buffers and
+    notes other writers added (a Secret, a Channel or goal note).
+    :meth:`missing_arrived_notes` checks them against the live request.
+    """
 
     messages: list[ChatMessage]
     cursor: SessionReadCursor
     active_lineage: list[ChatMessage]
     pending_edit_message_id: str | None = None
+    _arrived_note_ids: set[str] = field(default_factory=set, init=False, repr=False)
 
     @property
     def active_messages(self) -> list[ChatMessage]:
@@ -464,6 +476,7 @@ class _SessionSnapshot:
                 tool_results=tool_results,
                 subagent_reply_target=subagent_reply_target,
             ),
+            written=messages,
         )
 
     async def apply_edit(
@@ -515,16 +528,19 @@ class _SessionSnapshot:
         self,
         session: ChatSession,
         write: _HistoryWrite,
+        *,
+        written: Sequence[ChatMessage] = (),
     ) -> None:
         """Run one history *write* of this Session and advance to its result.
 
         *write* returns every record after *since* from its own transaction,
         including other writers' appends, exactly as :meth:`refresh` would.
+        *written* are the Messages the write itself appends.
         """
         committed = await write(since=self.cursor)
         if committed is not None:
             session.acknowledge_deferred_notes(committed.messages)
-        await self._apply(session, committed)
+        await self._apply(session, committed, written={message.id for message in written})
 
     async def flush_deferred_notes(self, session: ChatSession) -> None:
         """Persist deferred notes, then include every newer record."""
@@ -534,7 +550,50 @@ class _SessionSnapshot:
         else:
             await self.refresh(session)
 
-    async def _apply(self, session: ChatSession, batch: SessionReadBatch | None) -> None:
+    async def missing_arrived_notes(
+        self,
+        request_messages: list[JsonObject],
+        *,
+        replay_policy: ReasoningReplayPolicy,
+        agent_model: str | None,
+        delivering: Sequence[ChatMessage] = (),
+    ) -> tuple[list[ChatMessage], bool]:
+        """Check the arrived notes against the live *request_messages*.
+
+        Returns the arrived notes the request does not show, in history order,
+        and whether one of them precedes the request's last sent message: a
+        note another writer added while the Model answered is replayed before
+        that answer, where no request boundary can add it. *delivering* are
+        notes the caller adds to the request itself. Arrived notes the request
+        shows are forgotten; the missing ones stay arrived until
+        :meth:`forget_arrived_notes`. The whole-history comparison runs only
+        when a note arrived.
+        """
+        self._arrived_note_ids.difference_update(note.id for note in delivering)
+        if not self._arrived_note_ids:
+            return [], False
+        missing, misplaced = await _CHAT_TRANSFORM_WORKERS.run(
+            _missing_arrived_notes,
+            list(self.active_messages),
+            list(request_messages),
+            frozenset(self._arrived_note_ids),
+            replay_policy,
+            agent_model,
+        )
+        self._arrived_note_ids = {note.id for note in missing}
+        return missing, misplaced
+
+    def forget_arrived_notes(self) -> None:
+        """Treat every note in the snapshot as shown, after a request build from it."""
+        self._arrived_note_ids.clear()
+
+    async def _apply(
+        self,
+        session: ChatSession,
+        batch: SessionReadBatch | None,
+        *,
+        written: Collection[str] = (),
+    ) -> None:
         if batch is None:
             replacement = await self.load(session)
             self.messages = replacement.messages
@@ -544,6 +603,38 @@ class _SessionSnapshot:
         self.messages.extend(batch.messages)
         self.active_lineage.extend(batch.active_messages)
         self.cursor = batch.cursor
+        self._arrived_note_ids.update(
+            message.id
+            for message in batch.active_messages
+            if message.role == "note" and message.id not in written
+        )
+
+
+def _missing_arrived_notes(
+    history: list[ChatMessage],
+    request_messages: list[JsonObject],
+    arrived: frozenset[str],
+    replay_policy: ReasoningReplayPolicy,
+    agent_model: str | None,
+) -> tuple[list[ChatMessage], bool]:
+    """Find the *arrived* notes a live request lacks, and whether one precedes its tail."""
+    effective = effective_compaction_messages(history)
+    missing = [
+        note
+        for note in notes_missing_from_request(
+            effective, request_messages, replay_policy=replay_policy, agent_model=agent_model
+        )
+        if note.id in arrived
+    ]
+    if not missing:
+        return [], False
+    tail = {
+        note.id
+        for note in request_tail_notes(
+            effective, replay_policy=replay_policy, agent_model=agent_model
+        )
+    }
+    return missing, any(note.id not in tail for note in missing)
 
 
 @dataclass(frozen=True)

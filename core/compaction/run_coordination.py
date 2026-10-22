@@ -45,7 +45,7 @@ if TYPE_CHECKING:
     from core.compaction import CompactionService
     from core.permissions import PermissionBoundary
     from core.runs import Run
-    from core.sessions import ChatSession, SessionReadCursor
+    from core.sessions import ChatSession, SessionReadCursor, TemporarySessionBinding
 
 
 _LOGGER = get_logger("compaction.coordination")
@@ -121,6 +121,8 @@ class CompactionRunHost(Protocol):
         session: ChatSession,
         messages: list[ChatMessage],
         settings: CompactionSettings,
+        *,
+        temporary_binding: TemporarySessionBinding | None,
     ) -> ManualCompactionRequest: ...
 
     async def close_manual_request(self, request: Any) -> None: ...
@@ -240,8 +242,13 @@ class CompactionRunCoordinator:
         compaction_service: CompactionService,
         *,
         instruction: str | None,
+        temporary_binding: TemporarySessionBinding | None = None,
     ) -> ChatMessage:
-        """Execute one manual Compaction inside its canonical Run lifecycle."""
+        """Execute one manual Compaction inside its canonical Run lifecycle.
+
+        *temporary_binding* is the owner binding of an owner-managed Session;
+        its request keeps the Extension's Session Tools and prompt blocks.
+        """
         session = session.for_run(run.id)
         request: Any | None = None
         # The divider appears at this emit; its visible duration ends when the
@@ -272,6 +279,7 @@ class CompactionRunCoordinator:
                     session,
                     messages,
                     settings,
+                    temporary_binding=temporary_binding,
                 )
                 prompt_cache_affinity_id = await self._host.run_transform(
                     self._host.sessions.prompt_cache_affinity_id,

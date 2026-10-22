@@ -85,6 +85,7 @@ from server._streams import (
     _register_ws_client,
     _replay_after_sequence,
     _RunStreamingResponse,
+    _send_websocket_json,
     _server_identity,
     _session_activity_snapshot,
     _sse_run_events,
@@ -731,8 +732,8 @@ def create_app(
                 "session_activity": _session_activity_snapshot(websocket.app.state),
                 "server": websocket.app.state.server_identity,
             }
-            await websocket.send_json(
-                file_delivery.bind_payload(hello_frame, _file_actor(websocket.scope))
+            await _send_websocket_json(
+                websocket, file_delivery.bind_payload(hello_frame, _file_actor(websocket.scope))
             )
             if replay_status == REPLAY_STATUS_RESUMED:
                 subscribe_after_sequence = client_after_sequence

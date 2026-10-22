@@ -4,7 +4,7 @@ How `core/compaction/run_coordination.py` runs Compaction inside Runs: preparati
 
 ## Preparation
 
-Manual Compaction resolves Project paths, Settings, Model routes and Adapters on the Chat preparation worker. Automatic Compaction uses the same worker boundary for its Context window and summary Adapter. The coordinator retains every acquired Adapter before a worker returns, so cancellation waits for preparation and closes new Adapters even when the awaited result is discarded; the active Run's Adapter remains owned by that Run.
+Manual Compaction resolves Project paths, Settings, Model routes and Adapters on the Chat preparation worker. On an owner-managed Session, `ChatLoop.start_compaction_run` resolves the temporary Agent from the Session's binding and builds the compacted request with that binding, so the Extension's Session Tools and prompt blocks stay in it and in the next prompt epoch, as in the Session's own Runs; the Compaction Run does not count toward Agent activity (`test_manual_compaction_of_a_temporary_session_keeps_its_admitted_configuration`). Automatic Compaction uses the same worker boundary for its Context window and summary Adapter. The coordinator retains every acquired Adapter before a worker returns, so cancellation waits for preparation and closes new Adapters even when the awaited result is discarded; the active Run's Adapter remains owned by that Run.
 
 ## Evaluation
 

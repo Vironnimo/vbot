@@ -13,6 +13,7 @@ import psutil  # type: ignore[import-untyped]
 
 from core.performance import count
 from core.runs import RUN_AGENT_ACTIVITY_FIELD, RunStatus
+from core.utils.surrogates import replace_lone_surrogates
 from core.utils.timestamps import format_canonical_timestamp
 from core.utils.workers import finish_despite_cancel
 from server._app_lifecycle import _app_chat_runs
@@ -70,6 +71,17 @@ class _RunStreamingResponse(StreamingResponse):  # type: ignore[misc]
             await finish_despite_cancel(self._run_stream.aclose())
 
 
+async def _send_websocket_json(websocket: WebSocket, payload: Any) -> None:
+    """Send *payload* as one JSON text frame, lone surrogates replaced with U+FFFD.
+
+    Starlette's ``send_json`` keeps non-ASCII text unescaped, and the frame's
+    UTF-8 encoding fails on a lone surrogate (half an emoji from a Model, a file
+    name that is not UTF-8), which would end the connection.
+    """
+    text = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+    await websocket.send_text(replace_lone_surrogates(text))
+
+
 async def _stream_websocket_events(
     websocket: WebSocket,
     stream: Any,
@@ -115,8 +127,9 @@ async def _stream_websocket_events(
                     {event_task}, timeout=WS_HEARTBEAT_INTERVAL_SECONDS
                 )
                 if not done:
-                    await websocket.send_json(
-                        {"type": "heartbeat", "timestamp": datetime.now(UTC).isoformat()}
+                    await _send_websocket_json(
+                        websocket,
+                        {"type": "heartbeat", "timestamp": datetime.now(UTC).isoformat()},
                     )
                     continue
                 completed_event_task, event_task = event_task, None
@@ -129,7 +142,7 @@ async def _stream_websocket_events(
                 else:
                     if file_delivery is not None:
                         event = file_delivery.bind_payload(event, file_actor)
-                    await websocket.send_json(event)
+                    await _send_websocket_json(websocket, event)
         finally:
             if event_task is not None:
                 event_task.cancel()

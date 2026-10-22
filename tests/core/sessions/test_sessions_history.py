@@ -541,6 +541,31 @@ async def test_lone_surrogates_are_stored_as_replacement_characters(manager, tmp
     )
     assert stored_payload == "\ufffd"
 
+    # Changed paths are file names, which can hold one too.
+    path = f"/repo/{lone}.py"
+    changes = {
+        "files": 1,
+        "added": 1,
+        "removed": 0,
+        "paths": [path],
+        "file_stats": [{"path": path, "added": 1, "removed": 0}],
+    }
+    await writer.record_change_stats_async(changes)
+    assert manager.change_stats(session.address)["file_stats"][0]["path"] == "/repo/\ufffd.py"
+    summary = ChatMessage.run_summary(
+        run_id="run",
+        status="completed",
+        iteration_count=1,
+        change_stats=changes,
+        timing={
+            "started_at": "2026-09-19T10:00:00Z",
+            "completed_at": "2026-09-19T10:00:01Z",
+            "duration_ms": 1000,
+        },
+    )
+    stored = complete_run(session, summary).change_stats
+    assert stored is not None and stored["paths"] == ["/repo/\ufffd.py"]
+
 
 def test_recall_context_is_bounded_and_a_missing_anchor_has_none(manager) -> None:
     session = manager.create("coder", session_id="long")

@@ -198,6 +198,8 @@ def finish_run(
     )
     summary = replace(summary, subagent_reply_target=_store_values.subagent_reply_target(state))
     summary.validate()
+    # Changed paths are file names, which can hold lone surrogates.
+    summary = _store_codec.storable(summary)
     timing, timing_extra, _present = _store_codec._timing_fields(summary.timing)
     completed_at = _store_values._timestamp(str(timing["completed_at"]), "Run completion")
     seq = int(state["next_seq"])
@@ -284,7 +286,7 @@ def record_run_changes(
 
     run_key = _running_run_key(connection, address, run_id, "records change statistics")
     ChatMessage.validate_change_stats(change_stats)
-    _write_change_stats(connection, run_key, change_stats)
+    _write_change_stats(connection, run_key, without_lone_surrogates(change_stats))
 
 
 def _write_change_stats(

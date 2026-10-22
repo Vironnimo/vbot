@@ -471,6 +471,7 @@ class RunExecution:
                         context.session_snapshot.active_messages
                     ),
                 )
+                context.session_snapshot.forget_arrived_notes()
                 try:
                     checked_scratch = await self._announce_scratch(context)
                 except ScratchUnavailableError:
