@@ -598,8 +598,9 @@ class AgentResolver:
                 global_defaults.tool_loading,
             ),
             permission_rules=resolve_permission_rules(
-                (_override_permission_rules(project, agent_id), scanned.permission_rules),
+                (_override_permission_rules(project, agent_id),),
                 global_defaults,
+                repository=scanned.permission_rules,
             ),
             # A restricted member must not loosen its rules through a definition
             # that would replace its own.
@@ -671,13 +672,13 @@ class AgentResolver:
         """Return the Permission Rules an Agent inherits for each part it does not set itself.
 
         An Identity Agent inherits ``defaults.agent.permission_rules``; a Team
-        *member*'s vBot override inherits the repository's rules, then that
-        default. ``None`` when nothing is inherited (full access) or the stored
-        default is invalid; editors show the value as the default.
+        *member*'s vBot override inherits that default restricted by the
+        repository's rules. ``None`` when nothing is inherited (full access) or
+        the stored default is invalid; editors show the value as the default.
         """
-        levels = (member.permission_rules,) if member is not None else ()
         return inherited_permission_rules(
-            levels, AgentDefaults.from_dict(self._global_agent_defaults())
+            AgentDefaults.from_dict(self._global_agent_defaults()),
+            repository=member.permission_rules if member is not None else None,
         )
 
     def effective_tools_for_member(self, project: Project, member: AgentProfile) -> dict[str, Any]:
@@ -751,11 +752,9 @@ class AgentResolver:
             "thinking_effort": _config_thinking_effort_source(project, scanned, global_defaults),
             "tool_access": _config_tool_access_source(project, scanned),
             "permission_rules": permission_rules_source(
-                (
-                    ("override", _override_permission_rules(project, scanned.agent_id)),
-                    ("repository", scanned.permission_rules),
-                ),
+                (("override", _override_permission_rules(project, scanned.agent_id)),),
                 global_defaults,
+                repository=scanned.permission_rules,
             ),
         }
 

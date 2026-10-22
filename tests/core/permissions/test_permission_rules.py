@@ -11,6 +11,7 @@ from core.permissions import (
     apply_preset,
     check_permission_rules,
     describe_permission_rules,
+    intersect_rule_sets,
     matching_preset,
     normalize_permission_rule,
     normalize_permission_rules,
@@ -227,6 +228,62 @@ def test_rule_sets_resolve_per_part(
     levels: tuple[PermissionRules | None, ...], expected: PermissionRules | None
 ) -> None:
     assert resolve_rule_set(*levels) == expected
+
+
+@pytest.mark.parametrize(
+    ("first", "second", "expected"),
+    [
+        pytest.param(None, _rules(write="scratch"), _rules(write="scratch"), id="one-set"),
+        pytest.param(
+            _rules(read="work_area", write="work_area", deny=["Shell(rm *)"]),
+            _rules(write="scratch", deny=["Read(~/.ssh)"]),
+            _rules(read="work_area", write="scratch", deny=["Shell(rm *)", "Read(~/.ssh)"]),
+            id="stricter-bases-and-every-deny",
+        ),
+        pytest.param(
+            _rules(commands="listed", allow=["Shell(git status)", "Shell(curl *)"]),
+            _rules(commands="listed", allow=["Shell(git *)"]),
+            _rules(commands="listed", allow=["Shell(git status)"]),
+            id="commands-both-allow",
+        ),
+        pytest.param(
+            _rules(commands="listed", allow=["Shell(curl *)"]),
+            _rules(allow=["Shell(rm *)"]),
+            _rules(commands="listed", allow=["Shell(curl *)"]),
+            id="an-inert-allow-stays-inert",
+        ),
+        pytest.param(
+            _rules(web="listed", allow=["Web(*.example.com)", "Web(other.org)"]),
+            _rules(web="listed", allow=["Web(example.com)"]),
+            _rules(web="listed", allow=["Web(*.example.com)"]),
+            id="hosts-both-allow",
+        ),
+        pytest.param(
+            _rules(read="work_area", allow=["Read(~/docs/api/**)", "Read(/etc)", "Read(../x)"]),
+            _rules(read="work_area", allow=["Read(~/docs)"]),
+            _rules(read="work_area", allow=["Read(~/docs/api/**)"]),
+            id="read-allows-inside-an-allowed-folder",
+        ),
+        pytest.param(
+            _rules(
+                read="work_area",
+                write="work_area",
+                allow=["Edit(/srv/shared/**)", "Edit({workdir}/build)", "Edit({scratch}/out)"],
+            ),
+            _rules(write="scratch"),
+            _rules(
+                read="work_area",
+                write="scratch",
+                allow=["Read(/srv/shared/**)", "Read({workdir}/build)", "Edit({scratch}/out)"],
+            ),
+            id="an-edit-allow-the-other-only-reads",
+        ),
+    ],
+)
+def test_an_intersection_permits_only_what_both_permit(
+    first: PermissionRules | None, second: PermissionRules, expected: PermissionRules
+) -> None:
+    assert intersect_rule_sets(first, second) == expected
 
 
 @pytest.mark.parametrize("written", ["work-dir", "work_dir", " Work dir "])

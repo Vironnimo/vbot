@@ -9,7 +9,12 @@ import pytest
 
 from core.agents.temporary import TemporaryAgent, TemporaryAgentConfig, TemporaryAgentRegistry
 from core.database import DatabaseUnavailableError
-from core.permissions import BoundaryContext, PermissionBoundary, normalize_permission_rules
+from core.permissions import (
+    BoundaryContext,
+    PermissionBoundary,
+    normalize_permission_rules,
+    permission_rules_to_dict,
+)
 from core.projects import AgentOverrides, AgentResolutionError, ModelConfigurationError
 from core.projects.projects import ProjectError
 from core.projects.resolver import AgentResolver
@@ -389,29 +394,44 @@ def test_tool_loading_override_inherits_each_part_it_does_not_set(
 def test_permission_rules_resolve_each_part_from_override_then_repository_then_default(
     agents: AgentStore, projects: ProjectStore, repo: Path
 ) -> None:
-    # The repository's own restriction (OpenCode external_directory: deny) applies
-    # without a vBot setting; the override and the defaults fill the other parts.
+    # The repository's own restriction (OpenCode external_directory: deny, a denied
+    # command) applies without a vBot setting, but only restricts the shared default:
+    # the default's stricter write base, its allow rule and its deny rule stay.
     _write_agent(
-        repo, "builder.md", model="openai/gpt-5.2", permission={"external_directory": "deny"}
+        repo,
+        "builder.md",
+        model="openai/gpt-5.2",
+        permission={"external_directory": "deny", "bash": '{"rm *": deny}'},
     )
     _project(projects, repo)
-    default = {"write": "anywhere", "commands": "listed", "deny": ["Read({home}/.ssh/**)"]}
+    default = {
+        "write": "scratch",
+        "commands": "listed",
+        "allow": ["Shell(git status)"],
+        "deny": ["Read({home}/.ssh/**)"],
+    }
     resolver = _resolver(agents, projects, _openai_configured(), global_permission_rules=default)
-    repository = {"read": "work_area", "write": "work_area"}
+    restricted = {**default, "read": "work_area", "deny": ["Shell(rm *)", *default["deny"]]}
 
     assert resolver.resolve_agent("vbot", "builder").permission_rules == (
-        normalize_permission_rules({**default, **repository})
+        normalize_permission_rules(restricted)
     )
     assert resolver.effective_config("vbot", "builder")["permission_rules"]["source"] == (
         "repository"
     )
+    # An override editor shows the same as what an override inherits.
+    (member,) = resolver.team_for_project("vbot")
+    assert resolver.inherited_permission_rules(member) == permission_rules_to_dict(
+        normalize_permission_rules(restricted)
+    )
     with pytest.raises(ProjectError, match="permission_rules.write"):
         projects.set_override("vbot", "builder", "permission_rules", {"write": "nowhere"})
 
-    projects.set_override("vbot", "builder", "permission_rules", {"write": "scratch"})
+    # The user's override replaces whole parts.
+    projects.set_override("vbot", "builder", "permission_rules", {"write": "work_area"})
 
     assert resolver.resolve_agent("vbot", "builder").permission_rules == (
-        normalize_permission_rules({**default, **repository, "write": "scratch"})
+        normalize_permission_rules({**restricted, "write": "work_area"})
     )
     effective = resolver.effective_config("vbot", "builder")["permission_rules"]
     assert effective["source"] == "override"
@@ -419,7 +439,8 @@ def test_permission_rules_resolve_each_part_from_override_then_repository_then_d
         "read": "repository",
         "write": "override",
         "commands": "global_default",
-        "deny": "global_default",
+        "allow": "global_default",
+        "deny": "repository",
     }
 
     # The Full access preset as an override lifts the repository's and the default's limits.

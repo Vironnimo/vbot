@@ -28,8 +28,9 @@ class Part:
 class Word:
     """One command word as written, lowered into parts.
 
-    ``glob``: an unquoted wildcard may expand it (bash; PowerShell decides per
-    parameter). ``tilde``: a leading ``~`` expands to the home directory.
+    ``glob``: an unquoted wildcard may expand it (bash; pwsh outside Windows in
+    a native program's argument, while cmdlets decide per parameter).
+    ``tilde``: a leading ``~`` expands to the home directory.
     ``items``: the elements of a PowerShell array literal (``a,b``), which a
     native program receives as separate arguments. ``block``: a PowerShell
     script block, whose commands are part of the same lowered script.

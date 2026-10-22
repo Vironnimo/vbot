@@ -17,7 +17,7 @@ from typing import Final, Literal, TypeGuard, cast, override
 from urllib.parse import urlsplit
 
 from core.permissions._addresses import canonical_host
-from core.permissions._paths import DRIVE_RELATIVE_PATH, split_lexical
+from core.permissions._paths import DRIVE_RELATIVE_PATH, has_wildcard, is_inside, split_lexical
 from core.utils.errors import VBotError
 
 type RuleKind = Literal["Read", "Edit", "Shell", "Web"]
@@ -352,6 +352,179 @@ def resolve_rule_set(*levels: PermissionRules | None) -> PermissionRules | None:
         deny=cast("tuple[PermissionRule, ...] | None", first("deny")),
     )
     return resolved if resolved.restricts else None
+
+
+def intersect_rule_sets(
+    first: PermissionRules | None, second: PermissionRules | None
+) -> PermissionRules | None:
+    """One level that permits only what both rule sets permit.
+
+    A level that may only restrict the level below it (a repository's
+    translated rules over the shared default) meets it here instead of
+    replacing its parts. Each base takes the stricter value; the deny rules of
+    both apply; an allow rule stays only where the other set permits what it
+    names too, and an Edit allow the other set permits only reading stays as a
+    Read allow. Coverage is decided without a Run's folders, so an allow rule
+    whose coverage the other set's rules do not plainly show is dropped: the
+    result may permit less than both, never more. ``None`` only when both are.
+    """
+    if first is None or second is None:
+        return first if second is None else second
+    allow: tuple[PermissionRule, ...] | None = None
+    if first.allow is not None or second.allow is not None:
+        kept: list[PermissionRule] = []
+        candidates = (
+            *((rule, second) for rule in first.allow or ()),
+            *((rule, first) for rule in second.allow or ()),
+        )
+        for rule, other in candidates:
+            within = _within(other, rule)
+            if within is not None and within not in kept:
+                kept.append(within)
+        allow = tuple(kept)
+    deny = (
+        None
+        if first.deny is None and second.deny is None
+        else tuple(dict.fromkeys((*(first.deny or ()), *(second.deny or ()))))
+    )
+    return PermissionRules(
+        read=cast("ReadBase | None", _stricter("read", first.read, second.read)),
+        write=cast("WriteBase | None", _stricter("write", first.write, second.write)),
+        commands=cast(
+            "CommandsBase | None", _stricter("commands", first.commands, second.commands)
+        ),
+        web=cast("WebBase | None", _stricter("web", first.web, second.web)),
+        allow=allow,
+        deny=deny,
+    )
+
+
+def _stricter(part: str, first: str | None, second: str | None) -> str | None:
+    """The narrower of two values of a base; the bases list each part widest first."""
+    if first is None or second is None:
+        return first if second is None else second
+    choices = BASE_CHOICES[part]
+    return max(first, second, key=choices.index)
+
+
+def _within(rules: PermissionRules, rule: PermissionRule) -> PermissionRule | None:
+    """``rule`` as far as ``rules`` permit what it names, or ``None``."""
+    if rule.kind == "Shell":
+        return rule if _permits_command(rules, rule.pattern) else None
+    if rule.kind == "Web":
+        return rule if _permits_host(rules, rule.pattern) else None
+    if rule.kind == "Edit" and _permits_path(rules, rule.pattern, write=True):
+        return rule
+    if _permits_path(rules, rule.pattern, write=False):
+        # An Edit allow also permits reading; where only reading is permitted, it reads.
+        return PermissionRule("Read", rule.pattern)
+    return None
+
+
+def _permits_command(rules: PermissionRules, pattern: str) -> bool:
+    if rules.commands in (None, "any"):
+        return True
+    return any(
+        _command_covers(allowed.pattern, pattern)
+        for allowed in rules.allow or ()
+        if allowed.kind == "Shell"
+    )
+
+
+def _command_covers(allowed: str, pattern: str) -> bool:
+    """Whether every command ``pattern`` matches also matches ``allowed``.
+
+    Only plain cases count: the same pattern, ``*``, or a trailing `` *`` after
+    words ``pattern`` starts with, whole first word included, so both resolve
+    the same PowerShell alias.
+    """
+    if allowed in ("*", pattern):
+        return True
+    if not allowed.endswith(" *"):
+        return False
+    return pattern == allowed[:-2] or pattern.startswith(allowed[:-1])
+
+
+def _permits_host(rules: PermissionRules, pattern: str) -> bool:
+    if rules.web in (None, "any"):
+        return True
+    return any(
+        allowed.pattern in ("*", pattern)
+        or host_matches(allowed.pattern, pattern.removeprefix("*."))
+        for allowed in rules.allow or ()
+        if allowed.kind == "Web"
+    )
+
+
+# Placeholders of the folders every layer lets a Run read. Writing reaches the
+# Scratch Area under every base, and the working directory under ``work_area``.
+_ALWAYS_READABLE: Final = frozenset({"{scratch}", "{workdir}", "{workspace}"})
+_ROOT = re.compile(r"//[^/]+/[^/]+/|[A-Za-z]:/|/")
+
+
+def _permits_path(rules: PermissionRules, pattern: str, *, write: bool) -> bool:
+    """Whether ``rules`` permit reading (or changing) everything ``pattern`` names.
+
+    An unsafe form (network or device path, alternate data stream) is permitted
+    only by an allow rule without wildcards, as the boundary decides it.
+    """
+    unsafe = split_lexical(pattern, windows=True).unsafe is not None
+    read = rules.read or "anywhere"
+    base = write_within_read(read, rules.write or "anywhere") if write else read
+    if not unsafe:
+        if base == "anywhere":
+            return True
+        place = _anchored(pattern)
+        if ".." not in place:
+            free = {"{scratch}", "{workdir}"} if base == "work_area" else {"{scratch}"}
+            if place[0] in (free if write else _ALWAYS_READABLE):
+                return True
+    kinds = ("Edit",) if write else ("Read", "Edit")
+    return any(
+        _path_covers(allowed.pattern, pattern, exact=unsafe)
+        for allowed in rules.allow or ()
+        if allowed.kind in kinds
+    )
+
+
+def _path_covers(allowed: str, pattern: str, *, exact: bool) -> bool:
+    """Whether the path pattern ``allowed`` covers everything ``pattern`` names.
+
+    Only a pattern without wildcards (apart from a closing ``/**``, unless
+    ``exact``) covers another one: what lies at or below its folder. Patterns
+    compare as written, so different placeholders or case never cover each other.
+    ``exact`` decides as the boundary names an unsafe form: by a rule without
+    any wildcard at or above it.
+    """
+    if allowed == pattern:
+        return True
+    if exact:
+        return not has_wildcard(allowed) and is_inside(pattern, allowed)
+    folder = _anchored(allowed)
+    if folder[-1] == "**":
+        folder = folder[:-1]
+    if any(has_wildcard(segment) for segment in folder):
+        return False
+    place = _anchored(pattern)
+    return place[: len(folder)] == folder and ".." not in place[len(folder) :]
+
+
+def _anchored(pattern: str) -> tuple[str, ...]:
+    """A normalized path pattern as its anchor and its segments.
+
+    The anchor is the placeholder (``~`` is ``{home}``, a relative pattern
+    ``{workdir}``) or the root of an absolute pattern.
+    """
+    if pattern.startswith("{"):
+        head, _, rest = pattern.partition("}")
+        anchor = head + "}"
+    elif pattern == "~" or pattern.startswith("~/"):
+        anchor, rest = "{home}", pattern[1:]
+    elif (root := _ROOT.match(pattern)) is not None:
+        anchor, rest = root.group(0), pattern[root.end() :]
+    else:
+        anchor, rest = "{workdir}", pattern
+    return (anchor, *(segment for segment in rest.split("/") if segment not in ("", ".")))
 
 
 def _require_write_within_read(read: str | None, write: str | None) -> None:

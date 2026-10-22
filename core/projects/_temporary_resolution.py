@@ -132,12 +132,9 @@ class TemporaryResolution:
             allowed_skills=skills,
             # The owner's parts first, then the Team member's resolution.
             permission_rules=resolve_permission_rules(
-                (
-                    owner_rules,
-                    _override_permission_rules(project, profile.agent_id),
-                    profile.permission_rules,
-                ),
+                (owner_rules, _override_permission_rules(project, profile.agent_id)),
                 AgentDefaults.from_dict(self._owner._global_agent_defaults()),
+                repository=profile.permission_rules,
             ),
             instructions="\n\n".join(part for part in (profile.body, config.instructions) if part),
             temperature=overrides.get(

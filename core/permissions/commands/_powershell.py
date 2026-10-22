@@ -58,6 +58,9 @@ _BOOTSTRAP = (
     "& ([ScriptBlock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($s)))) $r"
 )
 _LINE_LIMIT = 64 * 1024 * 1024
+# Outside Windows pwsh expands the unquoted wildcards in a native program's
+# arguments against the file system before the program runs, as bash does.
+NATIVE_GLOBS = sys.platform != "win32"
 # One helper serves every analysis in turn (a request takes milliseconds); a
 # wait this long means it is overloaded or stuck and is worth a log line.
 _SLOW_QUEUE_SECONDS = 1.0
@@ -435,8 +438,13 @@ def _command(entry: dict[str, Any], pipeline: Pipeline | None) -> RawCommand:
             unbound=[_word(value) for value in raw.get("unbound") or []],
             errors=[str(error) for error in raw.get("errors") or []],
         )
+    # The helper resolves cmdlets and functions; any other name is a native program.
+    expands = NATIVE_GLOBS and not entry.get("resolved") and not entry.get("script_function")
     return RawCommand(
-        [_word(entry["name"]), *(_word(word) for word in entry.get("words") or [])],
+        [
+            _word(entry["name"]),
+            *(_word(word, expands=expands) for word in entry.get("words") or []),
+        ],
         str(entry.get("source", "")),
         redirects,
         pipeline,
@@ -465,7 +473,12 @@ _TARGET_KINDS: dict[str, CallTargetKind] = {
 _PART_KINDS = {"s": "text", "v": "variable", "d": "dynamic"}
 
 
-def _word(raw: dict[str, Any]) -> Word:
+def _word(raw: dict[str, Any], *, expands: bool = False, element: bool = False) -> Word:
+    """One helper word; with *expands* (a native program's argument), ``glob`` unless quoted.
+
+    pwsh treats an array literal's elements as unquoted whatever their own
+    quotes (*element*), and a parameter (``-x:sec*``) as unquoted too.
+    """
     parts = tuple(
         Part(_PART_KINDS.get(str(part.get("k")), "dynamic"), str(part.get("v", "")))  # type: ignore[arg-type]
         for part in raw.get("parts") or []
@@ -475,11 +488,15 @@ def _word(raw: dict[str, Any]) -> Word:
     return Word(
         parts,
         str(raw.get("source", "")),
-        glob=True,
+        glob=expands and (element or not raw.get("quoted")),
         tilde=True,
-        items=tuple(_word(item) for item in items) if isinstance(items, list) else None,
+        items=(
+            tuple(_word(item, expands=expands, element=True) for item in items)
+            if isinstance(items, list)
+            else None
+        ),
         block=bool(raw.get("block")),
         splat=bool(raw.get("splat")),
         parameter=raw.get("parameter"),
-        argument=_word(argument) if isinstance(argument, dict) else None,
+        argument=_word(argument, expands=expands) if isinstance(argument, dict) else None,
     )
