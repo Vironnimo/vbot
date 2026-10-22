@@ -459,8 +459,12 @@ def _capture_config_backup_locked(
     reason: str,
     barrier: SnapshotBarrier | None = None,
     now: datetime | None = None,
+    keep: frozenset[str] = frozenset(),
 ) -> ConfigBackup | None:
-    """Capture while the caller holds the data-store operation lock."""
+    """Capture while the caller holds the data-store operation lock.
+
+    ``keep`` names backups retention must not remove, such as the one a restore restores.
+    """
     contents = _read_configuration(data_dir, barrier)
     files = {
         path: ConfigFile(
@@ -491,7 +495,7 @@ def _capture_config_backup_locked(
     manifest.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(manifest, json.dumps(_manifest_payload(backup), indent=2) + "\n")
     fsync_dir(manifest.parent)
-    _prune(root, [backup, *backups], unreadable=unreadable, now=moment)
+    _prune(root, [backup, *backups], unreadable=unreadable, now=moment, keep=keep)
     _LOGGER.info(
         "Created configuration backup (backup=%s files=%d changed=%d reason=%s)",
         backup.backup_id,
@@ -613,23 +617,30 @@ def _retained(backups: list[ConfigBackup], now: datetime) -> set[str]:
     return keep
 
 
-def _prune(root: Path, backups: list[ConfigBackup], *, unreadable: int, now: datetime) -> None:
-    """Remove the backups retention drops, then the objects no backup references.
+def _prune(
+    root: Path,
+    backups: list[ConfigBackup],
+    *,
+    unreadable: int,
+    now: datetime,
+    keep: frozenset[str] = frozenset(),
+) -> None:
+    """Remove the backups retention drops, except ``keep``, then the objects no backup references.
 
     Objects are kept while any manifest cannot be read, since it may reference them.
     """
     backups = sorted(
         backups, key=lambda backup: (backup.created_at, backup.backup_id), reverse=True
     )
-    keep = _retained(backups, now)
+    kept = _retained(backups, now) | keep
     for backup in backups:
-        if backup.backup_id not in keep:
+        if backup.backup_id not in kept:
             _manifest_path(root, backup.backup_id).unlink(missing_ok=True)
     if unreadable:
         return
     _delete_unreferenced_objects(
         root,
-        {digest for backup in backups if backup.backup_id in keep for digest in backup.objects()},
+        {digest for backup in backups if backup.backup_id in kept for digest in backup.objects()},
     )
 
 
@@ -929,13 +940,19 @@ def _verified_object(root: Path, backup_id: str, item: ConfigFile) -> bytes:
 def _before_restore_backup(
     data_dir: Path, backup_id: str, *, interrupted: bool, now: datetime | None
 ) -> str | None:
-    """The backup of the state a restore replaces; taken once, also across a repeated restore."""
+    """The backup of the state a restore replaces; taken once, also across a repeated restore.
+
+    Its retention keeps the backup being restored, which an interrupted restore needs
+    to be repeated: only that ends its maintenance guard.
+    """
     reason = f"before restore {backup_id}"
     if interrupted:
         # A repeated restore: the interrupted attempt took the backup already.
         earlier = [backup for backup in list_config_backups(data_dir) if backup.reason == reason]
         return earlier[0].backup_id if earlier else None
-    taken = _capture_config_backup_locked(data_dir, reason=reason, now=now)
+    taken = _capture_config_backup_locked(
+        data_dir, reason=reason, now=now, keep=frozenset({backup_id})
+    )
     if taken is not None:
         return taken.backup_id
     # The current state equals the newest backup, which therefore holds it.

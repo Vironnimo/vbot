@@ -302,6 +302,9 @@ def test_a_backup_repairs_a_stored_copy_altered_to_the_same_size(
 def test_an_interrupted_restore_holds_the_maintenance_guard_until_it_is_repeated(
     data_dir: Path, monkeypatch: pytest.MonkeyPatch, wrote_every_file: bool
 ) -> None:
+    # Only the newest-backups rule holds the restored backup: the before-restore
+    # backup would push it out, and the restore could never be repeated.
+    monkeypatch.setattr(config_backups_module, "CONFIG_BACKUP_KEEP_LATEST", 2)
     _write(data_dir, "settings.json", _settings("Europe/Berlin"))
     _write(data_dir, NOTE, "KEY=one\n")
     backup_id = _backup(data_dir)
@@ -322,7 +325,7 @@ def test_an_interrupted_restore_holds_the_maintenance_guard_until_it_is_repeated
     with monkeypatch.context() as patched:
         patched.setattr(config_backups_module, "atomic_write_bytes", fail_on_settings)
         with pytest.raises(OSError, match="injected"):
-            restore_config_backup(data_dir, backup_id)
+            restore_config_backup(data_dir, backup_id, now=NOW + timedelta(minutes=10))
     first_before = list_config_backups(data_dir)[0]
     assert first_before.reason == f"before restore {backup_id}"
     assert read_maintenance(data_dir) is not None
