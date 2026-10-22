@@ -926,6 +926,24 @@ def due(
     return _entries(connection, rows)
 
 
+def identity_agent_entry_ids(connection: sqlite3.Connection, agent_id: str) -> tuple[str, ...]:
+    """The entries an Identity Agent rename from or to ``agent_id`` changes, oldest first.
+
+    Those that hold archived Sessions following a rename of the Agent
+    (``_store_mutations.archived_identity_session``) and its ``session`` entries.
+    """
+    rows = connection.execute(
+        "SELECT e.entry_id FROM archive_entries AS e "
+        "WHERE (e.kind = ? AND e.project_id = '' AND e.agent_id = ?) "
+        "OR e.entry_key IN (SELECT m.entry_key FROM archive_entry_sessions AS m "
+        "JOIN sessions AS s ON s.session_key = m.session_key "
+        f"WHERE {_store_mutations.archived_identity_session('s')}) "
+        "ORDER BY e.entry_key",
+        (ARCHIVE_KIND_SESSION, agent_id, agent_id),
+    ).fetchall()
+    return tuple(str(row[0]) for row in rows)
+
+
 def newest_entry_id(connection: sqlite3.Connection, kind: str, subject_id: str) -> str | None:
     """The newest entry archiving ``subject_id`` as ``kind``, or ``None``."""
     row = connection.execute(

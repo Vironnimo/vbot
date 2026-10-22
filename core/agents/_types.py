@@ -76,8 +76,10 @@ class AgentReferencedError(AgentError):
     """Raised when a rename or a new Agent takes an Agent id that references still name.
 
     ``references`` names each one as ``<kind>:<id>``, such as ``channel:tg-main``,
-    ``cron:<job id>`` or ``secret:<name>``. A new Agent is refused only for
-    Agent Secret grants, which an archived Agent of that id keeps for its restore.
+    ``cron:<job id>``, ``secret:<name>`` or ``archive:<entry id>`` (an archive
+    entry holding Sessions of an earlier Agent of that id, which a rename would
+    take over). A new Agent is refused only for Agent Secret grants, which an
+    archived Agent of that id keeps for its restore.
     """
 
     def __init__(self, agent_id: str, references: Iterable[str], *, creating: bool = False) -> None:
@@ -95,6 +97,11 @@ class AgentReferencedError(AgentError):
                 f"Cannot rename an Agent to {agent_id} while {', '.join(self.references)} "
                 "still reference it; change or remove these references first"
             )
+            if any(reference.startswith("archive:") for reference in self.references):
+                message += (
+                    f". The archive entries hold Sessions of an earlier Agent {agent_id}: "
+                    "delete them permanently, or choose another id"
+                )
         super().__init__(message)
 
 

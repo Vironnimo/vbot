@@ -900,13 +900,14 @@ class ChatSessionManager:
     def retarget_identity_agent_references(
         self, old_agent_id: str, new_agent_id: str
     ) -> tuple[SessionIdentityReferenceUpdate, ...]:
-        """Point live Sub-Agent parent links at an Identity Agent's moved Sessions.
+        """Point Sub-Agent parent links, live and archived, at an Identity Agent's moved Sessions.
 
         Run after :meth:`retarget_identity_agent_sessions`: a link naming
-        ``old_agent_id`` changes only when its parent Session is now live under
-        ``new_agent_id``. A link to a parent that stayed behind or no longer exists
-        keeps its id, so reversing the ids moves back only links to moved Sessions, and a
-        repeated call after an interruption finishes the retarget.
+        ``old_agent_id`` changes only when its parent Session, live or archived,
+        moved to ``new_agent_id`` (and is the generation the link recorded). A
+        link to a parent that stayed behind or no longer exists keeps its id, so
+        reversing the ids moves back only links to moved Sessions, and a repeated
+        call after an interruption finishes the retarget.
         """
         return self._store.retarget_identity_agent_references(old_agent_id, new_agent_id)
 
@@ -950,12 +951,17 @@ class ChatSessionManager:
         return self._store.review_forks(address, recursive=recursive)
 
     def retarget_identity_agent_sessions(self, old_agent_id: str, new_agent_id: str) -> None:
-        """Move every live global Session of an Identity Agent to its new id.
+        """Move every global Session of an Identity Agent to its new id, live and archived.
 
-        Only Sessions still owned by ``old_agent_id`` move, so a repeated call after an
-        interruption finishes the move.
+        The archived ones and the scope of the Agent's ``session`` archive entries
+        follow in the same transaction, so a restore brings them back to the
+        renamed Agent. Archived Sessions that an archived Agent of the old id
+        holds in its own entry, or that an Extension manages, stay. Only
+        Sessions still owned by ``old_agent_id`` move, so a repeated call after
+        an interruption finishes the move.
         """
-        self._store.retarget_identity_agent(old_agent_id, new_agent_id)
+        if self._store.retarget_identity_agent(old_agent_id, new_agent_id):
+            self._archive_ledger.notify_changed()
 
     def is_fts_available(self) -> bool:
         return self._store.is_fts_available()

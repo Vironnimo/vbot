@@ -63,12 +63,15 @@ class AgentRenames:
         Agent-owned file live below the same directory, so moving that directory
         preserves the whole identity. A Workspace anywhere inside the tree is
         rebased to the same relative location; an external Workspace is unchanged.
-        Live Session addresses, the Sub-Agent parent links to them, the roster
-        order and delegation allow-lists move to the new id with it.
+        Live and archived Session addresses, the Sub-Agent parent links to them,
+        the roster order and delegation allow-lists move to the new id with it;
+        only archived Sessions that an archived Agent of the old id holds or that
+        an Extension manages stay behind.
 
-        The new id must be unused. No Agent, live Session or
-        ``external_references`` entry (the references other owners hold to
-        ``new_agent_id``) may name it; references raise
+        The new id must be unused. No Agent, live Session, archived Session that
+        a rename moves or ``external_references`` entry (the references other
+        owners hold to ``new_agent_id``) may name it; references and archive
+        entries holding such Sessions (``archive:<entry id>``) raise
         :class:`AgentReferencedError` naming each of them. Reverting a rename
         moves what names the new id back to the old one, so it would take along a
         reference that named the new id before the rename. A delegation allow-list
@@ -111,7 +114,15 @@ class AgentRenames:
             # Rolling back renames the new id's Sessions back, so it must own none yet.
             if sessions.list_addresses(None, agent_id=new_agent_id):
                 raise AgentAlreadyExistsError(f"Sessions already exist for Agent: {new_agent_id}")
-            references = tuple(external_references)
+            # Archived Sessions an earlier Agent of the new id left move with the
+            # renamed Agent's and back with a revert, so they refuse like references.
+            references = (
+                *external_references,
+                *(
+                    f"archive:{entry_id}"
+                    for entry_id in sessions.archive_ledger.identity_agent_entry_ids(new_agent_id)
+                ),
+            )
             if references:
                 raise AgentReferencedError(new_agent_id, references)
             # Before the record, outside every rename direction: an interruption

@@ -1,9 +1,11 @@
 """Agent rename: its Agent-owned half, its rollback, and its recovery after a crash."""
 
+import asyncio
 import os
+import sqlite3
 import sys
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -20,13 +22,21 @@ from core.agents import (
     AgentStore,
     InvalidAgentIdError,
 )
-from core.sessions import ChatSessionManager, SessionAddress
+from core.sessions import (
+    ARCHIVE_KIND_AGENT,
+    ArchiveEntryFilter,
+    ArchiveScope,
+    ChatSessionManager,
+    SessionAddress,
+)
 from tests.core.agents.agents_test_support import create_with_session, persisted
 from tests.core.agents.agents_test_support import store as store
 from tests.core.agents.agents_test_support import template_dir as template_dir
 
 _CHILD = SessionAddress(None, "manager", "child")
 _CURATING = SessionAddress(None, "librarian", "curating")
+_ARCHIVED = SessionAddress(None, "coder", "archived")
+_ARCHIVED_CHILD = SessionAddress(None, "manager", "archived-child")
 
 
 class _Killed(BaseException):
@@ -41,24 +51,62 @@ def _seed(store: AgentStore) -> Agent:
     """``coder``, a ``manager`` that delegates to it, and Sessions that name it.
 
     A ``manager`` Session links to ``coder`` as its Sub-Agent parent; a Librarian
-    Session maintains the Skills of ``coder``.
+    Session maintains the Skills of ``coder``. The archive holds a deleted
+    Session of ``coder`` and a deleted ``manager`` Session that was its
+    Sub-Agent child, and an earlier ``researcher`` Agent with its own Session.
     """
+    sessions = store._session_manager()
+    ledger = sessions.archive_ledger
+    earlier = ledger.begin(ARCHIVE_KIND_AGENT, subject_id="researcher", agent_id="researcher")
+    sessions.create("researcher", session_id="theirs")
+    ledger.commit_scope(earlier.entry_key, ArchiveScope(agent_id="researcher"))
     created = store.create(
         "coder", "Coder Agent", tools={"subagent": {"allowed_agents": ["coder", "coder@project"]}}
     )
     store.create("manager", "Manager", tools={"subagent": {"allowed_agents": ["coder"]}})
-    sessions = store._session_manager()
     sessions.create("coder", session_id="kept")
     sessions.create("manager", session_id="child")
     sessions.set_metadata(
         _CHILD,
         {"subagent_parent": {"agent_id": "coder", "session_id": "kept", "project_id": None}},
     )
+    sessions.create("coder", session_id=_ARCHIVED.session_id)
+    sessions.create("manager", session_id=_ARCHIVED_CHILD.session_id)
+    sessions.set_metadata(
+        _ARCHIVED_CHILD,
+        {"subagent_parent": {"agent_id": "coder", "session_id": "archived", "project_id": None}},
+    )
+    asyncio.run(sessions.archive(_ARCHIVED_CHILD))
+    asyncio.run(sessions.archive(_ARCHIVED))
     sessions.create("librarian", session_id="curating")
     sessions.set_metadata(
         _CURATING, {SKILL_AGENT_ID_KEY: "coder", SKILL_AGENT_CREATED_AT_KEY: created.created_at}
     )
     return store.update(created.id, current_session_id="kept")
+
+
+def _archive_scopes(store: AgentStore) -> set[tuple[str, str, tuple[str, ...]]]:
+    """Each archive entry's kind and Agent scope, with the Agents of its member Sessions."""
+    ledger = store._session_manager().archive_ledger
+    return {
+        (
+            entry.kind,
+            entry.agent_id,
+            tuple(member.address.agent_id for member in ledger.members(entry.entry_key)),
+        )
+        for entry in ledger.page(ArchiveEntryFilter()).entries
+    }
+
+
+def _archived_link_agent_id(store: AgentStore, address: SessionAddress) -> str:
+    """The Agent id the Sub-Agent parent link of an archived Session names."""
+    with closing(sqlite3.connect(store.data_dir / "sessions.db")) as connection:
+        row = connection.execute(
+            "SELECT subagent_parent_agent_id FROM sessions WHERE agent_id = ? "
+            "AND session_id = ? AND state = 'archived'",
+            (address.agent_id, address.session_id),
+        ).fetchone()
+    return str(row[0])
 
 
 def _link_to(store: AgentStore, session_id: str, parent_agent_id: str) -> SessionAddress:
@@ -95,6 +143,14 @@ def _assert_agent_is(store: AgentStore, created: Agent, agent_id: str, other_id:
     assert sessions.exists(SessionAddress(None, agent_id, "kept"))
     assert sessions.list_addresses(None, agent_id=other_id) == []
     assert sessions.get_metadata(_CHILD)["subagent_parent"]["agent_id"] == agent_id
+    # Archived Sessions and their links follow, so a restore returns them to the
+    # Agent; the earlier ``researcher`` keeps its own Session for its restore.
+    assert _archive_scopes(store) == {
+        ("session", agent_id, (agent_id,)),
+        ("session", "manager", ("manager",)),
+        ("agent", "researcher", ("researcher",)),
+    }
+    assert _archived_link_agent_id(store, _ARCHIVED_CHILD) == agent_id
     assert sessions.metadata_value(_CURATING, SKILL_AGENT_ID_KEY) == agent_id
     assert sessions.metadata_value(_CURATING, SKILL_AGENT_CREATED_AT_KEY) == created.created_at
     assert [listed.id for listed in store.list()] == [agent_id, "manager"]
@@ -165,7 +221,8 @@ def test_rename_retargets_allowed_agent_ids_sub_agent_links_and_librarian_sessio
     result = store.rename("coder", "researcher")
 
     assert result.policy_agent_ids == ("manager", "researcher")
-    assert result.session_link_count == 1
+    # The live and the archived child: an archived Session moves like a live one.
+    assert result.session_link_count == 2
     assert store.get("manager").tools["subagent"]["allowed_agents"] == ["researcher"]
     assert store.get("researcher").tools["subagent"]["allowed_agents"] == [
         "researcher",
@@ -221,37 +278,50 @@ def test_rename_preserves_agent_order_position(store: AgentStore) -> None:
     assert [agent.id for agent in store.list()] == ["gamma", "renamed", "beta"]
 
 
+def _occupy_with_agent(store: AgentStore) -> tuple[str, ...]:
+    store.create("researcher", "Researcher Agent")
+    return ()
+
+
+def _occupy_with_grant(store: AgentStore) -> tuple[str, ...]:
+    store.create("manager", tools={"subagent": {"allowed_agents": ["researcher"]}})
+    return ()
+
+
+def _occupy_with_archived_session(store: AgentStore) -> tuple[str, ...]:
+    """A deleted Session of an earlier ``researcher``, which its archive entry keeps."""
+    sessions = store._session_manager()
+    address = sessions.create("researcher", session_id="left").address
+    return (f"archive:{asyncio.run(sessions.archive(address)).entry_id}",)
+
+
 @pytest.mark.parametrize(
-    ("occupant", "destination", "refused"),
+    ("occupy", "destination", "refused"),
     [
-        pytest.param(
-            {"agent_id": "researcher", "name": "Researcher Agent"},
-            "researcher",
-            AgentAlreadyExistsError,
-            id="agent",
-        ),
+        pytest.param(_occupy_with_agent, "researcher", AgentAlreadyExistsError, id="agent"),
         # A reference another owner holds would pass to the renamed Agent, and a
         # revert would take it along. The refusal changes nothing, so it keeps
         # even the delegation grant a rename would otherwise remove.
+        pytest.param(_occupy_with_grant, "researcher", AgentReferencedError, id="references"),
+        # Archived Sessions move with the renamed Agent's, and back with a revert.
         pytest.param(
-            {"agent_id": "manager", "tools": {"subagent": {"allowed_agents": ["researcher"]}}},
+            _occupy_with_archived_session,
             "researcher",
             AgentReferencedError,
-            id="references",
+            id="archived-sessions",
         ),
         # Windows reserves the name for a device; it is refused on every platform.
-        pytest.param(None, "con", InvalidAgentIdError, id="windows-reserved"),
+        pytest.param(lambda _store: (), "con", InvalidAgentIdError, id="windows-reserved"),
     ],
 )
 def test_rename_rejects_an_unusable_destination(
     store: AgentStore,
-    occupant: dict[str, Any] | None,
+    occupy: Callable[[AgentStore], tuple[str, ...]],
     destination: str,
     refused: type[AgentError],
 ) -> None:
     store.create("coder", "Coder Agent")
-    if occupant is not None:
-        store.create(**occupant)
+    archived = occupy(store)
     before = {agent.id: agent for agent in store.list()}
 
     with pytest.raises(refused) as raised:
@@ -259,7 +329,7 @@ def test_rename_rejects_an_unusable_destination(
 
     if isinstance(raised.value, AgentReferencedError):
         assert raised.value.agent_id == "researcher"
-        assert raised.value.references == ("channel:tg-old",)
+        assert raised.value.references == tuple(sorted(("channel:tg-old", *archived)))
     assert {agent.id: agent for agent in store.list()} == before
     assert not _record(store).exists()
 

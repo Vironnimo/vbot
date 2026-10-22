@@ -805,6 +805,29 @@ async def test_a_session_scope_blocker_names_the_entry_that_restores_its_agent(
 
 
 @pytest.mark.asyncio
+async def test_a_renamed_agent_takes_its_archived_sessions_and_an_earlier_one_keeps_its_own(
+    world: ArchiveWorld,
+) -> None:
+    world.agents.create("coder")
+    world.sessions.create("coder", session_id="earlier")
+    earlier = (await world.service.archive_agent("coder")).entry_id
+    agent_with_session(world, "coder")
+    notes = world.sessions.create("coder", session_id="notes").address
+    deleted = (await world.service.archive_session(notes)).entry_id
+
+    world.agents.finish_rename(world.agents.rename("coder", "researcher").rename)
+
+    assert world.entry(deleted).agent_id == "researcher"
+    assert (await world.service.restore(deleted)).addresses == (
+        SessionAddress(None, "researcher", "notes"),
+    )
+    # The earlier ``coder`` returns with its own Session under its own id.
+    assert (await world.service.restore(earlier)).addresses == (
+        SessionAddress(None, "coder", "earlier"),
+    )
+
+
+@pytest.mark.asyncio
 async def test_purge_deletes_the_sessions_payload_and_entry_after_importing_usage(
     world: ArchiveWorld,
 ) -> None:
