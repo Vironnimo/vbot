@@ -9,8 +9,10 @@ precise codes and wording that say what went wrong and what to try next. A
 restricted caller passes its Permission Boundary: every hop is checked against
 it too (``check_url``) and a refused one raises ``PermissionDenied``.
 
-curl_cffi loads with the first request: importing it costs about 0.1 s, which
-every process that imports the Tools would otherwise pay.
+curl_cffi loads with the first request, in a Tool worker: importing it (with
+markdownify, bs4 and charset_normalizer, which it imports) costs 0.3-0.4 s, which
+every process that imports the Tools would otherwise pay, and which would block
+the Event Loop where the request starts.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import codecs
 import html
+import importlib
 import ipaddress
 import re
 import socket
@@ -34,7 +37,7 @@ from core.permissions import (
     PermissionRefusal,
     normalize_host,
 )
-from core.tools.tools import JsonObject, tool_failure
+from core.tools.tools import JsonObject, run_tool_worker, tool_failure
 from core.utils.http_status import is_retryable_status, parse_retry_after
 from core.utils.logging import get_logger
 from core.utils.retry import MAX_RETRIES, sleep_for_retry
@@ -206,6 +209,21 @@ class _TransportFailedError(Exception):
         self.attempts = attempts
         self.url = url
         super().__init__(str(error))
+
+
+_curl_cffi_loaded = False
+
+
+async def _load_curl_cffi() -> None:
+    """Import curl_cffi in a Tool worker once, before the first request uses it.
+
+    Later imports of its modules, on the Event Loop too, then only look them up.
+    Concurrent first requests each wait in a worker for the one import.
+    """
+    global _curl_cffi_loaded
+    if not _curl_cffi_loaded:
+        await run_tool_worker(importlib.import_module, "curl_cffi.requests")
+        _curl_cffi_loaded = True
 
 
 def _make_session(accept: str | None) -> AsyncSession:
@@ -971,10 +989,11 @@ async def fetch_public(
     (``PermissionDenied``). Every other failure, including an HTTP error status,
     raises ``PublicFetchError``.
     """
-    from curl_cffi.requests.exceptions import RequestException
-
     # A refused address opens no session.
     _check_hop(permissions, url, url)
+    await _load_curl_cffi()
+    from curl_cffi.requests.exceptions import RequestException
+
     try:
         async with _make_session(accept) as session:
             result = await _fetch_with_retry(
