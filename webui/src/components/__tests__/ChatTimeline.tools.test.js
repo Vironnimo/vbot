@@ -4,8 +4,8 @@ import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import {
   detailRow,
   detailText,
+  flushAsync,
   flushSync,
-  tick,
   openDisclosures,
   setupChatTimelineSuite,
   stubClipboard,
@@ -408,7 +408,8 @@ describe('ChatTimeline Tools', () => {
     });
 
     // A row carries previews of a long call; the whole call loads once a
-    // section that shows it opens, behind the raw disclosure or directly.
+    // section that shows it opens, behind the raw disclosure or directly. A
+    // failed read shows its error and waits until the section opens again.
     it.each([
       ['detail blocks', true],
       ['no detail blocks', false],
@@ -420,6 +421,8 @@ describe('ChatTimeline Tools', () => {
           arguments: { command: 'cat big.log' },
           result: { ok: true, error: null, data: { output: 'whole' } },
         }));
+        loadToolCall.mockRejectedValueOnce(new Error('read failed'));
+        const callSection = withBlocks ? '.tool-raw-call' : '.tool-event';
         timeline.render(
           sessionWithTool([
             toolItem({
@@ -458,10 +461,21 @@ describe('ChatTimeline Tools', () => {
           toolId: 'call',
         });
         expect(document.body.textContent).toContain(t('chat.toolRawLoading'));
-        await tick();
-        flushSync();
-        expect(detailText('chat.toolResultLabel')).toContain('whole');
+        await flushAsync();
+        expect(document.body.textContent).toContain(
+          t('chat.toolRawUnavailable', { error: 'read failed' }),
+        );
         expect(loadToolCall).toHaveBeenCalledTimes(1);
+
+        const section = document.querySelector(callSection);
+        section.open = false;
+        section.dispatchEvent(new Event('toggle'));
+        flushSync();
+        openDisclosures(callSection);
+        expect(loadToolCall).toHaveBeenCalledTimes(2);
+        await flushAsync();
+        expect(detailText('chat.toolResultLabel')).toContain('whole');
+        expect(loadToolCall).toHaveBeenCalledTimes(2);
       },
     );
 
