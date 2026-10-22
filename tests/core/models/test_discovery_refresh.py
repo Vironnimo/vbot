@@ -11,20 +11,20 @@ import logging
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 import httpx
 import pytest
 import respx
 
-import core.models._discovery_http as discovery_module
 from core.models.discovery import ModelDiscoveryError, build_discovery_request, refresh_models
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
 from core.models.models_dev import ModelsDevCatalog
+from core.providers.adapter_types import ADAPTER_TYPES
 from core.providers.errors import CatalogEntrySkipped
 from core.providers.ollama import OllamaAdapter
+from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
-from core.providers.runtime import ADAPTER_TYPES
 from core.utils.retry import MAX_RETRIES
 
 from .discovery_test_support import (
@@ -187,14 +187,17 @@ _STUB_MODELS = {
 }
 
 
-class _StubAdapter:
-    @staticmethod
-    def normalize_catalog_entry(raw_model: dict[str, Any], defaults: object) -> Model:
-        if raw_model["id"] == "skip-me":
+class _StubAdapter(OpenAICompatibleAdapter):
+    @classmethod
+    @override
+    def normalize_catalog_entry(
+        cls, raw: Mapping[str, Any], defaults: Mapping[str, Any] | None = None
+    ) -> Model:
+        if raw["id"] == "skip-me":
             raise CatalogEntrySkipped("not a chat model")
-        if raw_model["id"] == "broken":
+        if raw["id"] == "broken":
             raise ValueError("schema mismatch")
-        return _STUB_MODELS[raw_model["id"]]
+        return _STUB_MODELS[raw["id"]]
 
 
 @respx.mock
@@ -202,7 +205,7 @@ class _StubAdapter:
 async def test_normalized_models_round_trip_through_the_written_catalog(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setitem(discovery_module._DISCOVERY_ADAPTER_MAP, "stub", _StubAdapter)
+    monkeypatch.setitem(ADAPTER_TYPES, "stub", _StubAdapter)
     resources_dir = tmp_path / "resources"
     respx.get(SIMPLE_MODELS_URL).mock(
         return_value=httpx.Response(
@@ -271,7 +274,7 @@ async def test_failed_refresh_raises_and_writes_no_projection(
     response: httpx.Response,
     expected_calls: int,
 ) -> None:
-    monkeypatch.setitem(discovery_module._DISCOVERY_ADAPTER_MAP, "stub", _StubAdapter)
+    monkeypatch.setitem(ADAPTER_TYPES, "stub", _StubAdapter)
     route = respx.get(SIMPLE_MODELS_URL).mock(return_value=response)
     resources_dir = tmp_path / "resources"
 

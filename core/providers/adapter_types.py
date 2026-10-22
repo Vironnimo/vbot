@@ -44,6 +44,14 @@ ADAPTER_TYPES: dict[str, type[ProviderAdapter]] = {
 }
 
 
+def discovery_adapter_type(adapter: str) -> type[ProviderAdapter] | None:
+    """Resolve catalog behavior from the shared Adapter registration."""
+
+    adapter_class = ADAPTER_TYPES.get(adapter)
+    # Cloud chat uses OpenAI compatibility; discovery uses /api/tags and /api/show.
+    return OllamaAdapter if adapter_class is OllamaCloudAdapter else adapter_class
+
+
 def openai_compatible_base_url(adapter: str, base_url: str) -> str:
     """Return the OpenAI-compatible API base for a Provider's configured base URL.
 

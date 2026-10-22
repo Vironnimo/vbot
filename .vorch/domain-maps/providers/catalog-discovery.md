@@ -25,7 +25,7 @@ An OpenAI-compatible Custom Provider participates without a separate discovery p
 - Refresh writes only the normalized projection; raw primary, supplementary, enrichment, and task responses are not retained. Runtime reads only normalized/assembled Model data.
 - After the models.dev projection, refresh keeps only the Models whose wire profile admits them on the refreshed Connection (`_admitted_models`, judged on the projected Model so a rule can read the projected protocol hint); a `restricted` or `retired` Model is not written. Adapter normalizers therefore do not check admission themselves.
 
-Runtime and discovery use separate Adapter-selector maps: `_ADAPTER_MAP` constructs live chat Adapters; `_DISCOVERY_ADAPTER_MAP` selects static catalog behavior. A new Adapter selector that supports discovery must be registered in both places.
+Runtime and discovery share `ADAPTER_TYPES` in `core/providers/adapter_types.py`. Its `discovery_adapter_type` selects static catalog behavior, with one explicit exception: Ollama Cloud chats through `OllamaCloudAdapter` but discovers through the native `OllamaAdapter`. Register a new Adapter selector once in this Provider-owned map.
 
 ## Connection-scoped merge
 
