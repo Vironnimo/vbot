@@ -186,16 +186,22 @@ async def test_a_live_rename_moves_every_reference_or_none(
             (runtime.bootstrap_service, ("list_jobs", "retarget_agent")),
         ):
             _record_threads(owner, names, automation_threads, monkeypatch)
-        # Live Terminal Sessions and commands follow the Agent's Sessions, and
-        # back on a revert.
+        # Live Terminal Sessions, Portals and commands follow the Agent's
+        # Sessions, and back on a revert.
         terminal_moves: list[tuple[str, str]] = []
+        portal_moves: list[tuple[str, str]] = []
         command_moves: list[tuple[str, str]] = []
         move_terminals = runtime.terminal_manager.transfer_agent_scope
+        move_portals = runtime.portals.transfer_agent_scope
         move_commands = runtime.command_manager.transfer_agent_scope
 
         async def record_terminal_move(agent_id: str, new_agent_id: str) -> int:
             terminal_moves.append((agent_id, new_agent_id))
             return await move_terminals(agent_id, new_agent_id)
+
+        def record_portal_move(agent_id: str, new_agent_id: str) -> int:
+            portal_moves.append((agent_id, new_agent_id))
+            return move_portals(agent_id, new_agent_id)
 
         async def record_command_move(agent_id: str, new_agent_id: str) -> int:
             command_moves.append((agent_id, new_agent_id))
@@ -205,6 +211,7 @@ async def test_a_live_rename_moves_every_reference_or_none(
             return await move_commands(agent_id, new_agent_id)
 
         monkeypatch.setattr(runtime.terminal_manager, "transfer_agent_scope", record_terminal_move)
+        monkeypatch.setattr(runtime.portals, "transfer_agent_scope", record_portal_move)
         monkeypatch.setattr(runtime.command_manager, "transfer_agent_scope", record_command_move)
         if fails:
             with pytest.raises(OSError, match="read-only"):
@@ -224,7 +231,7 @@ async def test_a_live_rename_moves_every_reference_or_none(
         assert automation_threads == {threading.get_ident()}
         forward = ("coder", "researcher")
         assert terminal_moves == ([forward, forward[::-1]] if fails else [forward])
-        assert command_moves == terminal_moves
+        assert portal_moves == command_moves == terminal_moves
     finally:
         await runtime.aclose()
 

@@ -185,6 +185,7 @@ class Runtime(RuntimeServiceGraph):
                 resources=(self.terminal_manager, self.command_manager, self.trigger_service),
                 terminals=self.terminal_manager,
                 commands=self.command_manager,
+                portals=self._portals,
                 scratch_areas=self.scratch_areas,
                 get_change_publisher=lambda: self._extension_change_publisher,
                 get_title_service=lambda: self._session_title_service,
@@ -716,7 +717,8 @@ class Runtime(RuntimeServiceGraph):
 
         The Agent's tree, config, Sessions and Sub-Agent links move together with
         the Channels, Cron and Bootstrap jobs, delegation
-        allow-lists and live Terminal Session scopes that name it. A failure
+        allow-lists and live Terminal Session, Portal and command scopes that
+        name it. A failure
         reverts all of it; an interrupted rename completes on the next start.
         While a Channel, Cron or Bootstrap job still names
         ``new_agent_id``, the rename is refused with ``AgentReferencedError``
@@ -787,6 +789,7 @@ class Runtime(RuntimeServiceGraph):
             snapshot_barrier=self._snapshot_barrier,
             terminals=self._terminal_manager,
             commands=self._command_manager,
+            portals=self._portals,
         )
 
     def reload_skills(self) -> None:

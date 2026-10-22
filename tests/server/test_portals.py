@@ -37,6 +37,7 @@ class _App(BaseHTTPRequestHandler):
         body = b"app page"
         self.send_response(200)
         self.send_header("Set-Cookie", "sid=42; Domain=localhost; Path=/; HttpOnly")
+        self.send_header("Clear-Site-Data", '"cookies", "storage"')
         self.send_header("Content-Type", "text/plain")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -128,6 +129,8 @@ def test_an_agent_portal_reaches_the_app_only_with_the_cards_credential(
     assert page.status_code == 200 and page.text == "app page"
     # The app's cookie is namespaced for this Portal; vBot's never reach the app.
     assert page.headers["set-cookie"] == f"vp_{portal['id']}_sid=42; Path=/; HttpOnly"
+    # Its Clear-Site-Data would clear them all, port or not.
+    assert "clear-site-data" not in page.headers
     [seen] = _App.seen
     assert seen["path"] == "/cart?step=2"
     assert seen["host"] == f"localhost:{app_port}"
@@ -194,6 +197,33 @@ async def test_a_portal_bridges_websockets_and_waits_for_an_app_that_is_not_up()
     assert waiting.status_code == 502
     assert '<meta http-equiv="refresh"' in waiting.text and str(app_port) in waiting.text
     assert listening is not None and listening.listening is False
+
+
+@pytest.mark.asyncio
+async def test_the_credential_redirect_keeps_the_address_the_browser_sent() -> None:
+    delivery = FileDelivery()
+    access = AccessService(access_config("local"), local_token=None, bind_host="127.0.0.1")
+    registry, server = _portal_server(access, delivery)
+    portal, _opened = await registry.open(_OWNER, target_port=5173, title="t", path="/")
+    credential = f"vbot_portal={delivery.portal_token(portal.id)}"
+    locations = {}
+    async with httpx.AsyncClient() as browser:
+        for target in (
+            f"/files/a%3Fb/caf%C3%A9/x%2Fy/100%25?{credential}",
+            f"/search?flag&q=a+b%26c&{credential}&page=2",
+            # Not a protocol-relative address of another host.
+            f"//other.host/x?{credential}",
+        ):
+            response = await browser.get(f"http://127.0.0.1:{portal.listen_port}{target}")
+            locations[target.split("?")[0]] = response.headers["location"]
+    await registry.aclose()
+    await server.aclose()
+
+    assert locations == {
+        "/files/a%3Fb/caf%C3%A9/x%2Fy/100%25": "/files/a%3Fb/caf%C3%A9/x%2Fy/100%25",
+        "/search": "/search?flag&q=a+b%26c&page=2",
+        "//other.host/x": "/.//other.host/x",
+    }
 
 
 @pytest.mark.asyncio

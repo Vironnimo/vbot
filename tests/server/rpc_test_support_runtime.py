@@ -635,6 +635,7 @@ class StubRuntime:
             snapshot_barrier=self.snapshot_barrier,
             terminals=cast(Any, self.terminal_manager),
             commands=self.command_manager,
+            portals=None,
         )
 
     def skills_for(self, _project_id: str | None = None, _agent_id: str | None = None) -> Any:

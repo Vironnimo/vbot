@@ -47,6 +47,7 @@ from core.tools.availability import (
     normalize_tool_access,
 )
 from core.tools.command_manager import CommandManager
+from core.tools.portal_registry import PortalRegistry
 from core.tools.scratch_areas import ScratchAreas
 from core.tools.terminal_manager import TerminalManager, TerminalOwner
 from core.tools.tools import ToolContext, ToolRegistry
@@ -132,6 +133,7 @@ class ExtensionHostFactory:
         resources: Sequence[ExecutionResources],
         terminals: TerminalManager,
         commands: CommandManager,
+        portals: PortalRegistry | None,
         scratch_areas: ScratchAreas,
         get_change_publisher: Callable[[], Callable[[str, str, Sequence[str], int], None] | None],
         get_title_service: Callable[[], SessionTitleService | None],
@@ -160,6 +162,7 @@ class ExtensionHostFactory:
         self._resources = resources
         self._terminals = terminals
         self._commands = commands
+        self._portals = portals
         self._scratch_areas = scratch_areas
         self._get_change_publisher = get_change_publisher
         self._get_title_service = get_title_service
@@ -271,6 +274,8 @@ class ExtensionHostFactory:
             TerminalOwner(address.project_id, address.agent_id, address.session_id)
         )
         await self._commands.close_scope(address)
+        if self._portals is not None:
+            self._portals.close_sessions([address])
 
     async def archive_uninstalled_owner_groups(self, installed: frozenset[str]) -> None:
         """Archive the live owner-managed Sessions of every owner not in *installed*.

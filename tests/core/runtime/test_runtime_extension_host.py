@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -435,8 +436,15 @@ async def test_owner_pages_and_archives_only_its_own_closed_groups(
             closed_commands.append(owner)
             return 0
 
+        closed_portals: list[SessionAddress] = []
+
+        def close_portals(addresses: Iterable[SessionAddress]) -> int:
+            closed_portals.extend(addresses)
+            return 0
+
         monkeypatch.setattr(runtime.terminal_manager, "close_scope", close_scope)
         monkeypatch.setattr(runtime.command_manager, "close_scope", close_command_scope)
+        monkeypatch.setattr(runtime.portals, "close_sessions", close_portals)
         groups = _owner_host(runtime, "swarm").temporary_agents
         assert groups is not None
         first = await groups.create("group-a", "peer", _participant(tmp_path))
@@ -468,9 +476,10 @@ async def test_owner_pages_and_archives_only_its_own_closed_groups(
         assert await groups.archive_group("group-a") == 1
         assert not first_scratch.area.exists()
         assert second_scratch.area.exists() and other_scratch.area.exists()
-        # Like an ordinary Session removal, the participants' Terminals and commands close.
+        # Like an ordinary Session removal, the participants' Terminals, commands
+        # and Portals close.
         assert closed == terminals[:1]
-        assert closed_commands == [first.address]
+        assert closed_commands == closed_portals == [first.address]
         assert await groups.groups() == ["group-b"]
         assert await groups.list("group-a") == []
         with pytest.raises(RunAdmissionBlockedError):
@@ -481,7 +490,7 @@ async def test_owner_pages_and_archives_only_its_own_closed_groups(
         assert await groups.delete_group("group-b") == 1
         assert not second_scratch.area.exists()
         assert closed == terminals
-        assert closed_commands == [first.address, second.address]
+        assert closed_commands == closed_portals == [first.address, second.address]
         assert await groups.delete_group("group-a") == 1  # archived; its Terminals closed before
         assert closed == terminals
 
