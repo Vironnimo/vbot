@@ -31,6 +31,26 @@ from core.providers.adapter import (
 from core.providers.errors import ProviderError, classify_in_band_error_type
 
 
+def messages_terminal_outcome(stop_reason: Any, *, has_tool_calls: bool) -> TerminalOutcome:
+    """Return the canonical terminal outcome of a Messages ``stop_reason``.
+
+    Streams and completed responses of every Messages wire map it alike.
+    """
+    if not isinstance(stop_reason, str):
+        return TERMINAL_OUTCOME_UNKNOWN
+    if stop_reason in ANTHROPIC_TOOL_STOP_REASONS:
+        return TERMINAL_OUTCOME_TOOL_CALLS
+    if stop_reason in ANTHROPIC_STOP_REASONS:
+        return TERMINAL_OUTCOME_TOOL_CALLS if has_tool_calls else TERMINAL_OUTCOME_STOP
+    if stop_reason in ANTHROPIC_TRUNCATED_STOP_REASONS:
+        return TERMINAL_OUTCOME_OUTPUT_TRUNCATED
+    if stop_reason == "refusal":
+        return TERMINAL_OUTCOME_CONTENT_FILTERED
+    if stop_reason in ANTHROPIC_ERROR_STOP_REASONS:
+        return TERMINAL_OUTCOME_ERROR
+    return TERMINAL_OUTCOME_UNKNOWN
+
+
 class AnthropicMessagesStreamDecoder:
     """Normalize one Anthropic Messages SSE stream into vBot deltas.
 
@@ -221,7 +241,7 @@ class AnthropicMessagesStreamDecoder:
                 normalized_deltas.append(
                     {
                         "type": "finish",
-                        "reason": self._normalize_stop_reason(
+                        "reason": messages_terminal_outcome(
                             stop_reason,
                             has_tool_calls=self._has_stream_tool_calls(),
                         ),
@@ -295,26 +315,6 @@ class AnthropicMessagesStreamDecoder:
                 "arguments_delta": arguments_delta,
             }
         ]
-
-    @staticmethod
-    def _normalize_stop_reason(
-        stop_reason: Any,
-        *,
-        has_tool_calls: bool,
-    ) -> TerminalOutcome:
-        if not isinstance(stop_reason, str):
-            return TERMINAL_OUTCOME_UNKNOWN
-        if stop_reason in ANTHROPIC_TOOL_STOP_REASONS:
-            return TERMINAL_OUTCOME_TOOL_CALLS
-        if stop_reason in ANTHROPIC_STOP_REASONS:
-            return TERMINAL_OUTCOME_TOOL_CALLS if has_tool_calls else TERMINAL_OUTCOME_STOP
-        if stop_reason in ANTHROPIC_TRUNCATED_STOP_REASONS:
-            return TERMINAL_OUTCOME_OUTPUT_TRUNCATED
-        if stop_reason == "refusal":
-            return TERMINAL_OUTCOME_CONTENT_FILTERED
-        if stop_reason in ANTHROPIC_ERROR_STOP_REASONS:
-            return TERMINAL_OUTCOME_ERROR
-        return TERMINAL_OUTCOME_UNKNOWN
 
     @staticmethod
     def _stream_index(event: dict[str, Any]) -> int | None:

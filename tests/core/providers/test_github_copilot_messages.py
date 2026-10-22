@@ -461,6 +461,7 @@ async def test_send_applies_the_model_thinking_policy(
                     },
                 ],
                 "usage": {"input_tokens": 10, "output_tokens": 20},
+                "stop_reason": "tool_use",
             },
             {
                 "role": "assistant",
@@ -475,6 +476,7 @@ async def test_send_applies_the_model_thinking_policy(
                 "tool_calls": [
                     {"id": "toolu_1", "name": "read", "arguments": {"path": "README.md"}}
                 ],
+                "terminal_outcome": "tool_calls",
                 "usage": {"input_tokens": 10, "output_tokens": 20},
             },
             id="text-thinking-tools-usage",
@@ -484,7 +486,8 @@ async def test_send_applies_the_model_thinking_policy(
                 "content": [
                     {"type": "thinking", "text": "Need to inspect first.", "signature": "sig-1"},
                     {"type": "text", "text": "Done."},
-                ]
+                ],
+                "stop_reason": "end_turn",
             },
             {
                 "role": "assistant",
@@ -496,6 +499,7 @@ async def test_send_applies_the_model_thinking_policy(
                     ]
                 },
                 "tool_calls": None,
+                "terminal_outcome": "stop",
             },
             id="visible-thinking-text-variant",
         ),
@@ -509,6 +513,7 @@ async def test_send_applies_the_model_thinking_policy(
                     "cache_creation_input_tokens": 50,
                     "output_tokens_details": {"thinking_tokens": 12},
                 },
+                "stop_reason": "max_tokens",
             },
             {
                 "role": "assistant",
@@ -516,6 +521,7 @@ async def test_send_applies_the_model_thinking_policy(
                 "reasoning": None,
                 "reasoning_meta": None,
                 "tool_calls": None,
+                "terminal_outcome": "output_truncated",
                 "usage": {
                     "input_tokens": 560,
                     "output_tokens": 20,
@@ -527,7 +533,8 @@ async def test_send_applies_the_model_thinking_policy(
             id="cache-tokens-fold-into-input",
         ),
         pytest.param(
-            # A missing counter stays absent so Chat can estimate it.
+            # A missing counter stays absent so Chat can estimate it; a missing
+            # stop_reason is no completed turn.
             {"content": [{"type": "text", "text": "Use this."}], "usage": {"output_tokens": 7}},
             {
                 "role": "assistant",
@@ -535,6 +542,7 @@ async def test_send_applies_the_model_thinking_policy(
                 "reasoning": None,
                 "reasoning_meta": None,
                 "tool_calls": None,
+                "terminal_outcome": "unknown",
                 "usage": {"output_tokens": 7},
             },
             id="output-without-input",

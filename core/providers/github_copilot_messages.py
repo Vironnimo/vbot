@@ -14,6 +14,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from core.providers._chat_completions_wire import _selected_thinking_effort
+from core.providers._messages_stream import messages_terminal_outcome
 from core.providers._openai_constants import REASONING_PARAMETER_NAMES
 from core.providers.adapter import (
     canonical_tool_result_is_error,
@@ -158,6 +159,9 @@ def normalize_copilot_messages_response(response: dict[str, Any]) -> dict[str, A
         "reasoning_meta": _extract_messages_reasoning_meta(content_blocks),
         "tool_calls": _extract_messages_tool_calls(content_blocks),
     }
+    normalized["terminal_outcome"] = messages_terminal_outcome(
+        response.get("stop_reason"), has_tool_calls=bool(normalized["tool_calls"])
+    )
     usage = extract_anthropic_usage(response)
     if usage is not None:
         normalized["usage"] = usage
