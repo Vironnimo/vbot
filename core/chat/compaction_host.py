@@ -59,7 +59,7 @@ if TYPE_CHECKING:
     from core.compaction.compaction import CompactionService, CompactionSettings
     from core.permissions import PermissionBoundary
     from core.runs import Run
-    from core.sessions import SessionReadCursor
+    from core.sessions import SessionReadCursor, TemporarySessionBinding
 
 
 @dataclass(frozen=True)
@@ -164,6 +164,8 @@ class ChatCompactionHost:
         session: ChatSession,
         messages: list[ChatMessage],
         settings: CompactionSettings,
+        *,
+        temporary_binding: TemporarySessionBinding | None,
     ) -> ManualCompactionRequest:
         """Build the exact manual Compaction request and acquire its adapters."""
         project_cwd = await self.run_transform(
@@ -309,6 +311,7 @@ class ChatCompactionHost:
                 permissions=permissions.boundary,
                 list_announced_tools=adapter.list_announced_tools(model_id),
                 tool_route_on_demand_tools=adapter.on_demand_tools(model_id),
+                temporary_binding=temporary_binding,
             )
             state = await self._requests.build_request_state(agent, session, inputs=inputs)
             return ManualCompactionRequest(

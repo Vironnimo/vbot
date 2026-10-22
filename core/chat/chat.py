@@ -461,7 +461,12 @@ class ChatLoop:
         *,
         project_id: str | None = None,
     ) -> Run:
-        """Start manual Compaction as the Session's active observable Run."""
+        """Start manual Compaction as the Session's active observable Run.
+
+        An owner-managed Session compacts as its temporary Agent: the admitted
+        configuration of its binding, with the Extension's Session Tools and
+        prompt blocks in the compacted request and the next prompt epoch.
+        """
         compaction_service = self._compaction_service
         if compaction_service is None:
             raise CompactionUnavailableError("Compaction is not available.")
@@ -470,7 +475,16 @@ class ChatLoop:
             agent_id, session_id, create_missing=False, project_id=project_id
         )
         resolver = self._dependencies.agent_resolver
-        agent = await resolver.resolve_agent_async(project_id, agent_id, session_id=session_id)
+        binding = await _CHAT_TRANSFORM_WORKERS.run(
+            self._dependencies.sessions.temporary_binding, session.address
+        )
+        agent = (
+            await resolver.resolve_temporary_agent_async(
+                binding.address, generation_id=binding.generation_id, session=binding.address
+            )
+            if binding is not None
+            else await resolver.resolve_agent_async(project_id, agent_id, session_id=session_id)
+        )
         working_project_id = await resolver.resolve_working_project_async(
             project_id, agent, session_id=session_id
         )
@@ -482,9 +496,11 @@ class ChatLoop:
                 session,
                 compaction_service,
                 instruction=instruction,
+                temporary_binding=binding,
             ),
             admission=RunAdmission(
                 working_project_id=working_project_id,
+                contributes_to_agent_activity=binding is None,
                 expected_session_generation_id=session.generation_id,
             ),
         )

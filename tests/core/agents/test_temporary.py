@@ -30,6 +30,7 @@ from core.runs import (
 from core.sessions import ChatSessionManager, SessionAddress
 from core.storage import TemporaryFileManager
 from core.tools.availability import ToolAccess
+from tests.core.chat.chat_loop_compaction_test_support import seed_tail
 from tests.core.chat.chat_loop_support import (
     StubAdapter,
     StubAgent,
@@ -475,6 +476,37 @@ async def test_temporary_compaction_policy_is_the_participant_agent_policy(
         await (await loop.start_temporary_run(binding, "shared goal")).wait()
         assert service.should_auto_calls
         assert {call[2] for call in service.should_auto_calls} == {threshold}
+    finally:
+        runtime.chat_sessions.close()
+
+
+@pytest.mark.asyncio
+async def test_manual_compaction_of_a_temporary_session_keeps_its_admitted_configuration(
+    tmp_path: Path,
+) -> None:
+    """``/compact`` on an owner-managed Session compacts the request its Runs send."""
+    runtime = _participant_runtime(tmp_path, "participant result")
+    binding = _bind_participant(runtime, tmp_path)
+    loop = build_chat_loop(runtime)
+    try:
+        await (await loop.start_temporary_run(binding, "shared goal")).wait()
+        checkpoint = seed_tail(runtime.chat_sessions.get(binding.address))
+        service = StubCompactionService(should_auto=False, checkpoint=checkpoint)
+        loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
+
+        run = await loop.start_compaction_run(
+            binding.address.agent_id,
+            binding.address.session_id,
+            project_id=binding.address.project_id,
+        )
+        await run.wait()
+
+        assert not run.contributes_to_agent_activity
+        [call] = service.compact_calls
+        assert "fixture_private" in {tool["name"] for tool in call["active_tools"]}
+        assert "swarm-orientation" in str(call["request_messages"][0])
+        messages = runtime.chat_sessions.get(binding.address).load()
+        assert "compaction_checkpoint" in [message.role for message in messages]
     finally:
         runtime.chat_sessions.close()
 
