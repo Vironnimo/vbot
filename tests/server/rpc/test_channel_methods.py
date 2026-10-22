@@ -15,6 +15,7 @@ import pytest
 
 from core.channels import ChannelConfig, ChannelConfigError, ChannelNotFoundError, DeniedChatFacts
 from server.events import ServerEventBus
+from server.rpc import secret_methods
 from tests.server.rpc_test_support import resource_changes, rpc_error, rpc_result
 
 JsonObject = dict[str, Any]
@@ -38,8 +39,10 @@ class _CredentialStorage:
     def load_environment(self) -> dict[str, str]:
         return dict(self.credentials)
 
-    def set_data_dir_credential(self, key: str, value: str) -> None:
+    def set_data_dir_credential(self, key: str, value: str) -> bool:
+        changed = self.credentials.get(key) != value
         self.credentials[key] = value
+        return changed
 
     def remove_data_dir_credential(self, key: str) -> bool:
         return self.credentials.pop(key, None) is not None
@@ -116,6 +119,7 @@ def _state(
         channel_service=channel_service if channel_service is not None else _channel_service(),
         reload_channel_tool=Mock(),
         reload_environment_credentials=reload_environment_credentials,
+        reload_environment_credentials_async=AsyncMock(side_effect=reload_environment_credentials),
         resolve_environment_credential=resolve_environment_credential,
         environment_credential_source=environment_credential_source,
         storage=storage,
@@ -373,22 +377,103 @@ async def test_channel_set_token_saves_the_credential_and_restarts_only_when_it_
 
 
 @pytest.mark.asyncio
-async def test_channel_set_token_rolls_back_credential_when_restart_fails() -> None:
+@pytest.mark.parametrize("concurrent_update", [False, True])
+async def test_channel_set_token_rolls_back_credential_when_restart_fails(
+    concurrent_update: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
     config = _channel_config()
     service = _channel_service(config)
-    service.restart_channel.side_effect = [ChannelConfigError("restart failed"), True]
+    restarting, release = asyncio.Event(), asyncio.Event()
+
+    async def restart(_channel_id: str) -> bool:
+        if service.restart_channel.await_count == 1:
+            restarting.set()
+            await release.wait()
+            raise ChannelConfigError("restart failed")
+        return True
+
+    service.restart_channel.side_effect = restart
     state = _state(service)
     state.runtime.storage.credentials[config.token_env_var] = "old-token"
     state.runtime.reload_environment_credentials()
 
-    error = await rpc_error(state, "channel.set_token", id="tg-assistant", token="new-token")
+    mutation = asyncio.create_task(
+        rpc_error(state, "channel.set_token", id="tg-assistant", token="new-token")
+    )
+    await restarting.wait()
+    replacement: asyncio.Task[JsonObject] | None = None
+    try:
+        if concurrent_update:
+            # Execute the in-memory credential double inline, so an unprotected
+            # secrets.set deterministically completes before the failed rotation.
+            monkeypatch.setattr(
+                secret_methods._SECRET_WORKERS,
+                "run",
+                AsyncMock(side_effect=lambda function, *args: function(*args)),
+            )
+            replacing = asyncio.Event()
+
+            async def replace_credential() -> JsonObject:
+                replacing.set()
+                return await rpc_result(
+                    state, "secrets.set", name=_TOKEN_KEY, value="independent-update"
+                )
+
+            replacement = asyncio.create_task(replace_credential())
+            await replacing.wait()
+            assert not replacement.done()
+    finally:
+        release.set()
+        error = await mutation
+        if replacement is not None:
+            await replacement
 
     assert error["code"] == "channel_config_error"
-    assert state.runtime.storage.credentials == {_TOKEN_KEY: "old-token"}
-    assert state.runtime.live_credentials == {_TOKEN_KEY: "old-token"}
+    expected = "independent-update" if concurrent_update else "old-token"
+    assert state.runtime.storage.credentials == {_TOKEN_KEY: expected}
+    assert state.runtime.live_credentials == {_TOKEN_KEY: expected}
     # The adapter is restarted again on the restored token.
     assert service.restart_channel.await_count == 2
-    assert resource_changes(state) == []
+    assert resource_changes(state) == (
+        [_DATA_STORE_CHANGED, {"kind": "providers"}] if concurrent_update else []
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["create", "set_token"])
+async def test_channel_credential_mutations_settle_before_cancellation(operation: str) -> None:
+    service = _channel_service(_channel_config())
+    state = _state(service)
+    entered, release = asyncio.Event(), asyncio.Event()
+    finished = False
+
+    async def complete(_target: Any) -> bool:
+        nonlocal finished
+        entered.set()
+        await release.wait()
+        finished = True
+        return True
+
+    if operation == "create":
+        service.create_channel.side_effect = complete
+        params = {"id": "tg-main", "platform": "telegram", "agent_id": "assistant"}
+        key = _MANAGED_KEY
+    else:
+        service.restart_channel.side_effect = complete
+        params = {"id": "tg-assistant"}
+        key = _TOKEN_KEY
+    mutation = asyncio.create_task(rpc_result(state, f"channel.{operation}", token="new", **params))
+    await entered.wait()
+    mutation.cancel()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await mutation
+
+    assert finished
+    assert state.runtime.storage.credentials == {key: "new"}
+    assert state.runtime.live_credentials == {key: "new"}
+    state.runtime.reload_channel_tool.assert_called_once_with()
+    assert resource_changes(state) == [_CHANNELS_CHANGED, _DATA_STORE_CHANGED]
 
 
 # ---------------------------------------------------------------------------

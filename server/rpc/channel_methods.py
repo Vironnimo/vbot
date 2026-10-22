@@ -16,6 +16,7 @@ from core.channels import (
 from core.database import DatabaseError
 from core.utils.logging import get_logger
 from server.events import RESOURCE_KIND_CHANNELS, RESOURCE_KIND_DATA_STORE
+from server.rpc._mutations import serialized_mutation
 from server.rpc.agent_refs import _agent_reference_lock
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
@@ -47,6 +48,15 @@ async def _list_channels(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _create_channel(state: Any, params: JsonObject) -> JsonObject:
+    # References stay protected through credential persistence, Channel creation,
+    # rollback and publication, including when the request is cancelled.
+    async with _agent_reference_lock(state):
+        return await serialized_mutation(
+            _create_channel_admitted, lock_attribute="_settings_mutation_lock"
+        )(state, params)
+
+
+async def _create_channel_admitted(state: Any, params: JsonObject) -> JsonObject:
     supported_fields = {
         "id",
         "platform",
@@ -87,28 +97,27 @@ async def _create_channel(state: Any, params: JsonObject) -> JsonObject:
     previous_app_value = None
     app_written = False
     try:
-        async with _agent_reference_lock(state):
-            _validate_channel_agent_exists(state, config.agent_id)
-            config.validate()
-            if "app_token" in params:
-                previous_app_value = state.runtime.storage.load_environment().get(app_key)
-                _store_channel_token(state.runtime, app_key, _required_string(params, "app_token"))
-                app_written = True
-            if managed_token is None:
+        _validate_channel_agent_exists(state, config.agent_id)
+        config.validate()
+        if "app_token" in params:
+            previous_app_value = state.runtime.storage.load_environment().get(app_key)
+            _store_channel_token(state.runtime, app_key, _required_string(params, "app_token"))
+            app_written = True
+        if managed_token is None:
+            await state.runtime.channel_service.create_channel(config)
+        else:
+            previous_value = state.runtime.storage.load_environment().get(token_env_var)
+            try:
+                credential_result = _store_channel_token(
+                    state.runtime,
+                    token_env_var,
+                    managed_token,
+                )
                 await state.runtime.channel_service.create_channel(config)
-            else:
-                previous_value = state.runtime.storage.load_environment().get(token_env_var)
-                try:
-                    credential_result = _store_channel_token(
-                        state.runtime,
-                        token_env_var,
-                        managed_token,
-                    )
-                    await state.runtime.channel_service.create_channel(config)
-                except Exception:
-                    _restore_channel_token(state.runtime, token_env_var, previous_value)
-                    raise
-            state.runtime.reload_channel_tool()
+            except Exception:
+                _restore_channel_token(state.runtime, token_env_var, previous_value)
+                raise
+        state.runtime.reload_channel_tool()
     except Exception as exc:
         if app_written:
             _restore_channel_token(state.runtime, app_key, previous_app_value)
@@ -659,7 +668,9 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "channel.delete": _delete_channel,
         "channel.enable": _enable_channel,
         "channel.disable": _disable_channel,
-        "channel.set_token": _set_channel_token,
+        "channel.set_token": serialized_mutation(
+            _set_channel_token, lock_attribute="_settings_mutation_lock"
+        ),
         "channel.status": _channel_status,
         "channel.access.get": _channel_access_get,
         "channel.identity.set": _channel_identity_set,
