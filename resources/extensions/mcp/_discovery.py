@@ -25,7 +25,7 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import best_match
 
 from core.tools.call_syntax import normalize_call_arguments
-from core.tools.contracts import ToolContractError, compile_tool_contract
+from core.tools.contracts import ToolContractError, compile_tool_contract, current_dialect_schema
 from core.tools.tools import tool_failure
 
 from ._definitions import (
@@ -93,13 +93,17 @@ def remote_tool_name(connection: str, name: str) -> str:
     return f"mcp_{connection}_{label}_{digest}"
 
 
-def tool_contract_problem(connection: str, tool: dict[str, Any]) -> str | None:
-    """Why remote *tool* cannot become a vBot Tool, or ``None`` when it can.
+def usable_tool(connection: str, tool: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
+    """Remote *tool* as vBot uses it, and why it cannot become a vBot Tool (``None`` when it can).
 
-    Its input schema must compile as a Tool contract (JSON Schema 2020-12 plus the
+    Its input schema is read in the Tool contract's dialect: spellings of older
+    JSON Schema drafts become their 2020-12 form (``current_dialect_schema``), so
+    the catalog, describe, validation and the registered Tool share one schema.
+    That schema must compile as a Tool contract (JSON Schema 2020-12 plus the
     contract's invariants), with the options its registration uses, which then
     finds the compiled contract cached.
     """
+    tool = {**tool, "inputSchema": current_dialect_schema(tool["inputSchema"])}
     try:
         compile_tool_contract(
             name=remote_tool_name(connection, tool["name"]),
@@ -108,8 +112,8 @@ def tool_contract_problem(connection: str, tool: dict[str, Any]) -> str | None:
             require_closed_input=False,
         )
     except ToolContractError as error:
-        return str(error)
-    return None
+        return tool, str(error)
+    return tool, None
 
 
 def target_for(kind: str, name: str, definition: Any) -> str:

@@ -1106,10 +1106,14 @@ async def test_calls_run_concurrently_and_server_requests_belong_to_their_call(
 async def test_legacy_list_changed_refreshes_and_republishes_a_changed_catalog(
     host, monkeypatch, caplog
 ):
-    tools = ["add", "odd"]
+    tools = ["add", "pair", "odd"]
     published: list[list[str]] = []
-    # A schema vBot's Tool contract refuses costs only that Tool.
-    refused = {"type": "object", "properties": {}, "required": ["missing"]}
+    # A schema vBot's Tool contract refuses costs only that Tool; one written for
+    # an older draft is listed in the contract's dialect.
+    schemas = {
+        "odd": {"type": "object", "properties": {}, "required": ["missing"]},
+        "pair": {"type": "object", "properties": {"pair": {"items": [{"type": "string"}]}}},
+    }
 
     async def call(server_context, params):
         tools.append("added")
@@ -1121,7 +1125,7 @@ async def test_legacy_list_changed_refreshes_and_republishes_a_changed_catalog(
     async def list_tools(server_context, params):
         return types.ListToolsResult(
             tools=[
-                types.Tool(name=name, input_schema=refused if name == "odd" else {"type": "object"})
+                types.Tool(name=name, input_schema=schemas.get(name, {"type": "object"}))
                 for name in tools
             ]
         )
@@ -1148,7 +1152,10 @@ async def test_legacy_list_changed_refreshes_and_republishes_a_changed_catalog(
             ):
                 await asyncio.sleep(0)
         # Republished once: refreshes that find the same catalog publish nothing.
-        assert published == [["add"], ["add", "added"]]
+        assert published == [["add", "pair"], ["add", "pair", "added"]]
+        assert runner.catalog["tools"][1]["inputSchema"]["properties"]["pair"] == {
+            "prefixItems": [{"type": "string"}]
+        }
         assert _notified(runner) == ["catalog_changed"] * 3
         # The left-out Tool is reported once, when it starts being left out.
         events = runner.events()["events"]

@@ -47,6 +47,7 @@ from core.providers._messages_constants import (
 from core.providers._messages_images import prepare_message_images
 from core.providers._messages_stream import (
     AnthropicMessagesStreamDecoder,
+    messages_terminal_outcome,
 )
 from core.providers._messages_wire import (
     _apply_anthropic_tools,
@@ -248,7 +249,7 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
             "reasoning_meta": _extract_anthropic_reasoning_meta(content_blocks),
             "tool_calls": _extract_anthropic_tool_calls(content_blocks),
         }
-        normalized["terminal_outcome"] = AnthropicMessagesStreamDecoder._normalize_stop_reason(
+        normalized["terminal_outcome"] = messages_terminal_outcome(
             response.get("stop_reason"),
             has_tool_calls=bool(normalized["tool_calls"]),
         )

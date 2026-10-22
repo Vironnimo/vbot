@@ -8,6 +8,7 @@ from typing import Any
 
 from core.providers._chat_completions_constants import (
     _OPENAI_INPUT_AUDIO_FORMATS,
+    OPENAI_CONTENT_FILTER_FINISH_REASONS,
     OPENAI_ERROR_FINISH_REASONS,
     OPENAI_NATIVE_TRANSPORT_FINISH_REASONS,
     OPENAI_REASONING_KEYS,
@@ -38,19 +39,27 @@ from core.providers.reasoning import (
 from core.providers.tool_schema import ToolSchemaProfile, render_tool_definitions
 
 
-def _openai_concealed_transport_failure(
+def _openai_transport_failure(
     finish_reason: Any,
     native_finish_reason: Any,
 ) -> NetworkError | ProviderError | None:
-    """Return a retryable error when ``stop`` conceals an upstream transport drop.
+    """Return a retryable error when a finish reports a failed inference or transport.
 
-    Observed 2026-08-24 on OpenRouter ``stealth/ox-alpha``: HTTP 200 SSE with
-    empty ``delta.content``, ``finish_reason=stop``, and
+    GLM (Z.ai) ends a turn whose inference failed with
+    ``finish_reason=network_error`` ("model inference exception", Zhipu's Chat
+    Completion reference, read 2026-10-22, not live-probed); like a dropped
+    transport, Chat restarts the stream.
+
+    A ``stop`` can also conceal an upstream transport drop. Observed 2026-08-24
+    on OpenRouter ``stealth/ox-alpha``: HTTP 200 SSE with empty
+    ``delta.content``, ``finish_reason=stop``, and
     ``native_finish_reason=network_error``. Treating that as a completed stop
     makes Chat try to persist an empty Assistant turn and die on validation,
     with no stream restart.
     """
 
+    if finish_reason == "network_error":
+        return NetworkError("Provider stream ended with finish_reason=network_error")
     if (
         finish_reason != "stop"
         or native_finish_reason not in OPENAI_NATIVE_TRANSPORT_FINISH_REASONS
@@ -75,7 +84,7 @@ def _normalize_openai_finish_reason(
         return TERMINAL_OUTCOME_TOOL_CALLS if has_tool_calls else TERMINAL_OUTCOME_STOP
     if finish_reason in OPENAI_TRUNCATED_FINISH_REASONS:
         return TERMINAL_OUTCOME_OUTPUT_TRUNCATED
-    if finish_reason == "content_filter":
+    if finish_reason in OPENAI_CONTENT_FILTER_FINISH_REASONS:
         return TERMINAL_OUTCOME_CONTENT_FILTERED
     if finish_reason in OPENAI_ERROR_FINISH_REASONS:
         return TERMINAL_OUTCOME_ERROR
@@ -91,7 +100,7 @@ def _extract_openai_terminal_outcome(
     if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
         return TERMINAL_OUTCOME_UNKNOWN
     choice = choices[0]
-    transport_failure = _openai_concealed_transport_failure(
+    transport_failure = _openai_transport_failure(
         choice.get("finish_reason"),
         choice.get("native_finish_reason"),
     )

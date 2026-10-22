@@ -30,7 +30,7 @@ from ._calls import (
     UnsupportedOperationError,
     _Call,
 )
-from ._discovery import remote_tool_name, tool_contract_problem
+from ._discovery import remote_tool_name, usable_tool
 from ._events import dump
 from ._tasks import (
     TASKS_EXTENSION,
@@ -204,14 +204,16 @@ class ConnectionProtocol:
     def _skip_unusable_tools(self, catalog: dict[str, Any]) -> None:
         """Leave out the Tools whose input schema vBot's Tool contract refuses.
 
-        One such schema must not cost the connection its other Tools, nor list a
-        Tool that no call could reach. Each Tool records a ``tool_skipped`` event and
-        logs one WARNING, without its schema, when it starts being skipped.
+        The catalog keeps the other Tools with their schemas in the contract's
+        dialect (``usable_tool``). One refused schema must not cost the connection
+        its other Tools, nor list a Tool that no call could reach. Each Tool
+        records a ``tool_skipped`` event and logs one WARNING, without its schema,
+        when it starts being skipped.
         """
         usable: list[dict[str, Any]] = []
         skipped: set[str] = set()
-        for tool in catalog["tools"]:
-            problem = tool_contract_problem(self._runner.id, tool)
+        for listed in catalog["tools"]:
+            tool, problem = usable_tool(self._runner.id, listed)
             if problem is None:
                 usable.append(tool)
                 continue

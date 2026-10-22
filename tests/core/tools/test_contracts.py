@@ -17,6 +17,7 @@ from core.tools import (
     tool_success,
 )
 from core.tools.call_syntax import normalize_call_arguments
+from core.tools.contracts import current_dialect_schema
 from tests.core.tools.tools_test_support import JsonObject, make_context
 
 
@@ -109,21 +110,102 @@ def test_compile_leaves_schema_like_data_and_local_references_alone() -> None:
         contract.validate_arguments({"children": [{"children": "none"}]})
 
 
-def test_model_facing_object_compiles_open_but_its_properties_are_the_parameter_list() -> None:
-    contract = _open_contract({"value": {"type": "string"}})
+def test_older_draft_spellings_read_as_their_2020_12_form() -> None:
+    # MCP servers write Tool schemas for older drafts, whose tuple ``items`` and
+    # boolean exclusive bounds 2020-12 refuses; data keywords stay as written.
+    looks_older = {"items": ["a"], "additionalItems": False}
+    query = {"type": "object", "default": looks_older, "examples": [looks_older]}
+    older: JsonObject = {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+            "pair": {
+                "type": "array",
+                "items": [
+                    {"type": "string"},
+                    {"type": "integer", "minimum": 0, "exclusiveMinimum": True},
+                ],
+                "additionalItems": False,
+            },
+            "point": {"type": "array", "items": [{"type": "number"}]},
+            "ratio": {"type": "number", "maximum": 1, "exclusiveMaximum": False},
+            "query": query,
+        },
+        "definitions": {"tuple": {"items": [{"type": "string"}]}},
+    }
+
+    converted = current_dialect_schema(older)
+
+    assert converted["properties"] == {
+        "pair": {
+            "type": "array",
+            "prefixItems": [{"type": "string"}, {"type": "integer", "exclusiveMinimum": 0}],
+            "items": False,
+        },
+        "point": {"type": "array", "prefixItems": [{"type": "number"}]},
+        "ratio": {"type": "number", "maximum": 1},
+        "query": query,
+    }
+    assert converted["definitions"] == {"tuple": {"prefixItems": [{"type": "string"}]}}
+    assert current_dialect_schema(converted) == converted
+    contract = compile_tool_contract(
+        name="sample", input_schema=converted, require_closed_input=False
+    )
+    contract.validate_arguments({"pair": ["a", 1], "point": [1.5, "free"], "ratio": 1})
+    for wrong in ({"pair": ["a", 0]}, {"pair": ["a", 1, "more"]}):
+        with pytest.raises(ToolContractError):
+            contract.validate_arguments(wrong)
+
+
+@pytest.mark.parametrize(
+    ("schema", "parameters"),
+    [
+        pytest.param({"properties": {"value": {"type": "string"}}}, "value", id="properties"),
+        pytest.param(
+            {
+                "allOf": [
+                    {"properties": {"value": {"type": "string"}}, "required": ["value"]},
+                    {"properties": {"mode": {"type": "string"}}},
+                ]
+            },
+            "value (required), mode",
+            id="root-composed-by-all-of",
+        ),
+        pytest.param(
+            {
+                "$ref": "#/$defs/base",
+                "properties": {"mode": {"type": "string"}},
+                "required": ["value"],
+                "$defs": {"base": {"properties": {"value": {"type": "string"}}}},
+            },
+            "mode, value (required)",
+            id="required-name-declared-by-a-ref",
+        ),
+    ],
+)
+def test_model_facing_object_compiles_open_but_its_properties_are_the_parameter_list(
+    schema: JsonObject, parameters: str
+) -> None:
+    contract = compile_tool_contract(
+        name="sample", input_schema={"type": "object", **schema}, require_closed_input=False
+    )
 
     contract.validate_arguments({"value": "ok"})
     with pytest.raises(ToolContractError) as exc_info:
         contract.validate_arguments({"value": "ok", "extra": True})
 
     assert str(exc_info.value) == (
-        'sample was not run:\n- "extra" is not a parameter.\nsample parameters: value.'
+        f'sample was not run:\n- "extra" is not a parameter.\nsample parameters: {parameters}.'
     )
 
 
 @pytest.mark.parametrize(
     "open_keywords",
-    [{"additionalProperties": True}, {"patternProperties": {"^x_": {"type": "string"}}}],
+    [
+        {"additionalProperties": True},
+        {"patternProperties": {"^x_": {"type": "string"}}},
+        pytest.param({"allOf": [{"additionalProperties": True}]}, id="open-all-of-branch"),
+    ],
 )
 def test_explicitly_open_root_accepts_and_keeps_unknown_arguments(
     open_keywords: JsonObject,

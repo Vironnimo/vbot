@@ -18,6 +18,12 @@ from jsonschema.exceptions import SchemaError, ValidationError
 
 from core.tools._argument_repair import decode_json_argument, normalize_schema_value
 from core.tools._contract_error import ToolContractError
+from core.tools._schema_reading import (
+    DATA_KEYWORDS,
+    SCHEMA_MAPS,
+    current_dialect_schema,
+    object_fields,
+)
 from core.tools.model_names import model_tool_name
 
 JsonObject = dict[str, Any]
@@ -485,6 +491,7 @@ def _compile_schema(
         raise ToolContractError(f"Tool {label} schema root must have type object")
     _validate_schema_invariants(
         canonical,
+        root=canonical,
         label=label,
         path=(),
         require_closed_objects=require_closed_objects,
@@ -492,18 +499,10 @@ def _compile_schema(
     return canonical
 
 
-# Keywords whose values are instance data, never schemas: schema rules do not
-# apply inside them, even where the data looks like a schema.
-_DATA_KEYWORDS = frozenset({"const", "default", "enum", "examples"})
-# Keywords whose values map names to schemas; the map itself is no schema.
-_SCHEMA_MAPS = frozenset(
-    {"$defs", "definitions", "dependentSchemas", "patternProperties", "properties"}
-)
-
-
 def _validate_schema_invariants(
     node: Any,
     *,
+    root: JsonObject,
     label: str,
     path: tuple[str | int, ...],
     require_closed_objects: bool,
@@ -513,22 +512,28 @@ def _validate_schema_invariants(
     if isinstance(node, dict):
         if schema:
             _validate_schema_node(
-                node, label=label, path=path, require_closed_objects=require_closed_objects
+                node,
+                root=root,
+                label=label,
+                path=path,
+                require_closed_objects=require_closed_objects,
             )
         for key, value in node.items():
-            if schema and key in _DATA_KEYWORDS:
+            if schema and key in DATA_KEYWORDS:
                 continue
             _validate_schema_invariants(
                 value,
+                root=root,
                 label=label,
                 path=(*path, key),
                 require_closed_objects=require_closed_objects,
-                schema=not (schema and key in _SCHEMA_MAPS),
+                schema=not (schema and key in SCHEMA_MAPS),
             )
     elif isinstance(node, list):
         for index, value in enumerate(node):
             _validate_schema_invariants(
                 value,
+                root=root,
                 label=label,
                 path=(*path, index),
                 require_closed_objects=require_closed_objects,
@@ -538,6 +543,7 @@ def _validate_schema_invariants(
 def _validate_schema_node(
     node: JsonObject,
     *,
+    root: JsonObject,
     label: str,
     path: tuple[str | int, ...],
     require_closed_objects: bool,
@@ -562,7 +568,14 @@ def _validate_schema_node(
         raise ToolContractError(
             f"Tool {label} schema{_format_path(path)} required must be an array"
         )
-    unknown_required = sorted(set(required).difference(properties))
+    declared: Collection[Any] = properties
+    if node.get("additionalProperties") is not False:
+        # The object accepts what its allOf branches and $ref declare; with
+        # additionalProperties false it refuses every name outside its own.
+        fields = object_fields(node, root)
+        if fields is not None:
+            declared = fields.properties
+    unknown_required = sorted(set(required).difference(declared))
     if unknown_required:
         names = ", ".join(unknown_required)
         raise ToolContractError(
@@ -575,17 +588,17 @@ def _closed_root_parameters(schema: Any) -> tuple[str, ...] | None:
 
     Model-facing schemas omit ``additionalProperties``, so a Tool's declared
     root properties are its complete parameter list: an omitted keyword closes
-    the root like ``false``. An explicit schema or ``true``, or
-    ``patternProperties``, keeps it open (``None``).
+    the root like ``false``. A root composed with ``allOf`` (or a ``$ref``)
+    declares its branches' properties too. An explicit schema or ``true``, or
+    ``patternProperties``, in the root or a branch keeps it open (``None``), and
+    so does a branch that cannot be read.
     """
     if not isinstance(schema, Mapping):
         return None
-    properties = schema.get("properties")
-    if not isinstance(properties, dict):
+    fields = object_fields(schema, schema)
+    if fields is None or not fields.declared or fields.open:
         return None
-    if schema.get("additionalProperties", False) is not False or "patternProperties" in schema:
-        return None
-    return tuple(properties)
+    return tuple(fields.properties)
 
 
 _MAX_REPORTED_PROBLEMS = 6
@@ -650,10 +663,14 @@ def _render_argument_problems(
 
 def _parameter_line(tool_name: str, schema: JsonObject) -> str:
     """Return the line listing the Tool's parameters, ``""`` when it has none."""
-    parameters = schema.get("properties")
+    fields = object_fields(schema, schema)
+    if fields is not None:
+        parameters: Any = fields.properties
+        required: Any = fields.required
+    else:
+        parameters, required = schema.get("properties"), schema.get("required", [])
     if not isinstance(parameters, dict) or not parameters:
         return ""
-    required = schema.get("required", [])
     names = ", ".join(f"{name} (required)" if name in required else name for name in parameters)
     return f"{tool_name} parameters: {names}."
 
@@ -996,6 +1013,7 @@ __all__ = [
     "ToolContract",
     "ToolContractError",
     "compile_tool_contract",
+    "current_dialect_schema",
     "decode_json_argument",
     "ignored_fields_note",
 ]
