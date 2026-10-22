@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from core.tools._search_confinement import Confinement, permitted, scope_confinement
-from core.tools._search_query import SearchQuery
+from core.tools._search_query import SearchQuery, glob_separators
 from core.tools.file_state import os_error_reason
 
 if TYPE_CHECKING:
@@ -122,9 +122,7 @@ def rg_globs(globs: list[str], prefixes: list[str], *, skip_caches: bool = False
     arguments: list[str] = []
     for glob in globs:
         negated = glob.startswith("!")
-        body = glob[1:] if negated else glob
-        if os.name == "nt":
-            body = re.sub(r"\\(?![*?\[\]{}!\\])", "/", body)
+        body = glob_separators(glob[1:] if negated else glob)
         if body.startswith("./"):
             body = "/" + body[2:].lstrip("/")
         variants = [body]

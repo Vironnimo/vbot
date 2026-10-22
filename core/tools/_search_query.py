@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import codecs
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Literal
@@ -422,6 +423,16 @@ _NAME_GLOB = re.compile(r"[\w.\-/{},]*(?<![.\])])\*[\w.\-/*{},]*\.(?:\w{1,10}|\{
 _REGEX_EVERYTHING = re.compile(r"\^?(?:\.[*+]?|\((?:\?:)?\.[*+]?\))\$?|\^|\$")
 # Flags under which such a regex no longer matches every name or line.
 _NARROWING_FLAGS = frozenset({"--invert-match", "--line-regexp", "--word-regexp"})
+
+
+# On Windows a backslash in a glob separates folders unless it escapes a character
+# a file name there can hold. * and ? cannot, so "src\*.py" means src/*.py.
+_WINDOWS_SEPARATORS = re.compile(r"\\+(?![\[\]{}!])")
+
+
+def glob_separators(glob: str) -> str:
+    """Write the folder separators of ``glob`` as ripgrep reads them, ``/``."""
+    return _WINDOWS_SEPARATORS.sub("/", glob) if os.name == "nt" else glob
 
 
 def glob_shaped(pattern: str) -> bool:
