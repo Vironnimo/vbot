@@ -1,3 +1,5 @@
+import { t } from './i18n.js';
+
 const BRIDGE_VERSION = 1;
 const MAX_MESSAGE_BYTES = 64 * 1024;
 const MAX_HOST_MESSAGE_BYTES = 8 * 1024 * 1024;
@@ -134,7 +136,9 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
   // as PathField read the failure the same way in a page.
   function replyError(data) {
     const error = new Error(
-      typeof data.error === 'string' ? data.error : 'Extension request failed',
+      typeof data.error === 'string'
+        ? data.error
+        : t('extensions.page.requestFailed'),
     );
     if (typeof data.code === 'string' && data.code) error.code = data.code;
     if (typeof data.reason === 'string' && data.reason)

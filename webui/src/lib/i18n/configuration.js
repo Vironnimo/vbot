@@ -2,6 +2,7 @@ export default Object.freeze({
   'extensions.pageUnavailable': 'This Extension page is unavailable.',
   'extensions.page.invalidLink': 'This link cannot be opened.',
   'extensions.page.fileUnavailable': 'This local file is no longer available.',
+  'extensions.page.requestFailed': 'The Extension request failed.',
   'extensions.page.responseTooLarge':
     'The answer is too large for this Extension page.',
   'extensions.inputWaiting': '{count} Extension requests need your response.',

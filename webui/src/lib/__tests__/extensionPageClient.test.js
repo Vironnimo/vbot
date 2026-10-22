@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createAutosaveParticipant } from '../autosave.js';
 import { createExtensionPageClient } from '../extensionPageClient.js';
+import { t } from '../i18n.js';
 import { listingErrorReason } from '../pathPicker.js';
 
 const descriptor = { owner: 'alpha', page: 'main' };
@@ -237,6 +238,11 @@ describe('extension page client', () => {
     }
     // The shared path field reads the failure as it reads the app's.
     expect(failures.map(listingErrorReason)).toEqual(['unreadable', 'invalid']);
+
+    // A failure without a message still says that the request failed.
+    const unnamed = client.listDirectory();
+    reply({ type: 'vbot.extension.error' });
+    await expect(unnamed).rejects.toThrow(t('extensions.page.requestFailed'));
   });
 
   it("asks the host for a Run's step window and for the steps before its gap", async () => {
