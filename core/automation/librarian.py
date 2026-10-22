@@ -633,7 +633,12 @@ class LibrarianService:
             error = await self._consolidate(agent_id, library, active)
             if active.consolidation == "ran":
                 fingerprint = await _LIBRARIAN_WORKERS.run(
-                    self._fingerprint_now, agent_id, usage, library.latest_revision, active.run_id
+                    self._fingerprint_now,
+                    agent_id,
+                    usage,
+                    library.latest_revision,
+                    active.run_id,
+                    agent_created_at=active.agent_created_at,
                 )
         finished = await self._finish(agent_id, active, "completed", fingerprint, error)
         _LOGGER.info(
@@ -659,7 +664,12 @@ class LibrarianService:
     ) -> _Library:
         """Keep archives, invalidation and their pass record together on shutdown."""
         library = await _LIBRARIAN_WORKERS.run(
-            self._age_library, agent_id, usage, scheduled, cutoff
+            self._age_library,
+            agent_id,
+            usage,
+            scheduled,
+            cutoff,
+            agent_created_at=active.agent_created_at,
         )
         active.archived = len(library.archived_names)
         active.archived_revisions = library.archived_revisions
@@ -679,7 +689,10 @@ class LibrarianService:
         assert active.base is not None
         running = active.record(format_canonical_timestamp(self._clock()), "interrupted")
         await _LIBRARIAN_WORKERS.run(
-            self._write_state, agent_id, replace(active.base, running_pass=running)
+            self._write_state,
+            agent_id,
+            replace(active.base, running_pass=running),
+            agent_created_at=active.agent_created_at,
         )
 
     async def _finish(
@@ -701,7 +714,9 @@ class LibrarianService:
             format_canonical_timestamp(self._clock()), outcome, counts=counts, error=error
         )
         state = replace(active.base.recorded(finished), consolidation_fingerprint=fingerprint)
-        await _LIBRARIAN_WORKERS.run(self._write_state, agent_id, state)
+        await _LIBRARIAN_WORKERS.run(
+            self._write_state, agent_id, state, agent_created_at=active.agent_created_at
+        )
         return finished
 
     async def _record_failure(self, agent_id: str, active: _ActivePass, error: str) -> None:
@@ -723,12 +738,15 @@ class LibrarianService:
         usage: Mapping[str, SkillUse],
         scheduled: frozenset[str],
         cutoff: datetime,
+        *,
+        agent_created_at: str,
     ) -> _Library:
         """Archive the inactive Skills, then describe what consolidation may change."""
         # Holding off other Skill writes keeps the activity read below true for
         # the archives: a person's change lands before it, which keeps the
         # Skill, or after the archive, never unseen in between.
         with self._runtime.agents.lifecycle_guard(), self._authoring.exclusive():
+            self._require_original_agent(agent_id, agent_created_at)
             root = self._skills_dir(agent_id)
             if not root.is_dir():
                 return _Library((), (), (), _fingerprint({}))
@@ -785,6 +803,8 @@ class LibrarianService:
         usage: Mapping[str, SkillUse],
         latest_revision: int,
         run_id: str | None,
+        *,
+        agent_created_at: str,
     ) -> str | None:
         """Fingerprint the result only if no outside writer changed the library.
 
@@ -792,6 +812,7 @@ class LibrarianService:
         fingerprint unset in that case so the next pass reviews it.
         """
         with self._runtime.agents.lifecycle_guard(), self._authoring.exclusive():
+            self._require_original_agent(agent_id, agent_created_at)
             root = self._skills_dir(agent_id)
             if not root.is_dir():
                 return _fingerprint({})
@@ -901,9 +922,19 @@ class LibrarianService:
             )[: LIBRARIAN_PASS_HISTORY - 1],
         )
 
-    def _write_state(self, agent_id: str, state: LibrarianState) -> None:
+    def _require_original_agent(self, agent_id: str, agent_created_at: str) -> None:
+        """Require the admitted Agent while the caller holds its lifecycle guard."""
+        agent = self._runtime.agents.find(agent_id)
+        if agent is None or agent.created_at != agent_created_at:
+            raise AgentNotFoundError(f"Agent not found: {agent_id}")
+
+    def _write_state(
+        self, agent_id: str, state: LibrarianState, *, agent_created_at: str | None = None
+    ) -> None:
         """Write the state while the Agent exists; a removed Agent keeps none."""
         with self._runtime.agents.lifecycle_guard():
+            if agent_created_at is not None:
+                self._require_original_agent(agent_id, agent_created_at)
             if not self._runtime.agents.exists(agent_id):
                 return
             write_json_document(
