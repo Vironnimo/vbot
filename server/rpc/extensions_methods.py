@@ -583,6 +583,54 @@ async def _extension_page_timeline_children(state: Any, params: JsonObject) -> J
         raise _map_expected_error(error) from error
 
 
+async def _extension_page_tool_call(state: Any, params: JsonObject) -> JsonObject:
+    """Read the complete arguments and result of one Tool row of a participant's Run."""
+    from server.timeline import timeline_tool_call
+
+    _reject_unsupported(
+        params,
+        {
+            "name",
+            "page",
+            "group_id",
+            "participant_id",
+            "run_id",
+            "tool_id",
+            "history_generation",
+        },
+        "extensions.page_tool_call",
+    )
+    name = _required_string(params, "name")
+    group_id = _required_string(params, "group_id")
+    participant_id = _required_string(params, "participant_id")
+    run_id = _required_string(params, "run_id")
+    tool_id = _required_string(params, "tool_id")
+    generation = _required_string(params, "history_generation")
+    registry = state.runtime.extensions
+    if registry is None:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "Extension page is unavailable; refresh the page")
+    try:
+        _validate_page_context(state.runtime, registry, name, params.get("page"))
+        page = params["page"]
+        identity = ExtensionRegistrationIdentity(name, page["epoch"])
+        temporary_agents = registry.host_for(identity).temporary_agents
+        if temporary_agents is None:
+            raise ValueError("Extension page is unavailable; refresh the page")
+        # Ownership names the participant's Session; the read stays inside it.
+        record = (await temporary_agents.owned_run(group_id, run_id)).record
+        if record.owner.participant_id != participant_id:
+            raise ValueError("The history position is unavailable; reload the conversation.")
+        result = await timeline_tool_call(
+            state, record.address, run_id, tool_id, generation, include_file_urls=True
+        )
+        _validate_page_context(state.runtime, registry, name, page)
+        return result
+    except ValueError as error:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(error)) from error
+    except Exception as error:
+        raise _map_expected_error(error) from error
+
+
 def _child_limit(params: JsonObject, key: str, label: str) -> int:
     """A number of Run steps from 1 to 200 under ``key``, or 0 when absent."""
     value = params.get(key)
@@ -716,6 +764,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "extensions.page_history": _extension_page_history,
         "extensions.page_run": _extension_page_run,
         "extensions.page_timeline_children": _extension_page_timeline_children,
+        "extensions.page_tool_call": _extension_page_tool_call,
         "extensions.page_cancel_tool": _extension_page_cancel_tool,
         "extensions.pages": _extension_pages,
         "extensions.requests": _extension_requests,

@@ -484,17 +484,16 @@ describe('Tool row presentation', () => {
     ).toEqual({ primary: [], facts: [], secretsUsed: [] });
   });
 
-  it('names the Secrets a call used from its result display, once each', () => {
+  it('names the Secrets a call used from its display, once each', () => {
     const used = ['GITHUB.password (terminal)', 'API_KEY (environment)'];
     expect(
       toolRowPresentation({
         name: 'bash',
-        display: { version: 1, primary: [], facts: [] },
-        resultEvent: {
-          payload: {
-            display: { secrets_used: used },
-            message: { tool_display: { secrets_used: [used[0]] } },
-          },
+        display: {
+          version: 1,
+          primary: [],
+          facts: [],
+          secrets_used: [...used, used[0]],
         },
       }).secretsUsed,
     ).toEqual([
@@ -779,7 +778,7 @@ describe('Tool row presentation', () => {
     const tool = {
       name: 'bash',
       status: 'interrupted',
-      startedEvent: { timestamp: startedAt },
+      startedAt,
     };
 
     expect(toolStatus(tool)).toBe('interrupted');

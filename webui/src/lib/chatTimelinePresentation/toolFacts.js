@@ -47,7 +47,7 @@ export const executionStateTitle = (status) =>
 // the `running` bucket in `toolStatus` (both are "not settled"), but the dot must
 // read differently: a preparing call has not begun executing, so an early
 // streamed sibling in a parallel batch should not look like it has been running
-// for ages. `mergeToolStarted` clears this to `running` the moment it dispatches.
+// for ages. The server sets it to `running` the moment the call dispatches.
 export const isToolPreparing = (tool) => tool?.status === 'preparing';
 
 export const toolArguments = (tool) =>
@@ -69,12 +69,8 @@ export function toolDurationMs(tool) {
   if (Number.isFinite(tool?.durationMs) && tool.durationMs >= 0) {
     return tool.durationMs;
   }
-  const start = timestampToMs(
-    tool?.timing?.started_at ?? tool?.startedEvent?.timestamp,
-  );
-  const end = timestampToMs(
-    tool?.timing?.completed_at ?? tool?.resultEvent?.timestamp,
-  );
+  const start = timestampToMs(tool?.timing?.started_at ?? tool?.startedAt);
+  const end = timestampToMs(tool?.timing?.completed_at ?? tool?.finishedAt);
   if (start === null || end === null || end < start) {
     return null;
   }
@@ -82,16 +78,11 @@ export function toolDurationMs(tool) {
 }
 
 export function toolStartedTimestamp(tool) {
-  return tool?.timing?.started_at ?? tool?.startedEvent?.timestamp ?? '';
+  return tool?.timing?.started_at ?? tool?.startedAt ?? '';
 }
 
 export function toolDisplay(tool) {
-  const display =
-    tool?.display ??
-    tool?.toolCall?.display ??
-    tool?.resultEvent?.payload?.display ??
-    tool?.resultEvent?.payload?.message?.tool_display ??
-    tool?.startedEvent?.payload?.display;
+  const display = tool?.display ?? tool?.toolCall?.display;
   return isPlainObject(display) ? display : null;
 }
 

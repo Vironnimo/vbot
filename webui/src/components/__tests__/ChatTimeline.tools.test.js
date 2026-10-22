@@ -5,6 +5,7 @@ import {
   detailRow,
   detailText,
   flushSync,
+  tick,
   openDisclosures,
   setupChatTimelineSuite,
   stubClipboard,
@@ -405,6 +406,64 @@ describe('ChatTimeline Tools', () => {
       );
       expect(rawCall.contains(detailRow('chat.toolResultLabel'))).toBe(true);
     });
+
+    // A row carries previews of a long call; the whole call loads once a
+    // section that shows it opens, behind the raw disclosure or directly.
+    it.each([
+      ['detail blocks', true],
+      ['no detail blocks', false],
+    ])(
+      'loads a previewed call when it is first shown, with %s',
+      async (_case, withBlocks) => {
+        const output = 'line\n'.repeat(3);
+        const loadToolCall = vi.fn(async () => ({
+          arguments: { command: 'cat big.log' },
+          result: { ok: true, error: null, data: { output: 'whole' } },
+        }));
+        timeline.render(
+          sessionWithTool([
+            toolItem({
+              id: 'call',
+              name: withBlocks ? 'bash' : 'custom_tool',
+              arguments: { command: 'cat big.log' },
+              result: { ok: true, error: null, data: { output: 'who…' } },
+              rawTruncated: true,
+              display: withBlocks
+                ? structuredDisplay({
+                    details: [
+                      {
+                        type: 'text',
+                        label: 'output',
+                        text: output,
+                        truncated: true,
+                      },
+                    ],
+                  })
+                : null,
+            }),
+          ]),
+          { onLoadToolCall: loadToolCall },
+        );
+
+        openDisclosures('.tool-event');
+        if (withBlocks) {
+          expect(document.body.textContent).toContain(
+            t('chat.toolDetailTruncated'),
+          );
+          expect(loadToolCall).not.toHaveBeenCalled();
+          openDisclosures('.tool-raw-call');
+        }
+        expect(loadToolCall).toHaveBeenCalledWith({
+          runId: 'run-tool',
+          toolId: 'call',
+        });
+        expect(document.body.textContent).toContain(t('chat.toolRawLoading'));
+        await tick();
+        flushSync();
+        expect(detailText('chat.toolResultLabel')).toContain('whole');
+        expect(loadToolCall).toHaveBeenCalledTimes(1);
+      },
+    );
 
     it('lists the matches of a results block with their local time', () => {
       const display = structuredDisplay({

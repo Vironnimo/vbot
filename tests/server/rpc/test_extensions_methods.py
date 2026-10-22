@@ -17,7 +17,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from core.chat import ChatMessage
+from core.chat import ChatMessage, ToolCall
 from core.chat.messages import ModelFallback
 from core.extensions.extensions import (
     CommandDeclaration,
@@ -35,6 +35,7 @@ from core.extensions.interactions import InteractionHandlerDeclaration
 from core.extensions.settings_schema import parse_settings_fields
 from core.runs import ChatRunManager, Run, RunExecutionOwner
 from core.sessions import SessionAddress
+from core.tools.tools import tool_success
 from core.utils.errors import ConfigError
 from server.events import ServerEventBus
 from tests.server.rpc_test_support import (
@@ -880,8 +881,20 @@ async def test_extension_page_history_windows_runs_and_pages_their_earlier_steps
             model="test/model",
             content=f"[step {index}](/api/files/capability.signature)",
         )
-        for index in range(5)
+        for index in range(4)
     ]
+    steps.append(
+        ChatMessage.assistant(
+            model="test/model",
+            content=None,
+            tool_calls=[ToolCall(id="call-a", name="read", arguments={"path": "a.txt"})],
+        )
+    )
+    tool = ChatMessage.tool(
+        tool_call_id="call-a",
+        name="read",
+        content=json.dumps(tool_success({"path": "a.txt", "content": "x" * 5_000})),
+    )
     snapshot = SimpleNamespace(
         runs=(),
         generation_id="generation",
@@ -889,9 +902,9 @@ async def test_extension_page_history_windows_runs_and_pages_their_earlier_steps
         incremental=False,
         has_newer=False,
         page=SimpleNamespace(
-            record_sequences=tuple(range(6)),
-            record_run_ids=("run-a",) * 6,
-            messages=(question, *steps),
+            record_sequences=tuple(range(7)),
+            record_run_ids=("run-a",) * 7,
+            messages=(question, *steps, tool),
             has_more=False,
             before_cursor=None,
         ),
@@ -920,7 +933,7 @@ async def test_extension_page_history_windows_runs_and_pages_their_earlier_steps
 
         async def load_run_messages_async(self, run_id: str) -> list[ChatMessage]:
             assert run_id == "run-a"
-            return [question, *steps]
+            return [question, *steps, tool]
 
     class Sessions:
         async def get_async(self, requested: SessionAddress) -> Session:
@@ -942,7 +955,7 @@ async def test_extension_page_history_windows_runs_and_pages_their_earlier_steps
     run = next(item for item in history["items"] if item["type"] == "assistant_run")
     gap, *latest = run["items"]
     assert gap["type"] == "history_gap"
-    assert [child["position"] for child in latest] == [3, 4]
+    assert [child["position"] for child in latest] == [4, 5]
     assert [message["role"] for message in history["messages"]] == ["user"]
     assert history["file_urls"] == ["/api/files/capability.signature"]
 
@@ -959,7 +972,7 @@ async def test_extension_page_history_windows_runs_and_pages_their_earlier_steps
         **children,
         **params,
     )
-    assert [child["position"] for child in page["items"][1:]] == [1, 2]
+    assert [child["position"] for child in page["items"][1:]] == [2, 3]
     assert page["has_more"] is True
     assert page["file_urls"] == ["/api/files/capability.signature"]
 
@@ -969,6 +982,32 @@ async def test_extension_page_history_windows_runs_and_pages_their_earlier_steps
         "extensions.page_timeline_children",
         participant_id="participant-b",
         **children,
+        **params,
+    )
+    assert foreign["code"] == "invalid_request"
+
+    # A Tool row previews its call; the page reads the whole call on request.
+    [row] = [child for child in latest if child["type"] == "tool_call"]
+    assert row["rawTruncated"] is True
+    raw_call = {
+        "run_id": "run-a",
+        "tool_id": row["id"],
+        "history_generation": history["history_generation"],
+    }
+    raw = await rpc_result(
+        state,
+        "extensions.page_tool_call",
+        participant_id="participant-a",
+        **raw_call,
+        **params,
+    )
+    assert raw["arguments"] == {"path": "a.txt"}
+    assert json.loads(raw["result"])["data"]["content"] == "x" * 5_000
+    foreign = await rpc_error(
+        state,
+        "extensions.page_tool_call",
+        participant_id="participant-b",
+        **raw_call,
         **params,
     )
     assert foreign["code"] == "invalid_request"

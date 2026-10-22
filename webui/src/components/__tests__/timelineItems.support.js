@@ -38,18 +38,6 @@ export function toolItem({
   timing = null,
   ...options
 } = {}) {
-  const toolCall = { id, index: 0, name, arguments: args };
-  const startedEvent = {
-    type: 'tool_call_started',
-    payload: { tool_call: toolCall, display },
-  };
-  const resultEvent =
-    result === undefined
-      ? null
-      : {
-          type: 'tool_call_result',
-          payload: { tool_call: toolCall, result, display, timing },
-        };
   return {
     id,
     type: 'tool_call',
@@ -58,15 +46,16 @@ export function toolItem({
     key: `id-${id}`,
     name,
     arguments: args,
-    toolCall,
     status,
     display,
     timing,
     durationMs: timing?.duration_ms ?? null,
     result,
-    startedEvent,
-    resultEvent,
-    events: [startedEvent, resultEvent].filter(Boolean),
+    started: true,
+    startedAt: null,
+    finished: result !== undefined,
+    finishedAt: null,
+    rawTruncated: false,
     ...options,
   };
 }

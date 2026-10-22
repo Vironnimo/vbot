@@ -518,6 +518,58 @@ def test_subagent_and_speech_activity_attach_to_their_tool_without_new_rows() ->
     assert tools[1]["status"] == "success"
 
 
+def test_tool_row_previews_its_call_and_keeps_the_whole_call_for_a_raw_read() -> None:
+    timeline = RunTimeline("run")
+    command = "echo " + "x" * 5_000
+    output = "".join(f"line {index}\n" for index in range(5_000))
+    call = {"id": "call", "name": "bash", "arguments": {"command": command, "timeout": 5}}
+    details = [
+        {"type": "text", "label": label, "source": {"from": origin, "path": path}}
+        for label, origin, path in (
+            ("command", "arguments", ["command"]),
+            ("output", "result", ["data", "output"]),
+            ("input", "arguments", ["missing"]),
+        )
+    ]
+    started = {"details": details, "secrets_used": ["TOKEN (environment)"]}
+    emit(timeline, "tool_call_started", {"tool_call": call, "display": started}, second=1)
+    emit(
+        timeline,
+        "tool_call_result",
+        {
+            "tool_call": call,
+            "result": {"ok": True, "error": None, "data": {"output": output}, "artifacts": []},
+            "display": {"details": details},
+        },
+        second=3,
+    )
+    [tool] = block(timeline)["items"]
+    assert {"toolCall", "startedEvent", "resultEvent", "events"}.isdisjoint(tool)
+    assert (tool["startedAt"], tool["finishedAt"]) == (
+        "2026-10-15T10:00:01Z",
+        "2026-10-15T10:00:03Z",
+    )
+    # Small fields stay whole; long strings are shortened.
+    assert tool["rawTruncated"] is True
+    assert tool["arguments"]["timeout"] == 5
+    assert len(tool["arguments"]["command"]) < len(command)
+    assert len(tool["result"]["data"]["output"]) < len(output)
+    # Detail texts are resolved from the whole call; an output keeps its end,
+    # and a source without text drops its block.
+    command_block, output_block = tool["display"]["details"]
+    assert (command_block["text"], "truncated" in command_block) == (command, False)
+    assert output_block["truncated"] is True
+    assert output_block["text"].endswith("line 4999\n")
+    assert len(output_block["text"]) < len(output)
+    # The result's display keeps the Secrets the started display named.
+    assert tool["display"]["secrets_used"] == ["TOKEN (environment)"]
+    raw = timeline.raw_tool_call(tool["id"])
+    assert raw is not None
+    assert raw["arguments"] == call["arguments"]
+    assert raw["result"]["data"]["output"] == output
+    assert timeline.raw_tool_call("unknown") is None
+
+
 def test_nonvisual_progress_updates_metadata_and_never_adds_rows() -> None:
     timeline = RunTimeline("run")
     speed = {"output_tokens_per_second": 50, "first_token_ms": 900, "basis": "output"}

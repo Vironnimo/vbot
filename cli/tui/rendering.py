@@ -372,9 +372,7 @@ def tool_time(item: JsonObject, now: datetime | None = None) -> str:
     timing = item.get("timing") or {}
     if status == "running":
         started = _instant(
-            timing.get("started_at")
-            or (item.get("startedEvent") or {}).get("timestamp")
-            or item.get("timestamp")
+            timing.get("started_at") or item.get("startedAt") or item.get("timestamp")
         )
         if started is None:
             return ""

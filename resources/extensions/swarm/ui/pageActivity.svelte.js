@@ -700,6 +700,16 @@ export function createSwarmPageActivity(host) {
     currentSubscription?.();
   }
 
+  // The complete arguments and result of a Tool row the shown History
+  // previews; a failure shows in the row's details.
+  function loadToolCall({ runId, toolId }) {
+    return host.model.client.readToolCall(
+      host.model.selectedSwarm?.id,
+      history?.participant.id,
+      { runId, toolId, historyGeneration: projection.historyGeneration },
+    );
+  }
+
   async function cancelToolCall({ runId, toolCallId }) {
     const groupId = host.model.selectedSwarm?.id;
     if (!groupId || !history || runId !== history.participant.lifecycle_run_id)
@@ -715,6 +725,7 @@ export function createSwarmPageActivity(host) {
 
   return {
     cancelToolCall,
+    loadToolCall,
     isReasoningOpen,
     setReasoningOpen,
     destroy,

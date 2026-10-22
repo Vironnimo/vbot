@@ -801,6 +801,8 @@
             onLoadOlder={actions.loadOlderHistory}
             onLoadRunHistory={(gap) =>
               chatController.loadRunHistory(target.activeSessionState, gap)}
+            onLoadToolCall={(call) =>
+              chatController.loadToolCall(target.activeSessionState, call)}
             onNavigateToSubAgent={navigation.handleNavigateToSubAgentLink}
             otherArea={subAgentOtherArea}
             onCancelToolCall={actions.handleCancelToolCall}

@@ -125,6 +125,31 @@ export function readExtensionPageTimelineChildren(
   );
 }
 
+// The complete arguments and result of one Tool row of a participant's Run
+// (`chat.tool_call` for an Extension page).
+export function readExtensionPageToolCall(
+  name,
+  page,
+  groupId,
+  participantId,
+  { runId, toolId, historyGeneration },
+  options = {},
+) {
+  return rpc(
+    'extensions.page_tool_call',
+    {
+      name,
+      page,
+      group_id: groupId,
+      participant_id: participantId,
+      run_id: runId,
+      tool_id: toolId,
+      history_generation: historyGeneration,
+    },
+    options,
+  );
+}
+
 export function getDataStoreStatus(options = {}) {
   return rpc('data_store.status', {}, options);
 }

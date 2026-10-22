@@ -250,6 +250,40 @@ class Conversation:
             return True
         return False
 
+    def tool_call_request(self, tool_id: str) -> JsonObject | None:
+        """The `chat.tool_call` parameters for one loaded Tool row, or None."""
+        for run in self.items:
+            if run.get("type") == "assistant_run" and any(
+                child.get("id") == tool_id for child in run["items"]
+            ):
+                return {
+                    **self.params(),
+                    "run_id": _run_id(run),
+                    "tool_id": tool_id,
+                    "history_generation": self.facts.get("history_generation"),
+                }
+        return None
+
+    def tool_call(self, response: JsonObject) -> bool:
+        """Show a Tool row's whole call in place of its previews; false once it is gone."""
+        for index, run in enumerate(self.items):
+            if run.get("type") != "assistant_run" or _run_id(run) != response["run_id"]:
+                continue
+            for position, child in enumerate(run["items"]):
+                if child.get("id") != response["tool_id"]:
+                    continue
+                whole = {
+                    **child,
+                    "arguments": response.get("arguments"),
+                    "result": response.get("result"),
+                    "rawTruncated": False,
+                }
+                children = [*run["items"][:position], whole, *run["items"][position + 1 :]]
+                replacement = {**run, "items": children}
+                self.items = [*self.items[:index], replacement, *self.items[index + 1 :]]
+                return True
+        return False
+
     def event(self, event: JsonObject) -> bool:
         """Apply only explicit wire edits; false means stale/duplicate delivery."""
         kind = event.get("type")

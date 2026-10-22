@@ -74,7 +74,7 @@ export function assistantRun({
   };
 }
 
-// A Tool child row; `startedEvent` marks it dispatched.
+// A Tool child row; `started` marks it dispatched.
 export function toolChild(
   name,
   args,
@@ -88,10 +88,7 @@ export function toolChild(
     toolCallId,
     status,
     arguments: args,
-    startedEvent: {
-      type: 'tool_call_started',
-      payload: { tool_call: { id: toolCallId, name } },
-    },
+    started: true,
     ...fields,
   };
 }
@@ -103,13 +100,7 @@ export function bashChild({
 } = {}) {
   const child = toolChild('bash', { command: 'ls -la' }, { status, ...fields });
   if (withResult) {
-    child.resultEvent = {
-      type: 'tool_call_result',
-      payload: {
-        tool_call: { id: child.toolCallId, name: 'bash' },
-        result: { ok: true, data: { output: 'file.txt' }, artifacts: [] },
-      },
-    };
+    child.finished = true;
   }
   return child;
 }
