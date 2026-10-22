@@ -147,7 +147,8 @@ def _add_data_store_parsers(
         help=(
             "Restore every file of the backup; files created after it, files whose "
             "folder no longer exists or is a link, and secrets.json (restored only with "
-            "--file) stay as they are"
+            "--file) stay as they are. It also replaces an unfinished restore of "
+            "another backup"
         ),
     )
     config_restore_parser.add_argument(

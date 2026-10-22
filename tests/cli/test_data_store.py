@@ -784,6 +784,24 @@ def test_config_backup_restore_stops_restores_and_restarts_the_running_server(
     assert calls == ["stop", "start", "stop"]
     assert read_maintenance(tmp_path) is None
 
+    # The unfinished restore of a lost backup cannot be repeated, without touching the
+    # server; restoring every file of another backup replaces it, although they all match.
+    lost = "20250101T000000Z-0000dead"
+    begin_maintenance(tmp_path, f"config restore {lost}")
+
+    refused = data_store_management.data_store_config_backup_restore(
+        instance, lost, True, ["settings.json"]
+    )
+    replaced = data_store_management.data_store_config_backup_restore(
+        instance, backup.backup_id, True, complete=True
+    )
+
+    assert not refused.ok and "--all" in refused.message
+    assert replaced.ok, replaced.message
+    assert lost in replaced.message
+    assert calls == ["stop", "start", "stop", "stop"]
+    assert read_maintenance(tmp_path) is None
+
 
 @pytest.mark.parametrize(
     ("files", "complete", "confirm", "expected"),

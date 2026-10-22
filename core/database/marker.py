@@ -401,10 +401,13 @@ def begin_maintenance(
 
 
 def _begin_maintenance_locked(
-    data_dir: Path, operation: str, *, resume: bool
+    data_dir: Path, operation: str, *, resume: bool, replaces: str | None = None
 ) -> MaintenanceOperation:
     current = read_maintenance(data_dir)
-    if current is not None and not (resume and current.operation == operation):
+    if current is not None and not (
+        (resume and current.operation == operation)
+        or (replaces is not None and current.operation == replaces)
+    ):
         raise DatabaseFormatError(
             f"data maintenance is already incomplete ({current.operation}): "
             f"{maintenance_guard_path(data_dir)}"
@@ -463,12 +466,16 @@ def maintenance(
 
 @contextlib.contextmanager
 def maintenance_locked(
-    data_dir: Path, operation: str, *, resume: bool = False
+    data_dir: Path, operation: str, *, resume: bool = False, replaces: str | None = None
 ) -> Iterator[MaintenanceOperation]:
-    """Hold the durable guard while the caller continuously holds the operation lock."""
+    """Hold the durable guard while the caller continuously holds the operation lock.
+
+    ``replaces`` names an incomplete operation whose guard this one takes over in
+    one atomic write, so no moment passes without a guard.
+    """
     if not operation or not operation.strip():
         raise ValueError("maintenance operation must be named")
-    record = _begin_maintenance_locked(data_dir, operation, resume=resume)
+    record = _begin_maintenance_locked(data_dir, operation, resume=resume, replaces=replaces)
     yield record
     _finish_maintenance_locked(data_dir, record)
 

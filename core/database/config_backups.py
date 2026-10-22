@@ -198,6 +198,8 @@ class ConfigRestore:
     holds the state before the restore (``None`` for a plan or when nothing
     changed). ``interrupted`` says that an earlier restore of this backup did
     not finish; the restore finishes it even when no file differs any more.
+    ``replaced`` names the backup whose unfinished restore this restore of every
+    file replaces, also when no file differs.
     """
 
     backup_id: str
@@ -207,6 +209,7 @@ class ConfigRestore:
     created_after: tuple[str, ...] = ()
     before_restore: str | None = None
     interrupted: bool = False
+    replaced: str | None = None
 
 
 @dataclass(frozen=True)
@@ -896,7 +899,7 @@ def reserve_config_backup(
     data_dir = Path(data_dir)
     moment = datetime.now(UTC) if now is None else now
     with operation_lock(data_dir):
-        read_config_backup(data_dir, backup_id)
+        _read_restorable(data_dir, backup_id)
         directory = _reservations_path(config_backup_root(data_dir))
         directory.mkdir(parents=True, exist_ok=True)
         reservation = ConfigBackupReservation(
@@ -927,10 +930,11 @@ def restore_config_backup(
     backups never read) refuses the restore with ``ValueError``; restoring every
     file skips such files instead. Every object is verified before anything
     changes; a missing or altered one raises ``DatabaseCorruptError``. Files
-    created after the backup stay. Before the first change the current state is backed up and the
-    maintenance guard held, so an interrupted restore keeps Runtime from
-    starting until it is repeated; while it is incomplete, any other restore
-    raises ``DatabaseFormatError``.
+    created after the backup stay. Before the first change the current state is
+    backed up and the maintenance guard held, so an interrupted restore keeps
+    Runtime from starting until it is repeated or a restore of every file of
+    another backup replaces it; while it is incomplete, any other restore raises
+    ``DatabaseFormatError``, as does repeating it once its backup cannot be read.
     """
     data_dir = Path(data_dir)
     with operation_lock(data_dir):
@@ -947,10 +951,10 @@ def _restore_config_backup_locked(
     check_only: bool,
     now: datetime | None,
 ) -> ConfigRestore:
-    backup = read_config_backup(data_dir, backup_id)
+    backup = _read_restorable(data_dir, backup_id)
     operation = _restore_operation(backup_id)
-    interrupted = _interrupted_restore(data_dir, operation)
     explicit = paths is not None
+    interrupted, replaced = _pending_restore(data_dir, operation, complete=not explicit)
     selected = (
         sorted(backup.files)
         if paths is None
@@ -990,13 +994,20 @@ def _restore_config_backup_locked(
         skipped=skipped,
         created_after=tuple(sorted(path for path in current if path not in backup.files)),
         interrupted=interrupted,
+        replaced=replaced,
     )
-    if check_only or not (restored or interrupted):
+    if check_only or not (restored or interrupted or replaced):
         return plan
+    # A replaced restore left a half-restored state: it is backed up like any other.
     before = _before_restore_backup(data_dir, backup_id, interrupted=interrupted, now=now)
     # An interrupted attempt may have written every file already: entering and
-    # leaving the guard finishes it.
-    with maintenance_locked(data_dir, operation, resume=True):
+    # leaving the guard finishes it, and taking over a replaced restore's guard ends it.
+    with maintenance_locked(
+        data_dir,
+        operation,
+        resume=True,
+        replaces=None if replaced is None else _restore_operation(replaced),
+    ):
         for path, (content, item) in restored.items():
             atomic_write_bytes(
                 _data_path(data_dir, path),
@@ -1005,10 +1016,11 @@ def _restore_config_backup_locked(
                 mode=item.mode if os.name == "posix" and item.mode & stat.S_IWUSR else None,
             )
     _LOGGER.info(
-        "Restored configuration backup (backup=%s files=%d before_restore=%s)",
+        "Restored configuration backup (backup=%s files=%d before_restore=%s replaced=%s)",
         backup_id,
         len(restored),
         before,
+        replaced,
     )
     return ConfigRestore(
         backup_id=backup_id,
@@ -1018,6 +1030,7 @@ def _restore_config_backup_locked(
         created_after=plan.created_after,
         before_restore=before,
         interrupted=interrupted,
+        replaced=replaced,
     )
 
 
@@ -1025,21 +1038,46 @@ def _restore_operation(backup_id: str) -> str:
     return f"{CONFIG_RESTORE_OPERATION} {backup_id}"
 
 
-def _interrupted_restore(data_dir: Path, operation: str) -> bool:
-    """Whether a restore of this backup is incomplete; refuse any other incomplete operation."""
+def _read_restorable(data_dir: Path, backup_id: str) -> ConfigBackup:
+    """Read the backup a restore restores; explain the way out when its restore is unfinished.
+
+    A guarded restore whose backup is gone or unreadable cannot be repeated, so
+    the refusal names the other way to end its guard.
+    """
+    try:
+        return read_config_backup(data_dir, backup_id)
+    except (ValueError, DatabaseCorruptError) as exc:
+        guard = read_maintenance(data_dir)
+        if guard is None or guard.operation != _restore_operation(backup_id):
+            raise
+        raise DatabaseFormatError(
+            f"{exc}, so its unfinished restore cannot be repeated; replace that restore by "
+            "restoring every file of another backup (--all)"
+        ) from exc
+
+
+def _pending_restore(data_dir: Path, operation: str, *, complete: bool) -> tuple[bool, str | None]:
+    """Whether a restore of this backup is incomplete, and which unfinished one it replaces.
+
+    Only a restore of every file (``complete``) replaces the unfinished restore of
+    another backup: it leaves every file that backup holds in one known state.
+    Any other incomplete operation is refused.
+    """
     guard = read_maintenance(data_dir)
     if guard is None:
-        return False
+        return False, None
     if guard.operation == operation:
-        return True
+        return True, None
     pending = guard.operation.removeprefix(f"{CONFIG_RESTORE_OPERATION} ")
-    if pending != guard.operation:
-        raise DatabaseFormatError(
-            f"the restore of configuration backup {pending} did not finish; "
-            "repeat that restore first"
-        )
-    require_no_maintenance(data_dir)
-    return False
+    if pending == guard.operation:
+        require_no_maintenance(data_dir)
+        return False, None
+    if complete:
+        return False, pending
+    raise DatabaseFormatError(
+        f"the restore of configuration backup {pending} did not finish; repeat that "
+        "restore, or replace it by restoring every file of another backup (--all)"
+    )
 
 
 def _restore_problem(data_dir: Path, item: ConfigFile) -> str | None:

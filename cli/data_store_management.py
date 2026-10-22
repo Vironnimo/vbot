@@ -363,8 +363,9 @@ def data_store_config_backup_restore(
             plan = restore(check_only=True)
         except (OSError, ValueError, DatabaseError) as exc:
             return refused(exc)
-        # An interrupted restore of this backup still has to finish, even with every file equal.
-        if not plan.restored and not plan.interrupted:
+        # An unfinished restore, of this backup or of the one a restore of every file
+        # replaces, still has to end, even with every file equal.
+        if not (plan.restored or plan.interrupted or plan.replaced):
             return CommandResult(
                 ok=True,
                 message=f"nothing to restore from configuration backup {backup_id} ("
@@ -382,7 +383,10 @@ def data_store_config_backup_restore(
 
 
 def _describe_config_restore(restored: ConfigRestore) -> str:
-    parts = [f"{len(restored.restored)} restored: " + ", ".join(restored.restored)]
+    parts = [
+        f"{len(restored.restored)} restored"
+        + (": " + ", ".join(restored.restored) if restored.restored else "")
+    ]
     if restored.unchanged:
         parts.append(f"{len(restored.unchanged)} already equal")
     parts.extend(f"{path} left alone: {reason}" for path, reason in restored.skipped.items())
@@ -390,6 +394,10 @@ def _describe_config_restore(restored: ConfigRestore) -> str:
         parts.append("created after the backup and kept: " + ", ".join(restored.created_after))
     if restored.interrupted:
         parts.append("the interrupted restore of this backup is finished")
+    if restored.replaced is not None:
+        parts.append(
+            f"it replaces the unfinished restore of configuration backup {restored.replaced}"
+        )
     if restored.before_restore is not None:
         parts.append(
             f"the replaced state is configuration backup {restored.before_restore}; "
