@@ -42,6 +42,32 @@ def test_desktop_client_round_trip_has_no_server_data(tmp_path: Path):
     )
 
 
+@pytest.mark.parametrize("content", [b"{broken", b"[]", b"\xff", None])
+def test_installation_save_preserves_unreadable_existing_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, content: bytes | None
+):
+    install = _server_install(tmp_path)
+    install.save()
+    path = tmp_path / "application.json"
+    if content is not None:
+        path.write_bytes(content)
+    else:
+        read_text = Path.read_text
+
+        def denied_read(target: Path, *args, **kwargs):
+            if target == path:
+                raise PermissionError("unavailable installation record")
+            return read_text(target, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", denied_read)
+    original = path.read_bytes()
+
+    with pytest.raises(ApplicationError):
+        replace(install, release_url=state.CHANNEL_URLS["main"]).save()
+
+    assert path.read_bytes() == original
+
+
 @pytest.mark.parametrize(
     "payload",
     [
