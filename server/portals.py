@@ -26,7 +26,7 @@ import html
 import socket
 from collections.abc import AsyncIterator, Awaitable, Callable, MutableMapping
 from typing import TYPE_CHECKING, Any
-from urllib.parse import parse_qsl, urlencode
+from urllib.parse import quote, unquote_plus
 
 import httpx
 
@@ -239,7 +239,7 @@ class _PortalApp:
             )
             return
         if query_token is not None and kind == "http" and scope.get("method") in {"GET", "HEAD"}:
-            await self._redirect_into_cookie(scope, send, query_token, path, query)
+            await self._redirect_into_cookie(scope, send, query_token, query)
             return
         if kind == "websocket":
             await self._forward_websocket(scope, receive, send, query)
@@ -262,20 +262,24 @@ class _PortalApp:
         actor = claims[1]
         return actor is not None and access.principal_for_capability(actor) is not None
 
-    async def _redirect_into_cookie(
-        self, scope: Scope, send: Send, token: str, path: str, query: str
-    ) -> None:
+    async def _redirect_into_cookie(self, scope: Scope, send: Send, token: str, query: str) -> None:
         secure = scope.get("scheme") == "https"
         cookie = f"{self._auth_cookie}={token}; Path=/; HttpOnly; SameSite=Lax" + (
             "; Secure" if secure else ""
         )
-        location = path + (f"?{query}" if query else "")
+        # The path as the browser sent it, still percent-encoded. A leading ``//``
+        # would make the Location protocol-relative, another host's address;
+        # ``/.//x`` names the same path on this origin.
+        location = _raw_path(scope)
+        if location.startswith(("//", "/\\")):
+            location = "/." + location
+        location += f"?{query}" if query else ""
         await send(
             {
                 "type": "http.response.start",
                 "status": 302,
                 "headers": [
-                    (b"location", location.encode("latin-1", "replace")),
+                    (b"location", location.encode("latin-1")),
                     (b"set-cookie", cookie.encode("latin-1")),
                     (b"cache-control", b"no-store"),
                     (b"referrer-policy", b"no-referrer"),
@@ -366,9 +370,7 @@ class _PortalApp:
         return ";".join([renamed, *kept])
 
     def _upstream_url(self, scope: Scope, query: str, *, scheme: str = "http") -> str:
-        raw_path = scope.get("raw_path")
-        path = raw_path.decode("latin-1") if raw_path else str(scope.get("path") or "/")
-        path = path.split("?", 1)[0] or "/"
+        path = _raw_path(scope)
         return f"{scheme}://localhost:{self._target_port}{path}" + (f"?{query}" if query else "")
 
     async def _forward_http(self, scope: Scope, receive: Receive, send: Send, query: str) -> None:
@@ -608,16 +610,34 @@ def _wants_page(scope: Scope) -> bool:
     return b"text/html" in accept
 
 
+def _raw_path(scope: Scope) -> str:
+    """The request path as the browser sent it, percent-encoding intact."""
+    raw_path = scope.get("raw_path")
+    if raw_path:
+        path = raw_path.decode("latin-1").split("?", 1)[0]
+    else:
+        path = quote(str(scope.get("path") or "/"), safe="/:@!$&'()*+,;=~")
+    return path or "/"
+
+
 def _split_query(scope: Scope) -> tuple[str | None, str]:
-    """The Portal credential from the query, and the query without it."""
-    raw = scope.get("query_string") or b""
-    text = raw.decode("latin-1")
+    """The Portal credential from the query, and the query without it.
+
+    The rest keeps the other parameters byte for byte: decoding and encoding
+    them again would change what the app receives (``?flag`` would become ``flag=``).
+    """
+    text = (scope.get("query_string") or b"").decode("latin-1")
     if PORTAL_QUERY not in text:
         return None, text
-    pairs = parse_qsl(text, keep_blank_values=True)
-    tokens = [value for name, value in pairs if name == PORTAL_QUERY]
-    rest = urlencode([(name, value) for name, value in pairs if name != PORTAL_QUERY])
-    return (tokens[0] if len(tokens) == 1 and tokens[0] else None), rest
+    tokens: list[str] = []
+    rest: list[str] = []
+    for part in text.split("&"):
+        name, _equals, value = part.partition("=")
+        if unquote_plus(name) == PORTAL_QUERY:
+            tokens.append(unquote_plus(value))
+        else:
+            rest.append(part)
+    return (tokens[0] if len(tokens) == 1 and tokens[0] else None), "&".join(rest)
 
 
 def _header_values(scope: Scope, name: bytes) -> list[bytes]:

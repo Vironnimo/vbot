@@ -200,6 +200,33 @@ async def test_a_portal_bridges_websockets_and_waits_for_an_app_that_is_not_up()
 
 
 @pytest.mark.asyncio
+async def test_the_credential_redirect_keeps_the_address_the_browser_sent() -> None:
+    delivery = FileDelivery()
+    access = AccessService(access_config("local"), local_token=None, bind_host="127.0.0.1")
+    registry, server = _portal_server(access, delivery)
+    portal, _opened = await registry.open(_OWNER, target_port=5173, title="t", path="/")
+    credential = f"vbot_portal={delivery.portal_token(portal.id)}"
+    locations = {}
+    async with httpx.AsyncClient() as browser:
+        for target in (
+            f"/files/a%3Fb/caf%C3%A9/x%2Fy/100%25?{credential}",
+            f"/search?flag&q=a+b%26c&{credential}&page=2",
+            # Not a protocol-relative address of another host.
+            f"//other.host/x?{credential}",
+        ):
+            response = await browser.get(f"http://127.0.0.1:{portal.listen_port}{target}")
+            locations[target.split("?")[0]] = response.headers["location"]
+    await registry.aclose()
+    await server.aclose()
+
+    assert locations == {
+        "/files/a%3Fb/caf%C3%A9/x%2Fy/100%25": "/files/a%3Fb/caf%C3%A9/x%2Fy/100%25",
+        "/search": "/search?flag&q=a+b%26c&page=2",
+        "//other.host/x": "/.//other.host/x",
+    }
+
+
+@pytest.mark.asyncio
 async def test_signed_in_access_needs_a_capability_bound_to_a_live_principal(
     tmp_path: Path, app_port: int
 ) -> None:
