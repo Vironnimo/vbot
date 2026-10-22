@@ -30,6 +30,7 @@ from core.database import (
     open_database,
     read_marker,
     read_verified_manifest,
+    reserve_config_backup,
     restore_config_backup,
     restore_data_snapshot,
     snapshot_root,
@@ -343,31 +344,41 @@ def data_store_config_backup_restore(
             instance.data_dir, backup_id, paths=paths, check_only=check_only
         )
 
-    try:
-        # Check before stopping the server: nothing changes yet.
-        plan = restore(check_only=True)
-    except (OSError, ValueError, DatabaseError) as exc:
+    def refused(exc: Exception) -> CommandResult:
         return CommandResult(
             ok=False,
             message=f"configuration backup cannot be restored: {backup_id}: {exc}",
             instance=instance,
         )
-    # An interrupted restore of this backup still has to finish, even with every file equal.
-    if not plan.restored and not plan.interrupted:
-        return CommandResult(
-            ok=True,
-            message=f"nothing to restore from configuration backup {backup_id} ("
-            + _describe_config_restore(plan)
-            + ")",
-            instance=instance,
+
+    try:
+        # The server backs up once more when it stops, and the retention after that
+        # backup must not remove this one before it is restored.
+        reservation = reserve_config_backup(instance.data_dir, backup_id)
+    except (OSError, ValueError, DatabaseError) as exc:
+        return refused(exc)
+    with reservation:
+        try:
+            # Check before stopping the server: nothing changes yet.
+            plan = restore(check_only=True)
+        except (OSError, ValueError, DatabaseError) as exc:
+            return refused(exc)
+        # An interrupted restore of this backup still has to finish, even with every file equal.
+        if not plan.restored and not plan.interrupted:
+            return CommandResult(
+                ok=True,
+                message=f"nothing to restore from configuration backup {backup_id} ("
+                + _describe_config_restore(plan)
+                + ")",
+                instance=instance,
+            )
+        return _change_while_stopped(
+            instance,
+            lambda: _describe_config_restore(restore(check_only=False)),
+            action="restore",
+            subject=f"configuration backup {backup_id}",
+            done=f"restored configuration backup {backup_id}",
         )
-    return _change_while_stopped(
-        instance,
-        lambda: _describe_config_restore(restore(check_only=False)),
-        action="restore",
-        subject=f"configuration backup {backup_id}",
-        done=f"restored configuration backup {backup_id}",
-    )
 
 
 def _describe_config_restore(restored: ConfigRestore) -> str:

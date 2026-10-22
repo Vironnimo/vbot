@@ -28,6 +28,7 @@ from core.database.config_backups import (
     CONFIGURATION_FILE_PATTERNS,
     ConfigBackup,
     ConfigBackupPurge,
+    ConfigBackupReservation,
     ConfigFile,
     ConfigRestore,
     capture_config_backup,
@@ -38,6 +39,7 @@ from core.database.config_backups import (
     list_config_backups,
     purge_config_backup_files,
     read_config_backup,
+    reserve_config_backup,
     restore_config_backup,
 )
 from core.database.database import Database, open_database, open_offline_database
@@ -133,6 +135,7 @@ __all__ = [
     "TRAILING_CAPTURE",
     "ConfigBackup",
     "ConfigBackupPurge",
+    "ConfigBackupReservation",
     "ConfigFile",
     "ConfigRestore",
     "DataStoreMarker",
@@ -198,6 +201,7 @@ __all__ = [
     "remove_interrupted_staging",
     "remove_retired_document_copies",
     "required_journal_mode",
+    "reserve_config_backup",
     "restore_config_backup",
     "restore_data_snapshot",
     "restore_update_snapshot",

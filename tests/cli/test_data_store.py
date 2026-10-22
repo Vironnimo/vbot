@@ -7,6 +7,7 @@ import sqlite3
 from collections.abc import Callable
 from contextlib import ExitStack
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -20,6 +21,7 @@ from core.chat import ChatMessage
 from core.database import (
     SnapshotRestore,
     capture_config_backup,
+    config_backups,
     create_data_snapshot,
     open_database,
     read_marker,
@@ -724,9 +726,11 @@ def test_config_backup_restore_stops_restores_and_restarts_the_running_server(
 ) -> None:
     instance = _instance(tmp_path)
     write_bootstrap_marker(tmp_path)
+    # Retention keeps only the newest backup, and the restored one is older than every tier.
+    monkeypatch.setattr(config_backups, "CONFIG_BACKUP_KEEP_LATEST", 1)
     settings = tmp_path / "settings.json"
     settings.write_text(_settings("Europe/Berlin"), encoding="utf-8")
-    backup = capture_config_backup(tmp_path, reason="start")
+    backup = capture_config_backup(tmp_path, reason="start", now=datetime(2025, 1, 1, tzinfo=UTC))
     assert backup is not None
     settings.write_text(_settings("UTC"), encoding="utf-8")
     calls: list[str] = []
@@ -734,6 +738,9 @@ def test_config_backup_restore_stops_restores_and_restarts_the_running_server(
     def record(action: str) -> Callable[[ServerInstance], CommandResult]:
         def run(resolved: ServerInstance) -> CommandResult:
             calls.append(action)
+            if calls == ["stop"]:
+                # The running server backs up once more when it stops.
+                capture_config_backup(tmp_path, reason="stop")
             return CommandResult(ok=True, message=action, instance=resolved)
 
         return run
@@ -758,8 +765,9 @@ def test_config_backup_restore_stops_restores_and_restarts_the_running_server(
     assert calls == ["stop", "start"]
     assert settings.read_text(encoding="utf-8") == _settings("Europe/Berlin")
     newest = json.loads(data_store_management.data_store_config_backup_list(instance).message)
+    # The stop backup holds the replaced state: the restore names it as its undo point.
     before = newest["config_backups"][0]
-    assert before["reason"] == f"before restore {backup.backup_id}"
+    assert before["reason"] == "stop"
     assert before["backup_id"] in result.message
     assert "restarted the server" in result.message
 

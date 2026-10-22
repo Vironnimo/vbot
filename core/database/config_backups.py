@@ -14,7 +14,9 @@ Layout under ``<data-dir>/config-backups/``:
   unchanged files costs only its manifest;
 - ``backups/<backup-id>.json``: one manifest per backup naming every file with
   its hash, size and permission bits, and marking JSON documents that did not
-  parse as ``damaged``.
+  parse as ``damaged``;
+- ``reservations/<token>.json``: a backup a restore is about to restore, kept
+  from retention until the restore released it or the reservation expired.
 
 A backup is taken only when the files differ from the newest backup, inside the
 data snapshot freeze, so the documents of one backup agree like those of a data
@@ -25,7 +27,9 @@ maintenance: it replaces the selected files (never one damaged in the backup,
 never one whose folder no longer exists, never one a backup cannot read because
 it or a folder on its path is a link), leaves files created after the backup
 alone, and first backs up the current state, so a restore can be taken back by
-restoring that backup.
+restoring that backup. A restore prepared while the server still runs reserves
+its backup first, because the server's last backup before it stops prunes by
+retention too.
 
 Manifests are written once, with one exception: :func:`purge_config_backup_files`
 rewrites them without files a vBot no longer keeps, such as the plaintext
@@ -100,16 +104,21 @@ CONFIG_BACKUP_KEEP_DAILY = timedelta(days=30)
 CONFIG_BACKUP_KEEP_WEEKLY = timedelta(weeks=52)
 #: How long a backup waits for another data-store operation, such as a data snapshot.
 CONFIG_BACKUP_LOCK_SECONDS = 5.0
+#: How long a restore reservation keeps its backup when its holder never releases it.
+CONFIG_BACKUP_RESERVATION_TIME = timedelta(hours=1)
 
 _BACKUPS_DIRECTORY = "backups"
 _OBJECTS_DIRECTORY = "objects"
+_RESERVATIONS_DIRECTORY = "reservations"
 _BACKUP_ID_PATTERN = re.compile(r"^\d{8}T\d{6}Z-[0-9a-f]{8}$")
 _HEX64_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+_RESERVATION_NAME_PATTERN = re.compile(r"^[0-9a-f]{32}\.json$")
 _MANIFEST_KEYS = frozenset(
     {"manifest_version", "backup_id", "created_at", "reason", "vbot_version", "files"}
 )
 _FILE_KEYS = frozenset({"sha256", "file_size", "mode"})
 _UNREADABLE_MANIFESTS = LoggedConditions()
+_UNREADABLE_RESERVATIONS = LoggedConditions()
 # ``core.json_documents.DOCUMENTS_KEPT_BY_RESTORES``: restored only when named.
 _KEPT_BY_FULL_RESTORE = (
     "restoring every file keeps the Secret Store, which holds the credentials and OAuth "
@@ -200,6 +209,36 @@ class ConfigRestore:
     interrupted: bool = False
 
 
+@dataclass(frozen=True)
+class ConfigBackupReservation:
+    """Keeps one backup from retention until :meth:`release` or ``expires_at``.
+
+    Usable as a context manager that releases it. A holder that dies leaves the
+    reservation behind; it expires after :data:`CONFIG_BACKUP_RESERVATION_TIME`.
+    """
+
+    backup_id: str
+    expires_at: str
+    path: Path
+
+    def release(self) -> None:
+        """End the reservation; one that cannot be removed expires instead."""
+        try:
+            self.path.unlink(missing_ok=True)
+        except OSError as exc:
+            _LOGGER.warning(
+                "Configuration backup reservation cannot be removed; it expires at %s: %s",
+                self.expires_at,
+                exc,
+            )
+
+    def __enter__(self) -> ConfigBackupReservation:
+        return self
+
+    def __exit__(self, *_exc_info: object) -> None:
+        self.release()
+
+
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
@@ -244,6 +283,10 @@ def _object_path(root: Path, digest: str) -> Path:
 
 def _manifest_path(root: Path, backup_id: str) -> Path:
     return root / _BACKUPS_DIRECTORY / f"{backup_id}.json"
+
+
+def _reservations_path(root: Path) -> Path:
+    return root / _RESERVATIONS_DIRECTORY
 
 
 # ---------------------------------------------------------------------------
@@ -625,14 +668,19 @@ def _prune(
     now: datetime,
     keep: frozenset[str] = frozenset(),
 ) -> None:
-    """Remove the backups retention drops, except ``keep``, then the objects no backup references.
+    """Remove the backups retention drops, then the objects no backup references.
 
-    Objects are kept while any manifest cannot be read, since it may reference them.
+    ``keep`` and every reserved backup stay. Nothing is removed while a
+    reservation cannot be read, and objects are kept while any manifest cannot
+    be read, since either may name them.
     """
     backups = sorted(
         backups, key=lambda backup: (backup.created_at, backup.backup_id), reverse=True
     )
-    kept = _retained(backups, now) | keep
+    reserved = _reserved(root, now)
+    if reserved is None:
+        return
+    kept = _retained(backups, now) | keep | reserved
     for backup in backups:
         if backup.backup_id not in kept:
             _manifest_path(root, backup.backup_id).unlink(missing_ok=True)
@@ -642,6 +690,79 @@ def _prune(
         root,
         {digest for backup in backups if backup.backup_id in kept for digest in backup.objects()},
     )
+
+
+def _reserved(root: Path, now: datetime) -> frozenset[str] | None:
+    """The backups an unexpired reservation names; ``None`` while one cannot be read.
+
+    Expired reservations are removed; a malformed one protects nothing and is
+    left alone with one WARNING, like an unreadable manifest.
+    """
+    directory = _reservations_path(root)
+    try:
+        names = sorted(
+            entry.name
+            for entry in os.scandir(directory)
+            if _RESERVATION_NAME_PATTERN.fullmatch(entry.name) is not None
+        )
+    except FileNotFoundError:
+        return frozenset()
+    except OSError as exc:
+        _unreadable_reservation(directory, exc)
+        return None
+    reserved: set[str] = set()
+    for name in names:
+        path = directory / name
+        try:
+            raw = path.read_bytes()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            _unreadable_reservation(path, exc)
+            return None
+        parsed = _parse_reservation(raw)
+        if parsed is None:
+            if _UNREADABLE_RESERVATIONS.started(path.as_posix(), "malformed"):
+                _LOGGER.warning(
+                    "Configuration backup reservation is malformed; it is ignored: %s", path
+                )
+            continue
+        _UNREADABLE_RESERVATIONS.ended(path.as_posix())
+        backup_id, expires_at = parsed
+        if expires_at <= now:
+            path.unlink(missing_ok=True)
+        else:
+            reserved.add(backup_id)
+    _UNREADABLE_RESERVATIONS.ended(directory.as_posix())
+    return frozenset(reserved)
+
+
+def _parse_reservation(raw: bytes) -> tuple[str, datetime] | None:
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except UnicodeDecodeError, json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    backup_id, expires_at = payload.get("backup_id"), payload.get("expires_at")
+    if (
+        not isinstance(backup_id, str)
+        or _BACKUP_ID_PATTERN.fullmatch(backup_id) is None
+        or not isinstance(expires_at, str)
+        or not is_canonical_timestamp(expires_at)
+    ):
+        return None
+    return backup_id, parse_canonical_timestamp(expires_at)
+
+
+def _unreadable_reservation(path: Path, error: OSError) -> None:
+    """Report a reservation that cannot be checked: it may protect any backup."""
+    if _UNREADABLE_RESERVATIONS.started(path.as_posix(), str(error)):
+        _LOGGER.warning(
+            "Configuration backup reservation cannot be read; retention removes no backup "
+            "until it can: %s",
+            error,
+        )
 
 
 def _delete_unreferenced_objects(root: Path, referenced: set[str]) -> None:
@@ -758,6 +879,34 @@ def _purge_locked(data_dir: Path, patterns: tuple[str, ...]) -> ConfigBackupPurg
 # ---------------------------------------------------------------------------
 # Restore
 # ---------------------------------------------------------------------------
+
+
+def reserve_config_backup(
+    data_dir: Path, backup_id: str, *, now: datetime | None = None
+) -> ConfigBackupReservation:
+    """Keep ``backup_id`` from retention until the reservation is released or expires.
+
+    For a restore checked while a server still runs on ``data_dir``: the server
+    backs up once more when it stops, and the retention after that backup could
+    remove the backup about to be restored. Works during data maintenance, so an
+    interrupted restore can be repeated. Raises ``ValueError`` when there is no
+    such backup, ``DatabaseCorruptError`` when its manifest is unreadable and
+    ``DatabaseUnavailableError`` while the operation lock stays busy.
+    """
+    data_dir = Path(data_dir)
+    moment = datetime.now(UTC) if now is None else now
+    with operation_lock(data_dir):
+        read_config_backup(data_dir, backup_id)
+        directory = _reservations_path(config_backup_root(data_dir))
+        directory.mkdir(parents=True, exist_ok=True)
+        reservation = ConfigBackupReservation(
+            backup_id=backup_id,
+            expires_at=format_canonical_timestamp(moment + CONFIG_BACKUP_RESERVATION_TIME),
+            path=directory / f"{uuid.uuid4().hex}.json",
+        )
+        payload = {"backup_id": backup_id, "expires_at": reservation.expires_at}
+        atomic_write_text(reservation.path, json.dumps(payload, indent=2) + "\n")
+    return reservation
 
 
 def restore_config_backup(
