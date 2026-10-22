@@ -399,6 +399,9 @@ def test_malformed_ceilings_are_refused(stored: object) -> None:
         pytest.param("167772165", None, id="number-form-of-listed-ip"),
         pytest.param("127.0.0.1", "deny_rule", id="ip-denied-in-short-form"),
         pytest.param("0x7f000001", "deny_rule", id="hex-form-of-denied-ip"),
+        pytest.param("[::ffff:10.0.0.5]", None, id="ipv6-mapped-form-of-listed-ip"),
+        pytest.param("::ffff:7f00:1", "deny_rule", id="ipv6-mapped-form-of-denied-ip"),
+        pytest.param("192.0.2.1", "deny_rule", id="ip-denied-in-ipv6-mapped-form"),
         pytest.param("other.org", "not_permitted", id="unlisted-host"),
         pytest.param("", "unanalyzable", id="no-host"),
     ],
@@ -408,7 +411,7 @@ def test_host_decisions(area: Area, host: str, reason: str | None) -> None:
         {
             "web": "listed",
             "allow": ["Web(example.com)", "Web(*.github.com)", "Web(10.0.0.5)"],
-            "deny": ["Web(bad.example.com)", "Web(127.1)"],
+            "deny": ["Web(bad.example.com)", "Web(127.1)", "Web([::ffff:192.0.2.1])"],
         }
     )
 
