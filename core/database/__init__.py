@@ -11,11 +11,17 @@ and kept apart from compound mutations by the :class:`SnapshotBarrier`; see
 ``core.database.snapshot_barrier``), quarantine, recovery incidents, automatic
 restore, the updater's guarded pre-update snapshot rollback, and the frequent
 configuration backups of the small configuration files
-(``core.database.config_backups``). See
+(``core.database.config_backups``, restored by
+``core.database._config_restore``). See
 ``.vorch/domain-maps/database.md``. :class:`DisposableDatabase` and
 :func:`projection_failure` serve owners of disposable projections at runtime.
 """
 
+from core.database._config_restore import (
+    ConfigRestore,
+    reserve_config_backup,
+    restore_config_backup,
+)
 from core.database._connections import (
     JOURNAL_MODE_DELETE,
     JOURNAL_MODE_WAL,
@@ -30,7 +36,6 @@ from core.database.config_backups import (
     ConfigBackupPurge,
     ConfigBackupReservation,
     ConfigFile,
-    ConfigRestore,
     capture_config_backup,
     config_backup_root,
     config_backup_summary,
@@ -39,8 +44,6 @@ from core.database.config_backups import (
     list_config_backups,
     purge_config_backup_files,
     read_config_backup,
-    reserve_config_backup,
-    restore_config_backup,
 )
 from core.database.database import Database, open_database, open_offline_database
 from core.database.disposable import DisposableDatabase, ProjectionFailure, projection_failure
