@@ -526,8 +526,10 @@ class SemanticIndexer:
     def _fail(self, classified: _Classified) -> None:
         self._failures += 1
         backoff = min(BACKOFF_INITIAL_S * 2 ** (self._failures - 1), BACKOFF_MAX_S)
-        if classified.retry_after is not None:
-            backoff = max(backoff, classified.retry_after)
+        if classified.retry_after is not None and classified.retry_after > backoff:
+            # A provider hint may lengthen the wait, but never past the backoff ceiling:
+            # an unbounded hint ("Retry-After: inf") would stop the indexer for good.
+            backoff = min(classified.retry_after, BACKOFF_MAX_S)
         self._state = "retrying" if classified.kind == "transient" else "error"
         self._last_error = classified.failure
         self._due = self._backoff_until = self._monotonic() + backoff

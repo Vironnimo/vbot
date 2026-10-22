@@ -469,12 +469,14 @@ async def test_transient_failures_back_off_and_honor_retry_after(
         _provider_failure(503, retryable=True),
         _provider_failure(503, retryable=True),
         _provider_failure(429, retryable=True, retry_after=300.0),
+        # A hint beyond the backoff ceiling ("Retry-After: inf") waits that ceiling.
+        _provider_failure(429, retryable=True, retry_after=float("inf")),
     ]
     embeddings = _Embeddings(reject=lambda _texts: failures.pop(0) if failures else None)
     indexer = _indexer(index, sessions, embeddings)
     observed: list[tuple[str, str | None, str | None]] = []
 
-    for _attempt in range(4):
+    for _attempt in range(5):
         await indexer.run_pass()
         status = await indexer.status()
         code = status.last_error.code if status.last_error is not None else None
@@ -488,6 +490,7 @@ async def test_transient_failures_back_off_and_honor_retry_after(
         ("retrying", "provider_unavailable", _at(30)),
         ("retrying", "provider_unavailable", _at(60)),
         ("retrying", "provider_rate_limited", _at(300)),
+        ("retrying", "provider_rate_limited", _at(1800)),
         ("idle", None, _at(600)),
     ]
     assert (await indexer.status()).indexed == 1
