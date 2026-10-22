@@ -64,8 +64,7 @@ class PortalListeners(Protocol):
     ``open`` binds a new listener for *portal_id* that forwards to
     ``localhost:<target_port>`` and returns its port; ``close`` stops it at once
     and ends its connections. ``own_ports`` are the ports vBot itself serves,
-    which no Portal may target. ``address`` is the URL of a listen port without
-    any credential.
+    which no Portal may target.
     """
 
     own_ports: frozenset[int]
