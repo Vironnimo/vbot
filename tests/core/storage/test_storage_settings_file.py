@@ -65,6 +65,7 @@ def test_settings_updates_keep_unknown_fields_on_disk_at_every_modeled_level(
                 "format_version": 1,
                 "future_top_level": {"kept": True},
                 "appearance": {"language": "en", "future_appearance": 1},
+                "librarian": {"model": "old/model", "future_librarian": {"kept": True}},
                 "providers": {
                     "custom": {
                         "local": {
@@ -87,15 +88,42 @@ def test_settings_updates_keep_unknown_fields_on_disk_at_every_modeled_level(
 
     assert "future_top_level" not in loaded
     assert loaded["appearance"] == {"language": "en"}
+    assert loaded["librarian"] == {}
     assert "future_provider_field" not in loaded["providers"]["custom"]["local"]
     on_disk = _on_disk(storage)
     assert on_disk["future_top_level"] == {"kept": True}
     assert on_disk["appearance"]["future_appearance"] == 1
     assert on_disk["appearance"]["chat_width"] == "wide"
     assert on_disk["keep_awake"] is True
+    assert on_disk["librarian"] == {"future_librarian": {"kept": True}}
     local = on_disk["providers"]["custom"]["local"]
     assert local["future_provider_field"] == "x"
     assert local["models"]["m"]["future_model_field"] == 2
+
+
+@pytest.mark.parametrize("mutation", ["patch", "section", "save"])
+def test_settings_writes_remove_only_the_retired_librarian_model(
+    tmp_path: Path, mutation: str
+) -> None:
+    storage = StorageManager(tmp_path)
+    original = {"enabled": True, "model": "old/model", "future_option": {"kept": True}}
+    _write_raw(storage, json.dumps({"format_version": 1, "librarian": original}))
+
+    assert storage.load_librarian_settings()["enabled"] is True
+    assert _on_disk(storage)["librarian"] == original
+    if mutation == "patch":
+        storage.patch_settings(
+            parse_patch_operations([{"op": "set", "path": "librarian.enabled", "value": False}])
+        )
+    elif mutation == "section":
+        storage.update_settings_sections({"librarian": {"enabled": False}})
+    else:
+        storage.save_settings({"librarian": {**original, "enabled": False}})
+
+    saved = _on_disk(storage)["librarian"]
+    assert "model" not in saved
+    assert saved["future_option"] == {"kept": True}
+    assert storage.load_librarian_settings()["enabled"] is False
 
 
 @pytest.mark.parametrize("mutation", ["patch", "section"])
