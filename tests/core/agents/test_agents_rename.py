@@ -35,6 +35,8 @@ from tests.core.agents.agents_test_support import template_dir as template_dir
 
 _CHILD = SessionAddress(None, "manager", "child")
 _CURATING = SessionAddress(None, "librarian", "curating")
+_CURATED = SessionAddress(None, "librarian", "curated")
+_SKILL_SUBJECT = f"json_extract(metadata_json, '$.{SKILL_AGENT_ID_KEY}')"
 _ARCHIVED = SessionAddress(None, "coder", "archived")
 _ARCHIVED_CHILD = SessionAddress(None, "manager", "archived-child")
 
@@ -52,8 +54,9 @@ def _seed(store: AgentStore) -> Agent:
 
     A ``manager`` Session links to ``coder`` as its Sub-Agent parent; a Librarian
     Session maintains the Skills of ``coder``. The archive holds a deleted
-    Session of ``coder`` and a deleted ``manager`` Session that was its
-    Sub-Agent child, and an earlier ``researcher`` Agent with its own Session.
+    Session of ``coder``, a deleted ``manager`` Session that was its Sub-Agent
+    child, a deleted Librarian Session that maintained its Skills, and an
+    earlier ``researcher`` Agent with its own Session.
     """
     sessions = store._session_manager()
     ledger = sessions.archive_ledger
@@ -78,11 +81,21 @@ def _seed(store: AgentStore) -> Agent:
     )
     asyncio.run(sessions.archive(_ARCHIVED_CHILD))
     asyncio.run(sessions.archive(_ARCHIVED))
-    sessions.create("librarian", session_id="curating")
-    sessions.set_metadata(
-        _CURATING, {SKILL_AGENT_ID_KEY: "coder", SKILL_AGENT_CREATED_AT_KEY: created.created_at}
-    )
+    for curating in (_CURATED, _CURATING):
+        _bind_librarian(store, curating, "coder", created.created_at)
+    asyncio.run(sessions.archive(_CURATED))
     return store.update(created.id, current_session_id="kept")
+
+
+def _bind_librarian(
+    store: AgentStore, address: SessionAddress, agent_id: str, created_at: str
+) -> None:
+    """Create a Librarian Session bound to the Agent ``agent_id`` created at ``created_at``."""
+    sessions = store._session_manager()
+    sessions.create(address.agent_id, session_id=address.session_id)
+    sessions.set_metadata(
+        address, {SKILL_AGENT_ID_KEY: agent_id, SKILL_AGENT_CREATED_AT_KEY: created_at}
+    )
 
 
 def _archive_scopes(store: AgentStore) -> set[tuple[str, str, tuple[str, ...]]]:
@@ -98,11 +111,11 @@ def _archive_scopes(store: AgentStore) -> set[tuple[str, str, tuple[str, ...]]]:
     }
 
 
-def _archived_link_agent_id(store: AgentStore, address: SessionAddress) -> str:
-    """The Agent id the Sub-Agent parent link of an archived Session names."""
+def _archived_value(store: AgentStore, address: SessionAddress, expression: str) -> str:
+    """One stored value of an archived Session: the SQL ``expression`` over its row."""
     with closing(sqlite3.connect(store.data_dir / "sessions.db")) as connection:
         row = connection.execute(
-            "SELECT subagent_parent_agent_id FROM sessions WHERE agent_id = ? "
+            f"SELECT {expression} FROM sessions WHERE agent_id = ? "
             "AND session_id = ? AND state = 'archived'",
             (address.agent_id, address.session_id),
         ).fetchone()
@@ -148,10 +161,12 @@ def _assert_agent_is(store: AgentStore, created: Agent, agent_id: str, other_id:
     assert _archive_scopes(store) == {
         ("session", agent_id, (agent_id,)),
         ("session", "manager", ("manager",)),
+        ("session", "librarian", ("librarian",)),
         ("agent", "researcher", ("researcher",)),
     }
-    assert _archived_link_agent_id(store, _ARCHIVED_CHILD) == agent_id
+    assert _archived_value(store, _ARCHIVED_CHILD, "subagent_parent_agent_id") == agent_id
     assert sessions.metadata_value(_CURATING, SKILL_AGENT_ID_KEY) == agent_id
+    assert _archived_value(store, _CURATED, _SKILL_SUBJECT) == agent_id
     assert sessions.metadata_value(_CURATING, SKILL_AGENT_CREATED_AT_KEY) == created.created_at
     assert [listed.id for listed in store.list()] == [agent_id, "manager"]
     assert sorted(path.name for path in (store.data_dir / "agents").iterdir()) == sorted(
@@ -217,6 +232,10 @@ def test_rename_retargets_allowed_agent_ids_sub_agent_links_and_librarian_sessio
     _seed(store)
     # A link follows its parent Session; one to a Session that did not move stays.
     orphan = _link_to(store, "orphan", "coder")
+    # A Librarian binding follows the Agent, not its id: one to an earlier
+    # ``coder`` stays for that Agent's restore.
+    earlier = SessionAddress(None, "librarian", "earlier")
+    _bind_librarian(store, earlier, "coder", "2020-01-01T00:00:00+00:00")
 
     result = store.rename("coder", "researcher")
 
@@ -230,14 +249,20 @@ def test_rename_retargets_allowed_agent_ids_sub_agent_links_and_librarian_sessio
     ]
     assert _link_agent_id(store, _CHILD) == "researcher"
     assert _link_agent_id(store, orphan) == "coder"
-    # The Librarian Session goes on maintaining the renamed Agent's Skills.
-    assert store._session_manager().metadata_value(_CURATING, SKILL_AGENT_ID_KEY) == "researcher"
+    # The Librarian Sessions go on maintaining the renamed Agent's Skills, a
+    # deleted one too once restored.
+    sessions = store._session_manager()
+    assert sessions.metadata_value(_CURATING, SKILL_AGENT_ID_KEY) == "researcher"
+    assert _archived_value(store, _CURATED, _SKILL_SUBJECT) == "researcher"
+    assert sessions.metadata_value(earlier, SKILL_AGENT_ID_KEY) == "coder"
 
 
 def test_revert_rename_restores_the_original_agent(store: AgentStore) -> None:
     created = _seed(store)
     # Left by an earlier ``researcher``: the revert moves back only what the rename moved.
     leftover = _link_to(store, "leftover", "researcher")
+    earlier = SessionAddress(None, "librarian", "earlier")
+    _bind_librarian(store, earlier, "researcher", "2020-01-01T00:00:00+00:00")
     result = store.rename("coder", "researcher")
 
     reverse = store.revert_rename(result.rename)
@@ -246,6 +271,7 @@ def test_revert_rename_restores_the_original_agent(store: AgentStore) -> None:
     store.finish_rename(reverse)
     _assert_agent_is(store, created, "coder", "researcher")
     assert _link_agent_id(store, leftover) == "researcher"
+    assert store._session_manager().metadata_value(earlier, SKILL_AGENT_ID_KEY) == "researcher"
 
 
 def test_rename_supports_case_only_id_change(store: AgentStore) -> None:

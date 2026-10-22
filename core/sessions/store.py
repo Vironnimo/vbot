@@ -325,11 +325,17 @@ class SessionStore:
         )
 
     def retarget_metadata_value(
-        self, agent_id: str, key: str, old_value: str, new_value: str
+        self,
+        agent_id: str,
+        key: str,
+        old_value: str,
+        new_value: str,
+        *,
+        matching: Mapping[str, str] | None = None,
     ) -> int:
         return self._execute_write(
             lambda connection: _store_mutations.retarget_metadata_value(
-                connection, agent_id, key, old_value, new_value
+                connection, agent_id, key, old_value, new_value, matching=matching
             )
         )
 

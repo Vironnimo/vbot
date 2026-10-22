@@ -734,20 +734,35 @@ def retarget_identity_agent(
 
 
 def retarget_metadata_value(
-    connection: sqlite3.Connection, agent_id: str, key: str, old_value: str, new_value: str
+    connection: sqlite3.Connection,
+    agent_id: str,
+    key: str,
+    old_value: str,
+    new_value: str,
+    *,
+    matching: Mapping[str, str] | None = None,
 ) -> int:
-    """Give one open metadata value of an Identity Agent's live Sessions a new value.
+    """Give one open metadata value of an Identity Agent's global Sessions a new value.
 
-    Only Sessions whose ``key`` still holds ``old_value`` change; returns their count.
+    Live and archived Sessions change, so an archived one keeps the value through
+    a restore, but only those whose ``key`` still holds ``old_value`` and whose
+    ``matching`` keys hold the given values; returns their count.
     """
-    if not key.isidentifier() or _store_values._is_reserved_prompt_key(key):
-        raise ChatSessionError(f"Session metadata {key} cannot be retargeted")
-    path = f"$.{key}"
+    conditions = {key: old_value, **(matching or {})}
+    for name in conditions:
+        if not name.isidentifier() or _store_values._is_reserved_prompt_key(name):
+            raise ChatSessionError(f"Session metadata {name} cannot be retargeted")
     cursor = connection.execute(
         "UPDATE sessions SET metadata_json = json_set(metadata_json, ?, ?), "
         "state_revision = state_revision + 1 WHERE project_id = '' AND agent_id = ? "
-        "AND state = 'live' AND json_extract(metadata_json, ?) = ?",
-        (path, new_value, agent_id, path, old_value),
+        "AND state IN ('live', 'archived')"
+        + "".join(" AND json_extract(metadata_json, ?) = ?" for _ in conditions),
+        (
+            f"$.{key}",
+            new_value,
+            agent_id,
+            *(part for name, value in conditions.items() for part in (f"$.{name}", value)),
+        ),
     )
     return int(cursor.rowcount)
 

@@ -27,6 +27,7 @@ from core.agents._config import (
 )
 from core.agents._types import (
     LIBRARIAN_AGENT_ID,
+    SKILL_AGENT_CREATED_AT_KEY,
     SKILL_AGENT_ID_KEY,
     AgentAlreadyExistsError,
     AgentError,
@@ -254,10 +255,18 @@ class AgentRenames:
         link_count = len(
             sessions.retarget_identity_agent_references(rename.source_id, rename.target_id)
         )
-        # The Librarian Sessions that maintain the Agent's Skills keep doing so.
-        sessions.retarget_metadata_value(
-            LIBRARIAN_AGENT_ID, SKILL_AGENT_ID_KEY, rename.source_id, rename.target_id
-        )
+        # The Librarian Sessions that maintain the Agent's Skills keep doing so,
+        # archived ones too, so a restored one still runs. A binding to an
+        # earlier Agent of either id stays for that Agent's restore.
+        created_at = self._created_at(rename)
+        if created_at is not None:
+            sessions.retarget_metadata_value(
+                LIBRARIAN_AGENT_ID,
+                SKILL_AGENT_ID_KEY,
+                rename.source_id,
+                rename.target_id,
+                matching={SKILL_AGENT_CREATED_AT_KEY: created_at},
+            )
         if workspace_ops._move_renamed_tree(self._owner._data_dir / "agents", rename):
             self._write_renamed_config(rename)
             self._rename_order_entry(rename)
@@ -272,6 +281,22 @@ class AgentRenames:
             policy_agent_ids=self._retarget_allowed_agents(rename.source_id, rename.target_id),
             session_link_count=link_count,
         )
+
+    def _created_at(self, rename: AgentRename) -> str | None:
+        """The persisted creation identity of the Agent ``rename`` moves, wherever its tree is.
+
+        ``None`` when its ``agent.json`` is gone or holds none: then no Librarian
+        binding can name this Agent, since binding stamps it first.
+        """
+        agents_dir = self._owner._data_dir / "agents"
+        for name in (rename.source_id, rename.target_id, rename.staging_name):
+            if name is None or not exists_strict(agents_dir / name / "agent.json"):
+                continue
+            created_at = load_validated_agent_json(agents_dir / name / "agent.json").get(
+                "created_at"
+            )
+            return created_at if isinstance(created_at, str) and created_at else None
+        return None
 
     def _write_renamed_config(self, rename: AgentRename) -> None:
         """Give the moved config the target id and rebase an in-tree Workspace."""
