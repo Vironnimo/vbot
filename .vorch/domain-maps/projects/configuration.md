@@ -33,7 +33,7 @@ Version 2 changed what the instruction settings mean: in version 1 instruction f
 
 ## Anchor Layout
 
-`core/projects/paths.py` owns all data-dir paths:
+`ProjectStore` in `core/projects/store.py` owns the data-dir paths; `core/projects/paths.py` owns cwd normalization and slug rules:
 
 ```text
 <data-dir>/projects/
@@ -106,7 +106,7 @@ When adding a persisted field, decide whether it is a Project default, a capabil
 
 - Entity, defaults, overrides, serialization: `core/projects/projects.py`
 - Persistence and the Anchor's archive and restore: `core/projects/store.py`
-- Anchor and cwd path rules: `core/projects/paths.py`
+- Anchor paths: `core/projects/store.py`; cwd and slug rules: `core/projects/paths.py`
 - Address parsing: `core/projects/address.py`
 - Public mutations: `server/rpc/project_methods.py`; removal coordination: `core/archive/` (`archive.md`)
 - Primary tests: `tests/core/projects/test_projects.py`, `tests/core/projects/test_store.py`, `tests/server/rpc/test_project_methods.py`, and `tests/server/rpc/test_project_methods_delete.py`

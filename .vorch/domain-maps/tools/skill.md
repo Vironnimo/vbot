@@ -33,7 +33,7 @@ remain available from `skill.py`.
 ## Constraints & Gotchas
 
 - **The loaded envelope shape (`data.name` / `data.status == "loaded"` / `data.content`, plus optional `data.resource_files` / `data.environment_access`) is a persisted read contract**: `core/sessions/` parses it (`skill_tool_activation`) for same-epoch dedup, Compaction names/digest projection, environment grants, and usage statistics. Renaming those fields breaks activation scanning over current-format Sessions.
-- When `skill` is excluded or denied by Tool Access Policy, listing, activation, and file reads are all unavailable; when it is available, an empty `allowed_skills` yields an empty catalog and blocks activation/read access.
+- When `skill` is excluded or denied by Tool Access Policy, listing, activation, and file reads are all unavailable. When it is available, an empty `allowed_skills` blocks the ordinary shared pool; Agent-private and active-Project-granted Skills remain allowed as described above.
 - Keep all three modes in this one flat optional-field contract: `{}` lists, `{name}` activates, and `{name, file_path}` reads; `offset` only pages the latter two. Do not add an action discriminator or split catalog listing into a companion Tool.
 
 ## Agent-facing text

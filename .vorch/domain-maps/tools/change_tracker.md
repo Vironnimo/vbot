@@ -75,7 +75,7 @@ belong to `tools/scratch.md`.
 
 1. The file edit Tools (`_file_changes._commit`) -> `record_write` (Tool worker thread).
 2. Chat loop after each dispatched Tool round
-   (`core/chat/_agentic_progression.py`) -> `peek_run_stats` on a Chat worker
+   (`core/chat/_tool_results.py`) -> `peek_run_stats` on a Chat worker
    -> when the value changed, first stored on the running Run
    (`ChatSession.record_change_stats_async`, best-effort with a warning), then
    the `run_change_stats` Run event (`{change_stats}`) that the WebUI

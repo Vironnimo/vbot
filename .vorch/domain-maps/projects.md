@@ -1,6 +1,6 @@
 # Projects
 
-The Projects domain turns a repository location into a persistent vBot execution boundary with its own Agent discovery, defaults, Tool and Skill ceilings, overrides, and per-Agent Session storage.
+The Projects domain turns a repository location into a persistent vBot execution boundary with its own Agent discovery, defaults, Tool and Skill ceilings, overrides, and Project Agent resolution.
 
 ## Overview
 
@@ -12,7 +12,7 @@ Core terms such as Project, Agent, Session, Tool, Skill, and Provider live in `.
 
 ### Project Anchor
 
-**Definition:** The vBot-owned directory `<data-dir>/projects/<project-id>/` containing `project.json` and Project-local workspace anchors. It is the durable filesystem identity of a Project; Project-scoped Sessions are relationally addressed in the canonical Session database.
+**Definition:** The vBot-owned directory `<data-dir>/projects/<project-id>/` containing `project.json`. It is the durable filesystem identity of a Project; Project-scoped Sessions are relationally addressed in the canonical Session database.
 
 **Not:** The repository at the Project's `cwd`; changing `cwd` does not move or replace the Project Anchor.
 

@@ -19,7 +19,7 @@ The short references participants see and send: `#N` is a post's Swarm-wide `seq
 The first ~400 characters (`OPENING_CHARS`, cut at a word boundary) of a main-discussion post longer than 1000 characters (`FULL_POST_CHARS`) by a participant. Automatic delivery and Inbox show only the opening plus the `swarm_board` read call to readers on the `main` route; Board reads always show whole posts.
 
 ### Quiet period
-The in-memory wait after a participant's completed Run in which it used no Tool (`_wake_pacing.py`). During it, only posts addressing it and posts by the user wake it.
+The in-memory wait after a participant's completed Run in which it used no Tool or only read-only Swarm Tools (`_wake_pacing.py`). During it, only posts addressing it and posts by the user wake it.
 
 ## Owners
 
@@ -1005,7 +1005,8 @@ browse the server's folders (`webui.md` -> Ownership). The Run directory counts
 as changed only when `sameServerPath` (`lib/pathPicker.js`) says it names another
 folder than the default, so a completed folder's trailing separator, or `/` for
 `\` on a Windows path, keeps the Project selection. The manifest
-therefore requires API 12 (`extension.json`; `SwarmPage.test.js`,
+requires API 20 (`extension.json`; path listing was added in API 12,
+slash-command argument hints in API 20; `SwarmPage.test.js`,
 `SwarmPage.profiles.test.js`).
 Activity forwards running Tool Call cancellation through the generic page bridge with the exact Swarm group, Run and Tool Call ids. The host verifies current page registration and canonical Run ownership before requesting call-local cancellation; failures stay visible and the Run continues (`SwarmPage.activity.test.js`, `test_extensions_methods.py`).
 Participant selection opens Activity and disposes the previous Run subscription;

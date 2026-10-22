@@ -4,7 +4,7 @@ Read when changing how a packaged Desktop notices a newly activated version, res
 
 ## Relaunch contract
 
-- Only a packaged launch restarts. `cli/application/desktop.py` (`open_desktop`) passes `VBOT_DESKTOP_RELAUNCH` = JSON `{version_file, version, command}`: the installation's absolute `active-version` path, the version id this Desktop runs, and the command that launches the active version (`[<install>/vBot.GUI.exe, "desktop"]`, `vBot.exe` when the GUI companion is missing). `restart.relaunch_contract()` accepts it only when the file and the command's first element are absolute, the version id is safe and the command is non-empty; anything else (and every source run) means no restart support, and the launch never reads a restart request.
+- Only a packaged launch restarts. `cli/application/desktop.py` (`open_desktop`) passes `VBOT_DESKTOP_RELAUNCH` = JSON `{version_file, version, command}`: the installation's absolute `active-version` path, the version id this Desktop runs, and the command that launches the active version (`[<install>/vBot.GUI.exe, "desktop"]`). `restart.relaunch_contract()` accepts it only when the file and the command's first element are absolute, the version id is safe and the command is non-empty; anything else (and every source run) means no restart support, and the launch never reads a restart request.
 - The relaunch goes through the stable bootstrap, never a versioned path, so the successor always runs whatever version is active at that moment. `desktop/restart.py` spawns it itself (new process group, no window, breakaway from the job when allowed, all std streams to `DEVNULL`) because the Desktop imports no project code.
 
 ## Pending detection and status

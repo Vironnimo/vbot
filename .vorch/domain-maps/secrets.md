@@ -26,7 +26,7 @@ Agent Secret is a shared term (`.vorch/GLOSSARY.md`); Secret reference, Sink, Se
 One random 256-bit AES key per store, identified by a key id. Created with the store, never rotated in place; `reset` starts a new store with a new key.
 
 ### Damaged entry
-One entry that does not authenticate under the store's key, name and section. It reads as missing, is reported, and stays untouched until replaced or removed.
+An entry that fails authentication under the store's key, name and section. Bulk reads omit it; `entry()` raises. It stays reported and untouched until replaced or removed.
 
 ### Import record
 The `plaintext_import` field: which plaintext files a conversion imported and the keyed fingerprint of every value it put into the store. It decides which store values the conversion may still replace or remove (`secrets/plaintext-conversion.md`).
@@ -59,7 +59,7 @@ The document is in `DURABLE_DOCUMENTS` (`"secrets"`, validated by `validate_secr
 
 ## Interfaces
 
-- `SecretStore(data_dir, protections=None)` with sections `CREDENTIALS`, `OAUTH_TOKENS` and `WEBHOOK_SECRETS`: `update(change)` makes one write for a `SecretTransaction`; `entry_names(section)` needs no key; `reset()` is the only replacement of a store (States). `status()` returns a `SecretStoreStatus` naming the key location found, every location this process searches (`key_locations`) and where it would create a new key (`new_key_location`); never a value.
+- `SecretStore(data_dir, protections=None)` with sections `CREDENTIALS`, `OAUTH_TOKENS`, `WEBHOOK_SECRETS` and `AGENT_SECRETS`: `update(change)` makes one write for a `SecretTransaction`; `entry_names(section)` needs no key; `reset()` is the only replacement of a store (States). `status()` returns a `SecretStoreStatus` naming the key location found, every location this process searches (`key_locations`) and where it would create a new key (`new_key_location`); never a value.
 - Credential names (`store.py`): `CREDENTIAL_NAME_PATTERN` (an environment-variable name of at most 200 characters; Storage's `ENV_KEY_PATTERN`, the RPCs, the CLI and the import accept only such names, while `ENTRY_NAME_PATTERN` also admits OAuth token ids), `CREDENTIAL_NAMES_IGNORE_CASE` (Windows), `credential_name_key(name)` (uppercase on Windows, the name elsewhere), `fold_credential_names(entries)` (one entry per credential: the all-uppercase spelling wins, otherwise the first spelling in sorted order). Storage, the Runtime fallback and the import use this one rule.
 - Errors: `SecretStoreError` (a `StorageError`; nothing changed), `SecretStoreUnavailableError`, `SecretEntryUnavailableError`.
 - Health: `secret_store_health` (`plaintext.py`) is the status projection; `data-store.status` carries it as `secrets`, and its `degraded_reason` degrades the data store (`database/snapshots-and-recovery.md` -> Status).

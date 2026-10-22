@@ -35,4 +35,4 @@ The former `decisions` database (`<data-dir>/decisions.db`) is listed in `core/r
 - `tests/core/model_tasks/test_model_task_targets.py::test_list_targets_offers_only_models_tagged_for_the_task`: only Jev targets are offered.
 - `tests/core/model_tasks/test_decision_{types,providers}.py`: validation and the wire (exact request, auth, retries of unanswered judgments, shared connection).
 - `tests/core/model_tasks/test_task_usage.py`: `decision` Usage per request.
-- `tests/core/runtime/test_runtime_lifecycle.py::test_a_start_removes_killed_staging_and_only_a_normal_one_releases_retired_databases`.
+- `tests/core/runtime/test_runtime_lifecycle.py::test_start_modes_split_staging_cleanup_conversion_and_database_release`.

@@ -1,6 +1,6 @@
 # Home Assistant Extension
 
-The first shipped **bundled extension** (`resources/extensions/homeassistant/`): four LLM-callable tools that wrap the Home Assistant REST API. Loaded out of the box, invisible everywhere until a token is set.
+The first shipped **bundled extension** (`resources/extensions/homeassistant/`): four LLM-callable tools that wrap the Home Assistant REST API. Loaded out of the box; its Tools remain unavailable until a token is set.
 
 ## Overview
 
@@ -78,7 +78,7 @@ All four tools share `ready=lambda: bool(api.resolve_credential("HASS_TOKEN").st
 - Home Assistant REST API at `{url}/api/` via `httpx.AsyncClient` with `Authorization: Bearer {token}`.
 - Home Assistant WebSocket API at `/api/websocket` via the bundled Skill's `websockets` script. The script accepts only allowlisted raw reads; dashboard mutation goes through purpose-built commands with local validation, expected-content hashing, backup-before-save, and post-save verification.
 - Credential key `HASS_TOKEN` (Long-Lived Access Token). `HASS_URL` is **retired** - no env fallback of any kind (Generation 1: app code reads only the current format). An existing `HASS_TOKEN` entry of an earlier `.env` keeps working once converted into the Secret Store.
-- Timeout: 15s connect, 30s total. Retry: max 2 with exponential backoff + jitter. GET reads retry transport errors and the shared idempotent statuses (`core/utils/http_status.py`). A POST service call repeats only when Home Assistant cannot have run it: connect/pool errors before sending, or 429/503. A 500/502/504 or a transport error after sending is never repeated; the message says the call may have run and names the read that checks it. `HomeAssistantClient` holds one call's resolved URL, token and logger; its request method is the only request helper that logs. Backoff uses shared `core.utils.retry.sleep_for_retry`; the Extension keeps its two-retry limit and mutation-safe policy.
+- Timeout: 15s connect, 30s read/write/pool waits; no whole-request deadline. Retry: max 2 with exponential backoff + jitter. GET reads retry transport errors and the shared idempotent statuses (`core/utils/http_status.py`). A POST service call repeats only when Home Assistant cannot have run it: connect/pool errors before sending, or 429/503. A 500/502/504 or a transport error after sending is never repeated; the message says the call may have run and names the read that checks it. `HomeAssistantClient` holds one call's resolved URL, token and logger; its request method is the only request helper that logs. Backoff uses shared `core.utils.retry.sleep_for_retry`; the Extension keeps its two-retry limit and mutation-safe policy.
 
 ## Error Envelopes
 
