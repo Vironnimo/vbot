@@ -131,6 +131,36 @@ def test_guidance_block_renders_while_a_connection_tool_is_listed(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "schema",
+    [
+        pytest.param(
+            {"type": "object", "properties": {"value": {}, "mode": {}}}, id="root-properties"
+        ),
+        pytest.param(
+            {
+                "type": "object",
+                "properties": {"value": {}},
+                "allOf": [{"$ref": "#/$defs/mode"}],
+                "$defs": {"mode": {"properties": {"mode": {}}}},
+            },
+            id="all-of-and-ref",
+        ),
+    ],
+)
+async def test_every_remote_tool_argument_is_an_external_secret_sink(context_service, schema):
+    service, registry, runner, calls = context_service
+    runner.catalog["tools"][0]["inputSchema"] = schema
+    service._publish(runner, runner.catalog)
+
+    remote = registry.get(remote_tool_name("example", "inspect"))
+
+    # A Secret reference becomes its value only in arguments the server declared.
+    assert remote is not None
+    assert dict(remote.secret_sinks) == {"value": "external_tools", "mode": "external_tools"}
+
+
+@pytest.mark.asyncio
 async def test_tool_selection_shows_connection_and_inspector_keeps_remote_names(
     context_service, host
 ):

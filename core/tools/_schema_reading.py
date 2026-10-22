@@ -171,6 +171,26 @@ def object_fields(
     return ObjectFields(fields, tuple(required), declared, is_open)
 
 
+def declared_parameters(schema: Any) -> tuple[dict[str, Any], tuple[str, ...]]:
+    """Return the root parameters *schema* declares (name -> schema) and its required names.
+
+    Root ``allOf`` branches and a local ``$ref`` declare parameters like the
+    root's own ``properties`` (``object_fields``); when one of them cannot be
+    read, only the root's own declarations count.
+    """
+    if not isinstance(schema, Mapping):
+        return {}, ()
+    fields = object_fields(schema, schema)
+    if fields is not None:
+        return fields.properties, fields.required
+    properties = schema.get("properties")
+    listed = schema.get("required")
+    return (
+        dict(properties) if isinstance(properties, dict) else {},
+        tuple(name for name in listed if isinstance(name, str)) if isinstance(listed, list) else (),
+    )
+
+
 def _local_reference(reference: Any, root: Any) -> Any:
     """Return the schema a ``#`` or ``#/...`` reference names inside *root*, else ``None``."""
     if reference == "#":

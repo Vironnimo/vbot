@@ -57,7 +57,7 @@ An Agent's `secrets` `request`: a form the user answers or declines within 10 mi
 | `terminal` | `terminal` `text` and `data` |
 | `files` | `write` `content`, `edit` `edits` (`old_string` too, so an edit around a masked line still matches), `apply_patch` `patch` |
 | `typing` | Computer Use `computer` `text` and `computer_batch` `actions` |
-| `external_tools` | the MCP connection Tool's `arguments` and every root parameter of a remote MCP Tool |
+| `external_tools` | the MCP connection Tool's `arguments` and every root parameter of a remote MCP Tool, root `allOf` and `$ref` branches included (`contracts.declared_parameters`) |
 
 Shell environment (`core/tools/_shell_arguments.py`, `shell.py`):
 

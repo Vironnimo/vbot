@@ -428,23 +428,44 @@ async def test_resource_can_be_named_by_its_uri(context_service, host):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("schema", "arguments", "problem"),
+    [
+        pytest.param(
+            None,
+            {"value": "x", "vlaue": "y"},
+            "/arguments has fields the target does not take: vlaue",
+            id="unknown-field",
+        ),
+        pytest.param(
+            # The summary names the arguments a root composed by allOf declares.
+            {
+                "type": "object",
+                "allOf": [{"properties": {"value": {"type": "string"}}, "required": ["value"]}],
+            },
+            {},
+            "/arguments is missing value",
+            id="all-of-root",
+        ),
+    ],
+)
 async def test_invalid_target_arguments_name_the_fields_and_the_describe_call(
-    context_service, host
+    context_service, host, schema, arguments, problem
 ):
     service, registry, runner, calls = context_service
+    if schema is not None:
+        runner.catalog["tools"][0]["inputSchema"] = schema
+        service._publish(runner, runner.catalog)
     target = await tool_target(registry, host)
 
     result = await dispatch(
-        registry,
-        host,
-        {"action": "call", "target": target, "arguments": {"value": "x", "vlaue": "y"}},
+        registry, host, {"action": "call", "target": target, "arguments": arguments}
     )
 
     assert model_text(result) == (
-        "Error (mcp_invalid_arguments): tool inspect was not called: /arguments has fields "
-        "the target does not take: vlaue. It takes value (string, required). Correct the "
-        f'arguments and call again; {{"action":"describe","targets":["{target}"]}} shows the '
-        "full schema."
+        f"Error (mcp_invalid_arguments): tool inspect was not called: {problem}. It takes "
+        "value (string, required). Correct the arguments and call again; "
+        f'{{"action":"describe","targets":["{target}"]}} shows the full schema.'
     )
     assert calls == []
 

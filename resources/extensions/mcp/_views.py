@@ -15,6 +15,8 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+from core.tools.contracts import declared_parameters
+
 # Values the SDK writes on every result; anything else stays in the view.
 _DEFAULTS: dict[str, Any] = {
     "isError": False,
@@ -158,11 +160,15 @@ def error_text(view: dict[str, Any]) -> str:
 
 
 def schema_summary(schema: dict[str, Any]) -> str:
-    """Name a target's arguments with their types, required ones first."""
-    properties = schema.get("properties")
-    if not isinstance(properties, dict) or not properties:
+    """Name a target's arguments with their types, required ones first.
+
+    The arguments are those the Tool contract lists: root ``properties`` with
+    those of root ``allOf`` branches and a local ``$ref``.
+    """
+    properties, declared_required = declared_parameters(schema)
+    if not properties:
         return "It takes no named arguments."
-    required = [name for name in schema.get("required", []) if name in properties]
+    required = [name for name in declared_required if name in properties]
     names = required + [name for name in properties if name not in required]
     items = []
     for name in names[:_SUMMARY_PROPERTIES]:
