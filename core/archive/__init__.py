@@ -1,6 +1,7 @@
 """core.archive — archive entries: archive, restore and permanent deletion of Agents,
 Projects and Sessions."""
 
+from core.archive._conversion import archived_projects_need_conversion, convert_archived_projects
 from core.archive._types import (
     RESTORE_CONFLICT_CODES,
     AgentArchiveOutcome,
@@ -54,4 +55,6 @@ __all__ = [
     "RestoreProblem",
     "SessionArchiveOutcome",
     "SkippedPurge",
+    "archived_projects_need_conversion",
+    "convert_archived_projects",
 ]

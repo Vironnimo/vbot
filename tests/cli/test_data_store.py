@@ -195,6 +195,11 @@ def test_dispatch_routes_nested_data_store_commands(tmp_path: Path) -> None:
     for args in (restore_args, documents_args, complete_args):
         assert dispatch_data_store_command(args, instance, snapshot_restore_fn=restore).ok
     assert dispatch_data_store_command(unregister_args, instance, unregister_fn=unregister).ok
+    assert dispatch_data_store_command(
+        parse_args(["data-store", "convert", "--yes"]),
+        instance,
+        convert_fn=lambda resolved, confirm: _recorded(calls, "convert", confirm, resolved),
+    ).ok
     for args in config_args:
         assert dispatch_data_store_command(
             args,
@@ -247,6 +252,7 @@ def test_dispatch_routes_nested_data_store_commands(tmp_path: Path) -> None:
         ("restore", ("s-1", False, (), True, False)),
         ("restore", ("s-1", True, (), False, True)),
         ("unregister", (_EXTENSION, True)),
+        ("convert", True),
         ("config list", None),
         ("config show", "b-1"),
         ("config restore", ("b-1", True, ("settings.json", "secrets.json"), False)),
@@ -788,6 +794,47 @@ def test_secrets_convert_runs_while_the_server_is_stopped_and_reset_spares_an_op
     assert not reset.ok and "the Secret Store is available" in reset.message
     assert calls == ["stop", "start"]
     assert SecretStore(tmp_path).entry(CREDENTIALS, "OPENAI_API_KEY") == "sk-openai"
+
+
+def test_convert_changes_older_documents_while_the_server_is_stopped(
+    tmp_path: Path, monkeypatch
+) -> None:
+    instance = _instance(tmp_path)
+    write_bootstrap_marker(tmp_path)
+    ChatSessionManager(tmp_path).close()
+    calls: list[str] = []
+
+    def record(action: str) -> Callable[[ServerInstance], CommandResult]:
+        def run(resolved: ServerInstance) -> CommandResult:
+            calls.append(action)
+            return CommandResult(ok=True, message=action, instance=resolved)
+
+        return run
+
+    _classified(monkeypatch, "running", "absent")
+    monkeypatch.setattr(data_store_management, "stop_server", record("stop"))
+    monkeypatch.setattr(data_store_management, "start_server", record("start"))
+    current = data_store_management.data_store_convert(instance, True)
+    document = tmp_path / "projects" / "repo" / "project.json"
+    document.parent.mkdir(parents=True)
+    document.write_text(
+        json.dumps(
+            {"format_version": 1, "project_id": "repo", "cwd": str(tmp_path), "allowed_tools": []}
+        ),
+        encoding="utf-8",
+    )
+    unconfirmed = data_store_management.data_store_convert(instance, False)
+
+    assert current.ok and "nothing to convert" in current.message
+    assert not unconfirmed.ok and "--yes" in unconfirmed.message
+    assert calls == []
+
+    converted = data_store_management.data_store_convert(instance, True)
+
+    assert converted.ok, converted.message
+    assert "projects/repo/project.json" in converted.message
+    assert calls == ["stop", "start"]
+    assert json.loads(document.read_text(encoding="utf-8"))["format_version"] == 2
 
 
 class _StatusPayload:

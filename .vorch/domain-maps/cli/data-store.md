@@ -1,6 +1,6 @@
 # Data Store Commands
 
-Supplementary to `cli.md`. The complete data-store grammar belongs to `cli/_parser_data_store.py`; `cli/parser.py` composes it with the other areas. Covers `vbot data-store` (`cli/data_store_management.py`), the operator surface of the database kernel (`database.md`): `status`, `snapshot`, `incident`, `unregister`, `config-backup` and `secrets`, including when they work on the local data directory instead of through the server.
+Supplementary to `cli.md`. The complete data-store grammar belongs to `cli/_parser_data_store.py`; `cli/parser.py` composes it with the other areas. Covers `vbot data-store` (`cli/data_store_management.py`), the operator surface of the database kernel (`database.md`): `status`, `snapshot`, `incident`, `unregister`, `config-backup`, `convert` and `secrets`, including when they work on the local data directory instead of through the server.
 
 ## Status
 
@@ -17,6 +17,10 @@ Supplementary to `cli.md`. The complete data-store grammar belongs to `cli/_pars
 
 - `config-backup list|show <id>` are local read-only views of the configuration backups (`database.md` -> Configuration backup; `list` adds the files each backup changed against the next older one, `show` compares each file with the current one).
 - `config-backup restore <id> --yes` needs exactly one of `--file <path>`... (as `show` names it; backslashes accepted) or `--all` (which, like a snapshot's document-set restore, keeps the current `secrets.json`; only `--file secrets.json` restores it, `database.md`); it runs a check-only pass first, which refuses an unknown, damaged or folder-less named file before the server is touched, returns without stopping the server when every selected file already matches and no interrupted restore of that backup is pending (`plan.interrupted`; a pending one is finished like a restore), and otherwise stops, restores and restarts the target like `snapshot restore` (shared `_change_while_stopped`, same refusal and failure texts with the noun `configuration backup`). The report names the restored files, the left-alone files with their reason, the files created after the backup (kept), and the `before restore` backup that takes the restore back.
+
+## Format conversion
+
+`convert --yes` runs the JSON document converters (`json-documents.md` -> Document rules) on a loopback target's data directory: today the `project.json` version 1 documents, live and archived (it opens `sessions.db` offline for the archive entries). It checks first without touching the server (live documents, and any version 1 `project.json` under `archive/`) and answers `nothing to convert` when there is none; otherwise it stops and restarts the target through `_change_while_stopped` (`tests/cli/test_data_store.py`).
 
 ## Secrets
 

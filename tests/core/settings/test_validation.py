@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from core.config_validation import JsonDiagnostic
+from core.projects import PROJECT_FORMAT_VERSION
 from core.secrets import CREDENTIALS, KeyFileProtection, SecretStore
 from core.settings import (
     SettingsValidationError,
@@ -27,7 +28,7 @@ def _diagnostics(items: Iterable[JsonDiagnostic]) -> list[tuple[str, str, str]]:
 
 
 _VALID_PROJECT = {
-    "format_version": 1,
+    "format_version": PROJECT_FORMAT_VERSION,
     "project_id": "vbot",
     "display_name": "vBot",
     "cwd": "/srv/repos/vbot",

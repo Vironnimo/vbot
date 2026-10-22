@@ -16,7 +16,7 @@ from core.activity import SessionActivity
 from core.agents import LIVE_BACKEND_BUILTIN
 from core.agents.agents import AgentStore
 from core.agents.temporary import TemporaryAgentRegistry
-from core.archive import ArchiveService
+from core.archive import ArchiveService, convert_archived_projects
 from core.attachments import AttachmentStore
 from core.automation import (
     AutomationReferences,
@@ -61,6 +61,7 @@ from core.permissions import (
     PermissionCeiling,
 )
 from core.projects import ProjectStore, build_agent_resolver
+from core.projects.conversion import convert_project_documents
 from core.prompts import (
     PromptAgentStore,
     SkillPromptRegistry,
@@ -289,6 +290,16 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._storage.data_dir,
             store_path=runtime._storage.layout.sessions_db_path,
         )
+        if runtime.safe_startup_mode == "verification":
+            # An update's verification start converts the Project configurations an
+            # older vBot wrote, live and archived, under the update's data snapshot;
+            # a failure fails the verification, so the update rolls back. Normal
+            # startup never converts: an older document stays unreadable until
+            # `vbot data-store convert` converts it.
+            convert_project_documents(runtime._storage.data_dir)
+            convert_archived_projects(
+                runtime._storage.data_dir, runtime._chat_sessions.archive_ledger
+            )
         runtime._attachment_store.collect_session_orphans(runtime._chat_sessions)
         runtime._usage_recorder = UsageRecorder(
             canonical_database_path(runtime._storage.data_dir, "model_usage"),
