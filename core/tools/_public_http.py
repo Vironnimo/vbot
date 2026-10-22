@@ -275,6 +275,21 @@ _BYTE_ORDER_MARKS = (
 _HEADER_CHARSET = re.compile(r"""charset\s*=\s*["']?([^"';\s]+)""", re.I)
 _XML_ENCODING = re.compile(rb"""<\?xml[^>]*?encoding\s*=\s*["']([\w.:-]+)""")
 _META_CHARSET = re.compile(rb"""<meta[^>]+?charset\s*=\s*["']?\s*([\w.:-]+)""", re.I)
+# Text codecs that are no charset of a page, as browsers ignore them: they fail
+# on ordinary bytes (``idna``, ``undefined``), rewrite them (the escape codecs,
+# ``punycode``, ``utf-7``) or depend on the host (``mbcs``, ``oem``).
+_NOT_CHARSETS = frozenset(
+    {
+        "idna",
+        "undefined",
+        "unicode-escape",
+        "raw-unicode-escape",
+        "punycode",
+        "utf-7",
+        "mbcs",
+        "oem",
+    }
+)
 
 
 def _decoded(content: bytes, content_type: str) -> str:
@@ -310,6 +325,8 @@ def _codec(label: str, *, in_body: bool) -> str | None:
         name = codecs.lookup(label).name
         b"".decode(name)  # refuses codecs that do not decode text, such as base64
     except LookupError, ValueError:
+        return None
+    if name in _NOT_CHARSETS:
         return None
     if name in {"iso8859-1", "ascii"}:
         # Browsers decode both labels as Windows-1252, which pages labelled

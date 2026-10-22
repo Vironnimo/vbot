@@ -10,7 +10,11 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from core.chat._effort_epoch import EffortState
 from core.chat._prompt_block_epoch import PromptBlockPin
-from core.chat._run_permissions import RunPermissions, run_permission_boundary
+from core.chat._run_permissions import (
+    RunPermissions,
+    permitted_project_context,
+    run_permission_boundary,
+)
 from core.chat._step_outcomes import _ToolProgress
 from core.chat._stream_draft import StreamDraft
 from core.chat._tool_epoch import ToolChange, ToolEpochView
@@ -865,26 +869,6 @@ async def create_run_execution_context(
             if prompt_project is not None
             else None
         )
-        project_prompt_context = (
-            ProjectPromptContext.from_project(
-                prompt_project.project_id,
-                prompt_project.display_name,
-                prompt_project.cwd,
-                prompt_project.auto_load,
-            )
-            if prompt_project is not None
-            else None
-        )
-        working_project_context = await _CHAT_TRANSFORM_WORKERS.run(
-            pinned_working_project_context,
-            dependencies,
-            run.agent_id,
-            run.session_id,
-            agent,
-            prompt_project,
-            project_prompt_context,
-            project_id,
-        )
         agent_body = await _CHAT_TRANSFORM_WORKERS.run(
             pinned_agent_body,
             dependencies,
@@ -957,6 +941,24 @@ async def create_run_execution_context(
             address=session_address,
             project_root=Path(prompt_project.cwd) if prompt_project is not None else None,
             skill_registry=skill_registry,
+        )
+        # The frame carries only the instruction files the Run may read.
+        project_prompt_context = (
+            await _CHAT_TRANSFORM_WORKERS.run(
+                permitted_project_context, prompt_project, permissions.boundary
+            )
+            if prompt_project is not None
+            else None
+        )
+        working_project_context = await _CHAT_TRANSFORM_WORKERS.run(
+            pinned_working_project_context,
+            dependencies,
+            run.agent_id,
+            run.session_id,
+            agent,
+            prompt_project,
+            project_prompt_context,
+            project_id,
         )
         session.activated_skill_contents(session_snapshot.active_messages)
         context = _RunExecutionContext(

@@ -10,6 +10,7 @@ from core.chat._folder_instructions import (
     folder_instruction_notes,
 )
 from core.chat.wire_shaping import note_request_messages
+from core.permissions import PermissionBoundary
 from core.projects import FolderInstructions
 
 
@@ -20,7 +21,13 @@ def test_a_compaction_makes_shown_folder_instructions_due_again(tmp_path: Path) 
     worked = [tmp_path / "app" / "main.py"]
 
     def notes(history: list[ChatMessage]) -> list[ChatMessage]:
-        return folder_instruction_notes(finder, worked, history, tool_available=lambda _: False)
+        return folder_instruction_notes(
+            finder,
+            worked,
+            history,
+            permissions=PermissionBoundary.UNRESTRICTED,
+            tool_available=lambda _: False,
+        )
 
     [note] = notes([])
     assert notes([note]) == []

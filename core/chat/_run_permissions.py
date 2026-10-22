@@ -35,7 +35,12 @@ from core.permissions import (
     PermissionCeiling,
     PermissionRules,
 )
-from core.prompts import BLOCK_KIND_DATA, BLOCK_OWNER_ALWAYS, BlockDefinition
+from core.prompts import (
+    BLOCK_KIND_DATA,
+    BLOCK_OWNER_ALWAYS,
+    BlockDefinition,
+    ProjectPromptContext,
+)
 from core.storage.layout import DataDirectoryLayout
 from core.storage.temp_files import artifact_owner, session_artifact_dirs
 from core.utils.config import VBOT_ROOT
@@ -43,7 +48,7 @@ from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from core.chat._run_state import ChatLoopDependencies
-    from core.projects import RuntimeAgent
+    from core.projects import Project, RuntimeAgent
     from core.runs import Run
     from core.sessions import SessionAddress
     from core.skills import SkillRegistry
@@ -337,6 +342,21 @@ def _build_run_permissions(
         own_hosts=own_hosts,
     )
     return RunPermissions(boundary, documents, address, project_root, sources, stamps)
+
+
+def permitted_project_context(
+    project: Project, boundary: PermissionBoundary, cwd: Path | None = None
+) -> ProjectPromptContext:
+    """The Working Project frame's input, with the instruction files *boundary* lets a Run read.
+
+    A file the boundary refuses (a deny rule, a link out of the readable area)
+    is left out, as the ``project`` Tool leaves it out, so its content never
+    reaches the System Prompt. *cwd* replaces the Project's directory where the
+    Run works elsewhere. Blocking: resolves links.
+    """
+    root = cwd if cwd is not None else Path(project.cwd)
+    files = [name for name in project.auto_load if boundary.check_path(root / name, "read") is None]
+    return ProjectPromptContext.from_project(project.project_id, project.display_name, root, files)
 
 
 # The System Prompt block telling a restricted Agent its boundary. Chat adds it
