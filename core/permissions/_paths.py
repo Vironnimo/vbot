@@ -67,10 +67,6 @@ class NormalizedPath:
     unsafe: str | None = None
 
 
-def is_windows(platform: str) -> bool:
-    return platform == "win32"
-
-
 def path_key(text: str, *, windows: bool) -> str:
     """The comparison key of a normalized path: case-folded on Windows."""
     return text.casefold() if windows else text

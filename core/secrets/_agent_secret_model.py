@@ -258,10 +258,6 @@ def check_description(description: str) -> str:
     return text
 
 
-def kind_fields(kind: SecretKind) -> tuple[tuple[str, bool], ...]:
-    return KIND_FIELDS[kind]
-
-
 def check_sinks(sinks: Iterable[str]) -> frozenset[SinkClass]:
     chosen = set()
     for sink in sinks:

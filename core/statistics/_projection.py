@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from core.chat.messages import ChatMessage, usage_token_is_estimated
@@ -32,7 +32,6 @@ from core.utils.timestamps import parse_canonical_timestamp
 JsonObject = dict[str, Any]
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
-_EPOCH_DATE = date(1970, 1, 1)
 _MICROSECOND = timedelta(microseconds=1)
 MICROSECONDS_PER_DAY = 86_400_000_000
 MICROSECONDS_PER_HOUR = 3_600_000_000
@@ -117,11 +116,6 @@ def latency_bucket(duration_ms: int | None) -> int | None:
     if duration_ms is None:
         return None
     return ((duration_ms + 1) ** 4).bit_length() - 1
-
-
-def day_key(day: int) -> str:
-    """Return the ISO date for a day number derived from an instant."""
-    return (_EPOCH_DATE + timedelta(days=day)).isoformat()
 
 
 def cost_source_class(cost: JsonObject) -> tuple[int, float | None]:

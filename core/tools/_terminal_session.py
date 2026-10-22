@@ -582,10 +582,6 @@ class TerminalSession:
             async for event in events:
                 yield event
 
-    async def runs_program(self, program: str) -> bool:
-        """Whether *program* runs in this Session's process tree."""
-        return await asyncio.to_thread(self._services.program_probe, self._adapter.pid, program)
-
     # Output and activity
 
     async def _read(self) -> None:

@@ -19,7 +19,7 @@ from core.providers.errors import (
 )
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.opencode_go import OPENCODE_SESSION_HEADER, OpenCodeGoAdapter
-from core.utils.retry import MAX_RETRIES, RetryNotice, caller_owns_retries, observe_retries
+from core.utils.retry import MAX_RETRIES, caller_owns_retries
 
 from .opencode_go_test_support import (
     API_KEY,
@@ -66,19 +66,19 @@ def _affinity(adapter: OpenCodeGoAdapter) -> dict[str, Any]:
 @pytest.mark.parametrize("failure", list(UPSTREAM_FAILURES))
 @pytest.mark.parametrize("streaming", [False, True], ids=["send", "stream"])
 @pytest.mark.parametrize("wire", _WIRE_IDS)
+@pytest.mark.parametrize("caller_owned", [False, True], ids=["standalone", "caller-owned"])
 @pytest.mark.asyncio
-async def test_observed_upstream_failure_retries_the_identical_request(
-    wire: str, streaming: bool, failure: str
+async def test_observed_upstream_failure_keeps_request_and_failure_evidence(
+    wire: str, streaming: bool, failure: str, caller_owned: bool
 ) -> None:
-    """An observed gateway failure keeps its status, body and Retry-After and is retried."""
+    """Retry the same request, or expose its complete failure to the caller's retry owner."""
     model_id, url = WIRES[wire]
     status, body = UPSTREAM_FAILURES[failure]
     adapter = go_adapter()
-    notices: list[RetryNotice] = []
 
     with (
         respx.mock,
-        observe_retries(notices.append),
+        caller_owns_retries() if caller_owned else nullcontext(),
         patch("core.utils.retry._sleep", new_callable=AsyncMock) as sleep,
     ):
         route = respx.post(GEMINI_STREAM_URL if wire == "gemini" and streaming else url).mock(
@@ -87,24 +87,32 @@ async def test_observed_upstream_failure_retries_the_identical_request(
                 success_response(wire, streaming=streaming),
             ]
         )
-        deltas = await go_request(adapter, model_id, streaming=streaming, **_affinity(adapter))
+        if caller_owned:
+            with pytest.raises(ProviderError) as caught:
+                await go_request(adapter, model_id, streaming=streaming, **_affinity(adapter))
+        else:
+            deltas = await go_request(adapter, model_id, streaming=streaming, **_affinity(adapter))
+            assert not streaming or any(delta["type"] == "finish" for delta in deltas)
 
-    assert not streaming or any(delta["type"] == "finish" for delta in deltas)
-    assert route.call_count == 2
-    assert route.calls[0].request.content == route.calls[1].request.content
     assert all(
         call.request.headers[OPENCODE_SESSION_HEADER] == "vbot-retry-affinity"
         for call in route.calls
     )
-    sleep.assert_awaited_once()
-    assert sleep.await_args is not None
-    assert sleep.await_args.args[0] >= 7
-    error = notices[0].error
-    assert type(error) is ProviderError
-    assert error.retryable is True
-    assert error.status_code == status
-    assert error.retry_after == 7
-    assert json.loads(str(error).split(f"{status} ", 1)[1]) == body
+    if caller_owned:
+        assert route.call_count == 1
+        sleep.assert_not_awaited()
+        error = caught.value
+        assert type(error) is ProviderError
+        assert error.retryable is True
+        assert error.status_code == status
+        assert error.retry_after == 7
+        assert json.loads(str(error).split(f"{status} ", 1)[1]) == body
+    else:
+        assert route.call_count == 2
+        assert route.calls[0].request.content == route.calls[1].request.content
+        sleep.assert_awaited_once()
+        assert sleep.await_args is not None
+        assert sleep.await_args.args[0] >= 7
 
 
 @pytest.mark.parametrize(

@@ -11,7 +11,6 @@ export const TOOL_ACCESS_MODES = Object.freeze([
 ]);
 
 export const TOOL_ACTIVATION_CONFIGURABLE = 'configurable';
-export const TOOL_ACTIVATION_FOLLOWS = 'follows';
 
 // Tools with this constraint work only for the Agents of a Live voice call.
 const TOOL_CONSTRAINT_LIVE_CALL = 'live_call';
@@ -140,20 +139,6 @@ export function setToolAccessState(
   });
 }
 
-export function setToolFamilyState(
-  value,
-  members,
-  state,
-  catalog = [],
-  ceiling = null,
-) {
-  let next = normalizeToolAccess(value);
-  for (const member of members) {
-    next = setToolAccessState(next, member.name, state, catalog, ceiling);
-  }
-  return next;
-}
-
 // The compact editor exposes one permission switch per Tool. The persisted
 // representation still differs by mode: an off configurable Tool is an
 // exclusion in `all`, but simply absent from `selected`; automatic Tools use an
@@ -242,30 +227,6 @@ export function setAnalyzeImageAlwaysAvailable(value, enabled) {
   if (enabled) granted.add('analyze_image');
   else granted.delete('analyze_image');
   return compactPolicy({ ...policy, granted: [...granted] });
-}
-
-export function toolAccessState(value, tool, catalog = [], context = {}) {
-  const policy = normalizeToolAccess(value);
-  if ((policy.denied ?? []).includes(tool.name)) {
-    return 'denied';
-  }
-  if (toolIsConfigurable(tool)) {
-    if (tool.requires_opt_in && !(policy.granted ?? []).includes(tool.name))
-      return 'off';
-    if (policy.mode === TOOL_ACCESS_MODE_ALL) {
-      return 'included';
-    }
-    if (
-      policy.mode === TOOL_ACCESS_MODE_SELECTED &&
-      (policy.allowed ?? []).includes(tool.name)
-    ) {
-      return 'enabled';
-    }
-    return 'off';
-  }
-  return automaticToolIsActive(policy, tool, catalog, context)
-    ? 'automatic'
-    : 'inactive';
 }
 
 export function toolAccessIncludes(value, name, catalog = []) {
@@ -506,41 +467,6 @@ function toolByName(catalog, name) {
       (tool) => tool?.name === name,
     ) ?? { name, activation: TOOL_ACTIVATION_CONFIGURABLE }
   );
-}
-
-function automaticToolIsActive(
-  policy,
-  tool,
-  catalog,
-  context,
-  seen = new Set(),
-) {
-  if (policy.mode === TOOL_ACCESS_MODE_NONE || seen.has(tool?.name)) {
-    return false;
-  }
-  if ((policy.denied ?? []).includes(tool?.name)) {
-    return false;
-  }
-  if (tool?.activation === 'memory_mode') {
-    return context?.memoryPromptMode !== 'off';
-  }
-  if (tool?.activation === 'session_grant') {
-    return true;
-  }
-  if (tool?.activation !== TOOL_ACTIVATION_FOLLOWS) {
-    return true;
-  }
-
-  const nextSeen = new Set(seen);
-  nextSeen.add(tool.name);
-  // A followed Tool is active while any of its sources is.
-  return activationSources(tool).some((sourceName) => {
-    const source = toolByName(catalog, sourceName);
-    if (toolIsConfigurable(source)) {
-      return toolAccessPreferenceEnabled(policy, source);
-    }
-    return automaticToolIsActive(policy, source, catalog, context, nextSeen);
-  });
 }
 
 /**

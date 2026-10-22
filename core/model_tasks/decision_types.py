@@ -40,14 +40,6 @@ def text(value: Any, label: str, *, maximum: int = 100_000) -> str:
     return value
 
 
-def validate_input(state: Any, questions: Any) -> tuple[Any, list[dict[str, Any]]]:
-    """Keep state content verbatim; validate complete independent questions."""
-    if not isinstance(state, str | dict | list):
-        raise DecisionError("state must be text, a JSON object, or a JSON array.")
-    state, questions = json_copy([state, validate_questions(questions)])
-    return state, questions
-
-
 def validate_questions(questions: Any) -> list[dict[str, Any]]:
     """Validate complete independent questions in the Decisions wire vocabulary."""
     if not isinstance(questions, list) or not questions:

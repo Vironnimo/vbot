@@ -37,7 +37,7 @@ from core.providers.github_copilot_messages import build_copilot_messages_payloa
 from core.providers.github_copilot_responses import build_responses_payload
 from core.providers.mistral import MistralAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
-from core.providers.tool_schema import render_tool_definitions, sanitize_anthropic_tool_input_schema
+from core.providers.tool_schema import render_tool_definitions
 from core.providers.wire_profiles import standalone_wire_binding
 from core.tools import tool_failure, tool_success
 
@@ -95,17 +95,10 @@ def test_rendered_schema_is_independent_of_the_source_definition(nested: bool) -
     assert source == ({"function": _tool()} if nested else _tool())
 
 
-def test_anthropic_input_schema_is_an_unchanged_copy_of_an_object_root() -> None:
-    result = sanitize_anthropic_tool_input_schema(_SCHEMA)
-
-    assert result == _SCHEMA
-    assert result is not _SCHEMA
-
-
 @pytest.mark.parametrize("schema", [None, {"anyOf": [{"type": "object"}]}], ids=["none", "union"])
-def test_anthropic_input_schema_rejects_a_non_object_root(schema: object) -> None:
+def test_rendering_rejects_a_non_object_schema_root(schema: object) -> None:
     with pytest.raises(ValueError):
-        sanitize_anthropic_tool_input_schema(schema)
+        render_tool_definitions([{**_tool(), "parameters": schema}], profile="omit_strict")
 
 
 # ---------------------------------------------------------------------------

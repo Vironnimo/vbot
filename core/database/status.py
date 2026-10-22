@@ -30,16 +30,6 @@ from core.utils.file_status import is_file_strict
 if TYPE_CHECKING:
     from core.database.database import Database
 
-#: Overall states, most severe first.
-STATUS_STATES = (
-    "maintenance",
-    "unavailable",
-    "recovered_with_incident",
-    "degraded",
-    "snapshot_degraded",
-    "healthy",
-)
-
 
 def data_store_status(
     data_dir: Path,

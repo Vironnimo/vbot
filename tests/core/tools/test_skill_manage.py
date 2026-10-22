@@ -12,7 +12,7 @@ from typing import Any, cast
 import pytest
 
 from core.permissions import BoundaryContext, PermissionBoundary, normalize_permission_rules
-from core.providers.tool_schema import sanitize_anthropic_tool_input_schema
+from core.providers.tool_schema import render_tool_definitions
 from core.runs import RunKind
 from core.skills import _history as skill_history_module
 from core.skills.authoring import (
@@ -279,13 +279,8 @@ def test_provider_schema_is_flat_and_hermes_shaped(tmp_path: Path) -> None:
     assert "draft_id" not in str(parameters)
     assert "source_path" not in str(parameters)
     assert "executable" not in str(parameters)
-    assert (
-        sanitize_anthropic_tool_input_schema(
-            SKILL_MANAGE_TOOL_PARAMETERS,
-            tool_name=SKILL_MANAGE_TOOL_NAME,
-        )
-        == SKILL_MANAGE_TOOL_PARAMETERS
-    )
+    [rendered] = render_tool_definitions(definitions, profile="omit_strict")
+    assert rendered["parameters"] == SKILL_MANAGE_TOOL_PARAMETERS
 
 
 def test_create_is_immediately_live_and_invalidates(tmp_path: Path, caplog: Any) -> None:

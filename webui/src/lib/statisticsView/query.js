@@ -166,18 +166,3 @@ export class StatisticsReportQuery {
     };
   }
 }
-
-/** The `statistics.report` parameters of one tab, range and time zone. */
-export function statisticsReportParams(
-  tab,
-  range,
-  timeZone = 'UTC',
-  now = Date.now(),
-) {
-  return new StatisticsReportQuery(tab, range, timeZone).params(now);
-}
-
-/** The cache key of one tab's report: its sections, range and time zone. */
-export function statisticsReportKey(tab, range, timeZone = 'UTC') {
-  return new StatisticsReportQuery(tab, range, timeZone).key;
-}

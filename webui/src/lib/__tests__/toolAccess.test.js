@@ -12,11 +12,9 @@ import {
   setToolAlwaysLoaded,
   setToolFamilyPreference,
   setToolAccessState,
-  setToolFamilyState,
   setToolsOnDemand,
   toolAccessIncludes,
   toolAccessPreferenceEnabled,
-  toolAccessState,
   toolIsAlwaysLoaded,
   toolLoadingInheritsList,
 } from '../toolAccess.js';
@@ -171,61 +169,22 @@ describe('Tool Access Policy UI helpers', () => {
       allowed: ['session_search'],
       denied: ['session_read'],
     });
-    expect(toolAccessState(blocked, catalog[3])).toBe('denied');
+    expect(toolAccessPreferenceEnabled(blocked, catalog[3])).toBe(false);
     expect(
       setToolAccessState(blocked, 'session_read', 'enabled', catalog),
     ).toEqual({ mode: 'selected', allowed: ['session_search'] });
   });
 
-  it('shows a following Tool as inactive until its source is included', () => {
-    const policy = { mode: 'selected', allowed: ['read'] };
-    expect(toolAccessState(policy, catalog[3], catalog)).toBe('inactive');
-    expect(
-      toolAccessState(
-        { mode: 'selected', allowed: ['session_search'] },
-        catalog[3],
-        catalog,
-      ),
-    ).toBe('automatic');
-  });
-
-  it('shows a Tool following several sources as automatic with any of them', () => {
-    const follower = {
-      name: 'background_tasks',
-      activation: 'follows',
-      activation_source: ['read', 'write'],
-    };
-    const tools = [...catalog, follower];
-    const state = (allowed) =>
-      toolAccessState({ mode: 'selected', allowed }, follower, tools);
-    expect(state([])).toBe('inactive');
-    expect(state(['read'])).toBe('automatic');
-    expect(state(['write'])).toBe('automatic');
-  });
-
-  it('shows memory as inactive when Memory Prompt Mode is off', () => {
-    expect(
-      toolAccessState({ mode: 'all' }, catalog[4], catalog, {
-        memoryPromptMode: 'off',
-      }),
-    ).toBe('inactive');
-    expect(
-      toolAccessState({ mode: 'all' }, catalog[4], catalog, {
-        memoryPromptMode: 'agent_user',
-      }),
-    ).toBe('automatic');
-  });
-
-  it('applies family block and reset actions to every current member', () => {
-    const blocked = setToolFamilyState(
+  it('applies family preference changes to every current member', () => {
+    const blocked = setToolFamilyPreference(
       { mode: 'all' },
       catalog.slice(0, 2),
-      'denied',
+      false,
       catalog,
     );
     expect(blocked).toEqual({ mode: 'all', denied: ['read', 'write'] });
     expect(
-      setToolFamilyState(blocked, catalog.slice(0, 2), 'default', catalog),
+      setToolFamilyPreference(blocked, catalog.slice(0, 2), true, catalog),
     ).toEqual({ mode: 'all' });
   });
 
@@ -339,7 +298,6 @@ describe('explicit Tool opt-in', () => {
     expect(
       changeToolAccessMode(all, 'selected', allTools).allowed,
     ).not.toContain('computer');
-    expect(toolAccessState(all, computer)).toBe('off');
   });
   it('grants and revokes explicitly without leaving All mode', () => {
     const granted = setToolAccessPreference(
@@ -390,22 +348,6 @@ describe('explicit Tool opt-in', () => {
         'read',
       ]),
     ).toEqual({ mode: 'all' });
-  });
-  it('keeps companions inactive until their parent is granted', () => {
-    const follower = {
-      name: 'computer_read',
-      activation: 'follows',
-      activation_source: 'computer',
-    };
-    expect(
-      toolAccessState({ mode: 'all' }, follower, [computer, follower]),
-    ).toBe('inactive');
-    expect(
-      toolAccessState({ mode: 'all', granted: ['computer'] }, follower, [
-        computer,
-        follower,
-      ]),
-    ).toBe('automatic');
   });
 });
 

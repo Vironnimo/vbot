@@ -6,9 +6,9 @@ import {
   reasoningMarkdownSource,
   renderMarkdown,
   renderMarkdownDocument,
-  renderMarkdownStreaming,
-  renderReasoningMarkdown,
-  renderReasoningMarkdownStreaming,
+  renderMarkdownStreamingDocument,
+  renderReasoningMarkdownDocument,
+  renderReasoningMarkdownStreamingDocument,
 } from '../markdown.js';
 
 describe('renderMarkdown()', () => {
@@ -167,7 +167,7 @@ describe('renderMarkdown()', () => {
       ['data-markdown-code-index'],
     ],
   ])('streams %s', (_label, source, contained, absent) => {
-    const html = renderMarkdownStreaming(source);
+    const { html } = renderMarkdownStreamingDocument(source);
 
     for (const fragment of contained) {
       expect(html).toContain(fragment);
@@ -192,8 +192,10 @@ describe('renderMarkdown()', () => {
     // including the rendered prefix preceding an unfinished code fence.
     const saved = renderMarkdownDocument(source);
     for (let index = 0; index < 350; index += 1) {
-      renderMarkdownStreaming(`Draft ${index}\n\n${'text '.repeat(index % 5)}`);
-      renderMarkdownStreaming(`Prefix ${index}\n\n\`\`\`js\ncode`);
+      renderMarkdownStreamingDocument(
+        `Draft ${index}\n\n${'text '.repeat(index % 5)}`,
+      );
+      renderMarkdownStreamingDocument(`Prefix ${index}\n\n\`\`\`js\ncode`);
     }
     expect(renderMarkdownDocument(source)).toBe(saved);
 
@@ -276,8 +278,8 @@ describe('reasoning Markdown', () => {
     );
 
     for (const html of [
-      renderReasoningMarkdown(source),
-      renderReasoningMarkdownStreaming(source),
+      renderReasoningMarkdownDocument(source).html,
+      renderReasoningMarkdownStreamingDocument(source).html,
     ]) {
       expect(html).toContain('<strong>Designing the component</strong>');
       expect(html).toContain('<br>');

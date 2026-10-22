@@ -36,7 +36,6 @@ CREATE TABLE kernel_migrations (
   breaks_older       INTEGER NOT NULL CHECK (breaks_older IN (0, 1))
 ) STRICT;
 """
-KERNEL_TABLES = ("kernel_meta", "kernel_migrations")
 
 _TABLE_CONSTRAINT_PREFIXES = ("CONSTRAINT", "PRIMARY", "UNIQUE", "CHECK", "FOREIGN")
 _BARE_TOKEN = re.compile(r"([^\s(]+)\s*(.*)", re.DOTALL)

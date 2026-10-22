@@ -27,6 +27,8 @@ describe('CopyButton', () => {
     }
 
     document.body.innerHTML = '';
+    window.history.replaceState({}, '', '/');
+    delete window.pywebview;
     vi.restoreAllMocks();
   });
 
@@ -36,23 +38,23 @@ describe('CopyButton', () => {
     return document.body.querySelector('button');
   }
 
-  it('writes the provided text verbatim and shows copied feedback', async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    Object.defineProperty(navigator, 'clipboard', {
-      value: { writeText },
-      configurable: true,
-    });
+  it.each(['browser', 'desktop'])(
+    'copies verbatim through the %s clipboard and shows feedback',
+    async (accessor) => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      configureClipboard(accessor, writeText);
 
-    const button = render({ text: 'a verbatim - line' });
-    expect(button.classList.contains('copy-button')).toBe(true);
-    expect(button.getAttribute('aria-label')).toBe('Copy');
+      const button = render({ text: 'a verbatim - line' });
+      expect(button.classList.contains('copy-button')).toBe(true);
+      expect(button.getAttribute('aria-label')).toBe('Copy');
 
-    button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    await flushAsync();
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await flushAsync();
 
-    expect(writeText).toHaveBeenCalledWith('a verbatim - line');
-    expect(button.getAttribute('aria-label')).toBe('Copied');
-  });
+      expect(writeText).toHaveBeenCalledWith('a verbatim - line');
+      expect(button.getAttribute('aria-label')).toBe('Copied');
+    },
+  );
 
   it('honors caller-supplied labels and passthrough class', () => {
     const button = render({
@@ -71,21 +73,31 @@ describe('CopyButton', () => {
     expect(button.disabled).toBe(true);
   });
 
-  it('stays in the resting state when clipboard access is blocked', async () => {
-    const writeText = vi.fn().mockRejectedValue(new Error('denied'));
-    Object.defineProperty(navigator, 'clipboard', {
-      value: { writeText },
-      configurable: true,
-    });
+  it.each(['browser', 'desktop'])(
+    'keeps the resting state when the %s clipboard refuses access',
+    async (accessor) => {
+      const writeText = vi.fn().mockRejectedValue(new Error('denied'));
+      configureClipboard(accessor, writeText);
 
-    const button = render({ text: 'data' });
-    button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    await flushAsync();
+      const button = render({ text: 'data' });
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await flushAsync();
 
-    expect(writeText).toHaveBeenCalled();
-    expect(button.getAttribute('aria-label')).toBe('Copy');
-  });
+      expect(writeText).toHaveBeenCalled();
+      expect(button.getAttribute('aria-label')).toBe('Copy');
+    },
+  );
 });
+
+function configureClipboard(accessor, writeText) {
+  const desktop = accessor === 'desktop';
+  window.history.replaceState({}, '', desktop ? '/?accessor=desktop' : '/');
+  Object.defineProperty(navigator, 'clipboard', {
+    value: desktop ? undefined : { writeText },
+    configurable: true,
+  });
+  if (desktop) window.pywebview = { api: { setClipboardText: writeText } };
+}
 
 async function flushAsync() {
   for (let index = 0; index < 5; index += 1) {

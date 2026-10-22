@@ -25,7 +25,6 @@ from core.automation._cron_timing import _utc_now_iso
 from core.config_validation import (
     JsonConfigValidationError,
     JsonDiagnostic,
-    JsonObject,
     JsonValidationReport,
     add_error,
     load_validated_json_file,
@@ -41,7 +40,6 @@ from core.json_documents import (
     json_document,
     json_list,
     json_object,
-    strip_unknown_fields,
     validate_collection_root,
 )
 from core.permissions import PermissionCeiling, PermissionRulesError
@@ -271,17 +269,6 @@ def _target_validation_error(job: CronJob, error: Exception) -> CronTargetError:
 def validate_cron_jobs_file(jobs_path: str | Path) -> JsonValidationReport:
     """Validate persisted ``cron/jobs.json`` without consuming it."""
     return validate_json_file(jobs_path, validate_cron_jobs_data, missing_ok=True)
-
-
-def load_validated_cron_jobs_json(jobs_path: str | Path) -> list[JsonObject]:
-    """Load the modeled fields of schema-valid Cron jobs; a missing file has none."""
-    try:
-        data = load_validated_json_file(jobs_path, validate_cron_jobs_data, missing_ok=True)
-    except JsonConfigValidationError as error:
-        raise CronStorageError(str(error)) from error
-    if data is None:
-        return []
-    return cast("list[JsonObject]", strip_unknown_fields(data, CRON_JOBS_SHAPE)["jobs"])
 
 
 def _load_cron_jobs_payload(jobs_path: str | Path) -> list[Any]:
