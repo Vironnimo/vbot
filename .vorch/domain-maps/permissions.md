@@ -60,6 +60,7 @@ Rule language, presets, resolution, descriptions and editor data: `permissions/r
 - Shell: `bash`/`powershell` check every call before launch and run it in a confined environment (`tools/shell.md` -> Permission Rules).
 - Cron watch checks of a job with a ceiling: the command and URL at every check and when the `cron` Tool saves the watch (`automation/cron-watch.md`).
 - Web: `web_fetch` at the address, every redirect hop and final page; `analyze_image` image URLs and hops (`fetch_public(..., permissions=)`); `web_search` drops results it may not fetch (`tools/web_fetch.md`, `tools/web_search.md` -> Permission Rules).
+- Portal: `portal open` checks `http://localhost:<port>/` with `check_url` before any listener is bound or the port probed; `list` and `close` of the Session's own Portals are not checked (`tools/portal.md` -> Permission Rules).
 - Terminal: `start` (program, folder), lines submitted at an integrated shell prompt, and `attach`/`status` only for terminals started under the same or narrower rules (`tools/terminal.md` -> Permission Rules).
 - Other Sessions: `session_search` searches only the current Agent's Sessions (`tools/session_search.md`).
 - Ceilings: `AgentOverrides.permission_ceiling` of a Session, joined and never widened (`source` `parent` by delegation and `send`, `cron` for a fired Session), `CronJob.permission_ceiling` (`source` `cron`, `CronJob.ceiling()`), `TemporaryAgentConfig.permission_ceiling` (`source` `extension`).

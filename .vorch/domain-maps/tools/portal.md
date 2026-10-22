@@ -1,6 +1,6 @@
 # Portals (`portal`)
 
-A Portal shows the user a web app that runs on the vBot computer, such as a dev server the Agent started, through a private link: the WebUI shows a card after the Tool call with the app's state, an expandable preview and "open in new tab". User decisions of 2026-10-21: every Portal has its own port of the vBot server (an origin of its own; behind a reverse proxy it is reachable only from the vBot computer, and the card says so); the Portal only forwards, the Agent starts and stops the app itself; a Portal ends when the Agent or the user closes it, its Session is archived (deleted) or vBot stops; every Agent may open Portals; targets are only `localhost` ports, never vBot's own; the credential reaches only the WebUI card.
+A Portal shows the user a web app that runs on the vBot computer, such as a dev server the Agent started, through a private link: the WebUI shows a card after the Tool call with the app's state, an expandable preview and "open in new tab". User decisions of 2026-10-21: every Portal has its own port of the vBot server (an origin of its own; behind a reverse proxy it is reachable only from the vBot computer, and the card says so); the Portal only forwards, the Agent starts and stops the app itself; a Portal ends when the Agent or the user closes it, its Session is archived (deleted) or vBot stops; every Agent may open Portals, a restricted one only where its web rules let it reach `localhost` (user decision 2026-10-22, Permission Rules below); targets are only `localhost` ports, never vBot's own; the credential reaches only the WebUI card.
 
 ## Interfaces
 
@@ -22,6 +22,10 @@ Per request, in this order:
 5. WebSockets are bridged message by message through `websockets` (subprotocols kept, same header rules).
 
 A target that refuses the connection marks the Portal not listening and answers 502: a page that reloads itself every 2 s for document and frame loads, text otherwise. A successful forward marks it listening.
+
+## Permission Rules
+
+A restricted Session's `open` (`permissions.md`) checks `http://localhost:<port>/` with `check_url`, the decision a shell `curl localhost:<port>` gets: refused when the web rules do not let it fetch from `localhost` (`web: listed` without `Web(localhost)`, or a `Web(localhost)` deny rule) and, as everywhere, at the vBot server's own port. The check runs after the port is validated and before the registry binds a listener or probes the port, so a refused call learns nothing about whether the port answers; a repeated open of an existing Portal is checked the same way. The refusal is the standard not-retryable `permission_denied` (`PermissionDenied`, target `localhost:<port>`). `list` and `close` act only on the Session's own Portals and are not checked. A Portal opened before the rules narrowed keeps forwarding until it is closed: the rules confine the Agent's calls, and the Portal's requests come from the user's browser. Test: `test_portal.py::test_a_restricted_agent_opens_only_ports_its_web_rules_reach`.
 
 ## Constraints & Gotchas
 
@@ -51,4 +55,5 @@ Reviewed with `vbot-agent-tools` on 2026-10-21.
 | `The user is using <Telegram / the terminal>, where the card does not show; they open the portal from this Session in the vBot app.` | Without it the Agent assumes the user sees the card on a surface that cannot show it. |
 | List result: `Portals of this Session:` then `- <id> "<title>": localhost:<port> (app answers / nothing answers yet)`, or `No portals are open in this Session.` | Ids for close and the app state in one line each. |
 | Close result: `Closed portal <id>. The app on localhost:<port> keeps running.` | States that the app still runs, so the Agent stops it itself when that was the intent. |
+| `permission_denied`: `portal was not run: the permission rules refuse fetching localhost:<port>, because ...`, then the `PermissionRefusal` sentences | Tells the Agent that its rules, not the app, stopped the Portal, so it does not start the app again or try other ports; the target names the port it asked for. `fetching` because the decision is the one a fetch of `http://localhost:<port>` gets, so the allowed-hosts list (`You can fetch only from:`) and the `core:permissions` block match it. Texts and reasons: `permissions/agent-facing-text.md`. |
 | Refusals: `Nothing was opened. Port <port> is vBot itself; pass the port of the app.` / `... portal open needs port, ...` / `... This Session already has 5 portals (<ids>); close one with action close first.` / `Nothing was closed. No portal <id> is open in this Session; its portals: <ids>.` / `session_required`: `Nothing was changed. Portals belong to a chat Session, and this call runs outside one.` | Each says that nothing happened, what is wrong, and the valid next step or choices. |
