@@ -8,10 +8,12 @@ it with a credential only the WebUI receives (``.vorch/domain-maps/tools/portal.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from functools import cache
 from typing import Any
 from urllib.parse import urlsplit
 
+from core.permissions import PermissionDenied
 from core.sessions import SessionAddress
 from core.tools.call_syntax import SpellingAliases, is_placeholder, normalize_call_arguments
 from core.tools.contracts import ToolContract, ToolContractError, compile_tool_contract
@@ -210,6 +212,10 @@ async def _open(
             "invalid_arguments",
             f"Nothing was opened. Port {port} does not exist; pass a port from 1 to 65535.",
         )
+    # Before any listener is bound or the port probed: a restricted Agent reaches
+    # localhost only where its web rules allow, the same decision as `curl localhost:<port>`.
+    if (refused := context.permissions.check_url(f"http://localhost:{port}/")) is not None:
+        raise PermissionDenied(replace(refused, target=f"localhost:{port}"))
     title = arguments.get("title") or f"localhost:{port}"
     path = arguments.get("path") or "/"
     try:

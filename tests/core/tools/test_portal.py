@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from core.chat import ReplySurface
+from core.permissions import BoundaryContext, PermissionBoundary, normalize_permission_rules
 from core.sessions import SessionAddress
 from core.tools.portal import PORTAL_TOOL_NAME, register_portal_tool
 from core.tools.portal_registry import MAX_PORTALS_PER_SESSION, PortalRegistry
@@ -38,9 +39,14 @@ class _Listeners:
         self.closed.append(portal_id)
 
 
-def _setup() -> tuple[ToolRegistry, PortalRegistry, _Listeners]:
+def _setup(probed: list[int] | None = None) -> tuple[ToolRegistry, PortalRegistry, _Listeners]:
     # Only port 5173 has an app listening.
-    portals = PortalRegistry(probe=lambda port: asyncio.sleep(0, result=port == 5173))
+    def probe(port: int) -> Any:
+        if probed is not None:
+            probed.append(port)
+        return asyncio.sleep(0, result=port == 5173)
+
+    portals = PortalRegistry(probe=probe)
     listeners = _Listeners()
     portals.attach(listeners)
     tools = ToolRegistry()
@@ -115,6 +121,49 @@ async def test_refused_calls_change_nothing_and_say_why(
     assert message in result["error"]["message"]
     assert result["error"]["message"].startswith("Nothing was")
     assert listeners.next_port == 41000
+
+
+@pytest.mark.asyncio
+async def test_a_restricted_agent_opens_only_ports_its_web_rules_reach(tmp_path: Path) -> None:
+    probed: list[int] = []
+    tools, portals, listeners = _setup(probed)
+    unrestricted, _context = await _call(tools, tmp_path, {"action": "open", "port": 5173})
+    [portal_id] = [portal.id for portal in portals.list(SessionAddress(None, "agent", "session"))]
+
+    def boundary(rules: dict[str, Any]) -> PermissionBoundary:
+        return PermissionBoundary.build(
+            normalize_permission_rules(rules),
+            BoundaryContext(workdir=tmp_path, home=tmp_path, data_dir=tmp_path / "data"),
+        )
+
+    listed_only = boundary({"web": "listed", "allow": ["Web(example.com)"]})
+    denied = boundary({"deny": ["Web(localhost)"]})
+    allowed = boundary({"web": "listed", "allow": ["Web(localhost)"]})
+    probed_before = list(probed)
+    refusals = [
+        (await _call(tools, tmp_path, {"action": "open", "port": port}, permissions=rules))[0]
+        for port, rules in ((3000, listed_only), (5173, listed_only), (3000, denied))
+    ]
+    probed_after_refusals = list(probed)
+    # A refusing boundary still lists and closes the Session's own Portals.
+    listed, _context = await _call(tools, tmp_path, {"action": "list"}, permissions=denied)
+    closed, _context = await _call(
+        tools, tmp_path, {"action": "close", "id": portal_id}, permissions=denied
+    )
+    reached, _context = await _call(
+        tools, tmp_path, {"action": "open", "port": 3000}, permissions=allowed
+    )
+
+    assert unrestricted["data"]["content"].startswith("Opened portal ")
+    for refused in refusals:
+        assert refused["error"]["code"] == "permission_denied"
+        assert refused["error"]["message"].startswith("portal was not run: the permission rules")
+    # Neither a listener nor a probe for a refused port.
+    assert probed_after_refusals == probed_before and len(listeners.opened) == 2
+    assert portal_id in listed["data"]["content"]
+    assert closed["data"]["content"].startswith(f"Closed portal {portal_id}.")
+    assert reached["data"]["content"].startswith("Opened portal ")
+    await portals.aclose()
 
 
 @pytest.mark.asyncio
