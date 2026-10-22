@@ -84,6 +84,11 @@ describe('rpc()', () => {
       { code: RPC_ERROR_HTTP, status: 500 },
     ],
     [
+      'an HTTP error with a null body',
+      jsonResponse(null, { ok: false, status: 503 }),
+      { code: RPC_ERROR_HTTP, status: 503 },
+    ],
+    [
       'a response without an ok flag',
       jsonResponse({ result: {} }),
       { code: RPC_ERROR_RESPONSE },
