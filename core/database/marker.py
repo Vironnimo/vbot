@@ -96,6 +96,8 @@ class MaintenanceOperation:
     operation: str
     started_at: str
     pid: int
+    #: The guard file cannot be parsed; ``operation`` is then ``"unknown"``.
+    damaged: bool = False
 
 
 def marker_path(data_dir: Path) -> Path:
@@ -340,8 +342,8 @@ def read_kernel_identity(path: Path) -> dict[str, str]:
 def read_maintenance(data_dir: Path) -> MaintenanceOperation | None:
     """Return the incomplete offline operation, or ``None``.
 
-    A guard that cannot be parsed still blocks: it is reported with operation
-    ``"unknown"``.
+    A guard that cannot be parsed still blocks: it is reported as ``damaged``,
+    with operation ``"unknown"``.
     """
     path = maintenance_guard_path(data_dir)
     try:
@@ -364,7 +366,7 @@ def read_maintenance(data_dir: Path) -> MaintenanceOperation | None:
         or not isinstance(payload.get("started_at"), str)
         or not isinstance(payload.get("pid"), int)
     ):
-        return MaintenanceOperation("", "unknown", "", 0)
+        return MaintenanceOperation("", "unknown", "", 0, damaged=True)
     return MaintenanceOperation(
         str(payload["operation_id"]),
         str(payload["operation"]),
@@ -376,13 +378,29 @@ def read_maintenance(data_dir: Path) -> MaintenanceOperation | None:
 def require_no_maintenance(data_dir: Path) -> None:
     """Refuse while an offline operation is incomplete."""
     operation = read_maintenance(data_dir)
-    if operation is not None:
-        raise DatabaseFormatError(
-            f"data maintenance is incomplete ({operation.operation}"
-            + (f", started {operation.started_at}" if operation.started_at else "")
-            + f"); resume or finish the offline operation first: "
-            f"{maintenance_guard_path(data_dir)}"
-        )
+    if operation is None:
+        return
+    if operation.damaged:
+        raise _damaged_guard_error(data_dir)
+    raise DatabaseFormatError(
+        f"data maintenance is incomplete ({operation.operation}"
+        + (f", started {operation.started_at}" if operation.started_at else "")
+        + f"); resume or finish the offline operation first: "
+        f"{maintenance_guard_path(data_dir)}"
+    )
+
+
+def _damaged_guard_error(data_dir: Path) -> DatabaseFormatError:
+    """Refuse a guard nothing can resume; deleting it by hand is the way out."""
+    return DatabaseFormatError(
+        "data maintenance is incomplete, but its guard is damaged and does not say which "
+        "offline operation it guards, so nothing can resume or finish it: "
+        f"{maintenance_guard_path(data_dir)}. Delete that file by hand to continue. The "
+        "operation it guarded, a data snapshot or configuration backup restore, may have "
+        "stopped halfway; if in doubt, restore a data snapshot (`vbot data-store snapshot "
+        "restore`) or a configuration backup (`vbot data-store config-backup restore`) "
+        "afterwards"
+    )
 
 
 def begin_maintenance(
@@ -408,6 +426,8 @@ def _begin_maintenance_locked(
         (resume and current.operation == operation)
         or (replaces is not None and current.operation == replaces)
     ):
+        if current.damaged:
+            raise _damaged_guard_error(data_dir)
         raise DatabaseFormatError(
             f"data maintenance is already incomplete ({current.operation}): "
             f"{maintenance_guard_path(data_dir)}"
