@@ -17,14 +17,38 @@ from core.settings._provider_settings import (
     CUSTOM_PROVIDER_FIELDS,
     CUSTOM_PROVIDER_MODEL_FIELDS,
 )
-from core.settings.settings import (
-    AGENT_DEFAULT_FIELDS,
-    LIBRARIAN_BOOLEAN_FIELDS,
-    LIBRARIAN_DAY_FIELDS,
+from core.settings._rules import (
+    APPEARANCE_FIELDS,
+    ARCHIVE_FIELDS,
+    COMPACTION_FIELDS,
+    DEBUG_FIELDS,
+    DEFAULTS_SECTIONS,
+    EXTENSIONS_FIELDS,
+    LIBRARIAN_FIELDS,
+    LOCAL_MODELS_FIELDS,
+    MODEL_TASK_BINDING_FIELDS,
     NOTIFICATION_FIELDS,
+    OPENROUTER_PROVIDER_FIELDS,
     OPENROUTER_ROUTING_FIELDS,
     OPENROUTER_ROUTING_POLICY_FIELDS,
+    RECALL_FIELDS,
+    REFLECTION_FIELDS,
+    SESSION_TITLE_FIELDS,
+    SPEECH_FIELDS,
+    TRANSCRIPTION_AUDIO_FIELDS,
+    WEB_SEARCH_FIELDS,
+    WEB_SEARCH_SEARXNG_FIELDS,
 )
+from core.settings._rules import (
+    MAX_TRACE_LIMIT as MAX_TRACE_LIMIT,
+)
+from core.settings._rules import (
+    REFLECTION_INTERVAL_FIELDS as REFLECTION_INTERVAL_FIELDS,
+)
+from core.settings._rules import (
+    SUBAGENT_SETTING_FIELDS as SUBAGENT_SETTING_FIELDS,
+)
+from core.settings.agent_defaults import AGENT_DEFAULT_FIELDS
 from core.tools.tool_loading import TOOL_LOADING_FIELDS
 
 SETTINGS_FORMAT_VERSION = 1
@@ -67,62 +91,7 @@ KNOWN_RAW_SETTINGS_KEYS = frozenset(
 )
 
 
-SUBAGENT_SETTING_FIELDS = (
-    "max_subagent_depth",
-    "max_active_subagents",
-    "max_active_subagents_total",
-)
-
-
-APPEARANCE_FIELDS = frozenset({"language", "chat_width", "chat_working_mode"})
-
-
-ARCHIVE_FIELDS = frozenset({"retention_days"})
-
-
-COMPACTION_FIELDS = frozenset({"enabled", "trigger", "strategy"})
-
-
-DEFAULTS_SECTIONS = frozenset({"agent"})
-
-
-RECALL_FIELDS = frozenset({"backend"})
-
-
-EXTENSIONS_FIELDS = frozenset({"disabled", "config"})
-
-
-WEB_SEARCH_FIELDS = frozenset({"provider", "default_count", "searxng"})
-
-
-WEB_SEARCH_SEARXNG_FIELDS = frozenset({"base_url"})
-
-
-MODEL_TASK_BINDING_FIELDS = frozenset({"target", "options"})
-
-
-DEBUG_FIELDS = frozenset({"enabled", "trace_limit"})
-
-
-SESSION_TITLE_FIELDS = frozenset({"enabled", "model"})
-
-
 NOTIFICATION_FIELD_SET = frozenset(NOTIFICATION_FIELDS)
-
-
-SPEECH_FIELDS = frozenset({"transcription_audio"})
-
-
-TRANSCRIPTION_AUDIO_FIELDS = frozenset({"profile", "format", "sample_rate_hz"})
-
-
-MAX_TRACE_LIMIT = 500
-
-
-REFLECTION_FIELDS = frozenset({"enabled", "memory_turn_interval", "skill_model_step_interval"})
-
-
-LIBRARIAN_FIELDS = frozenset({*LIBRARIAN_BOOLEAN_FIELDS, *LIBRARIAN_DAY_FIELDS})
 
 
 # ``librarian.model`` of an earlier vBot: loading ignores it, validation explains it.
@@ -132,16 +101,7 @@ _RETIRED_LIBRARIAN_MODEL_WARNING = (
 )
 
 
-LOCAL_MODELS_FIELDS = frozenset({"context_windows"})
-
-
 PROVIDERS_FIELDS = frozenset({"connections", "custom", "openrouter"})
-
-
-OPENROUTER_PROVIDER_FIELDS = frozenset({"routing"})
-
-
-REFLECTION_INTERVAL_FIELDS = ("memory_turn_interval", "skill_model_step_interval")
 
 
 COMPACTION_TRIGGER_FIELDS = frozenset({"type", "threshold", "tokens"})

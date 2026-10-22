@@ -27,6 +27,18 @@ from core.settings._path_types import (
     DynamicSegment,
     SettingDefinition,
 )
+from core.settings._rules import (
+    DEFAULT_APPEARANCE_CHAT_WIDTH,
+    DEFAULT_APPEARANCE_CHAT_WORKING_MODE,
+    MAX_ARCHIVE_RETENTION_DAYS,
+    MAX_LIBRARIAN_DAYS,
+    MAX_TRACE_LIMIT,
+    MIN_ARCHIVE_RETENTION_DAYS,
+    OPENROUTER_ROUTING_MODES,
+    SUPPORTED_APPEARANCE_CHAT_WIDTHS,
+    SUPPORTED_APPEARANCE_CHAT_WORKING_MODES,
+    default_timezone_name,
+)
 from core.settings.agent_defaults import agent_default_catalog
 from core.settings.normalizers import (
     ARCHIVE_SETTING_DEFAULTS,
@@ -39,17 +51,6 @@ from core.settings.normalizers import (
     NOTIFICATION_SETTING_DEFAULTS,
     REFLECTION_SETTING_DEFAULTS,
     SUPPORTED_APPEARANCE_LANGUAGES,
-)
-from core.settings.settings import (
-    DEFAULT_APPEARANCE_CHAT_WIDTH,
-    DEFAULT_APPEARANCE_CHAT_WORKING_MODE,
-    MAX_ARCHIVE_RETENTION_DAYS,
-    MAX_LIBRARIAN_DAYS,
-    MIN_ARCHIVE_RETENTION_DAYS,
-    OPENROUTER_ROUTING_MODES,
-    SUPPORTED_APPEARANCE_CHAT_WIDTHS,
-    SUPPORTED_APPEARANCE_CHAT_WORKING_MODES,
-    default_timezone_name,
 )
 from core.utils.config import DEFAULT_PORT
 
@@ -412,7 +413,7 @@ _DEFINITIONS: tuple[SettingDefinition, ...] = (
         "Maximum number of retained debug traces.",
         default=DEBUG_SETTING_DEFAULTS["trace_limit"],
         minimum=1,
-        maximum=500,
+        maximum=MAX_TRACE_LIMIT,
     ),
     _static(
         "session_titles.enabled",

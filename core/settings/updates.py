@@ -1,4 +1,8 @@
-"""Pure in-memory Settings merges used inside StorageManager transactions."""
+"""In-memory Settings section merges and effective-value conflict detection.
+
+Storage owns the transaction and persistence. These rules keep its tolerant
+normalization contract distinct from strict public update parsing.
+"""
 
 from __future__ import annotations
 
@@ -7,11 +11,21 @@ from copy import deepcopy
 from typing import Any
 
 from core.model_tasks import SUPPORTED_TASK_TYPES, task_model_targets_equal
-from core.settings import (
+from core.settings._rules import (
+    APPEARANCE_FIELDS,
+    ARCHIVE_FIELDS,
+    DEBUG_FIELDS,
+    LIBRARIAN_FIELDS,
+    LOCAL_MODELS_FIELDS,
+    MODEL_TASK_BINDING_FIELDS,
+    RECALL_FIELDS,
+    REFLECTION_FIELDS,
+    WEB_SEARCH_FIELDS,
     SettingsValidationError,
+    effective_timezone_name,
+    validate_timezone_name,
 )
 from core.settings.normalizers import (
-    LIBRARIAN_SETTING_DEFAULTS,
     coerce_defaults_section,
     coerce_defaults_update,
     coerce_skills_update,
@@ -40,8 +54,7 @@ from core.settings.normalizers import (
     validate_supported_agent_default_fields,
 )
 from core.settings.paths import SUBAGENT_SETTING_DEFAULTS, build_effective_settings
-from core.settings.settings import effective_timezone_name, validate_timezone_name
-from core.storage.errors import StorageError
+from core.utils.errors import StorageError
 
 _MISSING = object()
 
@@ -55,7 +68,7 @@ def apply_appearance_settings(
     if not isinstance(appearance, Mapping):
         raise StorageError("Appearance settings must be a mapping")
 
-    unsupported_fields = sorted(set(appearance) - {"language", "chat_width", "chat_working_mode"})
+    unsupported_fields = sorted(set(appearance) - APPEARANCE_FIELDS)
     if unsupported_fields:
         raise StorageError(f"Unsupported appearance settings: {', '.join(unsupported_fields)}")
 
@@ -138,7 +151,7 @@ def apply_local_models_settings(
     if not isinstance(local_models, Mapping):
         raise StorageError("Local-models settings must be a mapping")
 
-    unsupported_fields = sorted(set(local_models) - {"context_windows"})
+    unsupported_fields = sorted(set(local_models) - LOCAL_MODELS_FIELDS)
     if unsupported_fields:
         raise StorageError(f"Unsupported local_models settings: {', '.join(unsupported_fields)}")
 
@@ -194,9 +207,7 @@ def apply_reflection_settings(
     if not isinstance(reflection, Mapping):
         raise StorageError("Reflection settings must be a mapping")
 
-    unsupported_fields = sorted(
-        set(reflection) - {"enabled", "memory_turn_interval", "skill_model_step_interval"}
-    )
+    unsupported_fields = sorted(set(reflection) - REFLECTION_FIELDS)
     if unsupported_fields:
         raise StorageError(f"Unsupported reflection settings: {', '.join(unsupported_fields)}")
 
@@ -218,8 +229,7 @@ def apply_librarian_settings(
 
     if not isinstance(librarian, Mapping):
         raise StorageError("Librarian settings must be a mapping")
-    supported = set(LIBRARIAN_SETTING_DEFAULTS)
-    unsupported_fields = sorted(set(librarian) - supported)
+    unsupported_fields = sorted(set(librarian) - LIBRARIAN_FIELDS)
     if unsupported_fields:
         raise StorageError(f"Unsupported librarian settings: {', '.join(unsupported_fields)}")
 
@@ -275,7 +285,7 @@ def apply_recall_settings(
     if not isinstance(recall, Mapping):
         raise StorageError("Recall settings must be a mapping")
 
-    unsupported_fields = sorted(set(recall) - {"backend"})
+    unsupported_fields = sorted(set(recall) - RECALL_FIELDS)
     if unsupported_fields:
         raise StorageError(f"Unsupported recall settings: {', '.join(unsupported_fields)}")
 
@@ -293,7 +303,7 @@ def apply_debug_settings(
     if not isinstance(debug, Mapping):
         raise StorageError("Debug settings must be a mapping")
 
-    unsupported_fields = sorted(set(debug) - {"enabled", "trace_limit"})
+    unsupported_fields = sorted(set(debug) - DEBUG_FIELDS)
     if unsupported_fields:
         raise StorageError(f"Unsupported debug settings: {', '.join(unsupported_fields)}")
 
@@ -316,7 +326,7 @@ def apply_archive_settings(
     if not isinstance(archive, Mapping):
         raise StorageError("Archive settings must be a mapping")
 
-    unsupported_fields = sorted(set(archive) - {"retention_days"})
+    unsupported_fields = sorted(set(archive) - ARCHIVE_FIELDS)
     if unsupported_fields:
         raise StorageError(f"Unsupported archive settings: {', '.join(unsupported_fields)}")
 
@@ -382,7 +392,7 @@ def apply_web_search_settings(
     if not isinstance(web_search, Mapping):
         raise StorageError("Web search settings must be a mapping")
 
-    unsupported_fields = sorted(set(web_search) - {"provider", "default_count", "searxng"})
+    unsupported_fields = sorted(set(web_search) - WEB_SEARCH_FIELDS)
     if unsupported_fields:
         raise StorageError(f"Unsupported web_search settings: {', '.join(unsupported_fields)}")
 
@@ -421,7 +431,7 @@ def apply_model_task_settings(
         if not isinstance(raw_binding, Mapping):
             raise StorageError(f"Model task binding {task_type} must be a mapping")
 
-        unsupported_fields = sorted(set(raw_binding) - {"target", "options"})
+        unsupported_fields = sorted(set(raw_binding) - MODEL_TASK_BINDING_FIELDS)
         if unsupported_fields:
             raise StorageError(
                 f"Unsupported model task settings for {task_type}: {', '.join(unsupported_fields)}"
@@ -547,7 +557,7 @@ _SECTION_APPLIERS: dict[str, Callable[[dict[str, Any], Any], Any]] = {
 def apply_settings_update(
     settings: dict[str, Any], settings_update: Mapping[str, Any]
 ) -> dict[str, Any]:
-    """Merge parsed public Settings sections into ``settings``; return each section's result."""
+    """Normalize and merge Settings sections into ``settings``; return each section's result."""
 
     unsupported_sections = sorted(set(settings_update) - set(_SECTION_APPLIERS))
     if unsupported_sections:

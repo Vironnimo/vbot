@@ -37,7 +37,7 @@ Sub-Agent limits are flat raw keys exposed as `subagents.*` paths: `max_subagent
 
 ## `base` plumbing
 
-The `base` contract itself is in `settings.md` -> Public surface. `settings.update` parses it with `parse_settings_update_base`; for `task_model.update` it is `{"model_tasks": {...}}`, where a binding with an empty target means unbound. Inside the write transaction (`StorageManager.update_settings_sections`, which `update_model_task_settings` uses) `stale_setting_paths` (`core/storage/_settings_updates.py`) compares effective values (`build_effective_settings`) leaf by leaf. `task_model.update` validates each binding that differs from the stored one, so a caller sends only the bindings it changed. Tests: `test_section_update_with_base_refuses_only_changes_over_newer_values`, `test_update_based_on_stale_values_is_refused_without_effects`.
+The `base` contract itself is in `settings.md` -> Public surface. `settings.update` parses it with `parse_settings_update_base`; for `task_model.update` it is `{"model_tasks": {...}}`, where a binding with an empty target means unbound. Inside the write transaction (`StorageManager.update_settings_sections`, which `update_model_task_settings` uses) `stale_setting_paths` (`core/settings/updates.py`) compares effective values (`build_effective_settings`) leaf by leaf. `task_model.update` validates each binding that differs from the stored one, so a caller sends only the bindings it changed. Tests: `test_section_update_with_base_refuses_only_changes_over_newer_values`, `test_update_based_on_stale_values_is_refused_without_effects`.
 
 ## Installer seed of `defaults.agent`
 

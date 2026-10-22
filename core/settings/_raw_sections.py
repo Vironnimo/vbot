@@ -562,7 +562,11 @@ def _validate_debug(diagnostics: list[JsonDiagnostic], value: Any) -> None:
     if "trace_limit" in value:
         trace_limit = value["trace_limit"]
         if isinstance(trace_limit, bool) or not isinstance(trace_limit, int):
-            _error(diagnostics, "$.debug.trace_limit", "must be a positive integer (1-500)")
+            _error(
+                diagnostics,
+                "$.debug.trace_limit",
+                f"must be a positive integer (1-{MAX_TRACE_LIMIT})",
+            )
         elif trace_limit <= 0:
             _error(diagnostics, "$.debug.trace_limit", "must be at least 1")
         elif trace_limit > MAX_TRACE_LIMIT:
