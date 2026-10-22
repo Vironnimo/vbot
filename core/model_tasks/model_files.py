@@ -110,7 +110,14 @@ def fetch_model_files(
             missing.append(item)
     if not missing:
         return
-    needed = sum(item.size for item in missing) + _SPACE_MARGIN_BYTES
+    needed = _SPACE_MARGIN_BYTES
+    for item in missing:
+        target = directory / item.path
+        partial_path = target.with_name(target.name + ".part")
+        present = partial_path.stat().st_size if partial_path.is_file() else 0
+        # Resuming appends only the remaining bytes. If the server ignores Range,
+        # truncating the partial file releases its existing bytes first.
+        needed += item.size - present if 0 <= present <= item.size else item.size
     if shutil.disk_usage(directory).free < needed:
         raise ModelFilesError("insufficient_space")
     with open_client() as client:
