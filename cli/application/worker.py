@@ -25,6 +25,7 @@ import psutil  # type: ignore[import-untyped]
 
 from cli.application import processes
 from cli.application.packages import (
+    OlderReleaseError,
     download_release,
     require_access_compatible_release,
     stage_package,
@@ -411,7 +412,15 @@ def execute(install: Installation, operation: Operation) -> None:
         )
         candidate = stage_package(install, package, local=operation.local_package)
     else:
-        archive = download_release(install, operation.id, progress=progress)
+        try:
+            archive = download_release(install, operation.id, progress=progress)
+        except OlderReleaseError as exc:
+            # An expected refusal before anything changed, not a worker failure.
+            operation.error = str(exc)
+            operation.transition(
+                install, "failed", "The update channel offers no newer version; nothing changed"
+            )
+            return
         if archive is None:
             candidate = install.version().name
         else:
