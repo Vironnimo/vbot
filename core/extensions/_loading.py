@@ -352,11 +352,10 @@ def _run_coroutine_to_completion(coro: Any, timeout_seconds: float | None = None
 def _load_manifest(directory: Path) -> ExtensionManifest | None:
     """Parse an optional ``extension.json``; raise ``_ManifestError`` if malformed."""
     manifest_path = directory / _MANIFEST_FILENAME
-    if not manifest_path.is_file():
-        return None
-
     try:
         raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
     except UnicodeError as exc:
         raise _ManifestError(f"{_MANIFEST_FILENAME} is not valid UTF-8: {exc}") from exc
     except json.JSONDecodeError as exc:
