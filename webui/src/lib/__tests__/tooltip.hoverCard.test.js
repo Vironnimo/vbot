@@ -6,6 +6,7 @@ import {
   FLOATING_HOVER_CLOSE_DELAY_MS,
   HOVER_CARD_SHOW_DELAY_MS,
   INTENTIONAL_HOVER_SHOW_DELAY_MS,
+  createFloatingLayer,
   floatingHoverCard,
 } from '../tooltip.js';
 import {
@@ -153,6 +154,37 @@ describe('floatingHoverCard action', () => {
     );
     window.dispatchEvent(pointerAt('pointermove', 200, 290));
 
+    expect(card.dataset.floatingOpen).toBe('false');
+  });
+
+  it('stays open while the pointer rests on a layer anchored inside it', () => {
+    // An info popover of a "?" in the card, portaled beside it.
+    const dot = button('?', card);
+    const popover = document.createElement('div');
+    document.body.appendChild(popover);
+    const popoverLayer = createFloatingLayer({
+      kind: 'popover',
+      anchor: () => dot,
+      element: () => popover,
+      onDismiss: () => popoverLayer.hide(),
+    });
+    placeAt(anchor, { left: 100, top: 20, width: 80, height: 24 });
+    action = floatingHoverCard(card, { placement: 'bottom' });
+    open();
+    placeAt(card, { left: 60, top: 50, width: 300, height: 400 });
+    placeAt(popover, { left: 120, top: 300, width: 220, height: 90 });
+    popoverLayer.show();
+
+    // From the "?" across the card onto the popover, away from the anchor.
+    card.dispatchEvent(
+      pointerAt('pointerleave', 200, 390, { relatedTarget: popover }),
+    );
+    popover.dispatchEvent(pointerAt('pointermove', 210, 360));
+    vi.advanceTimersByTime(FLOATING_HOVER_CLOSE_DELAY_MS * 4);
+    expect(card.dataset.floatingOpen).toBe('true');
+
+    // Moving on from the popover to elsewhere closes the card and the popover.
+    document.body.dispatchEvent(pointerAt('pointermove', 600, 600));
     expect(card.dataset.floatingOpen).toBe('false');
   });
 
