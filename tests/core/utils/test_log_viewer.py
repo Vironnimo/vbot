@@ -186,6 +186,26 @@ async def test_list_files_returns_newest_first_with_default_selection(tmp_path: 
         "default_file": "2026-05-11",
     }
 
+    application = tmp_path / "application-logs"
+    application.mkdir()
+    for name in ("2026-05-12", "2026-05-11", "2026-05-08", "server-startup.log"):
+        (application / name).write_text("", encoding="utf-8")
+    combined = LogViewer(tmp_path, additional_directories={"application": application})
+    assert await combined.list_files() == {
+        "files": [
+            "application/2026-05-12",
+            "2026-05-11",
+            "application/2026-05-11",
+            "2026-05-10",
+            "2026-05-09",
+            "application/2026-05-08",
+            "application/server-startup.log",
+            "server-crash.log",
+            "server-crash.log.1",
+        ],
+        "default_file": "application/2026-05-12",
+    }
+
 
 @pytest.mark.asyncio
 async def test_read_file_returns_structured_entries(tmp_path: Path) -> None:

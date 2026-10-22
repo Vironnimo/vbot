@@ -511,9 +511,13 @@ class LogReader:
             self._directories[namespace] = directory
 
     def list_files(self) -> JsonObject:
-        names = list(self._iter_log_files())
-        daily = sorted((name for name in names if _DAILY_FILE_PREFIX.match(name)), reverse=True)
-        other = sorted(name for name in names if not _DAILY_FILE_PREFIX.match(name))
+        daily: list[str] = []
+        other: list[str] = []
+        for name in self._iter_log_files():
+            group = daily if _DAILY_FILE_PREFIX.match(name.rpartition("/")[2]) else other
+            group.append(name)
+        daily.sort(key=lambda name: name.rpartition("/")[2], reverse=True)
+        other.sort()
         files = daily + other
         return {"files": files, "default_file": files[0] if files else None}
 
