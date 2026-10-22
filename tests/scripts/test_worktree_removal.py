@@ -445,6 +445,35 @@ def test_remove_directory_tree_clears_readonly_files(tmp_path, monkeypatch):
     outside.chmod(stat.S_IRWXU)
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows process cleanup uses PowerShell")
+def test_process_cleanup_matches_only_literal_worktree_paths(monkeypatch):
+    module = _worktree_manager()
+    worktree = Path(r"C:\dev\[ab]vbot's\.worktrees\audit")
+    owned = [str(worktree / "tool.exe"), str(worktree / "other.exe").swapcase()]
+    paths = [
+        *owned,
+        str(worktree / "unrelated.exe").replace("[ab]", "a"),
+        str(worktree) + r"-other\tool.exe",
+    ]
+    records = json.dumps([{"Path": path, "Id": index} for index, path in enumerate(paths)])
+    # Exercise the generated PowerShell predicate without enumerating or stopping
+    # any real process. The subprocess is the Windows-only cleanup interpreter.
+    setup = (
+        "function Get-Process { foreach ($record in (ConvertFrom-Json '"
+        + records.replace("'", "''")
+        + "')) { $record } }; "
+        "function Stop-Process { param($Id, [switch]$Force, $ErrorAction) }; "
+    )
+    run = subprocess.run
+
+    def fake_processes(command, **kwargs):
+        return run([*command[:-1], setup + command[-1]], **kwargs)
+
+    monkeypatch.setattr(worktree_removal.subprocess, "run", fake_processes)
+
+    assert module.removal._terminate_worktree_processes(worktree) == owned
+
+
 def test_sweep_trash_directories_removes_only_trash_dirs(tmp_path):
     module = _worktree_manager()
 
@@ -534,8 +563,9 @@ def test_cmd_delete_moves_stuck_worktree_to_trash(tmp_path, monkeypatch, capsys)
     assert "status: deleted" in captured.out
 
 
-def test_cmd_delete_hands_a_held_empty_directory_to_the_background_remover(
-    tmp_path, monkeypatch, capsys
+@pytest.mark.parametrize("remaining_file", [None, "held-by-editor.node"])
+def test_cmd_delete_hands_only_a_held_empty_directory_to_the_background_remover(
+    tmp_path, monkeypatch, capsys, remaining_file
 ):
     """The shell that ran the delete holds its start directory until the command ends."""
     module = _worktree_manager()
@@ -560,6 +590,8 @@ def test_cmd_delete_hands_a_held_empty_directory_to_the_background_remover(
     def empty_but_keep_directory(path):
         for child in path.iterdir():
             child.unlink()
+        if remaining_file:
+            (path / remaining_file).write_text("still held", encoding="utf-8")
         return "the directory is in use"
 
     handed_over = []
@@ -577,6 +609,12 @@ def test_cmd_delete_hands_a_held_empty_directory_to_the_background_remover(
     result = module.removal.delete(argparse.Namespace(name=name, force=False))
 
     captured = capsys.readouterr()
+    if remaining_file:
+        assert result == 1
+        assert handed_over == []
+        assert ["git", "branch", "-d", name] not in commands
+        assert (worktree_path / remaining_file).read_text(encoding="utf-8") == "still held"
+        return
     assert result == 0
     assert handed_over == [name]
     assert ["git", "branch", "-d", name] in commands
@@ -584,7 +622,10 @@ def test_cmd_delete_hands_a_held_empty_directory_to_the_background_remover(
     assert "background process removes it" in captured.out
 
 
-def test_cmd_remove_released_waits_for_release_and_never_removes_a_checkout(tmp_path, monkeypatch):
+@pytest.mark.parametrize("new_file", [".git", "new-work.txt"])
+def test_cmd_remove_released_waits_for_release_and_preserves_new_contents(
+    tmp_path, monkeypatch, new_file
+):
     module = _worktree_manager()
     monkeypatch.setattr(module.context, "worktrees_dir", tmp_path / ".worktrees")
     monkeypatch.setattr(worktree_removal.time, "sleep", lambda _seconds: None)
@@ -592,24 +633,26 @@ def test_cmd_remove_released_waits_for_release_and_never_removes_a_checkout(tmp_
     released = module.context.worktrees_dir / "released"
     released.mkdir(parents=True)
     attempts = []
+    rmdir = Path.rmdir
 
     def held_twice(path):
         attempts.append(path)
         if len(attempts) < 3:
-            return "the directory is in use"
-        path.rmdir()
-        return None
+            raise PermissionError("the directory is in use")
+        rmdir(path)
 
-    monkeypatch.setattr(module.removal, "remove_directory_tree", held_twice)
+    monkeypatch.setattr(worktree_removal.Path, "rmdir", held_twice)
 
     assert module.removal.remove_released(argparse.Namespace(name="released")) == 0
     assert not released.exists()
     assert len(attempts) == 3
 
-    recreated = _make_checkout(module.context.worktrees_dir / "recreated")
+    recreated = module.context.worktrees_dir / "recreated"
+    recreated.mkdir()
+    (recreated / new_file).write_text("new content", encoding="utf-8")
 
     assert module.removal.remove_released(argparse.Namespace(name="recreated")) == 1
-    assert (recreated / ".git").exists()
+    assert (recreated / new_file).read_text(encoding="utf-8") == "new content"
     assert len(attempts) == 3
 
 
