@@ -538,3 +538,16 @@
   gap: 18px;
   margin-top: 12px;
 }
+
+/* A loading line for a call that loads on demand, and the note under a text
+   the server shortened. */
+.tool-event-body .teb-row.tool-raw-call__status,
+.tool-event-body .teb-row.tool-detail-truncated {
+  margin: 0;
+  color: var(--text-lo);
+  font-size: var(--fs-label-sm);
+}
+
+.tool-event-body .teb-row.tool-detail-truncated {
+  margin-top: -12px;
+}

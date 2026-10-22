@@ -89,7 +89,7 @@ function backgroundCommandTool(overrides = {}) {
     id: 'bash-background',
     name: 'bash',
     status: 'success',
-    resultEvent: { type: 'tool_call_result' },
+    finished: true,
     arguments: { command: 'npm run dev' },
     result: {
       ok: true,

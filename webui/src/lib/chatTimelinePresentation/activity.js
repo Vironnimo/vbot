@@ -683,12 +683,12 @@ function shouldRenderToolCall(tool) {
   if (isSubAgentTargetTool(tool)) {
     return Boolean(
       subAgentNavigationTarget(tool) ||
-      tool.resultEvent ||
+      tool.finished ||
       ['failed', 'cancelled', 'interrupted'].includes(toolStatus(tool)),
     );
   }
   return Boolean(
-    tool.startedEvent || tool.resultEvent || tool.output || tool.streaming,
+    tool.started || tool.finished || tool.output || tool.streaming,
   );
 }
 

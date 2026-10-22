@@ -9,6 +9,9 @@
   // Output (the command's newest output lines) takes the place of an Output
   // block, or follows the blocks while the call runs. Any other Tool shows
   // Args, live Output and its Result.
+  //
+  // A row may carry only previews of a long call (`tool.rawTruncated`); the
+  // whole call loads through `loadRaw` once a section showing it opens.
   import { toolDetailBlocks, toolDetailMedia } from '$lib/chatToolDetails.js';
   import { t } from '$lib/i18n.js';
   import CollapseRail from './CollapseRail.svelte';
@@ -35,6 +38,9 @@
     // The Tool row's stable key; the raw-call disclosure keeps its state
     // under it while the row is unmounted.
     viewKey = '',
+    // Reads the whole call, () => { arguments, result }, or null when `args`
+    // and `result` are complete.
+    loadRaw = null,
   } = $props();
 
   const viewState = timelineViewState();
@@ -75,12 +81,63 @@
       ),
   );
   let rawKey = $derived(`${viewKey}:raw-call`);
+  // Blocks or media take the place of the call, which waits behind the
+  // raw-call disclosure; otherwise the details show it directly.
+  let rawDisclosure = $derived(
+    Boolean(blocks) && (blocks.length > 0 || media.length > 0),
+  );
+  let callShown = $derived(
+    rawDisclosure ? viewState.isOpen(rawKey) : open || revealed,
+  );
+
+  // The whole call as read while the row was in one state; a call that
+  // finishes after the read loads again to show its result.
+  let loaded = $state(null);
+  let loading = $state(false);
+  let loadError = $state('');
+  let loadedCall = $derived(
+    loaded && loaded.finished === Boolean(tool?.finished) ? loaded.call : null,
+  );
+  let awaitingCall = $derived(Boolean(loadRaw) && !loadedCall);
+  let shownArgs = $derived(loadedCall ? loadedCall.arguments : args);
+  let shownResult = $derived(loadedCall ? loadedCall.result : result);
+
+  async function loadCall() {
+    if (!loadRaw || loadedCall || loading) return;
+    const finished = Boolean(tool?.finished);
+    loading = true;
+    loadError = '';
+    try {
+      loaded = { finished, call: await loadRaw() };
+    } catch (error) {
+      loadError = error instanceof Error ? error.message : String(error);
+    } finally {
+      loading = false;
+    }
+  }
+
+  $effect(() => {
+    if (callShown && awaitingCall) void loadCall();
+  });
 </script>
+
+{#snippet callStatus()}
+  {#if loadError}
+    <ToolNotice
+      notice={{
+        level: 'error',
+        text: t('chat.toolRawUnavailable', { error: loadError }),
+      }}
+    />
+  {:else}
+    <p class="teb-row tool-raw-call__status">{t('chat.toolRawLoading')}</p>
+  {/if}
+{/snippet}
 
 {#snippet argsSection(mode)}
   <ToolDetailSection
     label={t('chat.toolArgs')}
-    value={args}
+    value={shownArgs}
     {mode}
     {toolName}
     {tool}
@@ -101,7 +158,7 @@
   {#if showResult}
     <ToolDetailSection
       label={t('chat.toolResultLabel')}
-      value={result}
+      value={shownResult}
       isError={resultFailed}
       {mode}
       {toolName}
@@ -129,6 +186,11 @@
               expanded={viewState.isOpen(clampKey)}
               onExpandedChange={(next) => viewState.setOpen(clampKey, next)}
             />
+            {#if block.truncated}
+              <p class="teb-row tool-detail-truncated">
+                {t('chat.toolDetailTruncated')}
+              </p>
+            {/if}
           {/if}
         {:else if block.type === 'file_changes'}
           <ToolDiff changes={block.files} />
@@ -143,7 +205,7 @@
       {#if !streamsReplaceOutput}
         {@render outputSections()}
       {/if}
-      {#if blocks.length > 0 || media.length > 0}
+      {#if rawDisclosure}
         <details
           class="tool-raw-call"
           open={viewState.isOpen(rawKey)}
@@ -155,15 +217,24 @@
           </summary>
           {#if viewState.isOpen(rawKey)}
             <div class="tool-raw-call__body">
-              {@render argsSection('raw')}
-              {@render resultSection('raw-result')}
+              {#if awaitingCall}
+                {@render callStatus()}
+              {:else}
+                {@render argsSection('raw')}
+                {@render resultSection('raw-result')}
+              {/if}
             </div>
           {/if}
         </details>
+      {:else if awaitingCall}
+        {@render callStatus()}
       {:else}
         {@render argsSection('raw')}
         {@render resultSection()}
       {/if}
+    {:else if awaitingCall}
+      {@render callStatus()}
+      {@render outputSections()}
     {:else}
       {@render argsSection('arguments')}
       {@render outputSections()}

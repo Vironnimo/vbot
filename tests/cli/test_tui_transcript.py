@@ -288,6 +288,71 @@ async def test_earlier_run_steps_load_once_their_gap_comes_into_view() -> None:
 
 
 @pytest.mark.asyncio
+async def test_expanding_a_previewed_tool_row_reads_its_whole_call() -> None:
+    whole = "line\n" * 40
+
+    class RawServer(Server):
+        @override
+        async def rpc(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+            if method == "chat.tool_call":
+                self.calls.append((method, dict(params or {})))
+                return {
+                    "run_id": "run",
+                    "tool_id": "tool",
+                    "history_generation": "one",
+                    "arguments": {"path": "a.txt"},
+                    "result": {"ok": True, "data": {"content": whole}},
+                }
+            return await super().rpc(method, params)
+
+    server = RawServer()
+    server.items = [
+        {
+            "id": "run",
+            "type": "assistant_run",
+            "run_id": "run",
+            "status": "completed",
+            "items": [
+                {
+                    "id": "tool",
+                    "type": "tool_call",
+                    "name": "read",
+                    "status": "success",
+                    "arguments": {"path": "a.txt"},
+                    "result": {"ok": True, "data": {"content": "line…"}},
+                    "rawTruncated": True,
+                }
+            ],
+        }
+    ]
+    app = ConversationApp(server, agent_id="main", session_id="session-one")
+    async with app.run_test(size=(100, 35)) as pilot:
+        for _ in range(10):
+            await pilot.pause()
+            if app.transcript.displays("tool"):
+                break
+        assert not [call for call in server.calls if call[0] == "chat.tool_call"]
+        app.transcript.toggle("tool")
+        for _ in range(10):
+            await pilot.pause()
+            tool = app.conversation.items[0]["items"][0] if app.conversation else {}
+            if tool.get("rawTruncated") is False:
+                break
+        reads = [params for method, params in server.calls if method == "chat.tool_call"]
+        assert reads == [
+            {
+                "agent_id": "main",
+                "session_id": "session-one",
+                "run_id": "run",
+                "tool_id": "tool",
+                "history_generation": "one",
+            }
+        ]
+        assert app.conversation is not None
+        assert app.conversation.items[0]["items"][0]["result"]["data"]["content"] == whole
+
+
+@pytest.mark.asyncio
 async def test_double_and_triple_click_select_and_copy_a_word_and_its_paragraph() -> None:
     server = Server()
     server.items = [

@@ -358,6 +358,20 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
         history_generation: historyGeneration,
         ...(limit === undefined ? {} : { limit }),
       }),
+    // The complete arguments and result of a Tool row of a participant's Run,
+    // which the row only previews (`rawTruncated`).
+    readToolCall: (
+      groupId,
+      participantId,
+      { runId, toolId, historyGeneration },
+    ) =>
+      call('history.tool_call', {
+        group_id: groupId,
+        participant_id: participantId,
+        run_id: runId,
+        tool_id: toolId,
+        history_generation: historyGeneration,
+      }),
     openLink: (url) => call('link.open', { url }),
     openMedia: (url) => call('media.open', { url }),
     // The route becomes part of the app's Back/Forward history: `pushRoute`

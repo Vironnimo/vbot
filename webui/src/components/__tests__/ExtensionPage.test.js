@@ -12,6 +12,7 @@ vi.mock(
 const operation = vi.fn();
 const history = vi.fn();
 const runChildren = vi.fn();
+const toolCall = vi.fn();
 vi.mock('$lib/api.js', () => ({
   isTerminalRunEvent,
   invokeExtensionPageOperation: (...args) => operation(...args),
@@ -19,6 +20,7 @@ vi.mock('$lib/api.js', () => ({
   cancelExtensionPageToolCall: vi.fn().mockResolvedValue({ ok: true }),
   readExtensionPageHistory: (...args) => history(...args),
   readExtensionPageTimelineChildren: (...args) => runChildren(...args),
+  readExtensionPageToolCall: (...args) => toolCall(...args),
   listServerDirectory: vi.fn(),
   subscribeRunEvents: vi.fn(),
 }));
@@ -643,11 +645,28 @@ describe('ExtensionPage file links', () => {
         limit: 100,
       },
     );
-    for (const id of ['newest', 'oldest', 'earlier'])
+    // So does the whole call of a Tool row.
+    toolCall.mockResolvedValueOnce({ file_urls: ['/api/files/raw.signature'] });
+    page.call('raw', 'history.tool_call', {
+      group_id: 'group-a',
+      participant_id: 'participant-a',
+      run_id: 'run-a',
+      tool_id: 'tool-a',
+      history_generation: 'generation',
+    });
+    await page.replied('raw');
+    expect(toolCall).toHaveBeenCalledExactlyOnceWith(
+      'alpha',
+      pageRef,
+      'group-a',
+      'participant-a',
+      { runId: 'run-a', toolId: 'tool-a', historyGeneration: 'generation' },
+    );
+    for (const id of ['newest', 'oldest', 'earlier', 'raw'])
       page.call(`open-${id}`, 'link.open', {
         url: `/api/files/${id}.signature`,
       });
-    expect(open).toHaveBeenCalledTimes(3);
+    expect(open).toHaveBeenCalledTimes(4);
 
     let finishStale;
     history.mockImplementationOnce(
@@ -664,12 +683,12 @@ describe('ExtensionPage file links', () => {
     await page.replied('current');
     finishStale({ file_urls: ['/api/files/stale.signature'] });
     await page.replied('stale');
-    for (const id of ['newest', 'oldest', 'earlier', 'stale', 'current'])
+    for (const id of ['newest', 'oldest', 'earlier', 'raw', 'stale', 'current'])
       page.call(`after-switch-${id}`, 'link.open', {
         url: `/api/files/${id}.signature`,
       });
     await page.replied('after-switch-current');
-    expect(open).toHaveBeenCalledTimes(4);
+    expect(open).toHaveBeenCalledTimes(5);
     expect(open).toHaveBeenLastCalledWith(
       window.location.origin + '/api/files/current.signature',
       ...OPEN_OPTIONS,
@@ -678,6 +697,7 @@ describe('ExtensionPage file links', () => {
       'after-switch-newest',
       'after-switch-oldest',
       'after-switch-earlier',
+      'after-switch-raw',
       'after-switch-stale',
     ]);
   });

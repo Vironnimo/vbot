@@ -76,6 +76,8 @@
     loadingHistory = false,
     onLoadOlder = async () => false,
     onLoadRunHistory = async () => false,
+    // Reads the complete arguments and result of a Tool row: { runId, toolId }.
+    onLoadToolCall = null,
     // Reports the scroller's real scrollbar width (0 with overlay
     // scrollbars) so ChatView can keep the floating composer stack clear of
     // the scrollbar column.
@@ -641,6 +643,7 @@
         onSubAgentContextMenu={otherArea ? openSubAgentMenu : null}
         {onCancelToolCall}
         {onBackgroundToolCall}
+        loadToolCall={onLoadToolCall}
         backgroundToolCallIds={currentRun?.runId === item.runId &&
         currentRun.status === 'running'
           ? (currentRun.controls?.background_tool_call_ids ?? [])

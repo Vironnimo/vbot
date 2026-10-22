@@ -700,6 +700,25 @@ class ConversationController:
         finally:
             self.older_loading.discard(id(view))
 
+    async def load_tool_call(self, view: Conversation, item: JsonObject) -> None:
+        """Read the whole call of an expanded Tool row that only previews it."""
+        request = view.tool_call_request(str(item["id"]))
+        if request is None:
+            return
+        key, revision = view.key, view.refresh_revision
+        try:
+            response = await self.app.client.rpc("chat.tool_call", request)
+        except ClientError as exc:
+            self.app._notice(str(exc), error=True)
+            return
+        if (
+            self.app.conversation is view
+            and view.key == key
+            and view.refresh_revision == revision
+            and view.tool_call(response)
+        ):
+            await self.app._render()
+
     async def older(self) -> None:
         view = self.app.conversation
         if not view or not view.next_before:

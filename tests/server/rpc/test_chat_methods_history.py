@@ -752,6 +752,65 @@ async def test_timeline_bounds_run_delivery_and_pages_the_same_durable_children(
 
 
 @pytest.mark.asyncio
+async def test_timeline_previews_a_tool_call_and_reads_it_whole_on_request(
+    history: _History,
+) -> None:
+    content = "line\n" * 2_000
+    seed_history(
+        history.session(),
+        [
+            ChatMessage.user("Read it"),
+            ChatMessage.assistant(
+                model="test/model",
+                content=None,
+                tool_calls=[
+                    ToolCall(id="call-one", name="read", arguments={"path": "a.txt"}),
+                ],
+            ),
+            ChatMessage.tool(
+                tool_call_id="call-one",
+                name="read",
+                content=json.dumps(tool_success({"path": "a.txt", "content": content})),
+            ),
+            _summary("run-one", "summary"),
+        ],
+    )
+    timeline = await history.read(method="chat.timeline", child_limit=10)
+    run = next(item for item in timeline["items"] if item["type"] == "assistant_run")
+    [tool] = [child for child in run["items"] if child["type"] == "tool_call"]
+    # The row carries a preview: small fields whole, long ones shortened.
+    assert tool["rawTruncated"] is True
+    assert tool["arguments"] == {"path": "a.txt"}
+    assert tool["result"]["data"]["path"] == "a.txt"
+    assert len(tool["result"]["data"]["content"]) < len(content)
+    assert content not in json.dumps(timeline)
+
+    raw = await history.read(
+        method="chat.tool_call",
+        session_id="session-one",
+        run_id="run-one",
+        tool_id=tool["id"],
+        history_generation=timeline["history_generation"],
+    )
+    assert raw["arguments"] == {"path": "a.txt"}
+    assert json.loads(raw["result"])["data"]["content"] == content
+    for tool_id, generation in (
+        ("unknown", timeline["history_generation"]),
+        (tool["id"], "stale"),
+    ):
+        rejected = await call(
+            history.state,
+            "chat.tool_call",
+            agent_id="coder",
+            session_id="session-one",
+            run_id="run-one",
+            tool_id=tool_id,
+            history_generation=generation,
+        )
+        assert rejected["error"]["code"] == "invalid_request"
+
+
+@pytest.mark.asyncio
 async def test_history_expands_the_page_to_complete_the_oldest_run_segment(
     history: _History,
 ) -> None:

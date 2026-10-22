@@ -321,17 +321,7 @@ describe('ChatTimeline Runs', () => {
             name: 'read',
             arguments: { path: 'README.md' },
             timestamp: '2026-08-05T18:00:02.500Z',
-            startedEvent: {
-              type: 'tool_call_started',
-              timestamp: '2026-08-05T18:00:02.500Z',
-              payload: {
-                tool_call: {
-                  id: 'call-live-elapsed',
-                  name: 'read',
-                  arguments: { path: 'README.md' },
-                },
-              },
-            },
+            startedAt: '2026-08-05T18:00:02.500Z',
           }),
         ],
         { startTimestamp: '2026-08-05T18:00:00.000Z' },
@@ -365,7 +355,7 @@ describe('ChatTimeline Runs', () => {
           streaming: true,
           partialArgumentsText: '{"path":"README.md"}',
           previewArguments: { path: 'README.md' },
-          startedEvent: null,
+          started: false,
         }),
       ]),
     ];

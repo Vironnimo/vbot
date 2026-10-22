@@ -327,6 +327,27 @@ async def _chat_timeline_children(state: Any, params: JsonObject) -> JsonObject:
         raise _map_expected_error(exc) from exc
 
 
+async def _chat_tool_call(state: Any, params: JsonObject) -> JsonObject:
+    """Read the complete arguments and result of one timeline Tool row."""
+    from server.timeline import timeline_tool_call
+
+    _reject_unsupported(
+        params,
+        {"agent_id", "session_id", "run_id", "tool_id", "history_generation"},
+        "chat.tool_call",
+    )
+    address = _required_session_address(params)
+    run_id = _required_string(params, "run_id")
+    tool_id = _required_string(params, "tool_id")
+    generation = _required_string(params, "history_generation")
+    try:
+        return await timeline_tool_call(state, address, run_id, tool_id, generation)
+    except ValueError as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+
 def _read_chat_history(
     state: Any,
     address: SessionAddress,

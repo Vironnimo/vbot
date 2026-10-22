@@ -30,7 +30,23 @@ _DISPLAY_ROWS = {
 
 def history_timeline(messages: Sequence[JsonObject]) -> list[JsonObject]:
     """Project complete Run segments from public Session History records."""
+    return _project(messages)[0]
+
+
+def history_tool_call(messages: Sequence[JsonObject], tool_id: str) -> JsonObject | None:
+    """Return the complete arguments and result of one Tool row of *messages*.
+
+    *tool_id* is the row's timeline id; ``None`` when no row has it.
+    """
+    for run in _project(messages)[1]:
+        if (raw := run.raw_tool_call(tool_id)) is not None:
+            return raw
+    return None
+
+
+def _project(messages: Sequence[JsonObject]) -> tuple[list[JsonObject], list[RunTimeline]]:
     items: list[JsonObject] = []
+    runs: list[RunTimeline] = []
     run: RunTimeline | None = None
     # Goal changes and Sub-Agent messages outside a Run that land between its
     # records, such as a `/goal pause` while it works, follow that Run instead
@@ -112,6 +128,7 @@ def history_timeline(messages: Sequence[JsonObject]) -> list[JsonObject]:
                 continue
         if run is None:
             run = RunTimeline(str(run_id), timestamp=message.get("timestamp"))
+            runs.append(run)
             run.run["status"] = "completed"
             run.run["source"] = "history"
         event: JsonObject = {
@@ -164,4 +181,4 @@ def history_timeline(messages: Sequence[JsonObject]) -> list[JsonObject]:
             continue
         run.apply(event)
     flush()
-    return items
+    return items, runs

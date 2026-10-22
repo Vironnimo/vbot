@@ -69,8 +69,10 @@ export const toolRowFromEvent = (event) => {
     name: toolNameForEvent(event),
     toolCall: toolCallFromEvent(event),
     display: toolDisplayFromEvent(event),
-    startedEvent: resultEvent ? null : event,
-    resultEvent,
+    started: true,
+    startedAt: resultEvent ? null : (event?.timestamp ?? null),
+    finished: Boolean(resultEvent),
+    finishedAt: resultEvent?.timestamp ?? null,
     result: resultEvent?.payload?.result,
     timing: resultEvent?.payload?.timing ?? null,
     status: resultEvent
@@ -139,8 +141,7 @@ export const toolStatusDetails = (tool, nowMs = Date.now()) => {
             : '',
     rows: executionDetailRows({
       startedAt,
-      finishedAt:
-        tool?.timing?.completed_at ?? tool?.resultEvent?.timestamp ?? '',
+      finishedAt: tool?.timing?.completed_at ?? tool?.finishedAt ?? '',
       durationMs: running
         ? elapsedSinceTimestamp(startedAt, nowMs)
         : toolDurationMs(tool),
@@ -185,17 +186,11 @@ export const toolRowPresentation = (tool) => {
 
 // The Secrets a call's arguments used, from the display its result carries
 // (`secrets_used`: `NAME.field (sink)`), as `{ reference, sink }` without
-// repeats. The started call's display cannot know them yet, so every display
-// the row holds counts.
+// repeats. The server keeps the ones an earlier display of the call named.
 const SECRET_USE = /^(.+?) \(([a-z_]+)\)$/;
 
 function toolSecretsUsed(tool) {
-  const displays = [
-    tool?.resultEvent?.payload?.display,
-    tool?.resultEvent?.payload?.message?.tool_display,
-    tool?.display,
-    tool?.toolCall?.display,
-  ];
+  const displays = [tool?.display, tool?.toolCall?.display];
   const labels = [];
   for (const display of displays) {
     if (!Array.isArray(display?.secrets_used)) continue;

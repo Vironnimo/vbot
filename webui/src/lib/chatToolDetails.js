@@ -149,10 +149,7 @@ function hiddenArgumentKeysForTool(toolOrName, fallbackName = '') {
 }
 
 function toolDisplay(tool) {
-  const display =
-    tool?.display ??
-    tool?.toolCall?.display ??
-    tool?.startedEvent?.payload?.display;
+  const display = tool?.display ?? tool?.toolCall?.display;
   return isPlainObject(display) ? display : null;
 }
 
@@ -478,7 +475,16 @@ export function toolDetailBlocks(tool, { args, result } = {}) {
         typeof block.text === 'string'
           ? block.text
           : sourceText(block.source, { args, result });
-      return text.trim() ? [{ type: 'text', label: block.label, text }] : [];
+      if (!text.trim()) return [];
+      return [
+        {
+          type: 'text',
+          label: block.label,
+          text,
+          // The server shortened a long text; the raw call holds all of it.
+          ...(block.truncated === true ? { truncated: true } : {}),
+        },
+      ];
     }
     if (block?.type === 'results' && Array.isArray(block.items)) {
       const items = block.items.flatMap((item) =>

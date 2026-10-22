@@ -101,7 +101,7 @@ def test_tool_row_shows_what_ran_and_names_only_the_calls_that_went_wrong() -> N
     assert tool_time(item | {"durationMs": 420}) == "0.4s"
     timing = {"started_at": started, "completed_at": "2026-10-16T18:01:15Z"}
     assert tool_time(item | {"timing": timing}) == "1m 15s"
-    running = item | {"status": "running", "startedEvent": {"timestamp": started}}
+    running = item | {"status": "running", "startedAt": started}
     assert tool_time(running, datetime(2026, 10, 16, 18, 0, 12, tzinfo=UTC)) == "12s"
     assert tool_time(item | {"status": "preparing", "durationMs": 5}) == ""
 

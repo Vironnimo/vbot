@@ -293,7 +293,7 @@ it.each(['run', 'event'])(
                 toolCallId: toolCall.id,
                 status: 'success',
                 result,
-                resultEvent: event,
+                finished: true,
               },
             ],
           }

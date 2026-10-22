@@ -46,7 +46,7 @@ export function timelineRowsForViewport(items, workingMode = 'normal') {
 }
 
 export function assistantRunChildProgressKey(child) {
-  return `${child?.revision ?? child?.sequence ?? ''}:${child?.content?.length ?? 0}:${child?.partialArgumentsText?.length ?? 0}:${child?.output?.length ?? 0}:${child?.status ?? ''}:${Boolean(child?.resultEvent)}:${child?.message?.content?.length ?? 0}`;
+  return `${child?.revision ?? child?.sequence ?? ''}:${child?.content?.length ?? 0}:${child?.partialArgumentsText?.length ?? 0}:${child?.output?.length ?? 0}:${child?.status ?? ''}:${Boolean(child?.finished)}:${child?.message?.content?.length ?? 0}`;
 }
 
 function runIdOf(item) {

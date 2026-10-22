@@ -354,7 +354,7 @@ describe('ChatTimeline sub-agent rows', () => {
         status: 'preparing',
         streaming: true,
         partialArgumentsText: '{"agent_id":"beta"',
-        startedEvent: null,
+        started: false,
       }),
     ],
   ])('renders no sub-agent card for %s', (_case, event) => {
