@@ -12,7 +12,8 @@ Strategies, in order; the first that finds any match wins (its own ambiguity is
 terminal — it does not fall through to a looser strategy):
 
 1. ``exact`` — literal substring match that does not split a CRLF pair.
-2. ``normalized`` — match after collapsing CR/CRLF to LF and mapping a few
+2. ``normalized`` — match after collapsing CR/CRLF to LF, composing characters
+   with their marks (text that differs only in NFC versus NFD), and mapping a few
    visually-equivalent Unicode characters (curly quotes, non-breaking space,
    en-dash) to ASCII, on both sides. Character-level, so it also matches a
    fragment within a line. In a CRLF file it first searches the old text with
@@ -27,7 +28,9 @@ terminal — it does not fall through to a looser strategy):
 
 All non-exact strategies search a normalized copy of the content and map the
 match back to the original characters through a per-character span map, so CRLF line
-endings and the exact original characters are always preserved. Old text copied
+endings and the exact original characters are always preserved. When the matched
+text is in one normalization form and the old text is not, the replacement is
+written in the matched text's form (``_written_form``). Old text copied
 with other errors is ``copy_match``'s concern.
 
 Searching text a reader sees (``fold_for_search``, used by web_fetch ``find``) is

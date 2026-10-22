@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from functools import lru_cache
 
-from core.tools._fuzzy_text import _TYPOGRAPHIC_NORMALIZATION, _normalize_with_spans
+from core.tools._fuzzy_text import _TYPOGRAPHIC_NORMALIZATION, _composed, _normalize_with_spans
 from core.tools.arguments import TEXT_LINE_BREAK
 from core.utils.edit_distance import edit_distance
 
@@ -206,7 +206,7 @@ def _code_names(text: _Text) -> set[int]:
 
 
 def _line_key(text: str) -> str:
-    return " ".join(text.translate(_FOLD).split())
+    return " ".join(_composed(text).translate(_FOLD).split())
 
 
 def _misspelling(wrong: str, right: str) -> bool:

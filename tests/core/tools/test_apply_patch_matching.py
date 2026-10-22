@@ -623,6 +623,32 @@ def test_normalized_changed_lines_preserve_only_unchanged_typography(
     assert path.read_bytes() == (expected + "\r\n").encode()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", ["edit", "apply_patch"])
+@pytest.mark.parametrize(
+    ("held", "copied"),
+    [
+        # Models write composed letters where a file (often from macOS) has them decomposed.
+        ("Café noir et crème", "Café noir et crème"),
+        ("Café noir et crème", "Café noir et crème"),
+    ],
+)
+async def test_text_in_another_normalization_form_is_edited_in_the_files_form(
+    tmp_path, tool, held, copied
+):
+    path = tmp_path / "file.txt"
+    path.write_bytes(f"head\n{held}\n".encode())
+    new = copied.replace("noir", "au lait")
+    if tool == "edit":
+        arguments = {"file_path": "file.txt", "old_string": copied, "new_string": new}
+        result = await call(tmp_path, arguments)
+    else:
+        result = apply(tmp_path, update(f"@@\n head\n-{copied}\n+{new}"))
+    assert result["ok"], result
+    assert path.read_bytes() == f"head\n{held.replace('noir', 'au lait')}\n".encode()
+    assert "Note" not in text(result)
+
+
 @pytest.mark.parametrize(
     ("body", "code"),
     [

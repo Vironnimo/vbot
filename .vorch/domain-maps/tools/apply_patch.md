@@ -491,7 +491,8 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   old lines; only a hint then orders occurrences. Other files retain normal
   tolerance.
 - `fuzzy_match.replace_fuzzy` owns precise matching: exact, normalized (newline,
-  Unicode, typography), line-trimmed, and whitespace-normalized, in that order.
+  Unicode glyphs and normalization form, typography), line-trimmed, and
+  whitespace-normalized, in that order.
   Patch-only options require whole-line matches and constrain EOF. The matcher
   retains its default substring mode for direct callers. Its
   `fold_for_search` is a separate, looser read-side fold for web_fetch `find`
@@ -539,6 +540,21 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   about 16 instead of 400 ms and the whole `edit` call took about 330 instead
   of 810 ms (4 MB: 60 instead of 2200 ms matching). Guard:
   `test_repeated_text_is_ambiguous_unless_every_occurrence_is_replaced`.
+- The normalized step also reads text that differs only in Unicode
+  normalization form (NFC or NFD) as equal: each character with its marks, and
+  decomposed Hangul jamo, folds to NFC (`_fuzzy_text._composed_with_spans`),
+  except singletons such as CJK compatibility ideographs, which are characters
+  of their own. When the matched file text is in one form and the old text is
+  not, the written text takes the file's form, its new letters included
+  (`_written_form`, `_in_form`); `copy_match` writes the passage's form the
+  same way, and difference reports compare lines composed. Silent, like the
+  other representation folds. Text already in NFC costs one
+  `unicodedata.is_normalized` check. Evidence: review 2026-10-22, a file with
+  decomposed accents refused every edit a Model wrote composed. This replaced
+  a note that named the differing code points while matching stayed exact.
+  Coverage: `test_fuzzy_match.py::test_normalized_matches_typography_and_line_endings`,
+  `test_apply_patch_matching.py::test_text_in_another_normalization_form_is_edited_in_the_files_form`,
+  `test_copy_match.py::test_line_endings_and_indentation_follow_the_file`.
 - Newline/Unicode/typography/whitespace/indentation differences are supported
   for every hunk line. Old text copied with other errors is applied whenever the
   passage is clearly identified, with stricter evidence for shorter text (user

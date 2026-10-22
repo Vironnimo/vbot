@@ -694,6 +694,13 @@ JSON_ITEM = (
             "        # done\r\n",
             id="crlf-and-dropped-level",
         ),
+        pytest.param(
+            "label = 'Café noir for everyone'\n",
+            "lable = 'Café noir for everyone'",
+            "label = 'Café crème for everyone'",
+            "label = 'Café crème for everyone'\n",
+            id="normalization-form",
+        ),
         # Swarm run 2026-10-12: a copy that joined a "{" line to the next one paired its
         # indent with that next line's; the closing "}" and the lines added after it were
         # written at the inner level. The "}" that reads alike decides its indent.

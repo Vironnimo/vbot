@@ -247,37 +247,6 @@ async def test_missing_old_string_shows_closest_text_and_existing_new_text(tmp_p
     assert (tmp_path / "e.py").read_bytes() == b"value = compute(a, b)\n"
 
 
-@pytest.mark.asyncio
-async def test_a_line_that_differs_only_in_unicode_normalization_names_its_code_points(
-    tmp_path,
-):
-    # Both texts quote alike: the file spells é and è decomposed, Models write them composed.
-    before = "Café noir et crème\n".encode()
-    (tmp_path / "file.txt").write_bytes(before)
-    composed = "Café noir et crème"
-
-    edited = await call(
-        tmp_path, {"file_path": "file.txt", "old_string": composed, "new_string": "x"}
-    )
-    patched = apply(tmp_path, update(f"@@\n-{composed}\n+x"))
-
-    found = (
-        "This line differs only in Unicode normalization: the file has U+0065 U+0301 where "
-        "{source} has U+00E9, and U+0065 U+0300 where {source} has U+00E8."
-    )
-    assert text(edited).endswith(
-        found.format(source="old_string")
-        + " Send old_string with e\\u0301 and e\\u0300 in their places to match the file."
-    )
-    assert text(patched).endswith(found.format(source="the patch"))
-    # The escapes it names match the file's characters.
-    escaped = composed.replace("é", "e\\u0301").replace("è", "e\\u0300")
-    fixed = await call(
-        tmp_path, {"file_path": "file.txt", "old_string": escaped, "new_string": "x"}
-    )
-    assert (fixed["ok"], (tmp_path / "file.txt").read_bytes()) == (True, b"x\n")
-
-
 @pytest.mark.parametrize(
     ("body", "lead", "report"),
     [
