@@ -514,7 +514,7 @@ describe('App controller', () => {
     ['calendar', ['calendar']],
     ['commands', ['commands']],
     ['terminals', ['terminals']],
-    ['skills', ['skills']],
+    ['skills', ['skills', 'commands']],
     ['archive', ['archive']],
     ['agents', []],
     ['queue', []],

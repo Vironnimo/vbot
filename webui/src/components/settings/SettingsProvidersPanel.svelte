@@ -674,6 +674,7 @@
               <OpenRouterRoutingSettings
                 {provider}
                 active={expanded && summaryStatus === 'connected'}
+                {modelsRefreshToken}
                 {onRefreshProviderSettings}
                 {onToast}
                 {onError}

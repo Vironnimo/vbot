@@ -2,6 +2,7 @@ import {
   dateKeyInApplicationZone,
   formatDateTimeInApplicationZone,
 } from '../dateTimePrefs.svelte.js';
+import { t } from '../i18n.js';
 
 const EM_DASH = '\u2014';
 const MINUTE_MS = 60_000;
@@ -111,32 +112,49 @@ export function formatShare(value, total, locale = 'en') {
   return formatPercent(part / whole, locale);
 }
 
-/** A duration: `850 ms`, `12.3 s`, `4m 05s`, `2h 10m`; a dash when unknown. */
+/** A duration: `850 ms`, `12.3 s`, `4m 05s`, `2h 10m`; a dash when unknown.
+ *  It rounds to a unit's precision before choosing the unit, so 59.96 s reads
+ *  `1m 00s`, not `60.0 s`, and 3 h 59 m 30 s reads `4h 0m`, not `3h 60m`. */
 export function formatDurationMs(milliseconds) {
   const value = finite(milliseconds);
   if (value === null) return EM_DASH;
-  const ms = Math.max(0, value);
-  if (ms < 1000) return `${Math.round(ms)} ms`;
-  if (ms < MINUTE_MS) return `${(ms / 1000).toFixed(1)} s`;
-  if (ms < HOUR_MS) {
-    const minutes = Math.floor(ms / MINUTE_MS);
-    const seconds = Math.round((ms % MINUTE_MS) / 1000);
-    return seconds === 60
-      ? `${minutes + 1}m 00s`
-      : `${minutes}m ${String(seconds).padStart(2, '0')}s`;
+  const ms = Math.round(Math.max(0, value));
+  if (ms < 1000) return t('statistics.duration.milliseconds', { ms });
+  const tenths = Math.round(ms / 100);
+  if (tenths < 600) {
+    return t('statistics.duration.seconds', {
+      seconds: (tenths / 10).toFixed(1),
+    });
   }
-  const hours = Math.floor(ms / HOUR_MS);
-  const minutes = Math.round((ms % HOUR_MS) / MINUTE_MS);
-  return `${hours}h ${minutes}m`;
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 3600) {
+    return t('statistics.duration.minutesSeconds', {
+      minutes: Math.floor(seconds / 60),
+      seconds: String(seconds % 60).padStart(2, '0'),
+    });
+  }
+  const minutes = Math.round(ms / MINUTE_MS);
+  return t('statistics.duration.hoursMinutes', {
+    hours: Math.floor(minutes / 60),
+    minutes: minutes % 60,
+  });
 }
 
 // Short duration for chart axes: 10s, 2m, 1h.
 function formatDurationShort(milliseconds) {
-  if (milliseconds >= HOUR_MS) return `${Math.round(milliseconds / HOUR_MS)}h`;
-  if (milliseconds >= MINUTE_MS) {
-    return `${Math.round(milliseconds / MINUTE_MS)}m`;
+  if (milliseconds >= HOUR_MS) {
+    return t('statistics.duration.shortHours', {
+      hours: Math.round(milliseconds / HOUR_MS),
+    });
   }
-  return `${Math.round(milliseconds / 1000)}s`;
+  if (milliseconds >= MINUTE_MS) {
+    return t('statistics.duration.shortMinutes', {
+      minutes: Math.round(milliseconds / MINUTE_MS),
+    });
+  }
+  return t('statistics.duration.shortSeconds', {
+    seconds: Math.round(milliseconds / 1000),
+  });
 }
 
 function parseIso(isoString) {

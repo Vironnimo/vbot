@@ -44,7 +44,9 @@ export const RESOURCE_KIND_DATA_STORE = 'data_store';
 // Channel tokens, Extension secrets) or only "providers" (Provider keys), so
 // both bump the "credentials" group (re-fetch secrets.list). An Agent Secret,
 // Secret request or password-manager Source that changes publishes
-// "agent_secrets" (re-fetch agent_secrets.list).
+// "agent_secrets" (re-fetch agent_secrets.list). A Skill that appears, changes
+// or goes also bumps the "commands" group, because Chat's `/` and `$`
+// suggestions (chat.commands) list Skills beside the commands.
 // New kinds add their mapping here.
 const KIND_TOKEN_GROUPS = {
   models: [RESOURCE_TOKEN_MODELS],
@@ -61,7 +63,7 @@ const KIND_TOKEN_GROUPS = {
   calendar: [RESOURCE_TOKEN_CALENDAR],
   commands: [RESOURCE_TOKEN_COMMANDS],
   terminals: [RESOURCE_TOKEN_TERMINALS],
-  skills: [RESOURCE_TOKEN_SKILLS],
+  skills: [RESOURCE_TOKEN_SKILLS, RESOURCE_TOKEN_COMMANDS],
   archive: [RESOURCE_TOKEN_ARCHIVE],
   data_store: [RESOURCE_TOKEN_CREDENTIALS],
   agent_secrets: [RESOURCE_TOKEN_AGENT_SECRETS],

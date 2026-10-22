@@ -90,8 +90,10 @@ describe('DateField', () => {
     ['4 October 2027', '2027-10-04'],
     ['Sun, Oct 4, 2026', '2026-10-04'],
     ['2026-10-04', '2026-10-04'],
-  ])('reads the typed date %j as %s', (text, expected) => {
-    const input = render();
+    // An empty field takes the year of today in the application zone.
+    ['Oct 4', '2027-10-04', { value: '', today: '2027-01-01' }],
+  ])('reads the typed date %j as %s', (text, expected, initial = {}) => {
+    const input = render(initial);
 
     type(input, text);
 

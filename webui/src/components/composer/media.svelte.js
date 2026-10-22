@@ -1,4 +1,3 @@
-import { SvelteDate } from 'svelte/reactivity';
 import { t, tOr } from '$lib/i18n.js';
 import {
   getPendingAttachments,
@@ -12,6 +11,10 @@ import {
   transcribeSpeech,
 } from '$lib/api.js';
 import { createAudioRecorder } from '$lib/audioRecorder.js';
+import {
+  dateTimePartsInZone,
+  dateTimePrefs,
+} from '$lib/dateTimePrefs.svelte.js';
 
 export function createComposerMedia(context) {
   const ATTACHMENT_ACCEPT =
@@ -235,11 +238,11 @@ export function createComposerMedia(context) {
     );
   };
 
+  // Named by the moment of the paste on the Settings timezone's clock.
   const buildPastedImageFileName = () => {
-    const now = new SvelteDate();
-    const pad = (value) => String(value).padStart(2, '0');
-    const date = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-    const time = `${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
+    const parts = dateTimePartsInZone(Date.now(), dateTimePrefs.timeZone);
+    const date = `${parts.year}-${parts.month}-${parts.day}`;
+    const time = `${parts.hour}-${parts.minute}-${parts.second}`;
     return `screenshot-${date}-${time}.png`;
   };
 

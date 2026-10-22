@@ -195,7 +195,10 @@
 
   function handleInput(text) {
     draft = text;
-    const parsed = parseDateText(text, { referenceValue: value });
+    // A date without a year takes the shown date's, or today's in the app zone.
+    const parsed = parseDateText(text, {
+      referenceValue: isDateValue(value) ? value : currentDay,
+    });
     if (parsed === '') {
       if (!required && value !== '') onChange('');
       return;
