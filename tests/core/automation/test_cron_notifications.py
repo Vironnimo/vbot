@@ -172,3 +172,53 @@ async def test_slow_delivery_never_holds_a_cron_run_slot(
         await service._notifications.flush()
         await service.aclose()
     assert [text for _, text, *_ in chats.sent] == ["First.", "Second."]
+
+
+@pytest.mark.asyncio
+async def test_a_waiting_notification_holds_back_only_its_own_chat(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, trigger = make_service(tmp_path)
+    chats = FakeChats(owners={"tg-main": "agent-one", "tg-other": "agent-one"})
+    service.set_chat_delivery(chats)
+    stopped = {"tg-main"}
+    original_send = chats.send
+
+    async def send(
+        channel_id: str, message: str, platform_target: str, *, thread_id: str | None = None
+    ) -> None:
+        if channel_id in stopped:
+            raise ChannelError("Channel is stopped", possibly_delivered=False)
+        await original_send(channel_id, message, platform_target, thread_id=thread_id)
+
+    monkeypatch.setattr(chats, "send", send)
+    job = await service.create_job(
+        agent_id="agent-one",
+        prompt="Check",
+        schedule_type="interval",
+        interval_seconds=60,
+        delivery=_CHAT,
+    )
+    scripted_runs(
+        trigger,
+        (RunStatus.COMPLETED, "First."),
+        (RunStatus.COMPLETED, "Second."),
+        (RunStatus.COMPLETED, "Elsewhere."),
+    )
+    for _ in range(2):
+        await service._execution._trigger_job_run(service.get_job(job.id))
+    other = CronDelivery(kind="chat", channel_id="tg-other", platform_target="chat-9")
+    await service.update_job(job.id, delivery=other)
+    await service._execution._trigger_job_run(service.get_job(job.id))
+
+    await service._notifications.flush()
+
+    # The stopped chat keeps its messages in order; another chat is not held back.
+    assert chats.sent == [("tg-other", "Elsewhere.", "chat-9", None)]
+    assert service.get_job(job.id).delivery_progress()["waiting"] == 2
+    stopped.clear()
+    now = notifications.time.time()
+    monkeypatch.setattr(notifications.time, "time", lambda: now + 60)
+    await service._notifications.flush()
+    assert [text for _, text, *_ in chats.sent] == ["Elsewhere.", "First.", "Second."]
+    await service.aclose()
