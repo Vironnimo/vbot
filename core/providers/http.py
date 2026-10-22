@@ -114,14 +114,13 @@ def build_async_client(
             verify=shared_ssl_context(),
         )
 
-    transport = _DebugCaptureTransport(
-        httpx.AsyncHTTPTransport(verify=shared_ssl_context()),
-        debug_recorder,
-    )
     return httpx.AsyncClient(
         base_url=base_url,
         timeout=effective_timeout,
-        transport=transport,
+        transport=_DebugCaptureTransport(
+            httpx.AsyncHTTPTransport(verify=shared_ssl_context()),
+            debug_recorder,
+        ),
     )
 
 

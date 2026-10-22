@@ -32,6 +32,7 @@ import httpx
 
 from core.tools.portal_registry import PortalRegistry
 from core.utils.logging import get_logger
+from core.utils.tls import ssl_context_for
 from server.access._service import AccessError, AccessService
 
 if TYPE_CHECKING:
@@ -49,6 +50,8 @@ PORTAL_QUERY = "vbot_portal"
 PORTAL_COOKIE_PREFIX = "vbot_portal_"
 #: WebSocket close code for a Portal request without its credential.
 WEBSOCKET_PRIVATE = 4401
+# Every forwarded request goes to an app on this computer over plain HTTP.
+_UPSTREAM_ORIGIN = "http://localhost"
 _CONNECT_TIMEOUT_SECONDS = 5.0
 _POOL_TIMEOUT_SECONDS = 10.0
 # How long closing all Portals waits for their requests to end before cancelling.
@@ -109,6 +112,9 @@ class PortalServer:
             ),
             follow_redirects=False,
             trust_env=False,
+            # The app is always plain HTTP on this computer: a context without CA
+            # parsing, which a bare client would do on the Event Loop.
+            verify=ssl_context_for(_UPSTREAM_ORIGIN),
             transport=transport,
         )
         # The browser's headers go through as they are; no client defaults.
