@@ -48,6 +48,7 @@ from core.tools._search_execution import (
     SearchBoundError,
     SearchExecution,
     SearchRefusedError,
+    crlf_line_breaks,
     explain_failure,
     pattern_retry,
 )
@@ -604,13 +605,15 @@ def _note_no_match(
         if note is not None:
             query.notes[query.notes.index(repair_note)] = note
             return
-    # A repaired pattern's note already says how it was read.
-    if patterns is query.patterns and not query.literal and can_miss_literal_text(patterns[0]):
+    # A repaired pattern's note already says how it was read; line feeds widened
+    # to match CRLF line ends leave the pattern as written.
+    as_written = patterns is query.patterns or patterns == crlf_line_breaks(query.patterns, query)
+    if as_written and not query.literal and can_miss_literal_text(query.patterns[0]):
         literal = replace(query, rg_args=[*query.rg_args, "--fixed-strings"], literal=True)
-        found = _recount(execution, literal, scopes, patterns)
+        found = _recount(execution, literal, scopes, query.patterns)
         files = sum(1 for entry in found.entries if entry.count) if found else 0
         if files:
-            query.notes.append(literal_text_note(patterns[0], files))
+            query.notes.append(literal_text_note(query.patterns[0], files))
             return
     if patterns is query.patterns and not query.multiline and can_span_lines(patterns[0]):
         spanning = replace(query, rg_args=[*query.rg_args, "--multiline"])

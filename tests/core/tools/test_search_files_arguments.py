@@ -226,6 +226,8 @@ async def test_an_empty_repaired_glob_pattern_offers_a_name_search_without_chang
         # Swarm run 2026-10-12: the "?" of a URL made the regex miss the URL.
         ("page.pl?id=7", True),
         ("load(x)", True),
+        # Also after a line break made the search run with -U.
+        (r'"\n".join', True),
         # The literal text is absent as well.
         ("page.pl?id=8", False),
     ],
@@ -233,10 +235,10 @@ async def test_an_empty_repaired_glob_pattern_offers_a_name_search_without_chang
 async def test_a_regex_without_matches_names_the_literal_search_when_its_text_occurs(
     project: Path, pattern: str, noted: bool
 ):
-    (project / "links.txt").write_text("see page.pl?id=7 and load(x)\n")
+    (project / "links.txt").write_text('see page.pl?id=7 and load(x)\nprint("\\n".join(lines))\n')
     result = await dispatch(project, {"pattern": pattern})
     assert "content" not in result["data"]
-    assert ("note" in result["data"]) is noted
+    assert ("-F" in result["data"].get("note", "")) is noted
     literal = await dispatch(project, {"pattern": pattern, "args": ["-F"]})
     assert ("links.txt" in literal["data"].get("content", "")) is noted
     assert "note" not in literal["data"]
@@ -811,14 +813,19 @@ async def test_unbalanced_regex_characters_match_literally_with_a_note(
             "code\n1:Alpha\n2:Beta",
             False,
         ),
+        # Their line feeds match CRLF line ends too, as text copied from read shows them.
+        (r"Alpha\nBeta", {"path": "windows"}, "windows\n1:Alpha\n2:Beta", True),
+        ("Alpha\nBeta", {"path": "windows"}, "windows\n1:Alpha\n2:Beta", True),
+        (r"Gamma\x0A+Delta", {"path": "windows"}, "windows\n7:Gamma\n8:\n9:Delta", True),
+        (r"Alpha\nBeta", {"path": "windows", "args": ["--no-crlf"]}, "", True),
     ],
 )
 async def test_rejected_regex_line_breaks_run_multiline_without_overriding_explicit_modes(
     tmp_path, pattern, options, content, noted
 ):
-    (tmp_path / "code").write_text(
-        "Alpha\nBeta\nAlpha\nbetween\nBeta\nAlpha\\nBeta\n", newline="\n"
-    )
+    text = "Alpha\nBeta\nAlpha\nbetween\nBeta\nAlpha\\nBeta\n"
+    (tmp_path / "code").write_text(text, newline="\n")
+    (tmp_path / "windows").write_text(text + "Gamma\n\nDelta\n", newline="\r\n")
 
     result = await dispatch(tmp_path, {"pattern": pattern, "path": "code", **options})
 
@@ -827,7 +834,7 @@ async def test_rejected_regex_line_breaks_run_multiline_without_overriding_expli
         assert result["error"]["code"] == "search_error"
         return
     assert result["ok"], result
-    assert result["data"]["content"] == content
+    assert result["data"].get("content", "") == content
     assert ("note" in result["data"]) is noted
 
 
