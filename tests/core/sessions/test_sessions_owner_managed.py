@@ -440,6 +440,10 @@ async def test_archived_group_leaves_live_reads_but_keeps_its_bindings(manager) 
     archived = [bind("fixture", "group-a", "peer", "project"), bind("fixture", "group-a", "peer-2")]
     kept = [bind("fixture", "group-b", "peer"), bind("other", "group-a", "peer")]
     manager.set_temporary_group_title(owner_name="fixture", group_id="group-a", title="Parser")
+    # Every Session under a temporary Agent's id, a delegated child too, runs as it.
+    manager.create(archived[0].address.agent_id, "child", project_id="project")
+    assert manager.temporary_agent_binding("project", archived[0].address.agent_id) == archived[0]
+    assert manager.temporary_agent_binding(None, archived[1].address.agent_id) == archived[1]
 
     assert await manager.temporary_owners_async() == ["fixture", "other"]
     assert await manager.temporary_groups_async(owner_name="fixture", limit=1) == ["group-a"]
@@ -468,6 +472,7 @@ async def test_archived_group_leaves_live_reads_but_keeps_its_bindings(manager) 
         binding.address for binding in kept
     ]
     assert not any(manager.exists(binding.address) for binding in archived)
+    assert manager.temporary_agent_binding("project", archived[0].address.agent_id) is None
     # An archived participant is never revived; its owner deletes the group instead.
     with pytest.raises(ChatSessionError, match="archived Session"):
         bind("fixture", "group-a", "peer")
@@ -476,3 +481,7 @@ async def test_archived_group_leaves_live_reads_but_keeps_its_bindings(manager) 
     ) == {"group-a": "Parser"}
     assert await manager.delete_temporary_group(owner_name="fixture", group_id="group-a") == 2
     assert all(manager.exists(binding.address) for binding in kept)
+    assert manager.temporary_agent_binding(None, kept[0].address.agent_id) == kept[0]
+    # Bindings that share an Agent id name no single temporary Agent.
+    bind("fixture", "group-b", "peer-2")
+    assert manager.temporary_agent_binding(None, kept[0].address.agent_id) is None

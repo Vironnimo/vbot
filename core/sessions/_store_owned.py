@@ -104,6 +104,24 @@ def temporary_binding(
     return lambda: None if row is None else _temporary_binding(row)
 
 
+def temporary_agent_binding(
+    connection: sqlite3.Connection, project_id: str | None, agent_id: str
+) -> Callable[[], TemporarySessionBinding | None]:
+    """Select the live binding of temporary Agent *agent_id*; the decoder yields ``None`` for none.
+
+    Each binding gets its own Agent id, so every Session under that id (the bound
+    Session and the child Sessions it delegated to itself) belongs to it. Bindings
+    that share an id name no single Agent, so they yield ``None`` too.
+    """
+    rows = connection.execute(
+        f"SELECT {_BINDING_COLUMNS} FROM temporary_session_bindings AS b "
+        "JOIN sessions AS s ON s.session_key = b.session_key "
+        "WHERE s.project_id = ? AND s.agent_id = ? AND s.state = 'live' LIMIT 2",
+        (project_id or "", agent_id),
+    ).fetchall()
+    return lambda: _temporary_binding(rows[0]) if len(rows) == 1 else None
+
+
 def temporary_binding_by_participant(
     connection: sqlite3.Connection, *, owner_name: str, group_id: str, participant_id: str
 ) -> Callable[[], TemporarySessionBinding | None]:
