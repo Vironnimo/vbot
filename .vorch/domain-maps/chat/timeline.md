@@ -6,6 +6,8 @@ Read this when changing conversation ordering, History/live overlap, semantic Ru
 
 `core/runs/_timeline.py::RunTimeline` folds provider-neutral Run events at emission, before bounded raw replay can discard them. It retains current semantic elements, not another event log. `core/chat/timeline.py::history_timeline` adapts public canonical History records into the same reducer. Sessions remain the only durable source; no timeline database or format migration exists.
 
+Folding is linear in a Run's events, which matters for durable Runs of ~1,500 entries: lookups skip the row scan through index sets in `RunTimeline.__init__` that hold every value a row ever had. Code that adds rows or changes a row's message id or Tool key records the value there. A History fold is discarded after projection and takes `snapshot(isolated=False)`, which skips the isolating copies.
+
 The active Run owns the projection and a change signal. Snapshot copies are cached by sequence so multiple readers share the captured version. Settlement releases the Run's reference; an attached stream retains its projection through terminal delivery, while a later subscriber loads that exact Run's durable records. Raw event streams and their retention contracts remain available to one-shot CLI and other consumers.
 
 `server/timeline.py` owns public snapshot/patch transport and file projection. `server/rpc/chat_methods.py` exposes `chat.timeline` through the existing Chat History read boundary, preserving address, generation, paging, Queue/activity and Usage ownership. Extension page adapters reuse this owner behind their page capability.
