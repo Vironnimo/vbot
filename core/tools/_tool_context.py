@@ -244,6 +244,10 @@ class ToolContext:
     presentation_details: list[JsonObject] = field(default_factory=list, repr=False, compare=False)
     # The Secrets this call used, as ``NAME.field (sink)``, shown with every display.
     presentation_secret_uses: list[str] = field(default_factory=list, repr=False, compare=False)
+    # Each Secret value dispatch put into a ``files`` sink argument, with the
+    # reference text it replaced: the file edit Tools match old text that holds
+    # the reference text itself (``secrets/agent-secrets.md`` -> References and sinks).
+    secret_literals: dict[str, str] = field(default_factory=dict, repr=False, compare=False)
     # The widget the call shows inline in the chat, recorded via ``show_display_widget``;
     # empty when it shows none.
     presentation_widget: JsonObject = field(default_factory=dict, repr=False, compare=False)

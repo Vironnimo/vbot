@@ -58,8 +58,11 @@ from core.secrets._references import (
     SecretMasker,
     find_references,
     has_reference,
+    has_reference_or_escape,
     map_strings,
+    unescape_references,
 )
+from core.secrets._references import substitute as substitute_references
 from core.secrets._totp import TotpSeedError, totp_code
 from core.secrets.sources import SecretSource, SecretSourceError, SourceStatus
 from core.secrets.store import AGENT_SECRETS, SecretStore, SecretTransaction, credential_name_key
@@ -91,8 +94,10 @@ __all__ = [
     "describe_uses",
     "find_references",
     "has_reference",
+    "has_reference_or_escape",
     "main_field_name",
     "normalize_secret_name",
+    "unescape_references",
 ]
 
 _LOGGER = get_logger("secrets")
@@ -769,20 +774,21 @@ class AgentSecrets:
         *,
         passed_only: bool = False,
         consume: bool = True,
+        literals: dict[str, str] | None = None,
     ) -> tuple[Any, list[SecretUse]]:
-        """``value`` (JSON-like) with references replaced; raises :class:`SecretUseError`."""
+        """``value`` (JSON-like) with references replaced; raises :class:`SecretUseError`.
+
+        An escaped reference (``{{!secret:NAME}}``) becomes the reference text.
+        ``literals``, when given, receives each substituted value with the
+        reference text it replaced, so a caller can tell the two readings apart.
+        """
         uses: list[SecretUse] = []
         # One value per reference and call, so a ``once`` Secret named twice
         # in the same call is resolved (and consumed) once.
         resolved_values: dict[tuple[str, str | None], tuple[str, SecretUse]] = {}
 
         def replace_text(text: str) -> str:
-            references = find_references(text)
-            if not references:
-                return text
-            parts: list[str] = []
-            position = 0
-            for reference in references:
+            def resolve(reference: Reference) -> str:
                 key = (reference.name, reference.field)
                 if key not in resolved_values:
                     resolved_values[key] = self.resolve(
@@ -793,13 +799,13 @@ class AgentSecrets:
                         consume=False,
                     )
                 resolved, use = resolved_values[key]
-                parts.append(text[position : reference.start])
-                parts.append(resolved)
-                position = reference.end
                 if use not in uses:
                     uses.append(use)
-            parts.append(text[position:])
-            return "".join(parts)
+                if literals is not None:
+                    literals.setdefault(resolved, text[reference.start : reference.end])
+                return resolved
+
+            return substitute_references(text, resolve)
 
         changed = map_strings(value, replace_text)
         if consume:
@@ -956,29 +962,33 @@ class AgentSecrets:
     ) -> SecretUseError:
         exists = any(item.name == reference.name for item in self.all())
         names = self._names_text(address, passed_only)
+        literal = (
+            f" If you meant the text {{{{secret:{reference.text_name}}}}} itself, "
+            f"write {{{{!secret:{reference.text_name}}}}}."
+        )
         if exists and passed_only:
             return SecretUseError(
                 "not_granted",
                 f"{reference.name} was not passed to you. Your Secrets: {names}. "
-                "If you need it, say so in your report; your Parent Agent can pass it.",
+                "If you need it, say so in your report; your Parent Agent can pass it." + literal,
             )
         if exists:
             return SecretUseError(
                 "not_granted",
                 f"{reference.name} is not granted to you. Your Secrets: {names}. "
-                "Ask the user to grant it in Settings -> Secrets if you need it.",
+                "Ask the user to grant it in Settings -> Secrets if you need it." + literal,
             )
         system = {credential_name_key(item).upper() for item in self._credential_names()}
         if reference.name in system:
             return SecretUseError(
                 "not_granted",
                 f"{reference.name} is a vBot credential, not a Secret you can use here. "
-                f"Your Secrets: {names}.",
+                f"Your Secrets: {names}." + literal,
             )
         return SecretUseError(
             "unknown_secret",
             f"No Secret named {reference.name}. Your Secrets: {names}. "
-            "Use the secrets Tool to request one from the user.",
+            "Use the secrets Tool to request one from the user." + literal,
         )
 
     def _names_text(self, address: SessionAddress, passed_only: bool) -> str:

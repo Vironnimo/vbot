@@ -23,7 +23,12 @@ from pathlib import Path
 
 from core.permissions import PermissionBoundary
 from core.sessions import SessionAddress
-from core.tools._edit_engine import apply_hunks, clean_additions, line_ending
+from core.tools._edit_engine import (
+    apply_hunks,
+    clean_additions,
+    line_ending,
+    with_literal_readings,
+)
 from core.tools._patch_entries import (
     _ABSENT,
     _entry_path,
@@ -744,6 +749,10 @@ def run_operations(
     ``_run_step``), while any other failure, such as a missing file, writes
     nothing.
     """
+    if context.secret_literals:
+        for operation in operations:
+            if operation.action == "update":
+                operation.hunks = with_literal_readings(operation.hunks, context.secret_literals)
     resolved: dict[str, Path] = {}
     resolution_errors: dict[str, JsonObject] = {}
     for operation in operations:

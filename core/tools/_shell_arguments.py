@@ -25,7 +25,7 @@ from typing import Any
 
 from core.permissions import PermissionBoundary
 from core.projects import ProjectStore
-from core.secrets.agent_secrets import REFERENCE_PATTERN, has_reference
+from core.secrets.agent_secrets import REFERENCE_PATTERN, has_reference, unescape_references
 from core.tools._path_suggestions import similar_entries
 from core.tools._powershell import (
     powershell_literal,
@@ -463,7 +463,7 @@ def split_env_object(
             continue
         if name in granted or _credential_name(name):
             raise ValueError(_literal_credential_message(name, granted))
-        variables[name] = value
+        variables[name] = unescape_references(value)
     return variables, credentials, secret_references
 
 
@@ -602,6 +602,8 @@ def _parse_call(
     if has_reference(command):
         # Command lines reach process listings and shell history.
         raise ToolContractError(_secret_in_text_message("command"))
+    # An escaped reference ({{!secret:NAME}}) runs as the reference text itself.
+    command = unescape_references(command)
     description = optional_string(arguments.get("description"), field_name="description")
     background = arguments.get("run_in_background") is True
     timeout, note = resolve_timeout(

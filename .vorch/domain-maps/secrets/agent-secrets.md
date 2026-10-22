@@ -5,7 +5,7 @@ Task-gated reference for Agent Secrets (GLOSSARY -> Agent Secret): records and l
 ## Terms
 
 ### Secret reference
-`{{secret:NAME[.field]}}`: what an Agent writes where a value belongs and what masking shows instead of the value; outside a sink it stays literal text.
+`{{secret:NAME[.field]}}`: what an Agent writes where a value belongs and what masking shows instead of the value; outside a sink it stays literal text. Its escape `{{!secret:NAME[.field]}}` writes the reference text itself (References and sinks).
 
 ### Sink
 A class of Tool arguments where vBot substitutes references (`environment`, `terminal`, `files`, `typing`, `external_tools`); each Agent Secret lists its allowed sinks.
@@ -18,9 +18,9 @@ An Agent's `secrets` `request`: a form the user answers or declines within 10 mi
 
 ## Source
 
-- `core/secrets/agent_secrets.py` (`AgentSecrets`: records, grants, resolution, substitution, shell environment, masker, sources, recent uses), `_agent_secret_model.py` (record model, names, kinds, default sinks, codec), `_references.py` (reference grammar, `SecretMasker`), `_totp.py`, `sources.py` (`SecretSource`), `requests.py` (`SecretRequests`), `commands.py` (`/secret` grammar).
+- `core/secrets/agent_secrets.py` (`AgentSecrets`: records, grants, resolution, substitution, shell environment, masker, sources, recent uses), `_agent_secret_model.py` (record model, names, kinds, default sinks, codec), `_references.py` (reference and escape grammar, `SecretMasker`), `_totp.py`, `sources.py` (`SecretSource`), `requests.py` (`SecretRequests`), `commands.py` (`/secret` grammar).
 - Users: `core/tools/tools.py` (substitution in dispatch), `core/tools/shell.py` and `_shell_arguments.py` (environment), `core/tools/secrets.py` (the `secrets` Tool and `tool:secrets` block), `core/chat/_tool_registry.py`, `content_blocks.py`, `wire_shaping.py` and `core/compaction/compaction.py` (masking), `core/chat/_command_secret.py` and `secret_giving.py` (`/secret`, `agent_secrets.give`), `core/subagents/subagents.py` (pass-through), `core/archive/archive.py` (removal), `server/rpc/agent_secret_methods.py`, `server/app.py::_publish_secret_changes`, `core/channels/engine.py` (message removal).
-- Tests: `tests/core/secrets/test_agent_secrets.py`, `test_commands.py` (`/secret` grammar), `tests/core/tools/test_secrets_tool.py`, `test_tools_registry.py` (sinks), `test_shell.py` and `test_shell_arguments.py`, `tests/core/chat/test_tool_dispatch.py`, `test_wire_shaping_requests.py`, `test_commands.py`, `tests/core/subagents/test_subagents.py`, `tests/server/rpc/test_agent_secret_methods.py`, `tests/core/channels/test_engine_commands.py`.
+- Tests: `tests/core/secrets/test_agent_secrets.py`, `test_commands.py` (`/secret` grammar), `tests/core/tools/test_secrets_tool.py`, `test_tools_registry.py` (sinks), `test_edit_tools_secret_references.py` (escape, old text following the file), `test_shell.py` and `test_shell_arguments.py`, `tests/core/chat/test_tool_dispatch.py`, `test_wire_shaping_requests.py`, `test_commands.py`, `tests/core/subagents/test_subagents.py`, `tests/server/rpc/test_agent_secret_methods.py`, `tests/core/channels/test_engine_commands.py`.
 
 ## Records
 
@@ -45,8 +45,10 @@ An Agent's `secrets` `request`: a form the user answers or declines within 10 mi
 ## References and sinks
 
 - Grammar (`REFERENCE_PATTERN`): `{{secret:NAME}}` or `{{secret:NAME.field}}`, spaces inside the braces tolerated, name and field case-insensitive. Without a field it means the only field, else `password`, else `value`. The same text is the mask, so masked text written back through a sink restores the value.
+- Escape (user decision 2026-10-22): `{{!secret:NAME[.field]}}` is not a reference; wherever references are interpreted (every sink, the shell `command` and `env` values) it loses one `!` and becomes the reference text, so `{{!!secret:X}}` writes `{{!secret:X}}` and any text can be written. It never resolves, so it needs no grant and is never refused. Masking never produces it: output shows a stored value and reference text in a file alike, as `{{secret:NAME}}`.
+- Old text follows the file: in the file edit Tools (`edit` `old_string`, `apply_patch` context and `-` lines) a reference first means its value. Dispatch hands the handler each value it put into a `files` sink with the reference text it replaced (`ToolContext.secret_literals`); when the old text with values has no precise match, the engine tries the same change with every value read back as its reference text, precisely only (`_edit_engine.with_literal_readings`). If that matches, the file holds the reference text, and the change writes its new text with the references kept as text too, with a result note (`Kept {{secret:X}} as text: ...`). So a line copied from any output (read, shell, search) into an edit works whether the file holds the value or the reference text. Limits: the Secret was still resolved, so the display lists it as used and a `once` Secret is spent; new text without old text to follow (`write`, `apply_patch` Add File, a pure `+` block) needs the escape for reference text.
 - A Tool declares sinks with `secret_sinks` (root argument -> sink class) in `ToolRegistry.register`, `api.register_tool` or a live Extension catalog declaration (API 17). After argument normalization and validation, dispatch replaces references in those arguments, nested strings included, on the handler's copy only, on a Tool worker because a source may block. The persisted call, its events and its display keep the references. A reference in any other argument stays literal text.
-- A reference that cannot be used here (`unknown_secret`, `not_granted`, `unknown_field`, `sink_not_allowed`, `source_failed`; `SecretUseError`) fails the call as `secret_unavailable` with that message, and nothing runs. Each used field is recorded on the display as `secrets_used` (`NAME.field (sink)`, never a value).
+- A reference that cannot be used here (`unknown_secret`, `not_granted`, `unknown_field`, `sink_not_allowed`, `source_failed`; `SecretUseError`) fails the call as `secret_unavailable` with that message, and nothing runs. The `unknown_secret` and `not_granted` messages name the escape for the reference text itself. Each used field is recorded on the display as `secrets_used` (`NAME.field (sink)`, never a value).
 
 | Sink class | Declared by |
 |---|---|
@@ -60,7 +62,7 @@ Shell environment (`core/tools/_shell_arguments.py`, `shell.py`):
 
 - `env_keys` accepts the caller's Secret names and field variables (`environment_names`): a Secret name sets every field, as `NAME` for a one-field Secret and `NAME_<FIELD>` otherwise; one field's variable (`GITHUB_PASSWORD`) sets that field. A granted credential keeps precedence over a Secret name.
 - An `env` value that is exactly one reference becomes that value.
-- A reference in `command`, or inside an `env` value with other text, refuses the call before it runs (`invalid_arguments`, naming both ways): command lines reach process listings and shell history.
+- A reference in `command`, or inside an `env` value with other text, refuses the call before it runs (`invalid_arguments`, naming both ways): command lines reach process listings and shell history. An escaped reference there runs as the reference text.
 - Resolution runs on a worker after the call is parsed; a refusal is `secret_unavailable`. A granted credential a command received through `env_keys` is remembered for masking.
 
 ## Masking

@@ -26,10 +26,17 @@ V4A line hunks (`` ``/``-``/``+`` lines, ``@@`` hints, ``*** End of File``):
 
 ``_splice`` writes every placed hunk: unchanged lines keep the file's bytes,
 changed lines take the file's line endings, indentation and typography.
+
+A hunk whose text held Secret references carries a literal reading
+(``with_literal_readings``): the same change with every substituted value read
+back as its reference text. It is tried, precisely only, when the substituted
+old text has no precise match; when it matches, the file holds the reference
+text itself and the change keeps it as text in the new text too.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import replace
 from os.path import commonprefix
 
@@ -41,7 +48,7 @@ from core.tools._edit_locations import DeviationNote as DeviationNote
 from core.tools._edit_locations import file_excerpt as file_excerpt
 from core.tools._edit_locations import line_ending as line_ending
 from core.tools._edit_replacement import _apply_replacement
-from core.tools._patch_syntax import _Hunk, _PatchError
+from core.tools._patch_syntax import _Hunk, _PatchError, _Replacement
 from core.tools.fuzzy_match import (
     replace_fuzzy,
 )
@@ -81,10 +88,7 @@ def apply_hunks(
         if failures:
             hunk = replace(hunk, precise_only=True)
         try:
-            if hunk.replacement is not None:
-                edited, placed = _apply_replacement(content, hunk, path)
-            else:
-                edited, placed = _apply_line_hunk(content, hunk, path, previous)
+            edited, placed = _place(content, hunk, path, previous)
             if failures is not None and "\x00" in edited:
                 # Only binary files hold it; the call's other changes still apply.
                 raise _PatchError("binary_file", template="nul_text", path=path, label=hunk.label)
@@ -111,6 +115,91 @@ def apply_hunks(
         content = edited
         notes.extend(placed)
     return content, notes, previous
+
+
+# Errors after which a literal reading of the hunk is tried.
+_NOT_FOUND = frozenset({"text_not_found", "context_not_found"})
+
+
+def _place(content: str, hunk: _Hunk, path: object, previous: int | None) -> tuple[str, list[str]]:
+    """Place one hunk; with a literal reading, as the reading the file holds."""
+    literal = hunk.literal
+    if literal is None:
+        return _place_reading(content, hunk, path, previous)
+    hunk = replace(hunk, literal=None)
+    try:
+        return _place_reading(content, replace(hunk, precise_only=True), path, previous)
+    except _PatchError as error:
+        if error.code not in _NOT_FOUND:
+            raise
+    try:
+        edited, placed = _place_reading(
+            content, replace(literal, precise_only=True), path, previous
+        )
+    except _PatchError:
+        return _place_reading(content, hunk, path, previous)
+    kept = " and ".join(literal.kept_references)
+    return edited, [
+        *placed,
+        f"Kept {kept} as text: the file holds that text, not the Secret's value.",
+    ]
+
+
+def _place_reading(
+    content: str, hunk: _Hunk, path: object, previous: int | None
+) -> tuple[str, list[str]]:
+    if hunk.replacement is not None:
+        return _apply_replacement(content, hunk, path)
+    return _apply_line_hunk(content, hunk, path, previous)
+
+
+def with_literal_readings(hunks: list[_Hunk], literals: Mapping[str, str]) -> list[_Hunk]:
+    """``hunks``, each whose text holds a value of ``literals`` with its literal reading.
+
+    ``literals`` maps each Secret value dispatch substituted to the reference
+    text it replaced (``ToolContext.secret_literals``).
+    """
+    if not literals:
+        return hunks
+    ordered = sorted(literals.items(), key=lambda item: len(item[0]), reverse=True)
+
+    def read_back(text: str, kept: list[str]) -> str:
+        for value, reference in ordered:
+            if value in text:
+                text = text.replace(value, reference)
+                if reference not in kept:
+                    kept.append(reference)
+        return text
+
+    changed: list[_Hunk] = []
+    for hunk in hunks:
+        kept: list[str] = []
+        replacement = hunk.replacement
+        literal = replace(
+            hunk,
+            hints=[read_back(hint, kept) for hint in hunk.hints],
+            lines=[(prefix, read_back(text, kept)) for prefix, text in hunk.lines],
+            replacement=None
+            if replacement is None
+            else _Replacement(
+                read_back(replacement.old, kept),
+                read_back(replacement.new, kept),
+                replacement.replace_all,
+            ),
+        )
+        # Old text without a reference cannot tell the readings apart.
+        old_kept: list[str] = []
+        if replacement is not None:
+            read_back(replacement.old, old_kept)
+        else:
+            for prefix, text in hunk.lines:
+                if prefix in " -":
+                    read_back(text, old_kept)
+        if not old_kept:
+            changed.append(hunk)
+            continue
+        changed.append(replace(hunk, literal=replace(literal, kept_references=tuple(kept))))
+    return changed
 
 
 def _replaced_by(seen: list[tuple[str, str]], hunk: _Hunk) -> str | None:
