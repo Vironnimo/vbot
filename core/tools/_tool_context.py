@@ -5,6 +5,7 @@ from __future__ import annotations
 import inspect
 import json
 import os
+import re
 from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -72,6 +73,7 @@ class UnusablePathError(ToolContractError):
         )
 
 
+_SEPARATOR = re.compile(r"([\\/])")
 _COLON_IN_NAME = (
     'Windows file and folder names cannot contain ":". Use another character, such as "-"'
 )
@@ -96,18 +98,33 @@ def _names(path: Path) -> tuple[str, ...]:
     return path.parts[1:] if path.anchor else path.parts
 
 
-def _windows_name_problem(candidate: Path, access: PathResolveAccess) -> str | None:
+def _windows_name_problem(text: str, candidate: Path, access: PathResolveAccess) -> str | None:
     """Return why Windows cannot use the names of ``candidate``, or ``None``.
 
     A ``:`` inside a name makes Windows read the path as another drive's current
     folder or an alternate data stream; in a folder name it can lead to a file
     outside the working directory. A final name keeps one for a read, which
     opens that stream; a change or a working directory could only fail on it.
+    Windows drops the dots and spaces that end a name, so a change refuses such
+    a name and names the path it would change instead; a read just opens it.
     """
     names = _names(candidate)
     if any(":" in name for name in names[:-1]) or (access != "read" and names and ":" in names[-1]):
         return _COLON_IN_NAME
-    return None
+    if access != "write" or all(name in {".", ".."} or name[-1:] not in " ." for name in names):
+        return None
+    pieces = _SEPARATOR.split(text)
+    kept = [
+        piece if piece in {".", ".."} or _SEPARATOR.fullmatch(piece) else piece.rstrip(" .")
+        for piece in pieces
+    ]
+    if any(piece and not shortened for piece, shortened in zip(pieces, kept, strict=True)):
+        return "Windows file and folder names cannot end with a dot or space. Choose another name"
+    named = "".join(kept)
+    return (
+        "Windows drops the dot or space at the end of a file or folder name, so this path "
+        f'names "{named}". Send "{named}" if you mean that path'
+    )
 
 
 def _drive_relative_problem(text: str, candidate: Path) -> str:
@@ -384,7 +401,7 @@ class ToolContext:
         # filename here. An explicitly relative ./~name is literal on every host.
         if str(spelling).startswith("~") and (os.name != "nt" or candidate.parts[0] == "~"):
             candidate = candidate.expanduser()
-        problem = _windows_name_problem(candidate, access) if windows else None
+        problem = _windows_name_problem(str(spelling), candidate, access) if windows else None
         target = candidate if candidate.is_absolute() else self.effective_cwd / candidate
         if problem is None and not target.is_absolute():
             problem = (

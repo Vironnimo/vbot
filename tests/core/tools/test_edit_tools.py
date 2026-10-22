@@ -1339,6 +1339,25 @@ NUL = (
             id="write-colon",
             marks=pytest.mark.skipif(os.name != "nt", reason="Windows file names"),
         ),
+        # Both created a regular file named new or trail.txt and reported another name.
+        pytest.param(
+            "write",
+            {"path": "new/", "content": "x"},
+            "invalid_path",
+            'Cannot use path new/: it ends with "/", so it names a folder, not a file. Add the '
+            'file name after "new/"; missing folders are created with the file.',
+            id="write-folder-path",
+        ),
+        pytest.param(
+            "write",
+            {"path": "sub./trail.txt.", "content": "x"},
+            "invalid_path",
+            "Cannot use path sub./trail.txt.: Windows drops the dot or space at the end of a file "
+            'or folder name, so this path names "sub/trail.txt". Send "sub/trail.txt" if you mean '
+            "that path.",
+            id="write-trailing-dot",
+            marks=pytest.mark.skipif(os.name != "nt", reason="Windows file names"),
+        ),
     ],
 )
 async def test_failed_changes_change_nothing_and_say_what_to_send(

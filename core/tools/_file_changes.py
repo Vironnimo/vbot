@@ -16,6 +16,7 @@ others are written.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable, Mapping
 from contextlib import ExitStack
 from dataclasses import dataclass, field, replace
@@ -39,6 +40,7 @@ from core.tools._patch_syntax import _Operation, _PatchError
 from core.tools._path_suggestions import missing_file_message
 from core.tools._read_text import add_line_numbers, plain_line_end
 from core.tools._swarm_references import wiki_page_call
+from core.tools._tool_context import _path_argument
 from core.tools.arguments import split_text_lines
 from core.tools.file_state import (
     FileReadState,
@@ -77,6 +79,10 @@ _STALE_WARNING = (
     "{path} changed after this Session last read it; the change used its current content."
 )
 _STALE_FAILURE = "{path} changed after this Session last read it; read it again before resending."
+_FOLDER_PATH = (
+    'it ends with "{separator}", so it names a folder, not a file. Add the file name after '
+    '"{path}"; missing folders are created with the file'
+)
 # Failures that mean the call's view of the file differs from its current content.
 _MISMATCH_CODES = frozenset(
     {"text_not_found", "context_not_found", "ambiguous_match", "ambiguous_context"}
@@ -719,6 +725,15 @@ def _run_step(
             batch.change_ends.pop(source, None)
 
 
+def _folder_problem(name: str) -> str | None:
+    """Say why a file cannot be created at ``name`` when it ends with a separator."""
+    text = str(_path_argument(name, windows=os.name == "nt")).rstrip()
+    separators = "/\\" if os.name == "nt" else "/"
+    if not text or text[-1] not in separators:
+        return None
+    return _FOLDER_PATH.format(separator=text[-1], path=text)
+
+
 def _steps(operation: _Operation) -> list[_Operation]:
     """Split one patch operation into its steps: each hunk, then a move."""
     if operation.action != "update":
@@ -757,6 +772,11 @@ def run_operations(
                     resolved[name] = _resolve(context, name, access="write")
                 except _PatchError as error:
                     resolution_errors[name] = _error_data(error, batch)
+        folder = _folder_problem(operation.path) if operation.action == "add" else None
+        if folder is not None and operation.path not in resolution_errors:
+            # The path would resolve to the folder's own name and create a file there.
+            refusal = _PatchError("invalid_path", path=operation.path, reason=folder)
+            resolution_errors[operation.path] = _error_data(refusal, batch)
     # Delete and Move act on the named entry: a final link itself, not its target.
     entries: dict[tuple[str, bool], Path] = {}
     for operation in operations:
