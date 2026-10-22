@@ -26,6 +26,7 @@ from typing import Any
 import mcp.types as types
 
 from core.extensions.operations import ExtensionHost
+from core.tools.contracts import current_dialect_schema
 from core.tools.tools import ToolContext
 
 from ._events import ConnectionEvents, dump
@@ -139,11 +140,13 @@ class ServerRequests:
                 "temperature": request.get("temperature"),
                 "stop_sequences": request.get("stopSequences"),
                 "tool_choice": request.get("toolChoice", {}).get("mode"),
+                # Provider wires render JSON Schema 2020-12: an older draft's
+                # spellings are converted as for the server's listed Tools.
                 "tools": [
                     {
                         "name": tool["name"],
                         "description": tool.get("description", tool["name"]),
-                        "parameters": tool["inputSchema"],
+                        "parameters": current_dialect_schema(tool["inputSchema"]),
                     }
                     for tool in request.get("tools", [])
                 ],

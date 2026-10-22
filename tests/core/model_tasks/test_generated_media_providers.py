@@ -315,6 +315,13 @@ async def test_music_client_rejects_error_after_partial_audio(error: object) -> 
             id="content-filter",
         ),
         pytest.param(
+            200,
+            # GLM's name for a content-safety block (Z.ai Chat Completion reference).
+            [{"choices": [{"delta": {"content": "Blocked."}, "finish_reason": "sensitive"}]}],
+            "Blocked.",
+            id="sensitive",
+        ),
+        pytest.param(
             400,
             {"error": {"code": "content_policy_violation", "message": "Not allowed"}},
             "Not allowed",

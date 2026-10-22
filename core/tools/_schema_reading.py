@@ -40,21 +40,26 @@ _SUBSCHEMA_KEYWORDS = frozenset(
 )
 # Draft-04 boolean exclusive bounds and the bound each one makes exclusive.
 _DRAFT4_EXCLUSIVE_BOUNDS = {"exclusiveMinimum": "minimum", "exclusiveMaximum": "maximum"}
+# The 2019-09 keywords that split draft-07 ``dependencies``.
+_DEPENDENT_KEYWORDS = ("dependentRequired", "dependentSchemas")
 
 
 def current_dialect_schema(schema: Any) -> Any:
     """Return a copy of *schema* with older JSON Schema spellings in their 2020-12 form.
 
     Tool contracts are JSON Schema 2020-12. Schemas from outside vBot, such as
-    MCP servers' Tool schemas, are often written for draft-04 to 2019-09; two
-    spellings of those drafts are invalid in 2020-12 and mean one thing there,
-    so they are converted wherever a schema holds another:
+    MCP servers' Tool schemas, are often written for draft-04 to 2019-09; three
+    spellings of those drafts are invalid in 2020-12 or ignored by it, and each
+    means one thing there, so they are converted wherever a schema holds another:
 
     - a tuple ``items`` (an array of schemas) becomes ``prefixItems``, and an
       ``additionalItems`` beside it becomes ``items``;
     - a draft-04 boolean ``exclusiveMinimum``/``exclusiveMaximum`` becomes the
       numeric bound: ``true`` takes over the value of ``minimum``/``maximum``,
-      ``false`` is dropped.
+      ``false`` is dropped;
+    - ``dependencies`` splits by value: an array of names joins
+      ``dependentRequired``, a schema joins ``dependentSchemas``; a name either
+      keyword already lists keeps its entry there.
 
     Everything else, ``$schema`` included, stays as written, so a schema
     without these spellings comes back equal.
@@ -89,8 +94,14 @@ def _current_dialect_keywords(schema: JsonObject) -> JsonObject:
         for keyword, bound in _DRAFT4_EXCLUSIVE_BOUNDS.items()
         if isinstance(schema.get(keyword), bool)
     }
+    dependencies = schema.get("dependencies")
+    split_dependencies = isinstance(dependencies, dict) and all(
+        isinstance(schema.get(keyword, {}), dict) for keyword in _DEPENDENT_KEYWORDS
+    )
     converted: JsonObject = {}
     for key, value in schema.items():
+        if split_dependencies and key == "dependencies":
+            continue
         if tuple_items and key == "items":
             converted["prefixItems"] = value
         elif tuple_items and key == "additionalItems":
@@ -103,6 +114,11 @@ def _current_dialect_keywords(schema: JsonObject) -> JsonObject:
             continue  # Its exclusive keyword carries the value now.
         else:
             converted[key] = value
+    if split_dependencies:
+        assert isinstance(dependencies, dict)
+        for name, dependency in dependencies.items():
+            keyword = "dependentRequired" if isinstance(dependency, list) else "dependentSchemas"
+            converted.setdefault(keyword, {}).setdefault(name, dependency)
     return converted
 
 
@@ -169,6 +185,26 @@ def object_fields(
         declared = declared or nested.declared
         is_open = is_open or nested.open
     return ObjectFields(fields, tuple(required), declared, is_open)
+
+
+def declared_parameters(schema: Any) -> tuple[dict[str, Any], tuple[str, ...]]:
+    """Return the root parameters *schema* declares (name -> schema) and its required names.
+
+    Root ``allOf`` branches and a local ``$ref`` declare parameters like the
+    root's own ``properties`` (``object_fields``); when one of them cannot be
+    read, only the root's own declarations count.
+    """
+    if not isinstance(schema, Mapping):
+        return {}, ()
+    fields = object_fields(schema, schema)
+    if fields is not None:
+        return fields.properties, fields.required
+    properties = schema.get("properties")
+    listed = schema.get("required")
+    return (
+        dict(properties) if isinstance(properties, dict) else {},
+        tuple(name for name in listed if isinstance(name, str)) if isinstance(listed, list) else (),
+    )
 
 
 def _local_reference(reference: Any, root: Any) -> Any:

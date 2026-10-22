@@ -22,6 +22,7 @@ from core.tools._schema_reading import (
     DATA_KEYWORDS,
     SCHEMA_MAPS,
     current_dialect_schema,
+    declared_parameters,
     object_fields,
 )
 from core.tools.model_names import model_tool_name
@@ -663,13 +664,8 @@ def _render_argument_problems(
 
 def _parameter_line(tool_name: str, schema: JsonObject) -> str:
     """Return the line listing the Tool's parameters, ``""`` when it has none."""
-    fields = object_fields(schema, schema)
-    if fields is not None:
-        parameters: Any = fields.properties
-        required: Any = fields.required
-    else:
-        parameters, required = schema.get("properties"), schema.get("required", [])
-    if not isinstance(parameters, dict) or not parameters:
+    parameters, required = declared_parameters(schema)
+    if not parameters:
         return ""
     names = ", ".join(f"{name} (required)" if name in required else name for name in parameters)
     return f"{tool_name} parameters: {names}."
@@ -1014,6 +1010,7 @@ __all__ = [
     "ToolContractError",
     "compile_tool_contract",
     "current_dialect_schema",
+    "declared_parameters",
     "decode_json_argument",
     "ignored_fields_note",
 ]

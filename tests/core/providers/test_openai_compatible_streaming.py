@@ -202,19 +202,26 @@ _TOOL_FRAGMENT = _delta_chunk(tool_calls=[{"index": 0, "function": {"name": "sea
 
 
 @pytest.mark.parametrize(
-    ("before_finish", "finish_reason", "expected"),
+    ("before_finish", "finish_reason", "native_reason", "expected"),
     [
-        pytest.param([], "length", "output_truncated", id="length"),
-        pytest.param([_TOOL_FRAGMENT], "stop", "tool_calls", id="stop-after-tool-fragment"),
-        pytest.param([_TOOL_FRAGMENT], "provider_tool_stop", "unknown", id="unknown-stays-unsafe"),
-        pytest.param([], "sensitive", "content_filtered", id="glm-content-safety-block"),
+        pytest.param([], "length", None, "output_truncated", id="length"),
+        pytest.param([_TOOL_FRAGMENT], "stop", None, "tool_calls", id="stop-after-tool-fragment"),
+        pytest.param(
+            [_TOOL_FRAGMENT], "provider_tool_stop", None, "unknown", id="unknown-stays-unsafe"
+        ),
+        pytest.param([], "sensitive", None, "content_filtered", id="glm-content-safety-block"),
+        # Malformed reasons name no outcome; they never break the stream.
+        pytest.param([], ["stop"], None, "unknown", id="non-string-reason"),
+        pytest.param([], "stop", ["network_error"], "stop", id="non-string-native-reason"),
     ],
 )
 @pytest.mark.asyncio
 async def test_stream_finish_maps_the_terminal_outcome(
-    before_finish, finish_reason, expected
+    before_finish, finish_reason, native_reason, expected
 ) -> None:
-    chunks = await stream_chunks(sse(*before_finish, _finish_chunk(finish_reason)))
+    chunks = await stream_chunks(
+        sse(*before_finish, _finish_chunk(finish_reason, native_finish_reason=native_reason))
+    )
 
     assert chunks[-1] == {"type": "finish", "reason": expected}
 

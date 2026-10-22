@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any
 from core.extensions import ExtensionAPI
 from core.extensions.operations import PENDING_INPUTS_RESOURCE, ExtensionHost
 from core.tools.availability import resolve_tool_access
+from core.tools.contracts import declared_parameters
 from core.tools.tools import (
     ToolContext,
     run_tool_worker,
@@ -313,7 +314,7 @@ class MCPService:
                     "activation": "follows",
                     "activation_source": parent,
                     "secret_sinks": dict.fromkeys(
-                        parameters.get("properties") or {}, "external_tools"
+                        declared_parameters(parameters)[0], "external_tools"
                     ),
                 }
             )

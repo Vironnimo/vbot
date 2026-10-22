@@ -112,7 +112,8 @@ def test_compile_leaves_schema_like_data_and_local_references_alone() -> None:
 
 def test_older_draft_spellings_read_as_their_2020_12_form() -> None:
     # MCP servers write Tool schemas for older drafts, whose tuple ``items`` and
-    # boolean exclusive bounds 2020-12 refuses; data keywords stay as written.
+    # boolean exclusive bounds 2020-12 refuses and whose ``dependencies`` it
+    # ignores; data keywords stay as written.
     looks_older = {"items": ["a"], "additionalItems": False}
     query = {"type": "object", "default": looks_older, "examples": [looks_older]}
     older: JsonObject = {
@@ -132,6 +133,7 @@ def test_older_draft_spellings_read_as_their_2020_12_form() -> None:
             "query": query,
         },
         "definitions": {"tuple": {"items": [{"type": "string"}]}},
+        "dependencies": {"pair": ["ratio"], "point": {"required": ["pair"]}},
     }
 
     converted = current_dialect_schema(older)
@@ -147,12 +149,20 @@ def test_older_draft_spellings_read_as_their_2020_12_form() -> None:
         "query": query,
     }
     assert converted["definitions"] == {"tuple": {"prefixItems": [{"type": "string"}]}}
+    assert "dependencies" not in converted
+    assert converted["dependentRequired"] == {"pair": ["ratio"]}
+    assert converted["dependentSchemas"] == {"point": {"required": ["pair"]}}
     assert current_dialect_schema(converted) == converted
     contract = compile_tool_contract(
         name="sample", input_schema=converted, require_closed_input=False
     )
     contract.validate_arguments({"pair": ["a", 1], "point": [1.5, "free"], "ratio": 1})
-    for wrong in ({"pair": ["a", 0]}, {"pair": ["a", 1, "more"]}):
+    for wrong in (
+        {"pair": ["a", 0], "ratio": 1},
+        {"pair": ["a", 1, "more"], "ratio": 1},
+        {"pair": ["a", 1]},
+        {"point": [1.5]},
+    ):
         with pytest.raises(ToolContractError):
             contract.validate_arguments(wrong)
 

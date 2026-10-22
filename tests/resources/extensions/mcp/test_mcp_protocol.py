@@ -705,6 +705,56 @@ async def test_sampling_follows_the_connection_policy_within_its_limits(
 
 
 @pytest.mark.asyncio
+async def test_sampling_tools_reach_the_model_in_the_contract_dialect(host, monkeypatch):
+    sent = []
+
+    async def sample(invocation, request):
+        sent.append(request)
+        return {"model": "test/model", "content": "sampled"}
+
+    # A sampling Tool written for draft-07: tuple ``items``.
+    older = {"type": "object", "properties": {"pair": {"items": [{"type": "string"}]}}}
+
+    async def call(server_context, params):
+        if params.input_responses:
+            return types.CallToolResult(content=[types.TextContent(type="text", text="done")])
+        return types.InputRequiredResult.model_validate(
+            {
+                "resultType": "input_required",
+                "inputRequests": {
+                    "sample": {
+                        "method": "sampling/createMessage",
+                        "params": {
+                            "messages": [
+                                {"role": "user", "content": {"type": "text", "text": "pick"}}
+                            ],
+                            "maxTokens": 20,
+                            "tools": [{"name": "pick", "inputSchema": older}],
+                        },
+                    }
+                },
+            }
+        )
+
+    async def list_tools(server_context, params):
+        return types.ListToolsResult(
+            tools=[types.Tool(name="callbacks", input_schema={"type": "object"})]
+        )
+
+    server = Server("callbacks", on_call_tool=call, on_list_tools=list_tools)
+    runner = runner_for(replace(host, sample=sample), server, monkeypatch, sampling="allow")
+    try:
+        async with asyncio.timeout(10):
+            result = await runner.invoke("tools/call", {"name": "callbacks"}, context(host))
+        assert result["content"][0]["text"] == "done"
+        assert [tool["parameters"] for tool in sent[0]["tools"]] == [
+            {"type": "object", "properties": {"pair": {"prefixItems": [{"type": "string"}]}}}
+        ]
+    finally:
+        await runner.close()
+
+
+@pytest.mark.asyncio
 async def test_legacy_server_sampling_and_roots(host, monkeypatch, caplog, recwarn):
     from mcp import Client
 

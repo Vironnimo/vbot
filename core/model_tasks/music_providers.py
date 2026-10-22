@@ -27,6 +27,10 @@ from core.providers.http import (
     parse_sse_json_data,
     wrap_network_error,
 )
+from core.providers.openai_compatible import (
+    OPENAI_CONTENT_FILTER_FINISH_REASONS,
+    OPENAI_NATIVE_TRANSPORT_FINISH_REASONS,
+)
 from core.providers.task_client import (
     ProviderTaskClient,
     classify_task_response,
@@ -242,9 +246,13 @@ class _MusicStream:
                 if isinstance(transcript, str) and transcript:
                     self.transcript_parts.append(transcript)
         finish_reason = choice.get("finish_reason")
-        if finish_reason == "content_filter":
+        native_reason = choice.get("native_finish_reason")
+        # The finishes Chat Completions reads as a content filter or a failed
+        # transport mean the same here, but a billed track is never retried.
+        if isinstance(finish_reason, str) and finish_reason in OPENAI_CONTENT_FILTER_FINISH_REASONS:
             raise ProviderContentRefusedError(self.text()[:_MAX_REASON_CHARS] or None)
-        if (finish_reason is not None and finish_reason != "stop") or choice.get(
-            "native_finish_reason"
-        ) in ("network_error", "server_error"):
+        if (finish_reason is not None and finish_reason != "stop") or (
+            isinstance(native_reason, str)
+            and native_reason in OPENAI_NATIVE_TRANSPORT_FINISH_REASONS
+        ):
             raise ProviderError(f"OpenRouter ended the music stream with {finish_reason}.")
