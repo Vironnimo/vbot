@@ -17,6 +17,7 @@ from core.chat._output_speed import (
     OutputTimer,
     reported_speed,
 )
+from core.debug import timing
 from core.providers.adapter import (
     TERMINAL_OUTCOME_UNKNOWN,
     TerminalOutcome,
@@ -452,6 +453,8 @@ class _ToolCallFragments:
     provider_id: str | None = None
     name_text: str = ""
     arguments_text: str = ""
+    timing_closed: bool = False
+    timing_finalized: bool = False
 
     @property
     def tool_call_id(self) -> str:
@@ -607,6 +610,14 @@ class StreamingAccumulator:
             ):
                 break
             calls = fragments.to_tool_calls()
+            for call in calls:
+                timing.mark(
+                    "call_released",
+                    slot=slot,
+                    call=str(call["id"]),
+                    reason="finish" if self._finish_reason is not None else "stream_advanced",
+                    expanded_calls=len(calls),
+                )
             self._taken_tool_calls[slot] = calls
             taken.extend(calls)
         return taken
@@ -642,7 +653,19 @@ class StreamingAccumulator:
         tool_calls: list[JsonObject] = []
         for slot, fragments in self._tool_calls.items():
             taken = self._taken_tool_calls.get(slot)
-            tool_calls.extend(taken if taken is not None else fragments.to_tool_calls())
+            calls = taken if taken is not None else fragments.to_tool_calls()
+            if not fragments.timing_finalized:
+                fragments.timing_finalized = True
+                for call in calls:
+                    timing.mark(
+                        "call_finalized",
+                        slot=slot,
+                        call=str(call["id"]),
+                        already_released=taken is not None,
+                        expanded_calls=len(calls),
+                        terminal_outcome=self._finish_reason,
+                    )
+            tool_calls.extend(calls)
         content, reasoning = self._finalize_text()
         return StreamingAssistantFields(
             content=content,
@@ -759,9 +782,33 @@ class StreamingAccumulator:
         previous_id = fragments.tool_call_id
         fragments.accept_provider_id(provider_id)
         id_changed = had_fragments and previous_id != fragments.tool_call_id
+        if not had_fragments or id_changed:
+            timing.mark(
+                "call_received" if not had_fragments else "call_identified",
+                slot=stream_slot,
+                call=fragments.tool_call_id,
+                previous_call=previous_id if id_changed else None,
+            )
         if not name_delta and not arguments_delta and not id_changed:
             return None
         fragments.append(name_delta=name_delta, arguments_delta=arguments_delta)
+        if timing.enabled():
+            # Most fragments are in the middle of an object/string. Parse only
+            # plausible ends; this observer never changes the completion gate.
+            text = fragments.arguments_text.rstrip()
+            candidate = bool(text) and (
+                text[-1] == {"{": "}", "[": "]", '"': '"'}.get(text[0], text[-1])
+                or fragments.timing_closed
+            )
+            closed = fragments.arguments_closed() if candidate else False
+            if closed != fragments.timing_closed:
+                fragments.timing_closed = closed
+                timing.mark(
+                    "arguments_complete" if closed else "arguments_reopened",
+                    slot=stream_slot,
+                    call=fragments.tool_call_id,
+                    argument_chars=len(fragments.arguments_text),
+                )
         if name_delta or arguments_delta:
             self._output_timer.output(len(name_delta) + len(arguments_delta), answer=True)
 
@@ -825,8 +872,9 @@ class StreamingAccumulator:
             raise StreamingDeltaError("finish reason must be a string")
         if reason is None:
             self._finish_reason = TERMINAL_OUTCOME_UNKNOWN
-            return
-        self._finish_reason = terminal_outcome_from_response({"terminal_outcome": reason})
+        else:
+            self._finish_reason = terminal_outcome_from_response({"terminal_outcome": reason})
+        timing.mark("stream_finished", terminal_outcome=self._finish_reason)
 
 
 def finalize_model_response(response: JsonObject) -> JsonObject:

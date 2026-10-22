@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any, override
 
 import httpx
 
+from core.debug import timing
 from core.providers.errors import (
     NetworkError,
     ProviderAuthError,
@@ -106,7 +107,7 @@ def build_async_client(
     their traffic will silently not be traced.
     """
     effective_timeout = timeout if timeout is not None else provider_chat_timeout()
-    if debug_recorder is None:
+    if debug_recorder is None and not timing.enabled():
         return httpx.AsyncClient(
             base_url=base_url,
             timeout=effective_timeout,
@@ -149,34 +150,48 @@ class _DebugCaptureTransport(httpx.AsyncBaseTransport):
     def __init__(
         self,
         inner: httpx.AsyncBaseTransport,
-        recorder: ProviderDebugRecorder,
+        recorder: ProviderDebugRecorder | None,
     ) -> None:
         self._inner = inner
         self._recorder = recorder
 
     @override
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        capture = self._recorder.begin_capture(
-            method=request.method,
-            url=str(request.url),
-            headers=dict(request.headers),
-            body=request.content,
+        capture = (
+            self._recorder.begin_capture(
+                method=request.method,
+                url=str(request.url),
+                headers=dict(request.headers),
+                body=request.content,
+            )
+            if self._recorder is not None
+            else None
+        )
+        wire_timing = (
+            capture.wire_timing
+            if capture is not None
+            else timing.WireTiming()
+            if timing.enabled()
+            else None
         )
         try:
             response = await self._inner.handle_async_request(request)
         except Exception as exc:
-            capture.record_error(exc)
-            capture.finalize()
+            if capture is not None:
+                capture.record_error(exc)
+                capture.finalize()
             raise
 
-        capture.record_response_head(response.status_code, dict(response.headers))
+        if capture is not None:
+            capture.record_response_head(response.status_code, dict(response.headers))
         inner_stream = response.stream
         if isinstance(inner_stream, httpx.AsyncByteStream):
-            response.stream = _CaptureByteStream(inner_stream, capture)
+            response.stream = _CaptureByteStream(inner_stream, capture, wire_timing)
         else:
             # An async transport always yields an async stream; finalize
             # defensively so a trace is never left unpersisted.
-            capture.finalize()
+            if capture is not None:
+                capture.finalize()
         return response
 
     @override
@@ -192,14 +207,30 @@ class _CaptureByteStream(httpx.AsyncByteStream):
     stream is closed (covers both full reads and streamed iteration).
     """
 
-    def __init__(self, inner: httpx.AsyncByteStream, capture: Any) -> None:
+    def __init__(
+        self,
+        inner: httpx.AsyncByteStream,
+        capture: Any,
+        wire_timing: timing.WireTiming | None = None,
+    ) -> None:
         self._inner = inner
         self._capture = capture
+        self._wire_timing = wire_timing
 
     @override
     async def __aiter__(self) -> AsyncIterator[bytes]:
-        async for chunk in self._inner:
-            self._capture.feed_body(chunk)
+        iterator = self._inner.__aiter__()
+        while True:
+            if self._wire_timing is not None:
+                self._wire_timing.reading()
+            try:
+                chunk = await anext(iterator)
+            except StopAsyncIteration:
+                break
+            if self._capture is not None:
+                self._capture.feed_body(chunk)
+            elif self._wire_timing is not None:
+                self._wire_timing.received(len(chunk))
             yield chunk
 
     @override
@@ -207,7 +238,8 @@ class _CaptureByteStream(httpx.AsyncByteStream):
         try:
             await self._inner.aclose()
         finally:
-            self._capture.finalize()
+            if self._capture is not None:
+                self._capture.finalize()
 
 
 # Retry-After parsing lives in core.utils.http_status (shared with the HTTP
@@ -688,6 +720,7 @@ async def iter_sse_events(response: httpx.Response) -> AsyncIterator[SSEEvent]:
     async for line in iter_stream_lines(response):
         if line == "":
             if data_parts:
+                timing.framed_event()
                 yield SSEEvent(data="\n".join(data_parts))
                 data_parts = []
             continue
@@ -698,6 +731,7 @@ async def iter_sse_events(response: httpx.Response) -> AsyncIterator[SSEEvent]:
             data_parts.append(line[len("data:") :].lstrip(" "))
 
     if data_parts:
+        timing.framed_event()
         yield SSEEvent(data="\n".join(data_parts))
 
 

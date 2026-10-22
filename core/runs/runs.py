@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Protocol
 
+from core.debug import timing
 from core.runs.run import (
     DEFAULT_COMPLETED_RUN_RETENTION_LIMIT,
     DEFAULT_RUN_ADMISSION,
@@ -826,6 +827,9 @@ class ChatRunManager:
             if run._started_from_queue_item_id is not None:  # noqa: SLF001
                 started_payload["queue_item_id"] = run._started_from_queue_item_id  # noqa: SLF001
             run.emit(RUN_STARTED_EVENT, started_payload)
+            timing.mark(
+                "run_executor_started", run=run.id, session=run.session_id, kind=run.run_kind.value
+            )
             result = await executor(run)
         except RunInterruptedError as exc:
             status, error = RunStatus.INTERRUPTED, exc

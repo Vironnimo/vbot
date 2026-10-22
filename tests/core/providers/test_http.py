@@ -9,12 +9,15 @@ import json
 import zlib
 from collections.abc import Awaitable, Callable
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, override
 
 import httpx
 import pytest
 import respx
 
+from core.chat.streaming import StreamingAccumulator
+from core.debug import timing
 from core.debug.recorder import DebugContext, ProviderDebugRecorder
 from core.debug.store import DebugTraceStore
 from core.providers.errors import (
@@ -515,6 +518,69 @@ def _traces(store: DebugTraceStore) -> list[dict[str, Any]]:
 
 async def _drain(adapter: OpenAICompatibleAdapter) -> list[dict[str, Any]]:
     return [delta async for delta in adapter.stream(_MESSAGES, model_id="gpt-5.2")]
+
+
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize("delivery", ["incremental", "batched", "backpressure"])
+async def test_tool_timing_distinguishes_wire_batches_from_local_waits(
+    debug_adapter: OpenAICompatibleAdapter,
+    debug_store: DebugTraceStore,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    delivery: str,
+) -> None:
+    caplog.set_level("DEBUG", logger="vbot.debug.timing")
+    clock = [0]
+    monkeypatch.setattr(timing, "time", SimpleNamespace(monotonic_ns=lambda: clock[0]))
+    frames: list[bytes] = []
+    for index in range(8):
+        for part, arguments in enumerate(['{"content":"PRIVATE', '"}']):
+            call: dict[str, Any] = {"index": index, "function": {"arguments": arguments}}
+            if part == 0:
+                call.update(id=f"call_{index}")
+                call["function"]["name"] = "subagent"
+            frames.append(f"data: {_chunk({'tool_calls': [call]})}\n\n".encode())
+    frames.append(f"data: {_chunk({}, 'tool_calls')}\n\ndata: [DONE]\n\n".encode())
+
+    async def body():  # type: ignore[no-untyped-def]
+        for frame in [b"".join(frames)] if delivery == "batched" else frames:
+            clock[0] += 1_000_000  # pending transport read, no real waits
+            yield frame
+
+    respx.post(_DEBUG_URL).mock(return_value=httpx.Response(200, content=body()))
+    accumulator = StreamingAccumulator()
+    calls: list[dict[str, Any]] = []
+    debug_adapter.set_debug_context(_debug_context(streaming=True))
+    try:
+        with timing.request_scope(run="run-timing", iteration=1, model="debug/model"):
+            async for delta in debug_adapter.stream(_MESSAGES, model_id="gpt-5.2"):
+                accumulator.add_delta(delta)
+                calls.extend(accumulator.take_completed_tool_calls())
+                if delivery == "backpressure":
+                    clock[0] += 10_000_000  # Chat has not requested the next fragment yet
+    finally:
+        await debug_adapter.aclose()
+    assert [call["id"] for call in calls] == [f"call_{i}" for i in range(8)]
+    marks = [r.tool_timing for r in caplog.records if hasattr(r, "tool_timing")]
+    received = [m for m in marks if m["phase"] == "call_received"]
+    complete = [m for m in marks if m["phase"] == "arguments_complete"]
+    released = [m for m in marks if m["phase"] == "call_released"]
+    wire = [m for m in marks if m["phase"] == "wire_received"]
+    assert len(received) == len(complete) == len(released) == 8
+    assert len({m["request"] for m in marks}) == 1
+    assert {m["wire"] for m in wire} == {_traces(debug_store)[0]["trace_id"]}
+    if delivery == "batched":
+        assert len(wire) == 1
+        assert {m["wire_chunk"] for m in received + complete} == {1}
+    else:
+        assert [m["wire_chunk"] for m in received] == list(range(1, 17, 2))
+        assert [m["wire_chunk"] for m in complete] == list(range(2, 17, 2))
+        assert all(m["wire_received_ns"] - m["read_started_ns"] == 1_000_000 for m in wire)
+        expected_gap = 10_000_000 if delivery == "backpressure" else 0
+        assert all(m["consumer_gap_ns"] == expected_gap for m in wire[1:])
+    assert all(m["run"] == "run-timing" and m["iteration"] == 1 for m in marks)
+    assert all("PRIVATE" not in r.getMessage() for r in caplog.records if hasattr(r, "tool_timing"))
 
 
 def _sse(content: str, headers: dict[str, str] | None = None) -> httpx.Response:
