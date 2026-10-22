@@ -267,9 +267,11 @@ class CalendarService(CalendarProjection):
         """Change a whole event: title, description, location, start, end or rrule.
 
         Omitted fields keep their value. A new start alone keeps the event's
-        length; an empty or null rrule stops the repetition. Moving a repeating
-        event's start moves its removed and changed occurrences with it;
-        occurrences the new rule no longer produces lose their changes.
+        length; an empty or null rrule stops the repetition. A repeating
+        event's removed and changed occurrences move with a moved start where
+        the new rule produces them there, else stay where it still produces
+        them; the others lose their changes. A change between timed and
+        all-day carries them over by their local date.
         """
         await self.load()
         self._event(event_id)
@@ -424,10 +426,10 @@ class CalendarService(CalendarProjection):
         ):
             # The rule's meaning depends on the start (its weekday, UNTIL, BYHOUR).
             candidate.rrule = _event_rule(candidate.rrule, candidate.start, candidate.tz_name)
-        if candidate.rrule is None or candidate.all_day != event.all_day:
+        if candidate.rrule is None:
             candidate.exdates, candidate.overrides = [], {}
         elif (candidate.start, candidate.rrule) != (event.start, event.rrule):
-            _move_occurrence_keys(candidate, event)
+            _carry_occurrence_changes(candidate, event)
         return candidate
 
     def _event_times(
@@ -685,19 +687,63 @@ def _event_rule(value: object, start: str, tz_name: str | None) -> str | None:
     return normalize_rrule(value, start=local_time(start), zone=zone)
 
 
-def _move_occurrence_keys(candidate: CalendarEvent, event: CalendarEvent) -> None:
-    """Move removed and changed occurrences with a moved start; drop those the rule lost."""
-    shift = local_time(candidate.start) - local_time(event.start)
+def _carry_occurrence_changes(candidate: CalendarEvent, event: CalendarEvent) -> None:
+    """Carry the removed and changed occurrences of ``event`` over to its changed series.
+
+    An occurrence follows the start's move when the new rule produces the
+    moved key, else keeps its own key when the new rule still produces that,
+    and is dropped otherwise. Where two meet on one key, a moved one wins over
+    one that stays, else the earlier one. A change between timed and all-day
+    maps each key by its local date: to that date, or to that date at the new
+    start time; a changed occurrence's own start goes the same way and takes
+    the series' new length.
+    """
+    keys = sorted({*event.exdates, *event.overrides})
     all_day = candidate.all_day
+    new_start = local_time(candidate.start)
 
-    def moved(key: str) -> str:
-        return occurrence_key(local_time(key) + shift, all_day=all_day)
+    def own_slot(text: str) -> datetime:
+        """A stored time of ``event`` in the form of ``candidate``, on its local date."""
+        moment = local_time(text)
+        if all_day == event.all_day:
+            return moment
+        return datetime.combine(moment.date(), time.min if all_day else new_start.time())
 
-    exdates = [moved(key) for key in event.exdates]
-    overrides = {moved(key): dict(value) for key, value in event.overrides.items()}
-    produced = occurrence_keys(candidate, [*exdates, *overrides])
-    candidate.exdates = sorted(key for key in exdates if key in produced)
-    candidate.overrides = {key: value for key, value in overrides.items() if key in produced}
+    shift = new_start - own_slot(event.start)
+    moved = {key: occurrence_key(own_slot(key) + shift, all_day=all_day) for key in keys}
+    kept = {key: occurrence_key(own_slot(key), all_day=all_day) for key in keys}
+    produced = occurrence_keys(candidate, [*moved.values(), *kept.values()])
+    targets: dict[str, str] = {}
+    taken: set[str] = set()
+    for key in keys:
+        if moved[key] in produced and moved[key] not in taken:
+            targets[key] = moved[key]
+            taken.add(moved[key])
+    for key in keys:
+        if moved[key] not in produced and kept[key] in produced and kept[key] not in taken:
+            targets[key] = kept[key]
+            taken.add(kept[key])
+    candidate.exdates = sorted(targets[key] for key in event.exdates if key in targets)
+    length = local_time(candidate.end) - new_start
+    overrides: dict[str, dict[str, Any]] = {}
+    for key, changes in event.overrides.items():
+        if key not in targets:
+            continue
+        value = dict(changes)
+        if all_day != event.all_day and "start" in value:
+            start = own_slot(value.pop("start"))
+            del value["end"]
+            value |= _without_series_values(
+                candidate,
+                targets[key],
+                {
+                    "start": occurrence_key(start, all_day=all_day),
+                    "end": occurrence_key(start + length, all_day=all_day),
+                },
+            )
+        if value:
+            overrides[targets[key]] = value
+    candidate.overrides = overrides
 
 
 def _without_series_values(

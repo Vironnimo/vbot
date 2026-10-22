@@ -224,40 +224,81 @@ class TestUpdateEvent:
 
         assert (updated.start, updated.end) == expected
 
-    def test_moving_a_series_moves_its_changed_and_removed_occurrences(
-        self, service: CalendarService
+    @pytest.mark.parametrize(
+        ("created", "change", "fields", "exdates", "overrides"),
+        [
+            pytest.param(
+                ("2030-01-07T09:00", "FREQ=WEEKLY"),
+                {},
+                {"start": "2030-01-08T10:00"},
+                ["2030-01-15T10:00:00"],
+                {"2030-01-22T10:00:00": {}},
+                id="moved-with-the-start",
+            ),
+            pytest.param(
+                ("2030-01-07T09:00", "FREQ=WEEKLY;BYDAY=MO"),
+                {},
+                {"start": "2030-01-08T09:00"},
+                ["2030-01-14T09:00:00"],
+                {"2030-01-21T09:00:00": {}},
+                id="kept-where-the-rule-still-has-them",
+            ),
+            pytest.param(
+                ("2030-01-07T09:00", "FREQ=WEEKLY"),
+                {},
+                {"rrule": "FREQ=WEEKLY;INTERVAL=2"},
+                [],
+                {"2030-01-21T09:00:00": {}},
+                id="dropped-where-the-rule-lost-them",
+            ),
+            pytest.param(
+                ("2030-01-07T09:00", "FREQ=WEEKLY"),
+                {"start": "2030-01-23T14:00"},
+                {"start": "2030-01-07"},
+                ["2030-01-14"],
+                {"2030-01-21": {"start": "2030-01-23", "end": "2030-01-24"}},
+                id="timed-to-all-day-by-date",
+            ),
+            pytest.param(
+                ("2030-01-07", "FREQ=WEEKLY"),
+                {"start": "2030-01-23"},
+                {"start": "2030-01-08T10:00"},
+                ["2030-01-15T10:00:00"],
+                {
+                    "2030-01-22T10:00:00": {
+                        "start": "2030-01-23T10:00:00",
+                        "end": "2030-01-23T11:00:00",
+                    }
+                },
+                id="all-day-to-timed-moved",
+            ),
+        ],
+    )
+    def test_series_change_carries_its_removed_and_changed_occurrences(
+        self,
+        service: CalendarService,
+        created: tuple[str, str],
+        change: dict[str, str],
+        fields: dict[str, str],
+        exdates: list[str],
+        overrides: dict[str, dict[str, str]],
     ) -> None:
-        event = service.create_event(title="Weekly", start="2030-01-07T09:00", rrule="FREQ=WEEKLY")
-        asyncio.run(service.delete_occurrence(occurrence_id(event.id, "2030-01-14T09:00:00")))
-        asyncio.run(
-            service.update_occurrence(occurrence_id(event.id, "2030-01-21T09:00:00"), title="Kept")
-        )
+        event = service.create_event(title="Weekly", start=created[0], rrule=created[1])
+        second, third = [item.id for item in _window(service, "2030-01-14", "2030-01-21")]
+        asyncio.run(service.delete_occurrence(second))
+        asyncio.run(service.update_occurrence(third, title="Kept", **change))
 
-        moved = asyncio.run(service.update_event(event.id, start="2030-01-08T10:00"))
+        changed = asyncio.run(service.update_event(event.id, **fields))
 
-        assert moved.exdates == ["2030-01-15T10:00:00"]
-        assert moved.overrides == {"2030-01-22T10:00:00": {"title": "Kept"}}
-        assert [
-            (item.start, item.title) for item in _window(service, "2030-01-01", "2030-01-31")
-        ] == [
-            ("2030-01-08T10:00:00", "Weekly"),
-            ("2030-01-22T10:00:00", "Kept"),
-            ("2030-01-29T10:00:00", "Weekly"),
-        ]
-
-    def test_new_rule_drops_the_changes_of_occurrences_it_no_longer_has(
-        self, service: CalendarService
-    ) -> None:
-        event = service.create_event(title="Weekly", start="2030-01-07T09:00", rrule="FREQ=WEEKLY")
-        asyncio.run(service.delete_occurrence(occurrence_id(event.id, "2030-01-14T09:00:00")))
-        asyncio.run(
-            service.update_occurrence(occurrence_id(event.id, "2030-01-21T09:00:00"), title="Kept")
-        )
-
-        changed = asyncio.run(service.update_event(event.id, rrule="FREQ=WEEKLY;INTERVAL=2"))
-
-        assert changed.exdates == []
-        assert changed.overrides == {"2030-01-21T09:00:00": {"title": "Kept"}}
+        assert changed.exdates == exdates
+        assert changed.overrides == {
+            key: {"title": "Kept", **value} for key, value in overrides.items()
+        }
+        for key in exdates:
+            with pytest.raises(CalendarEventNotFoundError):
+                service.get_occurrence(occurrence_id(event.id, key))
+        for key in overrides:
+            assert service.get_occurrence(occurrence_id(event.id, key)).title == "Kept"
 
     @pytest.mark.parametrize("rrule", [None, ""])
     def test_stopping_repetition_drops_occurrence_changes(
