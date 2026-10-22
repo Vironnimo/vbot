@@ -62,12 +62,18 @@ async def test_each_item_is_one_bounded_request_answered_in_item_order(monkeypat
     owner = service()
     states: list[Any] = []
     running = peak = 0
+    first_batch_started = asyncio.Event()
 
     async def evaluate(target, state, questions, *, http_client=None, usage_context=None):
         nonlocal running, peak
         states.append(state)
         running += 1
         peak = max(peak, running)
+        # Preparation runs on workers: one loop turn need not start another item.
+        # Keep the first batch in flight until all eight request slots are used.
+        if running == 8:
+            first_batch_started.set()
+        await first_batch_started.wait()
         await asyncio.sleep(0)
         running -= 1
         if state["item"] == "broken":
@@ -93,7 +99,7 @@ async def test_each_item_is_one_bounded_request_answered_in_item_order(monkeypat
     assert outcomes[0] == {"answers": {"q": {"type": "noul", "noul": 0.4}}}
     assert isinstance(outcomes[1], DecisionError) and outcomes[1].code == "provider_error"
     assert [outcome["answers"]["q"]["noul"] for outcome in outcomes[2:]] == [0.6] * 10 + [0.7] * 10
-    assert 1 < peak <= 8
+    assert peak == 8
 
 
 class _Calibration:
