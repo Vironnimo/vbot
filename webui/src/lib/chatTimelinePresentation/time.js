@@ -37,15 +37,7 @@ export const formatDate = (timestamp) => {
 };
 
 export function dateKeyForTimestamp(timestamp) {
-  if (!timestamp) {
-    return todayDateKey();
-  }
-
-  const date = new Date(timestamp);
-  if (Number.isNaN(date.getTime())) {
-    return todayDateKey();
-  }
-  return dateKeyForDate(date);
+  return (timestamp && dateKeyInApplicationZone(timestamp)) || todayDateKey();
 }
 
 export function formatDurationMs(durationMs) {
