@@ -48,13 +48,15 @@ class ToolDispatchContext:
     run: Run
     vbot_root: Path
     data_root: Path
+    # The Run's Permission Boundary, which every Tool Call checks its accesses
+    # against. Required: a dispatch that forgets it must not run unrestricted.
+    permissions: PermissionBoundary
     project_cwd: Path | None = None
     project_id: str | None = None
     skill_project_id: str | None = None
     skill_registry: SkillRegistry | None = None
     reply_surface: ReplySurface | None = None
     subagent_session: bool = False
-    permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED
     tool_restriction: Sequence[str] | None = None
     tool_denial_resolver: Callable[[str], str | None] | None = None
     base_allowed_tools: Sequence[str] | None = None

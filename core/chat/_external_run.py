@@ -4,7 +4,9 @@ A realtime voice Model talks with the user on its own; vBot does not request
 its turns. Its conversation is still one Run of its Agent in a Session of its
 own: what the user and the Model said, notes about what vBot told the Model, and
 every Tool call the Model made. Those calls run through the same Tool dispatch
-as a Chat Run, with the Agent's Tools, events and stored results.
+as a Chat Run, with the Agent's Tools, events and stored results, in the
+Session's Working Project and inside the Run's Permission Boundary, rebuilt
+before a call once one of its rule sources changed.
 """
 
 from __future__ import annotations
@@ -16,7 +18,10 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from core.chat._run_permissions import RunPermissions, run_permission_boundary
+from core.chat._run_state import _resolve_working_project
 from core.chat._step_outcomes import _RegisteredNames, tool_result_facts
+from core.chat._workers import _CHAT_TRANSFORM_WORKERS
 from core.chat.content_blocks import masked_content
 from core.chat.errors import ChatError
 from core.chat.events import _emit_message_event
@@ -29,6 +34,8 @@ from core.chat.messages import (
     _new_message_id,
 )
 from core.chat.tool_dispatch import ToolDispatchContext, ToolRound
+from core.permissions import PermissionBoundary
+from core.projects import resolve_skill_scope
 from core.providers.adapter import normalize_tool_call_candidate
 from core.runs import (
     ASSISTANT_OUTPUT_EVENT,
@@ -46,6 +53,7 @@ from core.utils.workers import finish_despite_cancel
 if TYPE_CHECKING:
     from core.chat._request_builder import RequestBuilder
     from core.chat._run_state import ChatLoopDependencies
+    from core.skills.skills import SkillRegistry
 
 _LOGGER = get_logger("chat")
 
@@ -84,6 +92,9 @@ class ExternalRun:
         tool_definitions: Sequence[JsonObject],
         allowed_tools: Sequence[str],
         on_cancel: Callable[[], None] | None,
+        project_cwd: Path | None,
+        skill_project_id: str | None,
+        skill_registry: SkillRegistry,
     ) -> None:
         self._dependencies = dependencies
         self._agent = agent
@@ -92,6 +103,13 @@ class ExternalRun:
         self._tool_definitions = tuple(dict(definition) for definition in tool_definitions)
         self._allowed_tools = tuple(allowed_tools)
         self._on_cancel = on_cancel
+        self._project_cwd = project_cwd
+        self._skill_project_id = skill_project_id
+        self._skill_registry = skill_registry
+        # The Run's Permission Boundary, built once the Run is admitted
+        # (:meth:`bind_permissions`); no Tool call runs without it.
+        self._permissions: RunPermissions | None = None
+        self._permissions_lock = asyncio.Lock()
         self._run: Run | None = None
         self._write_lock = asyncio.Lock()
         self._iteration = 0
@@ -160,10 +178,15 @@ class ExternalRun:
         call finished, while it is being stored, no longer stops it: the call is
         stored with its result, which is returned. A call still running when the
         Run ends is stored as stopped then.
+
+        The call checks its accesses against the Run's Permission Boundary,
+        rebuilt first when one of its rule sources changed; a rebuild that
+        fails raises before anything runs.
         """
         run = self._require_run()
         if self.ended:
             return tool_failure("tool_stopped", _STOPPED)
+        permissions = await self._current_permissions(run)
         call = ToolCall.from_dict(
             normalize_tool_call_candidate(
                 tool_call_id=call_id,
@@ -179,7 +202,7 @@ class ExternalRun:
         self._iteration += 1
         assistant_id = _new_message_id()
         tool_round = ToolRound(
-            self._dispatch_context(run),
+            self._dispatch_context(run, permissions),
             assistant_message_id=assistant_id,
             iteration_number=self._iteration,
         )
@@ -249,6 +272,45 @@ class ExternalRun:
         self._run = run
         self._session = self._session.for_run(run.id)
 
+    async def bind_permissions(self, project_root: Path | None) -> None:
+        """Build the admitted Run's Permission Boundary as a Chat Run builds its own."""
+        self._permissions = await self._build_permissions(
+            self._require_run(), self._agent, project_root
+        )
+
+    async def _build_permissions(
+        self, run: Run, agent: Any, project_root: Path | None
+    ) -> RunPermissions:
+        return await run_permission_boundary(
+            self._dependencies,
+            run,
+            agent,
+            address=SessionAddress(
+                project_id=None, agent_id=self.agent_id, session_id=self.session_id
+            ),
+            project_root=project_root,
+            skill_registry=self._skill_registry,
+        )
+
+    async def _current_permissions(self, run: Run) -> PermissionBoundary:
+        """The boundary for the next call, rebuilt when one of its rule sources changed.
+
+        As a Chat Run refreshes it before each Tool round, the Agent is resolved
+        again, so an edit of its rules or of the shared default applies to the
+        next call.
+        """
+        async with self._permissions_lock:
+            current = self._permissions
+            if current is None:
+                raise ChatError("the external Run has no Permission Boundary")
+            if await current.changed():
+                agent = await self._dependencies.agent_resolver.resolve_agent_async(
+                    None, self.agent_id, session_id=self.session_id
+                )
+                current = await self._build_permissions(run, agent, current.project_root)
+                self._permissions = current
+            return current.boundary
+
     def _require_run(self) -> Run:
         if self._run is None:
             raise ChatError("the external Run has not started")
@@ -309,7 +371,7 @@ class ExternalRun:
                 return False
         return True
 
-    def _dispatch_context(self, run: Run) -> ToolDispatchContext:
+    def _dispatch_context(self, run: Run, permissions: PermissionBoundary) -> ToolDispatchContext:
         dependencies = self._dependencies
         return ToolDispatchContext(
             registry=dependencies.tools,
@@ -319,6 +381,10 @@ class ExternalRun:
             run=run,
             vbot_root=Path(dependencies.get_system_prompts().vbot_root),
             data_root=Path(dependencies.storage.data_dir),
+            permissions=permissions,
+            project_cwd=self._project_cwd,
+            skill_project_id=self._skill_project_id,
+            skill_registry=self._skill_registry,
             base_allowed_tools=self._allowed_tools,
             change_tracker=dependencies.change_tracker,
         )
@@ -340,6 +406,19 @@ async def start_external_run(
     agent = await resolver.resolve_agent_async(None, agent_id)
     working_project_id = await resolver.resolve_working_project_async(
         None, agent, requested=AGENT_DEFAULT_PROJECT
+    )
+    # The Working Project's cwd and repository, read off the Event Loop as a
+    # Chat Run reads them; an unavailable repository refuses the start.
+    project_cwd, prompt_project = (
+        await _CHAT_TRANSFORM_WORKERS.run(
+            _resolve_working_project, requests, dependencies, working_project_id, True
+        )
+        if working_project_id is not None
+        else (None, None)
+    )
+    skill_project_id, identity_agent_id = resolve_skill_scope(None, prompt_project, agent)
+    skill_registry = await _CHAT_TRANSFORM_WORKERS.run(
+        dependencies.resolve_skills, skill_project_id, identity_agent_id
     )
     definitions = await requests.tool_catalog.preview_tool_definitions(agent)
     offered = {str(definition.get("name")) for definition in definitions}
@@ -369,6 +448,9 @@ async def start_external_run(
         tool_definitions=_neutral_definitions(definitions),
         allowed_tools=allowed,
         on_cancel=on_cancel,
+        project_cwd=project_cwd,
+        skill_project_id=skill_project_id,
+        skill_registry=skill_registry,
     )
     address = SessionAddress(project_id=None, agent_id=agent_id, session_id=session.id)
     try:
@@ -384,6 +466,9 @@ async def start_external_run(
         )
         handle.bind(run)
         await run.wait_admitted()
+        await handle.bind_permissions(
+            Path(prompt_project.cwd) if prompt_project is not None else None
+        )
     except BaseException:
         await _discard(dependencies, address)
         raise
