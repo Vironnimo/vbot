@@ -842,8 +842,9 @@ def _extensions(disabled: list[str]) -> JsonObject:
 # (tests/core/runtime/test_runtime_settings.py). These rows cover the RPC
 # wiring: both methods hand over the persisted before/after Settings, an
 # explicit section save requests its refresh, a changed Extension layer
-# invalidates its Commands and page descriptors, and a rescanned Skill layer
-# invalidates the Skill inventory.
+# invalidates its Commands and page descriptors, a rescanned Skill layer
+# invalidates the Skill inventory, and changed shared Agent defaults invalidate
+# the Agents.
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("seed", "method", "params", "effects"),
@@ -898,6 +899,13 @@ def _extensions(disabled: list[str]) -> JsonObject:
             {"recall": {"backend": "sqlite_fts"}},
             {"recall_reloads": 1},
             id="update-recall-resave",
+        ),
+        pytest.param(
+            {},
+            "settings.patch",
+            _patch(_set("defaults.agent.permission_rules", {"write": "scratch"})),
+            {"invalidated": ["agents"]},
+            id="patch-default-permission-rules",
         ),
         # Live effects run after the write, so they read the saved value.
         pytest.param(

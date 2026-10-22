@@ -81,6 +81,7 @@ _NO_EFFECTS: dict[str, Any] = {
     "retention_changes": 0,
     "commands_changed": False,
     "skills_changed": False,
+    "agents_changed": False,
 }
 _SKILLS: dict[str, Any] = {"skill_directories": ["~/extra-skills"]}
 _RECALL: dict[str, Any] = {"recall": {"backend": "sqlite_fts"}}
@@ -205,6 +206,19 @@ def _extensions(*disabled: str, config: dict[str, Any] | None = None) -> dict[st
             {"embedding_binding_changes": 1},
             id="text-embedding-binding",
         ),
+        # Shared Agent defaults, the default Permission Rules among them, are
+        # read on every resolve; accessors showing an Agent read it again.
+        pytest.param(
+            {"defaults": {"agent": {"model": "openai/gpt-5.2"}}},
+            {
+                "defaults": {
+                    "agent": {"model": "openai/gpt-5.2", "permission_rules": {"write": "scratch"}}
+                }
+            },
+            (),
+            {"agents_changed": True},
+            id="agent-defaults",
+        ),
         # A changed retention period wakes the archive's retention sweep.
         pytest.param(
             {}, {"archive": {"retention_days": 14}}, (), {"retention_changes": 1}, id="retention"
@@ -259,6 +273,7 @@ def test_settings_changes_refresh_only_their_live_services(
         "retention_changes": retention_change.call_count,
         "commands_changed": effects.commands_changed,
         "skills_changed": effects.skills_changed,
+        "agents_changed": effects.agents_changed,
     } == {**_NO_EFFECTS, **expected}
 
 
