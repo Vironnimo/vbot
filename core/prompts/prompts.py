@@ -90,6 +90,7 @@ from core.prompts.blocks import (
     resolve_block_text,
     resolve_layout,
 )
+from core.tools.file_state import FileRead
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
 
@@ -238,7 +239,7 @@ class SystemPromptManager:
         subagent_session: bool = False,
         skill_registry: SkillPromptRegistry | None = None,
         skill_catalog: PinnedSkillCatalog | None = None,
-        read_paths: list[Path] | None = None,
+        read_paths: list[FileRead] | None = None,
         effective_tool_definitions: Sequence[Mapping[str, Any]] | None = None,
         on_demand_tools: Sequence[tuple[str, str]] | None = None,
         session_tool_grants: Sequence[str] = (),
@@ -277,8 +278,8 @@ class SystemPromptManager:
         It stays separate from ``project_context`` because an Identity Session may
         receive files from its working Project while remaining identity-scoped.
 
-        ``read_paths``, when a list is passed, is filled with the resolved absolute
-        path of every prompt file whose content actually reached the assembled prompt
+        ``read_paths``, when a list is passed, receives the resolved path and pre-read
+        metadata of every prompt file whose content reached the assembled prompt
         (a workspace ``{include:…}``, SOUL, the project auto-load files, the on-disk
         pinned-memory files). The chat loop stamps those as read-before-write so the
         agent can edit a file it was auto-shown without a separate read call. The
@@ -400,7 +401,7 @@ class SystemPromptManager:
         static_contributions_only: bool = False,
         block_order: list[str] | None = None,
         failed_blocks: set[str] | None = None,
-        read_paths: list[Path] | None = None,
+        read_paths: list[FileRead] | None = None,
     ) -> dict[str, RenderedBlock]:
         """Render live the blocks a build with these inputs shows that follow live state.
 
@@ -532,7 +533,7 @@ class SystemPromptManager:
         subagent_session: bool,
         effective_tool_names: frozenset[str] | None,
         session_tool_grants: Sequence[str],
-        read_observer: Callable[[Path], None] | None = None,
+        read_observer: Callable[[FileRead], None] | None = None,
     ) -> BlockRenderContext:
         return BlockRenderContext(
             agent=agent,
@@ -695,7 +696,7 @@ class SystemPromptManager:
         return render_soul(context.agent, context.tool_available, context.read_observer)
 
     def render_soul(
-        self, agent: PromptAgent, *, on_read: Callable[[Path], None] | None = None
+        self, agent: PromptAgent, *, on_read: Callable[[FileRead], None] | None = None
     ) -> str:
         """Render the SOUL block text from the agent's workspace ``SOUL.md``.
 
@@ -722,7 +723,7 @@ class SystemPromptManager:
         agent: PromptAgent,
         project_context: ProjectPromptContext,
         *,
-        on_read: Callable[[Path], None] | None = None,
+        on_read: Callable[[FileRead], None] | None = None,
     ) -> str:
         """Render the complete Working Project block from its resource template.
 
@@ -738,7 +739,7 @@ class SystemPromptManager:
         agent: PromptAgent,
         project_context: ProjectPromptContext,
         *,
-        on_read: Callable[[Path], None] | None = None,
+        on_read: Callable[[FileRead], None] | None = None,
     ) -> str:
         """Render Working Project files through the prompt worker boundary."""
         return await _PROMPT_WORKERS.run(
@@ -753,7 +754,7 @@ class SystemPromptManager:
         project_context: ProjectPromptContext | None,
         *,
         tool_available: ToolAvailability,
-        on_read: Callable[[Path], None] | None = None,
+        on_read: Callable[[FileRead], None] | None = None,
         on_issue: Callable[[PromptFileIssue], None] | None = None,
     ) -> str:
         """Render the project's auto-loaded files as ``<file>``-wrapped blocks.
@@ -766,7 +767,7 @@ class SystemPromptManager:
         names ``read`` only when it can. See :func:`_context._project_file_blocks` for paths
         and :func:`render_prompt_file` for the size limit and fail-soft rules.
 
-        ``on_read``, when given, is called with the resolved absolute path of every
+        ``on_read``, when given, receives the resolved path and pre-read metadata of every
         file actually inlined, so the caller can stamp it as read-before-write —
         used both for prompt assembly and the explicit ``project`` Tool.
         ``on_issue`` reports omissions so the Tool can explain partial loads.
@@ -843,7 +844,7 @@ class SystemPromptManager:
         )
 
     def render_memory_files(
-        self, agent: PromptAgent, *, on_read: Callable[[Path], None] | None = None
+        self, agent: PromptAgent, *, on_read: Callable[[FileRead], None] | None = None
     ) -> str:
         """Render the pinned-memory text for the agent's memory prompt mode.
 
@@ -852,7 +853,7 @@ class SystemPromptManager:
         entries that fit plus a notice; that notice names the ``memory`` Tool only
         when the Agent's current Tool policy offers it. When *on_read* is given,
         every on-disk memory file shown whole is reported so the agent can edit a
-        file it was auto-shown (see ``memory_prompt_file_paths``); an empty
+        file it was auto-shown from that render's captured metadata; an empty
         workspace (a config agent) reports nothing and must never resolve against
         ``Path(".")``.
         """

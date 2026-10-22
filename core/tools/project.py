@@ -24,7 +24,7 @@ from core.settings import PROJECT_ID_PATTERN
 from core.tools.arguments import required_string
 from core.tools.call_syntax import SpellingAliases, normalize_call_arguments
 from core.tools.contracts import compile_tool_contract
-from core.tools.file_state import FileReadState
+from core.tools.file_state import FileRead, FileReadState
 from core.tools.model_names import SHELL_MODEL_NAME
 from core.tools.tools import (
     JsonObject,
@@ -89,7 +89,7 @@ class ProjectContextRenderer(Protocol):
         project_context: Any,
         *,
         tool_available: Callable[[str], bool],
-        on_read: Callable[[Path], None] | None = None,
+        on_read: Callable[[FileRead], None] | None = None,
         on_issue: Callable[[PromptFileIssue], None] | None = None,
     ) -> str: ...
 
@@ -137,7 +137,7 @@ def make_project_handler(
             )
 
         renderer = get_renderer()
-        read_paths: list[Path] = []
+        read_paths: list[FileRead] = []
         issues: list[PromptFileIssue] = []
         refused: list[str] = []
         permitted: list[str] = []
@@ -183,8 +183,8 @@ def make_project_handler(
             data["note"] = "Some Project instruction files were not included." + (
                 "\n" + "\n".join(notices) if notices else " See the file notices below."
             )
-        for path in read_paths:
-            file_state.record_read(context.session_id, path)
+        for path, stamp in read_paths:
+            file_state.record_stamp(context.session_id, path, stamp)
         return tool_success(data)
 
     def project_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:

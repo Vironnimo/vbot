@@ -419,7 +419,9 @@ class ProviderUsageService:
             # Blind Copilot/MiniMax parsing may raise unexpected shapes; convert
             # any non-fetch error into a clean "unavailable" snapshot and log the
             # real cause for debugging (no token data is included in the message).
-            _LOGGER.warning("Usage fetch failed for target %s: %s", connection.target_id, exc)
+            _LOGGER.warning(
+                "Usage fetch failed for connection %s: %s", connection.connection_id, exc
+            )
             return self._error_snapshot(connection, "Unavailable")
 
     def _error_snapshot(

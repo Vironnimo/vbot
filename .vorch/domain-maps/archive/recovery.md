@@ -6,12 +6,14 @@ Task-gated detail for `archive.md` -> Recovery: what `recover()` finds and does 
 
 When `recover()` runs and its idempotent retry rule: `archive.md` -> Recovery. A folder under `archive/` that cannot be read is skipped with a WARNING. A payload, source or folder that cannot be checked counts as such a failure, never as missing, so recovery neither moves nor removes anything on that answer. Order: archived Sessions without membership, then the unsettled entries, then payloads without a row (after settling, because an undone archive may leave one). Recovery never moves files that are live again back into a payload: they may hold new data. It logs WARNING or INFO per settled entry.
 
+Orphan payload classification never follows a symbolic link or Windows junction at `agent/` or `project/`: a container holding only such links becomes a non-restorable `files` entry, without reading their targets.
+
 ## Actions per state
 
 | Found | Action |
 |---|---|
 | archived Sessions without membership (an older vBot after a downgrade) | adopted as `session`/`owner_group` entries, WARNING |
-| `archive/entries/arc_*` without a row | adopted as a `recovered` entry; an empty one is removed; WARNING |
+| `archive/entries/arc_*` without a row | real directories are adopted as a `recovered` entry; an empty one is removed; symbolic links and Windows junctions are left alone; WARNING |
 | `archiving` | a payload tree moves back to `source_path` when it is free; beside a source it is removed only if every payload entry also exists there unchanged (regular files compared byte for byte, no links followed). Matching configuration alone is insufficient after snapshot restore. Missing, different, unreadable or linked entries keep the payload, adopted as a `recovered` entry; recorded unroots are undone, the row is deleted |
 | `archived` with `cleanup_pending` | the Agent cleanup runs again; with a live Agent of the same id it only clears the flag |
 | `restoring`, payload present or target gone | a moved legacy Workspace placed inside the archive returns to the payload (one already back in its own folder stays there), then `archived` again; with neither payload nor target its restore check names `payload_missing`, and it stays purgeable |

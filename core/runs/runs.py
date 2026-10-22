@@ -490,7 +490,7 @@ class ChatRunManager:
         for item in queue:
             if item.item_id != item_id:
                 continue
-            if item.steering:
+            if item.steering or not item.editable:
                 return False
             item.executor = new_executor
             item.display_content = new_display_content

@@ -296,6 +296,7 @@ def test_write_json_document_keeps_unmodeled_map_entries_of_drop_empty_maps(
     ("content", "unreadable"),
     [
         ("{not json", False),
+        pytest.param("[" * 100_000 + "0" + "]" * 100_000, False, id="decoder-nesting-limit"),
         (json.dumps({"title": "missing version"}), False),
         (json.dumps({"format_version": 2, "title": "newer"}), False),
         (json.dumps({"format_version": 1, "title": 5}), False),

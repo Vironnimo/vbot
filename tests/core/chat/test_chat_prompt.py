@@ -71,26 +71,63 @@ def test_initial_prompt_files_are_stamped_once(tmp_path: Path, mode: Any) -> Non
         )
 
 
-@pytest.mark.parametrize("winner", ["", "earlier snapshot"])
-def test_first_prompt_build_uses_the_concurrent_winning_snapshot(tmp_path, monkeypatch, winner):
-    from core.prompts.pinned_context import pinned_soul_context
+@pytest.mark.parametrize("block", ["soul", "memory", "project"])
+@pytest.mark.parametrize(
+    "winner,previously_read", [("", False), ("earlier snapshot", False), ("earlier snapshot", True)]
+)
+def test_first_prompt_build_uses_the_concurrent_winning_snapshot(
+    tmp_path, monkeypatch, block, winner, previously_read
+):
+    from core.prompts.pinned_context import (
+        pinned_memory_files,
+        pinned_soul_context,
+        pinned_working_project_context,
+    )
+    from core.tools.file_state import StaleReason
     from tests.core.prompts.prompts_test_support import _agent, _facade_manager
 
-    (tmp_path / "SOUL.md").write_text("LATER_SNAPSHOT", encoding="utf-8")
-    agent = _agent(tmp_path)
+    filename = {"soul": "SOUL.md", "memory": "MEMORY.md", "project": "AGENTS.md"}[block]
+    target = (tmp_path / filename).resolve()
+    agent = _agent(tmp_path, memory_prompt_mode="agent")
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=cast(Any, agent), adapter=StubAdapter([]))
     runtime.system_prompts = _facade_manager(tmp_path)
     runtime.chat_sessions.create(agent.id, session_id="s1")
     dependencies = build_chat_loop(runtime)._dependencies
     ensure = runtime.chat_sessions.ensure_prompt_pin
 
+    if previously_read:
+        target.write_text("- ORIGINAL", encoding="utf-8")
+        runtime.file_read_state.record_read("s1", target)
+    target.write_text("- LATER_SNAPSHOT_UNSEEN", encoding="utf-8")
+
     def first_writer(address, slot, value, matches):
-        ensure(address, slot, {"text": winner}, matches)
+        ensure(address, slot, {**value, "text": winner}, matches)
         return ensure(address, slot, value, matches)
 
+    def snapshot():
+        if block == "soul":
+            return pinned_soul_context(dependencies, agent.id, "s1", agent, None)
+        if block == "memory":
+            return pinned_memory_files(dependencies, agent.id, "s1", agent, None)
+        project = StubProject(
+            project_id=PROJECT_ID,
+            cwd=str(tmp_path),
+            auto_load=[filename],
+            display_name="vBot",
+        )
+        context = ProjectPromptContext.from_project(
+            PROJECT_ID, project.display_name, project.cwd, project.auto_load
+        )
+        return pinned_working_project_context(
+            dependencies, agent.id, "s1", agent, project, context, None
+        )
+
     monkeypatch.setattr(runtime.chat_sessions, "ensure_prompt_pin", first_writer)
-    assert pinned_soul_context(dependencies, agent.id, "s1", agent, None) == winner
-    assert pinned_soul_context(dependencies, agent.id, "s1", agent, None) == winner
+    for _ in range(2):
+        assert snapshot() == winner
+        assert runtime.file_read_state.check_stale("s1", target) == (
+            StaleReason.MODIFIED if previously_read else StaleReason.NEVER_READ
+        )
 
 
 @pytest.mark.parametrize(

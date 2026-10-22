@@ -41,7 +41,9 @@ it absent; public address or Run-id reuse never proves historical ownership.
 - `update(id, usage)` enriches the same call without changing its outcome.
   Cumulative Live Voice reports replace counters instead of adding repeated
   snapshots. Chat enriches its record with final estimates before appending the
-  Assistant Message. Completion without new Usage retains earlier measurements.
+  Assistant Message. Token-only or estimated-cost updates keep an existing
+  Provider-reported cost snapshot; catalog-valued enrichment uses the rates
+  already stored for that call. Completion without new Usage retains earlier measurements.
 - `input_estimate_factor(model)` and `record_input_estimate(model, *, measured,
   estimated)` are the input estimate calibration (`_calibration.py`). vBot counts
   every Model with one local encoding (`providers/request-policy.md`), while

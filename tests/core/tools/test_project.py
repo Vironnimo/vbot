@@ -13,6 +13,7 @@ import pytest
 
 from core.permissions import BoundaryContext, PermissionBoundary, normalize_permission_rules
 from core.projects import ProjectStore
+from core.prompts import SystemPromptManager
 from core.prompts.blocks import INLINE_FILE_MAX_BYTES
 from core.tools import (
     FileReadState,
@@ -90,7 +91,12 @@ def test_project_tool_exposes_open_model_schema(tmp_path: Path) -> None:
     assert tool.open_input_schema is True
 
 
-def test_project_tool_loads_context_skills_and_stamps_files_read(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "changed_after_render", [False, True], ids=["unchanged", "concurrent-edit"]
+)
+def test_project_tool_loads_context_skills_and_stamps_files_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, changed_after_render: bool
+) -> None:
     data_dir = tmp_path / "data"
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -104,6 +110,16 @@ def test_project_tool_loads_context_skills_and_stamps_files_read(tmp_path: Path)
     agents_file.write_text("Follow the Project rules.", encoding="utf-8")
     file_state = FileReadState()
     skill = SimpleNamespace(name="review", description="Review changes.", path=skill_path)
+
+    if changed_after_render:
+        render_project_files = SystemPromptManager.render_project_files
+
+        def render_then_change(self: SystemPromptManager, *args: Any, **kwargs: Any) -> str:
+            rendered = render_project_files(self, *args, **kwargs)
+            agents_file.write_text("New rules the Agent has not seen", encoding="utf-8")
+            return rendered
+
+        monkeypatch.setattr(SystemPromptManager, "render_project_files", render_then_change)
 
     result = _call(
         tmp_path, projects, {"project_id": "vbot"}, file_state=file_state, skills=[skill]
@@ -124,7 +140,9 @@ def test_project_tool_loads_context_skills_and_stamps_files_read(tmp_path: Path)
     assert "Claude rules." not in data["content"]
     assert data["content"].count("- review: Review changes.") == 1
     assert model_path(skill_path) not in data["content"]
-    assert file_state.check_stale("session-one", agents_file.resolve()) is None
+    assert file_state.check_stale("session-one", agents_file.resolve()) == (
+        StaleReason.MODIFIED if changed_after_render else None
+    )
     # The user sees where the Project lives and the context the Agent received.
     display = _registry(projects).display_for_call(
         PROJECT_TOOL_NAME, {"project_id": "vbot"}, result=result

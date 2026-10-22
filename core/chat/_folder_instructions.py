@@ -22,6 +22,7 @@ from core.chat.messages import ChatMessage
 from core.permissions import PermissionBoundary
 from core.projects import FolderInstructions
 from core.prompts.blocks import ToolAvailability, render_prompt_file
+from core.tools.file_state import FileRead
 
 FOLDER_INSTRUCTIONS_NOTE_PREFIX = "[folder-instructions] "
 _NOTE_VERSION = 1
@@ -94,7 +95,7 @@ def folder_instruction_notes(
     *,
     permissions: PermissionBoundary,
     tool_available: ToolAvailability,
-    on_read: Callable[[Path], None] | None = None,
+    on_read: Callable[[FileRead], None] | None = None,
 ) -> list[ChatMessage]:
     """Return the notes for the folder instruction files *worked_paths* lead to.
 

@@ -291,7 +291,7 @@ def _load_and_validate_json_file(
                 ),
             )
         )
-    except ValueError:
+    except ValueError, RecursionError:
         return _ValidatedDocument(
             report=JsonValidationReport(
                 file_path=file_path,

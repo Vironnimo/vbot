@@ -67,16 +67,22 @@ def test_names_without_a_sensitive_whole_word_are_kept(name: str):
 # ---------------------------------------------------------------------------
 
 
-def test_redact_url_redacts_every_sensitive_query_value_and_keeps_the_rest():
+@pytest.mark.parametrize("userinfo", ["", "user:password@", "token%40secret@"])
+def test_redact_url_redacts_every_sensitive_query_value_and_keeps_the_rest(userinfo: str):
     url = (
-        "https://api.example.com:8080/v1/chat"
+        f"https://{userinfo}api.example.com:8080/v1/chat"
         "?token=a&token=b&API.Key=secret&account_id=acct-123&user=john#section"
     )
 
     assert redact_url(url) == (
-        "https://api.example.com:8080/v1/chat"
+        f"https://{'%5BREDACTED%5D@' if userinfo else ''}api.example.com:8080/v1/chat"
         "?token=%5BREDACTED%5D&token=%5BREDACTED%5D&API.Key=%5BREDACTED%5D"
         "&account_id=%5BREDACTED%5D&user=john#section"
+    )
+
+    without_query = url.split("?", 1)[0]
+    assert redact_url(without_query) == (
+        f"https://{'%5BREDACTED%5D@' if userinfo else ''}api.example.com:8080/v1/chat"
     )
 
 

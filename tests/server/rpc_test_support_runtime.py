@@ -51,6 +51,7 @@ from core.skills import SkillAuthoringService
 from core.storage import StorageManager
 from core.tools import FileReadState, ToolRegistry
 from core.tools.command_manager import CommandManager
+from core.tools.file_state import FileRead
 from core.tools.portal_registry import PortalRegistry
 from core.utils.errors import ConfigError
 from core.utils.version import BuildIdentity
@@ -97,7 +98,7 @@ class StubPrompts:
         subagent_session: bool = False,
         skill_registry: object = None,
         skill_catalog: object = None,
-        read_paths: list[Path] | None = None,
+        read_paths: list[FileRead] | None = None,
         effective_tool_definitions: object = None,
         on_demand_tools: object = None,
         session_tool_grants: object = (),

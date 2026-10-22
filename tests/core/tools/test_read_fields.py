@@ -175,10 +175,12 @@ async def test_last_lines_of_a_crlf_file_without_a_final_break(project: Path) ->
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("position", [{"offset": "2:4"}, {"offset": -11, "character": 4}])
 async def test_continuation_position_from_a_cut_off_read_resumes_mid_line(
     project: Path,
+    position: dict,
 ) -> None:
-    result = await dispatch(project, {"path": "src/app.txt", "offset": "2:4", "limit": 2})
+    result = await dispatch(project, {"path": "src/app.txt", **position, "limit": 2})
 
     assert content(result).startswith("2:4| e 2\n3| line 3\n")
 

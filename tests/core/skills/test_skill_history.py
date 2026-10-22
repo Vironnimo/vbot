@@ -269,16 +269,26 @@ def test_pins_are_recorded_and_only_people_pin(service: SkillAuthoringService, r
     ]
 
 
+@pytest.mark.parametrize("existing_folder", ["demo", "other-folder"])
 def test_archived_skills_are_restored_with_their_provenance_or_purged(
-    service: SkillAuthoringService, root: Path
+    service: SkillAuthoringService, root: Path, existing_folder: str
 ) -> None:
     service.create(root, "demo", skill_document(), writer=AGENT)
     service.set_pinned(root, "demo", True, writer=HUMAN_WRITER)
     first = service.delete(root, "demo", writer=HUMAN_WRITER)
     service.create(root, "demo", skill_document(body="Second.\n"), writer=HUMAN_WRITER)
+    live = root / existing_folder
+    if live != root / "demo":
+        (root / "demo").rename(live)
+    previous_history = history_lines(root)
 
-    with pytest.raises(SkillAuthoringError, match="already exists"):
+    with pytest.raises(SkillAuthoringError):
         service.restore(root, str(first.archive_id), writer=HUMAN_WRITER)
+    assert "Second." in (live / "SKILL.md").read_text(encoding="utf-8")
+    assert (first.path / "SKILL.md").is_file()
+    assert history_lines(root) == previous_history
+    if live != root / "demo":
+        live.rename(root / "demo")
 
     second = service.delete(root, "demo", writer=HUMAN_WRITER)
     restored = service.restore(root, str(first.archive_id), writer=HUMAN_WRITER)
@@ -528,6 +538,19 @@ def test_revert_moves_skills_between_the_home_and_the_archive_and_flips_pins(
     service.revert(root, [int(pinned.revision or 0)], writer=HUMAN_WRITER)
     assert service.records(root)["demo"].pinned is False
     deleted = service.delete(root, "demo", writer=HUMAN_WRITER)
+
+    alias = root / "other-folder"
+    alias.mkdir()
+    (alias / "SKILL.md").write_text(skill_document(body="Live copy.\n"), encoding="utf-8")
+    previous_history = history_lines(root)
+    for attempt in (service.check_revert, service.revert):
+        with pytest.raises(SkillAuthoringError):
+            attempt(root, [int(deleted.revision or 0)], writer=HUMAN_WRITER)
+    assert "Live copy." in (alias / "SKILL.md").read_text(encoding="utf-8")
+    assert (deleted.path / "SKILL.md").is_file()
+    assert history_lines(root) == previous_history
+    (alias / "SKILL.md").unlink()
+    alias.rmdir()
 
     service.revert(root, [int(deleted.revision or 0)], writer=HUMAN_WRITER)
 

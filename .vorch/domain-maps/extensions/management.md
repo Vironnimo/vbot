@@ -16,6 +16,8 @@ A registration that cancels itself fails only its Extension. Cancelling the live
 
 The load path must preserve first-wins root shadowing before import. Overridden copies are not imported and their manifests are not read. Disabled winners are recorded without import but still shadow later roots.
 
+A missing `extension.json` is optional; an unavailable or unreadable manifest fails its Extension before import, so its API-version requirement cannot disappear on an I/O failure.
+
 ## API versions
 
 What each `API_VERSION` (`extensions.md` -> Loading and identity invariants) added:

@@ -51,6 +51,7 @@ from core.prompts.pinned_context import (
 )
 from core.providers.accounts import ConnectionRef
 from core.sessions import ChatSession, PromptEpoch
+from core.tools.file_state import FileRead
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -447,7 +448,7 @@ class ChatCompactionHost:
         working_project_context: str | None = None
         soul_context: str | None = None
         memory_files_context: str | None = None
-        read_paths: list[Path] = []
+        read_paths: list[FileRead] = []
         if project_prompt_context is not None:
             working_project_context = system_prompts.render_working_project_context(
                 refreshed_agent,
@@ -455,7 +456,7 @@ class ChatCompactionHost:
                 on_read=read_paths.append,
             )
         if getattr(refreshed_agent, "workspace", None):
-            identity_read_paths: list[Path] = []
+            identity_read_paths: list[FileRead] = []
             soul_context = system_prompts.render_soul(
                 refreshed_agent,
                 on_read=identity_read_paths.append,

@@ -88,12 +88,14 @@ function parseStore(raw) {
 function writeStore(storageKey, value) {
   try {
     if (typeof localStorage === 'undefined') {
-      return;
+      return false;
     }
     localStorage.setItem(storageKey, JSON.stringify(value));
+    return true;
   } catch {
     // Storage unavailable or over quota: the in-memory copy still serves this
     // browser session, only durability across a reload is lost.
+    return false;
   }
 }
 
@@ -120,16 +122,18 @@ function persistNow() {
       readStore(ATTACHMENTS_STORAGE_KEY) ?? attachments,
     );
     pruneOldest(attachments, MAX_DRAFT_SESSIONS);
-    pendingAttachmentChanges = [];
-    writeStore(ATTACHMENTS_STORAGE_KEY, attachments);
+    if (writeStore(ATTACHMENTS_STORAGE_KEY, attachments)) {
+      pendingAttachmentChanges = [];
+    }
     notifyPendingAttachments();
   }
   if (pendingHistoryPushes.length > 0 || pendingHistoryRenames.length > 0) {
     const stored = readStore(HISTORY_STORAGE_KEY) ?? histories;
     histories = withPendingHistory(stored);
-    pendingHistoryPushes = [];
-    pendingHistoryRenames = [];
-    writeStore(HISTORY_STORAGE_KEY, histories);
+    if (writeStore(HISTORY_STORAGE_KEY, histories)) {
+      pendingHistoryPushes = [];
+      pendingHistoryRenames = [];
+    }
   }
 }
 
@@ -138,8 +142,7 @@ function persistNow() {
 function persistKeyedChanges(storageKey, local, dirty) {
   const merged = withLocalChanges(readStore(storageKey) ?? local, local, dirty);
   pruneOldest(merged, MAX_DRAFT_SESSIONS);
-  dirty.clear();
-  writeStore(storageKey, merged);
+  if (writeStore(storageKey, merged)) dirty.clear();
   return merged;
 }
 
@@ -212,9 +215,9 @@ function adoptOtherTabWrites() {
   window.addEventListener('storage', (event) => {
     const adoptAll = event.key === null;
     if (adoptAll || event.key === DRAFTS_STORAGE_KEY) {
-      const external = adoptAll
-        ? readStore(DRAFTS_STORAGE_KEY)
-        : parseStore(event.newValue);
+      const external =
+        readStore(DRAFTS_STORAGE_KEY) ??
+        (adoptAll ? null : parseStore(event.newValue));
       if (external) {
         drafts = withLocalChanges(external, drafts, dirtyDrafts);
       }
@@ -231,9 +234,9 @@ function adoptOtherTabWrites() {
       }
     }
     if (adoptAll || event.key === HISTORY_STORAGE_KEY) {
-      const external = adoptAll
-        ? readStore(HISTORY_STORAGE_KEY)
-        : parseStore(event.newValue);
+      const external =
+        readStore(HISTORY_STORAGE_KEY) ??
+        (adoptAll ? null : parseStore(event.newValue));
       if (external) {
         histories = withPendingHistory(external);
       }

@@ -166,9 +166,10 @@ class WorktreeRemoval:
         if os.name != "nt":
             return []
 
-        pattern = f"{worktree_path}\\*".replace("'", "''")
+        prefix = f"{worktree_path}\\".replace("'", "''")
         script = (
-            f"Get-Process | Where-Object {{ $_.Path -and $_.Path -like '{pattern}' }} | "
+            "Get-Process | Where-Object { $_.Path -and "
+            f"$_.Path.StartsWith('{prefix}', [System.StringComparison]::OrdinalIgnoreCase) }} | "
             "ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue; "
             "$_.Path }"
         )
@@ -223,7 +224,7 @@ class WorktreeRemoval:
     def remove_released(self, args: argparse.Namespace) -> int:
         """Remove an emptied worktree directory once no process uses it any more.
 
-        Leaves a directory that holds a checkout again, or that stays in use for
+        Leaves a directory that holds any new content, or that stays in use for
         RELEASE_WAIT_SECONDS; `delete <name>` removes such a leftover later.
         """
         name: str = args.name
@@ -231,15 +232,26 @@ class WorktreeRemoval:
             return 1
         worktree_path = self.context.worktrees_dir / name
         deadline = time.monotonic() + RELEASE_WAIT_SECONDS
-        while worktree_path.exists():
-            if (worktree_path / ".git").exists():
+        while True:
+            try:
+                if next(worktree_path.iterdir(), None) is not None:
+                    return 1
+            except FileNotFoundError:
+                return 0
+            except OSError:
                 return 1
-            if self.remove_directory_tree(worktree_path) is None:
-                break
+            try:
+                # A recreated file between inspection and removal also makes
+                # rmdir refuse; the background helper never deletes contents.
+                worktree_path.rmdir()
+                return 0
+            except FileNotFoundError:
+                return 0
+            except OSError:
+                pass
             if time.monotonic() >= deadline:
                 return 1
             time.sleep(RELEASE_POLL_SECONDS)
-        return 0
 
     def _remove_checkout(self, checkout: Path) -> None:
         """Remove a linked checkout and its registration, even while processes hold files in it."""
@@ -488,9 +500,13 @@ class WorktreeRemoval:
                     leftover_path = self._move_to_trash(worktree_path)
                     # Only the directory is left once its checkout is gone, typically
                     # held as the working directory of this command or its shell.
+                    empty_directory = False
+                    if leftover_path is None:
+                        with suppress(OSError):
+                            empty_directory = next(worktree_path.iterdir(), None) is None
                     removal_deferred = (
                         leftover_path is None
-                        and not (worktree_path / ".git").exists()
+                        and empty_directory
                         and self._remove_when_released(name)
                     )
                     if leftover_path is None and not removal_deferred:

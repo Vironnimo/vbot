@@ -190,7 +190,9 @@ def stamp(
     if bool(text) == bool(overlay):
         raise CommandError("Give exactly one of --text or --overlay.")
     source = existing_pdf(value)
-    target = output_path(target_value, inputs=[source])
+    overlay_path = existing_pdf(overlay) if overlay else None
+    inputs = [source, overlay_path] if overlay_path is not None else [source]
+    target = output_path(target_value, inputs=inputs)
     reader = open_reader(source, password)
     writer = _writer_from(reader)
     indexes = parse_pages(pages, len(writer.pages))
@@ -199,8 +201,7 @@ def stamp(
     if not 0 < opacity <= 1:
         raise CommandError("--opacity must be between 0.05 and 1, for example 0.15.")
     overlay_pages: list[Any] = []
-    if overlay:
-        overlay_path = existing_pdf(overlay)
+    if overlay_path is not None:
         overlay_pages = list(open_reader(overlay_path).pages)
         if len(overlay_pages) not in (1, len(writer.pages)):
             raise CommandError(

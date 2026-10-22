@@ -332,6 +332,8 @@ class ComputerUseService:
             current = self._control_id
             if current is None or (control_id is not None and control_id != current):
                 return
+            if self._active is None:
+                self._release_input()
             self.interrupt(source=source)
             self._end_control(stopped_by=source)
 
@@ -345,6 +347,7 @@ class ComputerUseService:
                 return
             self._stop_source = source
             self._stop.set()
+            self._release_input()
             loop, stopped = self._loop, self._stopped
             if loop is not None:
                 # A closed loop has nothing waiting any more.
@@ -352,6 +355,25 @@ class ComputerUseService:
                     loop.call_soon_threadsafe(stopped.set)
             self.api.logger.debug("Computer Use call interrupted (source=%s)", source)
             self._control_changed()
+
+    def _release_input(self) -> None:
+        """Queue release even when no target input remains to observe the stop event.
+
+        The control lock is held: release enters the desktop worker before another
+        call can take control and queue input of its own.
+        """
+        self._held_run = None
+        executor, target = self._executor, self._target
+        if executor is None or target is None:
+            return
+
+        def release() -> None:
+            try:
+                target.release_all()
+            except Exception:
+                self.api.logger.warning("Computer Use could not release input", exc_info=True)
+
+        executor.submit(release)
 
     async def control(self, arguments: dict[str, Any]) -> dict[str, Any]:
         action = arguments.get("action", "status")
@@ -452,6 +474,7 @@ class ComputerUseService:
         def lapse() -> None:
             with self._control_lock:
                 if self._control_id == control_id and self._active is None:
+                    self._release_input()
                     self._end_control()
 
         self._control_timer = loop.call_later(CONTROL_IDLE_SECONDS, lapse)
@@ -666,10 +689,11 @@ class ComputerUseService:
 
     async def _act(self, context: ToolContext, desktop: Desktop, action: Action, frame: Any) -> str:
         done = await self._on_worker(desktop.act, action, frame, interrupt_on_cancel=True)
-        if action.name == "left_mouse_down":
-            self._held_run = context.run_id or ""
-        elif action.name == "left_mouse_up":
-            self._held_run = None
+        with self._control_lock:
+            if action.name == "left_mouse_down" and not self._stop.is_set():
+                self._held_run = context.run_id or ""
+            elif action.name == "left_mouse_up":
+                self._held_run = None
         return done
 
     async def computer_batch(

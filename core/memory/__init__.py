@@ -27,7 +27,6 @@ from core.memory.memory import (
     MemoryWriter,
     match_memory_entries,
     memory_block_definition,
-    memory_prompt_file_paths,
     read_memory_files,
     validate_memory_prompt_mode,
 )
@@ -59,7 +58,6 @@ __all__ = [
     "MemoryWriter",
     "match_memory_entries",
     "memory_block_definition",
-    "memory_prompt_file_paths",
     "read_memory_files",
     "validate_memory_prompt_mode",
 ]

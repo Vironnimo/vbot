@@ -11,17 +11,21 @@ import httpx
 import pytest
 import respx
 
+from core.model_tasks.model_tasks import parse_task_model_target_id
 from core.model_tasks.music_providers import ProviderMusicClient
+from core.model_tasks.task_execution import TaskUsage
 from core.providers.errors import (
     ProviderError,
     ProviderOutcomeUnknownError,
     ProviderTimeoutError,
 )
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
+from core.usage import UsageRecorder
+from tests.core.usage.usage_test_support import read_ledger
 
 
 @pytest.fixture
-def client() -> ProviderMusicClient:
+def client(recorder: UsageRecorder) -> ProviderMusicClient:
     return ProviderMusicClient(
         provider=ProviderConfig(
             id="openrouter",
@@ -38,6 +42,11 @@ def client() -> ProviderMusicClient:
         ),
         credential="test-key",
         model_id="google/lyria-3-pro-preview",
+        usage_observer=TaskUsage(
+            recorder,
+            "music_generation",
+            parse_task_model_target_id("openrouter/google/lyria-3-pro-preview::api-key"),
+        ),
     )
 
 
@@ -134,10 +143,11 @@ async def test_stop_without_done_cannot_return_audio(client: ProviderMusicClient
 @pytest.mark.parametrize("data", [123, "!invalid!"])
 @respx.mock
 async def test_malformed_audio_fragment_cannot_be_silently_dropped(
-    client: ProviderMusicClient, data: object
+    client: ProviderMusicClient, data: object, recorder: UsageRecorder
 ) -> None:
     stream = _Stream(
         _event({"delta": {"audio": {"data": "YWJj"}}})
+        + b'data: {"usage": {"cost": 0.04}}\n\n'
         + _event({"delta": {"audio": {"data": data}}})
         + b"data: [DONE]\n\n"
     )
@@ -149,6 +159,11 @@ async def test_malformed_audio_fragment_cannot_be_silently_dropped(
     assert not exc.value.retryable
     assert stream.closed
     assert route.call_count == 1
+
+    _, records = read_ledger(recorder)
+    assert len(records) == 1
+    assert records[0].status == "failed"
+    assert records[0].usage["reported_cost_usd"] == 0.04
 
 
 @pytest.mark.asyncio

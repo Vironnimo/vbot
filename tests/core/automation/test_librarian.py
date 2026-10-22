@@ -102,6 +102,7 @@ class _Harness:
                     if getattr(agent, "builtin", None) is None
                 ],
                 exists=lambda agent_id: agent_id in self.agents,
+                find=self.agents.get,
                 lifecycle_guard=nullcontext,
                 capture_creation_identity=self.capture_creation_identity,
                 librarian_problem=lambda: self.librarian_problem,
@@ -146,7 +147,8 @@ class _Harness:
 
     def capture_creation_identity(self, agent_id: str) -> str:
         # An admission snapshot is distinct from a legacy loader's read-time fallback.
-        return "2026-09-02T00:00:00.000000Z"
+        self.agents[agent_id].created_at = "2026-09-02T00:00:00.000000Z"
+        return str(self.agents[agent_id].created_at)
 
     @staticmethod
     def agent(*, name: str = "Main", librarian_enabled: bool = True) -> Any:
@@ -674,6 +676,51 @@ async def test_a_pass_that_stops_early_is_recorded_and_every_pass_session_stays(
         for record in overview["passes"][:3]
     ] == [("main", "Main", "lib-2"), ("main", "Main", None), ("main", "Main", "lib-1")]
     assert overview["passes"][0]["changed"] == interrupted["changed"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["before-aging", "during-consolidation"])
+async def test_pass_never_changes_a_replacement_agent(
+    harness: _Harness, monkeypatch: pytest.MonkeyPatch, stage: str
+) -> None:
+    root = harness.home("main")
+    for name in ("old-one", "old-two"):
+        harness.authoring.create(root, name, _document(name), writer=_HUMAN)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    if stage == "before-aging":
+
+        async def usage() -> tuple[SkillActivationUse, ...]:
+            entered.set()
+            await release.wait()
+            return ()
+
+        monkeypatch.setattr(harness.service, "_skill_usage", usage)
+    else:
+        harness.settings["archive_after_days"] = 365
+        harness.run_gate = release
+        entered = harness.run_awaited
+
+    await harness.service.run("main")
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        # Archive the old tree and give its id to another Agent while the pass awaits I/O.
+        root.parent.rename(root.parent.with_name("archived-main"))
+        harness.agents["main"] = harness.agent()
+        harness.agents["main"].created_at = "2026-10-22T00:00:00.000000Z"
+        harness.authoring.create(root, "replacement", _document("replacement"), writer=_HUMAN)
+        harness.write_state("main", {"first_seen_at": "2026-10-22T00:00:00.000000Z"})
+        state_path = root.parent / "librarian.json"
+        replacement_state = state_path.read_bytes()
+    finally:
+        release.set()
+        await asyncio.gather(
+            *(active.task for active in harness.service._active.values() if active.task)
+        )
+
+    assert (root / "replacement" / "SKILL.md").is_file()
+    assert state_path.read_bytes() == replacement_state
+    assert not harness.service.running("main")
 
 
 @pytest.mark.asyncio

@@ -134,6 +134,35 @@ async def test_reader_resolves_worker_requests_and_propagates_worker_failure(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("possibly_delivered", [False, True])
+async def test_bridge_failures_preserve_delivery_uncertainty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, possibly_delivered: bool
+) -> None:
+    adapter = make_adapter(tmp_path, "whatsapp", connected=False).adapter
+    bridge = FakeBridge(answer=False)
+    listener = await start_bridge(adapter, bridge, monkeypatch)
+    sending = asyncio.create_task(adapter.send("hello", "self"))
+    try:
+        async with asyncio.timeout(2):
+            await bridge.written.wait()
+            bridge.emit(
+                {
+                    "id": bridge.requests[0]["id"],
+                    "ok": False,
+                    "possibly_delivered": possibly_delivered,
+                }
+            )
+            with pytest.raises(ChannelError) as error:
+                await sending
+        assert error.value.possibly_delivered is possibly_delivered
+        assert not error.value.retryable
+        assert len(bridge.requests) == 1
+        assert adapter._pending == {}
+    finally:
+        await stop_bridge(adapter, listener, sending)
+
+
+@pytest.mark.asyncio
 async def test_logout_fails_pending_calls_without_leaving_pairing_idle(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
