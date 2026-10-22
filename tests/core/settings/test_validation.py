@@ -251,7 +251,7 @@ def test_validate_data_dir_config_refuses_documents_before_generation_1(tmp_path
         ),
         pytest.param("[]", False, [("error", "$", "Expected a JSON object, got list")], id="array"),
         pytest.param(
-            "[" * 100_000 + "0" + "]" * 100_000,
+            RecursionError,
             False,
             [("error", "$", "JSON exceeds decoder limits")],
             id="decoder-nesting-limit",
@@ -266,8 +266,21 @@ def test_validate_data_dir_config_refuses_documents_before_generation_1(tmp_path
     ],
 )
 def test_validate_settings_file_reports_the_document(
-    tmp_path: Path, content: str | None, ok: bool, diagnostics: list[tuple[str, str, str]]
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    content: str | type[Exception] | None,
+    ok: bool,
+    diagnostics: list[tuple[str, str, str]],
 ) -> None:
+    if isinstance(content, type):
+        # The decoder's nesting limit varies between Python builds and hosts.
+        decoder_error = content
+
+        def fail_json(_text: str) -> None:
+            raise decoder_error
+
+        monkeypatch.setattr(json, "loads", fail_json)
+        content = "{}"
     path = tmp_path / "settings.json"
     if content is not None:
         path.write_text(content, encoding="utf-8")
