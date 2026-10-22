@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -14,6 +14,7 @@ from core.tools.availability import (
     SKILL_MANAGE_TOOL_NAME,
     ToolAccess,
 )
+from core.tools.file_state import FileRead
 from core.tools.tools import ToolDefinitionProfileContext
 
 JsonObject = dict[str, Any]
@@ -351,7 +352,12 @@ class MemoryPromptProvider(Protocol):
     """
 
     def read_prompt_files(
-        self, workspace: Path, mode: MemoryPromptMode, *, memory_tool: str | None
+        self,
+        workspace: Path,
+        mode: MemoryPromptMode,
+        *,
+        memory_tool: str | None,
+        on_read: Callable[[FileRead], None] | None = None,
     ) -> str:
         """Return the pinned-memory entries for a mode, each scope cut to its budget.
 

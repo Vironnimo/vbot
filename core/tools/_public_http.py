@@ -232,12 +232,15 @@ def _size_label(max_bytes: int) -> str:
     return f"{megabytes} MB" if megabytes and not remainder else f"{max_bytes:,} bytes"
 
 
-async def _http_get(session: AsyncSession, url: str, max_bytes: int) -> PublicResponse:
+async def _http_get(
+    session: AsyncSession, url: str, max_bytes: int, *, truncate: bool = False
+) -> PublicResponse:
     """Perform a bounded GET with redirects disabled — the patchable network seam.
 
     Tests substitute this coroutine to feed canned responses without touching
     the network; production streams into one bounded byte buffer so a missing or
     dishonest ``Content-Length`` cannot make the process retain an unlimited body.
+    A longer body is refused, or with ``truncate`` cut at ``max_bytes``.
     """
     too_large = f"response exceeds the {_size_label(max_bytes)} download limit"
     async with session.stream(
@@ -248,13 +251,16 @@ async def _http_get(session: AsyncSession, url: str, max_bytes: int) -> PublicRe
     ) as response:
         headers = {name.lower(): value for name, value in response.headers.items()}
         declared_size = _declared_response_size(headers)
-        if declared_size is not None and declared_size > max_bytes:
+        if not truncate and declared_size is not None and declared_size > max_bytes:
             raise _ResponseTooLargeError(too_large)
 
         body = bytearray()
         async for chunk in response.aiter_content():
             if len(body) + len(chunk) > max_bytes:
-                raise _ResponseTooLargeError(too_large)
+                if not truncate:
+                    raise _ResponseTooLargeError(too_large)
+                body.extend(chunk[: max_bytes - len(body)])
+                break
             body.extend(chunk)
 
         content = bytes(body)
@@ -275,6 +281,21 @@ _BYTE_ORDER_MARKS = (
 _HEADER_CHARSET = re.compile(r"""charset\s*=\s*["']?([^"';\s]+)""", re.I)
 _XML_ENCODING = re.compile(rb"""<\?xml[^>]*?encoding\s*=\s*["']([\w.:-]+)""")
 _META_CHARSET = re.compile(rb"""<meta[^>]+?charset\s*=\s*["']?\s*([\w.:-]+)""", re.I)
+# Text codecs that are no charset of a page, as browsers ignore them: they fail
+# on ordinary bytes (``idna``, ``undefined``), rewrite them (the escape codecs,
+# ``punycode``, ``utf-7``) or depend on the host (``mbcs``, ``oem``).
+_NOT_CHARSETS = frozenset(
+    {
+        "idna",
+        "undefined",
+        "unicode-escape",
+        "raw-unicode-escape",
+        "punycode",
+        "utf-7",
+        "mbcs",
+        "oem",
+    }
+)
 
 
 def _decoded(content: bytes, content_type: str) -> str:
@@ -310,6 +331,8 @@ def _codec(label: str, *, in_body: bool) -> str | None:
         name = codecs.lookup(label).name
         b"".decode(name)  # refuses codecs that do not decode text, such as base64
     except LookupError, ValueError:
+        return None
+    if name in _NOT_CHARSETS:
         return None
     if name in {"iso8859-1", "ascii"}:
         # Browsers decode both labels as Windows-1252, which pages labelled
@@ -576,13 +599,15 @@ def _retries_allowed(error: RequestException) -> int:
     return MAX_RETRIES
 
 
-async def _request_with_retry(session: AsyncSession, url: str, max_bytes: int) -> PublicResponse:
+async def _request_with_retry(
+    session: AsyncSession, url: str, max_bytes: int, *, truncate: bool = False
+) -> PublicResponse:
     """Fetch a URL and retry transient transport/status failures with backoff."""
     from curl_cffi.requests.exceptions import RequestException
 
     for attempt in range(MAX_RETRIES + 1):
         try:
-            result = await _http_get(session, url, max_bytes)
+            result = await _http_get(session, url, max_bytes, truncate=truncate)
         except RequestException as error:
             if attempt >= _retries_allowed(error):
                 raise _TransportFailedError(error, attempt + 1, url) from error
@@ -611,6 +636,7 @@ async def _fetch_with_retry(
     hosts: HostSlots | None = None,
     *,
     permissions: PermissionBoundary,
+    truncate: bool = False,
 ) -> PublicResponse:
     """Fetch a URL, validating each redirect hop against SSRF rules and *permissions*.
 
@@ -681,7 +707,7 @@ async def _fetch_with_retry(
             nullcontext() if hosts is None else hosts.hold(normalized_host)
         )
         async with slot:
-            result = await _request_with_retry(session, current_url, max_bytes)
+            result = await _request_with_retry(session, current_url, max_bytes, truncate=truncate)
         if result.status_code not in _REDIRECT_STATUS_CODES:
             return result
 
@@ -920,9 +946,11 @@ async def fetch_public(
     what: str = "page",
     hosts: HostSlots | None = None,
     permissions: PermissionBoundary,
+    truncate: bool = False,
 ) -> PublicResponse:
     """GET a public address and return its successful response.
 
+    A body longer than ``max_bytes`` fails, or with ``truncate`` is cut there.
     ``what`` names the expected content in failure messages ("page", "image").
     ``hosts`` bounds the requests running at once against each host, shared with
     the caller's other fetches; ``None`` leaves them unbounded. ``permissions``
@@ -937,14 +965,21 @@ async def fetch_public(
     try:
         async with _make_session(accept) as session:
             result = await _fetch_with_retry(
-                session, url, {}, max_bytes, what, hosts, permissions=permissions
+                session, url, {}, max_bytes, what, hosts, permissions=permissions, truncate=truncate
             )
         if result.status_code == 406:
             # The site serves none of the formats asked for; a browser's own
             # request is what sites answer most (a page refused text/markdown).
             async with _make_session(None) as session:
                 result = await _fetch_with_retry(
-                    session, url, {}, max_bytes, what, hosts, permissions=permissions
+                    session,
+                    url,
+                    {},
+                    max_bytes,
+                    what,
+                    hosts,
+                    permissions=permissions,
+                    truncate=truncate,
                 )
     except _RedirectTargetBlockedError as error:
         raise PublicFetchError("blocked_url", str(error)) from error

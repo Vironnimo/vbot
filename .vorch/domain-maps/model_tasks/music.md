@@ -22,7 +22,7 @@ Explicit non-`stop` finish outcomes also reject partial audio, as do native `net
 
 Non-null `audio.data` values must be strings; malformed fragments cannot be dropped to turn earlier partial audio into a successful artifact. Base64 validation applies to the complete concatenation, preserving fragment boundaries inside encoded groups.
 
-The stream POST records one durable `music_generation` attempt. Reported SSE `usage` fields update its latest counters; repeated cumulative reports are not added. Failure or cancellation retains any telemetry already received, and artifact persistence is independent of that record. Tool callers pass their internal execution scope. A stream without Usage remains an unknown-cost call, with no inference from generated audio length. Coverage: `test_task_usage.py` and the stream outcome tests.
+The stream POST records one durable `music_generation` attempt. Reported SSE `usage` fields update its latest counters; repeated cumulative reports are not added. The attempt settles only after audio decoding, so a refusal or unusable result after `[DONE]` records failure. Failure or cancellation retains any telemetry already received, and artifact persistence is independent of that record. Tool callers pass their internal execution scope. A stream without Usage remains an unknown-cost call, with no inference from generated audio length. Coverage: `test_task_usage.py` and the stream outcome tests.
 
 ## Tests
 

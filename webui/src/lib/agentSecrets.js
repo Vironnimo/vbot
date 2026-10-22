@@ -130,8 +130,16 @@ export function expiryAfter(durationId, nowMs = Date.now()) {
 // The lifetimes a user picks when giving a Session's Agent a Secret (the
 // composer form, a request answer): this Session, one use, permanently, or a
 // time from now. A choice is `session`, `once`, `permanent` or `for:<id>`.
-export function lifetimeChoices() {
+// `keep` adds the choice `keep`, which leaves a replaced Secret's lifetime as
+// it is: `replace` when the value replaces a stored Secret, `give` when it may
+// (a new one then lasts for this Session).
+export function lifetimeChoices({ keep = null } = {}) {
+  const kept = {
+    replace: () => t('secrets.lifetime.keep'),
+    give: () => t('secrets.lifetime.keepOrSession'),
+  }[keep];
   return [
+    ...(kept ? [{ value: 'keep', label: kept() }] : []),
     { value: 'session', label: t('secrets.lifetime.session') },
     { value: 'once', label: t('secrets.lifetime.once') },
     { value: 'permanent', label: t('secrets.lifetime.permanent') },
@@ -142,8 +150,10 @@ export function lifetimeChoices() {
   ];
 }
 
-// A lifetime choice as RPC parameters: `{ lifetime, expires_at? }`.
+// A lifetime choice as RPC parameters: `{ lifetime, expires_at? }`, none for
+// `keep`.
 export function lifetimeChoiceParams(choice, nowMs = Date.now()) {
+  if (choice === 'keep') return {};
   const expiresAt = expiryAfter(lifetimeChoiceDuration(choice), nowMs);
   if (expiresAt) {
     return { lifetime: 'until', expires_at: expiresAt };
@@ -199,6 +209,7 @@ export function secretCommandText({
 }) {
   const parts = ['/secret', name];
   if (lifetime === 'permanent') parts.push('--permanent');
+  else if (lifetime === 'session') parts.push('--session');
   else if (lifetime === 'once') parts.push('--once');
   else if (lifetime === 'until') parts.push('--for', duration);
   const value = kind === 'login' ? values.password : values.value;

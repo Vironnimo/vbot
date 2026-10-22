@@ -215,7 +215,7 @@ def test_an_incomplete_environment_inventory_keeps_every_runtime_in_place(
     assert _versions(install) == {"rel_active", "rel_required"}
 
 
-def test_downloads_of_finished_operations_are_retired(
+def test_downloads_and_activation_archives_of_finished_operations_are_retired(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     install = _install(tmp_path, ["rel_active"], active="rel_active")
@@ -223,15 +223,32 @@ def test_downloads_of_finished_operations_are_retired(
     _operation(install, "upd_running", "preparing", "rel_active", None, at=2)
     for operation_id in ("upd_done", "upd_running", "upd_unrecorded"):
         (tmp_path / "downloads" / operation_id).mkdir(parents=True)
+    # Earlier versions' `update activate` left a zip of the prepared version in
+    # staging; only the one an unfinished operation still installs stays.
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    for version_id in ("rel_activated", "rel_activating"):
+        (staging / f"{version_id}.zip").write_bytes(b"zip")
+    Operation(
+        id="upd_activating",
+        phase="queued",
+        package=str((staging / "rel_activating.zip").resolve()),
+        local_package=True,
+        created_at="2026-09-03T12:00:00+00:00",
+    ).save(install)
     _processes(monkeypatch)
 
     retired = retention.retire_unneeded(install)
+    retention.remove_retired(retired)
 
     assert sorted(path.name for path in retired) == [
         "retired-downloads-upd_done",
         "retired-downloads-upd_unrecorded",
+        "retired-staging-rel_activated.zip",
     ]
+    assert not any(path.exists() for path in retired)
     assert [path.name for path in (tmp_path / "downloads").iterdir()] == ["upd_running"]
+    assert [path.name for path in staging.iterdir()] == ["rel_activating.zip"]
 
 
 def test_a_version_that_cannot_be_moved_is_kept_for_a_later_cleanup(

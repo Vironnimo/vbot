@@ -8,6 +8,7 @@
   import { onDestroy } from 'svelte';
 
   import { t } from '$lib/i18n.js';
+  import { writeClipboardText } from '$lib/clipboard.js';
 
   import Button from './Button.svelte';
 
@@ -37,7 +38,7 @@
     }
 
     try {
-      await navigator.clipboard.writeText(copyText);
+      await writeClipboardText(copyText);
       copied = true;
       clearResetTimer();
       resetTimer = setTimeout(() => {

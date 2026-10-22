@@ -11,6 +11,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
+from core.permissions import PermissionBoundary
 from core.prompts.prompts import _format_skill_catalog
 from core.providers.tool_schema import render_tool_definitions
 from core.recall import (
@@ -82,6 +83,7 @@ async def _evaluate_case(
             data_root=data_root,
             vbot_root=PROJECT_ROOT,
             allowed_skills=["vbot-docs"],
+            permissions=PermissionBoundary.UNRESTRICTED,
         )
         definitions = registry.provider_definitions()
         wire = render_tool_definitions(definitions, profile="explicit_non_strict")

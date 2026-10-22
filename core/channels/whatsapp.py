@@ -153,7 +153,8 @@ class WhatsAppChannelAdapter(NetworkChannelAdapter):
                 response = await future
             if not response.get("ok"):
                 raise ChannelError(
-                    "WhatsApp operation failed; check connection and attachment size"
+                    "WhatsApp operation failed; check connection and attachment size",
+                    possibly_delivered=response.get("possibly_delivered") is True,
                 )
             return response
         except TimeoutError, OSError:

@@ -544,10 +544,6 @@ class ExtensionRegistry:
         """
         return {record.name for record in self._records if record.status == "loaded"}
 
-    def has_tool_hooks(self) -> bool:
-        """Return whether active Extensions can modify Tool calls or results."""
-        return bool(self._handlers.get("tool_call") or self._handlers.get("tool_result"))
-
     async def deactivate(
         self,
         name: str,

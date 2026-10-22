@@ -536,6 +536,7 @@ async def test_temporary_self_delegation_uses_parent_configuration_without_priva
                 data_root=tmp_path,
                 execution_owner=owner,
                 emit_hook=record_event,
+                permissions=PermissionBoundary.UNRESTRICTED,
             ),
             {
                 "action": "run",

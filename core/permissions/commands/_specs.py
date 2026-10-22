@@ -116,8 +116,6 @@ _GENERIC_PATH_PARAMETERS = (
     "OutputPath", "OutputDirectory", "InFile",
 )  # fmt: skip
 
-# Cmdlets that change the location (cwd tracking) or take part in pipelines.
-LOCATION_CMDLETS = frozenset({"set-location", "push-location", "pop-location"})
 # Their output names the paths they list (``gci ..\x | Remove-Item``).
 LISTING_CMDLETS = frozenset(
     {"get-childitem", "get-item", "resolve-path", "convert-path", "select-string"}

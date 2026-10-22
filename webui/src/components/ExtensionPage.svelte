@@ -16,6 +16,7 @@
     cancelExtensionPageToolCall,
     readExtensionPageHistory,
     readExtensionPageTimelineChildren,
+    readExtensionPageToolCall,
     listServerDirectory,
     subscribeRunEvents,
   } from '$lib/api.js';
@@ -28,6 +29,7 @@
     'operation',
     'history.read',
     'history.children',
+    'history.tool_call',
     'link.open',
     'media.open',
     'route.push',
@@ -365,6 +367,16 @@
     );
   }
 
+  function validToolCallRead(params) {
+    return [
+      'group_id',
+      'participant_id',
+      'run_id',
+      'tool_id',
+      'history_generation',
+    ].every((key) => typeof params[key] === 'string' && params[key].length > 0);
+  }
+
   // Server-verified file links of a History reply join the grants of the
   // participant it was read for; a reply for another participant clears them.
   function grantHistoryFiles(context, scope, result) {
@@ -501,6 +513,28 @@
             ...(data.params.limit === undefined
               ? {}
               : { limit: data.params.limit }),
+          },
+        );
+        if (frameContext !== context) return;
+        grantHistoryFiles(context, historyScope, result);
+      } else if (
+        data.method === 'history.tool_call' &&
+        validToolCallRead(data.params)
+      ) {
+        const historyScope = enterHistoryScope(
+          context,
+          data.params.group_id,
+          data.params.participant_id,
+        );
+        result = await readExtensionPageToolCall(
+          context.descriptor.owner,
+          { id: context.descriptor.page, epoch: context.descriptor.epoch },
+          data.params.group_id,
+          data.params.participant_id,
+          {
+            runId: data.params.run_id,
+            toolId: data.params.tool_id,
+            historyGeneration: data.params.history_generation,
           },
         );
         if (frameContext !== context) return;

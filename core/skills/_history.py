@@ -639,10 +639,6 @@ def file_state(path: Path) -> FileState | None:
     return FileState(_digest(data), _storable_text(data))
 
 
-def text_digest(text: str) -> str:
-    return _digest(text.encode("utf-8"))
-
-
 def document_fields(skill_file: Path) -> dict[str, Any]:
     """Return the front matter fields of a ``SKILL.md``, or ``{}`` when unreadable."""
     try:

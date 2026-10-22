@@ -184,7 +184,9 @@ def test_loaded_records_carry_manifest_config_and_disabled_state(tmp_path: Path)
     assert registry.diagnostics() == []
 
 
-def test_each_load_failure_fails_only_its_extension(tmp_path: Path) -> None:
+def test_each_load_failure_fails_only_its_extension(
+    tmp_path: Path, deny_access: Callable[[Path], None]
+) -> None:
     root = tmp_path / "extensions"
     marker, imported = tmp_path / "marker.txt", tmp_path / "imported.txt"
     noop = "def register(api):\n    pass\n"
@@ -192,6 +194,13 @@ def test_each_load_failure_fails_only_its_extension(tmp_path: Path) -> None:
     write_package(root, "bad_utf8", noop)
     (root / "bad_utf8" / "extension.json").write_bytes(b"\xff")
     write_package(root, "bad_version", noop, manifest={"version": 123})
+    unavailable = write_package(
+        root,
+        "unreadable_manifest",
+        _import_marker_source("unreadable_manifest", imported),
+        manifest={"api_version": API_VERSION + 1},
+    )
+    deny_access(unavailable / "extension.json")
     write_package(
         root,
         "future",
@@ -227,6 +236,7 @@ def test_each_load_failure_fails_only_its_extension(tmp_path: Path) -> None:
         "bad_json": "invalid JSON",
         "bad_utf8": "not valid UTF-8",
         "bad_version": "version must be a string",
+        "unreadable_manifest": "cannot read extension.json",
         "future": "api_version",
         "import_boom": "import failed: import boom",
         "register_boom": "register() raised: nope",

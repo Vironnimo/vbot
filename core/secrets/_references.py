@@ -3,6 +3,10 @@
 A reference is ``{{secret:NAME}}`` or ``{{secret:NAME.field}}``. The same text
 is the placeholder an Agent writes and the mask vBot puts where a known value
 appeared, so masked text written back through a sink restores the value.
+
+An escaped reference, ``{{!secret:NAME}}``, stands for the reference text
+itself: substitution removes one ``!`` (``{{!!secret:NAME}}`` gives
+``{{!secret:NAME}}``), so every text can be written through a sink.
 """
 
 from __future__ import annotations
@@ -10,10 +14,11 @@ from __future__ import annotations
 import base64
 import json
 import re
+from bisect import bisect_left
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, Final, cast
-from urllib.parse import quote
+from urllib.parse import quote, quote_plus
 
 #: ``{{secret:NAME}}`` or ``{{secret:NAME.field}}``; names and fields are
 #: matched case-insensitively and normalized by the resolver.
@@ -21,11 +26,28 @@ REFERENCE_PATTERN: Final = re.compile(
     r"\{\{\s*secret:\s*([A-Za-z][A-Za-z0-9_]{0,63})(?:\.([A-Za-z][A-Za-z0-9_]{0,31}))?\s*\}\}"
 )
 
+# A reference or an escaped one: group 1 holds the escape marks, empty for a
+# reference. Names and fields as in ``REFERENCE_PATTERN``.
+_REFERENCE_OR_ESCAPE: Final = re.compile(
+    r"\{\{\s*(!*)\s*secret:\s*([A-Za-z][A-Za-z0-9_]{0,63})(?:\.([A-Za-z][A-Za-z0-9_]{0,31}))?\s*\}\}"
+)
+
 #: Values shorter than this are not masked: they would match unrelated text.
 MIN_MASKED_LENGTH: Final = 8
 # Lines of a multi-line value at least this long are masked on their own too, so
 # a key printed with other line breaks or cut in parts does not leak.
 _MIN_MASKED_LINE = 20
+# Characters JavaScript's encodeURIComponent and encodeURI leave unencoded
+# beyond those ``quote`` always keeps.
+_URI_COMPONENT_SAFE = "!~*'()"
+_URI_SAFE = "!~*'();/?:@&=+$,#"
+_PERCENT_ESCAPE = re.compile(r"%[0-9A-F]{2}")
+# The line length of GNU ``base64`` output.
+_BASE64_LINE = 76
+# How much of the open end of growing text :meth:`SecretMasker.mask_growing`
+# checks, and the shortest beginning of a value it holds back there.
+_GROWING_TAIL_LIMIT = 1024
+_MIN_HELD_PREFIX = 3
 
 
 @dataclass(frozen=True)
@@ -59,6 +81,16 @@ def has_reference(value: Any) -> bool:
     return any(REFERENCE_PATTERN.search(text) for text in iter_strings(value))
 
 
+def has_reference_or_escape(value: Any) -> bool:
+    """Whether any string inside ``value`` (JSON-like) holds a reference or an escaped one."""
+    return any(_REFERENCE_OR_ESCAPE.search(text) for text in iter_strings(value))
+
+
+def unescape_references(text: str) -> str:
+    """``text`` with one ``!`` removed from each escaped reference; references stay."""
+    return substitute(text, lambda reference: text[reference.start : reference.end])
+
+
 def iter_strings(value: Any) -> Iterable[str]:
     if isinstance(value, str):
         yield value
@@ -84,16 +116,32 @@ def map_strings(value: Any, change: Callable[[str], str]) -> Any:
 
 
 def substitute(text: str, resolve: Callable[[Reference], str]) -> str:
-    """``text`` with every reference replaced by ``resolve``'s value."""
-    references = find_references(text)
-    if not references:
-        return text
+    """``text`` with every reference replaced by ``resolve``'s value.
+
+    An escaped reference loses one ``!`` and is never resolved.
+    """
     parts: list[str] = []
     position = 0
-    for reference in references:
-        parts.append(text[position : reference.start])
-        parts.append(resolve(reference))
-        position = reference.end
+    for match in _REFERENCE_OR_ESCAPE.finditer(text):
+        parts.append(text[position : match.start()])
+        if match.group(1):
+            # Escaped: drop the first ``!``.
+            parts.append(text[match.start() : match.start(1)])
+            parts.append(text[match.start(1) + 1 : match.end()])
+        else:
+            parts.append(
+                resolve(
+                    Reference(
+                        name=match.group(2).upper(),
+                        field=match.group(3).lower() if match.group(3) else None,
+                        start=match.start(),
+                        end=match.end(),
+                    )
+                )
+            )
+        position = match.end()
+    if not parts:
+        return text
     parts.append(text[position:])
     return "".join(parts)
 
@@ -113,6 +161,7 @@ class SecretMasker:
                 if len(variant) >= MIN_MASKED_LENGTH:
                     variants.setdefault(variant, reference)
         self._variants = variants
+        self._ordered = sorted(variants)
         self._pattern = (
             re.compile(
                 "|".join(re.escape(item) for item in sorted(variants, key=len, reverse=True))
@@ -128,6 +177,26 @@ class SecretMasker:
         if self._pattern is None or not text:
             return text
         return self._pattern.sub(lambda match: self._variants[match.group(0)], text)
+
+    def mask_growing(self, text: str) -> str:
+        """``text`` masked, without an end that could be the beginning of a value.
+
+        For snapshots of output still being written: a value cut off at the end
+        does not match yet, so that end is held back until a later snapshot
+        holds the whole value. Only the last line's final
+        ``_GROWING_TAIL_LIMIT`` characters are checked.
+        """
+        masked = self.mask(text)
+        if self._pattern is None:
+            return masked
+        start = max(masked.rfind("\n") + 1, len(masked) - _GROWING_TAIL_LIMIT)
+        ordered = self._ordered
+        for position in range(start, len(masked) - _MIN_HELD_PREFIX + 1):
+            tail = masked[position:]
+            index = bisect_left(ordered, tail)
+            if index < len(ordered) and ordered[index].startswith(tail):
+                return masked[:position]
+        return masked
 
     def mask_value[T](self, value: T) -> T:
         """``value`` (JSON-like) with every string masked; ``value`` itself when none matches."""
@@ -152,13 +221,29 @@ def _variants(value: str) -> set[str]:
     escaped = json.dumps(value, ensure_ascii=False)[1:-1]
     found.add(escaped)
     found.add(json.dumps(value)[1:-1])
-    found.add(quote(value, safe=""))
+    for encoded in (
+        quote(value, safe=""),
+        quote(value, safe=_URI_COMPONENT_SAFE),
+        quote(value, safe=_URI_SAFE),
+        quote_plus(value, safe=""),
+    ):
+        found.add(encoded)
+        # Percent-encoding with lowercase hex digits (%2f).
+        found.add(_PERCENT_ESCAPE.sub(lambda match: match.group(0).lower(), encoded))
     raw = value.encode("utf-8")
     for encode in (base64.b64encode, base64.urlsafe_b64encode):
         for offset in range(3):
             fragment = _base64_fragment(encode, raw, offset)
             if fragment:
                 found.add(fragment)
+    # GNU ``base64`` wraps its output at 76 characters: each line on its own.
+    encoded_value = base64.b64encode(raw).decode("ascii")
+    if len(encoded_value) > _BASE64_LINE:
+        found.update(
+            line
+            for start in range(0, len(encoded_value), _BASE64_LINE)
+            if len(line := encoded_value[start : start + _BASE64_LINE]) >= _MIN_MASKED_LINE
+        )
     return found
 
 

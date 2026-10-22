@@ -48,7 +48,13 @@ def _job_service(jobs: list[SimpleNamespace]) -> SimpleNamespace:
         list_jobs=lambda: jobs,
         retarget_agent=retarget_agent,
         retarget_agent_async=retarget_agent_async,
+        retarget_notifications=lambda _agent_id, _new_agent_id: (),
+        retarget_notifications_async=_no_notifications,
     )
+
+
+async def _no_notifications(_agent_id: str, _new_agent_id: str) -> tuple[str, ...]:
+    return ()
 
 
 @pytest.mark.asyncio

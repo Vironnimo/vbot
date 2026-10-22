@@ -140,6 +140,8 @@ def test_route_health_pauses_a_failed_route_and_doubles_each_repeat():
     for _ in range(4):
         pauses.append(health.failed("route") - now[0])
     assert pauses == [900, 1800, 3600, 3600]
+    for _ in range(1100):
+        assert health.failed("route") == now[0] + 3600
     assert health.retry_at("route") == now[0] + 3600
 
     now[0] += 3600

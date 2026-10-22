@@ -163,7 +163,9 @@ async def test_uninstalled_model_never_starts_a_child(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_memory_release_stops_only_an_idle_loaded_model(tmp_path: Path) -> None:
+async def test_memory_release_stops_only_an_idle_loaded_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     async with running(tmp_path) as executor:
         install_fake(tmp_path, GRANITE)
         install_fake(tmp_path, HARRIER)
@@ -184,6 +186,33 @@ async def test_memory_release_stops_only_an_idle_loaded_model(tmp_path: Path) ->
         assert FakeChild.events.count("close") == 2
         with pytest.raises(ValueError):
             await executor.release_memory("local/unknown")
+
+        # A different model's admitted turn may still precede an unload in the
+        # worker queue. Recheck the target when unloading, not only on admission.
+        await executor.embed(GRANITE.id, ["warm"], query=True, options={})
+        started, proceed = threading.Event(), threading.Event()
+        embed_turn = executor._embed_turn
+
+        def delayed_turn(model, key, texts):
+            started.set()
+            assert proceed.wait(timeout=2)
+            return embed_turn(model, key, texts)
+
+        monkeypatch.setattr(executor, "_embed_turn", delayed_turn)
+        other = asyncio.create_task(executor.embed(HARRIER.id, ["next"], query=True, options={}))
+        assert await asyncio.to_thread(started.wait, 2)
+        release = asyncio.create_task(executor.release_memory("local/granite-embedding-r2"))
+        try:
+            await asyncio.sleep(0)
+        finally:
+            proceed.set()
+        await other
+        result = await release
+
+        assert result["released"] is False
+        assert [model["target"] for model in result["models"] if model["loaded"]] == [
+            "local/harrier-0.6b"
+        ]
 
 
 class _Commands:

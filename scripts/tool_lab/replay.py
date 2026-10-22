@@ -48,6 +48,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TextIO
 
+from core.permissions import PermissionBoundary
 from core.runtime.runtime import Runtime
 from core.tools import ToolContext, ToolContractError
 from core.tools._line_diff import line_opcodes
@@ -165,6 +166,7 @@ class Dispatcher:
             cwd=workspace / "cwd",
             vbot_root=_VBOT_ROOT,
             data_root=self._root / "data",
+            permissions=PermissionBoundary.UNRESTRICTED,
         )
         try:
             _contained_path(workspace, self._root)
@@ -213,6 +215,7 @@ class Dispatcher:
             allowed_tools=self._names,
             session_tool_grants=self._names,
             input_contracts=self._contracts,
+            permissions=PermissionBoundary.UNRESTRICTED,
         )
         call = ToolCall(id=context.tool_call_id, name=tool, arguments=rewritten)
         try:

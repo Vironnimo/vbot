@@ -212,7 +212,10 @@ def _adopt_orphan_payloads(services: ArchiveServices) -> bool:
     candidates = []
     for child in children:
         try:
-            if child.name.startswith("arc_") and is_dir_strict(child) and not child.is_symlink():
+            if not child.name.startswith("arc_"):
+                continue
+            status = child.lstat()
+            if stat.S_ISDIR(status.st_mode) and not is_link_status(status):
                 candidates.append(child)
         except OSError as error:
             _unreadable(child, error)
@@ -265,7 +268,7 @@ def _payload_contents(
     """
     agent_dir = child / "agent"
     project_dir = child / "project"
-    if is_dir_strict(agent_dir):
+    if is_dir_strict(agent_dir) and not is_link_status(agent_dir.lstat()):
         inspected = services.agents.inspect_archived(agent_dir)
         facts = _format_facts(inspected.problem, AGENT_FORMAT_VERSION)
         subject = child.name
@@ -278,7 +281,7 @@ def _payload_contents(
             subject,
             facts,
         )
-    if is_dir_strict(project_dir):
+    if is_dir_strict(project_dir) and not is_link_status(project_dir.lstat()):
         inspected_project = services.projects.inspect_archived(project_dir)
         facts = _format_facts(inspected_project.problem, PROJECT_FORMAT_VERSION)
         subject = child.name

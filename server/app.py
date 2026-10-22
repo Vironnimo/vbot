@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
-from contextlib import aclosing, asynccontextmanager
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterator, Mapping
+from contextlib import aclosing, asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -227,106 +227,145 @@ def create_app(
         app_runtime.start()
         from server._log_sources import build_log_viewer
 
-        _initialize_app_state(
-            app,
-            app_runtime,
-            server_bind=resolved_server_bind,
-            server_hosts=access_service.server_hosts,
-            log_viewer=await build_log_viewer(app_runtime.storage.data_dir),
-            file_delivery=file_delivery,
-        )
-        app.state.shutdown_event = shutdown_event if shutdown_event is not None else asyncio.Event()
-        app.state.access = access_service
-        await access_service.start(
-            app_runtime.storage.data_dir,
-            on_change=lambda: publish_resource_changed(app.state, RESOURCE_KIND_DEVICES),
-        )
-        portal_server = PortalServer(
-            registry=app_runtime.portals,
-            access=access_service,
-            file_delivery=file_delivery,
-            listen_host=resolved_server_bind["listen_host"],
-            own_port=resolved_server_bind["listen_port"],
-            tls=tls,
-        )
-        app_runtime.portals.attach(portal_server)
-        _publish_secret_changes(app, app_runtime)
-        oauth_redirects = getattr(app_runtime, "oauth_redirects", None)
-        if oauth_redirects is not None:
-            oauth_redirects.bind(_oauth_callback_url(access_settings, resolved_server_bind))
-        _bind_webhook_url(app_runtime, access_settings, resolved_server_bind)
-        app.state.control_token = shutdown_token
-        app.state.server_identity = _server_identity(app_runtime)
-        app.state.request_restart = request_restart
-        app.state.activity.start()
-        app.state.statistics_warmup_task = (
-            None if effective_safe_mode is not None else _start_statistics_warmup(app.state)
-        )
-        if effective_safe_mode is None:
-            await _fire_extension_startup(app_runtime)
-            _start_speech_preload(app_runtime)
-            # A missing or incompatible runtime Model DB is detected before the
-            # sweep below can publish a new one.
-            start_installation_catalog_restore(app.state)
-        # Local model catalogs (auto_refresh connections, e.g. Ollama) refresh
-        # in the background — never blocking startup; the method itself is
-        # throttled and swallows failures.
-        app.state.local_catalog_refresh_task = (
-            None
-            if effective_safe_mode is not None
-            else asyncio.create_task(
-                app_runtime.maybe_refresh_local_catalogs(), name="local-catalog-refresh"
-            )
-        )
         server_logger = logging.getLogger("vbot.server.app")
-        server_logger.debug(
-            "Server application ready on %s:%s",
-            resolved_server_bind["listen_host"],
-            resolved_server_bind["listen_port"],
-        )
-        app_runtime.activate_bootstrap()
-        if on_ready is not None:
-            on_ready(app_runtime)
+        state_initialized = False
+        access_started = False
+        log_viewer = None
+        portal_server = None
+        app.state.shutdown_event = shutdown_event if shutdown_event is not None else asyncio.Event()
+        app.state.local_catalog_refresh_task = None
+        app.state.statistics_warmup_task = None
         try:
+            log_viewer = await build_log_viewer(app_runtime.storage.data_dir)
+            _initialize_app_state(
+                app,
+                app_runtime,
+                server_bind=resolved_server_bind,
+                server_hosts=access_service.server_hosts,
+                log_viewer=log_viewer,
+                file_delivery=file_delivery,
+            )
+            state_initialized = True
+            app.state.access = access_service
+            access_started = True
+            await access_service.start(
+                app_runtime.storage.data_dir,
+                on_change=lambda: publish_resource_changed(app.state, RESOURCE_KIND_DEVICES),
+            )
+            portal_server = PortalServer(
+                registry=app_runtime.portals,
+                access=access_service,
+                file_delivery=file_delivery,
+                listen_host=resolved_server_bind["listen_host"],
+                own_port=resolved_server_bind["listen_port"],
+                tls=tls,
+            )
+            app_runtime.portals.attach(portal_server)
+            _publish_secret_changes(app, app_runtime)
+            oauth_redirects = getattr(app_runtime, "oauth_redirects", None)
+            if oauth_redirects is not None:
+                oauth_redirects.bind(_oauth_callback_url(access_settings, resolved_server_bind))
+            _bind_webhook_url(app_runtime, access_settings, resolved_server_bind)
+            app.state.control_token = shutdown_token
+            app.state.server_identity = _server_identity(app_runtime)
+            app.state.request_restart = request_restart
+            app.state.activity.start()
+            app.state.statistics_warmup_task = (
+                None if effective_safe_mode is not None else _start_statistics_warmup(app.state)
+            )
+            if effective_safe_mode is None:
+                await _fire_extension_startup(app_runtime)
+                _start_speech_preload(app_runtime)
+                # A missing or incompatible runtime Model DB is detected before the
+                # sweep below can publish a new one.
+                start_installation_catalog_restore(app.state)
+            # Local model catalogs (auto_refresh connections, e.g. Ollama) refresh
+            # in the background — never blocking startup; the method itself is
+            # throttled and swallows failures.
+            app.state.local_catalog_refresh_task = (
+                None
+                if effective_safe_mode is not None
+                else asyncio.create_task(
+                    app_runtime.maybe_refresh_local_catalogs(), name="local-catalog-refresh"
+                )
+            )
+            server_logger.debug(
+                "Server application ready on %s:%s",
+                resolved_server_bind["listen_host"],
+                resolved_server_bind["listen_port"],
+            )
+            app_runtime.activate_bootstrap()
+            if on_ready is not None:
+                on_ready(app_runtime)
             yield
         finally:
             app.state.shutdown_event.set()
-            runtime_stopped_cleanly = False
+            services_stopped_cleanly = True
+
+            @contextmanager
+            def cleanup_step() -> Iterator[None]:
+                nonlocal services_stopped_cleanly
+                try:
+                    yield
+                except Exception:
+                    services_stopped_cleanly = False
+                    server_logger.exception("Server application cleanup failed")
+
             try:
                 server_logger.debug("Server application stopping")
-                await _shutdown_live_calls(app.state, server_logger)
-                await _shutdown_local_catalog_refresh(
-                    app.state.local_catalog_refresh_task,
-                    server_logger,
-                )
-                await _shutdown_statistics_warmup(app.state.statistics_warmup_task)
-                await app.state.activity.aclose()
-                _unregister_run_event_bridge(app.state)
-                _unregister_session_activity_bridge(app.state)
-                _unregister_session_title_bridge(app.state)
-                _unregister_session_completion_read_bridge(app.state)
-                _unregister_cron_change_bridge(app.state)
-                _unregister_calendar_change_bridge(app.state)
-                _unregister_archive_change_bridge(app.state)
-                _unregister_skill_change_bridge(app.state)
-                _unregister_model_catalog_change_bridge(app.state)
-                _unregister_terminal_change_bridge(app.state)
-                _unregister_portal_change_bridge(app.state)
-                _unregister_command_status_bridge(app.state)
-                _unregister_recall_index_status_bridge(app.state)
-                await _shutdown_log_viewer(app.state.log_viewer, server_logger)
-                await _shutdown_device_flow_engine(
-                    getattr(app.state, "device_flow_engine", None),
-                    server_logger,
-                )
-                await _shutdown_model_list_refreshes(app_runtime)
-                app_runtime.portals.detach()
-                await portal_server.aclose()
-                await access_service.close()
-                runtime_stopped_cleanly = await _shutdown_runtime(app_runtime)
+                if state_initialized:
+                    with cleanup_step():
+                        await _shutdown_live_calls(app.state, server_logger)
+                    with cleanup_step():
+                        await _shutdown_local_catalog_refresh(
+                            app.state.local_catalog_refresh_task,
+                            server_logger,
+                        )
+                    with cleanup_step():
+                        await _shutdown_statistics_warmup(app.state.statistics_warmup_task)
+                    with cleanup_step():
+                        await app.state.activity.aclose()
+                    for unregister in (
+                        _unregister_run_event_bridge,
+                        _unregister_session_activity_bridge,
+                        _unregister_session_title_bridge,
+                        _unregister_session_completion_read_bridge,
+                        _unregister_cron_change_bridge,
+                        _unregister_calendar_change_bridge,
+                        _unregister_archive_change_bridge,
+                        _unregister_skill_change_bridge,
+                        _unregister_model_catalog_change_bridge,
+                        _unregister_terminal_change_bridge,
+                        _unregister_portal_change_bridge,
+                        _unregister_command_status_bridge,
+                        _unregister_recall_index_status_bridge,
+                    ):
+                        with cleanup_step():
+                            unregister(app.state)
+                if log_viewer is not None:
+                    with cleanup_step():
+                        await _shutdown_log_viewer(log_viewer, server_logger)
+                if state_initialized:
+                    with cleanup_step():
+                        await _shutdown_device_flow_engine(
+                            getattr(app.state, "device_flow_engine", None),
+                            server_logger,
+                        )
+                    with cleanup_step():
+                        await _shutdown_model_list_refreshes(app_runtime)
+                if portal_server is not None:
+                    with cleanup_step():
+                        app_runtime.portals.detach()
+                    with cleanup_step():
+                        await portal_server.aclose()
+                if access_started:
+                    with cleanup_step():
+                        await access_service.close()
             finally:
+                runtime_stopped_cleanly = await _shutdown_runtime(app_runtime)
                 if on_stopped is not None:
-                    on_stopped(runtime_stopped_cleanly)
+                    with cleanup_step():
+                        on_stopped(runtime_stopped_cleanly and services_stopped_cleanly)
 
     # No generated API docs: the access guard serves every GET outside the server
     # namespaces as the public WebUI shell.

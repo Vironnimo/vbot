@@ -35,32 +35,23 @@ const minutesSeconds = (minutes, secs) =>
   t('chat.durationMinutesSeconds', { minutes, seconds: secs });
 
 function editTool({ path, added, removed, name = 'edit' }) {
-  const toolCall = { id: `call-${path}-${added}`, name };
   return {
     type: 'tool_call',
     id: `tool-${path}-${added}`,
     name,
     status: 'success',
     arguments: { path },
-    startedEvent: {
-      type: 'tool_call_started',
-      payload: { tool_call: toolCall },
-    },
-    resultEvent: {
-      type: 'tool_call_result',
-      payload: {
-        tool_call: toolCall,
-        display: {
-          version: 1,
-          summary: path,
-          hidden_argument_keys: [],
-          primary: [],
-          facts: [
-            { kind: 'line_change', change: 'added', value: added },
-            { kind: 'line_change', change: 'removed', value: removed },
-          ],
-        },
-      },
+    started: true,
+    finished: true,
+    display: {
+      version: 1,
+      summary: path,
+      hidden_argument_keys: [],
+      primary: [],
+      facts: [
+        { kind: 'line_change', change: 'added', value: added },
+        { kind: 'line_change', change: 'removed', value: removed },
+      ],
     },
   };
 }
@@ -538,8 +529,6 @@ describe('Run children', () => {
             streaming: true,
             name: 'session_search',
             partialArgumentsText: '{"query": "ca',
-            startedEvent: null,
-            resultEvent: null,
             output: '',
           },
         ],

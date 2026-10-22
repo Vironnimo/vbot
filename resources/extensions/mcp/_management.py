@@ -298,7 +298,7 @@ async def invoke_for_agent(
     runner: ConnectionRunner,
     arguments: dict[str, Any],
 ) -> dict[str, Any]:
-    """Run explore or invoke as the named Agent, through that Agent's Tool policy."""
+    """Run explore or invoke as the named Agent, through its Tool policy and Permission Rules."""
     agent_id, project_id = parse_agent_address(arguments["agent"])
     agent = host.resolve_agent(project_id, agent_id)
     registry = operations.tool_registry
@@ -321,6 +321,11 @@ async def invoke_for_agent(
     )
     if name not in resolution.allowed_tools:
         raise ValueError("Agent Tool policy does not permit this MCP operation")
+    if host.resolve_permissions is None:
+        raise RuntimeError("Agent Permission Rules are unavailable")
+    # The Agent's Permission Rules confine the call as in a new Session of it,
+    # so the roots a server asks for stay within what the Agent may read.
+    permissions = await host.resolve_permissions(project_id, agent_id)
     resolve_cwd = host.resolve_cwd
     context = ToolContext(
         agent_id=agent_id,
@@ -334,6 +339,7 @@ async def invoke_for_agent(
         cwd=resolve_cwd(project_id, agent_id) if resolve_cwd else None,
         vbot_root=VBOT_ROOT,
         data_root=host.data_dir,
+        permissions=permissions,
     )
     handler_arguments = (
         inputs.get("arguments", {})

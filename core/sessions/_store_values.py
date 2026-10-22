@@ -499,7 +499,6 @@ def _recall_visibility_sql(*, include_subagents: bool, alias: str = "s") -> str:
     return f"{_recall_visibility_case(alias)} IN ({admitted})"
 
 
-_SEARCH_RESULT_LIMIT = 1_000
 # Candidates one Message search checks before it reports an incomplete result.
 _SEARCH_CANDIDATE_LIMIT = 10_000
 

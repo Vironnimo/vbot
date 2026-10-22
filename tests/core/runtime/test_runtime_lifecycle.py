@@ -163,7 +163,7 @@ async def test_startup_policy_keeps_catalog_loading_separate_from_producers(
 
 
 @pytest.mark.asyncio
-async def test_a_start_removes_killed_staging_and_only_a_normal_one_releases_retired_databases(
+async def test_start_modes_split_staging_cleanup_conversion_and_database_release(
     config: Config,
 ) -> None:
     from core.database import open_database, read_marker, snapshot_root, write_bootstrap_marker
@@ -183,18 +183,33 @@ async def test_a_start_removes_killed_staging_and_only_a_normal_one_releases_ret
         assert marker is not None
         return set(marker.databases)
 
+    def older_project(project_id: str) -> Path:
+        path = data_dir / "projects" / project_id / "project.json"
+        path.parent.mkdir(parents=True)
+        document = {"format_version": 1, "project_id": project_id, "cwd": str(data_dir)}
+        path.write_text(json.dumps({**document, "allowed_tools": []}), encoding="utf-8")
+        return path
+
+    def version(path: Path) -> object:
+        return json.loads(path.read_text(encoding="utf-8"))["format_version"]
+
+    converted = older_project("converted")
     # An update's verification start keeps them: its rollback needs every registration.
-    # What a killed snapshot left goes at every start.
+    # It converts older documents; what a killed snapshot left goes at every start.
     verification = Runtime(config, safe_startup_mode="verification")
     verification.start()
     await verification.aclose()
     assert not killed.exists()
     assert set(RETIRED_CANONICAL_DATABASES) <= registered()
+    assert version(converted) == 2
 
+    # Normal startup never converts.
+    unconverted = older_project("unconverted")
     runtime = Runtime(config)
     runtime.start()
     await runtime.aclose()
     assert not set(RETIRED_CANONICAL_DATABASES) & registered()
+    assert version(unconverted) == 1
     for name in RETIRED_CANONICAL_DATABASES:
         assert not canonical_database_path(data_dir, name).exists()
 

@@ -7,6 +7,10 @@ from typing import Any
 import pytest
 
 from core.chat.streaming import StreamingAccumulator
+from core.providers._responses_wire import (
+    ResponsesStreamState,
+    normalize_responses_response,
+)
 from core.providers.adapter import (
     TERMINAL_OUTCOME_CONTENT_FILTERED,
     TERMINAL_OUTCOME_ERROR,
@@ -20,10 +24,6 @@ from core.providers.errors import (
     ProviderError,
     ProviderRateLimitError,
     ProviderTimeoutError,
-)
-from core.providers.github_copilot_responses import (
-    ResponsesStreamState,
-    normalize_responses_response,
 )
 from tests.core.providers.responses_test_support import decode_responses_sse, sse_event
 

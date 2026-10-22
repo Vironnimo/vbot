@@ -1,6 +1,6 @@
 # Agents Agent-facing text
 
-Why each sentence of the description suggestion prompt (`AGENT_DESCRIPTION_SYSTEM_PROMPT`, `core/runtime/_agent_description.py`), a prompt for another Model job, exists. Rules for this file: `.vorch/workflows/domain-map-workflow.md` -> Agent-facing text.
+Why each sentence of the description suggestion prompt (`AGENT_DESCRIPTION_SYSTEM_PROMPT`, `core/agents/description.py`), a prompt for another Model job, exists. Rules for this file: `.vorch/workflows/domain-map-workflow.md` -> Agent-facing text.
 
 | Text | Reason |
 |---|---|

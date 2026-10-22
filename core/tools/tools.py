@@ -18,7 +18,7 @@ from core.secrets.agent_secrets import (
     SecretUseError,
     SinkClass,
     describe_uses,
-    has_reference,
+    has_reference_or_escape,
 )
 from core.sessions import SessionAddress
 from core.tools._tool_context import (
@@ -459,10 +459,6 @@ class ToolRegistry:
         except KeyError:
             raise ValueError(f"Tool family not found: {family_id}") from None
 
-    def list_families(self) -> list[ToolFamily]:
-        """Return registered family definitions in stable id order."""
-        return sorted(self._families.values(), key=lambda family: family.id)
-
     def display_for_call(
         self,
         name: str,
@@ -802,7 +798,7 @@ class ToolRegistry:
         sinks = {
             name: cast(SinkClass, sink)
             for name, sink in tool.secret_sinks.items()
-            if name in arguments and has_reference(arguments[name])
+            if name in arguments and has_reference_or_escape(arguments[name])
         }
         if secrets is None or not sinks:
             return arguments
@@ -817,6 +813,7 @@ class ToolRegistry:
                     sink,
                     passed_only=context.subagent_session,
                     consume=False,
+                    literals=context.secret_literals if sink == "files" else None,
                 )
                 uses.extend(use for use in found if use not in uses)
             secrets.consume(

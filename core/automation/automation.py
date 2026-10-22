@@ -19,6 +19,7 @@ from core.runs import (
     RunKind,
     WaitingWorkAdmission,
 )
+from core.secrets._references import EMPTY_MASKER, SecretMasker
 from core.sessions import AGENT_DEFAULT_PROJECT, SessionAddress, WorkingProjectChoice
 from core.utils.logging import get_logger
 
@@ -94,6 +95,7 @@ class TriggerService:
         runtime: Runtime,
         *,
         sessions: ChatSessionManager | None = None,
+        secret_masker: Callable[[], SecretMasker] = lambda: EMPTY_MASKER,
     ) -> None:
         self._chat_loop = chat_loop
         self._chat_run_manager = chat_run_manager
@@ -102,6 +104,7 @@ class TriggerService:
             self._chat_loop,
             chat_run_manager,
             sessions,
+            secret_masker,
         )
 
     def submit_completion(
@@ -390,46 +393,11 @@ class TriggerService:
             return False
         return self._chat_run_manager.release_waiting_work(admission)
 
-    def has_active_run(
-        self, agent_id: str, session_id: str, *, project_id: str | None = None
-    ) -> bool:
-        """Return whether one session currently has an active run.
-
-        A thin delegate to the run manager's active-run guard, so command
-        producers (channels) can refuse run-conflicting actions such as starting
-        a new session mid-run without taking their own dependency on the run
-        manager. ``project_id=None`` keeps the identity scope (channels).
-        """
-        return (
-            self._chat_run_manager.active_run(
-                agent_id=agent_id, session_id=session_id, project_id=project_id
-            )
-            is not None
-        )
-
     def running_run(self, run_id: str) -> Run | None:
         """Return the Run *run_id* while it runs; None once it ended or when it is unknown."""
         if not self._chat_run_manager.is_running(run_id):
             return None
         return self._chat_run_manager.get(run_id)
-
-    async def compact_session(
-        self,
-        agent_id: str,
-        session_id: str,
-        instruction: str | None = None,
-        *,
-        project_id: str | None = None,
-    ) -> str:
-        """Compact a session and return a user-facing command reply.
-
-        ``instruction`` carries the optional free-text argument from
-        ``/compact <instruction>`` down into the summarization prompt.
-        ``project_id`` scopes compaction to a project session (``None`` = identity).
-        """
-        return await self._chat_loop.compact_session(
-            agent_id, session_id, instruction, project_id=project_id
-        )
 
     async def start_compaction_run(
         self,

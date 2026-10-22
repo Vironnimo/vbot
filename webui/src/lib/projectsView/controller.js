@@ -88,6 +88,8 @@ export function createProjectsController({
   const overrideEditVersions = new Map();
   let autoSaveTimer = null;
   let toolAccessOverrideAutoSaveTimer = null;
+  // Settles when the running Project save ends; null while none runs.
+  let runningEditSave = null;
 
   let pendingProjectList = null;
   // The order revision of the latest loaded list, applied with that list.
@@ -586,9 +588,10 @@ export function createProjectsController({
     state.editError = '';
   }
 
-  // An added Skill folder saves at once: the server checks that it exists and
-  // is no Source yet. A refused folder leaves the list again, and its reason
-  // is returned for the folder field instead of the page banner.
+  // An added Skill folder saves at once, after a save already running: the
+  // server checks that it exists and is no Source yet. A refused folder
+  // leaves the list again, and its reason is returned for the folder field
+  // instead of the page banner.
   async function addSkillFolder(path) {
     const before = state.editForm.sources;
     const next = addSkillFolderSource(before, path, (source) =>
@@ -597,9 +600,14 @@ export function createProjectsController({
     if (next === before) return { ok: false, error: '' };
     const previous = JSON.stringify(before);
     const added = JSON.stringify(next);
+    const selection = selectionVersion;
     updateEditField('sources', next);
-    if (state.editSaving || (await saveSelectedProject()))
-      return { ok: true, error: '' };
+    while (runningEditSave) await runningEditSave;
+    // Another Project was selected meanwhile; its editor holds no folder.
+    if (!active || selection !== selectionVersion) {
+      return { ok: false, error: '' };
+    }
+    if (await saveSelectedProject()) return { ok: true, error: '' };
     const error = state.editError;
     if (JSON.stringify(state.editForm.sources) === added) {
       state.editForm.sources = JSON.parse(previous);
@@ -658,6 +666,8 @@ export function createProjectsController({
     state.editError = '';
     state.statusMessage = '';
     const savedEditFormSnapshot = JSON.stringify(state.editForm);
+    const { promise: settled, resolve: settle } = Promise.withResolvers();
+    runningEditSave = settled;
     try {
       const result = await operations.setProject(project.project_id, changes);
       if (!active || selection !== selectionVersion) {
@@ -696,6 +706,8 @@ export function createProjectsController({
         state.editSaving = false;
         flushPendingProjects();
       }
+      if (runningEditSave === settled) runningEditSave = null;
+      settle();
     }
   }
 

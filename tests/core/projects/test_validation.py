@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from core.projects import (
+    PROJECT_FORMAT_VERSION,
     ProjectError,
     load_validated_project_json,
     validate_project_data,
@@ -21,7 +22,7 @@ _THINKING_EFFORTS = "'', 'high', 'low', 'max', 'medium', 'minimal', 'none', 'xhi
 
 def _valid_project_data() -> dict[str, object]:
     return {
-        "format_version": 1,
+        "format_version": PROJECT_FORMAT_VERSION,
         "project_id": "vbot",
         "display_name": "vBot",
         "cwd": "/srv/repos/vbot",
@@ -100,7 +101,7 @@ def test_validate_project_data_accepts_valid_configs(changes: dict[str, Any]) ->
 
 def test_validate_project_data_accepts_only_identity_cwd_and_tool_whitelist() -> None:
     data = {
-        "format_version": 1,
+        "format_version": PROJECT_FORMAT_VERSION,
         "project_id": "scratch",
         "cwd": "/srv/repos/scratch",
         "allowed_tools": [],
@@ -265,7 +266,7 @@ def test_validate_project_data_rejects_non_object_root() -> None:
 
 
 def test_validate_project_data_requires_only_cwd_and_tool_whitelist() -> None:
-    assert _diagnostics({"format_version": 1, "project_id": "vbot"}) == [
+    assert _diagnostics({"format_version": PROJECT_FORMAT_VERSION, "project_id": "vbot"}) == [
         ("error", "$.cwd", "is required"),
         ("error", "$.allowed_tools", "is required"),
     ]
@@ -278,8 +279,10 @@ def test_validate_project_data_requires_the_current_format_version() -> None:
     assert [(severity, path) for severity, path, _ in _diagnostics(data)] == [
         ("error", "$.format_version")
     ]
-    data["format_version"] = 2
+    data["format_version"] = PROJECT_FORMAT_VERSION + 1
     assert "written by a newer vBot" in _diagnostics(data)[0][2]
+    data["format_version"] = PROJECT_FORMAT_VERSION - 1
+    assert "vbot data-store convert --yes" in _diagnostics(data)[0][2]
 
 
 @pytest.mark.parametrize("exists", [False, True])
@@ -297,7 +300,9 @@ def test_load_validated_project_json_returns_mapping_or_raises(tmp_path: Path) -
     valid_path = tmp_path / "valid.json"
     valid_path.write_text(json.dumps(_valid_project_data()), encoding="utf-8")
     invalid_path = tmp_path / "invalid.json"
-    invalid_path.write_text(json.dumps({"format_version": 1, "project_id": "x"}), encoding="utf-8")
+    invalid_path.write_text(
+        json.dumps({"format_version": PROJECT_FORMAT_VERSION, "project_id": "x"}), encoding="utf-8"
+    )
 
     assert load_validated_project_json(valid_path) == _valid_project_data()
     with pytest.raises(ProjectError):

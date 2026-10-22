@@ -7,7 +7,7 @@ Read when changing how the boundary decides a path: normalization and unsafe for
 `normalize_path(path, *, base, home, platform)` gives the lexical and resolved forms exactly as the checks compare them (`_paths.py`):
 
 1. `~`, relative paths joined to `base` (default: the working directory), separators, `.`/`..`, Windows trailing dots and spaces, `\\?\` drive prefixes, 8.3 short names (`GetLongPathNameW` on the longest existing prefix).
-2. Unsafe forms are recognized lexically before any filesystem access: network paths (UNC, `\\?\UNC\`, `file://host`), device paths (`\\.\`, `\\?\GLOBALROOT`, NT `\??\`), alternate data streams and drive-relative paths. They are refused (`unsafe_form`, `location` names the form) unless an allow rule without wildcards names the path or a folder above it, and they are never resolved, so a UNC path never contacts SMB.
+2. Unsafe forms are recognized lexically before any filesystem access: network paths (UNC, `\\?\UNC\`, `file://host`), device paths (`\\.\`, `\\?\GLOBALROOT`, NT `\??\`), alternate data streams and drive-relative paths. They are refused (`unsafe_form`, `location` names the form) unless an allow rule without wildcards in every layer names the path or a folder above it, and they are never resolved, so a UNC path never contacts SMB.
 3. Links and junctions resolve with `os.path.realpath` (non-strict). POSIX resolves the joined path as written, so `link/..` climbs out of the link target as the kernel does; Windows resolves the lexical form, as Win32 does. Both forms must pass every later step; a refusal then names where the link leads (`resolved`).
 
 A restricted check touches the filesystem (`realpath`, 8.3 expansion), and `build` resolves every folder and pattern prefix once.

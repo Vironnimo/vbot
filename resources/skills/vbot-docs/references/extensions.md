@@ -50,7 +50,7 @@ def register(api):
 | Call | Declares |
 |---|---|
 | `api.on(event, handler)` | a hook handler for one event |
-| `api.register_command(name, description, handler, *, argument="optional", catalog_result="notice", execution_mode="serialized", argument_execution_mode=None, unavailable_surfaces=())` | a slash Command |
+| `api.register_command(name, description, handler, *, argument="optional", catalog_result="notice", execution_mode="serialized", argument_execution_mode=None, unavailable_surfaces=(), argument_hint="")` | a slash Command |
 | `api.register_tool_family(family_id, label)` | a Tool Family owned by this Extension |
 | `api.register_tool(name, description, parameters, handler, *, summary=None, internal=False, catalog_visible=True, requires_opt_in=False, display=None, ready=None, readiness_hint=None, result_schema=None, parallel_safe=True, open_input_schema=False, unadvertised_parameters=None, argument_normalizer=None, family=None, announce_changes=())` | an Agent Tool |
 | `api.register_page(page_id, title, entry, *, icon="network")` | an Extension page ([extension-pages.md](extension-pages.md)) |
@@ -150,8 +150,11 @@ def register(api):
         "Start the bundled workflow Skill.",
         start_workflow,
         argument="optional",
+        argument_hint="optional: what the workflow should achieve",
     )
 ```
+
+`argument_hint` (API 20) tells how to use the command, in plain words rather than usage notation; the WebUI shows it greyed after the typed command, when the user already chose the command, while the description says what it does in the `/` list.
 
 The handler, synchronous or asynchronous, receives `(context, argument)`: `argument` is the trimmed text after the Command, or `None`. It returns a `CommandOutcome` whose `command` equals the declared name. `ExtensionCommandContext` offers `agent_id`, `session_id`, `project_id`, `reply_surface`, `report_change(...)` and `await start_run(content, *, internal=False)`, which starts the Run at the same address and reply surface.
 
@@ -317,7 +320,7 @@ A package or directory Extension can add an `extension.json`; it is never requir
 }
 ```
 
-The identity stays the directory name; `name` is only shown. vBot refuses an Extension whose `api_version` is above its own, currently 15. Declare the version that added what you use: 3 Tool Families; 4 managed operations and live Tool catalogs; 5 `requires_opt_in`; 6 pages and `catalog_visible`; 7 [databases](#extension-databases); 8 [Tool result payloads](#tool-result-payloads); 9 `requires_tool` on prompt blocks; 10 listing and archiving owned Session groups; 11 OAuth browser redirects (`host.oauth_redirects`, see `core/extensions/oauth_redirects.py`); 12 server folder listing for pages; 13 [Tool summaries](#tool-summary); 14 [Tool-change announcements](#tool-changes-in-a-session); 15 `config_documents`, `host.resolve_tool_agent_async` and Tool-call receipts.
+The identity stays the directory name; `name` is only shown. vBot refuses an Extension whose `api_version` is above its own, currently 20. Declare the version that added what you use: 3 Tool Families; 4 managed operations and live Tool catalogs; 5 `requires_opt_in`; 6 pages and `catalog_visible`; 7 [databases](#extension-databases); 8 [Tool result payloads](#tool-result-payloads); 9 `requires_tool` on prompt blocks; 10 listing and archiving owned Session groups; 11 OAuth browser redirects (`host.oauth_redirects`, see `core/extensions/oauth_redirects.py`); 12 server folder listing for pages; 13 [Tool summaries](#tool-summary); 14 [Tool-change announcements](#tool-changes-in-a-session); 15 `config_documents`, `host.resolve_tool_agent_async` and Tool-call receipts; 16 windowed Run steps for pages; 17 Secret Sources; 18 `host.resolve_permissions`; 19 bounded Tool-call previews and `history.tool_call` for pages; 20 `argument_hint` on slash Commands.
 
 `config_documents` maps file patterns in your Extension's state directory to `module:function` validators, for example `"config_documents": {"connections.json": "config:validate_connections_file"}`. A validator receives the file's absolute `Path` and returns a `core.config_validation.JsonValidationReport`. `vbot doctor config` loads only that module, without your `__init__`, `register` or startup, also while the Extension is disabled; keep the module independent of registration.
 

@@ -150,6 +150,13 @@ class Transcript(ScrollView, can_focus=True):
             super().__init__()
             self.item = item
 
+    class LoadToolCall(Message):
+        """An expanded Tool row carries only previews of its call."""
+
+        def __init__(self, item: JsonObject) -> None:
+            super().__init__()
+            self.item = item
+
     class Leave(Message):
         """The operator left the transcript for the composer."""
 
@@ -785,11 +792,13 @@ class Transcript(ScrollView, can_focus=True):
             return
         header_top = self._offsets[index] + self._rows[index].gap
         screen_line = header_top - self.scroll_y
+        row = self._rows[index]
         if key in view.expanded_rows:
             view.expanded_rows.discard(key)
         else:
             view.expanded_rows.add(key)
-        row = self._rows[index]
+            if row.kind == "tool_call" and row.item.get("rawTruncated"):
+                self.post_message(self.LoadToolCall(row.item))
         self._paint_row(row, self._width())
         self._offsets_changed()
         visible = 0 <= screen_line < (self.scrollable_content_region.height or self.size.height)

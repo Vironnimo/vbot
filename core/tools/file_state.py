@@ -32,6 +32,9 @@ from core.utils.atomic import preserve_windows_file_metadata
 from core.utils.logging import get_logger
 from core.utils.paths import model_path
 
+# A file and the metadata captured before reading the bytes shown to the Model.
+type FileRead = tuple[Path, tuple[float, int]]
+
 _LOGGER = get_logger("tools.file_state")
 
 # Single off-switch for read-stamp tracking. Path locks and atomic writes remain

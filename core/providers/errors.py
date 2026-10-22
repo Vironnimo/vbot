@@ -209,7 +209,6 @@ IN_BAND_TRANSIENT_ERROR_CODES = frozenset(
         "websocket_connection_limit_reached",
     }
 )
-IN_BAND_RETRYABLE_NUMERIC_CODES = frozenset({429, 502, 503, 504})
 
 # An exhausted quota, spend cap or plan entitlement, whatever status carries it
 # (also HTTP 429): waiting does not help. These are the codes and types OpenAI's

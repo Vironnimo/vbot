@@ -10,7 +10,11 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from core.chat._effort_epoch import EffortState
 from core.chat._prompt_block_epoch import PromptBlockPin
-from core.chat._run_permissions import RunPermissions, run_permission_boundary
+from core.chat._run_permissions import (
+    RunPermissions,
+    permitted_project_context,
+    run_permission_boundary,
+)
 from core.chat._step_outcomes import _ToolProgress
 from core.chat._stream_draft import StreamDraft
 from core.chat._tool_epoch import ToolChange, ToolEpochView
@@ -68,6 +72,7 @@ from core.sessions import (
     latest_project_tool_context_id,
 )
 from core.tools import ToolContract
+from core.tools.file_state import FileRead
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -355,6 +360,8 @@ class _RunExecutionContext:
     skill_catalog: PinnedSkillCatalog
     prompt_cache_affinity_id: str
     session_snapshot: _SessionSnapshot
+    # Every Tool Call of this Run checks its accesses against this boundary.
+    permissions: PermissionBoundary
     # The Session is linked to a Parent Agent (a Sub-Agent Session).
     subagent_session: bool = False
     # The Session leaves ``subagent`` out of its Tool list for this Run (a
@@ -362,8 +369,6 @@ class _RunExecutionContext:
     subagent_tool_withheld: bool = False
     # The Session has an open goal, which grants ``update_goal`` for this Run.
     goal_session: bool = False
-    # Every Tool Call of this Run checks its accesses against this boundary.
-    permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED
     # What ``permissions`` was built from; ``None`` keeps it for the whole Run.
     permission_sources: RunPermissions | None = None
     request_state: _RequestState | None = None
@@ -554,7 +559,7 @@ class _CompactionPromptRefresh:
     skill_catalog: PinnedSkillCatalog
     # The Project whose Skill pool the refreshed catalog advertises (qualifies its pin).
     skill_project_id: str | None
-    prompt_read_paths: tuple[Path, ...]
+    prompt_read_paths: tuple[FileRead, ...]
     available_skill_names: tuple[str, ...]
     memory_prompt_mode: str | None = None
     # Whether ``agent_body`` is a prompt-epoch pin (a Workspace-less Agent's body).
@@ -865,26 +870,6 @@ async def create_run_execution_context(
             if prompt_project is not None
             else None
         )
-        project_prompt_context = (
-            ProjectPromptContext.from_project(
-                prompt_project.project_id,
-                prompt_project.display_name,
-                prompt_project.cwd,
-                prompt_project.auto_load,
-            )
-            if prompt_project is not None
-            else None
-        )
-        working_project_context = await _CHAT_TRANSFORM_WORKERS.run(
-            pinned_working_project_context,
-            dependencies,
-            run.agent_id,
-            run.session_id,
-            agent,
-            prompt_project,
-            project_prompt_context,
-            project_id,
-        )
         agent_body = await _CHAT_TRANSFORM_WORKERS.run(
             pinned_agent_body,
             dependencies,
@@ -957,6 +942,24 @@ async def create_run_execution_context(
             address=session_address,
             project_root=Path(prompt_project.cwd) if prompt_project is not None else None,
             skill_registry=skill_registry,
+        )
+        # The frame carries only the instruction files the Run may read.
+        project_prompt_context = (
+            await _CHAT_TRANSFORM_WORKERS.run(
+                permitted_project_context, prompt_project, permissions.boundary
+            )
+            if prompt_project is not None
+            else None
+        )
+        working_project_context = await _CHAT_TRANSFORM_WORKERS.run(
+            pinned_working_project_context,
+            dependencies,
+            run.agent_id,
+            run.session_id,
+            agent,
+            prompt_project,
+            project_prompt_context,
+            project_id,
         )
         session.activated_skill_contents(session_snapshot.active_messages)
         context = _RunExecutionContext(

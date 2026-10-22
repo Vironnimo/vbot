@@ -19,8 +19,10 @@ from pathlib import Path
 
 from core.chat._message_history import effective_compaction_messages
 from core.chat.messages import ChatMessage
+from core.permissions import PermissionBoundary
 from core.projects import FolderInstructions
 from core.prompts.blocks import ToolAvailability, render_prompt_file
+from core.tools.file_state import FileRead
 
 FOLDER_INSTRUCTIONS_NOTE_PREFIX = "[folder-instructions] "
 _NOTE_VERSION = 1
@@ -91,14 +93,16 @@ def folder_instruction_notes(
     worked_paths: Sequence[Path],
     session_messages: list[ChatMessage],
     *,
+    permissions: PermissionBoundary,
     tool_available: ToolAvailability,
-    on_read: Callable[[Path], None] | None = None,
+    on_read: Callable[[FileRead], None] | None = None,
 ) -> list[ChatMessage]:
     """Return the notes for the folder instruction files *worked_paths* lead to.
 
     Files a note since the latest Compaction checkpoint already showed are left
-    out, and so is a file that cannot be read; one too large to inline shows its
-    frame with the reader's notice. Blocking: reads the filesystem.
+    out, and so is a file that cannot be read or that *permissions* refuses to
+    read (a deny rule, a link out of the readable area); one too large to inline
+    shows its frame with the reader's notice. Blocking: reads the filesystem.
     """
     seen = [
         Path(note.file)
@@ -107,6 +111,8 @@ def folder_instruction_notes(
     ]
     notes: list[ChatMessage] = []
     for file in finder.files_for(worked_paths, seen=seen):
+        if permissions.check_path(file, "read") is not None:
+            continue
         label = _relative(file, finder.root)
         text = render_prompt_file(file, label, tool_available=tool_available, on_read=on_read)
         if text is None:

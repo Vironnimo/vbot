@@ -74,6 +74,14 @@ from core.providers._responses_websocket import (
     responses_conversation_id,
     responses_request_digest,
 )
+from core.providers._responses_wire import (
+    ResponsesStreamState,
+    build_responses_payload,
+    estimate_responses_input_tokens,
+    iter_responses_sse_deltas_with_state,
+    normalize_responses_response,
+    responses_returned_reasoning,
+)
 from core.providers._wire_learning import (
     execute_learning_from_rejections,
     stream_learning_from_rejections,
@@ -87,14 +95,6 @@ from core.providers.errors import (
     ProviderTimeoutError,
     exhausted_quota_code,
     usage_limit_error,
-)
-from core.providers.github_copilot_responses import (
-    ResponsesStreamState,
-    build_responses_payload,
-    estimate_responses_input_tokens,
-    iter_responses_sse_deltas_with_state,
-    normalize_responses_response,
-    responses_returned_reasoning,
 )
 from core.providers.http import (
     PROVIDER_NON_STREAMING_READ_TIMEOUT_SECONDS,

@@ -199,11 +199,17 @@ class SecretRequests:
         lifetime: Lifetime | None = None,
         expires_at: datetime | None = None,
     ) -> AgentSecret:
-        """Store the user's answer; :class:`SecretRecordError` leaves the request pending."""
+        """Store the user's answer; :class:`SecretRecordError` leaves the request pending.
+
+        Without ``lifetime`` and ``expires_at``, a replaced Secret keeps its
+        lifetime and grants, and a new one takes the lifetime the Agent asked for.
+        """
         pending = self._pending.get(request_id)
         if pending is None or pending.outcome.done():
             raise SecretRecordError("This request is no longer waiting; the Agent stopped asking.")
-        chosen = lifetime or pending.lifetime
+        chosen: Lifetime | None = lifetime
+        if chosen is None and expires_at is not None:
+            chosen = "until"
         if expires_at is not None and chosen == "permanent":
             chosen = "until"
         secret, replaced = await asyncio.to_thread(
@@ -223,7 +229,7 @@ class SecretRequests:
         self,
         pending: PendingSecretRequest,
         values: dict[str, str],
-        lifetime: Lifetime,
+        lifetime: Lifetime | None,
         expires_at: datetime | None,
     ) -> tuple[AgentSecret, bool]:
         current = self._secrets.get(pending.replaces) if pending.replaces else None
@@ -233,7 +239,7 @@ class SecretRequests:
                 actor="user",
                 values=values,
                 lifetime=lifetime,
-                given_to=pending.address,
+                given_to=pending.address if lifetime is not None else None,
                 expires_at=expires_at,
             ), True
         return (
@@ -242,7 +248,7 @@ class SecretRequests:
                 kind=pending.kind,
                 values=values,
                 actor="user",
-                lifetime=lifetime,
+                lifetime=lifetime or pending.lifetime,
                 session_id=pending.session_id,
                 expires_at=expires_at,
                 agents=[format_agent_address(pending.agent_id, pending.project_id)],

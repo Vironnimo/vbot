@@ -87,6 +87,12 @@ def test_built_in_commands_declare_their_argument_result_kind_and_new_session_mo
         "status": ("none", "detail", "session_less"),
         "stop": ("optional", "notice", "needs_session"),
     }
+    # Every command that takes an argument says what may follow its name.
+    assert {
+        name: bool(spec.argument_hint) for name, spec in CommandDispatcher.BUILT_IN_COMMANDS.items()
+    } == {
+        name: spec.argument != "none" for name, spec in CommandDispatcher.BUILT_IN_COMMANDS.items()
+    }
 
 
 @pytest.mark.parametrize(
@@ -737,3 +743,22 @@ async def test_secret_stores_the_value_and_tells_the_agent_only_its_reference(
     assert outcome.status == "stored" and outcome.secret is not None
     assert outcome.secret.lifetime == "permanent" and answered.feedback is not None
     assert usage.feedback is not None and usage.feedback.text.startswith("/secret NAME VALUE")
+
+    # A value without a kind replaces the login's password, not a new field, and
+    # without a lifetime option the Secret stays permanent.
+    kept = await _execute(dispatcher, "/secret github new-password-456")
+    replaced = secrets.lookup(SessionAddress(None, "coder", "session-one"), "GITHUB")
+    assert replaced is not None and replaced.lifetime == "permanent"
+    assert [item.name for item in replaced.fields] == ["username", "password"]
+    narrowed = await _execute(dispatcher, "/secret github --session new-password-456")
+    narrowed_secret = secrets.get(replaced.id)
+    assert narrowed_secret is not None and narrowed_secret.lifetime == "session"
+    # The feedback says when the lifetime changed.
+    assert kept.feedback is not None and narrowed.feedback is not None
+    assert "session" not in kept.feedback.text and "session" in narrowed.feedback.text
+    assert (
+        secrets.substitute(
+            SessionAddress(None, "coder", "session-one"), "{{secret:GITHUB}}", "terminal"
+        )[0]
+        == "new-password-456"
+    )

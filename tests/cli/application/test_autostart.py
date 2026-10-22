@@ -101,7 +101,8 @@ def test_windows_autostart_asks_a_timed_out_query_once_more_before_refusing(
 def test_linux_autostart_owns_one_systemd_user_unit_that_runs_the_bootstrap_server(
     tmp_path: Path, lingering: bool
 ) -> None:
-    install = _install(tmp_path / "app")
+    # The application and data paths hold characters systemd expands in ExecStart.
+    install = _install(tmp_path / "v$USER %h" / "app")
     units = tmp_path / "units"
     commands: list[list[str]] = []
 
@@ -117,6 +118,9 @@ def test_linux_autostart_owns_one_systemd_user_unit_that_runs_the_bootstrap_serv
     # Ownership means the unit's program is this installation's bootstrap.
     assert owned_unit(install, unit_dir=units) == units / UNIT_NAME
     assert '"--server" "--host" "127.0.0.1" "--port" "8420" "--data-dir"' in unit
+    [exec_start] = [line for line in unit.splitlines() if line.startswith("ExecStart=")]
+    assert exec_start.count("v$$USER %%h") == 2
+    assert "$" not in exec_start.replace("$$", "") and "%" not in exec_start.replace("%%", "")
     assert "Restart=on-failure" in unit and "KillMode=mixed" in unit
     assert commands == [
         ["systemctl", "--user", "daemon-reload"],

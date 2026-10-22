@@ -209,7 +209,9 @@ of 12000, 5 of 53 Wiki reads in one Run showed only part of a page shorter than
 continuations bind their query and revision watermark; content continuations pin
 the requested revision. Search matches Unicode-casefolded titles and content; the
 folding runs in Python over the latest revisions because kernel read connections
-carry no custom SQL functions. A multi-word query that no page contains as written
+carry no custom SQL functions. Search excerpts translate folded match offsets back
+to the original content, so expanding characters before a match cannot hide it.
+A multi-word query that no page contains as written
 lists instead the pages holding all of its whitespace-separated words (edge
 punctuation stripped) in title or content, and says so in the header
 (`_store_wiki.py::_search`, Sessions, 2026-10); the choice is made at the

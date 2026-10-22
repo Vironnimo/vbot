@@ -18,6 +18,7 @@ export const ARCHIVE_STATE_PURGING = 'purging';
 // A restore that meets only these blockers succeeds under another id.
 const RESTORE_CONFLICT_CODES = new Set([
   'agent_id_taken',
+  'agent_id_referenced',
   'project_id_taken',
   'session_address_taken',
 ]);
@@ -351,6 +352,10 @@ export function restoreProblemText(problem, { warning = false } = {}) {
       return t('archive.problem.newerFormat');
     case 'agent_id_taken':
       return t('archive.problem.agentIdTaken', {
+        id: text(problem.agent_id),
+      });
+    case 'agent_id_referenced':
+      return t('archive.problem.agentIdReferenced', {
         id: text(problem.agent_id),
       });
     case 'project_id_taken':

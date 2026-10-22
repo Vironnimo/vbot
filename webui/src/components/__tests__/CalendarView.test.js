@@ -20,6 +20,7 @@ vi.mock('$lib/api.js', () =>
 );
 
 const { default: CalendarView } = await import('../CalendarView.svelte');
+const { monthlyLabel } = await import('../calendar/presentation.js');
 
 function calendarWindow({
   events = [],
@@ -437,6 +438,35 @@ describe('CalendarView', () => {
           rrule: 'FREQ=WEEKLY;BYDAY=WE;COUNT=10',
         },
       ]);
+    });
+
+    it('keeps a monthly weekday choice while the start date is typed', async () => {
+      mountedComponent = await mountCalendarView();
+      button(t('calendar.newEvent')).click();
+      flushSync();
+      typeInto('calendar-form-title-input', 'Review');
+      typeInto('calendar-form-start-date', '9/30/2026');
+      chooseOption('calendar-form-freq', t('calendar.form.freqMonthly'));
+      const lastWednesday = monthlyLabel('last', '2026-09-30');
+      chooseOption('calendar-form-monthly', lastWednesday);
+
+      // On the way, "9/3" is a date without a last weekday: the form shows
+      // its day of the month but keeps the choice for the final date.
+      typeInto('calendar-form-start-date', '9/3');
+      expect(
+        document.getElementById('calendar-form-monthly').textContent.trim(),
+      ).toBe(monthlyLabel('day', '2026-09-03'));
+      typeInto('calendar-form-start-date', '9/30/2026');
+      expect(
+        document.getElementById('calendar-form-monthly').textContent.trim(),
+      ).toBe(lastWednesday);
+
+      button(t('calendar.form.create')).click();
+      await waitForCondition(() => rpcCalls('calendar.create').length === 1);
+      expect(rpcCalls('calendar.create')[0]).toMatchObject({
+        start: '2026-09-30T09:00:00',
+        rrule: 'FREQ=MONTHLY;BYDAY=-1WE',
+      });
     });
 
     it.each([

@@ -62,7 +62,6 @@ _CAPTURE_DISCONNECTED = "disconnected"
 _CAPTURE_FAILED = "failed"
 _CAPTURE_STOPPED = "stopped"
 _STAGE_TRANSCRIBING = "transcribing"
-_STAGE_SENDING = "sending"
 
 
 class VoiceController:

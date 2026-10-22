@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from tests.server.rpc.project_methods_test_support import _make_state, _write_agent
-from tests.server.rpc_test_support import JsonObject, rpc_error, rpc_result
+from tests.server.rpc_test_support import JsonObject, resource_changes, rpc_error, rpc_result
 
 OPENCODE_AGENTS_SUBPATH = (".opencode", "agents")
 
@@ -107,6 +107,8 @@ async def test_set_override_is_the_winning_tier_until_cleared(
     assert _member(shown)["effective"][field] == {"value": value, "source": "override"}
     assert _member(cleared)["overrides"] is None
     assert state.runtime.projects.get("vbot").overrides == {}
+    # Setting and clearing each change the member's effective configuration.
+    assert len(resource_changes(state, "agents")) == 2
 
 
 @pytest.mark.asyncio
@@ -115,18 +117,22 @@ async def test_a_permission_rules_override_is_saved_normalized_over_what_it_inhe
 ) -> None:
     state = await _vbot_state(tmp_path)
     override = {"project_id": "vbot", "agent_id": "builder", "field": "permission_rules"}
+    value = {"write": "scratch", "allow": ["Write(docs/**)"]}
+    before = len(resource_changes(state))
 
     refused = await rpc_error(
         state, "project.set_override", **override, value={"allow": ["Copy(x)"]}
     )
-    overridden = await rpc_result(
-        state,
-        "project.set_override",
-        **override,
-        value={"write": "scratch", "allow": ["Write(docs/**)"]},
-    )
+    overridden = await rpc_result(state, "project.set_override", **override, value=value)
+    invalidated = [change["kind"] for change in resource_changes(state)[before:]]
+    # Saving the same rules again changes nothing and invalidates nothing.
+    await rpc_result(state, "project.set_override", **override, value=value)
 
     assert "permission_rules.allow[0]" in refused["message"]
+    # The override changes the member's effective rules, so accessors showing
+    # the Agent (the Chat Restricted badge) read them again.
+    assert invalidated == ["projects", "agents"]
+    assert len(resource_changes(state)) == before + 2
     member = _member(overridden)
     saved = {"write": "scratch", "allow": ["Edit(docs/**)"]}
     assert member["overrides"] == {"permission_rules": saved}
@@ -190,6 +196,7 @@ async def test_clearing_an_absent_override_is_a_no_op(tmp_path: Path) -> None:
 
     assert result["project"]["project_id"] == "vbot"
     assert state.runtime.projects.get("vbot").overrides == {}
+    assert resource_changes(state, "agents") == []
 
 
 _OVERRIDE = {"project_id": "vbot", "agent_id": "builder"}

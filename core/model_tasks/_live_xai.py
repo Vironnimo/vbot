@@ -42,7 +42,7 @@ from core.providers.task_client import ProviderTaskClient
 from core.providers.token_getter import OAuthRequestRecovery
 from core.utils.ids import new_id
 from core.utils.tls import shared_ssl_context
-from core.utils.workers import cancel_and_wait
+from core.utils.workers import cancel_and_wait, finish_despite_cancel
 
 REALTIME_PATH = "/realtime"
 
@@ -75,13 +75,15 @@ async def open_xai_live_wire(
 
     client = await _XaiLiveClient.from_runtime_async(runtime, target_ref)
     socket = await client.connect(connect or websocket_connect)
-    session = XaiSession(tools=tools, clock=clock, wall_clock=wall_clock)
     try:
+        session = XaiSession(tools=tools, clock=clock, wall_clock=wall_clock)
         await socket.send(json.dumps(session.configure(instructions, voice), ensure_ascii=False))
-    except ConnectionClosed as exc:
+    except BaseException as exc:
         with contextlib.suppress(Exception):
-            await socket.close()
-        raise NetworkError("The xAI realtime connection closed during setup") from exc
+            await finish_despite_cancel(socket.close())
+        if isinstance(exc, ConnectionClosed):
+            raise NetworkError("The xAI realtime connection closed during setup") from exc
+        raise
     return XaiLiveWire(call_id=new_id("live"), socket=socket, session=session, clock=clock)
 
 

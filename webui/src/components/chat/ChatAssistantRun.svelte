@@ -80,6 +80,9 @@
     onSubAgentContextMenu = null,
     onCancelToolCall = () => {},
     onBackgroundToolCall = () => {},
+    // Reads the complete arguments and result of a Tool row, which the row
+    // only previews: ({ runId, toolId }) => { arguments, result }.
+    loadToolCall = null,
     backgroundToolCallIds = [],
     onCancelSubAgent = () => {},
     messageEditingDisabledReason = '',
@@ -156,6 +159,12 @@
         toolCallId: tool.toolCallId,
       }),
     );
+  }
+
+  // Loads the whole call of a Tool row that previews it, or null.
+  function rawCallLoader(tool) {
+    if (!loadToolCall || !tool?.rawTruncated || !item?.runId) return null;
+    return () => loadToolCall({ runId: item.runId, toolId: tool.id });
   }
 
   async function handleCancelToolCall(event, tool) {
@@ -435,6 +444,7 @@
               resultFailed={toolStatus(child) === 'failed'}
               live={toolStatus(child) === 'running'}
               viewKey={toolDisclosureKey(child)}
+              loadRaw={rawCallLoader(child)}
             />
           </details>
         {:else if isSubAgentSendTool(child)}
@@ -532,6 +542,7 @@
               resultFailed={sendStatus === 'failed'}
               live={sendStatus === 'running'}
               viewKey={toolDisclosureKey(child)}
+              loadRaw={rawCallLoader(child)}
             />
           </details>
         {:else}
@@ -658,6 +669,7 @@
               resultFailed={rowDotStatus === 'failed'}
               live={toolStatus(child) === 'running'}
               viewKey={toolDisclosureKey(child)}
+              loadRaw={rawCallLoader(child)}
             />
           </details>
           {#if isTextToSpeechTool(child)}

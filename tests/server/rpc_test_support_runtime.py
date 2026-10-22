@@ -51,6 +51,7 @@ from core.skills import SkillAuthoringService
 from core.storage import StorageManager
 from core.tools import FileReadState, ToolRegistry
 from core.tools.command_manager import CommandManager
+from core.tools.file_state import FileRead
 from core.tools.portal_registry import PortalRegistry
 from core.utils.errors import ConfigError
 from core.utils.version import BuildIdentity
@@ -97,7 +98,7 @@ class StubPrompts:
         subagent_session: bool = False,
         skill_registry: object = None,
         skill_catalog: object = None,
-        read_paths: list[Path] | None = None,
+        read_paths: list[FileRead] | None = None,
         effective_tool_definitions: object = None,
         on_demand_tools: object = None,
         session_tool_grants: object = (),
@@ -395,6 +396,14 @@ class StubJobService:
     async def receive_webhook(self, _job_id: str, _headers: Any, _body: bytes) -> str:
         return "refused"
 
+    def retarget_notifications(self, _agent_id: str, _new_agent_id: str) -> tuple[str, ...]:
+        return ()
+
+    async def retarget_notifications_async(
+        self, _agent_id: str, _new_agent_id: str
+    ) -> tuple[str, ...]:
+        return ()
+
 
 class StubChannelService:
     """Channel service double that holds no Channels."""
@@ -635,6 +644,7 @@ class StubRuntime:
             snapshot_barrier=self.snapshot_barrier,
             terminals=cast(Any, self.terminal_manager),
             commands=self.command_manager,
+            portals=None,
         )
 
     def skills_for(self, _project_id: str | None = None, _agent_id: str | None = None) -> Any:
@@ -685,9 +695,7 @@ class StubRuntime:
         return self.adapter
 
     async def suggest_agent_description(self, agent_id: str) -> str:
-        from core.runtime._agent_description import suggest_agent_description
-
-        return await suggest_agent_description(cast(Any, self), agent_id)
+        return await Runtime.suggest_agent_description(cast(Any, self), agent_id)
 
     def _wire_profile_model(self, provider_id: str, model_id: str) -> Any:
         try:

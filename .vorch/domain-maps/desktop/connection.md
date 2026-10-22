@@ -38,6 +38,8 @@ The effective launch target seeds their server URL; every successful in-window c
 - Stored shape: `servers: [{host, port, label?, scheme?}]` and `last_used: {host, port, scheme?}` in `<config-dir>/settings.json`; `scheme` is written only as `"https"` (absent means HTTP, so older files keep working), and an entry with any other scheme is dropped on read.
 - An older Desktop rewriting `servers` keeps only `{host, port, label}`: a downgrade turns an HTTPS entry into an HTTP entry on port 443, which then fails to connect.
 
+Remembered-server mutations serialize their complete read-modify-write and last-used updates within the Desktop process, so simultaneous bridge calls cannot discard another call's change.
+
 ## Server switches from the WebUI
 
 Connected-server management lives in `webui/src/components/settings/DesktopConnectionSettings.svelte`, a Desktop-only bridge client applying prepared switches via `window.location.assign` after the Promise resolves. During a live outage AppShell's availability popup opens the same picker in a modal outside the inert content. First run and launch-time failure stay shell-owned - no WebUI exists yet.

@@ -31,10 +31,19 @@ from core.providers._responses_profile import (
     profile_responses_policy,
     take_reasoning_renderer,
 )
+from core.providers._responses_wire import (
+    ResponsesStreamState,
+    build_responses_payload,
+    estimate_responses_input_tokens,
+    iter_responses_sse_deltas_with_state,
+    normalize_responses_response,
+    responses_returned_reasoning,
+)
 from core.providers._wire_learning import (
     execute_learning_from_rejections,
     stream_learning_from_rejections,
 )
+from core.providers.adapter import is_request_context_message
 from core.providers.errors import CatalogEntrySkipped, NetworkError, ProviderError
 from core.providers.github_copilot_messages import (
     CopilotMessagesStreamState,
@@ -42,14 +51,6 @@ from core.providers.github_copilot_messages import (
     estimate_copilot_messages_input_tokens,
     normalize_copilot_messages_response,
     normalize_copilot_messages_stream_event,
-)
-from core.providers.github_copilot_responses import (
-    ResponsesStreamState,
-    build_responses_payload,
-    estimate_responses_input_tokens,
-    iter_responses_sse_deltas_with_state,
-    normalize_responses_response,
-    responses_returned_reasoning,
 )
 from core.providers.http import (
     PreparedRequest,
@@ -756,11 +757,18 @@ def _read_optional_token_limit(
 
 
 def _copilot_request_initiator(messages: list[dict[str, Any]]) -> str:
+    """Return ``agent`` when Tool Results follow the latest user turn, else ``user``.
+
+    Copilot bills a ``user`` request as a premium request. Context that Chat
+    renders as user-role messages, such as System Reminders after a Tool Result
+    batch, is no user turn and keeps a Tool-loop request an agent request.
+    """
+
     for message in reversed(messages):
         role = message.get("role")
         if role == "tool":
             return "agent"
-        if role in {"user", "assistant"}:
+        if role == "user" and not is_request_context_message(message):
             return "user"
     return "user"
 

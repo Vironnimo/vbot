@@ -109,10 +109,6 @@ _SCOPE_SYNONYMS: dict[str, tuple[str, ...]] = {
     "agent": ("agent", "memory", "agentmemory", "memorymd"),
 }
 
-# Actions that mutate a scope. Only these feed the thrash guard: a failed mutation
-# invites the model to consolidate and retry, so a model that keeps failing them is
-# the loop we cap; list is a pure read and never counts.
-_MEMORY_MUTATION_ACTIONS = ("add", "replace", "remove")
 # Consecutive failed mutations tolerated per run before the tool cuts the loop off.
 # Recovery from a full scope is normally a single failure (add rejected → remove
 # succeeds → re-add), so a legitimate flow never approaches this; the cap only bites

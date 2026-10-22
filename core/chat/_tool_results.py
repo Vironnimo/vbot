@@ -160,8 +160,11 @@ class ToolResultPersistence:
             finder,
             paths,
             context.session_snapshot.active_messages,
+            permissions=context.permissions,
             tool_available=allowed.__contains__,
-            on_read=partial(self._dependencies.file_read_state.record_read, context.run.session_id),
+            on_read=lambda read: self._dependencies.file_read_state.record_stamp(
+                context.run.session_id, *read
+            ),
         )
 
     async def _finish_tool_round(

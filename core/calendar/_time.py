@@ -32,23 +32,11 @@ def _resolve_zone(tz_name: str) -> ZoneInfo:
         raise CalendarValidationError(f"tz is not a known IANA timezone: {tz_name}") from error
 
 
-def _local_naive_iso(value: datetime, zone: ZoneInfo) -> str:
-    """Render one UTC instant as a naive local datetime string in ``zone``."""
-    return value.astimezone(zone).replace(tzinfo=None, microsecond=0).isoformat()
-
-
 def _parse_iso_datetime(value: str, *, field_name: str) -> datetime:
     try:
         return datetime.fromisoformat(value)
     except ValueError as error:
         raise CalendarValidationError(f"{field_name} must be a valid ISO 8601 datetime") from error
-
-
-def _parse_utc_instant(value: str, *, field_name: str) -> datetime:
-    parsed = _parse_iso_datetime(value, field_name=field_name)
-    if parsed.tzinfo is None:
-        raise CalendarValidationError(f"{field_name} must include timezone information")
-    return parsed
 
 
 def _merge_intervals(

@@ -227,17 +227,51 @@ def test_until_bounds_the_repetition_inclusively(
     assert _starts(service, "2030-01-01", "2030-01-31")[-1] == last
 
 
-def test_rule_parts_beyond_weekdays_expand(service: CalendarService) -> None:
+@pytest.mark.parametrize(
+    ("rule", "lower", "upper", "expected"),
+    [
+        (
+            "FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=-1;COUNT=2",
+            "2030-01-01",
+            "2030-02-28",
+            ["2030-01-31T17:00:00", "2030-02-28T17:00:00"],
+        ),
+        (
+            "FREQ=DAILY;INTERVAL=365;BYMONTH=2;BYMONTHDAY=29",
+            "3292-02-01",
+            "3292-03-01",
+            ["3292-02-29T17:00:00"],
+        ),
+        (
+            "FREQ=WEEKLY;INTERVAL=365;BYMONTH=2;BYMONTHDAY=29",
+            "3296-02-01",
+            "3296-03-01",
+            ["3296-02-29T17:00:00"],
+        ),
+        (
+            "FREQ=MONTHLY;INTERVAL=497;BYMONTH=2;BYMONTHDAY=29",
+            "3728-02-01",
+            "3728-03-01",
+            ["3728-02-29T17:00:00"],
+        ),
+        (
+            "FREQ=YEARLY;INTERVAL=999;BYMONTH=2;BYMONTHDAY=29",
+            "4028-02-01",
+            "4028-03-01",
+            ["4028-02-29T17:00:00"],
+        ),
+    ],
+)
+def test_rule_parts_beyond_weekdays_expand(
+    service: CalendarService, rule: str, lower: str, upper: str, expected: list[str]
+) -> None:
     service.create_event(
         title="Last workday",
         start="2030-01-01T17:00",
-        rrule="FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=-1;COUNT=2",
+        rrule=rule,
     )
 
-    assert _starts(service, "2030-01-01", "2030-02-28") == [
-        "2030-01-31T17:00:00",
-        "2030-02-28T17:00:00",
-    ]
+    assert _starts(service, lower, upper) == expected
 
 
 def test_all_day_rule_repeats_whole_days(service: CalendarService) -> None:

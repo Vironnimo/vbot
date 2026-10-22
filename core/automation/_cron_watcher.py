@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from core.automation import _cron_timing as _timing
-from core.automation._cron_execution import _count_consecutive_failure
+from core.automation._cron_execution import _count_consecutive_failure, end_failure_alert
 from core.automation._cron_jobs import (
     MAX_CONCURRENT_CRON_RUNS,
     CronJob,
@@ -275,6 +275,7 @@ class CronWatcher:
             # The check works again: its failure streak ends.
             job.last_check_error = None
             job.consecutive_failures = 0
+            end_failure_alert(job)
         await self._owner._execution._save_jobs_after_fire(job_id)
 
     async def _record_failure(

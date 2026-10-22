@@ -10,6 +10,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
+from core.permissions import PermissionBoundary
 from core.skills import SkillRegistry
 from core.skills.authoring import SkillAuthoringService, SkillWriter
 from core.tools import ToolContext, ToolRegistry, register_skill_manage_tool, tool_failure
@@ -109,6 +110,7 @@ async def _skill_case(
             workspace=root,
             vbot_root=root,
             data_root=root,
+            permissions=PermissionBoundary.UNRESTRICTED,
         )
         task = case.get("task") or (
             "Execute this requested Skill operation once; "

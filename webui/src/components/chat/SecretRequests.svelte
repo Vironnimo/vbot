@@ -2,7 +2,8 @@
   // The Agent's pending Secret requests in the displayed Session (the
   // `secrets` Tool's `request` action): a notice per request above the
   // composer, and a dialog that takes the value with masked fields and the
-  // lifetime, preset to the requested one. Store answers the request
+  // lifetime, preset to the requested one, or to keeping the lifetime of the
+  // Secret a request replaces. Store answers the request
   // (`agent_secrets.answer`), Decline turns it down; either way the Agent's
   // Tool call returns. The typed values live only while the dialog is open.
   // The list reloads on mount, when the Session changes and whenever
@@ -99,11 +100,11 @@
   function open(request) {
     selected = request;
     values = {};
-    lifetime = lifetimeChoices().some(
-      (choice) => choice.value === request.lifetime,
-    )
-      ? request.lifetime
-      : 'session';
+    lifetime = request.replaces
+      ? 'keep'
+      : lifetimeChoices().some((choice) => choice.value === request.lifetime)
+        ? request.lifetime
+        : 'session';
     submitted = false;
     busy = false;
     error = '';
@@ -251,7 +252,9 @@
                 id={control.controlId}
                 ariaLabelledby={control.labelId}
                 value={lifetime}
-                options={lifetimeChoices()}
+                options={lifetimeChoices({
+                  keep: selected.replaces ? 'replace' : null,
+                })}
                 disabled={busy}
                 onValueChange={(next) => (lifetime = next)}
               />

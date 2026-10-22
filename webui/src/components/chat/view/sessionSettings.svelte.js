@@ -189,6 +189,9 @@ export function createSessionSettings(context) {
       saving: saving[shown.key] === true,
       pending: Boolean(unsaved[shown.key]),
       save: () => saveFor(shown.key).runSave('manual'),
+      // Changes when the server may have changed the Agent or this Session,
+      // so a reader of other server state about them reads it again.
+      revision: `${context.agentsRefreshToken}:${context.sessionsRefreshToken}:${rowRevision}`,
     };
     const teamProject = teamProjectId
       ? { editable: false, known: true, team: true, value: teamProjectId }

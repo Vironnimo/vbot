@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-from core.memory import DEFAULT_MEMORY_PROMPT_MODE, memory_prompt_file_paths, read_memory_files
+from core.memory import DEFAULT_MEMORY_PROMPT_MODE, read_memory_files
 from core.prompts._types import (
     SOUL_FRAMING,
     SOUL_INCLUDE_MARKER,
@@ -23,6 +23,7 @@ from core.prompts.blocks import (
     render_prompt_file,
 )
 from core.tools.availability import MEMORY_TOOL_NAME, memory_tool_enabled
+from core.tools.file_state import FileRead
 from core.tools.model_names import model_tool_name
 from core.utils.paths import model_path
 
@@ -30,7 +31,7 @@ from core.utils.paths import model_path
 def render_soul(
     agent: PromptAgent,
     tool_available: ToolAvailability,
-    on_read: Callable[[Path], None] | None,
+    on_read: Callable[[FileRead], None] | None,
 ) -> str:
     rendered = expand_workspace_includes(
         SOUL_INCLUDE_MARKER,
@@ -47,7 +48,7 @@ def render_working_project(
     storage: PromptFragmentReader,
     project_context: ProjectPromptContext,
     tool_available: ToolAvailability,
-    on_read: Callable[[Path], None] | None,
+    on_read: Callable[[FileRead], None] | None,
 ) -> str:
     project_files = [
         _indent_project_file_frame(block)
@@ -69,7 +70,7 @@ def render_project_files(
     project_context: ProjectPromptContext | None,
     *,
     tool_available: ToolAvailability,
-    on_read: Callable[[Path], None] | None = None,
+    on_read: Callable[[FileRead], None] | None = None,
     on_issue: Callable[[PromptFileIssue], None] | None = None,
 ) -> str:
     """Render the project's auto-loaded files as ``<file>``-wrapped blocks.
@@ -82,7 +83,7 @@ def render_project_files(
     names ``read`` only when it can. See :func:`_project_file_blocks` for paths
     and :func:`render_prompt_file` for the size limit and fail-soft rules.
 
-    ``on_read``, when given, is called with the resolved absolute path of every
+    ``on_read``, when given, receives the resolved path and pre-read metadata of every
     file actually inlined, so the caller can stamp it as read-before-write —
     used both for prompt assembly and the explicit ``project`` Tool.
     ``on_issue`` reports omissions so the Tool can explain partial loads.
@@ -120,7 +121,7 @@ def render_project_skills(
 def _project_file_blocks(
     project_context: ProjectPromptContext,
     tool_available: ToolAvailability,
-    on_read: Callable[[Path], None] | None,
+    on_read: Callable[[FileRead], None] | None,
     on_issue: Callable[[PromptFileIssue], None] | None = None,
 ) -> list[str]:
     """Return each existing auto-load file as a ``<file>`` block, in list order.
@@ -153,7 +154,7 @@ def render_memory_files(
     provider: MemoryPromptProvider,
     agent: PromptAgent,
     tool_available: ToolAvailability,
-    on_read: Callable[[Path], None] | None,
+    on_read: Callable[[FileRead], None] | None,
 ) -> str:
     mode = getattr(agent, "memory_prompt_mode", DEFAULT_MEMORY_PROMPT_MODE)
     workspace = agent.workspace
@@ -165,11 +166,9 @@ def render_memory_files(
         if memory_tool_enabled(mode) and tool_available(MEMORY_TOOL_NAME)
         else None
     )
-    rendered = read_memory_files(Path(workspace), mode, provider=provider, memory_tool=memory_tool)
-    if on_read is not None:
-        for path in memory_prompt_file_paths(Path(workspace), mode):
-            on_read(path)
-    return rendered
+    return read_memory_files(
+        Path(workspace), mode, provider=provider, memory_tool=memory_tool, on_read=on_read
+    )
 
 
 def _indent_project_file_frame(block: str) -> str:

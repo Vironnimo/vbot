@@ -25,6 +25,7 @@ from PIL import Image, ImageDraw
 
 from core.extensions.extensions import ExtensionAPI, ExtensionDeclarations
 from core.extensions.operations import ExtensionHost
+from core.permissions import PermissionBoundary
 from core.providers.adapter import tool_result_text
 from core.tools import ToolContext, ToolRegistry
 from core.tools.availability import ToolAccess
@@ -396,6 +397,7 @@ async def computer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIter
         workspace=tmp_path,
         vbot_root=tmp_path,
         data_root=tmp_path,
+        permissions=PermissionBoundary.UNRESTRICTED,
     )
     await service.start(cast(ExtensionHost, host))
     yield Harness(service, api, registry, target, hotkeys, agent, context, published, sleeps)

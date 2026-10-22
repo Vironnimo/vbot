@@ -25,6 +25,8 @@ from core.tools import ToolContext, ToolRegistry, tool_success
 from tests.core.chat.chat_loop_support import (
     StubAdapter,
     StubAgent,
+    StubProject,
+    StubProjects,
     StubRuntime,
     build_chat_loop,
     history,
@@ -125,6 +127,55 @@ async def test_a_restricted_run_checks_tool_accesses_against_its_expanded_bounda
     assert "## Permission rules" in prompt
     assert f"`{workspace.as_posix()}`" in prompt
     assert f"`Read({workspace.as_posix()}/secrets/**)`" in prompt
+
+
+@pytest.mark.asyncio
+async def test_a_restricted_run_gets_only_the_instruction_files_it_may_read(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    (repo / "app").mkdir(parents=True)
+    (repo / "AGENTS.md").write_text("ROOT_RULES", encoding="utf-8")
+    (repo / "private.md").write_text("PRIVATE_RULES", encoding="utf-8")
+    (repo / "app" / "AGENTS.md").write_text("APP_RULES", encoding="utf-8")
+
+    def work(context: ToolContext, _arguments: Any) -> Any:
+        context.record_worked_paths(repo / "app" / "main.py")
+        return tool_success({})
+
+    tools = ToolRegistry()
+    tools.register("probe", "Probe.", {"type": "object"}, work)
+    deny = [f"Read({(repo / name).as_posix()})" for name in ("private.md", "app/AGENTS.md")]
+    agent = _RuleAgent(
+        id="coder",
+        model="openai/gpt-5.2",
+        allowed_tools=["*"],
+        permission_rules=normalize_permission_rules({"deny": deny}),
+    )
+    project = StubProject(
+        project_id="vbot",
+        cwd=str(repo),
+        auto_load=["AGENTS.md", "private.md"],
+        display_name="vBot",
+        folder_instructions=True,
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path / "data",
+        agent=agent,
+        adapter=StubAdapter([tool_turn(("call_1", "probe")), final("Done")]),
+        tools=tools,
+        projects=StubProjects({"vbot": project}),
+    )
+    runtime.chat_sessions.create("coder", session_id="s1", working_project_id="vbot")
+
+    await build_chat_loop(runtime).send("coder", "Work", session_id="s1")
+
+    # Neither the Working Project frame nor a folder instruction note carries a
+    # file the rules refuse to read.
+    prompt = _system_prompt(runtime)
+    assert "ROOT_RULES" in prompt and "PRIVATE_RULES" not in prompt
+    after_tool = str(runtime.adapter.requests[1]["messages"])
+    assert "APP_RULES" not in after_tool
 
 
 @pytest.mark.asyncio

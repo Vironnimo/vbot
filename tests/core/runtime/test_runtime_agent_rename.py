@@ -13,7 +13,9 @@ import pytest
 
 import core.agents._workspace as workspace_ops
 from core.agents import AgentReferencedError
+from core.automation.cron import CronDelivery
 from core.runtime.runtime import Runtime
+from core.secrets.agent_secrets import Lifetime
 from core.sessions import SessionAddress
 from core.utils.config import Config
 
@@ -52,7 +54,33 @@ async def _seed(runtime: Runtime, *, channel_enabled: bool = False) -> str:
     await runtime.cron_service.create_job(
         agent_id="coder", prompt="Check in", schedule_type="interval", interval_seconds=3600
     )
+    # A finished job the rename leaves as history, still holding a chat message
+    # for the Agent's Channel, which follows the Channel.
+    history = await runtime.cron_service.create_job(
+        agent_id="coder",
+        prompt="Report",
+        schedule_type="once",
+        run_at="2099-01-01T09:00:00+00:00",
+        delivery=CronDelivery(kind="chat", channel_id="tg-coder", platform_target="12345"),
+    )
+    finished = runtime.cron_service._jobs[history.id]
+    finished.status = "completed"
+    runtime.cron_service._notifications.stage(finished, "Done.")
+    await runtime.cron_service._save_jobs_async()
     runtime.bootstrap_service.create_job(agent_id="coder", prompt="Verify", mode="once")
+    # An Agent-wide Secret given in the Session (a grant path through it) and a
+    # Session Secret.
+    lifetimes: tuple[tuple[str, Lifetime], ...] = (("GITHUB", "permanent"), ("SCRATCH", "session"))
+    for name, lifetime in lifetimes:
+        runtime.agent_secrets.create(
+            name=name,
+            kind="token",
+            values={"value": f"{name.lower()}-value-123"},
+            actor="user",
+            lifetime=lifetime,
+            session_id="kept",
+            agents=["coder"],
+        )
     return coder.current_session_id
 
 
@@ -62,8 +90,19 @@ def _assert_agent_is(runtime: Runtime, agent_id: str, current_session_id: str) -
     assert runtime.agents.get(agent_id).current_session_id == current_session_id
     assert runtime.chat_sessions.exists(SessionAddress(None, agent_id, "kept"))
     assert [channel.agent_id for channel in runtime.channel_service.list_channels()] == [agent_id]
-    assert [job.agent_id for job in runtime.cron_service.list_jobs()] == [agent_id]
+    jobs = runtime.cron_service.list_jobs()
+    assert [job.agent_id for job in jobs if job.status == "active"] == [agent_id]
+    assert [job.agent_id for job in jobs if job.status == "completed"] == ["coder"]
+    assert [item.agent_id for job in jobs for item in job.notifications] == [agent_id]
     assert [job.agent_id for job in runtime.bootstrap_service.list_jobs()] == [agent_id]
+    secrets = runtime.agent_secrets
+    kept = SessionAddress(None, agent_id, "kept")
+    assert [secret.name for secret in secrets.usable(kept)] == ["GITHUB", "SCRATCH"]
+    assert [secret.name for secret in secrets.usable(kept, passed_only=True)] == [
+        "GITHUB",
+        "SCRATCH",
+    ]
+    assert len(secrets.naming_identity_agent(agent_id)) == len(secrets.all()) == 2
     assert not (runtime.storage.data_dir / "agents" / "rename-pending.json").exists()
 
 
@@ -182,20 +221,34 @@ async def test_a_live_rename_moves_every_reference_or_none(
         # Event Loop happens there, never on a worker.
         automation_threads: set[int] = set()
         for owner, names in (
-            (runtime.cron_service, ("list_jobs", "retarget_agent_async", "_notify_changed")),
+            (
+                runtime.cron_service,
+                (
+                    "list_jobs",
+                    "retarget_agent_async",
+                    "retarget_notifications_async",
+                    "_notify_changed",
+                ),
+            ),
             (runtime.bootstrap_service, ("list_jobs", "retarget_agent")),
         ):
             _record_threads(owner, names, automation_threads, monkeypatch)
-        # Live Terminal Sessions and commands follow the Agent's Sessions, and
-        # back on a revert.
+        # Live Terminal Sessions, Portals and commands follow the Agent's
+        # Sessions, and back on a revert.
         terminal_moves: list[tuple[str, str]] = []
+        portal_moves: list[tuple[str, str]] = []
         command_moves: list[tuple[str, str]] = []
         move_terminals = runtime.terminal_manager.transfer_agent_scope
+        move_portals = runtime.portals.transfer_agent_scope
         move_commands = runtime.command_manager.transfer_agent_scope
 
         async def record_terminal_move(agent_id: str, new_agent_id: str) -> int:
             terminal_moves.append((agent_id, new_agent_id))
             return await move_terminals(agent_id, new_agent_id)
+
+        def record_portal_move(agent_id: str, new_agent_id: str) -> int:
+            portal_moves.append((agent_id, new_agent_id))
+            return move_portals(agent_id, new_agent_id)
 
         async def record_command_move(agent_id: str, new_agent_id: str) -> int:
             command_moves.append((agent_id, new_agent_id))
@@ -205,6 +258,7 @@ async def test_a_live_rename_moves_every_reference_or_none(
             return await move_commands(agent_id, new_agent_id)
 
         monkeypatch.setattr(runtime.terminal_manager, "transfer_agent_scope", record_terminal_move)
+        monkeypatch.setattr(runtime.portals, "transfer_agent_scope", record_portal_move)
         monkeypatch.setattr(runtime.command_manager, "transfer_agent_scope", record_command_move)
         if fails:
             with pytest.raises(OSError, match="read-only"):
@@ -224,7 +278,7 @@ async def test_a_live_rename_moves_every_reference_or_none(
         assert automation_threads == {threading.get_ident()}
         forward = ("coder", "researcher")
         assert terminal_moves == ([forward, forward[::-1]] if fails else [forward])
-        assert command_moves == terminal_moves
+        assert portal_moves == command_moves == terminal_moves
     finally:
         await runtime.aclose()
 
@@ -246,6 +300,13 @@ async def test_a_rename_to_an_id_that_references_still_name_changes_nothing(
         leftover = await runtime.cron_service.create_job(
             agent_id="researcher", prompt="Report", schedule_type="interval", interval_seconds=60
         )
+        runtime.agent_secrets.create(
+            name="LEFT",
+            kind="token",
+            values={"value": "left-value-123"},
+            actor="user",
+            agents=["researcher"],
+        )
         runtime.agents.update("coder", tools={"subagent": {"allowed_agents": ["researcher"]}})
         with monkeypatch.context() as unchecked:
             unchecked.setattr(runtime.automation_references, "agent_references", lambda _id: ())
@@ -255,13 +316,19 @@ async def test_a_rename_to_an_id_that_references_still_name_changes_nothing(
         with pytest.raises(AgentReferencedError) as refused:
             await runtime.rename_agent("coder", "researcher")
 
-        assert refused.value.references == (f"cron:{leftover.id}",)
+        # A Secret grant left for the id refuses the rename too; deletion checks only automations.
+        assert refused.value.references == (f"cron:{leftover.id}", "secret:LEFT")
         assert await runtime.agent_references("researcher") == (f"cron:{leftover.id}",)
+        # The archived Agent keeps its grant for a restore; a namesake may not take it.
+        with pytest.raises(AgentReferencedError) as created:
+            runtime.agents.create("researcher")
+        assert created.value.references == ("secret:LEFT",)
         assert len(channel_reads) > 0
         assert threading.get_ident() not in channel_reads
         assert sorted(agent.id for agent in runtime.agents.list()) == ["coder", "main"]
         assert runtime.agents.get("coder").current_session_id == current_session_id
         assert sorted(job.agent_id for job in runtime.cron_service.list_jobs()) == [
+            "coder",
             "coder",
             "researcher",
         ]

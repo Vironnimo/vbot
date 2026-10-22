@@ -26,6 +26,12 @@ _OPENAI_TOOL_CALL_NAMES_STATE_KEY = "openai_tool_call_names"
 
 OPENAI_TOOL_FINISH_REASONS = {"tool_calls", "function_call"}
 
+# Besides ``length``, compatible APIs name a turn cut off by the Context window:
+# Mistral ``model_length``, GLM (Z.ai) ``model_context_window_exceeded``.
+OPENAI_TRUNCATED_FINISH_REASONS = frozenset(
+    {"length", "model_length", "model_context_window_exceeded"}
+)
+
 OPENAI_ERROR_FINISH_REASONS = {
     "cancelled",
     "error",

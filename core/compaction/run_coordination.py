@@ -43,6 +43,7 @@ from core.utils.logging import get_logger
 if TYPE_CHECKING:
     from core.chat.messages import ChatMessage
     from core.compaction import CompactionService
+    from core.permissions import PermissionBoundary
     from core.runs import Run
     from core.sessions import ChatSession, SessionReadCursor
 
@@ -68,6 +69,9 @@ class ManualCompactionRequest(Protocol):
 
     @property
     def request_inputs(self) -> object: ...
+
+    @property
+    def permissions(self) -> PermissionBoundary: ...
 
     @property
     def active_adapter(self) -> Any: ...
@@ -140,6 +144,7 @@ class CompactionRunHost(Protocol):
         working_project_id: str | None,
         project_cwd: Path | None,
         activation_skill_project_id: str | None,
+        permissions: PermissionBoundary,
     ) -> object: ...
 
     async def commit_checkpoint(
@@ -335,6 +340,7 @@ class CompactionRunCoordinator:
                     working_project_id=run.working_project_id,
                     project_cwd=request.project_cwd,
                     activation_skill_project_id=request.activation_skill_project_id,
+                    permissions=request.permissions,
                 )
             except Exception:
                 _LOGGER.warning(
@@ -667,6 +673,7 @@ class CompactionRunCoordinator:
                         working_project_id=run.working_project_id,
                         project_cwd=context.project_cwd,
                         activation_skill_project_id=context.skill_project_id,
+                        permissions=context.permissions,
                     )
                 except Exception:
                     _LOGGER.warning(

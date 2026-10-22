@@ -8,6 +8,9 @@ from typing import Any
 import pytest
 import respx
 
+from core.chat.messages import ChatMessage
+from core.chat.wire_shaping import note_request_messages
+from core.providers._responses_wire import REASONING_ENCRYPTED_CONTENT_INCLUDE
 from core.providers.adapter import (
     IMAGE_WIRE_MEDIA_TYPES,
     TERMINAL_OUTCOME_STOP,
@@ -19,7 +22,6 @@ from core.providers.github_copilot import (
     MESSAGES_ENDPOINT,
     RESPONSES_ENDPOINT,
 )
-from core.providers.github_copilot_responses import REASONING_ENCRYPTED_CONTENT_INCLUDE
 from core.providers.reasoning import REASONING_REPLAY_FULL_HISTORY
 from tests.core.providers.github_copilot_test_support import (
     API_KEY,
@@ -445,8 +447,27 @@ async def test_every_endpoint_sends_auth_extra_headers_and_user_initiator(
     assert "Copilot-Vision-Request" not in headers
 
 
+@pytest.mark.parametrize(
+    ("after_results", "expected_initiator"),
+    [
+        pytest.param([], "agent", id="tool-results"),
+        pytest.param(
+            note_request_messages([ChatMessage.note("Folder instructions: keep tests green.")]),
+            "agent",
+            id="system-reminder",
+        ),
+        pytest.param(
+            note_request_messages([ChatMessage.note("[channel-message] Bob (51): hello")]),
+            "agent",
+            id="channel-observation",
+        ),
+        pytest.param([{"role": "user", "content": "Also check the docs"}], "user", id="user-turn"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_request_after_tool_result_is_agent_initiated() -> None:
+async def test_request_after_tool_results_is_agent_initiated_until_the_user_speaks(
+    after_results: list[dict[str, Any]], expected_initiator: str
+) -> None:
     messages: list[dict[str, Any]] = [
         {"role": "user", "content": "Run it"},
         {
@@ -455,11 +476,12 @@ async def test_request_after_tool_result_is_agent_initiated() -> None:
             "tool_calls": [{"id": "call_1", "type": "function", "name": "run", "arguments": "{}"}],
         },
         {"role": "tool", "tool_call_id": "call_1", "content": "ok"},
+        *after_results,
     ]
 
     exchange = await send_exchange(make_adapter(), messages, model_id="unknown-copilot-model")
 
-    assert exchange.request.headers["x-initiator"] == "agent"
+    assert exchange.request.headers["x-initiator"] == expected_initiator
 
 
 def _vision_metadata(**vision: Any) -> dict[str, Any]:

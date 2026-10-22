@@ -451,6 +451,53 @@ describe('MCP management surface', () => {
     ).toBe('true');
     expect(document.body.textContent).not.toContain('test-owned-secret');
   });
+  it('keeps a connection name typed while an earlier name is checked', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const server = (id, conflict) => ({
+      name: 'example',
+      id,
+      conflict,
+      selected: !conflict,
+      enabled: true,
+      connection: { ...original, id },
+      credentials: [],
+      warnings: [],
+    });
+    const checking = Promise.withResolvers();
+    const handler = rpc.getMockImplementation();
+    rpc.mockImplementation(async (method, params) => {
+      if (params?.operation !== 'import') return handler(method, params);
+      const id = params.arguments.ids?.example;
+      if (!id) return { servers: [server('example', true)] };
+      if (id === 'example_2') return checking.promise;
+      return { servers: [server(id, false)] };
+    });
+    try {
+      component = mount(Panel, { target: document.body });
+      await settle();
+      button('Import').click();
+      await settle();
+      input('Setup text', 'test-owned-setup');
+      submit();
+      await settle();
+
+      input('Connection name', 'example_2');
+      vi.advanceTimersByTime(400);
+      await settle();
+      input('Connection name', 'example_23');
+      // The check of the earlier name answers after the newer input.
+      checking.resolve({ servers: [server('example_2', false)] });
+      await settle();
+      expect(field('Connection name').value).toBe('example_23');
+
+      vi.advanceTimersByTime(400);
+      await settle();
+      expect(field('Connection name').value).toBe('example_23');
+      expect(button('Import 1')).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it('explains a failed connection with its server output and reconnects it', async () => {
     records = [
       {
@@ -599,6 +646,37 @@ describe('MCP management surface', () => {
       'Import MCP servers',
     );
     expect(button('Import 2')).toBeTruthy();
+  });
+  it('changes nothing when the editor closed while its fill was read', async () => {
+    const reading = Promise.withResolvers();
+    const handler = rpc.getMockImplementation();
+    rpc.mockImplementation(async (method, params) =>
+      params?.operation === 'import'
+        ? reading.promise
+        : handler(method, params),
+    );
+    component = mount(Panel, { target: document.body });
+    await settle();
+    button('Add MCP connection').click();
+    await settle();
+    input('Command line or URL (optional)', 'test-owned-setup');
+    button('Fill in').click();
+    await settle();
+    button('Cancel').click();
+    await settle();
+    reading.resolve({
+      servers: ['one', 'two'].map((name) => ({
+        name,
+        id: name,
+        selected: true,
+        enabled: true,
+        connection: { ...original, id: name },
+        credentials: [],
+        warnings: [],
+      })),
+    });
+    await settle();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
   it('reconciles enablement and requires confirmation before removal', async () => {
     records = [

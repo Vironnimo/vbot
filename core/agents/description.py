@@ -3,21 +3,25 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from core.agents import AgentError
+from core.agents._types import AgentError
 from core.chat.streaming import stream_model_response
 from core.providers.accounts import ConnectionRef
 from core.providers.adapter import ProviderAdapter
 from core.providers.errors import ProviderError
-from core.runtime._workers import _RUNTIME_WORKERS
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from core.runtime.runtime import Runtime
+    from core.agents._types import Agent
+    from core.sessions import ChatSessionManager
+    from core.skills.skills import SkillRegistry
+    from core.usage import UsageRecorder
+    from core.utils.workers import BoundedWorkerPool
 
-_LOGGER = get_logger("runtime.agent_description")
+_LOGGER = get_logger("agents.description")
 
 SOUL_INPUT_MAX_CHARACTERS = 4000
 SKILL_INPUT_MAX = 20
@@ -44,17 +48,23 @@ class AgentDescriptionSuggestionError(AgentError):
     """The Model returned nothing usable as a description."""
 
 
-async def suggest_agent_description(runtime: Runtime, agent_id: str) -> str:
-    """Draft a description for ``agent_id`` with its own Model; nothing is saved.
+async def suggest_agent_description(
+    agent: Agent,
+    *,
+    sessions: ChatSessionManager,
+    skills_for: Callable[[str], SkillRegistry],
+    resolve_model: Callable[[str], tuple[str, str, str]],
+    get_adapter: Callable[[ConnectionRef], ProviderAdapter],
+    usage_recorder: UsageRecorder | None,
+    workers: BoundedWorkerPool,
+) -> str:
+    """Draft a description with the Agent's own Model; nothing is saved.
 
-    Raises the store's errors for an unknown Agent, the Provider's for a failed
-    request, and :class:`AgentDescriptionSuggestionError` for an empty answer.
+    Raises the Provider's error for a failed request and
+    :class:`AgentDescriptionSuggestionError` for an empty answer.
+    Collaborators are supplied by the caller; this owner has no Runtime dependency.
     """
-    from core.chat.model_resolution import resolve_agent_model_target
-
-    agent = await runtime.agents.get_async(agent_id)
-    facts = await _RUNTIME_WORKERS.run(_agent_facts, runtime, agent)
-    sessions = runtime.chat_sessions
+    facts = await workers.run(_agent_facts, agent, skills_for)
     page = await sessions.run_async(
         sessions.list_summaries_page, [(None, agent.id)], limit=SESSION_TITLE_INPUT_MAX
     )
@@ -67,12 +77,12 @@ async def suggest_agent_description(runtime: Runtime, agent_id: str) -> str:
 
     def prepare() -> tuple[str, str, str]:
         nonlocal adapter
-        provider_id, model_id, connection_id = resolve_agent_model_target(runtime, agent)
-        adapter = runtime.get_adapter(ConnectionRef(provider_id, connection_id))
+        provider_id, model_id, connection_id = resolve_model(agent.model)
+        adapter = get_adapter(ConnectionRef(provider_id, connection_id))
         return provider_id, model_id, connection_id
 
     try:
-        provider_id, model_id, connection_id = await _RUNTIME_WORKERS.run(prepare)
+        provider_id, model_id, connection_id = await workers.run(prepare)
         assert adapter is not None
         usage = {
             "model": f"{provider_id}/{model_id}",
@@ -82,10 +92,12 @@ async def suggest_agent_description(runtime: Runtime, agent_id: str) -> str:
         }
         user_message = f"<agent>\n{facts}</agent>"
         try:
-            response = await _request(runtime, adapter, model_id, user_message, "none", usage)
+            response = await _request(
+                usage_recorder, adapter, model_id, user_message, "none", usage
+            )
         except ProviderError:
             # Some reasoning-mandatory endpoints reject an explicit disable.
-            response = await _request(runtime, adapter, model_id, user_message, "", usage)
+            response = await _request(usage_recorder, adapter, model_id, user_message, "", usage)
     finally:
         if adapter is not None:
             try:
@@ -99,7 +111,7 @@ async def suggest_agent_description(runtime: Runtime, agent_id: str) -> str:
     return suggestion
 
 
-def _agent_facts(runtime: Runtime, agent: Any) -> str:
+def _agent_facts(agent: Agent, skills_for: Callable[[str], SkillRegistry]) -> str:
     """Name, SOUL.md, own Skills and default Project as labeled sections."""
     facts = _section("Name", [agent.name])
     try:
@@ -108,7 +120,7 @@ def _agent_facts(runtime: Runtime, agent: Any) -> str:
         soul = ""
     if soul:
         facts += _section("SOUL.md", [soul[:SOUL_INPUT_MAX_CHARACTERS]])
-    registry = runtime.skills_for(None, agent.id)
+    registry = skills_for(agent.id)
     skills = []
     for name in sorted(registry.always_allowed)[:SKILL_INPUT_MAX]:
         try:
@@ -128,14 +140,13 @@ def _section(label: str, lines: list[str]) -> str:
 
 
 async def _request(
-    runtime: Runtime,
+    recorder: UsageRecorder | None,
     adapter: ProviderAdapter,
     model_id: str,
     user_message: str,
     thinking_effort: str,
     usage: dict[str, Any],
 ) -> dict[str, Any]:
-    recorder = runtime.usage_recorder
     call_id = await recorder.start(**usage) if recorder is not None else None
     reported: dict[str, Any] = {}
     try:

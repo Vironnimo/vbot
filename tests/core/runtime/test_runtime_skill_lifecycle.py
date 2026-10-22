@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 
+from core.permissions import PermissionBoundary
 from core.runtime.runtime import Runtime
 from core.skills import _authoring_documents as authoring_module
 from core.skills.authoring import HUMAN_WRITER
@@ -88,6 +89,7 @@ async def test_shared_write_serializes_with_owner_lifecycle(
             cwd=tmp_path,
             vbot_root=tmp_path,
             data_root=tmp_path / "data",
+            permissions=PermissionBoundary.UNRESTRICTED,
         )
         loop = asyncio.get_running_loop()
         loop_thread = threading.get_ident()
@@ -267,6 +269,7 @@ async def test_merge_keeps_its_access_check_with_deletion(
             cwd=tmp_path,
             vbot_root=tmp_path,
             data_root=data,
+            permissions=PermissionBoundary.UNRESTRICTED,
         )
         loop = asyncio.get_running_loop()
         prepared = asyncio.Event()

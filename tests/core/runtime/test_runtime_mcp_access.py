@@ -13,6 +13,7 @@ from mcp.server import Server
 
 from core.agents.temporary import TemporaryAgentConfig
 from core.extensions.extensions import ExtensionAPI, ExtensionDeclarations
+from core.permissions import PermissionBoundary
 from core.runs import RunExecutionOwner
 from core.runtime.runtime import Runtime
 from core.tools.availability import ToolAccess
@@ -63,6 +64,7 @@ async def test_temporary_mcp_caller_uses_bound_policy_and_keeps_generation_scope
             vbot_root=tmp_path,
             data_root=tmp_path,
             execution_owner=owner,
+            permissions=PermissionBoundary.UNRESTRICTED,
         )
         host = root.for_owner(runtime.extensions.registration_identity("mcp"))
         assert host.resolve_tool_agent_async is not None
@@ -147,7 +149,20 @@ async def test_management_explore_and_invoke_run_as_the_agent_outside_any_sessio
     service = None
     try:
         assert runtime.extensions is not None
-        runtime.agents.create("mcptest", tool_access=ToolAccess(granted=("mcp_example",)))
+        runtime.agents.create(
+            "mcptest",
+            tool_access=ToolAccess(granted=("mcp_example",)),
+            permission_rules={"deny": ["read({workdir}/private/**)"]},
+        )
+        # The calls carry the Agent's Permission Rules, as its Sessions' calls do.
+        contexts: list[ToolContext] = []
+        dispatch = runtime.tools.dispatch
+
+        async def recording(context: ToolContext, *args: Any, **kwargs: Any) -> Any:
+            contexts.append(context)
+            return await dispatch(context, *args, **kwargs)
+
+        monkeypatch.setattr(runtime.tools, "dispatch", recording)
         root = runtime._extension_host()  # noqa: SLF001 - the Runtime hands hosts only to Extensions.
         assert root.for_owner is not None
         host = root.for_owner(runtime.extensions.registration_identity("mcp"))
@@ -201,3 +216,4 @@ async def test_management_explore_and_invoke_run_as_the_agent_outside_any_sessio
     assert called["result"]["data"]["value"]["content"][0]["text"] == "answer"
     assert explored["state"] == "completed", explored
     assert [match["name"] for match in explored["result"]["data"]["value"]["matches"]] == ["ask"]
+    assert len(contexts) == 2 and all(context.permissions.restricted for context in contexts)

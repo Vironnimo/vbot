@@ -584,23 +584,6 @@ export function syncQueueFromServer(sessionState, serverItems) {
   return sessionState.queue;
 }
 
-export function updateQueuedMessageContent(
-  sessionState,
-  itemId,
-  newContent,
-  { editable } = {},
-) {
-  const queuedItem = sessionState.queue.find((item) => item.id === itemId);
-  if (!queuedItem) {
-    return false;
-  }
-  queuedItem.content = newContent;
-  if (typeof editable === 'boolean') {
-    queuedItem.editable = editable;
-  }
-  return true;
-}
-
 export function removeQueuedMessage(sessionState, queuedMessageId) {
   const originalLength = sessionState.queue.length;
   sessionState.queue = sessionState.queue.filter(

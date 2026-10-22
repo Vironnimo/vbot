@@ -13,7 +13,7 @@ from core.chat._request_builder import (
 )
 from core.chat._request_epoch import _finalize_compaction_checkpoint
 from core.chat._request_targets import _resolve_request_image_limit, _resolved_model_reference
-from core.chat._run_permissions import run_permission_boundary
+from core.chat._run_permissions import permitted_project_context, run_permission_boundary
 from core.chat._run_state import (
     ChatLoopDependencies,
     RequestBuildInputs,
@@ -36,7 +36,6 @@ from core.chat.usage import ContextRoute, RequestContextUsage
 from core.chat.wire_shaping import PINNED_IMAGE_RETIREMENT_SLOT, RequestImageBudget
 from core.memory import DEFAULT_MEMORY_PROMPT_MODE
 from core.projects import resolve_prompt_project, resolve_skill_scope, runtime_agent_body
-from core.prompts import ProjectPromptContext
 from core.prompts.pinned_context import (
     PINNED_DYNAMIC_BLOCKS_SLOT,
     PINNED_THINKING_EFFORT_SLOT,
@@ -52,11 +51,13 @@ from core.prompts.pinned_context import (
 )
 from core.providers.accounts import ConnectionRef
 from core.sessions import ChatSession, PromptEpoch
+from core.tools.file_state import FileRead
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from core.compaction.compaction import CompactionService, CompactionSettings
+    from core.permissions import PermissionBoundary
     from core.runs import Run
     from core.sessions import SessionReadCursor
 
@@ -77,6 +78,11 @@ class ManualCompactionRequest:
     summary_adapter: Any
     summary_provider_id: str
     summary_model_id: str
+
+    @property
+    def permissions(self) -> PermissionBoundary:
+        """The Permission Boundary of the Run the Compaction serves."""
+        return self.request_inputs.permissions
 
 
 class ChatCompactionHost:
@@ -192,26 +198,6 @@ class ChatCompactionHost:
                 self._dependencies.projects,
                 run.working_project_id,
             )
-            prompt_context = (
-                ProjectPromptContext.from_project(
-                    prompt_project.project_id,
-                    prompt_project.display_name,
-                    prompt_project.cwd,
-                    prompt_project.auto_load,
-                )
-                if prompt_project is not None
-                else None
-            )
-            working_project_context = await self.run_transform(
-                pinned_working_project_context,
-                self._dependencies,
-                run.agent_id,
-                run.session_id,
-                agent,
-                prompt_project,
-                prompt_context,
-                run.project_id,
-            )
             soul_context = await self.run_transform(
                 pinned_soul_context,
                 self._dependencies,
@@ -277,6 +263,23 @@ class ChatCompactionHost:
                 address=session.address,
                 project_root=Path(prompt_project.cwd) if prompt_project is not None else None,
                 skill_registry=skill_registry,
+            )
+            prompt_context = (
+                await self.run_transform(
+                    permitted_project_context, prompt_project, permissions.boundary
+                )
+                if prompt_project is not None
+                else None
+            )
+            working_project_context = await self.run_transform(
+                pinned_working_project_context,
+                self._dependencies,
+                run.agent_id,
+                run.session_id,
+                agent,
+                prompt_project,
+                prompt_context,
+                run.project_id,
             )
             inputs = RequestBuildInputs(
                 replay_policy=adapter.reasoning_replay_policy(model_id),
@@ -368,6 +371,7 @@ class ChatCompactionHost:
         working_project_id: str | None,
         project_cwd: Path | None,
         activation_skill_project_id: str | None,
+        permissions: PermissionBoundary,
     ) -> _CompactionPromptRefresh:
         return cast(
             _CompactionPromptRefresh,
@@ -380,6 +384,7 @@ class ChatCompactionHost:
                 working_project_id=working_project_id,
                 project_cwd=project_cwd,
                 activation_skill_project_id=activation_skill_project_id,
+                permissions=permissions,
             ),
         )
 
@@ -393,18 +398,14 @@ class ChatCompactionHost:
         working_project_id: str | None,
         project_cwd: Path | None,
         activation_skill_project_id: str | None,
+        permissions: PermissionBoundary,
     ) -> _CompactionPromptRefresh:
         from core.agents.temporary import TemporaryAgent
 
         is_temporary = isinstance(agent, TemporaryAgent)
         prompt_project = resolve_prompt_project(self._dependencies.projects, working_project_id)
         project_prompt_context = (
-            ProjectPromptContext.from_project(
-                prompt_project.project_id,
-                prompt_project.display_name,
-                project_cwd if project_cwd is not None else prompt_project.cwd,
-                prompt_project.auto_load,
-            )
+            permitted_project_context(prompt_project, permissions, project_cwd)
             if prompt_project is not None
             else None
         )
@@ -447,7 +448,7 @@ class ChatCompactionHost:
         working_project_context: str | None = None
         soul_context: str | None = None
         memory_files_context: str | None = None
-        read_paths: list[Path] = []
+        read_paths: list[FileRead] = []
         if project_prompt_context is not None:
             working_project_context = system_prompts.render_working_project_context(
                 refreshed_agent,
@@ -455,7 +456,7 @@ class ChatCompactionHost:
                 on_read=read_paths.append,
             )
         if getattr(refreshed_agent, "workspace", None):
-            identity_read_paths: list[Path] = []
+            identity_read_paths: list[FileRead] = []
             soul_context = system_prompts.render_soul(
                 refreshed_agent,
                 on_read=identity_read_paths.append,

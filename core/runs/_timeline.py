@@ -14,9 +14,14 @@ from datetime import datetime
 from typing import Any
 
 from core.runs._timeline_arguments import ToolArgumentPreview
+from core.runs._timeline_tools import bounded_preview, merged_secrets_used, presented_display
 
 JsonObject = dict[str, Any]
 _TERMINAL = {"completed", "cancelled", "failed", "interrupted"}
+# An answer row's message leaves out what its Tool and Reasoning rows show.
+_MESSAGE_KEYS_SHOWN_ELSEWHERE = frozenset(
+    {"tool_calls", "reasoning", "reasoning_summary", "reasoning_meta", "reasoning_timing"}
+)
 
 
 class RunTimeline:
@@ -54,6 +59,9 @@ class RunTimeline:
         self._child_snapshots: dict[str, JsonObject] = {}
         self._text_parts: dict[str, list[str]] = {}
         self._argument_parts: dict[str, list[str]] = {}
+        # The complete arguments and result of each Tool row, which the row
+        # itself only previews; read through `raw_tool_call`.
+        self._raw_calls: dict[str, JsonObject] = {}
 
     def _new_id(self, kind: str) -> str:
         count = self._counts.get(kind, 0)
@@ -81,6 +89,20 @@ class RunTimeline:
             row["items"] = children
             self._snapshot = [*copy.deepcopy(self.before), row, *copy.deepcopy(self.after)]
         return self._snapshot
+
+    def raw_tool_call(self, child_id: str) -> JsonObject | None:
+        """Return the complete arguments and result of one Tool row, or None.
+
+        The result is None while the call runs; the arguments are None before
+        its start supplied them.
+        """
+        raw = self._raw_calls.get(child_id)
+        if raw is None:
+            return None
+        return {
+            "arguments": copy.deepcopy(raw.get("arguments")),
+            "result": copy.deepcopy(raw.get("result")),
+        }
 
     def apply(self, event: JsonObject) -> None:
         """Apply one event. The Run supplies it once, in sequence order."""
@@ -236,7 +258,6 @@ class RunTimeline:
                 "content": message.get("content"),
                 "message": copy.deepcopy(message),
                 "timestamp": message.get("timestamp"),
-                "events": [copy.deepcopy(event)],
             }
         )
 
@@ -317,8 +338,6 @@ class RunTimeline:
                 "timestamp": event.get("timestamp"),
                 "streaming": streaming,
                 "interrupted": False,
-                "events": [],
-                "messages": [],
             }
             items.append(child)
         self._dirty_children.add(child["id"])
@@ -331,8 +350,16 @@ class RunTimeline:
         child["interrupted"] = bool(message.get("interrupted"))
         if message:
             child["messageId"] = message_id
-            child["messages"] = [copy.deepcopy(message)]
-            child["events"] = [copy.deepcopy(event)]
+            if kind == "assistant_output":
+                # The public projection signs the answer's delivered files
+                # through this message; its calls and Reasoning have rows.
+                child["messages"] = [
+                    {
+                        key: copy.deepcopy(value)
+                        for key, value in message.items()
+                        if key not in _MESSAGE_KEYS_SHOWN_ELSEWHERE
+                    }
+                ]
         if kind == "reasoning":
             if not streaming:
                 child["reasoningSummary"] = copy.deepcopy(message.get("reasoning_summary"))
@@ -366,7 +393,7 @@ class RunTimeline:
                     or not item.get("assistantMessageId")
                     or item["assistantMessageId"] == assistant_id
                 )
-                and not (kind == "tool_call_delta" and item.get("resultEvent"))
+                and not (kind == "tool_call_delta" and item.get("finished"))
             ),
             None,
         )
@@ -382,14 +409,16 @@ class RunTimeline:
                 "display": None,
                 "partialArgumentsText": None,
                 "previewArguments": None,
+                "arguments": None,
                 "result": None,
-                "toolCall": None,
-                "startedEvent": None,
-                "resultEvent": None,
+                "rawTruncated": False,
+                "started": False,
+                "startedAt": None,
+                "finished": False,
+                "finishedAt": None,
                 "timing": None,
                 "durationMs": None,
                 "output": "",
-                "events": [],
             }
             self.run["items"].append(child)
         child["toolCallId"] = call_id or child.get("toolCallId")
@@ -414,38 +443,36 @@ class RunTimeline:
                 if scanner.push(payload.get("arguments_delta", "")):
                     child["previewArguments"] = scanner.fields()
             return
+        raw = self._raw_calls.setdefault(child["id"], {"arguments": None, "result": None})
         if call:
-            child["toolCall"] = {**(child.get("toolCall") or {}), **copy.deepcopy(call)}
             child["name"] = call.get("name") or child["name"]
             child["index"] = call.get("index", child.get("index"))
             if "arguments" in call:
-                child["arguments"] = copy.deepcopy(call["arguments"])
+                raw["arguments"] = copy.deepcopy(call["arguments"])
         if kind == "tool_call_started":
             self._tool_previews.pop(child["id"], None)
             self._argument_parts.pop(child["id"], None)
             child.update(streaming=False, partialArgumentsText=None, previewArguments=None)
             # A final Assistant boundary may arrive after a Tool completed.
             # Never overwrite its richer dispatch/result presentation.
-            if child["startedEvent"] is None or "display" in payload:
-                child["startedEvent"] = copy.deepcopy(event)
+            if not child["started"] or "display" in payload:
+                child.update(started=True, startedAt=event.get("timestamp"))
             if "display" in payload:
-                child["display"] = copy.deepcopy(payload["display"])
-            if not child["resultEvent"]:
+                raw["display"] = merged_secrets_used(raw.get("display"), payload["display"])
+            if not child["finished"]:
                 child["status"] = "running"
         elif kind == "tool_call_result":
             message = payload.get("message") or {}
-            child.update(
-                streaming=False,
-                result=copy.deepcopy(payload.get("result", message.get("content"))),
-                resultEvent=copy.deepcopy(event),
-            )
-            child["display"] = copy.deepcopy(
-                payload.get("display", message.get("tool_display", child["display"]))
+            raw["result"] = copy.deepcopy(payload.get("result", message.get("content")))
+            child.update(streaming=False, finished=True, finishedAt=event.get("timestamp"))
+            raw["display"] = merged_secrets_used(
+                raw.get("display"),
+                payload.get("display", message.get("tool_display", raw.get("display"))),
             )
             child["timing"] = copy.deepcopy(payload.get("timing") or message.get("timing"))
             child["durationMs"] = (child["timing"] or {}).get("duration_ms")
             child["status"] = _tool_status(
-                child["result"], child["name"], child["display"], payload.get("error")
+                raw["result"], child["name"], raw["display"], payload.get("error")
             )
         elif kind == "tool_call_output":
             child["output"] = payload.get("output", "")
@@ -453,10 +480,19 @@ class RunTimeline:
             child["subAgentSession"] = copy.deepcopy(payload.get("data") or {})
         elif kind == "speech_playback":
             child["speechPlayback"] = payload.get("url")
-        # Keep relevant boundary events, never one event per streamed chunk.
-        child["events"] = [
-            item for item in (child.get("startedEvent"), child.get("resultEvent")) if item
-        ]
+        if kind in {"tool_call_started", "tool_call_result"} or call:
+            self._present_tool(child, raw)
+
+    def _present_tool(self, child: JsonObject, raw: JsonObject) -> None:
+        """Rebuild what the row shows of its call from the complete values."""
+        arguments, arguments_cut = bounded_preview(raw["arguments"])
+        result, result_cut = bounded_preview(raw["result"])
+        child.update(
+            arguments=arguments,
+            result=result,
+            rawTruncated=arguments_cut or result_cut,
+            display=presented_display(raw.get("display"), raw["arguments"], raw["result"]),
+        )
 
     def _fallback(self, event: JsonObject) -> None:
         payload = event.get("payload") or {}
@@ -618,7 +654,7 @@ class RunTimeline:
         for child in self.run["items"]:
             self._dirty_children.add(child["id"])
             child["streaming"] = False
-            if child["type"] == "tool_call" and not child.get("resultEvent"):
+            if child["type"] == "tool_call" and not child.get("finished"):
                 child["status"] = "cancelled" if status == "cancelled" else "interrupted"
                 child["endTimestamp"] = event.get("timestamp")
         if status == "failed" and not self.after and payload.get("error"):
@@ -638,6 +674,11 @@ class RunTimeline:
             for item in self.run["items"]
             if item["type"] != "tool_call" or not item.get("streaming")
         ]
+        self._forget_dropped_calls()
+
+    def _forget_dropped_calls(self) -> None:
+        retained = {item["id"] for item in self.run["items"]}
+        self._raw_calls = {key: value for key, value in self._raw_calls.items() if key in retained}
 
     def _recount_text_slots(self) -> None:
         for kind in ("reasoning", "assistant_output", "tool_call"):
@@ -661,6 +702,7 @@ class RunTimeline:
         self._tool_previews = {
             key: value for key, value in self._tool_previews.items() if key in retained
         }
+        self._forget_dropped_calls()
 
     def _freeze_reasoning(self, timestamp: str | None) -> None:
         if not timestamp:

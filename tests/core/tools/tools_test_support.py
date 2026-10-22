@@ -7,6 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from core.permissions import PermissionBoundary
 from core.tools import (
     Tool,
     ToolContext,
@@ -39,6 +40,7 @@ def make_context(
         workspace=Path("workspace"),
         vbot_root=Path("app"),
         data_root=Path("data"),
+        permissions=PermissionBoundary.UNRESTRICTED,
     )
     return replace(context, **fields)
 
@@ -54,6 +56,7 @@ def make_execution_config(
         vbot_root=Path("app"),
         data_root=Path("data"),
         allowed_tools=allowed_tools,
+        permissions=PermissionBoundary.UNRESTRICTED,
     )
     return replace(config, **fields)
 

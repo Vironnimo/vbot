@@ -11,6 +11,7 @@ import {
   previewPrompt,
 } from '$lib/api.js';
 import { t } from '$lib/i18n.js';
+import { writeClipboardText } from '$lib/clipboard.js';
 
 export function createPromptScope(context) {
   const PREVIEW_REFRESH_DEBOUNCE_MS = 100;
@@ -449,7 +450,7 @@ export function createPromptScope(context) {
     }
 
     try {
-      await navigator.clipboard.writeText(previewText);
+      await writeClipboardText(previewText);
       context.showToast(t('common.copied'), 'success');
     } catch {
       context.showToast(t('systemPrompt.error.copyFailed'), 'error');

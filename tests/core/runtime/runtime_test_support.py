@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from core.chat import CommandExecutionContext, ReplySurface
+from core.permissions import PermissionBoundary
 from core.runtime.runtime import Runtime
 from core.tools import ToolContext
 
@@ -180,6 +181,7 @@ def tool_context(tool_name: str, data_dir: Path, *, agent_id: str = "a") -> Tool
         workspace=data_dir,
         vbot_root=data_dir,
         data_root=data_dir,
+        permissions=PermissionBoundary.UNRESTRICTED,
     )
 
 

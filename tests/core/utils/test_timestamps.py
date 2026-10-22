@@ -33,9 +33,20 @@ def test_every_aware_form_normalizes_to_one_fixed_width_text(value: str | dateti
 
 
 @pytest.mark.parametrize(
-    "value", ["", "2026-07-01T12:00:00", "2026-07-01Z", "not a time", datetime(2026, 7, 1, 12)]
+    "value",
+    [
+        "",
+        "2026-07-01T12:00:00",
+        "2026-07-01Z",
+        "not a time",
+        datetime(2026, 7, 1, 12),
+        "0001-01-01T00:00:00+01:00",
+        "9999-12-31T23:59:59-01:00",
+        datetime.min.replace(tzinfo=_PLUS_TWO),
+        datetime.max.replace(tzinfo=timezone(timedelta(hours=-2))),
+    ],
 )
-def test_a_value_without_an_offset_is_never_guessed(value: str | datetime) -> None:
+def test_invalid_or_unrepresentable_timestamps_are_rejected(value: str | datetime) -> None:
     with pytest.raises(ValueError):
         canonical_timestamp(value)
 
@@ -71,6 +82,8 @@ def test_stored_values_parse_only_in_the_canonical_form() -> None:
         "2026-07-01T12:00:00.000000z",
         "2026-07-01T12:00:00.25Z",
         "2026-07-01T12:00:00.000000",
+        "0001-01-01T00:00:00+01:00",
+        "9999-12-31T23:59:59-01:00",
         "",
     ],
 )

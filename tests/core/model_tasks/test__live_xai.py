@@ -7,7 +7,7 @@ import base64
 import json
 import re
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, override
 
 import pytest
 from websockets.datastructures import Headers
@@ -929,6 +929,30 @@ async def test_open_joins_the_pinned_model_with_connection_auth_and_configures_t
 async def test_handshake_failures_map_to_provider_errors(failure, error):
     with pytest.raises(error):
         await _open(FakeConnect(failure))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "error"),
+    [
+        (ConnectionClosedError(None, None), NetworkError),
+        (OSError("send failed"), OSError),
+        (asyncio.CancelledError(), asyncio.CancelledError),
+    ],
+    ids=["closed", "send-failed", "cancelled"],
+)
+async def test_failed_configuration_closes_the_opened_socket(failure, error):
+    class SetupFailureSocket(FakeSocket):
+        @override
+        async def send(self, message: str) -> None:
+            raise failure
+
+    socket = SetupFailureSocket()
+
+    with pytest.raises(error):
+        await _open(FakeConnect(socket))
+
+    assert socket.closed
 
 
 @pytest.mark.asyncio

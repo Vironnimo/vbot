@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
 import { init, t } from '../../../lib/i18n.js';
+import { reactiveProps } from '../../__tests__/reactiveProps.support.svelte.js';
 
 vi.mock('svelte', async () => {
   return import('../../../../node_modules/svelte/src/index-client.js');
@@ -144,6 +145,47 @@ describe('SessionPermissionsBadge', () => {
     expect(
       document.querySelector('[data-session-permissions-card]').textContent,
     ).toContain(t('permissions.preview.scratch', { scratch: '{scratch}' }));
+  });
+
+  it('reads the limits again after they may have changed elsewhere', async () => {
+    permissionsMock.mockResolvedValue({ restricted: false, layers: [] });
+    const props = reactiveProps({
+      agentAddress: 'coder',
+      sessionId: 's1',
+      revision: '0',
+    });
+    component = mount(SessionPermissionsBadge, {
+      target: document.body,
+      props,
+    });
+    await settle();
+    expect(document.querySelector('[data-session-permissions]')).toBeNull();
+
+    // The Agent or the Session changed on the server.
+    permissionsMock.mockResolvedValue({
+      restricted: true,
+      layers: [OWN_LAYER],
+      stored_ceiling: false,
+    });
+    props.revision = '1';
+    await settle();
+    expect(document.querySelector('[data-session-permissions]')).not.toBeNull();
+
+    // A change no event reports (the shared default) shows once the card
+    // is about to open.
+    permissionsMock.mockResolvedValue({
+      restricted: true,
+      layers: [OWN_LAYER, CRON_LAYER],
+      stored_ceiling: false,
+    });
+    document
+      .querySelector('[data-session-permissions]')
+      .dispatchEvent(new Event('pointerenter'));
+    await settle();
+    expect(
+      document.querySelector('[data-session-permissions-card]').textContent,
+    ).toContain(t('permissions.session.source.cron'));
+    expect(permissionsMock).toHaveBeenCalledTimes(3);
   });
 
   it('offers no removal for limits the Session does not store', async () => {

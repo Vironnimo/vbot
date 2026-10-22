@@ -66,6 +66,8 @@ def test_validate_cron_jobs_data_checks_delivery_watch_and_last_answer() -> None
                 {**base, "id": "job-6", "watch": {"url": "file:///etc/hosts"}},
                 {**base, "id": "job-7", "notifications": [None]},
                 {**base, "id": "job-8", "permission_ceiling": {"layers": "all"}},
+                {**base, "id": "job-9", "unread_alert": {"message": "Failed.", "at": "now"}},
+                {**base, "id": "job-10", "dropped_notifications": -1},
             ],
         }
     )
@@ -91,6 +93,8 @@ def test_validate_cron_jobs_data_checks_delivery_watch_and_last_answer() -> None
             "$.jobs[7].permission_ceiling",
             "permission_ceiling.layers must be a non-empty list.",
         ),
+        ("error", "$.jobs[8].unread_alert", "unread_alert.at must be a UTC timestamp"),
+        ("error", "$.jobs[9].dropped_notifications", "must be a non-negative integer"),
     ]
 
 

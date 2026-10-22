@@ -112,7 +112,6 @@ SESSION_TITLE_KEY = "title"
 SESSION_AUTO_TITLE_KEY = "auto_title"
 SESSION_AUTO_TITLE_INITIALIZED_KEY = "auto_title_initialized"
 SESSION_TITLE_MAX_LENGTH = 200
-SESSION_TERMINAL_RUN_STATUSES = frozenset({"completed", "failed", "cancelled", "interrupted"})
 FORK_SOURCE_META_KEY = "fork_source"
 # The Sub-Agent Session marker and its Parent link (``subagent_parent``).
 SUBAGENT_SESSION_META_KEY = "is_subagent_session"

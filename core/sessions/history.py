@@ -173,10 +173,6 @@ def _skill_contexts(messages: list[ChatMessage]) -> dict[str, str]:
     return result
 
 
-def skill_activation_names(messages: list[ChatMessage]) -> frozenset[str]:
-    return frozenset(_skill_contexts(messages))
-
-
 def skill_activation_contents(messages: list[ChatMessage]) -> dict[str, str]:
     return _skill_contexts(messages)
 

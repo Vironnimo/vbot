@@ -55,6 +55,10 @@ class CommandSpec:
     # The argument can carry a Secret value: accessors keep no copy of the command
     # text, and a Channel removes the user's message where the platform allows.
     secret_argument: bool = False
+    # How to use the command, in plain words (`your goal, or pause, resume,
+    # clear`), shown greyed after the typed command; the description says what
+    # it does. Empty for a command without an argument.
+    argument_hint: str = ""
 
 
 @dataclass(frozen=True)

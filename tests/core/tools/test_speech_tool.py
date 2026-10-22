@@ -20,6 +20,7 @@ from core.model_tasks import (
 )
 from core.model_tasks.speech_playback import SpeechPlaybackStore
 from core.model_tasks.speech_types import SpeechAudioChunk
+from core.permissions import PermissionBoundary
 from core.providers.errors import ProviderAuthError
 from core.runs.run import RunExecutionOwner
 from core.tools.speech import (
@@ -77,6 +78,7 @@ async def _speak(
         workspace=tmp_path,
         vbot_root=tmp_path,
         data_root=tmp_path,
+        permissions=PermissionBoundary.UNRESTRICTED,
     )
     try:
         return await registry.dispatch(replace(tool_context, **context), arguments)

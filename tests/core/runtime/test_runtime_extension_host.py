@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,12 @@ from core.chat import ChatMessage
 from core.chat.messages import ToolCall
 from core.extensions import ExtensionRegistrationIdentity
 from core.extensions.operations import ExtensionHost
+from core.permissions import (
+    BoundaryContext,
+    PermissionBoundary,
+    PermissionCeiling,
+    normalize_permission_rules,
+)
 from core.runs import RunAdmission, RunAdmissionBlockedError, RunExecutionOwner
 from core.runtime.runtime import Runtime
 from core.sessions import SessionAddress, ToolResultFacts, ToolResultPayload
@@ -435,8 +442,15 @@ async def test_owner_pages_and_archives_only_its_own_closed_groups(
             closed_commands.append(owner)
             return 0
 
+        closed_portals: list[SessionAddress] = []
+
+        def close_portals(addresses: Iterable[SessionAddress]) -> int:
+            closed_portals.extend(addresses)
+            return 0
+
         monkeypatch.setattr(runtime.terminal_manager, "close_scope", close_scope)
         monkeypatch.setattr(runtime.command_manager, "close_scope", close_command_scope)
+        monkeypatch.setattr(runtime.portals, "close_sessions", close_portals)
         groups = _owner_host(runtime, "swarm").temporary_agents
         assert groups is not None
         first = await groups.create("group-a", "peer", _participant(tmp_path))
@@ -468,9 +482,10 @@ async def test_owner_pages_and_archives_only_its_own_closed_groups(
         assert await groups.archive_group("group-a") == 1
         assert not first_scratch.area.exists()
         assert second_scratch.area.exists() and other_scratch.area.exists()
-        # Like an ordinary Session removal, the participants' Terminals and commands close.
+        # Like an ordinary Session removal, the participants' Terminals, commands
+        # and Portals close.
         assert closed == terminals[:1]
-        assert closed_commands == [first.address]
+        assert closed_commands == closed_portals == [first.address]
         assert await groups.groups() == ["group-b"]
         assert await groups.list("group-a") == []
         with pytest.raises(RunAdmissionBlockedError):
@@ -481,7 +496,7 @@ async def test_owner_pages_and_archives_only_its_own_closed_groups(
         assert await groups.delete_group("group-b") == 1
         assert not second_scratch.area.exists()
         assert closed == terminals
-        assert closed_commands == [first.address, second.address]
+        assert closed_commands == closed_portals == [first.address, second.address]
         assert await groups.delete_group("group-a") == 1  # archived; its Terminals closed before
         assert closed == terminals
 
@@ -579,6 +594,7 @@ async def test_result_payloads_load_for_their_owner_through_the_calling_session(
             vbot_root=tmp_path,
             data_root=tmp_path,
             result_payload_hook=(lambda *_args: "unused") if in_session else None,
+            permissions=PermissionBoundary.UNRESTRICTED,
         )
 
     load = mcp.load_result_payload
@@ -609,6 +625,15 @@ async def test_deferred_tool_outcomes_follow_only_the_original_session_generatio
     host = _owner_host(runtime, "mcp")
     other = _owner_host(runtime, "swarm")
     session = runtime.chat_sessions.create("main", "recovery-origin")
+    # A restored call keeps the Session's inherited ceiling.
+    private = tmp_path / "private"
+    ceiling = PermissionBoundary.build(
+        normalize_permission_rules({"deny": ["read({workdir}/private/**)"]}),
+        BoundaryContext(workdir=tmp_path, home=tmp_path, data_dir=tmp_path / "data"),
+    ).to_ceiling_dict(source="parent")
+    runtime.agent_resolver.join_session_ceiling(
+        session.address, PermissionCeiling.from_ceiling_dict(ceiling)
+    )
     running = session.start_run("recovery-run")
     running.append(
         ChatMessage.assistant(
@@ -627,6 +652,7 @@ async def test_deferred_tool_outcomes_follow_only_the_original_session_generatio
         workspace=tmp_path,
         data_root=tmp_path,
         vbot_root=tmp_path,
+        permissions=PermissionBoundary.UNRESTRICTED,
     )
     assert (
         host.capture_tool_call is not None
@@ -658,6 +684,7 @@ async def test_deferred_tool_outcomes_follow_only_the_original_session_generatio
     )
     restored = await host.restore_tool_call(receipt)
     assert restored is not None and restored.session_id == moved.id
+    assert restored.permissions.check_path(private / "notes.txt", "read") is not None
     assert await host.deliver_tool_outcome(receipt, "recovered-outcome-sentinel")
     assert await host.deliver_tool_outcome(receipt, "recovered-outcome-sentinel")
     assert [message.content for message in moved.load() if message.role == "note"] == [

@@ -291,6 +291,29 @@ describe('extension page client', () => {
       result: page,
     });
     await expect(children).resolves.toEqual(page);
+
+    const raw = client.readToolCall('group', 'participant', {
+      runId: 'run',
+      toolId: 'tool',
+      historyGeneration: 'generation',
+    });
+    expect(lastCall()).toMatchObject({
+      method: 'history.tool_call',
+      params: {
+        group_id: 'group',
+        participant_id: 'participant',
+        run_id: 'run',
+        tool_id: 'tool',
+        history_generation: 'generation',
+      },
+    });
+    const call = { arguments: {}, result: null };
+    dispatchFrom(target, {
+      ...lastCall(),
+      type: 'vbot.extension.result',
+      result: call,
+    });
+    await expect(raw).resolves.toEqual(call);
   });
 
   it('reports whether layers are open and closes the topmost one when the host asks', () => {

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -65,6 +67,45 @@ def test_add_server_appends_and_replaces_the_same_target_in_place(tmp_path: Path
         ServerEntry("vbot.example.com", 443, "Cloud", "https"),
         ServerEntry("pi.lan", 9000, None, "https"),
     ]
+
+
+def test_concurrent_server_mutations_preserve_both_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings_file = _settings(tmp_path)
+    first_writing = threading.Event()
+    release_first = threading.Event()
+    second_finished = threading.Event()
+    write_servers = desktop_servers.write_servers
+
+    def paused_write(entries: list[dict[str, Any]], path: Path | None) -> None:
+        if entries == [{"host": "first.lan", "port": 9000}]:
+            first_writing.set()
+            assert release_first.wait(timeout=2)
+        write_servers(entries, path)
+
+    def add_second() -> None:
+        desktop_servers.add_server("second.lan", 9000, settings_file=settings_file)
+        second_finished.set()
+
+    monkeypatch.setattr(desktop_servers, "write_servers", paused_write)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(
+            desktop_servers.add_server, "first.lan", 9000, settings_file=settings_file
+        )
+        assert first_writing.wait(timeout=2)
+        second = pool.submit(add_second)
+        try:
+            assert not second_finished.wait(timeout=0.1)
+        finally:
+            release_first.set()
+        first.result(timeout=2)
+        second.result(timeout=2)
+
+    assert {entry.host for entry in desktop_servers.list_servers(settings_file)} == {
+        "first.lan",
+        "second.lan",
+    }
 
 
 @pytest.mark.parametrize(

@@ -24,7 +24,7 @@ A setup may own one pinned Model (`model=PinnedModel`, `models_dir`): its files 
 2. else adopts a verified copy from a `reuse` folder (`_fetch_model()` passes the Model's other installed revisions, so a revision bump fetches only changed files) or the user's Hugging Face cache (`HF_HUB_CACHE`, else `HF_HOME/hub`, else `~/.cache/huggingface/hub`; `blobs/<sha256>` or `snapshots/*/<path>`; hard link, else `Path.copy`, which clones blocks where the file system can);
 3. else downloads `https://huggingface.co/{repo}/resolve/{revision}/{path}` with httpx and the shared SSL context into `<path>.part`, resuming it with `Range` and retrying 429/5xx and transport errors (4 attempts).
 
-A file takes its final name only after its size and SHA-256 match. Before anything is fetched, the missing bytes plus a 512 MB margin must be free. Error codes: `insufficient_space`, `checksum_mismatch`, `download_failed`; cancelling the job sets a `threading.Event`, the thread stops within one chunk (`interrupted`) and `.part` files stay for the next install. Engines never download at use: a ready target runs offline.
+A file takes its final name only after its size and SHA-256 match. Before anything is fetched, the missing bytes plus a 512 MB margin must be free; resumable `.part` bytes already on disk do not count as missing. Error codes: `insufficient_space`, `checksum_mismatch`, `download_failed`; cancelling the job sets a `threading.Event`, the thread stops within one chunk (`interrupted`) and `.part` files stay for the next install. Engines never download at use: a ready target runs offline.
 
 ## Generic local engine RPCs
 

@@ -99,7 +99,7 @@ async function sendRpc(envelope, options) {
       payload,
       response.headers?.get?.('retry-after'),
     );
-    throw normalizeRpcError(payload.error, {
+    throw normalizeRpcError(payload?.error, {
       method,
       status: response.status,
       fallbackCode: RPC_ERROR_HTTP,

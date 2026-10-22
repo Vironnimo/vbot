@@ -10,6 +10,7 @@ from typing import Any, cast
 
 from core.chat.messages import ChatMessage, JsonObject, ToolCall
 from core.chat.tool_dispatch import ToolDispatchContext, ToolRound
+from core.permissions import PermissionBoundary
 from core.runs import Run
 from core.sessions import ChatSessionManager
 from core.skills import SkillRegistry
@@ -123,6 +124,7 @@ class ToolDispatchHarness:
                 run=active_run,
                 vbot_root=Path.cwd(),
                 data_root=self.tmp_path,
+                permissions=PermissionBoundary.UNRESTRICTED,
                 project_cwd=project_cwd,
                 project_id=project_id,
                 skill_project_id=None,

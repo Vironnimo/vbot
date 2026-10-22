@@ -25,6 +25,7 @@ from core.runs import (
     RunExecutionOwner,
     RunKind,
 )
+from core.secrets._references import SecretMasker
 from core.sessions import SessionAddress
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("current_format_data_directory")]
@@ -624,20 +625,24 @@ async def test_completion_start_failure_persists_system_reminder_without_run(
         run_manager,
         cast(Any, Mock()),
         sessions=sessions,
+        secret_masker=lambda: SecretMasker({"hunter2-very-secret": "{{secret:GITHUB}}"}),
     )
 
     delivery = trigger_service.submit_completion(
         SessionAddress(None, "coder", "session-one"),
         notice_id="bash:fallback",
         origin_run_id="origin-run",
-        body="background command finished",
+        body="background command finished: hunter2-very-secret",
     )
     await asyncio.wait_for(delivery, timeout=5)
 
     completion_loop.start_run.assert_awaited_once()
+    # Results reach the Run input and the Session masked.
+    assert "{{secret:GITHUB}}" in completion_loop.start_run.await_args.args[1]
     notes = _notes(sessions.get(_ADDRESS))
     assert len(notes) == 1
-    assert "background command finished" in notes[0]
+    assert "background command finished: {{secret:GITHUB}}" in notes[0]
+    assert "hunter2" not in completion_loop.start_run.await_args.args[1] + notes[0]
 
 
 @pytest.mark.parametrize("failure_boundary", ["read", "append"])

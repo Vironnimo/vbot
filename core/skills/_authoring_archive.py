@@ -28,7 +28,7 @@ from core.skills._history import (
     document_fields,
 )
 from core.skills._packages import is_redirect
-from core.skills.skills import SKILL_FILENAME
+from core.skills.skills import SKILL_FILENAME, SkillRegistry
 from core.utils.ids import has_id_entry, new_id
 from core.utils.logging import get_logger
 from core.utils.timestamps import format_canonical_timestamp
@@ -151,7 +151,9 @@ class SkillArchives:
             info = self._archive_infos(history).get(archive_id)
             name = info.skill if info is not None else _declared_name(package)
             destination = self._owner._skill_dir(root, name)
-            if destination.exists():
+            if destination.exists() or any(
+                skill.name == name for skill in SkillRegistry.load(root).list_all()
+            ):
                 raise SkillAuthoringError(
                     f"A Skill named '{name}' already exists. Delete or rename it first, "
                     "then restore this one."

@@ -70,6 +70,8 @@ What becomes an unresolved `command`: a command line above the limit or that doe
 
 ## Command checks
 
+A full-access boundary returns at once; the first restricted check creates the `CommandAnalyzer` (PowerShell helper above). `aclose()` (shutdown step `command_analysis`, `runtime/lifecycle-steps.md`) stops it; later checks refuse. Analysis and decision run on bounded worker pools, off the Event Loop.
+
 `CommandChecker` (`_command_check.py`, `permissions.md` -> Interfaces) decides a plan in this order; the first refusal wins: the analysis (`CommandAnalysisUnavailable` refuses), the start directory (`start_dir`), every simple command against deny rules of every layer (`command_pattern_may_match`), every `commands: listed` layer's allow rules (`command_pattern_matches`), vBot's own CLI (`vbot` as a program or `.ps1`, a Python running `<vbot>/cli/...` or `server/main.py`, `python -m cli...`/`server...` in a folder inside the checkout), the vBot server (a `host:port` word, or an own-host word plus a word that is the port), every URL (`check_url`) and host (`check_host`), every path access (`check_path` with its `subtree`, `glob` and `pruned`; a `work_tree` access at the repository's top, a `git` access with `git=True`; a read refused for a denied part `below` gets the hint to use `search_files`), every mention (`check_path(..., deny_only=True)`: deny rules and protected locations only, no base refusals, and the path follows links only when it exists, so a word naming no file costs one `lexists` instead of a realpath walk), and last every unresolved element. The platform for case folding comes from the boundary's context, vBot's checkout from `core.utils.config.VBOT_ROOT`.
 
 ## Limits and false-refusal risks

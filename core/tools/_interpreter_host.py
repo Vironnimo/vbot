@@ -55,9 +55,6 @@ class HostedObject(Protocol):
         """Run the object's *method* and return its result."""
         ...
 
-    def call_nowait(self, method: str, *arguments: Any, **options: Any) -> None:
-        """Run the object's *method* after the calls before it; a failure is logged."""
-
     def close(self) -> None:
         """Release the object after the calls made before; later calls fail."""
 
@@ -229,12 +226,6 @@ class _InlineObject:
     async def call(self, method: str, *arguments: Any, **options: Any) -> Any:
         return self._method(method)(*arguments, **options)
 
-    def call_nowait(self, method: str, *arguments: Any, **options: Any) -> None:
-        try:
-            self._method(method)(*arguments, **options)
-        except Exception:
-            _LOGGER.warning("A %s call failed", self._name, exc_info=True)
-
     def close(self) -> None:
         self._instance = None
 
@@ -257,10 +248,6 @@ class _WorkerObject:
         return await self._worker.submit(
             _hosted_objects.call, self._key, method, arguments, options
         )
-
-    def call_nowait(self, method: str, *arguments: Any, **options: Any) -> None:
-        self._check()
-        self._worker.submit_nowait(_hosted_objects.call, self._key, method, arguments, options)
 
     def close(self) -> None:
         if self._closed:

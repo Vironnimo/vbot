@@ -10,6 +10,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
+from core.permissions import PermissionBoundary
 from core.tools.search_files import interpret_search_call, register_search_files_tool
 from core.tools.tools import ToolContext, ToolRegistry
 
@@ -563,6 +564,7 @@ async def _case(adapter: Any, args: argparse.Namespace, case: dict) -> dict:
             workspace=root,
             vbot_root=root,
             data_root=root,
+            permissions=PermissionBoundary.UNRESTRICTED,
         )
         try:
             query = interpret_search_call(arguments)

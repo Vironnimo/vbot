@@ -25,6 +25,7 @@ from core.chat import (
 from core.chat.messages import ChatMessage
 from core.chat.status_report import STATUS_PLACEHOLDER, ReasoningIntent, status_session_facts
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
+from core.permissions import PermissionBoundary
 from core.projects import (
     AgentResolutionError,
     AgentResolver,
@@ -92,6 +93,7 @@ def _context(tmp_path: Path, *, project_id: str | None = None) -> ToolContext:
         vbot_root=tmp_path,
         data_root=tmp_path,
         project_id=project_id,
+        permissions=PermissionBoundary.UNRESTRICTED,
     )
 
 

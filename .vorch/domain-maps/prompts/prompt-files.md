@@ -8,6 +8,8 @@ How `render_prompt_file` reads the files vBot puts into a Model's Context on its
 
 The manager's `render_project_files(project_context, *, tool_available, on_read=None, on_issue=None)` takes the caller's answer to which Tools the Agent can call (`tool_available`; the `project` Tool passes `ToolContext.can_call`), which decides `FILE_READ_HINT`. `render_project_skills(..., *, tool_available)` lists names/descriptions and names the `skill` Tool only when callable.
 
+The `on_read` observer receives `(resolved_path, (mtime, size))` captured before the byte read, only for content included whole. Prompt assembly, prompt-epoch capture, Compaction and the explicit `project` Tool carry this stamp to `FileReadState.record_stamp` without restatting the path, so a concurrent rewrite never counts as content the Agent has seen. If a concurrent first build wins the prompt pin with different text, the losing render's reads are discarded; existing read stamps stay unchanged.
+
 ## Includes
 
 `{include:filename}` accepts safe flat filenames under the agent workspace and renders through `render_prompt_file`: wrapped as `<file name="...">`, an oversized file as its notice, missing/unreadable files dropped with a warning (never aborting a run) - logged once per path and state rather than on every build, with an INFO line once the file loads whole again; unsafe paths in the template raise `PromptError`. That includes do not nest and that an empty workspace never resolves includes are domain rules in `prompts.md` -> Conventions.

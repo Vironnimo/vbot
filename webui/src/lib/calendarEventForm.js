@@ -331,10 +331,10 @@ export function buildRrule(values) {
     const days = WEEKDAY_CODES.filter((day) => values.by_weekday.includes(day));
     parts.push(`BYDAY=${days.join(',').toUpperCase()}`);
   }
-  if (values.freq === 'monthly' && values.monthly_by !== 'day') {
+  const monthlyBy = monthlyChoice(values);
+  if (values.freq === 'monthly' && monthlyBy !== 'day') {
     const weekday = weekdayCode(values.start_date).toUpperCase();
-    const ordinal =
-      values.monthly_by === 'last' ? -1 : weekOfMonth(values.start_date);
+    const ordinal = monthlyBy === 'last' ? -1 : weekOfMonth(values.start_date);
     parts.push(`BYDAY=${ordinal}${weekday}`);
   }
   if (values.end_mode === 'count') {
@@ -360,6 +360,16 @@ export function monthlyChoices(startDayKey) {
     choices.push('last');
   }
   return choices;
+}
+
+// The monthly repetition the values describe: the chosen one, or the day of
+// the month while the start day does not offer it. The choice itself stays,
+// so a start typed through intermediate dates keeps it once the final date
+// offers it again.
+export function monthlyChoice(values) {
+  return monthlyChoices(values.start_date).includes(values.monthly_by)
+    ? values.monthly_by
+    : 'day';
 }
 
 export function weekOfMonth(dayKey) {

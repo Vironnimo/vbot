@@ -217,6 +217,7 @@
                 isReasoningOpen={activity.isReasoningOpen}
                 onReasoningOpenChange={activity.setReasoningOpen}
                 onCancelToolCall={activity.cancelToolCall}
+                loadToolCall={activity.loadToolCall}
                 agentName={inspected.display_name}
               />{:else}<ChatTimelineEntry
                 {item}

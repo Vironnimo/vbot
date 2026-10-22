@@ -2,7 +2,8 @@
 
 ``/secret NAME [options] VALUE`` stores a Secret; options come before the value,
 and everything after them is the value, spaces included. ``--`` ends the
-options when a value starts with ``--``.
+options when a value starts with ``--``. Without a lifetime option a new Secret
+lasts for the Session and a replaced value keeps its Secret's lifetime.
 """
 
 from __future__ import annotations
@@ -22,13 +23,16 @@ __all__ = [
 ]
 
 SECRET_COMMAND_USAGE: Final = (
-    "/secret NAME VALUE stores a Secret for this session. Options before the value: "
-    "--permanent, --for 2h (or 30m, 7d), --once, --kind login --user NAME, "
-    "--kind text, --description TEXT."
+    "/secret NAME VALUE stores a Secret for this session; a new value for a Secret "
+    "keeps its lifetime. Options before the value: --permanent, --session, "
+    "--for 2h (or 30m, 7d), --once, --kind login --user NAME, --kind text, "
+    "--description TEXT."
 )
 _DURATION = re.compile(r"(\d+)\s*([mhdw])", re.IGNORECASE)
 _DURATION_UNITS: Final = {"m": "minutes", "h": "hours", "d": "days", "w": "weeks"}
 _VALUE_OPTIONS: Final = frozenset({"--for", "--kind", "--user", "--description"})
+# Any whitespace separates the name and the options, line breaks included.
+_SEPARATOR = re.compile(r"\s+")
 
 
 class SecretCommandError(ValueError):
@@ -41,7 +45,9 @@ class SecretCommand:
     value: str
     kind: SecretKind | None = None
     username: str | None = None
-    lifetime: Lifetime = "session"
+    # None when no option chose one: new Secrets last for the Session,
+    # replaced values keep their Secret's lifetime.
+    lifetime: Lifetime | None = None
     duration: timedelta | None = None
     description: str = ""
 
@@ -51,15 +57,14 @@ def parse_secret_command(arguments: str) -> SecretCommand:
     text = arguments.strip()
     if not text:
         return SecretCommand(name=None, value="")
-    name, _, rest = text.partition(" ")
+    name, rest = _first_word(text)
     if name.startswith("--"):
         raise SecretCommandError(f"Name the Secret first. {SECRET_COMMAND_USAGE}")
     options: dict[str, str] = {}
     flags: set[str] = set()
     rest = rest.lstrip()
     while rest.startswith("--"):
-        token, _, remainder = rest.partition(" ")
-        rest = remainder.lstrip()
+        token, rest = _first_word(rest)
         if token == "--":
             break
         option = token.lower()
@@ -71,22 +76,31 @@ def parse_secret_command(arguments: str) -> SecretCommand:
                 options[option] = rest[1:closing]
                 rest = rest[closing + 1 :].lstrip()
                 continue
-            argument, _, remainder = rest.partition(" ")
+            argument, rest = _first_word(rest)
             if not argument:
-                raise SecretCommandError(f"{token} needs a value. {SECRET_COMMAND_USAGE}")
+                raise SecretCommandError(f"{option} needs a value. {SECRET_COMMAND_USAGE}")
             options[option] = argument
-            rest = remainder.lstrip()
-        elif option in {"--permanent", "--once"}:
+        elif option in {"--permanent", "--session", "--once"}:
             flags.add(option)
         else:
-            raise SecretCommandError(f"Unknown option {token}. {SECRET_COMMAND_USAGE}")
-    lifetime: Lifetime = "session"
+            # The token may be a value that starts with --: never repeat it.
+            raise SecretCommandError(
+                "An option before the value is unknown; write -- before a value that "
+                f"starts with --. {SECRET_COMMAND_USAGE}"
+            )
+    lifetime: Lifetime | None = None
     duration = None
-    chosen = [item for item in ("--permanent", "--once", "--for") if item in flags | set(options)]
+    chosen = [
+        item
+        for item in ("--permanent", "--session", "--once", "--for")
+        if item in flags | set(options)
+    ]
     if len(chosen) > 1:
         raise SecretCommandError(f"Use only one of {', '.join(chosen)}.")
     if "--permanent" in flags:
         lifetime = "permanent"
+    elif "--session" in flags:
+        lifetime = "session"
     elif "--once" in flags:
         lifetime = "once"
     elif "--for" in options:
@@ -127,10 +141,19 @@ def secret_command_example(name: str, kind: SecretKind, lifetime: Lifetime) -> s
     return " ".join(parts)
 
 
+def _first_word(text: str) -> tuple[str, str]:
+    """The text up to the first whitespace, and the rest after that whitespace."""
+    match = _SEPARATOR.search(text)
+    if match is None:
+        return text, ""
+    return text[: match.start()], text[match.end() :]
+
+
 def _duration(text: str) -> timedelta:
     match = _DURATION.fullmatch(text.strip())
     if match is None:
-        raise SecretCommandError(f"--for takes a duration such as 30m, 2h, 7d or 2w; got {text}.")
+        # The argument may be the value itself: never repeat it.
+        raise SecretCommandError("--for takes a duration such as 30m, 2h, 7d or 2w.")
     amount = int(match.group(1))
     if amount <= 0:
         raise SecretCommandError("--for needs a duration above zero.")

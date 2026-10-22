@@ -28,6 +28,7 @@ from core.sessions import (
     ARCHIVE_TREE_AGENT,
     ARCHIVE_TREE_PROJECT,
     ArchiveEntry,
+    ArchiveEntryFilter,
     ArchiveEntryRef,
     ArchiveScope,
     ArchiveTree,
@@ -105,6 +106,22 @@ def archive_agent(services: ArchiveServices, agent_id: str) -> AgentArchiveOutco
     return AgentArchiveOutcome(
         ref.entry_id, agent_id, session_count, policy_agent_ids, external_workspace
     )
+
+
+def holds_agent_id_grants(services: ArchiveServices, entry: ArchiveEntry) -> bool:
+    """Whether the Agent Secret grants naming the archived Agent's id are its own.
+
+    Grants name only an id, and a new Agent is never created under an id they
+    name; so they are the archived Agent's unless a live Agent has its id again
+    or another entry archived an Agent of that id, which keep them.
+    """
+    agent_id = entry.subject_id
+    if services.agents.exists(agent_id):
+        return False
+    others = services.sessions.archive_ledger.page(
+        ArchiveEntryFilter(kind=ARCHIVE_KIND_AGENT, agent_id=agent_id), limit=2
+    )
+    return all(other.entry_id == entry.entry_id for other in others.entries)
 
 
 def _repair_review_currents(services: ArchiveServices, entry_key: int, scope: ArchiveScope) -> None:

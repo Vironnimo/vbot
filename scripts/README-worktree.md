@@ -496,7 +496,8 @@ the common case is an orphaned `esbuild.exe` service process left behind by a
 Vite build, which blocks deletion of `webui/node_modules`. `delete` handles
 this automatically:
 
-1. Processes whose executable lives inside the worktree are terminated and
+1. Processes whose executable lives inside the worktree (a literal,
+   case-insensitive directory prefix) are terminated and
    reported as `terminated:` lines. These are always disposable build helpers;
    external programs (e.g. your editor) are never touched.
 2. If files remain locked by an external process (e.g. an editor language
@@ -511,8 +512,8 @@ this automatically:
    a `cd` inside the command. Once the checkout is gone, `delete` hands the
    empty directory to a background `remove-released` process and prints a
    `note:` line. That process removes the directory as soon as no process uses
-   it, waiting up to five minutes; it never removes a directory that holds a
-   checkout again.
+   it, waiting up to five minutes; it removes only an empty directory and leaves
+   any new files or a recreated checkout untouched.
 
 In all cases the delete finishes: owned data dir and managed branch are cleaned up.
 The worktree name is reusable at once, or after the background removal in case 3.

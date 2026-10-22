@@ -12,6 +12,7 @@ from core.chat._command_types import CommandExecutionContext, CommandFeedback, C
 from core.chat.secret_giving import give_secret
 from core.secrets.agent_secrets import (
     AgentSecret,
+    Lifetime,
     SecretRecordError,
     normalize_secret_name,
 )
@@ -57,11 +58,8 @@ async def execute_secret(
     except SecretRecordError as error:
         return _notice(str(error))
     kind = parsed.kind or ("text" if "\n" in parsed.value else "token")
-    values = (
-        {"password": parsed.value, **({"username": parsed.username} if parsed.username else {})}
-        if kind == "login"
-        else {"value": parsed.value}
-    )
+    # The value goes to the main field of the Secret it replaces or creates.
+    values = {"username": parsed.username} if parsed.username else {}
     now = secrets.now()
     expires_at = now + parsed.duration if parsed.duration is not None else None
     try:
@@ -73,28 +71,42 @@ async def execute_secret(
             name=name,
             kind=kind,
             values=values,
+            value=parsed.value,
             lifetime=parsed.lifetime,
             expires_at=expires_at,
             description=parsed.description,
         )
     except SecretRecordError as error:
         return _notice(f"Nothing was stored. {error}")
-    return _notice(_feedback(given.secret, parsed.value, replaced=given.replaced))
-
-
-def _feedback(secret: AgentSecret, value: str, *, replaced: bool) -> str:
-    lifetime = {
-        "permanent": "permanently",
-        "session": "for this session",
-        "once": "for one use",
-    }.get(secret.lifetime, "")
-    if secret.lifetime == "until" and secret.expires_at is not None:
-        lifetime = f"until {secret.expires_at.isoformat(timespec='minutes')}"
-    text = (
-        f"Replaced the value of {secret.name}."
-        if replaced
-        else f"Stored {secret.name} {lifetime}. The agent sees only {secret.reference()}."
+    return _notice(
+        _feedback(
+            given.secret, parsed.value, replaced=given.replaced, previous=given.previous_lifetime
+        )
     )
+
+
+_LIFETIME_WORDS = {"permanent": "permanently", "session": "for this session", "once": "for one use"}
+
+
+def _lifetime_words(secret: AgentSecret) -> str:
+    if secret.lifetime == "until" and secret.expires_at is not None:
+        return f"until {secret.expires_at.isoformat(timespec='minutes')}"
+    return _LIFETIME_WORDS.get(secret.lifetime, "")
+
+
+def _feedback(
+    secret: AgentSecret, value: str, *, replaced: bool, previous: Lifetime | None = None
+) -> str:
+    lifetime = _lifetime_words(secret)
+    if not replaced:
+        text = f"Stored {secret.name} {lifetime}. The agent sees only {secret.reference()}."
+    elif previous is None:
+        text = f"Replaced the value of {secret.name}."
+    else:
+        before = "for a limited time" if previous == "until" else _LIFETIME_WORDS[previous]
+        text = (
+            f"Replaced the value of {secret.name}. It is now kept {lifetime} instead of {before}."
+        )
     if len(value) < _SHORT_VALUE:
         text += (
             f" The value has fewer than {_SHORT_VALUE} characters, so vBot cannot recognize it "

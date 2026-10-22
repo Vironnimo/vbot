@@ -29,6 +29,7 @@ from core.skills._history import (
     package_state,
 )
 from core.skills._packages import excluded, is_redirect
+from core.skills.skills import SkillRegistry
 from core.utils.atomic import atomic_write_bytes
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
@@ -285,6 +286,13 @@ def _simulate(root: Path, archive_root: Path, steps: list[_Step]) -> None:
     """Check every step against the state the earlier steps leave."""
     live = {step.skill: live_package(root, step.skill) is not None for step in steps}
     occupied = {step.skill: (root / step.skill).exists() for step in steps}
+    # Include duplicate declarations too; archiving their first-loaded package
+    # leaves the other declaration active. Invalid packages retain their folder
+    # name here, which is already an occupied restoration destination.
+    package_names = {
+        diagnostic.path.parent: diagnostic.name
+        for diagnostic in SkillRegistry.load(root).diagnostics()
+    }
     archived: dict[str, bool] = {}
 
     def available(archive_id: str) -> bool:
@@ -307,13 +315,14 @@ def _simulate(root: Path, archive_root: Path, steps: list[_Step]) -> None:
                     f"Revision {target.id} cannot be reverted: the archived package of "
                     f"Skill '{step.skill}' was permanently deleted."
                 )
-            if occupied[step.skill]:
+            if occupied[step.skill] or step.skill in package_names.values():
                 raise RevertError(
                     f"Revision {target.id} cannot be reverted: a Skill named "
                     f"'{step.skill}' exists. Delete or rename it first."
                 )
             archived[step.archive_id] = False
             live[step.skill] = occupied[step.skill] = True
+            package_names[root / step.skill] = step.skill
             continue
         if not live[step.skill]:
             raise RevertError(
@@ -328,6 +337,7 @@ def _simulate(root: Path, archive_root: Path, steps: list[_Step]) -> None:
             if step.archive_id is not None:
                 archived[step.archive_id] = True
             live[step.skill] = occupied[step.skill] = False
+            package_names.pop(root / step.skill, None)
 
 
 def _execute(root: Path, archive_root: Path, steps: list[_Step]) -> None:

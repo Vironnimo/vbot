@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Callable
+from contextlib import ExitStack
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -195,6 +196,11 @@ def test_dispatch_routes_nested_data_store_commands(tmp_path: Path) -> None:
     for args in (restore_args, documents_args, complete_args):
         assert dispatch_data_store_command(args, instance, snapshot_restore_fn=restore).ok
     assert dispatch_data_store_command(unregister_args, instance, unregister_fn=unregister).ok
+    assert dispatch_data_store_command(
+        parse_args(["data-store", "convert", "--yes"]),
+        instance,
+        convert_fn=lambda resolved, confirm: _recorded(calls, "convert", confirm, resolved),
+    ).ok
     for args in config_args:
         assert dispatch_data_store_command(
             args,
@@ -247,6 +253,7 @@ def test_dispatch_routes_nested_data_store_commands(tmp_path: Path) -> None:
         ("restore", ("s-1", False, (), True, False)),
         ("restore", ("s-1", True, (), False, True)),
         ("unregister", (_EXTENSION, True)),
+        ("convert", True),
         ("config list", None),
         ("config show", "b-1"),
         ("config restore", ("b-1", True, ("settings.json", "secrets.json"), False)),
@@ -444,6 +451,68 @@ def test_restore_stops_verifies_and_restarts_the_previously_running_server(
     try:
         assert restored.exists(SessionAddress(None, "agent", "restore"))
         assert not restored.exists(SessionAddress(None, "agent", "later"))
+    finally:
+        restored.close()
+
+
+@pytest.mark.parametrize("taken", ["before-stop", "after-stop"])
+def test_restore_reports_how_it_left_data_and_server_when_another_operation_holds_the_lock(
+    tmp_path: Path, monkeypatch, taken: str
+) -> None:
+    # An update or tray action of the installation can hold its operation lock; the
+    # restore then says whether the data changed and that the server stays stopped.
+    from cli.application import processes as application_processes
+    from cli.application.state import Installation, exclusive
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    instance = _instance(data_dir)
+    snapshot = _snapshot_with_one_session(data_dir)
+    sessions = ChatSessionManager(data_dir)
+    sessions.create("agent", session_id="later").append(ChatMessage.user("after the snapshot"))
+    sessions.close()
+    install = Installation(tmp_path / "app", "server", "127.0.0.1", 8420, str(data_dir))
+    install.root.mkdir()
+    other_operation = ExitStack()
+    if taken == "before-stop":
+        other_operation.enter_context(exclusive(install.root))
+    classified: list[ServerState] = []
+
+    def classify(_instance: object, **_kwargs: object) -> ServerState:
+        # Running before the restore, stopped once the stop returned.
+        classified.append("absent" if classified else "running")
+        if taken == "after-stop" and len(classified) == 2:
+            other_operation.enter_context(exclusive(install.root))
+        return classified[-1]
+
+    def stop(target: Installation) -> CommandResult:
+        stopped.append(target)
+        return CommandResult(ok=True, message="stopped", instance=instance)
+
+    stopped: list[Installation] = []
+    monkeypatch.setattr(
+        data_store_management,
+        "probe_health_patiently",
+        lambda _instance: HealthProbeResult(reachable=False, is_vbot=False),
+    )
+    monkeypatch.setattr(data_store_management, "classify_server", classify)
+    monkeypatch.setattr(application_processes, "owning_installation", lambda _target: install)
+    monkeypatch.setattr(application_processes, "stop", stop)
+    monkeypatch.setattr(
+        application_processes, "start", lambda _target: pytest.fail("the lock is held")
+    )
+
+    with other_operation:
+        result = data_store_management.data_store_snapshot_restore(instance, snapshot.name, True)
+
+    assert result.ok is False
+    assert result.message.startswith(
+        f"restored data snapshot {snapshot.name}" if taken == "after-stop" else "could not stop"
+    )
+    assert stopped == ([install] if taken == "after-stop" else [])
+    restored = ChatSessionManager(data_dir)
+    try:
+        assert restored.exists(SessionAddress(None, "agent", "later")) is (taken == "before-stop")
     finally:
         restored.close()
 
@@ -788,6 +857,47 @@ def test_secrets_convert_runs_while_the_server_is_stopped_and_reset_spares_an_op
     assert not reset.ok and "the Secret Store is available" in reset.message
     assert calls == ["stop", "start"]
     assert SecretStore(tmp_path).entry(CREDENTIALS, "OPENAI_API_KEY") == "sk-openai"
+
+
+def test_convert_changes_older_documents_while_the_server_is_stopped(
+    tmp_path: Path, monkeypatch
+) -> None:
+    instance = _instance(tmp_path)
+    write_bootstrap_marker(tmp_path)
+    ChatSessionManager(tmp_path).close()
+    calls: list[str] = []
+
+    def record(action: str) -> Callable[[ServerInstance], CommandResult]:
+        def run(resolved: ServerInstance) -> CommandResult:
+            calls.append(action)
+            return CommandResult(ok=True, message=action, instance=resolved)
+
+        return run
+
+    _classified(monkeypatch, "running", "absent")
+    monkeypatch.setattr(data_store_management, "stop_server", record("stop"))
+    monkeypatch.setattr(data_store_management, "start_server", record("start"))
+    current = data_store_management.data_store_convert(instance, True)
+    document = tmp_path / "projects" / "repo" / "project.json"
+    document.parent.mkdir(parents=True)
+    document.write_text(
+        json.dumps(
+            {"format_version": 1, "project_id": "repo", "cwd": str(tmp_path), "allowed_tools": []}
+        ),
+        encoding="utf-8",
+    )
+    unconfirmed = data_store_management.data_store_convert(instance, False)
+
+    assert current.ok and "nothing to convert" in current.message
+    assert not unconfirmed.ok and "--yes" in unconfirmed.message
+    assert calls == []
+
+    converted = data_store_management.data_store_convert(instance, True)
+
+    assert converted.ok, converted.message
+    assert "projects/repo/project.json" in converted.message
+    assert calls == ["stop", "start"]
+    assert json.loads(document.read_text(encoding="utf-8"))["format_version"] == 2
 
 
 class _StatusPayload:

@@ -14,6 +14,7 @@ from typing import Any
 
 from core.extensions import ExtensionRegistry, HookContext, InteractionEvent
 from core.extensions.extensions import ExtensionRecord
+from core.permissions import PermissionBoundary
 from core.tools import ToolContext
 
 
@@ -122,6 +123,7 @@ def tool_context(tool_name: str, root: Path) -> ToolContext:
         workspace=root,
         vbot_root=root,
         data_root=root,
+        permissions=PermissionBoundary.UNRESTRICTED,
     )
 
 

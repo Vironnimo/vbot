@@ -91,6 +91,29 @@ export function createComposerPicker(context) {
     context.availableSkills.filter((item) => item?.name),
   );
 
+  // While the draft is only a command's name (`/goal` or `/goal `), what may
+  // follow it: the composer shows the hint greyed after the typed text.
+  let commandArgumentHint = $derived.by(() => {
+    const match = /^\/([A-Za-z0-9_-]+)( ?)$/u.exec(context.content);
+    if (!match) {
+      return null;
+    }
+    const name = match[1].toLowerCase();
+    const command = triggerItems.find(
+      (item) =>
+        item.type === 'command' &&
+        String(item.name).replace(/^\/+/u, '').toLowerCase() === name,
+    );
+    const hint =
+      command?.argument !== 'none' && typeof command?.argument_hint === 'string'
+        ? command.argument_hint.trim()
+        : '';
+    if (!hint) {
+      return null;
+    }
+    return { typed: context.content, hint: match[2] ? hint : ` ${hint}` };
+  });
+
   let autocompleteItems = $derived.by(() =>
     triggerItemsForContext(triggerContext),
   );
@@ -756,6 +779,9 @@ export function createComposerPicker(context) {
     },
     set _triggerClosed(value) {
       _triggerClosed = value;
+    },
+    get commandArgumentHint() {
+      return commandArgumentHint;
     },
     get autocompleteItems() {
       return autocompleteItems;

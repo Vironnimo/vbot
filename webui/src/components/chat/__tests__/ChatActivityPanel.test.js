@@ -49,7 +49,7 @@ function backgroundCommandTask({ id, command, ...fields }) {
     id,
     name: 'bash',
     status: 'success',
-    resultEvent: { type: 'tool_call_result' },
+    finished: true,
     arguments: { command },
     result: {
       ok: true,
