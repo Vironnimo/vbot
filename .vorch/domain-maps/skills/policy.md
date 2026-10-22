@@ -1,6 +1,12 @@
 # Skill Policy
 
-The Skill Policy file `<data_dir>/skills/policy.json` (`core/skills/policy.py`, `SkillPolicyService`, persisted through `runtime.skill_policy`): its format, validation and mutation rules, and the surfaces that change it. Disabled and Shared Skill semantics: `skills.md` -> Terms.
+The Skill Policy file `<data_dir>/skills/policy.json` (`core/skills/policy.py`, `SkillPolicyService`, persisted through `runtime.skill_policy`): its format, validation and mutation rules, the surfaces that change it, and what disables, Agent Skill Exclusions and shares do. Vocabulary: `skills.md` -> Terms.
+
+## Disables, exclusions and shares
+
+- Disabled Skill (user requirement 2026-10-05: a disable turns off exactly that package, never a same-named one): set through the Skill Policy, or for a Project Skill through its Project's `skills_project_disabled`. The package is skipped at scan before it claims its name, so it vanishes from every runtime consumer, the owner's always-allowed copy included, while the next same-named package in precedence loads; only editor-scope loads still show it (`skills/loading.md`). The switch outranks allowlists and Agent Skill Exclusions and acts for every Agent and Project.
+- Agent Skill Exclusion: a name in an Identity Agent's optional `excluded_skills` (`agent/configuration.md`) is removed from what `allowed_skills` grants, also from `*`, so `["*"]` plus exclusions means "all except". It also turns off the Agent's own private Skills of that name (user requirement 2026-09-29: own Skills are toggleable per Agent), but never the active Project's effective set. An excluded Skill stays loaded and editable through `skill_manage` but leaves the Agent's catalog and activation, and Skills depending on it become unavailable. Config, Project and temporary Agents have no exclusions. In code the policy switch is the registry's `excluded_packages`, an Agent exclusion `SkillRegistry.allowlist_exclusions` (`skills/loading.md`).
+- Shared Skill: for each receiver, a share adds the owner's package as an extra pool layer between the Project and global layers (`skills.md` -> Overview), subject to the receiver's own `allowed_skills` and the disables and shown like its own Skills, without provenance. Receivers co-maintain it through `skill_manage` update actions; `create` and `delete` stay with the owner (`skills/skill-manage.md` -> Targets). Config and Team Agents never see shared Skills; stale entries are ignored (File).
 
 ## File
 

@@ -1417,7 +1417,7 @@ to 12 independent passages from the same observed revision without lost changes
 
 Rows cover the Board delivery sentences; older Swarm wording has no recorded
 reasons yet. Evidence comes from eight analyzed Runs (Sessions, 2026-09); counts only.
-Failure modes F1-F6: `tools.md` -> Terms.
+Failure modes F1-F6: `tools/agent-facing-text.md` -> Failure modes.
 
 | Text | Reason |
 |---|---|

@@ -1,6 +1,6 @@
 # Skill Manager Inventory
 
-Task-gated reference for the human Skill manager's read model: `skill.inventory` (`SkillRuntime.skill_inventory()`), its per-Agent and per-Project access projections, the Project Skill pool behind `project.show`, and the events that invalidate them. Read it when changing those payloads or a client that consumes them. Semantics of Agent Skill Exclusions, Disabled and Shared Skills live in `skills.md` -> Terms.
+Task-gated reference for the human Skill manager's read model: `skill.inventory` (`SkillRuntime.skill_inventory()`), its per-Agent and per-Project access projections, the Project Skill pool behind `project.show`, and the events that invalidate them. Read it when changing those payloads or a client that consumes them. Semantics of Agent Skill Exclusions, Disabled and Shared Skills live in `skills/policy.md` -> Disables, exclusions and shares.
 
 ## Inventory shape
 

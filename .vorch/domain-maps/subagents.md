@@ -10,22 +10,19 @@ Not owned here: coalescing and waking for deliveries (the automation completion 
 
 ## Terms
 
-Core terms (Agent, Session, Run, Queue, System Reminder) live in `.vorch/GLOSSARY.md`.
-
-### Sub-Agent
-A Session linked to the Parent Session that started it with `run`, together with the Agent working in it. It keeps one public id (`sub_` plus 16 lowercase base32 characters, `new_id("sub")`) for its whole life; every `send` and every `background_tasks` call on it uses that id.
+Core terms (Agent, Session, Run, Queue, System Reminder, Sub-Agent) live in `.vorch/GLOSSARY.md`.
 
 ### Parent Session / Parent Agent
 The Session (and its Agent) whose `run` created a Sub-Agent. A Sub-Agent can itself be a Parent.
 
 ### Agent tree
-A root Session that is not a Sub-Agent plus every Sub-Agent below it. Stop all and `background_tasks` stop act on complete subtrees, regardless of who receives their answers; the active limits count per Session and app-wide, not per tree.
+A root Session that is not a Sub-Agent plus every Sub-Agent below it; tree controls act on complete subtrees (`subagents/tree-control.md`). Not a unit of the active limits, which count per Session and app-wide.
 
 ### Forwarding
 Delivering the final answer of a Sub-Agent's turn to its Parent Session as a completion section, which wakes an idle Parent.
 
 ### Reply target
-The recipient of a Sub-Agent's final answers: Parent or user. User input selects the user; Parent input or an accepted `message_parent` call selects the Parent again. This never changes the Parent link, messaging, visibility, limits or stop controls (user decision 2026-10-14, replacing the former takeover boundary). Automatic continuations retain the selected recipient.
+The recipient of a Sub-Agent's final answers, its Parent or the user: user input selects the user, Parent input or a `message_parent` call the Parent again (`subagents/forwarding.md` -> Recipient changes). Not the Parent link: changing the target never changes the tree or its controls.
 
 ## Data Model
 
