@@ -182,6 +182,10 @@ def test_path_decisions(area: Area, path: str, access: PathAccess, reason: str |
         ),
         pytest.param(".", "read", None, ("secrets",), None, id="denied-folder-left-out"),
         pytest.param("{data}/..", "read", None, (), "protected_location", id="data-dir-below"),
+        # Below a part of the data directory the access may reach lies nothing protected.
+        pytest.param("{scratch}", "write", None, (), None, id="scratch-area"),
+        pytest.param("{workspace}", "read", "*.md", (), None, id="workspace"),
+        pytest.param("{skills}", "read", None, (), None, id="readable-folder"),
         pytest.param("{root}", "write", None, (), "protected_location", id="installation-below"),
     ],
 )
@@ -267,6 +271,7 @@ def test_a_workspace_working_directory_is_writable_except_agent_json(area: Area)
     boundary = area.boundary({"write": "work_area"}, workdir=area.workspace)
 
     assert boundary.check_path("MEMORY.md", "write") is None
+    assert boundary.check_path("drafts", "write", subtree=True) is None
     refusal = boundary.check_path("../agent.json", "write")
     assert refusal is not None and refusal.location == "agent_config"
 

@@ -398,9 +398,12 @@ class PermissionBoundary:
         ``reach`` is the pattern of what it reaches below the folder, as segments.
         """
         protected: list[tuple[ProtectedLocation, _Area | None]] = [
-            ("agent_config", self._agent_config),
-            ("data_dir", self._data_dirs),
+            ("agent_config", self._agent_config)
         ]
+        # A folder in a part of the data directory the access may reach (the
+        # Scratch Area, the Workspace, a readable folder) has only such parts below.
+        if not all(self._data_dir_allowed(key, access) for key in keys):
+            protected.append(("data_dir", self._data_dirs))
         if access == "write" and not git:
             protected.append(("agent_config", self._rule_files))
         if access == "write":
