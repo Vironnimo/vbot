@@ -75,6 +75,10 @@ _PLACEHOLDER_AT_START = re.compile(r"\{([^{}/\\]*)\}")
 _ANY_PLACEHOLDER = re.compile(r"\{([A-Za-z_ ]+)\}")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 _HOST_LABEL = re.compile(r"(?!-)[a-z0-9-]{1,63}(?<!-)\Z")
+# What an ASCII host name a check compares may hold: no character a program decodes.
+_HOST_NAME = re.compile(r"[a-z0-9_.-]+")
+# What UTS46 transitional processing maps differently (sharp s, final sigma, joiners).
+_IDNA_DEVIATIONS = str.maketrans({"\u00df": "ss", "\u03c2": "\u03c3", "\u200c": "", "\u200d": ""})
 
 
 class PermissionRulesError(VBotError, ValueError):
@@ -373,25 +377,52 @@ def write_within_read(read: ReadBase | None, write: WriteBase) -> WriteBase:
     return write
 
 
-def normalize_host(host: str) -> str:
-    """The comparison form of a host an access names: lowercase, IDNA, no brackets.
+def host_forms(host: str) -> tuple[str, ...]:
+    """The comparison forms of a host an access names: lower-case ASCII, no brackets.
 
     An IPv4 address in any form the resolver reads (``127.1``, ``2130706433``,
     ``0x7f000001``, ``[::ffff:7f00:1]``) takes its dotted form, so rules and
     checks compare one form.
+    A name with other characters than ASCII letters, digits, ``-``, ``_`` and
+    ``.`` takes its UTS46 IDNA forms, since programs request different hosts for
+    it: browsers, libidn2's curl and ``web_fetch`` the nontransitional form
+    (``faß.de`` -> ``xn--fa-hia.de``), Windows' curl.exe the transitional one
+    (``fass.de``). Empty when a program could request a host no form names: IDNA
+    rejects the name (a bare zero-width joiner, which transitional processing
+    drops), or it holds an ASCII character such as ``%``, which curl decodes.
     """
     text = host.strip().lower().rstrip(".")
     bracketed = text.startswith("[") and text.endswith("]")
     text = text[1:-1] if bracketed else canonical_host(text)
     address = _address_form(text)
     if address is not None:
-        return address
+        return (address,)
+    if text.isascii():
+        return (text,) if _HOST_NAME.fullmatch(text) else ()
     import idna
 
+    forms: list[str] = []
     try:
-        return idna.encode(text, uts46=True).decode("ascii")
+        # The idna package no longer applies transitional processing; it differs
+        # from the nontransitional one only in these deviation characters.
+        transitional = idna.uts46_remap(text).translate(_IDNA_DEVIATIONS)
+        for name in (text, transitional):
+            # A trailing U+3002 maps to a dot.
+            form = idna.encode(name, uts46=True).decode("ascii").rstrip(".")
+            if form not in forms:
+                forms.append(form)
     except idna.IDNAError, UnicodeError:
-        return text
+        return ()
+    return tuple(forms)
+
+
+def normalize_host(host: str) -> str | None:
+    """The host a request for *host* names, as checks compare it; None when unclear.
+
+    The nontransitional form of :func:`host_forms`, which browsers request too.
+    """
+    forms = host_forms(host)
+    return forms[0] if forms else None
 
 
 def host_matches(pattern: str, host: str) -> bool:

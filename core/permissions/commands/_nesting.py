@@ -16,7 +16,11 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from core.permissions.commands._directories import change_directory
+from core.permissions.commands._directories import (
+    WILDCARD_FOLDER,
+    change_directory,
+    expands_wildcard,
+)
 from core.permissions.commands._specs import POWERSHELLS, RunnerSpec
 from core.permissions.commands._state import Context, Value, environment_key
 from core.permissions.commands._syntax import RawCommand, Word
@@ -73,11 +77,7 @@ def unwrap(
             len(option) > 2 and not option.startswith("--") and options.get(option[:2])
         )
         if option in ("-C", "--chdir") and wrapper == "env":
-            target = (
-                Word.literal(attached, source=rest[0].source)
-                if attached
-                else (rest[1] if len(rest) > 1 else None)
-            )
+            target = rest[0].part(attached) if attached else (rest[1] if len(rest) > 1 else None)
             if target is not None:
                 change_directory(analysis, context, raw, "set", target, keep_old=False)
         if wrapper == "env" and option in ("-S", "--split-string"):
@@ -130,7 +130,7 @@ def unwrap_runner(
             option, equals, attached = text.partition("=")
             if option in spec.directories:
                 target = (
-                    Word.literal(attached, source=arguments[index].source)
+                    arguments[index].part(attached)
                     if equals
                     else (arguments[index + 1] if index + 1 < len(arguments) else None)
                 )
@@ -160,7 +160,7 @@ def unwrap_runner(
         # hatch run test:pytest: the environment before the colon.
         first = analysis.value(context, rest[0], location).text
         if first is not None and re.match(r"^[\w.-]+:[^\\/]", first):
-            rest[0] = Word.literal(first.split(":", 1)[1], source=rest[0].source)
+            rest[0] = rest[0].part(first.split(":", 1)[1])
     return rest
 
 
@@ -349,7 +349,12 @@ def _nested_powershell(
         if option in ("wd", "workingdirectory") or (
             len(option) >= 2 and "workingdirectory".startswith(option)
         ):
-            if index + 1 < len(arguments):
+            folder = values[index + 1].text if index + 1 < len(values) else None
+            if folder is not None and expands_wildcard(context.shell, arguments[index + 1], folder):
+                # bash expands it before pwsh starts, which then enters what it matched.
+                analysis.unresolve("cwd", arguments[index + 1].source, WILDCARD_FOLDER)
+                cwds = [None]
+            elif index + 1 < len(arguments):
                 accesses = analysis.access(
                     context, raw, "start_dir", arguments[index + 1], glob=False, tier="a"
                 )

@@ -20,6 +20,8 @@ from core.permissions.commands._syntax import RawCommand, Word
 if TYPE_CHECKING:
     from core.permissions.commands._analysis import Analysis
 
+WILDCARD_FOLDER = "it changes into a folder a wildcard picks when it runs"
+
 
 def cmd_directory(
     analysis: Analysis, context: Context, raw: RawCommand, name: str, arguments: Sequence[Word]
@@ -46,6 +48,7 @@ def cmd_directory(
         "push" if name == "pushd" else "set",
         target,
         keep_drive=cross_drive,
+        wildcards=True,
     )
 
 
@@ -90,11 +93,15 @@ def change_directory(
     *,
     keep_old: bool = True,
     keep_drive: bool = False,
+    wildcards: bool = False,
 ) -> list[Path]:
     """Move every candidate location; the old one stays, since the change may fail.
 
     *mode* is ``set``, ``push``, ``pop``, ``previous`` or ``unknown``. Returns
-    the folders changed into.
+    the folders changed into. *wildcards*: the command matches wildcards in
+    *target* itself (cmd's ``cd``, PowerShell's ``-Path``); bash expands an
+    unquoted one before any command runs. Such a target is unknown, like a
+    computed one: its literal text names no folder the command enters.
     """
     locations = context.locations(raw.scope)
     moved: list[Location] = []
@@ -147,6 +154,10 @@ def change_directory(
                 )
                 moved.append(location.moved(None))
             continue
+        if expands_wildcard(context.shell, target, value.text, wildcards=wildcards):
+            analysis.unresolve("cwd", target.source, WILDCARD_FOLDER)
+            moved.append(location.moved(None))
+            continue
         resolved = _paths.resolve(
             value.text,
             location.cwd,
@@ -179,6 +190,21 @@ def change_directory(
         moved.append(next_location)
     set_locations(analysis, context, raw, moved)
     return entered
+
+
+def expands_wildcard(shell: str, target: Word, text: str, *, wildcards: bool = False) -> bool:
+    """Whether a wildcard in *target* (value *text*) picks the folder when the line runs.
+
+    bash expands an unquoted wildcard in any word; elsewhere only a command that
+    matches wildcards itself (*wildcards*) does: cmd ``*`` and ``?``, PowerShell
+    also ``[``.
+    """
+    text = _paths.without_long_prefix(text)
+    if shell == "bash":
+        return target.glob and _paths.has_glob(text, brace=True)
+    if shell == "cmd":
+        return wildcards and any(character in text for character in "*?")
+    return wildcards and _paths.has_glob(text)
 
 
 def switch_drive(analysis: Analysis, context: Context, raw: RawCommand, letter: str) -> None:

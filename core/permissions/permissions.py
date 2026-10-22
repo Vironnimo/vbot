@@ -90,6 +90,7 @@ from core.permissions._rules import (
     WebBase,
     WriteBase,
     check_permission_rules,
+    host_forms,
     host_matches,
     normalize_host,
     normalize_permission_rule,
@@ -518,36 +519,51 @@ class PermissionBoundary:
                 kept.append(entry)
         return kept
 
-    def check_host(self, host: str, access: HostAccess = "web") -> PermissionRefusal | None:
+    def check_host(
+        self, host: str, access: HostAccess = "web", *, by_program: bool = False
+    ) -> PermissionRefusal | None:
         """Whether fetching from ``host`` (``connect``: reaching it at all) is permitted.
 
         ``Web(...)`` rules decide both; ``connect`` only words the refusal for a
-        network program such as ssh.
+        network program such as ssh. vBot requests the nontransitional IDNA form
+        of a name; for a program a command runs (``by_program``), every form it
+        may request must pass (``host_forms``).
         """
         if not self._layers:
             return None
-        normalized = normalize_host(host)
-        if not normalized:
+        if not host.strip().strip("[]").rstrip("."):
             return self.refusal(
                 access, f'"{host}"', "unanalyzable", detail="the address names no host"
             )
+        forms = host_forms(host)
+        if not forms:
+            return self.refusal(
+                access,
+                f'"{_visible(host)}"',
+                "unanalyzable",
+                detail="it is not a host name every program reads the same way",
+            )
+        if not by_program:
+            forms = forms[:1]
         for layer in self._compiled:
             for rule in layer.web_deny:
-                if host_matches(rule.pattern, normalized):
-                    return self.refusal(
-                        access, normalized, "deny_rule", rule=rule.text, source=layer.layer.source
-                    )
+                for form in forms:
+                    if host_matches(rule.pattern, form):
+                        return self.refusal(
+                            access, form, "deny_rule", rule=rule.text, source=layer.layer.source
+                        )
         for layer in self._compiled:
-            if layer.layer.web == "listed" and not any(
-                host_matches(rule.pattern, normalized) for rule in layer.web_allow
-            ):
-                return self.refusal(
-                    access, normalized, "not_permitted", source=layer.layer.source, base="listed"
-                )
+            if layer.layer.web != "listed":
+                continue
+            for form in forms:
+                if not any(host_matches(rule.pattern, form) for rule in layer.web_allow):
+                    return self.refusal(
+                        access, form, "not_permitted", source=layer.layer.source, base="listed"
+                    )
         return None
 
-    def check_url(self, url: str) -> PermissionRefusal | None:
-        """Whether fetching ``url`` (http or https) is permitted.
+    def check_url(self, url: str, *, by_program: bool = False) -> PermissionRefusal | None:
+        """Whether fetching ``url`` (http or https) is permitted (``by_program``: see check_host).
 
         The vBot server's own loopback port is refused, so an Agent cannot reach
         the server's API to change its own rules.
@@ -567,17 +583,16 @@ class PermissionBoundary:
                 "unanalyzable",
                 detail="only http and https URLs with a host and a valid port can be checked",
             )
-        host = normalize_host(parts.hostname)
         effective_port = port if port is not None else _DEFAULT_PORTS[scheme]
         if (
             self.loopback_port is not None
             and effective_port == self.loopback_port
-            and self.is_server_host(host)
+            and any(self.is_server_host(form) for form in host_forms(parts.hostname))
         ):
             return self.refusal(
                 "web", f"{scheme}://{parts.netloc}", "protected_location", location="vbot_server"
             )
-        return self.check_host(host)
+        return self.check_host(parts.hostname, by_program=by_program)
 
     def refusal(
         self,
@@ -953,6 +968,11 @@ def _machine_name() -> str:
     return socket.gethostname().casefold().rstrip(".")
 
 
+def _visible(text: str) -> str:
+    """*text* with characters that do not print as an escape, such as a zero-width joiner."""
+    return "".join(c if c.isprintable() else f"\\u{ord(c):04x}" for c in text)
+
+
 def _host_key(host: str) -> str:
     """One comparison form of a host name or address (no brackets, zone or IPv4 mapping)."""
     text = canonical_host(host.strip().strip("[]").rstrip(".").casefold().partition("%")[0])
@@ -1005,6 +1025,7 @@ __all__ = [
     "is_own_host",
     "join_ceilings",
     "matching_preset",
+    "normalize_host",
     "normalize_path",
     "normalize_permission_rule",
     "normalize_permission_rules",

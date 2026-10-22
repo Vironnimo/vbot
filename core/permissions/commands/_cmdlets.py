@@ -151,7 +151,14 @@ def cmdlet(
         if target is None and not binding.bound:
             change_directory(analysis, context, raw, mode, Word.literal("~", source=raw.source))
         elif target is not None:
-            change_directory(analysis, context, raw, mode, target)
+            change_directory(
+                analysis,
+                context,
+                raw,
+                mode,
+                target,
+                wildcards=target is binding.bound.get("Path"),
+            )
         return
     if lowered == "pop-location":
         change_directory(analysis, context, raw, "pop", None)
@@ -342,7 +349,7 @@ def _start_process(analysis: Analysis, context: Context, raw: RawCommand, bindin
     saved = context.locations(raw.scope)
     directory = binding.bound.get("WorkingDirectory")
     if directory is not None:
-        change_directory(analysis, context, raw, "set", directory, keep_old=False)
+        change_directory(analysis, context, raw, "set", directory, keep_old=False, wildcards=True)
     analysis.program(context, raw, _paths.program_name(name), arguments)
     context.states[raw.scope] = saved
 

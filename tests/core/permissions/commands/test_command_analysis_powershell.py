@@ -62,6 +62,17 @@ async def analyzer() -> AsyncIterator[CommandAnalyzer]:
             unresolved=("cwd", "path_write"),
         ),
         case(
+            "Set-Location -LiteralPath 'q*'; cd [s]ub; Remove-Item x",
+            id="a -Path wildcard picks the folder when it runs",
+            paths=("start_dir w/p/q*", "write w/p/x/**", "write w/p/q*/x/**"),
+            unresolved=("cwd", "path_write"),
+        ),
+        case(
+            "Start-Process cmd -WorkingDirectory s?b",
+            id="start-process matches its folder too",
+            unresolved=("cwd",),
+        ),
+        case(
             "Push-Location C:\\q; Pop-Location; cd..; D:",
             id="location stack, cd.. and drive switch",
             paths=("start_dir q", "start_dir w/p", "start_dir w", "start_dir .", "start_dir D:/"),

@@ -53,6 +53,10 @@ from tests.core.tools.web_fetch_test_support import stub_http_session as stub_ht
         ("mailto:someone@example.com", "not mailto: URLs"),
         ("notes about the page", "This is not a web address."),
         ("https:///path-only", "The URL has no host name."),
+        # Programs read these names as different hosts: one drops the joiner, another
+        # refuses it; curl decodes the escape.
+        ("https://exa\u200dmple.com/", '"exa\\u200dmple.com" is not a valid host name.'),
+        ("https://ex%61mple.com/", '"ex%61mple.com" is not a valid host name.'),
     ],
 )
 async def test_addresses_that_are_not_web_urls_are_refused_without_fetching(
@@ -519,6 +523,12 @@ async def test_transient_failures_recover_on_a_later_attempt(
             "https://xn--bcher-kva.example:8443/page",
             ["xn--bcher-kva.example:8443:93.184.216.34"],
         ),
+        # The nontransitional form the permission rules compare, not fass.example.
+        (
+            "https://faß.example/page",
+            "https://xn--fa-hia.example/page",
+            ["xn--fa-hia.example:443:93.184.216.34"],
+        ),
         ("http://93.184.216.34:8080/page", "http://93.184.216.34:8080/page", []),
         (
             f"https://{IPV6_HOST}/page",
@@ -527,7 +537,15 @@ async def test_transient_failures_recover_on_a_later_attempt(
         ),
         (f"https://[{IPV6_ADDRESS}]:8443/page", f"https://[{IPV6_ADDRESS}]:8443/page", []),
     ],
-    ids=["resolved-host", "trailing-dot", "idn", "literal-ip", "ipv6-dns", "ipv6-literal"],
+    ids=[
+        "resolved-host",
+        "trailing-dot",
+        "idn",
+        "idn-deviation",
+        "literal-ip",
+        "ipv6-dns",
+        "ipv6-literal",
+    ],
 )
 async def test_request_is_a_pinned_browser_like_get_with_a_streamed_body(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, url: str, request_url: str, pins: list[str]
