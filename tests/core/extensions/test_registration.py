@@ -14,7 +14,10 @@ import asyncio
 import inspect
 import logging
 import sys
+import threading
+from collections.abc import Iterator
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -149,47 +152,98 @@ async def test_timed_out_registration_logs_late_failure(
 
 
 @pytest.mark.asyncio
-async def test_aload_keeps_event_loop_responsive_during_async_register(tmp_path: Path) -> None:
+@pytest.mark.parametrize("phase", ["discovery", "import", "register", "async_register", "pages"])
+async def test_aload_keeps_event_loop_responsive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str
+) -> None:
     root = tmp_path / "extensions"
-    marker = tmp_path / "marker.txt"
-    write_extension(
+    loop = asyncio.get_running_loop()
+    loop_thread = threading.get_ident()
+    entered = asyncio.Event()
+    release = threading.Event()
+    async_release = asyncio.Event()
+    fired: list[str] = []
+
+    def block(at: str) -> None:
+        if at != phase:
+            return
+        assert threading.get_ident() != loop_thread
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(1), "serving loop did not release the loader worker"
+
+    async def register_async(api: ExtensionAPI) -> None:
+        assert asyncio.get_running_loop() is loop
+        if phase == "async_register":
+            entered.set()
+            await async_release.wait()
+
+        async def handler(ctx, **payload):
+            assert asyncio.get_running_loop() is loop
+            fired.append("fired")
+
+        api.on("run_start", handler)
+        api.register_page("board", "Board", "page.html")
+
+    probe = ModuleType("registration_probe")
+    probe.__dict__.update(block=block, register_async=register_async)
+    monkeypatch.setitem(sys.modules, probe.__name__, probe)
+    package = write_package(
         root,
-        "slow_async",
-        "import asyncio\n"
-        "import pathlib\n"
-        f"_MARKER = pathlib.Path({str(marker)!r})\n"
-        "async def register(api):\n"
-        "    await asyncio.sleep(0.02)\n"
-        "    def handler(ctx, **payload):\n"
-        "        _MARKER.write_text('fired', encoding='utf-8')\n"
-        "    api.on('run_start', handler)\n",
+        "slow",
+        "from registration_probe import block, register_async\n"
+        "block('import')\n"
+        "def register(api):\n"
+        "    block('register')\n"
+        "    return register_async(api)\n",
     )
-    heartbeat_ticks = 0
-    heartbeat_done = asyncio.Event()
+    page = package / "page.html"
+    page.write_text("<p>Board</p>", encoding="utf-8")
+    original_iterdir, original_resolve = Path.iterdir, Path.resolve
 
-    async def heartbeat() -> None:
-        nonlocal heartbeat_ticks
-        while not heartbeat_done.is_set():
-            await asyncio.sleep(0)
-            heartbeat_ticks += 1
+    def iterdir(path: Path) -> Iterator[Path]:
+        if path == root:
+            block("discovery")
+        return original_iterdir(path)
 
-    heartbeat_task = asyncio.create_task(heartbeat())
-    registry = await ExtensionRegistry.aload(root)
-    heartbeat_done.set()
-    await heartbeat_task
+    def resolve(path: Path, strict: bool = False) -> Path:
+        if path == page:
+            block("pages")
+        return original_resolve(path, strict=strict)
 
-    # The loop serviced other tasks while register() was pending.
-    assert heartbeat_ticks > 0
-    assert record(registry, "slow_async").status == "loaded"
+    monkeypatch.setattr(Path, "iterdir", iterdir)
+    monkeypatch.setattr(Path, "resolve", resolve)
+    loading = asyncio.create_task(ExtensionRegistry.aload(root))
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        # This task must run while the loader is held inside the selected phase.
+        assert not loading.done()
+    finally:
+        release.set()
+        async_release.set()
+        await asyncio.gather(loading, return_exceptions=True)
+    registry = await loading
+    assert record(registry, "slow").status == "loaded"
     await registry.dispatch_run_start(hook_context(), session_id="s", agent_id="a")
-    assert marker.read_text(encoding="utf-8") == "fired"
+    assert fired == ["fired"]
+    assert registry.current_page(registry.registration_identity("slow"), "board") is not None
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["scan", "async_register"])
 async def test_cancelling_aload_cancels_active_and_closes_pending_registrations(
     tmp_path: Path,
+    phase: str,
 ) -> None:
     root = tmp_path / "extensions"
+    loop = asyncio.get_running_loop()
+    entered = asyncio.Event()
+    release = threading.Event()
+
+    def block_scan() -> None:
+        if phase == "scan":
+            loop.call_soon_threadsafe(entered.set)
+            assert release.wait(1), "serving loop did not release the cancelled scan"
+
     write_extension(
         root,
         "a_active",
@@ -198,6 +252,7 @@ async def test_cancelling_aload_cancels_active_and_closes_pending_registrations(
         "finished = asyncio.Event()\n"
         "async def register(api):\n"
         "    started.set()\n"
+        "    api.get_config()['entered'].set()\n"
         "    try:\n"
         "        await asyncio.Event().wait()\n"
         "    finally:\n"
@@ -211,22 +266,34 @@ async def test_cancelling_aload_cancels_active_and_closes_pending_registrations(
         "def register(api):\n"
         "    global pending\n"
         "    pending = _register(api)\n"
+        "    api.get_config()['block_scan']()\n"
         "    return pending\n",
     )
-    loading = asyncio.create_task(ExtensionRegistry.aload(root))
-    await asyncio.sleep(0)
-    active = sys.modules["vbot_ext.a_active"]
-    pending = sys.modules["vbot_ext.z_pending"].pending
-    await active.started.wait()
-    loading.cancel()
+    loading = asyncio.create_task(
+        ExtensionRegistry.aload(
+            root, config_provider=lambda _: {"entered": entered, "block_scan": block_scan}
+        )
+    )
     try:
+        await asyncio.wait_for(entered.wait(), 1)
+        active = sys.modules["vbot_ext.a_active"]
+        pending = sys.modules["vbot_ext.z_pending"].pending
+        loading.cancel()
+        if phase == "scan":
+            await asyncio.sleep(0)
+            assert not loading.done()
+            loading.cancel()
+            release.set()
         with pytest.raises(asyncio.CancelledError):
             await loading
         await asyncio.sleep(0)
-        assert active.finished.is_set()
+        assert active.finished.is_set() == (phase == "async_register")
         assert inspect.getcoroutinestate(pending) == inspect.CORO_CLOSED
     finally:
-        pending.close()
+        release.set()
+        if not loading.done():
+            loading.cancel()
+            await asyncio.gather(loading, return_exceptions=True)
         for task in tuple(extension_callbacks._detached_tasks):
             task.cancel()
         await asyncio.sleep(0)

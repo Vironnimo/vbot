@@ -19,7 +19,7 @@ import pytest
 
 from cli.application.packages import validate_release
 from cli.application.state import current_platform
-from scripts import package_build
+from scripts import package_build, test_dependencies
 from scripts.package_build import (
     PYTHON_VERSION,
     compile_bytecode,
@@ -99,6 +99,45 @@ def test_every_pin_names_the_one_python_version_the_packages_bundle() -> None:
         )
     }
     assert {value for _name, value in versions} == {f'"{PYTHON_VERSION}"'}, versions
+    test_dependencies.check(ROOT)
+
+
+@pytest.mark.parametrize(
+    "change", ["dependency", "runtime", "overlay", "windows shape", "desktop dependency"]
+)
+def test_backend_locks_refuse_stale_inputs_and_runtime_replacements(
+    tmp_path: Path, change: str
+) -> None:
+    paths = [
+        "pyproject.toml",
+        *(lock.path for lock in (*test_dependencies.RUNTIME_LOCKS, *test_dependencies.TEST_LOCKS)),
+    ]
+    for name in paths:
+        destination = tmp_path / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / name, destination)
+    if change == "dependency":
+        path = tmp_path / "pyproject.toml"
+        path.write_text(path.read_text().replace('"psutil"', '"psutil>=999"', 1), encoding="utf-8")
+    elif change == "runtime":
+        path = tmp_path / test_dependencies.RUNTIME_LOCKS[-1].path
+        path.write_text(path.read_text() + "# refreshed runtime\n", encoding="utf-8")
+    elif change == "overlay":
+        path = tmp_path / test_dependencies.TEST_LOCKS[0].path
+        path.write_text(path.read_text() + "httpx==0.28.1\n", encoding="utf-8")
+    elif change == "desktop dependency":
+        path = tmp_path / test_dependencies.TEST_LOCKS[0].path
+        path.write_text(
+            re.sub(r"(?m)^numpy==[^\s\\]+", "numpy==999", path.read_text()), encoding="utf-8"
+        )
+    else:
+        path = tmp_path / test_dependencies.RUNTIME_LOCKS[1].path
+        path.write_text(
+            re.sub(r"(?m)^httpx==[^\s\\]+", "httpx==999", path.read_text()), encoding="utf-8"
+        )
+
+    with pytest.raises(ValueError):
+        test_dependencies.check(tmp_path)
 
 
 @pytest.mark.parametrize("protocol", [None, 1, True])

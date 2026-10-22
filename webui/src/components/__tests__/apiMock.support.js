@@ -30,6 +30,10 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
     reportClientMetrics: (report) => call('performance.client_report', report),
     updateSettings: (params) => call('settings.update', params),
     getRecallIndexStatus: () => call('recall.status'),
+    getDataStoreStatus: () => call('data_store.status'),
+    acknowledgeDataStoreIncident: (incidentId) =>
+      call('data_store.incident_acknowledge', { incident_id: incidentId }),
+    listBackgroundActivity: () => call('activity.list'),
     dismissBackgroundActivity: (id) => call('activity.dismiss', { id }),
     cancelLocalSetup: (target) =>
       call('task_model.local_setup_cancel', { target }),

@@ -1,5 +1,11 @@
 import { formatAgentAddress } from './agentAddress.js';
-import { invalidateCatalogReads, isRunServerEvent } from './api.js';
+import {
+  acknowledgeDataStoreIncident,
+  getDataStoreStatus,
+  invalidateCatalogReads,
+  isRunServerEvent,
+  listBackgroundActivity,
+} from './api.js';
 import { mergeBoundedEntries } from './clientCaches.js';
 import { noteInvalidation } from './clientMetrics.js';
 import {
@@ -141,18 +147,74 @@ export function createAppController({
   // A Session's Portals changed (its `portals` scope), or, with null, every
   // Session's may have.
   onPortalsChanged = () => {},
-  onLoadDataStoreStatus = async () => {},
-  onLoadBackgroundActivity = async () => {},
+  readDataStoreStatus = getDataStoreStatus,
+  readBackgroundActivity = listBackgroundActivity,
+  acknowledgeIncident = acknowledgeDataStoreIncident,
   onCheckWebuiBuild = async () => {},
   unavailableNoticeDelayMs = SERVER_UNAVAILABLE_NOTICE_DELAY_MS,
   restoredNoticeDurationMs = SERVER_RESTORED_NOTICE_DURATION_MS,
 }) {
   let sessionInvalidationSequence = state.sessionInvalidations?.at(-1)?.id ?? 0;
+  let destroyed = false;
+  let activityRevision = 0;
+  let dataStoreRevision = 0;
+  let pendingAcknowledgement = null;
   // Run events bypass `state`: copying a window of them into reactive state
   // on every event made each one cost the whole window.
   const runEvents = createRunEventFeed();
   let unavailableNoticeTimer = null;
   let restoredNoticeTimer = null;
+
+  async function loadBackgroundActivity() {
+    const revision = ++activityRevision;
+    try {
+      const result = await readBackgroundActivity();
+      if (destroyed || revision !== activityRevision) return;
+      state.backgroundActivity = Array.isArray(result?.activities)
+        ? result.activities
+        : [];
+    } catch {
+      // Preserve the last snapshot until another push or connection succeeds.
+    }
+  }
+
+  function applyDataStoreStatus(result) {
+    state.dataStoreIncident = result?.incidents?.[0] ?? null;
+    state.secretStore = result?.secrets ?? null;
+  }
+
+  async function loadDataStoreStatus() {
+    const revision = ++dataStoreRevision;
+    // A read triggered by the acknowledgement's invalidation must observe
+    // its completed mutation, not race its response with an older snapshot.
+    if (pendingAcknowledgement) await pendingAcknowledgement.catch(() => {});
+    if (destroyed || revision !== dataStoreRevision) return;
+    try {
+      const result = await readDataStoreStatus();
+      if (destroyed || revision !== dataStoreRevision) return;
+      applyDataStoreStatus(result);
+    } catch {
+      // A transient read failure must not erase a durable recovery notice.
+    }
+  }
+
+  function acknowledgeDataStoreRecovery() {
+    if (pendingAcknowledgement) return pendingAcknowledgement;
+    const incidentId = state.dataStoreIncident?.incident_id;
+    if (destroyed || !incidentId) return Promise.resolve();
+    // Invalidate reads already in flight; later reads wait for this write.
+    dataStoreRevision += 1;
+    pendingAcknowledgement = Promise.resolve()
+      .then(() => acknowledgeIncident(incidentId))
+      .then((result) => {
+        if (!destroyed) applyDataStoreStatus(result);
+      })
+      .finally(() => {
+        pendingAcknowledgement = null;
+      });
+    return pendingAcknowledgement;
+  }
+
   function clearConnectionTimers() {
     if (unavailableNoticeTimer) {
       clearTimeout(unavailableNoticeTimer);
@@ -209,6 +271,7 @@ export function createAppController({
   }
 
   async function handleServerEvent(event) {
+    if (destroyed) return;
     if (event.type === 'app_error') {
       onAppError(event.payload?.message ?? '');
       return;
@@ -225,8 +288,8 @@ export function createAppController({
         event.session_activity,
       );
       const refreshOwners = [
-        onLoadDataStoreStatus,
-        onLoadBackgroundActivity,
+        loadDataStoreStatus,
+        loadBackgroundActivity,
         onReloadExtensionPages,
         onCheckWebuiBuild,
       ];
@@ -303,6 +366,7 @@ export function createAppController({
       return;
     }
     if (event.type === 'activity_status') {
+      activityRevision += 1;
       const activities = event.payload?.activities;
       state.backgroundActivity = Array.isArray(activities) ? activities : [];
       return;
@@ -324,7 +388,7 @@ export function createAppController({
       }
     }
     if (kind === RESOURCE_KIND_DATA_STORE) {
-      await onLoadDataStoreStatus();
+      await loadDataStoreStatus();
     }
     if (kind === 'agents') {
       const scope = event.payload?.scope ?? {};
@@ -425,11 +489,13 @@ export function createAppController({
   }
 
   function destroy() {
+    destroyed = true;
     disconnect(state.connectionState);
     clearConnectionTimers();
   }
 
   return {
+    acknowledgeDataStoreRecovery,
     connectServerEvents,
     destroy,
     handleConnectionStatusChange,

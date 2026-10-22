@@ -12,7 +12,35 @@ far enough, or where repeated work grows with unrelated historical data.
 
 There are eleven new findings and one previously recorded capacity decision.
 They do not establish a need for a general rewrite, a different database, or
-additional service layers. No application changes were made by this review.
+additional service layers. No application changes were made by the original review.
+
+## Implementation and integration follow-up
+
+The user selected state correctness, blocking I/O and test-gate fixes, then
+authorized their merge. The fixes were combined with performance checkpoint
+`22a5d1840` and verified together before landing. This section records that
+implementation separately from the original evidence below.
+
+| Finding | Implemented protection |
+| --- | --- |
+| BP01 | Archive compensation abandons a recovery entry only after strict checks confirm that no payload remains. Inaccessible paths retain the entry for recovery. |
+| BP02 | The App controller orders activity/status reads, activity pushes and recovery acknowledgement together; superseded or post-teardown results cannot restore stale state. |
+| BP03 | Live Extension reload discovery, imports, synchronous registration and page-path resolution use a bounded loader worker. Attachment downloads use the existing store worker pool for metadata/blob checks. Async Extension registration and publication stay on the Event Loop. |
+| BP05 | CI and local push verification install the platform's hashed server runtime lock plus a hashed test-only overlay in an isolated environment. Shared Windows Desktop pins also constrain the overlay; input fingerprints reject stale locks. |
+| BP06 | Native push, WSL and CI retain the first suite failure even when a diagnostic isolated retry passes. |
+
+The combined state passed 418 targeted backend tests in the locked Windows
+environment and 247 WebUI tests. These cover the new worker measurements and
+cancellation contracts, Extension reloads, shared Skill rescans, Archive recovery,
+Attachment downloads, App state ordering, reconnect/history handling and the
+optimized Chat/Swarm timeline. Independent reviews found no integration conflict.
+The gate implementation also passed 64 development-tooling tests, an isolated
+installation with `pip check`, and exact comparison of all 117 installed dependency
+pins. Controlled native and shell probes confirm that a successful retry retains
+the original failing result. No package versions changed in the five runtime
+locks. The complete GitHub/WSL suites remain for the subsequent push flow.
+Initial synchronous Runtime bootstrap and per-Extension callback capacity (BP04)
+are outside this change. Other findings below remain separate work.
 
 ## Scope and evidence
 
