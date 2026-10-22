@@ -11,6 +11,10 @@ export default Object.freeze({
     'The Extension request timed out. Refresh to try again.',
   'extensions.page.responseTooLarge':
     'The answer is too large for this Extension page.',
+  'extensions.page.reloaded':
+    'The Extension page was reloaded before the request finished.',
+  'extensions.page.disposed':
+    'The Extension page was closed before the request finished.',
   'extensions.inputWaiting': '{count} Extension requests need your response.',
   'extensions.inputWaitingOne': 'An Extension request needs your response.',
   'extensions.reviewInput': 'Review request',
