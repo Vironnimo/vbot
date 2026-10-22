@@ -24,7 +24,7 @@ import asyncio
 import contextlib
 import html
 import socket
-from collections.abc import AsyncIterator, Awaitable, Callable, MutableMapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, MutableMapping
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote, unquote_plus
 
@@ -50,6 +50,9 @@ PORTAL_COOKIE_PREFIX = "vbot_portal_"
 #: WebSocket close code for a Portal request without its credential.
 WEBSOCKET_PRIVATE = 4401
 _CONNECT_TIMEOUT_SECONDS = 5.0
+_POOL_TIMEOUT_SECONDS = 10.0
+# How long closing all Portals waits for their requests to end before cancelling.
+_CLOSE_TIMEOUT_SECONDS = 5.0
 _WAITING_REFRESH_SECONDS = 2
 _HOP_BY_HOP = frozenset(
     {
@@ -99,7 +102,11 @@ class PortalServer:
         self.own_ports = frozenset({own_port})
         self._listeners: dict[str, _Listener] = {}
         self._client = httpx.AsyncClient(
-            timeout=httpx.Timeout(None, connect=_CONNECT_TIMEOUT_SECONDS),
+            # A finite pool wait: with every connection busy, a request fails
+            # instead of waiting for good.
+            timeout=httpx.Timeout(
+                None, connect=_CONNECT_TIMEOUT_SECONDS, pool=_POOL_TIMEOUT_SECONDS
+            ),
             follow_redirects=False,
             trust_env=False,
             transport=transport,
@@ -120,8 +127,14 @@ class PortalServer:
             listener.close()
 
     async def aclose(self) -> None:
+        tasks = [task for listener in self._listeners.values() for task in listener.tasks]
         for portal_id in list(self._listeners):
             self.close(portal_id)
+        # Requests in flight end as they see their connections close.
+        if tasks:
+            _done, stuck = await asyncio.wait(tasks, timeout=_CLOSE_TIMEOUT_SECONDS)
+            for task in stuck:
+                task.cancel()
         await self._client.aclose()
 
 
@@ -191,13 +204,22 @@ class _Listener:
             raise
         return cls(servers, state, port)
 
+    @property
+    def tasks(self) -> list[asyncio.Task[None]]:
+        """The requests and WebSockets in flight."""
+        return list(self._state.tasks)
+
     def close(self) -> None:
         for server in self._servers:
             server.close()
+        # Every connection ends now. A request in flight sees its browser leave
+        # and stops; cancelling its task instead would make uvicorn log a failed
+        # application. A TLS or unclassified connection closes in its shutdown.
         for connection in list(self._state.connections):
             connection.shutdown()
-        for task in list(self._state.tasks):
-            task.cancel()
+            transport = getattr(connection, "transport", None)
+            if transport is not None:
+                transport.close()
 
 
 class _PortalApp:
@@ -378,25 +400,43 @@ class _PortalApp:
         has_body = bool(_header_values(scope, b"transfer-encoding")) or any(
             value.strip() not in {b"", b"0"} for value in _header_values(scope, b"content-length")
         )
+        browser = _BrowserChannel(receive)
         request = client.build_request(
             str(scope.get("method") or "GET"),
             self._upstream_url(scope, query),
             headers=self._upstream_headers(scope),
-            content=_request_body(receive) if has_body else None,
+            content=browser.body() if has_body else None,
         )
+        # uvicorn ignores what is sent after the browser left, so without this
+        # watch an endless answer (an event stream) would hold its app connection
+        # and this task for good.
+        left = asyncio.ensure_future(browser.left(after_body=has_body))
         try:
-            response = await client.send(request, stream=True)
-        except httpx.ConnectError, httpx.ConnectTimeout:
-            self._server._registry.report_listening(self._portal_id, False)
-            await self._waiting(scope, send)
-            return
-        except httpx.HTTPError as exc:
-            _LOGGER.info(
-                "Portal request failed (id=%s error=%s)", self._portal_id, type(exc).__name__
-            )
-            await _plain(send, 502, "The app did not answer this request.")
-            return
-        self._server._registry.report_listening(self._portal_id, True)
+            try:
+                response = await _unless_left(left, client.send(request, stream=True))
+            except httpx.ConnectError, httpx.ConnectTimeout:
+                self._server._registry.report_listening(self._portal_id, False)
+                await self._waiting(scope, send)
+                return
+            except httpx.HTTPError as exc:
+                _LOGGER.info(
+                    "Portal request failed (id=%s error=%s)", self._portal_id, type(exc).__name__
+                )
+                await _plain(send, 502, "The app did not answer this request.")
+                return
+            if response is None:
+                return
+            self._server._registry.report_listening(self._portal_id, True)
+            try:
+                await _unless_left(left, self._relay(response, send))
+            finally:
+                await response.aclose()
+        finally:
+            left.cancel()
+            await asyncio.gather(left, return_exceptions=True)
+
+    async def _relay(self, response: httpx.Response, send: Send) -> None:
+        """Send the app's answer to the browser as it arrives."""
         try:
             await send(
                 {
@@ -412,8 +452,6 @@ class _PortalApp:
         except httpx.HTTPError:
             # The app broke off its answer; the browser sees a cut-off response.
             await send({"type": "http.response.body", "body": b""})
-        finally:
-            await response.aclose()
 
     async def _waiting(self, scope: Scope, send: Send) -> None:
         if not _wants_page(scope):
@@ -589,16 +627,50 @@ async def _plain(send: Send, status: int, message: str) -> None:
     await send({"type": "http.response.body", "body": body})
 
 
-async def _request_body(receive: Receive) -> AsyncIterator[bytes]:
-    while True:
-        message = await receive()
-        if message["type"] == "http.disconnect":
-            return
-        body = message.get("body") or b""
-        if body:
-            yield body
-        if not message.get("more_body", False):
-            return
+class _BrowserChannel:
+    """What one HTTP request receives from the browser: its body, then its leaving."""
+
+    def __init__(self, receive: Receive) -> None:
+        self._receive = receive
+        self._body_read = asyncio.Event()
+
+    async def body(self) -> AsyncIterator[bytes]:
+        try:
+            while True:
+                message = await self._receive()
+                if message["type"] == "http.disconnect":
+                    return
+                body = message.get("body") or b""
+                if body:
+                    yield body
+                if not message.get("more_body", False):
+                    return
+        finally:
+            self._body_read.set()
+
+    async def left(self, *, after_body: bool) -> None:
+        """Return once the browser is gone; with *after_body*, listen only once it is read.
+
+        uvicorn also answers ``http.disconnect`` once the response is complete;
+        by then the forwarding has finished.
+        """
+        if after_body:
+            await self._body_read.wait()
+        while (await self._receive())["type"] != "http.disconnect":
+            pass
+
+
+async def _unless_left[T](left: asyncio.Future[None], work: Coroutine[Any, Any, T]) -> T | None:
+    """The result of *work*, or ``None`` when the browser left first, which cancels it."""
+    task = asyncio.ensure_future(work)
+    waiting: set[asyncio.Future[Any]] = {task, left}
+    try:
+        await asyncio.wait(waiting, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+    return None if task.cancelled() else task.result()
 
 
 def _wants_page(scope: Scope) -> bool:

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, cast, override
@@ -197,6 +198,61 @@ async def test_a_portal_bridges_websockets_and_waits_for_an_app_that_is_not_up()
     assert waiting.status_code == 502
     assert '<meta http-equiv="refresh"' in waiting.text and str(app_port) in waiting.text
     assert listening is not None and listening.listening is False
+
+
+@pytest.mark.asyncio
+async def test_an_endless_answer_ends_when_the_browser_leaves_or_the_portal_closes(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    ended: asyncio.Queue[None] = asyncio.Queue()
+
+    class _Events(httpx.AsyncByteStream):
+        """An event stream that sends one event and then stays open."""
+
+        @override
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            try:
+                yield b"data: first\n\n"
+                await asyncio.get_running_loop().create_future()
+            finally:
+                ended.put_nowait(None)
+
+    def events(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=_Events())
+
+    delivery = FileDelivery()
+    access = AccessService(access_config("local"), local_token=None, bind_host="127.0.0.1")
+    registry, server = _portal_server(access, delivery, transport=httpx.MockTransport(events))
+    portal, _opened = await registry.open(_OWNER, target_port=5999, title="t", path="/")
+    request = (
+        f"GET /events HTTP/1.1\r\nHost: 127.0.0.1:{portal.listen_port}\r\n"
+        f"Cookie: vbot_portal_{portal.listen_port}={delivery.portal_token(portal.id)}\r\n\r\n"
+    ).encode()
+
+    async def first_event() -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+        reader, writer = await asyncio.open_connection("127.0.0.1", portal.listen_port)
+        writer.write(request)
+        await reader.readuntil(b"data: first")
+        return reader, writer
+
+    async with asyncio.timeout(5):
+        # The browser leaves: the app's stream, and its connection, end with it.
+        _reader, writer = await first_event()
+        writer.close()
+        await ended.get()
+        # The Portal closes while the browser still reads.
+        reader, writer = await first_event()
+        server.close(portal.id)
+        await ended.get()
+        # Its connection ends as well.
+        await reader.read()
+        assert reader.at_eof()
+        writer.close()
+    await registry.aclose()
+    await server.aclose()
+
+    # Neither end reads as a failed application.
+    assert [record for record in caplog.records if record.levelno >= logging.ERROR] == []
 
 
 @pytest.mark.asyncio
