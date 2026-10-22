@@ -10,6 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast, override
 
+from anyio.from_thread import BlockingPortal
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
 from core.automation.cron import CronFailureAlert, CronService
@@ -84,7 +85,7 @@ def test_core_change_callbacks_publish_server_events(tmp_path: Path) -> None:
 
     with TestClient(app) as client:
         # Trigger each change on the app's Event Loop, where core callbacks fire.
-        portal = client.portal
+        portal = cast(BlockingPortal | None, client.portal)
         assert portal is not None
         bus = app.state.event_bus
 
