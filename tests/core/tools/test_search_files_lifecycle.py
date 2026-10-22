@@ -25,6 +25,10 @@ from core.tools.search import SearchBudget
 from core.tools.tools import run_tool_worker
 from tests.core.tools.search_files_test_support import context, dispatch
 
+# A Windows venv launcher adds a child and keeps the inherited pipes open.
+# These stdlib-only search stand-ins need one process, just like ripgrep.
+_PYTHON = getattr(sys, "_base_executable", None) or sys.executable
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
@@ -95,7 +99,7 @@ async def test_retained_generator_or_error_does_not_retain_native_process(
 
     def launch(_command, **kwargs):
         script = "import sys; print('line'); sys.exit(2)" if finish == "error" else "print('line')"
-        process = original([sys.executable, "-c", script], **kwargs)
+        process = original([_PYTHON, "-c", script], **kwargs)
         created.append(threading.get_ident())
         weakref.finalize(process, lambda: finalized.append(threading.get_ident()))
         return process
@@ -161,7 +165,7 @@ async def test_native_cancellation_kills_in_worker(tmp_path, monkeypatch, when):
         launch_cancelled.set()
 
     def launch(_command, **kwargs):
-        process = original([sys.executable, "-c", script], **kwargs)
+        process = original([_PYTHON, "-c", script], **kwargs)
         children.append(weakref.ref(process))
         created.append(threading.get_ident())
         weakref.finalize(process, lambda: finalized.append(threading.get_ident()))
@@ -219,7 +223,7 @@ async def test_native_setup_failure_terminates_and_releases_child(tmp_path, monk
     starts = 0
 
     def launch(_command, **kwargs):
-        process = original([sys.executable, "-c", "import time; time.sleep(30)"], **kwargs)
+        process = original([_PYTHON, "-c", "import time; time.sleep(30)"], **kwargs)
         created.append(threading.get_ident())
         child_ids.append(process.pid)
         weakref.finalize(process, lambda: finalized.append(threading.get_ident()))
@@ -284,9 +288,7 @@ async def test_stdout_eof_does_not_disable_search_timeout(tmp_path, monkeypatch)
         return original_wait(process, *args, **kwargs)
 
     def launch(_command, **kwargs):
-        process = original(
-            [sys.executable, "-c", "import os,time; os.close(1); time.sleep(30)"], **kwargs
-        )
+        process = original([_PYTHON, "-c", "import os,time; os.close(1); time.sleep(30)"], **kwargs)
         weakref.finalize(process, lambda: finalized.append(threading.get_ident()))
         return process
 
@@ -308,7 +310,7 @@ def test_a_user_cancellation_kills_a_silent_child(tmp_path, monkeypatch):
     hooks = []
 
     def launch(_command, **kwargs):
-        child = original([sys.executable, "-c", "import time; time.sleep(30)"], **kwargs)
+        child = original([_PYTHON, "-c", "import time; time.sleep(30)"], **kwargs)
         children.append(child)
         return child
 
@@ -463,7 +465,7 @@ def test_child_memory_is_bounded_and_polled_at_an_interval(tmp_path, monkeypatch
             return SimpleNamespace(rss=Monitored.rss)
 
     def launch(_command, **kwargs):
-        return original([sys.executable, "-c", "for i in range(2000): print(i)"], **kwargs)
+        return original([_PYTHON, "-c", "for i in range(2000): print(i)"], **kwargs)
 
     monkeypatch.setattr("core.tools._search_native.subprocess.Popen", launch)
     monkeypatch.setattr("core.tools._search_native.psutil.Process", Monitored)

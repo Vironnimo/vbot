@@ -25,6 +25,9 @@ from core.tools.process_tree import (
 
 # Real processes: the contract is the operating system's. Each root waits for a
 # line before it starts children, so the tracker is in place first.
+# A Windows venv launcher adds another process; these stdlib-only children must
+# run directly so the root and its direct child are the processes under test.
+_PYTHON = getattr(sys, "_base_executable", None) or sys.executable
 
 # The survivor works briefly before it sleeps: on POSIX only running members
 # count towards the CPU time, which the kernel charges in clock ticks.
@@ -55,7 +58,7 @@ sys.stdin.readline()
 @contextlib.contextmanager
 def _tracked_root(script: str) -> Iterator[tuple[subprocess.Popen[str], ProcessTree]]:
     root = subprocess.Popen(
-        [sys.executable, "-c", script],
+        [_PYTHON, "-c", script],
         stdin=subprocess.PIPE,
         text=True,
         start_new_session=os.name != "nt",
@@ -152,7 +155,7 @@ def test_tree_records_the_exit_code_of_a_failed_direct_child() -> None:
         _start_children(root)
         facts = _first_facts(tree, lambda facts: bool(facts.nonzero_exits))
         assert [(failure.name, failure.exit_code) for failure in facts.nonzero_exits] == [
-            (os.path.basename(sys.executable), 5)
+            (os.path.basename(_PYTHON), 5)
         ]
 
 
