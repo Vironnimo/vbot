@@ -26,9 +26,11 @@ class _Listeners:
 
     def __init__(self) -> None:
         self.next_port = 41000
+        self.opened: list[str] = []
         self.closed: list[str] = []
 
-    async def open(self, _portal_id: str, _target_port: int) -> int:
+    async def open(self, portal_id: str, _target_port: int) -> int:
+        self.opened.append(portal_id)
         self.next_port += 1
         return self.next_port
 
@@ -156,6 +158,31 @@ async def test_archiving_sessions_closes_only_their_portals() -> None:
     assert changed == [archived, kept, archived]
     await portals.aclose()
     assert listeners.closed == [gone.id, stays.id]
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_open_leaves_no_listener_behind() -> None:
+    probing = asyncio.Event()
+
+    async def probe(_port: int) -> bool:
+        probing.set()
+        await asyncio.Event().wait()
+        return True
+
+    portals = PortalRegistry(probe=probe)
+    listeners = _Listeners()
+    portals.attach(listeners)
+    owner = SessionAddress(None, "coder", "current")
+    opening = asyncio.ensure_future(portals.open(owner, target_port=5173, title="t", path="/"))
+    await probing.wait()
+
+    opening.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await opening
+
+    assert listeners.closed == listeners.opened != []
+    assert portals.list(owner) == []
+    await portals.aclose()
 
 
 @pytest.mark.asyncio

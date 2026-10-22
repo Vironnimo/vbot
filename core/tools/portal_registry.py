@@ -175,7 +175,12 @@ class PortalRegistry:
                 raise PortalError("limit", f"vBot already has {MAX_PORTALS} portals open")
             portal_id = self._new_id()
             listen_port = await listeners.open(portal_id, target_port)
-            listening = await self._probe(target_port)
+            try:
+                listening = await self._probe(target_port)
+            except BaseException:
+                # No record names the listener yet; a cancelled open must not leak it.
+                listeners.close(portal_id)
+                raise
             portal = Portal(
                 portal_id, owner, title, path, target_port, listen_port, listening=listening
             )
