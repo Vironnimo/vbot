@@ -34,6 +34,7 @@ from core.tools._read_text import (
     render_text_page,
     render_text_path,
 )
+from core.tools._refused_notes import listing_note
 from core.tools._swarm_references import wiki_page_call
 from core.tools.arguments import optional_int, split_text_lines
 from core.tools.contracts import ToolContractError
@@ -528,7 +529,7 @@ def _list_directory(
 ) -> JsonObject:
     """List a directory's entries; reading a directory never counts as reading a file.
 
-    Entries the permission rules refuse to read are left out and counted.
+    Entries the permission rules refuse to read are left out and named in a note.
     """
     try:
         with os.scandir(resolved) as scan:
@@ -540,13 +541,26 @@ def _list_directory(
         page = render_directory_listing(readable, arguments, label)
     except ValueError as error:
         return tool_failure("invalid_arguments", str(error))
-    hidden = len(entries) - len(readable)
+    kept = {entry.path for entry in readable}
+    # Folders first: when the note counts the rest, it still names what holds the most.
+    hidden = sorted(
+        (_entry_label(entry) for entry in entries if entry.path not in kept),
+        key=lambda name: (not name.endswith("/"), name.casefold()),
+    )
     if hidden:
-        noun = "entry is" if hidden == 1 else "entries are"
-        note = f"[{hidden} {noun} not listed: the permission rules refuse reading them.]"
+        note = listing_note(hidden)
         content = "\n".join((page.content, note)) if readable else note
         page = replace(page, content=content)
     return tool_success(page.data())
+
+
+def _entry_label(entry: os.DirEntry[str]) -> str:
+    """The entry's name as the listing shows it: a directory ends with ``/``."""
+    try:
+        directory = entry.is_dir()
+    except OSError:
+        directory = False
+    return f"{entry.name}/" if directory else entry.name
 
 
 def _directory_search_message(arguments: JsonObject, label: str) -> str:

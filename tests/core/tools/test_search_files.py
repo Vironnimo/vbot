@@ -931,17 +931,18 @@ def test_a_restricted_search_leaves_out_what_the_rules_refuse(
     full = json.dumps(search(work, **arguments))
 
     assert result["ok"], result
+    note = result["data"].pop("note")
     restricted = json.dumps(result["data"])
     assert "src" in restricted
     assert "secrets" in full
     for refused in ("secrets", ".key", "o.txt", "draft"):
         assert refused not in restricted
     assert ("KEY" in restricted) is (sys.platform != "win32")
-    if "--dirs" not in arguments.get("args", []):
-        # Like a read listing, the result says that the rules left paths out.
-        assert "permission rules refuse to read are left out" in result["data"]["note"]
+    # Like a read listing, the note names what the rules left out, as the rules write it.
+    assert "src/secrets/**" in note and "the permission rules refuse reading them" in note
+    assert ("src/**/*.key" if "path" in arguments else "**/*.key") in note
     if "-L" in arguments.get("args", []):
-        assert "links" in result["data"]["note"]
+        assert "links" in note
 
 
 def test_a_restricted_search_counts_only_the_files_it_may_read(tmp_path: Path) -> None:

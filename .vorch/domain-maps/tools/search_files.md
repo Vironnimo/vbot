@@ -648,10 +648,14 @@ argument and no check.
   translate into globs (a backslash, or `**` for the whole root). So
   `files_searched` counts only permitted files; the filter also subtracts the
   entries it removes from it.
-- When the rules could refuse something below a searched root, the result's
-  `note` says so once, without a count: what an excluding glob kept ripgrep from
-  reading is never touched, so the search cannot tell whether anything was there
-  (a read listing counts its hidden entries, because it reads the folder anyway).
+- When the rules could refuse something below a searched folder, the result's
+  `note` names it once, in every mode (`--dirs` included), without a count: the
+  deny rules' parts relative to the working directory, spelled as the rules
+  write them, and protected locations only as `vBot's own files`
+  (`PermissionBoundary.refused_below`, `_left_out_note`). What an excluding glob
+  kept ripgrep from reading is never touched, so the search cannot tell whether
+  anything was there (a read listing names its hidden entries, because it reads
+  the folder anyway).
 - Open: ripgrep still reads ignore files of parent directories and the global
   gitignore; a no-match count still includes refused files whose pattern holds
   a backslash (POSIX only).
@@ -720,7 +724,7 @@ blank placeholders, so no sentence has to warn about them.
 | Warnings for unreadable files: `Could not read <path>: <reason>.` for the first five, then `Could not read 395 more paths.` | Swarm run 2026-10-20: a search beside a browser profile in use failed over its locked files and the Agent switched to a shell listing (one call; Diagnostics). The results stay; the names show where the unread files are, the count says how many without filling every warning slot with paths (F4, F6). |
 | Warning for any other diagnostic of a search that ran: `ripgrep reported: <message>.` | Such a message used to fail the whole search, results included; as a warning it keeps them and marks the result incomplete (F4; Swarm run 2026-10-20, one call). |
 | `-L (--follow) was ignored: under the permission rules, search_files does not follow links.` | The search ran without the flag the Agent sent; the note names the reason, so the Agent neither repeats it nor reads missing linked files as absent (F4). |
-| `Paths the permission rules refuse to read are left out of this search.` | Results that silently omit denied or protected paths read as the whole tree, as a read listing would without its count; the note keeps the Agent from concluding that a file is absent or hunting for it through the shell (F4; review 2026-10-21). Only when the rules could refuse something below a searched root. |
+| `Left out of this search: src/secrets/**, **/*.key and vBot's own files - the permission rules refuse reading them.` | Results that silently omit denied or protected paths read as the whole tree; the note keeps the Agent from concluding that a file is absent or hunting for it through the shell (F4; review 2026-10-21). It names the parts: under the former `Paths the permission rules refuse to read are left out of this search.` an Agent never learned that a refused `secrets/` existed and told the user the project had no API key (eval 2026-10-22). The parts are the deny rules the System Prompt lists, in their spelling; protected locations stay unnamed, since the System Prompt names no path of vBot's own. Up to five parts, the rest counted. Only when the rules could refuse something below a searched folder. |
 | Unknown refusal: `ripgrep refused the search:` / `<message>` / `Nothing was searched. Correct the call as that message says; {"args": ["--help"]} lists the accepted flags.` | Replaces `<message>` / `Nothing was searched.`, which gave no next step; in the Swarm run of 2026-10-20 its message was a cut path fragment, which read like nothing at all (F5). |
 | Failure without a message: `The search engine failed without giving a reason. Nothing was searched. Retry the call.` | Replaces `search_files could not complete the search: the search engine exited with code 2. Retry the call.` / `Nothing was searched.`, which ran together two endings and named an exit code the Agent cannot act on (F5). |
 

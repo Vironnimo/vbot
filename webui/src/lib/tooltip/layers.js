@@ -133,6 +133,18 @@ function insideOpenLayer(node) {
   return openLayers.some((layer) => isInside(layer.element, node));
 }
 
+// Whether `node` lies in an open layer anchored inside `element`, such as the
+// info popover of a "?" in a hover card. Such a layer is portaled out of
+// `element`, yet for the pointer it is part of `element`.
+function insideNestedLayer(element, node) {
+  return openLayers.some(
+    (layer) =>
+      layer.element !== element &&
+      isInside(element, layer.anchor) &&
+      isInside(layer.element, node),
+  );
+}
+
 function registerOpenLayer(layer) {
   for (const other of [...openLayers]) {
     if (
@@ -336,6 +348,9 @@ function pointerPoint(event) {
  * coordinates fall back to FLOATING_HOVER_CLOSE_DELAY_MS. A text selection
  * inside the layer keeps it open, so a dragged selection survives crossing
  * the edge and can still be copied; an outside press or Escape ends it.
+ * An open layer anchored inside this one (an info popover in a card) counts
+ * as part of it: the pointer may rest on that layer and return, and the exit
+ * closes once the pointer moves on from it to anywhere else.
  *
  * `leave(event, towards)` starts the exit (`towards` is 'layer' or
  * 'anchor'); `cancel()` stops it when the pointer re-enters either region.
@@ -343,11 +358,22 @@ function pointerPoint(event) {
 export function createHoverExit({ anchor, element, onClose }) {
   let closeTimer = null;
   let corridor = null;
+  // The pointer rests on a nested layer: no corridor applies until it moves on.
+  let held = false;
 
   function stopCorridor() {
-    if (corridor) {
+    if (corridor || held) {
       corridor = null;
+      held = false;
       window.removeEventListener('pointermove', onPointerMove, true);
+    }
+  }
+
+  function hold() {
+    corridor = null;
+    if (!held) {
+      held = true;
+      window.addEventListener('pointermove', onPointerMove, true);
     }
   }
 
@@ -367,6 +393,20 @@ export function createHoverExit({ anchor, element, onClose }) {
   }
 
   function onPointerMove(event) {
+    if (insideNestedLayer(element(), event.target)) {
+      hold();
+      return;
+    }
+    if (held) {
+      // Back on the layer or its anchor, whose pointerenter cancels the exit.
+      if (
+        !isInside(element(), event.target) &&
+        !isInside(anchor(), event.target)
+      ) {
+        close();
+      }
+      return;
+    }
     const point = pointerPoint(event);
     if (point && !pointInCorridor(point, corridor)) {
       close();
@@ -376,6 +416,10 @@ export function createHoverExit({ anchor, element, onClose }) {
   return {
     leave(event, towards) {
       cancel();
+      if (insideNestedLayer(element(), event.relatedTarget)) {
+        hold();
+        return;
+      }
       const point = pointerPoint(event);
       if (!point) {
         closeTimer = setTimeout(close, FLOATING_HOVER_CLOSE_DELAY_MS);

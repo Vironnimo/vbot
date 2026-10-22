@@ -516,6 +516,23 @@ def test_refusable_below_names_what_may_be_refused_under_a_folder(
     assert PermissionBoundary.UNRESTRICTED.refusable_below(path, access) == ()
 
 
+def test_refused_below_spells_deny_rules_as_written_and_only_flags_protected_locations(
+    area: Area,
+) -> None:
+    boundary = area.boundary({"deny": ["Read({workdir}/Secrets/**)", "Read({workdir}/**/.Env)"]})
+    work = area.work.relative_to(area.root).as_posix()
+
+    below_root = boundary.refused_below(area.root, "read")
+    below_work = boundary.refused_below(area.work, "read")
+
+    # Tool results name the rules' parts as the System Prompt lists the rules, in
+    # their own letter case; vBot's data directory below the root only as a flag.
+    assert below_root.rules == (f"{work}/Secrets/**", f"{work}/**/.Env")
+    assert below_root.protected
+    assert below_work.rules == ("Secrets/**", "**/.Env") and not below_work.protected
+    assert not PermissionBoundary.UNRESTRICTED.refused_below(area.root, "read")
+
+
 def test_readable_entries_leave_out_refused_names_and_links_leading_out(area: Area) -> None:
     (area.work / "notes.txt").write_text("x", encoding="utf-8")
     link_directory(area.work / "elsewhere", area.outside)

@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from core.permissions import PermissionBoundary, PermissionDenied
-from core.tools._path_suggestions import corrected_paths
+from core.tools._path_suggestions import corrected_paths, refused_note
 from core.tools._search_query import (
     SearchArgumentError,
     SearchQuery,
@@ -295,11 +295,12 @@ def _missing_root_message(
     page = wiki_page_call(root, cwd, offers, fields={"query": patterns[0]} if plain else None)
     message = f"Path not found: {path_label(root, cwd)}"
     suggestions = corrected_paths(root, cwd, permissions=permissions)
+    refused = refused_note(root, cwd, permissions, also=bool(suggestions))
     if suggestions:
         message += f" (similar: {', '.join(path_label(path, cwd) for path in suggestions)})"
     elif page:
-        return f"{path_label(root, cwd)} is not a file or directory. {page}"
+        return f"{path_label(root, cwd)} is not a file or directory.{refused} {page}"
     elif not Path(raw).expanduser().is_absolute():
         # Agents pass paths relative to another directory than the one search_files uses.
         message += f" (relative to the working directory {cwd.as_posix()})"
-    return f"{message}. {page}" if page else message + "."
+    return f"{message}.{refused} {page}" if page else f"{message}.{refused}"

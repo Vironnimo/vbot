@@ -511,15 +511,12 @@ class SearchExecution:
         self.cwd = cwd
         self.permissions = context.permissions
         self._confinements: dict[tuple[Path, tuple[str, ...]], Confinement] = {}
-        # Whether the permission rules left something below a searched folder out.
-        self.confined = False
 
     def _confinement(self, scope: Scope) -> Confinement:
         """The excluding globs and path filter of ``scope`` under the Run's rules."""
         key = (scope.cwd, tuple(scope.paths))
         if key not in self._confinements:
             self._confinements[key] = scope_confinement(scope, self.permissions)
-            self.confined = self.confined or self._confinements[key].filtered
         return self._confinements[key]
 
     def _judged(self, outcome: NativeOutcome, scope: Scope) -> ScanResult:

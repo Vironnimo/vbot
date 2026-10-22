@@ -195,23 +195,27 @@
     >
       <div class="app-tooltip__title">{t('permissions.session.title')}</div>
       <div class="app-tooltip__text">{t('permissions.session.text')}</div>
-      <dl class="app-tooltip__rows">
-        {#each rows as row, index (index)}
-          <dt class="app-tooltip__label">{row.label}</dt>
-          <dd class="app-tooltip__value">
-            {#each row.items as item, position (position)}
-              {#if position > 0}{SEPARATOR}{/if}<span
-                class:app-tooltip__mono={item.mono}>{item.text}</span
-              >
-            {/each}
-          </dd>
-        {/each}
-      </dl>
-      {#if namesScratch}
-        <p class="session-permissions-card__note">
-          {t('permissions.preview.scratch', { scratch: SCRATCH })}
-        </p>
-      {/if}
+      <!-- Only the rows scroll: the limits of the checks and the action stay
+           in view on a short window. -->
+      <div class="session-permissions-card__body">
+        <dl class="app-tooltip__rows">
+          {#each rows as row, index (index)}
+            <dt class="app-tooltip__label">{row.label}</dt>
+            <dd class="app-tooltip__value">
+              {#each row.items as item, position (position)}
+                {#if position > 0}{SEPARATOR}{/if}<span
+                  class:app-tooltip__mono={item.mono}>{item.text}</span
+                >
+              {/each}
+            </dd>
+          {/each}
+        </dl>
+        {#if namesScratch}
+          <p class="session-permissions-card__note">
+            {t('permissions.preview.scratch', { scratch: SCRATCH })}
+          </p>
+        {/if}
+      </div>
       <p
         class="session-permissions-card__note session-permissions-card__limits"
       >
@@ -286,11 +290,24 @@
      <body>; its title, text and rows use the details-card styles of the
      quick tooltip, so the limits read as they did there. */
   .session-permissions-card.floating-card {
+    display: flex;
+    flex-direction: column;
     width: min(360px, calc(100vw - 16px));
     max-width: min(360px, calc(100vw - 16px));
+    overflow: hidden;
     font-size: var(--fs-label-sm);
     line-height: 1.4;
     user-select: text;
+  }
+  .session-permissions-card__body {
+    flex: 0 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .session-permissions-card__limits,
+  .session-permissions-card__footer {
+    flex-shrink: 0;
   }
   .session-permissions-card__note {
     margin: 6px 0 0;
