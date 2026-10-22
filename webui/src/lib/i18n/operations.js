@@ -601,6 +601,12 @@ export default Object.freeze({
   'cron.delivery.checkedRetry': 'Chat checked — retry delivery',
   'cron.delivery.retry': 'Retry delivery now',
   'cron.delivery.retryError': 'Could not retry delivery',
+  'cron.delivery.dropped':
+    '{count} older messages were dropped unsent because too many were waiting. The next sent message says so.',
+  'cron.alert.unread': 'Unread alert',
+  'cron.alert.at': 'Alert from {time}',
+  'cron.alert.acknowledge': 'Mark as read',
+  'cron.alert.acknowledgeError': 'Could not mark the alert as read',
   'cron.detail.lastAnswer': 'Last answer',
   'cron.detail.target': 'Target',
   'cron.detail.newSessionEachRun': 'New Session each Run',
@@ -763,6 +769,8 @@ export default Object.freeze({
   'cron.form.deliveryChannelPlaceholder': 'Select a Channel',
   'cron.form.deliveryChannelNone':
     'No Channel belongs to this Agent. Connect one in Settings under Channels.',
+  'cron.form.deliveryChatProject':
+    'A Project Agent has no Channels, so its answers cannot go to a chat. Choose vBot or Nowhere.',
   'cron.form.deliveryChat': 'Chat ID',
   'cron.form.deliveryChatPlaceholder': 'Chat ID',
   'cron.form.deliveryChatHelp':

@@ -35,7 +35,7 @@ User decision 2026-10-20 (`.vorch/plans/cron-proactive-automation.md`, decision 
 ## Check failures
 
 - A `WatchCheckError` (its message names what failed, without a final period) or an unexpected error ("The check could not run: ...", logged ERROR with traceback) fails the check: `last_checked_at` and `last_check_error` are recorded, and `consecutive_failures` counts it like a failed Run, with the same five-failure stop (`cron.md` -> Execution health). Errors are masked before storage or alerts; logs carry identifiers and error stacks without command output or raw exception messages. WARNING `Cron watch check failed (job=... failures=... first=...)`.
-- Alerts follow the Run failure alerts (`cron.md` -> Delivery) with `check=True`: the alert's error is `last_check_error`, the stop text says `failures in a row`, and the second-failure text says the job keeps checking on schedule. A `chat` job gets them; an `app` job has no failed Run to mark, so its alerts reach the tray as `cron_failure_alert` (`cron.md` -> Delivery); `none` sends nothing.
+- Alerts follow the Run failure alerts (`cron.md` -> Delivery) with `check=True`: the alert's error is `last_check_error`, the stop text says `failures in a row`, and the second-failure text says the job keeps checking on schedule. A `chat` job gets them; an `app` job has no failed Run to mark, so its alerts are stored as the job's `unread_alert` and reach the tray as `cron_failure_alert` (`cron.md` -> Delivery); `none` sends nothing. A successful check that ends the streak clears a `failure` unread alert.
 
 ## Check runner (`core/tools/watch_checks.py`)
 

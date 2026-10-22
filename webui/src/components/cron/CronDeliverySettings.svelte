@@ -3,6 +3,7 @@
   // and, for a chat, the Channel, chat and optional thread.
   import { t } from '$lib/i18n.js';
   import { CRON_DELIVERY_CHAT } from '$lib/cronView.js';
+  import { parseAgentAddress } from '$lib/agentAddress.js';
   import { channelPlatformLabel } from '../settings/channels/controller.svelte.js';
   import { deliveryKindOptions } from './presentation.js';
   import TextField from '../ui/TextField.svelte';
@@ -12,10 +13,22 @@
   // `channels` are the Channels `channel.list` returned; only those of the
   // job's Agent are offered, since a job delivers only to its own Agent's chats.
   let { editor, channels = [] } = $props();
-  const deliveryKinds = deliveryKindOptions();
 
   let values = $derived(editor.formValues);
+  // Channels belong to Identity Agents, so a Project Agent's job cannot
+  // deliver to a chat; the server refuses it.
+  let isProjectTarget = $derived(
+    parseAgentAddress(values.agent_id).projectId !== null,
+  );
   let isChat = $derived(values.delivery_kind === CRON_DELIVERY_CHAT);
+  // A chat chosen before the target became a Project Agent stays shown, so
+  // the form says why it cannot be saved.
+  let deliveryKinds = $derived(
+    deliveryKindOptions().filter(
+      (option) =>
+        option.value !== CRON_DELIVERY_CHAT || !isProjectTarget || isChat,
+    ),
+  );
   let agentChannels = $derived(
     channels.filter((channel) => channel.agent_id === values.agent_id),
   );
@@ -67,6 +80,11 @@
           <label class="s-row-label" for="cron-job-delivery">
             {t('cron.form.delivery')}
           </label>
+          {#if isChat && isProjectTarget}
+            <div class="s-row-desc" data-testid="cron-delivery-chat-project">
+              {t('cron.form.deliveryChatProject')}
+            </div>
+          {/if}
         </div>
         <div class="s-row-control">
           <Dropdown
@@ -82,7 +100,7 @@
         </div>
       </div>
 
-      {#if isChat}
+      {#if isChat && !isProjectTarget}
         <div class="s-row">
           <div class="s-row-info">
             <label class="s-row-label" for="cron-job-delivery-channel">

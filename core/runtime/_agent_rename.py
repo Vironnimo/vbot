@@ -262,14 +262,18 @@ def _retarget_references(services: AgentRenameServices, rename: AgentRename) -> 
 
     Only non-terminal jobs that target the Identity Agent itself move: completed
     history stays as it ran, and a Project-qualified job targets that Project's
-    Team Agent. For a rename that completes at startup, before any owner has
-    started: each owner changes its stored references directly. Blocking.
+    Team Agent. The chat messages any job still holds for the Agent's Channels
+    move with those Channels, also in jobs that do not move. For a rename that
+    completes at startup, before any owner has started: each owner changes its
+    stored references directly. Blocking.
     """
     source, target = rename.source_id, rename.target_id
     channel_ids = services.channels.retarget_agent(source, target)
     cron_job_ids = _identity_job_ids(services.cron, source, TERMINAL_CRON_JOB_STATUSES)
     for job_id in cron_job_ids:
         services.cron.retarget_agent(job_id, target)
+    # Chat messages still waiting in other jobs follow the Agent's Channels too.
+    services.cron.retarget_notifications(source, target)
     bootstrap_job_ids = _identity_job_ids(services.bootstrap, source, TERMINAL_BOOTSTRAP_STATUSES)
     for job_id in bootstrap_job_ids:
         services.bootstrap.retarget_agent(job_id, target)
@@ -296,6 +300,7 @@ async def _retarget_on_loop(services: AgentRenameServices, rename: AgentRename) 
     cron_job_ids = _identity_job_ids(services.cron, source, TERMINAL_CRON_JOB_STATUSES)
     for job_id in cron_job_ids:
         await services.cron.retarget_agent_async(job_id, target)
+    await services.cron.retarget_notifications_async(source, target)
     bootstrap_job_ids = _identity_job_ids(services.bootstrap, source, TERMINAL_BOOTSTRAP_STATUSES)
     for job_id in bootstrap_job_ids:
         # Bootstrap changes its jobs synchronously on the Event Loop.

@@ -507,6 +507,14 @@
                       <span class="cron-item-name">
                         {job.name}
                       </span>
+                      {#if job.unread_alert}
+                        <span
+                          class="cron-item-alert"
+                          role="img"
+                          aria-label={t('cron.alert.unread')}
+                          data-testid={`cron-item-alert-${job.id}`}
+                        ></span>
+                      {/if}
                     </span>
                     <span class="cron-item-detail">
                       {listRowDetail(job, viewState.systemTimezone)}
@@ -745,6 +753,31 @@
                 {/if}
               </div>
 
+              {#if editor.selectedJob.unread_alert}
+                <!-- Stays until marked read, or the job's next success (or retried delivery). -->
+                <Banner
+                  variant="error"
+                  role="alert"
+                  data-testid="cron-unread-alert"
+                >
+                  <div>
+                    <p>{editor.selectedJob.unread_alert.message}</p>
+                    {#if editor.selectedJob.unread_alert.at_display}
+                      <p class="cron-alert-time">
+                        {t('cron.alert.at', {
+                          time: editor.selectedJob.unread_alert.at_display,
+                        })}
+                      </p>
+                    {/if}
+                  </div>
+                  <Button
+                    disabled={Boolean(editor.mutatingJobId)}
+                    onClick={() => editor.acknowledgeAlert(editor.selectedJob)}
+                  >
+                    {t('cron.alert.acknowledge')}
+                  </Button>
+                </Banner>
+              {/if}
               {#if editor.selectedJob.delivery_progress.waiting}
                 <Banner
                   variant={editor.selectedJob.delivery_progress.uncertain
@@ -763,6 +796,13 @@
                       <p>{t('cron.delivery.uncertain')}</p>
                     {:else if editor.selectedJob.delivery_progress.error}
                       <p>{editor.selectedJob.delivery_progress.error}</p>
+                    {/if}
+                    {#if editor.selectedJob.delivery_progress.dropped}
+                      <p>
+                        {t('cron.delivery.dropped', {
+                          count: editor.selectedJob.delivery_progress.dropped,
+                        })}
+                      </p>
                     {/if}
                   </div>
                   <Button

@@ -304,6 +304,16 @@ async def _cron_retry_delivery(state: Any, params: JsonObject) -> JsonObject:
         raise _map_expected_error(error) from error
 
 
+async def _cron_acknowledge_alert(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"id"}, "cron.acknowledge_alert")
+    job_id = _required_string(params, "id")
+    try:
+        job = await state.runtime.cron_service.acknowledge_alert(job_id, actor="rpc")
+    except Exception as error:
+        raise _map_expected_error(error) from error
+    return _cron_job_response(state.runtime.cron_service, job)
+
+
 async def _cron_disable(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"id"}, "cron.disable")
 
@@ -388,7 +398,11 @@ def _cron_job_response(cron_service: Any, job: Any) -> JsonObject:
         "last_run_silent": job.last_run_silent,
         # The latest answer that was not [SILENT]: text (at most 2,000 characters), at, run_id.
         "last_result": None if job.last_result is None else job.last_result.to_dict(),
-        "delivery_progress": job.delivery_progress(),
+        # Waiting and uncertain chat messages; ``dropped`` counts older ones dropped unsent,
+        # which the next sent message names.
+        "delivery_progress": {**job.delivery_progress(), "dropped": job.dropped_notifications},
+        # The latest alert no Run reports, {message, at, kind} until acknowledged; null for none.
+        "unread_alert": None if job.unread_alert is None else job.unread_alert.to_dict(),
         "last_error": job.last_error,
         # What the job checks before each run, {"command": ...} or {"url": ...}; null for none.
         "watch": None if job.watch is None else job.watch.to_dict(),
@@ -572,4 +586,5 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "cron.enable": _cron_enable,
         "cron.disable": _cron_disable,
         "cron.retry_delivery": _cron_retry_delivery,
+        "cron.acknowledge_alert": _cron_acknowledge_alert,
     }

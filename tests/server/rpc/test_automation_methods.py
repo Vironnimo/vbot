@@ -15,7 +15,14 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from core.automation import CronService
-from core.automation.cron import CronDelivery, CronJob, CronResult, CronWatch, WebhookStatus
+from core.automation.cron import (
+    CronAlert,
+    CronDelivery,
+    CronJob,
+    CronResult,
+    CronWatch,
+    WebhookStatus,
+)
 from core.projects import (
     AgentResolutionError,
     ResolutionAgentNotFoundError,
@@ -74,6 +81,7 @@ def _cron_state(cron_service: Any | None = None, *, resolver: Any | None = None)
             "enable_job",
             "disable_job",
             "retry_delivery",
+            "acknowledge_alert",
         ):
             setattr(cron_service, edit, AsyncMock())
     return SimpleNamespace(
@@ -467,7 +475,9 @@ async def test_cron_list_projects_each_job_with_its_next_fire_time() -> None:
                     "uncertain": 0,
                     "error": None,
                     "last_delivered_at": None,
+                    "dropped": 0,
                 },
+                "unread_alert": None,
                 "watch": {"command": "git log -1 --oneline"},
                 "last_checked_at": "2026-05-14T10:00:00+00:00",
                 "last_changed_at": "2026-05-14T09:55:00+00:00",
@@ -572,6 +582,23 @@ async def test_retry_delivery_only_retries_notifications() -> None:
     assert result["status"] == "completed"
     state.runtime.cron_service.retry_delivery.assert_awaited_once_with("job-1")
     state.runtime.cron_service.enable_job.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_jobs_unread_alert_is_returned_until_acknowledged() -> None:
+    state = _cron_state()
+    alert = CronAlert(message="Job failed twice.", at="2026-10-22T08:00:00.000000Z")
+    state.runtime.cron_service.list_jobs.return_value = [_cron_job(unread_alert=alert)]
+    listed = await rpc_result(state, "cron.list")
+    assert listed["jobs"][0]["unread_alert"] == {
+        "message": "Job failed twice.",
+        "at": "2026-10-22T08:00:00.000000Z",
+        "kind": "failure",
+    }
+    state.runtime.cron_service.acknowledge_alert.return_value = _cron_job()
+    result = await rpc_result(state, "cron.acknowledge_alert", id="job-1")
+    assert result["unread_alert"] is None
+    state.runtime.cron_service.acknowledge_alert.assert_awaited_once_with("job-1", actor="rpc")
 
 
 @pytest.mark.asyncio
