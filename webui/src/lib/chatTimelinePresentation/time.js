@@ -53,7 +53,8 @@ export function formatDurationMs(durationMs) {
     return '';
   }
   // Round to each unit's precision before choosing it, so 9.96 s reads 10s,
-  // not 10.0s, and 59.6 s reads 1m 0s, not 60s.
+  // not 10.0s, 59.6 s reads 1m 0s, not 60s, and 3 h 59 m 30 s reads 4h 0m
+  // (as Statistics does).
   const tenths = Math.round(durationMs / 100);
   if (tenths < 100) {
     return t('chat.durationSeconds', { seconds: (tenths / 10).toFixed(1) });
@@ -62,18 +63,16 @@ export function formatDurationMs(durationMs) {
   if (totalSeconds < 60) {
     return t('chat.durationSeconds', { seconds: totalSeconds });
   }
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  if (hours > 0) {
-    return t('chat.durationHoursMinutes', {
-      hours,
-      minutes,
+  if (totalSeconds < 3600) {
+    return t('chat.durationMinutesSeconds', {
+      minutes: Math.floor(totalSeconds / 60),
+      seconds: totalSeconds % 60,
     });
   }
-  return t('chat.durationMinutesSeconds', {
-    minutes,
-    seconds,
+  const totalMinutes = Math.round(durationMs / 60_000);
+  return t('chat.durationHoursMinutes', {
+    hours: Math.floor(totalMinutes / 60),
+    minutes: totalMinutes % 60,
   });
 }
 

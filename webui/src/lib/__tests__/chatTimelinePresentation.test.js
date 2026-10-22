@@ -217,6 +217,14 @@ describe('message presentation', () => {
         }),
     ],
     [
+      'a duration that rounds up to the next hour',
+      { durationMs: 14_370_000 },
+      () =>
+        t('chat.compactedWithTiming', {
+          duration: t('chat.durationHoursMinutes', { hours: 4, minutes: 0 }),
+        }),
+    ],
+    [
       'tokens without a known duration (reloaded History)',
       { contextTokensBefore: 254_224, contextTokensAfter: 40_289 },
       () => t('chat.compactedWithTokens', { before: '254k', after: '40k' }),
