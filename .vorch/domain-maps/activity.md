@@ -23,10 +23,10 @@ Not owned here: whether a Run counts toward Agent activity (`RunAdmission.contri
 ## Terms
 
 ### Work span
-From the confirmed leave of `idle` to the next confirmed `idle`, across all Runs and waiting time of the Session; reported as `work_started_at` and, with the move to `idle`, as `finished_work`. Not a Run's duration.
+The user-facing duration of a whole piece of work: from the confirmed leave of `idle` to the next confirmed `idle`, across all Runs and waiting time of the Session (Interfaces). Not a Run's duration.
 
 ### Pending wake
-Something that will start a Run in the Session by itself, without user input: a counted Sub-Agent, background command or held result (`waiting_for`). Not a Queue item, which makes the Session `working`.
+Something that will start a Run in the Session by itself, without user input: a counted Sub-Agent, background command or held result. Not a Queue item, which makes the Session `working`.
 
 ### Service command
 A background command one of whose processes listens on a TCP port; from then on it is no pending wake, though it still delivers its result when it ends (`tools/shell.md` -> CommandManager contract).

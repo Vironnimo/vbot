@@ -10,7 +10,7 @@ Programmatic Run triggering, time- and startup-based scheduling, background self
 
 ### Session Goal
 
-An objective the user sets for one Session with `/goal`. While it is active, the end of each completed Run starts the next automatic Run until the Agent marks it complete, blocked or paused with `update_goal` or the kernel pauses it. Not a Cron job or Bootstrap job: it has no schedule and lives in Session metadata.
+An objective the user sets for one Session, which automatic Runs pursue one after another until the Agent reports it complete, blocked or paused, or the kernel pauses it (`automation/goals.md`). Not a Cron job or Bootstrap job: it has no schedule and belongs to its Session.
 
 ## Interfaces
 

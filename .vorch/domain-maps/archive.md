@@ -21,18 +21,18 @@ A delete with `permanent: true` archives the same way, then purges exactly the e
 Core terms (Agent, Project, Session, Workspace, Archive Entry) live in `.vorch/GLOSSARY.md`.
 
 ### Payload
-The files of an entry under `<data-dir>/archive/`, recorded per tree in `archive_entry_trees` with a role (`agent`, `workspace`, `project`, `files`) and the `source_path` it came from.
+The files an archive entry holds under the data directory's `archive/` folder, recorded tree by tree with where each came from (Data Model; Payload layout and data snapshots).
 
 ### Purge
 The permanent deletion of an entry: its member Sessions, its recorded payload trees, then the entry row; manual, as part of a permanent delete, or by the retention sweep. Not the same as deleting a live resource, which archives it.
 
 ### Retention period
-How long an `archived` entry rests before the retention sweep purges it: the setting `archive.retention_days`, counted from the entry's `retention_start`. `null` keeps entries until they are purged by hand.
+How long an archived entry rests before the retention sweep purges it, counted from its retention start; it may be unlimited (Retention; `archive/purge-and-retention.md`).
 
 ## Data Model
 
 - Ids: the public `entry_id` is `arc_` plus 12 base32 characters; the integer `entry_key` never leaves the Session domain's callers.
-- Tables live in `sessions.db` (`core/sessions/schema.py`): `archive_entries` (one row per entry: `entry_id`, `kind`, `state`, `subject_id`, scope `project_id`/`agent_id` (`''` without one), `owner_name` for `owner_group`, `archived_at`, `retention_start`, `origin`, `cleanup_pending`, open `facts_json`), `archive_entry_sessions` (each archived Session generation belongs to exactly one entry; both foreign keys cascade) and `archive_entry_trees` (data-dir relative POSIX `path` as key, role, `source_path`).
+- Tables live in `sessions.db` (`core/sessions/schema.py`): `archive_entries` (one row per entry: `entry_id`, `kind`, `state`, `subject_id`, scope `project_id`/`agent_id` (`''` without one), `owner_name` for `owner_group`, `archived_at`, `retention_start`, `origin`, `cleanup_pending`, open `facts_json`), `archive_entry_sessions` (each archived Session generation belongs to exactly one entry; both foreign keys cascade) and `archive_entry_trees` (data-dir relative POSIX `path` as key, role `agent`, `workspace`, `project` or `files`, `source_path`).
 - Kinds (open vocabulary, no CHECK): `agent` (the tree `agents/<id>/` and the Agent's live global Sessions), `project` (the Anchor `projects/<id>/` and every live Session of the Project; the repository is never touched), `session` (one Session with its live review forks, `sessions.md` -> Terms -> Review fork; backfill: one archived batch of one scope), `owner_group` (the Sessions of one Extension owner group; listed and purgeable, not restorable: only the owner can resume work), `files` (legacy archive content only; purgeable, not restorable).
 - States (open vocabulary; every transition is a compare-and-set in one transaction, a mismatch raises `ArchiveEntryBusyError`): `archiving` (files may be moving, Sessions still live) -> `archived` (resting state; `cleanup_pending = 1` marks unfinished post-commit work) -> `restoring` (files may be moving back, Sessions still archived) -> `restored` (Sessions live, follow-up pending) -> row deleted. `archived` -> `purging` (never restorable, resumable) -> row deleted. A failed archive deletes its `archiving` row; a failed restore returns to `archived`.
 - `origin`: `operation`, `backfill` (the migration) or `recovered` (an orphan payload adopted at startup). `retention_start` is the archive time, or the adoption time for `backfill` and `recovered` entries. A `recovered` entry is never due: nothing records how old its payload is.

@@ -2,6 +2,10 @@
 
 The access guard's per-request rules in detail: peer and transport checks, forwarding headers, Host names, credentials, live connections, response headers, the exempt routes and the refusal reasons. Pipeline order, outcomes and invariants: `access.md` -> Request pipeline.
 
+## Route classes
+
+`_rules.classify_route` sorts every request, failing closed: `exempt` (no Bearer/cookie required; Exempt routes below), `shell` (the public WebUI shell: any GET/HEAD outside the server namespaces `/api`, `/ws`, `/_vbot`, `/auth`, `/health`) or `protected` (everything else, every WebSocket).
+
 ## Peer and transport
 
 `_rules.inspect_request`; a refusal answers 403 `access_denied` (WebSocket close 4403):
@@ -17,6 +21,10 @@ The access guard's per-request rules in detail: peer and transport checks, forwa
 `AccessService.authenticate`: `Authorization: Bearer` wins over the `__Host-vbot_device` cookie; a second `Authorization` header, another scheme, or more than one device cookie value is malformed (those cookies are not cleared: one of them may be valid). A `vbl_` token is checked against this start's local token, and only from a direct loopback peer; a `vbt_` token through the device store (in memory, constant-time hash comparison). In `local`/`lan` a refused credential still yields `open`; in `authenticated` it is logged, counted per effective client, and a dead cookie is cleared (`Max-Age=0`), unless the response sets a new device cookie itself (a ticket redemption or a browser's pairing claim). A well-formed `vbt_` token that an unavailable device store cannot check is neither accepted nor refused (Invariants).
 
 For capability routes in `authenticated` mode, `FileDelivery.access_claims` verifies the signed recipient and any capability-specific request-admission deadline, then `AccessService.principal_for_capability` resolves that issuer. The issuer becomes this request's principal regardless of any cookie or Bearer token. An internal unsigned-for-recipient reference, invalid/expired capability or revoked/expired issuer returns 404; an unavailable Device store returns 503. Another Device's credential cannot revive a capability. File and preview token projection belongs to `server/browser-capabilities.md`.
+
+## Principal
+
+`server/access/_principal.py`: `host` (the local access token), `device` (a paired Device) or `open` (a request admitted in `local`/`lan` without a valid credential). A capability request in `authenticated` mode acts for its signed issuer (above); there an exempt request without a valid credential, and every Cron webhook request, has no principal (`None`). Logs, a Device's `approved_by` and a ticket's issuer name a principal by its `actor`: the device id, `host` or `open`.
 
 ## Live connections
 
