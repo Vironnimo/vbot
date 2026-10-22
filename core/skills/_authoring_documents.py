@@ -110,7 +110,9 @@ def _normalized_support_path(relative_path: str) -> str:
     if not isinstance(relative_path, str) or not relative_path.strip():
         raise SkillAuthoringError("Support file path must be a non-empty string.")
     raw = PurePosixPath(relative_path.replace("\\", "/"))
-    if raw.is_absolute() or any(part in {"", ".", ".."} for part in raw.parts):
+    # On Windows a part with a colon is a drive prefix ("C:.." joins as the
+    # parent folder) or an NTFS stream, never a plain file or folder name.
+    if raw.is_absolute() or any(part in {"", ".", ".."} or ":" in part for part in raw.parts):
         raise SkillAuthoringError(f"Illegal support file path: {relative_path}")
     if len(raw.parts) < 2 or raw.parts[0] not in RESOURCE_DIRECTORIES:
         allowed = " or ".join(f"{name}/" for name in RESOURCE_DIRECTORIES)

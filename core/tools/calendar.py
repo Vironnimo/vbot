@@ -293,8 +293,11 @@ class _CalendarRead:
                     "time_max must come after time_min.", arguments, time_max=STAND_INS["time_max"]
                 )
             )
-        if end - start > timedelta(days=MAX_WINDOW_DAYS):
-            latest = _local(_days_after(start, MAX_WINDOW_DAYS, zone), zone)
+        # Local days, like the suggested window: across a clock change they
+        # last an hour more or less.
+        longest = _days_after(start, MAX_WINDOW_DAYS, zone)
+        if end > longest:
+            latest = _local(longest, zone)
             raise CalendarCallRefusedError(
                 refusal(
                     f"a window spans at most {MAX_WINDOW_DAYS} days.",

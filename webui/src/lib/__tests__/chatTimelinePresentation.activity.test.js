@@ -104,11 +104,11 @@ describe('runFooterParts', () => {
       () => [status('completed'), minutesSeconds(5, 25)],
     ],
     [
-      'hours and minutes for an hour-scale Run',
+      'hours and minutes for an hour-scale Run, rounded to the minute',
       { status: 'completed', durationMs: 5071000 },
       () => [
         status('completed'),
-        t('chat.durationHoursMinutes', { hours: 1, minutes: 24 }),
+        t('chat.durationHoursMinutes', { hours: 1, minutes: 25 }),
       ],
     ],
     [

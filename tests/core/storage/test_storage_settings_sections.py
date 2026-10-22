@@ -268,6 +268,17 @@ SECTION_UPDATES: dict[str, tuple[dict[str, Any], dict[str, Any], Read, Any]] = {
             },
         },
     ),
+    # A hand-edited field the stored type does not use is ignored, not fatal.
+    "compaction-update-drops-a-field-its-stored-type-does-not-use": (
+        {"compaction": {"strategy": {"type": "continuation", "tail_tokens": 15_000}}},
+        {"compaction": {"enabled": False}},
+        StorageManager.load_compaction_settings,
+        {
+            "enabled": False,
+            "trigger": {"type": "context_ratio", "threshold": 0.8},
+            "strategy": {"type": "continuation"},
+        },
+    ),
     "defaults-null-removes-one-field": (
         {
             "defaults": {

@@ -335,6 +335,45 @@ def test_compaction_variant_can_be_changed_with_one_atomic_patch() -> None:
     }
 
 
+@pytest.mark.parametrize(
+    ("part", "stored", "effective"),
+    [
+        ("strategy", {"type": "continuation", "tail_tokens": 15000}, {"type": "continuation"}),
+        (
+            "trigger",
+            {"type": "input_tokens", "tokens": 50000, "threshold": 0.8},
+            {"type": "input_tokens", "tokens": 50000},
+        ),
+    ],
+)
+def test_a_compaction_field_its_type_does_not_use_is_ignored_but_never_patched_in(
+    part: str, stored: dict[str, object], effective: dict[str, object]
+) -> None:
+    # Raw validation only warns about a hand-edited leftover, so reads ignore it.
+    original = {"compaction": {part: stored}}
+    assert build_effective_settings(original)["compaction"][part] == effective
+    disabled, _changed = apply_settings_patch(
+        original,
+        parse_patch_operations([{"op": "set", "path": "compaction.enabled", "value": False}]),
+    )
+    assert disabled["compaction"] == {"enabled": False, part: stored}
+
+    # A patch of that part is input and refuses the field; replacing it repairs.
+    leftover = next(key for key in stored if key not in effective)
+    with pytest.raises(SettingsPathError, match=leftover):
+        apply_settings_patch(
+            {"compaction": {part: effective}},
+            parse_patch_operations(
+                [{"op": "set", "path": f"compaction.{part}.{leftover}", "value": stored[leftover]}]
+            ),
+        )
+    repaired, _changed = apply_settings_patch(
+        original,
+        parse_patch_operations([{"op": "set", "path": f"compaction.{part}", "value": effective}]),
+    )
+    assert repaired == {"compaction": {part: effective}}
+
+
 def test_setting_same_compaction_variant_preserves_sibling_overrides() -> None:
     original = {"compaction": {"trigger": {"type": "context_ratio", "threshold": 0.6}}}
     operations = parse_patch_operations(

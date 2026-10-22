@@ -172,7 +172,7 @@
     // Replies include catalogs and canonical history, not just small commands.
     // Never drop a reply silently: onMessage returns this failure to its caller.
     if (!valid(data, MAX_HOST_MESSAGE_BYTES))
-      throw new Error('Extension response is too large');
+      throw new Error(t('extensions.page.responseTooLarge'));
     context.window.postMessage(JSON.parse(JSON.stringify(data)), '*');
   }
 
@@ -186,23 +186,24 @@
   }
 
   function openProjectedUrl(context, value) {
-    if (typeof value !== 'string' || !value) throw new Error('Invalid link');
+    if (typeof value !== 'string' || !value)
+      throw new Error(t('extensions.page.invalidLink'));
     let url;
     try {
       url = new URL(value, window.location.origin);
     } catch {
-      throw new Error('Invalid link');
+      throw new Error(t('extensions.page.invalidLink'));
     }
     if (url.protocol === 'mailto:') {
       window.open(url.href, '_blank', 'noopener,noreferrer');
       return;
     }
     if (url.protocol !== 'http:' && url.protocol !== 'https:')
-      throw new Error('Invalid link');
+      throw new Error(t('extensions.page.invalidLink'));
     if (url.origin === window.location.origin) {
       const localUrl = `${url.pathname}${url.search}`;
       if (!context.allowedUrls.includes(localUrl))
-        throw new Error('This local file is unavailable');
+        throw new Error(t('extensions.page.fileUnavailable'));
     }
     window.open(url.href, '_blank', 'noopener,noreferrer');
   }

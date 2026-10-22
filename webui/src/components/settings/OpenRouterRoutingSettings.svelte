@@ -45,6 +45,8 @@
   let {
     provider,
     active = false,
+    // Changes when the server reports a changed model catalog.
+    modelsRefreshToken = 0,
     onRefreshProviderSettings = noop,
     onToast = noop,
     onError = noop,
@@ -130,10 +132,22 @@
     }
   });
 
+  // The catalog is read once per activation and again when the model catalog
+  // changes; an empty or failed answer is not asked for again before then.
+  let modelsRequestedFor = null;
+  let modelsRequest = 0;
   $effect(() => {
-    if (active && models.length === 0 && !loadingModels) {
-      void loadOpenRouterModels();
+    const token = modelsRefreshToken;
+    if (!active) {
+      if (untrack(() => models.length === 0)) modelsRequestedFor = null;
+      return;
     }
+    if (modelsRequestedFor === token) return;
+    modelsRequestedFor = token;
+    untrack(loadOpenRouterModels);
+  });
+
+  $effect(() => {
     if (active && !providerOptionsByScope[''] && !loadingProviders) {
       void loadProviderOptions('');
     }
@@ -282,17 +296,20 @@
   }
 
   async function loadOpenRouterModels() {
+    const request = ++modelsRequest;
     loadingModels = true;
     try {
       const result = await listModels({
         provider_id: 'openrouter',
         task: 'chat',
       });
+      if (request !== modelsRequest) return;
       models = Array.isArray(result?.models) ? result.models : [];
     } catch (error) {
+      if (request !== modelsRequest) return;
       onError(error?.message || String(error));
     } finally {
-      loadingModels = false;
+      if (request === modelsRequest) loadingModels = false;
     }
   }
 

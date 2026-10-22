@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any, cast
 
 import pytest
@@ -12,10 +13,13 @@ from core.chat.messages import ToolCall
 
 
 class FakeSession:
+    run_id = "run_1"
+
     def __init__(self, *, failures: int = 0) -> None:
         self.chunks: list[tuple[str, str]] = []
         self.tool_calls: list[dict[str, Any]] = []
         self.discards = 0
+        self.attempts = 0
         self.failures = failures
         self.gate = asyncio.Event()
         self.gate.set()
@@ -29,6 +33,7 @@ class FakeSession:
         content_delta: str,
         tool_calls: list[dict[str, Any]],
     ) -> None:
+        self.attempts += 1
         self.writing.set()
         await self.gate.wait()
         if self.failures:
@@ -64,6 +69,37 @@ async def test_a_failed_draft_write_keeps_its_text_in_order_for_the_next() -> No
     assert "".join(content for _, content in session.chunks) == "C1C2"
     await draft.discard()
     assert session.discards == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_writes_retry_after_the_interval_and_then_stop(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    session = FakeSession(failures=3)
+    waits: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        waits.append(seconds)
+
+    draft = StreamDraft(cast(Any, session), flush_interval=2.0, clock=lambda: 0.0, sleep=sleep)
+    berlin = ToolCall(id="call_berlin", name="get_weather", arguments={"city": "Berlin"})
+    with caplog.at_level(logging.DEBUG, logger="vbot.chat"):
+        draft.record_tool_calls(model="openai/test", tool_calls=[berlin])
+        await _idle()
+        draft.record(model="openai/test", reasoning="", content="later")
+        await _idle()
+
+    # Started calls go at once; a retry waits out the interval even for them.
+    assert waits == [2.0, 2.0]
+    # Three failures in a row stop storing this stream attempt, logged once.
+    assert (session.attempts, session.chunks) == (3, [])
+    assert [record.levelno for record in caplog.records].count(logging.WARNING) == 1
+
+    # The next stream attempt stores its draft again.
+    await draft.discard()
+    draft.record(model="openai/test", reasoning="", content="next")
+    await _idle()
+    assert session.chunks == [("", "next")]
 
 
 @pytest.mark.asyncio

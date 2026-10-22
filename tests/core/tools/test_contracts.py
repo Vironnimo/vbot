@@ -66,6 +66,17 @@ def _open_contract(properties: JsonObject, **schema: Any) -> Any:
             r"external \$ref",
             id="external-reference",
         ),
+        pytest.param(
+            "sample",
+            {
+                "type": "object",
+                # A parameter named like a data keyword is still a schema.
+                "properties": {"default": {"$ref": "https://example.test/schema.json"}},
+                "additionalProperties": False,
+            },
+            r"external \$ref",
+            id="external-reference-in-a-parameter-named-default",
+        ),
         *(
             pytest.param(name, _input_schema(), "Tool name must start with a letter", id=name)
             for name in ("1tool", "tool-name", "tool name", "a" * 65)
@@ -77,6 +88,25 @@ def test_compile_rejects_an_unportable_contract(
 ) -> None:
     with pytest.raises(ToolContractError, match=message):
         compile_tool_contract(name=name, input_schema=input_schema)
+
+
+def test_compile_leaves_schema_like_data_and_local_references_alone() -> None:
+    # Data keywords hold instances, which no schema rule applies to; ``#`` is the
+    # schema itself, so the definition recurses.
+    like_a_schema = {"type": "object", "properties": {}, "required": ["status"]}
+    external = {"$ref": "https://example.test/schema.json"}
+    contract = _open_contract(
+        {
+            "filter": {"type": "object", "default": like_a_schema, "examples": [external]},
+            "shape": {"const": like_a_schema},
+            "choice": {"enum": [external, like_a_schema]},
+            "children": {"type": "array", "items": {"$ref": "#"}},
+        }
+    )
+
+    contract.validate_arguments({"children": [{"children": []}]})
+    with pytest.raises(ToolContractError):
+        contract.validate_arguments({"children": [{"children": "none"}]})
 
 
 def test_model_facing_object_compiles_open_but_its_properties_are_the_parameter_list() -> None:

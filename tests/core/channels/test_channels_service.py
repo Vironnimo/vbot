@@ -209,6 +209,15 @@ async def test_service_serves_running_channels_until_they_stop(
     adapter = DeniedAwareAdapter()
     adapter._denied_chat_log.record(chat_id="777", kind="direct", display_name="Julian")
     monkeypatch.setattr(service, "_create_adapter", lambda _config: adapter)
+    recovery_ended = asyncio.Event()
+
+    async def pending_recovery(**_kwargs: Any) -> None:
+        try:
+            await asyncio.Event().wait()
+        finally:
+            recovery_ended.set()
+
+    monkeypatch.setattr(service._observations, "recover", pending_recovery)
     try:
         service.start()
         await asyncio.wait_for(adapter.started.wait(), timeout=1)
@@ -223,6 +232,9 @@ async def test_service_serves_running_channels_until_they_stop(
 
         service.stop()
         await asyncio.wait_for(adapter.stopped.wait(), timeout=1)
+        # The synchronous stop also ends observation recovery: after a failed
+        # Runtime start no aclose follows, and the state database closes next.
+        await asyncio.wait_for(recovery_ended.wait(), timeout=1)
 
         assert service.denied_chats("tg-enabled") == []
         with pytest.raises(ChannelNotFoundError):

@@ -93,6 +93,25 @@ def remote_tool_name(connection: str, name: str) -> str:
     return f"mcp_{connection}_{label}_{digest}"
 
 
+def tool_contract_problem(connection: str, tool: dict[str, Any]) -> str | None:
+    """Why remote *tool* cannot become a vBot Tool, or ``None`` when it can.
+
+    Its input schema must compile as a Tool contract (JSON Schema 2020-12 plus the
+    contract's invariants), with the options its registration uses, which then
+    finds the compiled contract cached.
+    """
+    try:
+        compile_tool_contract(
+            name=remote_tool_name(connection, tool["name"]),
+            input_schema=tool["inputSchema"],
+            parallel_safe=False,
+            require_closed_input=False,
+        )
+    except ToolContractError as error:
+        return str(error)
+    return None
+
+
 def target_for(kind: str, name: str, definition: Any) -> str:
     """``kind:name:fingerprint``; the fingerprint changes with the definition's meaning."""
     fields = _FINGERPRINT_FIELDS.get(kind)

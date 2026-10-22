@@ -5,10 +5,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterator, Mapping
 from contextlib import aclosing, asynccontextmanager, contextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast, override
 
 from core.access.config import AccessConfig, access_config, inferred_access_mode
 from core.extensions.extensions import ExtensionUnavailableError
@@ -846,7 +847,7 @@ def _mount_webui(app: FastAPIType) -> None:
 
     webui_assets_dir = webui_dist_dir / "assets"
     if webui_assets_dir.is_dir():
-        app.mount("/assets", StaticFiles(directory=webui_assets_dir), name="webui-assets")
+        app.mount("/assets", _WebUIAssetFiles(directory=webui_assets_dir), name="webui-assets")
 
     @app.get("/", include_in_schema=False)
     async def webui_index() -> FileResponse:
@@ -925,8 +926,41 @@ def _current_extension_page(registry: Any, claims: JsonObject) -> tuple[Any | No
     return identity, current[0]
 
 
+class _WebUIAssetFiles(StaticFiles):
+    """The build's assets; a path that could name a place outside them is missing.
+
+    ``StaticFiles`` resolves the requested path before it confines it, so it is checked first.
+    """
+
+    @override
+    def lookup_path(self, path: str) -> tuple[str, os.stat_result | None]:
+        # ``get_path`` passes the request path normalized with the platform's separators.
+        if _webui_relative_parts(path.replace(os.sep, "/")) is None:
+            return "", None
+        return super().lookup_path(path)
+
+
+def _webui_relative_parts(requested_path: str) -> tuple[str, ...] | None:
+    """The segments of a path below the WebUI build, or None for a shape that could leave it.
+
+    Decided from the text alone, before any filesystem call: on Windows a backslash, a colon,
+    a leading or doubled slash or a dot segment can make it a UNC, device, drive or parent
+    path, and already resolving a UNC path contacts its host and offers the server user's
+    Windows credentials.
+    """
+    parts = requested_path.split("/")
+    if any(character in requested_path for character in ("\\", ":", "\0")) or any(
+        part in {"", ".", ".."} for part in parts
+    ):
+        return None
+    return tuple(parts)
+
+
 def _safe_webui_file_path(webui_dist_dir: Path, requested_path: str) -> Path | None:
-    file_path = webui_dist_dir / requested_path
+    parts = _webui_relative_parts(requested_path)
+    if parts is None:
+        return None
+    file_path = webui_dist_dir.joinpath(*parts)
     try:
         resolved_file_path = file_path.resolve()
         resolved_dist_dir = webui_dist_dir.resolve()

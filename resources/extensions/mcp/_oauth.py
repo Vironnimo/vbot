@@ -14,10 +14,13 @@ authorization server's metadata and the absolute expiry: after a restart the
 provider still refreshes an expiring token ahead of time, at that server's token
 endpoint, instead of sending it until it fails and signing in again. A stored
 registration is reused only for the redirect URI it was registered with, and
-only while it works: a sign-in that does not complete, or a refresh refused for
-any reason but a spent grant, deletes it with its tokens. Authorization servers
-expire and revoke dynamic registrations, and the next sign-in then registers
-again instead of presenting a client the server no longer knows.
+only while it works: a sign-in that does not complete, or a refresh refused with
+``invalid_client`` or ``unauthorized_client``, deletes it with its tokens.
+Authorization servers expire and revoke dynamic registrations, and the next
+sign-in then registers again instead of presenting a client the server no longer
+knows. Any other refused refresh (an OAuth error answer, RFC 6749 section 5.2)
+deletes only the tokens. A refresh that fails without a refusal (5xx, 429, or no
+OAuth error in the answer) fails that request and keeps both.
 
 Authorization servers that deviate from what the SDK expects. Every request of
 the flow identifies vBot (``_FLOW_HEADERS``): some firewalls refuse requests
@@ -61,7 +64,7 @@ from typing import Any, override
 from urllib.parse import parse_qs, urljoin, urlsplit, urlunsplit
 
 import httpx2
-from mcp.client.auth import OAuthClientProvider, OAuthFlowError
+from mcp.client.auth import OAuthClientProvider, OAuthFlowError, OAuthTokenError
 from mcp.client.auth.oauth2 import OAuthContext
 from mcp.client.auth.utils import (
     build_oauth_authorization_server_metadata_discovery_urls,
@@ -97,6 +100,8 @@ _ERROR_CODE = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 # Headers of every request the sign-in flow sends (discovery, registration, token).
 _FLOW_HEADERS = {"User-Agent": "vBot", "Accept": "application/json"}
 _OFFLINE_ACCESS = "offline_access"
+# Token endpoint errors that refuse the client itself, not only its refresh token.
+_CLIENT_REFUSALS = frozenset({"invalid_client", "unauthorized_client"})
 
 
 def _credential_keys(connection: str) -> tuple[str, str]:
@@ -517,14 +522,23 @@ class _Provider(OAuthClientProvider):
 
     @override
     async def _handle_refresh_response(self, response: httpx2.Response) -> bool:
-        refreshed = await super()._handle_refresh_response(response)
-        if not refreshed:
-            # The refresh token is spent or revoked; never offer it again.
+        if response.status_code != 200:
+            error = await _error_code(response) if response.status_code in {400, 401} else None
+            if error is None:
+                # Not a refusal (RFC 6749 section 5.2): the server failed (5xx), asked
+                # to slow down (429) or answered without an OAuth error. Failing this
+                # request keeps the sign-in for the next one; returning False would
+                # clear the tokens and start a new interactive sign-in.
+                raise OAuthTokenError(
+                    f"The OAuth token refresh failed with HTTP {response.status_code}; "
+                    "the next request tries again"
+                )
+            # The refresh token is refused; never offer it again.
             self._storage.forget_tokens()
-            # Any other refusal may mean the server no longer knows the client.
-            if await _error_code(response) != "invalid_grant":
+            if error in _CLIENT_REFUSALS:
+                # The server no longer knows or accepts the registered client.
                 self._forget_registration()
-        return refreshed
+        return await super()._handle_refresh_response(response)
 
     @override
     async def _perform_authorization(self) -> httpx2.Request:

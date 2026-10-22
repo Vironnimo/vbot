@@ -495,15 +495,13 @@
         const result = String(reader.result || '');
         const separator = result.indexOf(',');
         if (separator < 0) {
-          reject(new Error('The wakeword model could not be read.'));
+          reject(new Error(t('settings.voice.importReadFailed')));
           return;
         }
         resolve(result.slice(separator + 1));
       };
       reader.onerror = () =>
-        reject(
-          reader.error || new Error('The wakeword model could not be read.'),
-        );
+        reject(reader.error || new Error(t('settings.voice.importReadFailed')));
       reader.readAsDataURL(file);
     });
   }

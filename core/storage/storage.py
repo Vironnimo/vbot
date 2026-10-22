@@ -444,7 +444,7 @@ class StorageManager:
         """Return normalized persisted compaction settings."""
 
         settings = self.load_settings()
-        return normalize_compaction_settings(settings.get("compaction"))
+        return normalize_compaction_settings(settings.get("compaction"), stored=True)
 
     def load_defaults(self) -> dict[str, Any]:
         """Return normalized persisted defaults settings."""

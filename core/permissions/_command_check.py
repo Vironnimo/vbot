@@ -250,11 +250,11 @@ class CommandChecker:
             if refused is not None:
                 return refused
         for url in plan.urls:
-            refused = boundary.check_url(url)
+            refused = boundary.check_url(url, by_program=True)
             if refused is not None:
                 return refused
         for host in plan.hosts:
-            refused = boundary.check_host(canonical_host(host), "connect")
+            refused = boundary.check_host(canonical_host(host), "connect", by_program=True)
             if refused is not None:
                 return refused
         for access in plan.paths:

@@ -229,8 +229,7 @@ def _git_index_read(
     spec = re.sub(r"^[0-3]:", "", spec).removeprefix("/").replace("\\", "/")
     if spec.startswith(("./", "../")):
         analysis.access(
-            context, raw, "read", Word.literal(spec, source=word.source), glob=False,
-            tier="a", subtree=True,
+            context, raw, "read", word.part(spec), glob=False, tier="a", subtree=True,
         )  # fmt: skip
         return
     parts = [part for part in spec.split("/") if part not in ("", ".")]

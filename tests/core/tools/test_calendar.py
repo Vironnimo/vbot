@@ -312,6 +312,17 @@ class TestList:
     ) -> None:
         assert tool.refused({"action": "list", **window}) == message
 
+    def test_the_longest_window_counts_local_days_across_a_clock_change(
+        self, tool: CalendarTool
+    ) -> None:
+        # 62 local days across the autumn change last 62 days and one hour.
+        refused = tool.refused(
+            {"action": "list", "time_min": "2030-09-01", "time_max": "2030-11-03"}
+        )
+        assert refused.endswith('"time_min":"2030-09-01T00:00","time_max":"2030-11-02T00:00"}')
+
+        tool.succeeded({"action": "list", "time_min": "2030-09-01", "time_max": "2030-11-02T00:00"})
+
 
 class TestFindFreeTime:
     def test_lists_free_spans_of_at_least_duration_minutes(self, tool: CalendarTool) -> None:

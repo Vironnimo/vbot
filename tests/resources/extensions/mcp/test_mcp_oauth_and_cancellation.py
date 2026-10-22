@@ -72,6 +72,8 @@ class FakeServers:
         # Registered clients the server no longer knows, and refresh tokens it refuses.
         self.forgotten: set[str] = set()
         self.spent: set[str] = set()
+        # Answers the token endpoint gives before it works again, such as an outage.
+        self.token_failures: list[httpx2.Response] = []
 
     def handle(self, request: httpx2.Request) -> httpx2.Response:
         answer = self._answer(request)
@@ -131,6 +133,8 @@ class FakeServers:
                     201, json={key: value for key, value in registered.items() if value is not None}
                 )
             if url.path == "/token":
+                if self.token_failures:
+                    return self.token_failures.pop(0)
                 form = parse_qs(request.content.decode())
                 if form.get("client_id", [""])[0] in self.forgotten:
                     return httpx2.Response(401, json={"error": "invalid_client"})
@@ -254,7 +258,17 @@ async def test_the_browser_callback_completes_a_sign_in_bound_to_its_server(
 
 
 @pytest.mark.asyncio
-async def test_an_expiring_token_is_refreshed_after_a_restart_without_a_new_sign_in(host):
+@pytest.mark.parametrize(
+    "failure",
+    [
+        None,
+        # Failures that refuse nothing (RFC 6749 section 5.2) keep the sign-in.
+        httpx2.Response(503, text="Service Unavailable"),
+        httpx2.Response(429, json={"error": "slow_down"}),
+        httpx2.Response(400, text="<html>Bad Gateway</html>"),
+    ],
+)
+async def test_an_expiring_token_is_refreshed_after_a_restart_without_a_new_sign_in(host, failure):
     servers = FakeServers()
     inputs = InputRequests()
     async with signed_client(oauth_connection(), host, inputs, servers) as client:
@@ -266,11 +280,23 @@ async def test_an_expiring_token_is_refreshed_after_a_restart_without_a_new_sign
         assert (await asyncio.wait_for(request, 5)).status_code == 200
     stored = json.loads(host.resolve_credential(TOKENS))
     host.set_credential(TOKENS, json.dumps({**stored, "expires_at": time.time() + 10}))
+    client_document = host.resolve_credential(CLIENT)
     servers.requests.clear()
+    if failure is not None:
+        servers.token_failures.append(failure)
 
     # A new provider, as after a restart: it refreshes ahead of the expiry, at the
     # authorization server it signed in with, before sending the request.
     async with signed_client(oauth_connection(), host, inputs, servers) as client:
+        if failure is not None:
+            # The failed refresh fails only this request, without a new sign-in.
+            with pytest.raises(OAuthFlowError, match=f"HTTP {failure.status_code}"):
+                await asyncio.wait_for(client.get(RESOURCE), 5)
+            assert inputs.list() == []
+            assert servers.sent("mcp.example.com") == []
+            assert json.loads(host.resolve_credential(TOKENS))["refresh_token"] == "refresh-1"
+            assert host.resolve_credential(CLIENT) == client_document
+            servers.requests.clear()
         response = await asyncio.wait_for(client.get(RESOURCE), 5)
 
     assert response.status_code == 200

@@ -16,7 +16,12 @@ from core.providers.token_getter import (
 )
 from core.utils.errors import ConfigError
 from core.utils.workers import BoundedWorkerPool
-from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RPC_ERROR_OAUTH_NOT_SUPPORTED, RpcError
+from server.rpc.errors import (
+    RPC_ERROR_DOMAIN,
+    RPC_ERROR_INVALID_REQUEST,
+    RPC_ERROR_OAUTH_NOT_SUPPORTED,
+    RpcError,
+)
 
 JsonObject = dict[str, Any]
 _PROVIDER_ACCESS_WORKERS = BoundedWorkerPool(name="provider-access", max_workers=4)
@@ -173,7 +178,7 @@ def _api_key_connection(runtime: Any, provider_id: str, connection_id: str | Non
             )
         return connection
 
-    provider = runtime.providers.get(provider_id)
+    provider = _provider(runtime, provider_id)
     connections = [
         connection
         for connection in provider.connections
@@ -195,7 +200,7 @@ def _api_key_connection(runtime: Any, provider_id: str, connection_id: str | Non
 def _provider_connection(runtime: Any, provider_id: str, connection_id: str) -> Any:
     """Resolve a compositional ``provider:connection[:account]`` id to its connection."""
 
-    provider = runtime.providers.get(provider_id)
+    provider = _provider(runtime, provider_id)
     local_connection_id, _account_id = split_connection_id(provider_id, connection_id)
     get_connection = getattr(provider, "get_connection", None)
     if callable(get_connection):
@@ -204,6 +209,15 @@ def _provider_connection(runtime: Any, provider_id: str, connection_id: str) -> 
         if getattr(connection, "id", "") == local_connection_id:
             return connection
     raise ConfigError(f"Unknown connection id '{connection_id}' for provider '{provider_id}'")
+
+
+def _provider(runtime: Any, provider_id: str) -> Any:
+    """Return the Provider, refusing an unknown id as a domain error."""
+
+    try:
+        return runtime.providers.get(provider_id)
+    except KeyError as exc:
+        raise RpcError(RPC_ERROR_DOMAIN, f"unknown provider: {provider_id}") from exc
 
 
 def _runtime_token_store(runtime: Any) -> Any:

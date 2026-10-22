@@ -1,3 +1,5 @@
+import { t } from './i18n.js';
+
 const BRIDGE_VERSION = 1;
 const MAX_MESSAGE_BYTES = 64 * 1024;
 const MAX_HOST_MESSAGE_BYTES = 8 * 1024 * 1024;
@@ -134,7 +136,9 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
   // as PathField read the failure the same way in a page.
   function replyError(data) {
     const error = new Error(
-      typeof data.error === 'string' ? data.error : 'Extension request failed',
+      typeof data.error === 'string'
+        ? data.error
+        : t('extensions.page.requestFailed'),
     );
     if (typeof data.code === 'string' && data.code) error.code = data.code;
     if (typeof data.reason === 'string' && data.reason)
@@ -288,10 +292,10 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
 
   function call(method, params = {}) {
     if (!context)
-      return Promise.reject(new Error('Extension host is unavailable'));
+      return Promise.reject(new Error(t('extensions.page.hostUnavailable')));
     const id = String(++nextId);
     if (id.length > MAX_REQUEST_ID_LENGTH || !isPlainObject(params))
-      return Promise.reject(new Error('Extension request is invalid'));
+      return Promise.reject(new Error(t('extensions.page.requestInvalid')));
     const message = {
       type: 'vbot.extension.call',
       version: BRIDGE_VERSION,
@@ -303,11 +307,11 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
       params,
     };
     if (!validMessage(message))
-      return Promise.reject(new Error('Extension request is too large'));
+      return Promise.reject(new Error(t('extensions.page.requestTooLarge')));
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         pending.delete(id);
-        reject(new Error('Extension request timed out. Refresh to try again.'));
+        reject(new Error(t('extensions.page.requestTimedOut')));
       }, REQUEST_TIMEOUT_MS);
       pending.set(id, {
         resolve: (result) => {

@@ -118,6 +118,7 @@ def effective_compaction_policy(
         if isinstance(agent_policy, dict)
         else load_global_policy(),
         use_defaults=True,
+        stored=True,
     )
 
 

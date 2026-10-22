@@ -12,6 +12,7 @@
   //
   // A row may carry only previews of a long call (`tool.rawTruncated`); the
   // whole call loads through `loadRaw` once a section showing it opens.
+  import { untrack } from 'svelte';
   import { toolDetailBlocks, toolDetailMedia } from '$lib/chatToolDetails.js';
   import { t } from '$lib/i18n.js';
   import CollapseRail from './CollapseRail.svelte';
@@ -90,43 +91,57 @@
     rawDisclosure ? viewState.isOpen(rawKey) : open || revealed,
   );
 
-  // The whole call as read while the row was in one state; a call that
-  // finishes after the read loads again to show its result.
+  // The whole call, or why it could not be read, as read while the row was in
+  // one state. A call that finishes after the read loads again to show its
+  // result; a failed read waits until its section is shown again.
   let loaded = $state(null);
   let loading = $state(false);
-  let loadError = $state('');
-  let loadedCall = $derived(
-    loaded && loaded.finished === Boolean(tool?.finished) ? loaded.call : null,
+  let attempt = $derived(
+    loaded && loaded.finished === Boolean(tool?.finished) ? loaded : null,
   );
+  let loadedCall = $derived(attempt?.call ?? null);
   let awaitingCall = $derived(Boolean(loadRaw) && !loadedCall);
   let shownArgs = $derived(loadedCall ? loadedCall.arguments : args);
   let shownResult = $derived(loadedCall ? loadedCall.result : result);
+  // The section that shows the call is open now; `callShown` stays true for
+  // a collapsed row that keeps its details mounted.
+  let callOpen = $derived(rawDisclosure ? viewState.isOpen(rawKey) : open);
 
   async function loadCall() {
-    if (!loadRaw || loadedCall || loading) return;
     const finished = Boolean(tool?.finished);
     loading = true;
-    loadError = '';
     try {
       loaded = { finished, call: await loadRaw() };
     } catch (error) {
-      loadError = error instanceof Error ? error.message : String(error);
+      loaded = {
+        finished,
+        failed: true,
+        error: error instanceof Error ? error.message : String(error),
+      };
     } finally {
       loading = false;
     }
   }
 
   $effect(() => {
-    if (callShown && awaitingCall) void loadCall();
+    if (callShown && awaitingCall && !attempt && !loading) untrack(loadCall);
+  });
+
+  // Opening the call's section again retries a read that failed.
+  $effect(() => {
+    if (!callOpen) return;
+    untrack(() => {
+      if (loaded?.failed) loaded = null;
+    });
   });
 </script>
 
 {#snippet callStatus()}
-  {#if loadError}
+  {#if attempt?.failed}
     <ToolNotice
       notice={{
         level: 'error',
-        text: t('chat.toolRawUnavailable', { error: loadError }),
+        text: t('chat.toolRawUnavailable', { error: attempt.error }),
       }}
     />
   {:else}

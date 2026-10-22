@@ -52,30 +52,27 @@ export function formatDurationMs(durationMs) {
   if (!Number.isFinite(durationMs) || durationMs < 0) {
     return '';
   }
-  const elapsedSeconds = durationMs / 1000;
-  if (elapsedSeconds < 10) {
-    return t('chat.durationSeconds', {
-      seconds: elapsedSeconds.toFixed(1),
+  // Round to each unit's precision before choosing it, so 9.96 s reads 10s,
+  // not 10.0s, 59.6 s reads 1m 0s, not 60s, and 3 h 59 m 30 s reads 4h 0m
+  // (as Statistics does).
+  const tenths = Math.round(durationMs / 100);
+  if (tenths < 100) {
+    return t('chat.durationSeconds', { seconds: (tenths / 10).toFixed(1) });
+  }
+  const totalSeconds = Math.round(durationMs / 1000);
+  if (totalSeconds < 60) {
+    return t('chat.durationSeconds', { seconds: totalSeconds });
+  }
+  if (totalSeconds < 3600) {
+    return t('chat.durationMinutesSeconds', {
+      minutes: Math.floor(totalSeconds / 60),
+      seconds: totalSeconds % 60,
     });
   }
-  if (elapsedSeconds < 60) {
-    return t('chat.durationSeconds', {
-      seconds: Math.round(elapsedSeconds),
-    });
-  }
-  const totalSeconds = Math.round(elapsedSeconds);
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  if (hours > 0) {
-    return t('chat.durationHoursMinutes', {
-      hours,
-      minutes,
-    });
-  }
-  return t('chat.durationMinutesSeconds', {
-    minutes,
-    seconds,
+  const totalMinutes = Math.round(durationMs / 60_000);
+  return t('chat.durationHoursMinutes', {
+    hours: Math.floor(totalMinutes / 60),
+    minutes: totalMinutes % 60,
   });
 }
 

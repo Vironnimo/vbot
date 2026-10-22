@@ -1,3 +1,4 @@
+import { t } from './i18n.js';
 import { claimMicrophone } from './microphoneUse.js';
 
 const AUDIO_MIME_CANDIDATES = Object.freeze([
@@ -40,7 +41,7 @@ export async function createAudioRecorder(options = {}) {
     typeof navigatorObject.mediaDevices.getUserMedia !== 'function' ||
     typeof MediaRecorderClass !== 'function'
   ) {
-    throw new Error('Browser audio recording is not available.');
+    throw new Error(t('audioRecording.unavailable'));
   }
 
   const stream = await navigatorObject.mediaDevices.getUserMedia({
@@ -125,7 +126,7 @@ export async function createAudioRecorder(options = {}) {
             'error',
             (event) => {
               stopTracks();
-              reject(event.error ?? new Error('Audio recording failed.'));
+              reject(event.error ?? new Error(t('audioRecording.failed')));
             },
             { once: true },
           );

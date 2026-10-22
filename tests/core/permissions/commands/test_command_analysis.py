@@ -64,6 +64,33 @@ async def _analyze(line: str, shell: ShellKind) -> Any:
             unresolved=("cwd", "path_write"),
         ),
         case(
+            "cd sec* && cat key.pem; cd 'q*' && cat k",
+            id="a cd target a wildcard picks is unknown, a quoted one literal",
+            paths=("read w/p/key.pem", "start_dir w/p/q*", "read w/p/k", "read w/p/q*/k"),
+            unresolved=("cwd", "path_read"),
+        ),
+        case(
+            "pwsh -wd [s]ub -c 'Get-Content x'",
+            id="bash expands a start folder before pwsh enters it",
+            unresolved=("cwd", "command"),
+        ),
+        # bash expands an unquoted wildcard before the program reads the path, also
+        # in the piece of a word the program reads (--file=, @); a quoted one is literal.
+        case(
+            "python s[e]c/a.py; tar -tf x/[k].tar; tar -t --file=[t].tar; perl 'q[0]/k';"
+            " curl -d @s[e]c/k -o out https://example.com",
+            id="a program reads what bash expands a wildcard to",
+            paths=(
+                "read w/p/s?c/a.py",
+                "read w/p/x/?.tar",
+                "read w/p/?.tar",
+                "read w/p/q[0]/k",
+                "read w/p/s?c/k",
+                "write w/p/out",
+            ),
+            urls=("https://example.com",),
+        ),
+        case(
             "cat ~/s $HOME/t ${V}/u | grep x",
             id="home and environment expand",
             paths=("read h/s", "read h/t", "read v/u"),
@@ -246,6 +273,11 @@ async def _analyze(line: str, shell: ShellKind) -> Any:
             paths=("read w/p/** !secrets", "read w/p/src/**"),
         ),
         case(
+            "grep -rn TODO; egrep -d recurse x lib; grep y < f",
+            id="recursive grep without a path searches the working directory",
+            paths=("read w/p/**", "read w/p/lib/**", "read w/p/f"),
+        ),
+        case(
             "awk '{print $1}' notes/a.txt; jq -r .key --from-file=q.jq; echo secrets/key",
             id="words of programs without a spec are mentions",
             mentions=(
@@ -335,6 +367,12 @@ async def test_bash_plan(line: str, expected: Expected) -> None:
             id="cd to another drive",
             paths=("start_dir D:/x", "write w/p/y", "write D:/x/y"),
             marks=_WINDOWS,
+        ),
+        case(
+            "cd [s]ub & pushd s?b & del y",
+            id="cd and pushd match * and ? themselves",
+            paths=("start_dir w/p/[s]ub", "write w/p/y", "write w/p/[s]ub/y"),
+            unresolved=("cwd", "path_write"),
         ),
         case(
             "D: & del x",

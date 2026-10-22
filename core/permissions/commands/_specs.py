@@ -150,9 +150,13 @@ class ProgramSpec:
     (``grep PATTERN``, ``chmod MODE``) unless an option of ``skip_cancel``
     supplies them. ``values`` lists options that take a value, with that
     value's access or None. Options of ``subtree_flags`` (or ``subtree``)
-    make every access reach what lies below its path; options of
-    ``write_flags`` make operands writes (``sed -i``). ``default`` is the
-    access on the working directory without any operand. ``listing``: the
+    make every access reach what lies below its path, as does an
+    ``option=value`` entry there for that option's value, also when the value
+    is computed (``grep -d recurse``); options of ``write_flags`` make operands
+    writes (``sed -i``). ``default`` is the access on the working directory
+    without any operand; ``subtree_default`` that access when the command
+    reaches below its paths (``grep -r`` searches the working directory, plain
+    ``grep`` reads its input). ``listing``: the
     output names paths below the operands. ``filter``: passes pipeline input
     through. ``slash``: options start with ``/`` (Windows programs). Options of
     ``search_flags`` apply each operand's name at every depth below its folder
@@ -168,6 +172,7 @@ class ProgramSpec:
     subtree_flags: frozenset[str] = frozenset()
     subtree: bool = False
     default: AccessKind | None = None
+    subtree_default: AccessKind | None = None
     write_flags: frozenset[str] = frozenset()
     listing: bool = False
     filter: bool = False
@@ -182,6 +187,36 @@ _READ_TEXT = ProgramSpec(
     operands="read", values={"-n": None, "-c": None, "--lines": None, "--bytes": None}
 )
 _HASH = ProgramSpec(operands="read")
+# egrep and fgrep are grep -E and grep -F.
+_GREP = ProgramSpec(
+    operands="read",
+    skip=1,
+    skip_cancel=frozenset({"-e", "-f", "--regexp", "--file"}),
+    values={
+        "-e": None,
+        "--regexp": None,
+        "-f": "read",
+        "--file": "read",
+        "-m": None,
+        "--max-count": None,
+        "-A": None,
+        "-B": None,
+        "-C": None,
+        "--include": None,
+        "--exclude": None,
+        "--exclude-dir": None,
+        "-d": None,
+        "--directories": None,
+        "-D": None,
+    },
+    subtree_flags=frozenset(
+        {"-r", "-R", "--recursive", "--dereference-recursive", "-d=recurse",
+         "--directories=recurse"}
+    ),
+    subtree_default="read",
+    filter=True,
+    listing=True,
+)  # fmt: skip
 
 PROGRAMS: Mapping[str, ProgramSpec] = {
     "rm": ProgramSpec(operands="write", subtree_flags=_RECURSIVE),
@@ -311,30 +346,9 @@ PROGRAMS: Mapping[str, ProgramSpec] = {
     "du": ProgramSpec(
         operands="read", default="read", subtree=True, values={"-d": None, "--max-depth": None}
     ),
-    "grep": ProgramSpec(
-        operands="read",
-        skip=1,
-        skip_cancel=frozenset({"-e", "-f", "--regexp", "--file"}),
-        values={
-            "-e": None,
-            "--regexp": None,
-            "-f": "read",
-            "--file": "read",
-            "-m": None,
-            "--max-count": None,
-            "-A": None,
-            "-B": None,
-            "-C": None,
-            "--include": None,
-            "--exclude": None,
-            "--exclude-dir": None,
-            "-d": None,
-            "-D": None,
-        },
-        subtree_flags=frozenset({"-r", "-R", "--recursive", "--dereference-recursive"}),
-        filter=True,
-        listing=True,
-    ),  # fmt: skip
+    "grep": _GREP,
+    "egrep": _GREP,
+    "fgrep": _GREP,
     "rg": ProgramSpec(
         operands="read",
         skip=1,
@@ -485,12 +499,12 @@ CMD_BUILTINS: Mapping[str, ProgramSpec] = {
 }
 
 # Programs whose output names the files below the folders they list.
-LISTING_PROGRAMS = frozenset({"find", "ls", "dir", "fd", "fdfind", "grep", "rg"})
+LISTING_PROGRAMS = frozenset({"find", "ls", "dir", "fd", "fdfind", "grep", "egrep", "fgrep", "rg"})
 # Options that leave a folder out at every depth of a recursive search, by program:
 # option -> (the value names it after "!", the match ignores case).
 PRUNE_OPTIONS: Mapping[str, Mapping[str, tuple[bool, bool]]] = {
     "rg": {"-g": (True, False), "--glob": (True, False), "--iglob": (True, True)},
-    "grep": {"--exclude-dir": (False, False)},
+    **dict.fromkeys(("grep", "egrep", "fgrep"), {"--exclude-dir": (False, False)}),
 }
 
 # Wrappers that only change how the command after them runs (Claude Code's
