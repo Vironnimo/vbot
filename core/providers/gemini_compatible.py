@@ -15,12 +15,12 @@ from typing import Any, ClassVar, override
 import httpx
 
 from core.providers._gemini_wire import (
+    GeminiStreamDecoder,
     _apply_gemini_response_format,
     _gemini_tool_choice,
     _move_integer,
     _move_number,
     _normalize_gemini_response,
-    _normalize_gemini_stream_chunk,
     gemini_input_payload,
     gemini_returned_reasoning,
 )
@@ -164,33 +164,31 @@ class GeminiCompatibleAdapter(OpenAICompatibleAdapter):
             handle_error_status=_handle_error_status,
             auth_recovery=auth_recovery,
         )
-        replay_parts: list[dict[str, Any]] = []
-        seen_finish = False
-        has_tool_calls = False
+        decoder = GeminiStreamDecoder()
         try:
-            async for event in iter_sse_events(response):
-                data = event.data
-                if data is None:
-                    # Every event without data is a transport comment.
-                    yield {"type": "heartbeat"}
-                    continue
-                raw = parse_sse_json_data(data, context="Gemini provider")
-                if not isinstance(raw, dict):
-                    raise ProviderError(
-                        "Gemini provider sent non-object JSON in stream",
-                        retryable=False,
-                    )
-                deltas, chunk_has_tools, chunk_finished = _normalize_gemini_stream_chunk(
-                    raw,
-                    replay_parts,
-                    has_tool_calls=has_tool_calls,
-                )
-                has_tool_calls = has_tool_calls or chunk_has_tools
-                seen_finish = seen_finish or chunk_finished
-                for delta in deltas:
-                    yield delta
-            if not seen_finish:
-                raise NetworkError("Stream ended without a Gemini finish reason")
+            try:
+                async for event in iter_sse_events(response):
+                    data = event.data
+                    if data is None:
+                        # Every event without data is a transport comment.
+                        yield {"type": "heartbeat"}
+                        continue
+                    raw = parse_sse_json_data(data, context="Gemini provider")
+                    if not isinstance(raw, dict):
+                        raise ProviderError(
+                            "Gemini provider sent non-object JSON in stream",
+                            retryable=False,
+                        )
+                    for delta in decoder.normalize(raw):
+                        yield delta
+                if not decoder.finished:
+                    raise NetworkError("Stream ended without a Gemini finish reason")
+            except Exception:
+                # A broken stream hands over every part it delivered, as a finished one does.
+                snapshot = decoder.pending_replay()
+                if snapshot is not None:
+                    yield snapshot
+                raise
         except httpx.TimeoutException as exc:
             raise wrap_network_error(exc) from exc
         except httpx.TransportError as exc:

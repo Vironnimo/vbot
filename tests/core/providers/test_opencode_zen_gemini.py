@@ -444,6 +444,45 @@ async def test_gemini_stream_preserves_reasoning_meta_tools_usage_and_finish() -
 
 
 @pytest.mark.parametrize(
+    ("ending", "error"),
+    [
+        pytest.param({"candidates": [{"finishReason": "STOP"}]}, None, id="finished"),
+        pytest.param({"error": {"message": "boom"}}, ProviderError, id="in-band-error"),
+        pytest.param(None, NetworkError, id="no-finish"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_gemini_stream_hands_over_every_part_without_a_snapshot_per_text_chunk(
+    ending: dict[str, Any] | None, error: type[Exception] | None
+) -> None:
+    """Chat keeps the newest ``gemini_parts`` snapshot; one per text chunk would be quadratic."""
+
+    signed = {"text": "", "thoughtSignature": "opaque"}
+    texts = [{"text": f"word{index} "} for index in range(50)]
+    chunks = [{"candidates": [{"content": {"parts": [part]}}]} for part in [signed, *texts]]
+    received: list[dict[str, Any]] = []
+
+    with respx.mock:
+        respx.post(GEMINI_STREAM_URL).mock(
+            return_value=httpx.Response(
+                200, text=gemini_sse(*chunks, *([ending] if ending is not None else []))
+            )
+        )
+        try:
+            async for delta in zen_adapter().stream([], model_id=GEMINI_MODEL):
+                received.append(delta)
+        except Exception as caught:
+            assert error is not None and isinstance(caught, error)
+        else:
+            assert error is None
+
+    snapshots = [delta["reasoning_meta"] for delta in received if delta["type"] == "reasoning_meta"]
+    # One after the signed part, one once the stream ended or broke.
+    assert len(snapshots) == 2
+    assert snapshots[-1] == {"gemini_parts": [signed, *texts]}
+
+
+@pytest.mark.parametrize(
     ("raw_usage", "expected"),
     [
         pytest.param({}, None, id="empty"),
