@@ -138,11 +138,16 @@ async def test_failed_checks_count_toward_the_streak_and_alert_without_touching_
         service, checks, delivery=_CHAT if delivery == "chat" else CronDelivery(kind="app")
     )
 
-    for _ in range(4):
+    for _ in range(3):
         await service._watcher.fire(service.get_job(job_id))
-    # A successful check ends the streak its failures started.
+    # vBot keeps the alert on the job as unread; a chat got it as a message.
+    failing = service.get_job(job_id).unread_alert
+    assert (failing is not None) == (delivery == "app")
+    await service._watcher.fire(service.get_job(job_id))
+    # A successful check ends the streak its failures started, and the alert about it.
     recovered = service.get_job(job_id)
     assert (recovered.consecutive_failures, recovered.last_check_error) == (0, None)
+    assert recovered.unread_alert is None
     for _ in range(5):
         await service._watcher.fire(service.get_job(job_id))
 
@@ -164,6 +169,9 @@ async def test_failed_checks_count_toward_the_streak_and_alert_without_touching_
         "a row."
     )
     assert "stopped after 5 failures in a row" in alerts[2]
+    if delivery == "app":
+        assert stopped.unread_alert is not None
+        assert stopped.unread_alert.message == alerts[2]
 
 
 @pytest.mark.asyncio

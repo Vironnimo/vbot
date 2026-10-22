@@ -10,8 +10,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from core.automation import _cron_notifications as cron_notifications
 from core.automation import _cron_timing as cron_timing
-from core.automation.cron import CronDelivery, CronStorageError
+from core.automation._cron_delivery import CHAT_MESSAGE_MAX_CHARS
+from core.automation.cron import CronDelivery, CronFailureAlert, CronStorageError
 from core.channels import ChannelError
 from core.runs import RunStatus
 from tests.core.automation.cron_test_support import FakeChats, make_service, scripted_runs
@@ -87,7 +89,11 @@ async def test_notifications_survive_restart_without_repeating_a_completed_run(
     if failure in {"uncertain", "interrupted"}:
         assert recovered_chats.sent == []
         assert recovered.get_job(job.id).delivery_progress()["uncertain"] == 1
+        alert = recovered.get_job(job.id).unread_alert
+        assert alert is not None and alert.kind == "delivery"
         await recovered.retry_delivery(job.id)
+        # Retrying after checking the chat answers the alert.
+        assert recovered.get_job(job.id).unread_alert is None
         kept = json.loads(jobs_file.read_text(encoding="utf-8"))["jobs"][0]["notifications"]
         assert (kept[0]["retry_at"], kept[0]["retry_after_at"]) == (4102444800.0, None)
         await recovered._notifications.flush()
@@ -197,21 +203,134 @@ async def test_an_agent_rename_takes_the_waiting_notifications_along(
         interval_seconds=60,
         delivery=_CHAT,
     )
-    scripted_runs(trigger, (RunStatus.COMPLETED, "The result."))
+    # A finished job is history the rename leaves alone, but not its waiting message.
+    history = await service.create_job(
+        agent_id="agent-one",
+        prompt="Report",
+        schedule_type="interval",
+        interval_seconds=60,
+        remaining_runs=1,
+        delivery=_CHAT,
+    )
+    scripted_runs(trigger, (RunStatus.COMPLETED, "The result."), (RunStatus.COMPLETED, "Done."))
     service.set_chat_delivery(None)
     assert (await service._execution._trigger_job_run(job)).succeeded
-    # The rename moves the Channel first; until the job follows, the message waits.
+    assert (await service._execution._trigger_job_run(history)).succeeded
+    assert service.get_job(history.id).status == "completed"
+    # The rename moves the Channel first; until the messages follow, they wait.
     chats.owners["tg-main"] = "agent-two"
     service.set_chat_delivery(chats)
     await service._notifications.flush()
     assert chats.sent == []
     if started:
         await service.retarget_agent_async(job.id, "agent-two")
+        moved = await service.retarget_notifications_async("agent-one", "agent-two")
     else:
         service.retarget_agent(job.id, "agent-two")
+        moved = service.retarget_notifications("agent-one", "agent-two")
+    assert moved == (history.id,)
+    assert service.get_job(history.id).agent_id == "agent-one"
     now = cron_timing._utc_now()
     monkeypatch.setattr(cron_timing, "_utc_now", lambda: now + timedelta(seconds=30))
     await service._notifications.flush()
-    assert chats.sent == [("tg-main", "The result.", "chat-42", "7")]
-    assert service.get_job(job.id).delivery_progress()["waiting"] == 0
+    assert sorted(text for _, text, *_ in chats.sent) == ["Done.", "The result."]
+    for job_id in (job.id, history.id):
+        assert service.get_job(job_id).delivery_progress()["waiting"] == 0
+    await service.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_job_keeps_a_bounded_backlog_and_the_next_sent_message_counts_the_dropped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cron_notifications, "MAX_RETAINED_NOTIFICATIONS", 3)
+    service, trigger = make_service(tmp_path)
+    chats = FakeChats()
+    service.set_chat_delivery(chats)
+    job = await service.create_job(
+        agent_id="agent-one",
+        prompt="Check",
+        schedule_type="interval",
+        interval_seconds=60,
+        delivery=_CHAT,
+    )
+    long_answer = "word " * 2000
+    scripted_runs(
+        trigger,
+        *[(RunStatus.COMPLETED, f"Answer {number}.") for number in (1, 2, 3)],
+        (RunStatus.COMPLETED, long_answer),
+    )
+    service.set_chat_delivery(None)
+    for _ in range(4):
+        assert (await service._execution._trigger_job_run(job)).succeeded
+
+    stored = make_service(tmp_path)[0].get_job(job.id)
+    assert stored.delivery_progress()["waiting"] == 3
+    assert stored.dropped_notifications == 1
+    # An answer longer than a chat message keeps is cut, and the cut says so.
+    kept = stored.notifications[-1].text
+    assert len(kept) <= CHAT_MESSAGE_MAX_CHARS < len(long_answer)
+    assert kept.endswith("in vBot.]")
+
+    service.set_chat_delivery(chats)
+    await service._notifications.flush()
+    texts = [text for _, text, *_ in chats.sent]
+    assert len(texts) == 3
+    first_line, _, rest = texts[0].partition("\n\n")
+    assert "1 earlier message" in first_line and rest == "Answer 2."
+    assert texts[1:] == ["Answer 3.", kept]
+    assert service.get_job(job.id).dropped_notifications == 0
+    await service.aclose()
+
+
+@pytest.mark.asyncio
+async def test_messages_for_a_deleted_channel_end_after_a_day_with_an_unread_alert(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, trigger = make_service(tmp_path)
+    chats = FakeChats()
+    service.set_chat_delivery(chats)
+    alerts: list[CronFailureAlert] = []
+    service.add_failure_alert_callback(alerts.append)
+    job = await service.create_job(
+        agent_id="agent-one",
+        prompt="Check",
+        schedule_type="interval",
+        interval_seconds=60,
+        delivery=_CHAT,
+    )
+    scripted_runs(trigger, (RunStatus.COMPLETED, "The result."))
+    del chats.owners["tg-main"]
+    assert (await service._execution._trigger_job_run(job)).succeeded
+    saves = 0
+    save = service._save_jobs_async
+
+    async def counted() -> None:
+        nonlocal saves
+        saves += 1
+        await save()
+
+    monkeypatch.setattr(service, "_save_jobs_async", counted)
+    start = cron_timing._utc_now()
+    clock = [start]
+    monkeypatch.setattr(cron_timing, "_utc_now", lambda: clock[0])
+
+    await service._notifications.flush()
+    assert saves == 1
+    # Waiting on at the usual pace rewrites nothing.
+    for minutes in (1, 2, 60):
+        clock[0] = start + timedelta(minutes=minutes)
+        await service._notifications.flush()
+    assert saves == 1 and alerts == []
+    assert service.get_job(job.id).delivery_progress()["waiting"] == 1
+
+    clock[0] = start + timedelta(hours=24, minutes=1)
+    await service._notifications.flush()
+    gone = make_service(tmp_path)[0].get_job(job.id)
+    assert gone.delivery_progress()["waiting"] == 0
+    assert gone.unread_alert is not None and gone.unread_alert.kind == "delivery"
+    assert "tg-main" in gone.unread_alert.message
+    [alert] = alerts
+    assert (alert.job_id, alert.message) == (job.id, gone.unread_alert.message)
+    assert chats.sent == []
     await service.aclose()

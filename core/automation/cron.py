@@ -64,6 +64,12 @@ from core.automation._cron_jobs import (
     validate_cron_jobs_data,
     validate_cron_jobs_file,
 )
+from core.automation._cron_notification_model import (
+    ALERT_MAX_CHARS,
+    AlertKind,
+    CronAlert,
+    CronNotification,
+)
 from core.automation._cron_notifications import CronNotifications
 from core.automation._cron_projection import CronProjection
 from core.automation._cron_scheduler import CronScheduler
@@ -91,6 +97,7 @@ from core.sessions import SessionAddress
 from core.utils.file_status import exists_strict
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
+from core.utils.timestamps import format_canonical_timestamp
 from core.utils.workers import OrderedWorker, settle_before_cancelling
 
 if TYPE_CHECKING:
@@ -104,6 +111,7 @@ if TYPE_CHECKING:
 __all__ = [
     "CRON_EXPRESSION_FIELD_COUNT",
     "ChatDelivery",
+    "CronAlert",
     "CronDelivery",
     "CronFailureAlert",
     "CronJob",
@@ -343,11 +351,14 @@ class CronService:
     def add_failure_alert_callback(
         self, callback: Callable[[CronFailureAlert], None]
     ) -> Callable[[], None]:
-        """Subscribe to failure alerts for vBot itself and return an unsubscribe function.
+        """Subscribe to the alerts no Run reports and return an unsubscribe function.
 
         A job that delivers to vBot raises one at the second failure of a streak
         and when it stops, for failures no failed Run reports: failed checks and
-        Runs that could not start. The callback runs on the Event Loop.
+        Runs that could not start. A chat delivery raises one when a message's
+        delivery is uncertain or its Channel is gone. Each alert is stored on its
+        job as ``unread_alert`` before it is raised. The callback runs on the
+        Event Loop.
         """
         self._failure_alert_callbacks.add(callback)
 
@@ -669,6 +680,113 @@ class CronService:
             _log_retarget(job_id, job.agent_id, agent_id)
         return updated
 
+    def retarget_notifications(self, agent_id: str, new_agent_id: str) -> tuple[str, ...]:
+        """Move every retained chat notification of ``agent_id`` to ``new_agent_id``.
+
+        One step of an Identity Agent rename, after its jobs moved: an Agent
+        rename moves the Agent's Channels, so messages waiting for them follow,
+        also those of jobs the rename does not retarget (completed history, or a
+        job edited to another Agent since). Returns the ids of the changed jobs.
+        For a service that is not started: blocking, like :meth:`retarget_agent`.
+        """
+        if self._started:
+            raise RuntimeError("Retarget the notifications of a started Cron service on its loop")
+        self._ensure_jobs_loaded()
+        before = self._move_notifications(agent_id, new_agent_id)
+        if before:
+            try:
+                self._save_jobs()
+            except Exception:
+                self._restore_notifications(before)
+                raise
+            self._notify_changed()
+        return tuple(before)
+
+    async def retarget_notifications_async(
+        self, agent_id: str, new_agent_id: str
+    ) -> tuple[str, ...]:
+        """:meth:`retarget_notifications` for a started service, on its Event Loop."""
+        async with self._edits:
+            self._ensure_jobs_loaded()
+            before = self._move_notifications(agent_id, new_agent_id)
+            if before:
+                await settle_before_cancelling(
+                    self._save_edit(lambda: self._restore_notifications(before))
+                )
+        return tuple(before)
+
+    def _move_notifications(
+        self, agent_id: str, new_agent_id: str
+    ) -> dict[str, tuple[CronNotification, ...]]:
+        """Point notifications of ``agent_id`` at ``new_agent_id``.
+
+        Returns the earlier notifications of each job it changed.
+        """
+        before: dict[str, tuple[CronNotification, ...]] = {}
+        for job in self._jobs.values():
+            if not any(item.agent_id == agent_id for item in job.notifications):
+                continue
+            before[job.id] = job.notifications
+            job.notifications = tuple(
+                dataclasses.replace(item, agent_id=new_agent_id)
+                if item.agent_id == agent_id
+                else item
+                for item in job.notifications
+            )
+        return before
+
+    def _restore_notifications(self, before: dict[str, tuple[CronNotification, ...]]) -> None:
+        for job_id, notifications in before.items():
+            job = self._jobs.get(job_id)
+            if job is not None:
+                job.notifications = notifications
+
+    async def acknowledge_alert(self, job_id: str, *, actor: str = _DEFAULT_ACTOR) -> CronJob:
+        """Mark a job's unread alert as read; a job without one stays as it is."""
+        async with self._edits:
+            self._ensure_jobs_loaded()
+            job = self._jobs.get(job_id)
+            if job is None:
+                raise CronJobNotFoundError(f"Cron job not found: {job_id}")
+            alert = job.unread_alert
+            if alert is not None:
+                job.unread_alert = None
+
+                def undo() -> None:
+                    if job.unread_alert is None:
+                        job.unread_alert = alert
+
+                await settle_before_cancelling(self._save_edit(undo))
+                _LOGGER.info("Cron job alert acknowledged (job=%s actor=%s)", job_id, actor)
+            return self._clone_job(job)
+
+    async def _record_alert(
+        self, job_id: str, message: str, *, kind: AlertKind = "failure"
+    ) -> None:
+        """Store an alert no Run reports on its job as unread, then raise it to subscribers.
+
+        A later alert replaces an unread earlier one. The alert is raised even
+        when the job file cannot be written, so the tray still shows it.
+        """
+        job = self._jobs.get(job_id)
+        if job is None:
+            return
+        job.unread_alert = CronAlert(
+            message=message[:ALERT_MAX_CHARS],
+            at=format_canonical_timestamp(_timing._utc_now()),
+            kind=kind,
+        )
+        await self._execution._save_jobs_after_fire(job_id)
+        self._raise_failure_alert(
+            CronFailureAlert(
+                job_id=job.id,
+                name=job.name,
+                agent_id=job.agent_id,
+                project_id=job.project_id,
+                message=message,
+            )
+        )
+
     async def _edit(
         self, job_id: str, fields: dict[str, Any], *, rename: bool = False
     ) -> tuple[CronJob, CronJob, list[str]]:
@@ -860,6 +978,9 @@ class CronService:
             )
         if fields.get("status") == "active" and job.status == "failed":
             candidate.consecutive_failures = 0
+            # Enabling the stopped job again answers the alert about its failures.
+            if candidate.unread_alert is not None and candidate.unread_alert.kind == "failure":
+                candidate.unread_alert = None
             if candidate.remaining_runs == 0:
                 candidate.remaining_runs = 1
         if candidate.schedule_type == "webhook" and job.schedule_type != "webhook":
