@@ -27,6 +27,7 @@ from core.recall.canonical import (
 from core.recall.sqlite_fts import SqliteFtsRecallBackend
 from core.sessions import (
     ChatSessionManager,
+    SessionAddress,
 )
 from core.tools._argument_repair import load_json_value
 from core.tools._session_recall_results import (
@@ -287,14 +288,20 @@ async def _search_sessions(
 ) -> JsonObject:
     query = _required_string(arguments, "query")
     agent_id = _agent_id(arguments, context)
+    confined = _confined_to_tree(context)
     if agent_id != context.agent_id and context.permissions.restricted:
         # The rules confine what this Session reads; another Agent's conversations
         # can hold what they keep from it.
         raise _SessionSearchError(
             "permission_denied",
-            f'agent_id "{agent_id}" names another Agent. Under your permission rules, '
-            "session_search searches only your own Agent's Sessions, including its "
-            "Sub-Agent Sessions with include_subagents. Omit agent_id.",
+            f'agent_id "{agent_id}" names another Agent. '
+            + (
+                f"{_TREE_SCOPE} Omit agent_id."
+                if confined
+                else "Under your permission rules, session_search searches only your own "
+                "Agent's Sessions, including its Sub-Agent Sessions with include_subagents. "
+                "Omit agent_id."
+            ),
         )
     session_id = _optional_string(arguments.get("session_id"))
     if agent_id == context.agent_id and session_id == context.session_id:
@@ -320,6 +327,24 @@ async def _search_sessions(
     # Backends admit only Recall-visible Sessions; the current conversation is
     # excluded explicitly because it belongs to the searching Agent.
     excluded_session_ids = (context.session_id,) if agent_id == context.agent_id else ()
+    tree: frozenset[str] | None = None
+    if confined:
+        members, outside = await sessions.run_async(_own_tree, sessions, context)
+        tree = members
+        if session_id is not None and session_id not in members:
+            raise _SessionSearchError(
+                "permission_denied",
+                f'session_id "{session_id}" is outside this conversation. {_TREE_SCOPE} '
+                "Omit session_id.",
+            )
+        # The tree is mostly Sub-Agent Sessions; every other Session stays out
+        # through the exclusions every backend applies, and the recheck below.
+        include_subagents = True
+        excluded_session_ids = (*excluded_session_ids, *outside)
+        notes.append(
+            "Under the permission rules you inherited, this search covered only your own "
+            "Agent's Sessions in this conversation's Sub-Agent tree."
+        )
     request = RecallSearchRequest(
         agent_id=agent_id,
         project_id=context.project_id,
@@ -345,6 +370,7 @@ async def _search_sessions(
         sessions=sessions,
         include_subagents=include_subagents,
         excluded_session_ids=excluded_session_ids,
+        allowed_session_ids=tree,
     )
     if len(hits) != len(page.hits):
         page = replace(page, hits=tuple(hits))
@@ -359,6 +385,54 @@ async def _search_sessions(
         notes=notes,
     )
     return data
+
+
+# What a Session under an inherited ceiling can search, for its refusals.
+_TREE_SCOPE = (
+    "Under the permission rules you inherited, session_search searches only your own "
+    "Agent's Sessions in this conversation's Sub-Agent tree."
+)
+
+
+def _confined_to_tree(context: ToolContext) -> bool:
+    """Whether the Run inherited a ceiling: then only its own conversation tree is searchable.
+
+    A Sub-Agent or Cron Session bounded by whoever caused it could otherwise
+    pass on what its Agent's unrestricted Sessions hold. An Agent restricted
+    only by its own rules keeps searching all of its Sessions.
+    """
+    return any(layer.source != "agent" for layer in context.permissions.layers)
+
+
+def _own_tree(
+    sessions: ChatSessionManager, context: ToolContext
+) -> tuple[frozenset[str], tuple[str, ...]]:
+    """Blocking: the caller's Sessions in its conversation tree, and its other live Sessions.
+
+    The tree is the farthest live ancestor and every Sub-Agent Session below it,
+    as the Scratch Area places them; an unreadable link fails the search.
+    """
+    # Imported here: the Sub-Agent package imports the Tools.
+    from core.subagents.links import ancestors, descendants
+
+    address = SessionAddress(
+        project_id=context.project_id, agent_id=context.agent_id, session_id=context.session_id
+    )
+    chain = ancestors(sessions, address, strict=True)
+    root = chain[-1] if chain else address
+    members = (root, *(link.session for link in descendants(sessions, root, strict=True)))
+    tree = frozenset(
+        member.session_id
+        for member in members
+        if member.agent_id == context.agent_id
+        and (member.project_id or None) == (context.project_id or None)
+    )
+    outside = tuple(
+        revision.address.session_id
+        for revision in sessions.list_history_revisions(context.agent_id, context.project_id)
+        if revision.address.session_id not in tree
+    )
+    return tree, outside
 
 
 def _limit(value: Any) -> tuple[int, list[str]]:
