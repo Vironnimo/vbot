@@ -166,6 +166,9 @@ class CommandReport:
     # its start when it wrote none, until it ended or the report was taken; 0
     # for a command restored after a restart.
     silent_seconds: float = 0.0
+    # PowerShell background jobs (``&``, ``Start-Job``) the shell ended as it
+    # exited; their hosts are no failed programs (Windows only).
+    jobs_ended: bool = False
 
     @property
     def status(self) -> CommandStatus:

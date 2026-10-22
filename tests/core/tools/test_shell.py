@@ -885,6 +885,29 @@ async def test_failed_command_gets_a_hint_in_its_result_and_its_delivery(
     assert "Failed programs" not in body
 
 
+@pytest.mark.parametrize(
+    ("command", "hinted"),
+    [
+        # Agents wrote a trailing & to keep a server running, as in bash.
+        ("npm run dev &; Start-Sleep 5", True),
+        # The call operator starts no job, and a job the command waited for needs no hint.
+        ("& npm test; Start-Job { 1 } | Receive-Job -Wait", False),
+    ],
+)
+@pytest.mark.asyncio
+async def test_powershell_jobs_that_ended_with_the_command_are_named(
+    shell: Shell, command: str, hinted: bool
+) -> None:
+    call = shell.call({"command": command})
+    process = await shell.started()
+    process.tree.jobs_ended = 1
+    process.exit(0)
+
+    result = data(await shell.returned(call))
+    assert ("run_in_background" in result.get("hint", "")) is hinted
+    assert "failed_programs" not in result
+
+
 @pytest.mark.asyncio
 async def test_calls_refused_before_the_start_run_nothing(shell: Shell) -> None:
     tmp_path = shell.commands.cwd

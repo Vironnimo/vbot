@@ -206,6 +206,9 @@ def test_tree_records_the_exit_code_of_a_failed_direct_child() -> None:
             "npx create-vite@5.2.0",
         ),
         ("node.exe", ["node", "npx-cli.js", "https://SECRET@host/x.tgz"], "npx"),
+        ("pwsh.exe", ["pwsh", "-File", "SECRET.ps1"], ""),
+        # The host of a PowerShell job (& or Start-Job), which PowerShell ends as it exits.
+        ("pwsh.exe", ["pwsh", "-s", "-NoLogo", "-NoProfile", "-wd", "C:/work"], None),
     ],
     ids=[
         "module",
@@ -235,13 +238,15 @@ def test_tree_records_the_exit_code_of_a_failed_direct_child() -> None:
         "npm-option-first",
         "npx-package",
         "npx-url",
+        "powershell-script",
+        "powershell-job-host",
     ],
 )
 def test_child_start_retains_only_its_invocation_selector_through_exit(
     monkeypatch: pytest.MonkeyPatch,
     name: str,
     arguments: list[str] | psutil.Error,
-    invocation: str,
+    invocation: str | None,
 ) -> None:
     # Drive the OS notification boundary deterministically: command-line reads
     # can fail for an exited child even while its retained handle has its code.
@@ -285,6 +290,7 @@ def test_child_start_retains_only_its_invocation_selector_through_exit(
     tree._lock = threading.Lock()
     tree._children = {}
     tree._exits = []
+    tree._jobs_ended = 0
     tree._closed = False
     tree._job = 10
     monkeypatch.setattr(process_tree.psutil, "Process", Child)
@@ -292,6 +298,12 @@ def test_child_start_retains_only_its_invocation_selector_through_exit(
     tree.notify(process_tree._MSG_NEW_PROCESS, 2)
     tree.notify(process_tree._MSG_EXIT_PROCESS, 2)
     facts = tree.facts()
+    if invocation is None:
+        # Its exit code is no failure of its own: it ended with the job.
+        assert (facts.nonzero_exits, facts.jobs_ended, tree.exit_count()) == ((), 1, 0)
+        assert closed == [2]
+        return
+    assert facts.jobs_ended == 0
     (failure,) = facts.nonzero_exits
     assert (failure.name, failure.exit_code, failure.invocation) == (name, 5, invocation)
     described_name, _, described_code = failure.describe().partition(" exited with code ")

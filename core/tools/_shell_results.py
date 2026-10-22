@@ -36,7 +36,7 @@ from core.tools.command_manager import (
 from core.tools.file_state import os_error_reason
 from core.tools.model_names import BASH_TOOL_NAME, SHELL_MODEL_NAME
 from core.tools.process_tree import RunningProcess
-from core.tools.shell_hints import HINT_TOOL_NAMES, annotate_failure
+from core.tools.shell_hints import HINT_TOOL_NAMES, annotate_failure, ended_jobs_hint
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -423,7 +423,8 @@ def failure_hint(
     A stop by vBot explains itself; its hint only says why output piped into
     a stage that holds it is missing. The line count is the command's own,
     since a long *output* keeps only its first and last lines. A hint names
-    only paths *permissions*, the reading Session's boundary, may read.
+    only paths *permissions*, the reading Session's boundary, may read. Jobs
+    a trailing & started and the shell ended add their hint after any other.
     """
     if report.stop_reason is not None:
         stage = holding_stage(report.command)
@@ -451,6 +452,9 @@ def failure_hint(
             "Exit code 0 comes from the last statement only: the failed programs exited with "
             "an error before it, and the command went on after them."
         )
+    jobs = ended_jobs_hint(report.command) if report.jobs_ended else None
+    if jobs is not None:
+        hint = jobs if hint is None else f"{hint} {jobs}"
     return hint
 
 

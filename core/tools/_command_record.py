@@ -295,6 +295,7 @@ class CommandRecord:
                 else None
             ),
             log_loss=log_loss,
+            jobs_ended=facts is not None and facts.jobs_ended > 0,
         )
 
     def latest(self, lines: int) -> str:
