@@ -1103,9 +1103,13 @@ async def test_calls_run_concurrently_and_server_requests_belong_to_their_call(
 
 
 @pytest.mark.asyncio
-async def test_legacy_list_changed_refreshes_and_republishes_a_changed_catalog(host, monkeypatch):
-    tools = ["add"]
+async def test_legacy_list_changed_refreshes_and_republishes_a_changed_catalog(
+    host, monkeypatch, caplog
+):
+    tools = ["add", "odd"]
     published: list[list[str]] = []
+    # A schema vBot's Tool contract refuses costs only that Tool.
+    refused = {"type": "object", "properties": {}, "required": ["missing"]}
 
     async def call(server_context, params):
         tools.append("added")
@@ -1116,7 +1120,10 @@ async def test_legacy_list_changed_refreshes_and_republishes_a_changed_catalog(h
 
     async def list_tools(server_context, params):
         return types.ListToolsResult(
-            tools=[types.Tool(name=name, input_schema={"type": "object"}) for name in tools]
+            tools=[
+                types.Tool(name=name, input_schema=refused if name == "odd" else {"type": "object"})
+                for name in tools
+            ]
         )
 
     async def sleep(delay):
@@ -1124,6 +1131,7 @@ async def test_legacy_list_changed_refreshes_and_republishes_a_changed_catalog(h
 
     monkeypatch.setattr(mcp_client, "_sleep", sleep)
     monkeypatch.setattr(mcp_protocol, "_sleep", sleep)
+    caplog.set_level(logging.WARNING, logger="vbot.extensions.mcp")
     server = Server("changes", on_call_tool=call, on_list_tools=list_tools)
     runner = runner_for(host, StreamServer(server), monkeypatch)
     runner.config["transport"] = "sse"
@@ -1142,6 +1150,14 @@ async def test_legacy_list_changed_refreshes_and_republishes_a_changed_catalog(h
         # Republished once: refreshes that find the same catalog publish nothing.
         assert published == [["add"], ["add", "added"]]
         assert _notified(runner) == ["catalog_changed"] * 3
+        # The left-out Tool is reported once, when it starts being left out.
+        events = runner.events()["events"]
+        skipped = [event["payload"] for event in events if event["kind"] == "tool_skipped"]
+        assert [payload["tool"] for payload in skipped] == ["odd"]
+        assert "requires unknown properties: missing" in skipped[0]["problem"]
+        logged = [record.getMessage() for record in caplog.records if "skipped" in record.msg]
+        assert len(logged) == 1
+        assert "missing" not in logged[0]
     finally:
         await runner.close()
 

@@ -487,14 +487,20 @@ def _ambiguous_provider() -> SimpleNamespace:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("method", "params", "named"),
+    ("method", "params", "code", "named"),
     [
         (
             "provider.set_key",
             {"provider_id": "openrouter", "value": "secret", "account": "Not-Valid"},
+            "invalid_request",
             "Not-Valid",
         ),
-        ("provider.unset_key", {"provider_id": "openrouter", "account": "UPPER"}, "UPPER"),
+        (
+            "provider.unset_key",
+            {"provider_id": "openrouter", "account": "UPPER"},
+            "invalid_request",
+            "UPPER",
+        ),
         (
             "provider.set_key",
             {
@@ -503,26 +509,31 @@ def _ambiguous_provider() -> SimpleNamespace:
                 "value": "secret",
                 "account": "personal",
             },
+            "invalid_request",
             "params.account 'personal' conflicts with account 'work'",
         ),
         (
             "provider.set_key",
             {"provider_id": "openrouter", "connection_id": "openrouter:oauth", "value": "secret"},
+            "invalid_request",
             "'openrouter:oauth' is not an API key connection",
         ),
         (
             "provider.unset_key",
             {"provider_id": "openrouter", "connection_id": "openrouter:oauth"},
+            "invalid_request",
             "'openrouter:oauth' is not an API key connection",
         ),
         (
             "provider.set_key",
             {"provider_id": "ambiguous", "value": "secret"},
+            "invalid_request",
             "has multiple API key connections; pass connection_id",
         ),
         (
             "connection.set_enabled",
             {"provider_id": "openrouter", "connection_id": "openrouter:api-key", "enabled": "yes"},
+            "invalid_request",
             "params.enabled must be a boolean",
         ),
         # Enablement is Connection-level; an Account suffix is an invalid target.
@@ -533,9 +544,28 @@ def _ambiguous_provider() -> SimpleNamespace:
                 "connection_id": "openrouter:api-key:work",
                 "enabled": True,
             },
+            "invalid_request",
             "targets a connection, not an account",
         ),
-        ("connection.list", {"x": 1}, "connection.list does not accept params"),
+        (
+            "connection.list",
+            {"x": 1},
+            "invalid_request",
+            "connection.list does not accept params",
+        ),
+        # An unknown Provider id is refused whether or not a Connection is named.
+        (
+            "provider.set_key",
+            {"provider_id": "opneai", "value": "secret"},
+            "domain_error",
+            "unknown provider: opneai",
+        ),
+        (
+            "provider.unset_key",
+            {"provider_id": "opneai", "connection_id": "opneai:api-key"},
+            "domain_error",
+            "unknown provider: opneai",
+        ),
     ],
 )
 async def test_malformed_connection_requests_change_nothing(
@@ -543,6 +573,7 @@ async def test_malformed_connection_requests_change_nothing(
     monkeypatch: pytest.MonkeyPatch,
     method: str,
     params: JsonObject,
+    code: str,
     named: str,
 ) -> None:
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
@@ -552,7 +583,7 @@ async def test_malformed_connection_requests_change_nothing(
 
     error = await rpc_error(state, method, **params)
 
-    assert error["code"] == "invalid_request"
+    assert error["code"] == code
     assert named in error["message"]
     assert state.runtime.storage.load_environment() == {}
     assert resource_changes(state) == []
