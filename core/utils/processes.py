@@ -49,6 +49,7 @@ _POSIX_LIFETIME_WRITE_FD: int | None = None
 # ``core`` package, say), and it writes no bytecode into an installed version.
 _GUARDIAN_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "process_guardian.py")
 _GUARDIAN_INTERPRETER_OPTIONS = ("-I", "-S", "-B", "-X", "utf8")
+_GUARDIAN_DISCOVERY_SECONDS = 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,7 +197,16 @@ def find_process_guardian(pid: int) -> Any | None:
 
     try:
         process = psutil.Process(pid)
-        arguments = process.cmdline()
+        deadline = time.monotonic() + _GUARDIAN_DISCOVERY_SECONDS
+        while not (arguments := process.cmdline()):
+            # Linux can expose an empty cmdline while exec initializes a live
+            # process. Treating it as an ordinary process group loses custody
+            # of descendants that the guardian keeps across setsid/double-fork.
+            if not process.is_running() or process.status() == psutil.STATUS_ZOMBIE:
+                return None
+            if time.monotonic() >= deadline:
+                raise OSError(f"The command line of process {pid} is not available")
+            time.sleep(0.01)
         prefix = (*_GUARDIAN_INTERPRETER_OPTIONS, _GUARDIAN_SCRIPT)
         if tuple(arguments[1 : 1 + len(prefix)]) != prefix:
             return None
