@@ -699,11 +699,18 @@ def _check_member_scopes(
                     agent_id=agent_id,
                 )
         elif not services.agents.exists(agent_id):
+            # A rename takes the archived Sessions along, so a missing Agent was
+            # deleted: its newest entry restores it, or else only a new Agent of
+            # that id can take its Sessions.
+            entry_id = ledger.newest_entry_id(ARCHIVE_KIND_AGENT, agent_id)
             findings.block(
                 "scope_missing",
-                f"Agent {agent_id} does not exist; restore it first",
+                f"Agent {agent_id} does not exist; restore its archive entry {entry_id} first"
+                if entry_id is not None
+                else f"Agent {agent_id} no longer exists and no archive entry holds it; "
+                f"create an Agent with the id {agent_id}, then restore again",
                 agent_id=agent_id,
-                entry_id=ledger.newest_entry_id(ARCHIVE_KIND_AGENT, agent_id),
+                entry_id=entry_id,
             )
 
 

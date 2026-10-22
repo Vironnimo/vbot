@@ -470,12 +470,15 @@ class AgentStore:
         Agent-owned file live below the same directory, so moving that directory
         preserves the whole identity. A Workspace anywhere inside the tree is
         rebased to the same relative location; an external Workspace is unchanged.
-        Live Session addresses, the Sub-Agent parent links to them, the roster
-        order and delegation allow-lists move to the new id with it.
+        Live and archived Session addresses, the Sub-Agent parent links to them,
+        the roster order and delegation allow-lists move to the new id with it;
+        only archived Sessions that an archived Agent of the old id holds or that
+        an Extension manages stay behind.
 
-        The new id must be unused. No Agent, live Session or
-        ``external_references`` entry (the references other owners hold to
-        ``new_agent_id``) may name it; references raise
+        The new id must be unused. No Agent, live Session, archived Session that
+        a rename moves or ``external_references`` entry (the references other
+        owners hold to ``new_agent_id``) may name it; references and archive
+        entries holding such Sessions (``archive:<entry id>``) raise
         :class:`AgentReferencedError` naming each of them. Reverting a rename
         moves what names the new id back to the old one, so it would take along a
         reference that named the new id before the rename. A delegation allow-list

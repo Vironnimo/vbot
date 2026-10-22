@@ -308,6 +308,18 @@ class SessionArchiveLedger:
             )
         )
 
+    def identity_agent_entry_ids(self, agent_id: str) -> tuple[str, ...]:
+        """The entries an Identity Agent rename from or to ``agent_id`` changes, oldest first.
+
+        Those holding archived Sessions of the Agent that a rename moves, which
+        are all but the Sessions an archived Agent of that id holds in its own
+        entry or an Extension manages, and the Agent's ``session`` entries
+        (``ChatSessionManager.retarget_identity_agent_sessions``).
+        """
+        return self._store._read(
+            lambda connection: _store_archive.identity_agent_entry_ids(connection, agent_id)
+        )
+
     def newest_entry_id(self, kind: str, subject_id: str) -> str | None:
         return self._store._read(
             lambda connection: _store_archive.newest_entry_id(connection, kind, subject_id)

@@ -18,6 +18,7 @@ from core.sessions import (
     _store_prompts,
     _store_values,
 )
+from core.sessions._archive_types import ARCHIVE_KIND_AGENT, ARCHIVE_KIND_SESSION
 from core.sessions._metadata import _RUN_KIND_VALUES
 from core.sessions._types import (
     SESSION_FORK_ALWAYS_STRIP_META_KEYS,
@@ -629,10 +630,60 @@ def delete(connection: sqlite3.Connection, address: SessionAddress) -> None:
 _GLOBAL_AGENT_SCOPE = "s.project_id = '' AND s.agent_id = ? AND s.state = 'live'"
 
 
+def _stays_archived_with_its_owner(alias: str) -> str:
+    """SQL: the archived Session ``alias`` belongs to an owner that restores or deletes it.
+
+    An archived Agent of the same id holds it in its own entry, or an Extension
+    manages it.
+    """
+    return (
+        "(EXISTS (SELECT 1 FROM archive_entry_sessions AS held "
+        "JOIN archive_entries AS holder ON holder.entry_key = held.entry_key "
+        f"WHERE held.session_key = {alias}.session_key AND holder.kind = '{ARCHIVE_KIND_AGENT}' "
+        f"AND holder.subject_id = {alias}.agent_id) "
+        "OR EXISTS (SELECT 1 FROM temporary_session_bindings AS managed "
+        f"WHERE managed.session_key = {alias}.session_key))"
+    )
+
+
+def archived_identity_session(alias: str) -> str:
+    """SQL: the Session ``alias`` is archived and follows a rename of its Identity Agent.
+
+    The next parameter names the Agent. Every archived global Session of it
+    follows, so its archive entry restores it to the renamed Agent, except one
+    an archived Agent of the same id holds in its own entry, which that entry
+    restores with that Agent, and one an Extension manages, which only the
+    Extension resumes or deletes.
+    """
+    return (
+        f"{alias}.project_id = '' AND {alias}.agent_id = ? AND {alias}.state = 'archived' "
+        f"AND NOT {_stays_archived_with_its_owner(alias)}"
+    )
+
+
+def _renamed_session(alias: str) -> str:
+    """SQL: the Session ``alias`` moves with a rename of the Identity Agent the next parameter names.
+
+    Its live global Sessions move, and its archived ones that follow it
+    (:func:`archived_identity_session`).
+    """
+    return (
+        f"{alias}.project_id = '' AND {alias}.agent_id = ? AND ({alias}.state = 'live' "
+        f"OR ({alias}.state = 'archived' AND NOT {_stays_archived_with_its_owner(alias)}))"
+    )
+
+
 def retarget_identity_agent(
     connection: sqlite3.Connection, old_agent_id: str, new_agent_id: str
-) -> None:
-    """Rename every live global Session address of one Identity Agent."""
+) -> int:
+    """Rename every global Session address of one Identity Agent, live and archived.
+
+    Archived Sessions follow (:func:`archived_identity_session`), and so does the
+    scope of every ``session`` archive entry of the Agent, so a restore brings
+    them back to the renamed Agent. Archived generations may share an address,
+    so only live addresses can collide. Returns how many archived Sessions and
+    archive entries changed.
+    """
     _store_values._reject_owner_managed_scope_mutation(
         connection, _GLOBAL_AGENT_SCOPE, (old_agent_id,)
     )
@@ -650,6 +701,17 @@ def retarget_identity_agent(
         "WHERE project_id = '' AND agent_id = ? AND state = 'live'",
         (new_agent_id, old_agent_id),
     )
+    archived = connection.execute(
+        "UPDATE sessions SET agent_id = ?, state_revision = state_revision + 1 "
+        "WHERE session_key IN (SELECT s.session_key FROM sessions AS s "
+        f"WHERE {archived_identity_session('s')})",
+        (new_agent_id, old_agent_id),
+    ).rowcount
+    entries = connection.execute(
+        "UPDATE archive_entries SET agent_id = ? "
+        "WHERE kind = ? AND project_id = '' AND agent_id = ?",
+        (new_agent_id, ARCHIVE_KIND_SESSION, old_agent_id),
+    ).rowcount
     # Package owners follow an Identity Agent rename, including use in other
     # Agents' Sessions. This changes old entries rather than appending new ones,
     # so invalidate existing read cursors for their own and inherited views.
@@ -668,6 +730,7 @@ def retarget_identity_agent(
         "WHERE skill_package_source = 'agent' AND skill_package_location = ?",
         (new_agent_id, old_agent_id),
     )
+    return int(archived) + int(entries)
 
 
 def retarget_metadata_value(
@@ -704,18 +767,22 @@ def _write_subagent_parent(
 def retarget_identity_agent_references(
     connection: sqlite3.Connection, old_agent_id: str, new_agent_id: str
 ) -> tuple[SessionIdentityReferenceUpdate, ...]:
-    """Point live Sub-Agent parent links at the renamed Identity Agent's moved Sessions.
+    """Point Sub-Agent parent links at the renamed Identity Agent's moved Sessions.
 
-    A link follows its parent Session's address: it moves only while that Session
-    is live under ``new_agent_id``. Links to a parent that stayed behind, such as
-    an archived Session, or that no longer exists keep their Agent id.
+    A link of a live or archived child follows its parent Session's address: it
+    moves only while that Session, live or archived, is under ``new_agent_id``
+    the way :func:`retarget_identity_agent` moves Sessions there, and a link
+    that recorded its parent's generation moves only with that generation. Links
+    to a parent that stayed behind, such as a Session an archived Agent of the
+    old id holds, or that no longer exists keep their Agent id.
     """
     rows = connection.execute(
         f"SELECT {_store_values._SESSION_STATE_COLUMNS} FROM sessions AS s "
-        "WHERE s.state = 'live' AND s.subagent_parent_project_id IS NULL "
+        "WHERE s.subagent_parent_project_id IS NULL "
         "AND s.subagent_parent_agent_id = ? AND EXISTS (SELECT 1 FROM sessions AS parent "
-        "WHERE parent.project_id = '' AND parent.agent_id = ? "
-        "AND parent.session_id = s.subagent_parent_session_id AND parent.state = 'live') "
+        f"WHERE {_renamed_session('parent')} "
+        "AND parent.session_id = s.subagent_parent_session_id "
+        "AND COALESCE(s.subagent_parent_generation_id, '') IN ('', parent.generation_id)) "
         "ORDER BY s.session_key",
         (old_agent_id, new_agent_id),
     ).fetchall()

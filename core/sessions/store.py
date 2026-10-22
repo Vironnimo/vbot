@@ -308,7 +308,7 @@ class SessionStore:
             lambda connection: _store_mutations.discard_unused(connection, address, generation_id)
         )
 
-    def retarget_identity_agent(self, old_agent_id: str, new_agent_id: str) -> None:
+    def retarget_identity_agent(self, old_agent_id: str, new_agent_id: str) -> int:
         return self._execute_write(
             lambda connection: _store_mutations.retarget_identity_agent(
                 connection, old_agent_id, new_agent_id

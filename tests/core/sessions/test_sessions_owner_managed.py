@@ -9,7 +9,13 @@ import pytest
 from core.chat import ChatMessage, ChatSessionError
 from core.chat.messages import ToolCall
 from core.runs import Run, RunExecutionOwner
-from core.sessions import ChatSessionManager, SessionAddress, TemporarySessionBinding
+from core.sessions import (
+    ARCHIVE_KIND_OWNER_GROUP,
+    ArchiveEntryFilter,
+    ChatSessionManager,
+    SessionAddress,
+    TemporarySessionBinding,
+)
 from tests.core.sessions.history_fixtures import complete_run
 from tests.core.sessions.sessions_test_support import _address
 
@@ -205,6 +211,13 @@ async def test_owner_managed_session_rejects_lifecycle_mutations_at_storage_boun
     # Ordinary metadata never makes it listable.
     manager.set_metadata(address, {"title": "ordinary metadata"})
     assert manager.list_summaries_page([(None, "temporary")], limit=20).sessions == ()
+    # An Identity rename moves archived Sessions too, but an archived one an
+    # Extension manages neither blocks it nor moves: only the Extension removes it.
+    await manager.archive_temporary_group(owner_name="swarm", group_id="group", reason="test")
+    manager.retarget_identity_agent_sessions("temporary", "ordinary")
+    ledger = manager.archive_ledger
+    (entry,) = ledger.page(ArchiveEntryFilter(kind=ARCHIVE_KIND_OWNER_GROUP)).entries
+    assert [member.address for member in ledger.members(entry.entry_key)] == [address]
 
 
 @pytest.mark.asyncio
