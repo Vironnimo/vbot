@@ -122,6 +122,17 @@ class ChannelService:
         self._connections.start()
 
     def stop(self) -> None:
+        """Stop the adapters and observation recovery without awaiting them.
+
+        Recovery is durable and resumes at the next start; cancelling it here
+        keeps it from outliving the state database when no ``aclose`` follows,
+        as after a failed Runtime start.
+        """
+        self._stop_adapters()
+        for task in self._observation_tasks:
+            task.cancel()
+
+    def _stop_adapters(self) -> None:
         for setup_task in self._whatsapp_setup_tasks.values():
             setup_task.cancel()
         self._connections.stop()
@@ -168,7 +179,7 @@ class ChannelService:
         """Stop all channel tasks and await their cancellation/shutdown paths."""
         tasks = self._connections.pending_tasks()
         tasks.extend(self._whatsapp_setup_tasks.values())
-        self.stop()
+        self._stop_adapters()
         tasks.extend(self._connections.pending_tasks())
 
         pending_tasks = _unique_pending_tasks(tasks)
