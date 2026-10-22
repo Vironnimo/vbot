@@ -355,6 +355,8 @@ class _RunExecutionContext:
     skill_catalog: PinnedSkillCatalog
     prompt_cache_affinity_id: str
     session_snapshot: _SessionSnapshot
+    # Every Tool Call of this Run checks its accesses against this boundary.
+    permissions: PermissionBoundary
     # The Session is linked to a Parent Agent (a Sub-Agent Session).
     subagent_session: bool = False
     # The Session leaves ``subagent`` out of its Tool list for this Run (a
@@ -362,8 +364,6 @@ class _RunExecutionContext:
     subagent_tool_withheld: bool = False
     # The Session has an open goal, which grants ``update_goal`` for this Run.
     goal_session: bool = False
-    # Every Tool Call of this Run checks its accesses against this boundary.
-    permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED
     # What ``permissions`` was built from; ``None`` keeps it for the whole Run.
     permission_sources: RunPermissions | None = None
     request_state: _RequestState | None = None

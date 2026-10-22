@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -13,11 +13,15 @@ import pytest
 import core.chat._external_run as external_run_module
 from core.chat import ChatError
 from core.chat.messages import INPUT_ORIGIN_LIVE_VOICE
+from core.json_documents import document_change
+from core.permissions import normalize_permission_rules
 from core.runs import RunCancelledError, RunKind, RunStatus
-from core.tools import ToolRegistry, tool_success
+from core.tools import ToolContext, ToolRegistry, tool_success
 from tests.core.chat.chat_loop_support import (
     StubAdapter,
     StubAgent,
+    StubProject,
+    StubProjects,
     StubRuntime,
     build_chat_loop,
     session_address,
@@ -109,6 +113,65 @@ async def test_external_run_records_the_conversation_and_runs_tool_calls(tmp_pat
     assert external.ended
     assert (await external.run_tool("call_3", "lookup", {}))["ok"] is False
     assert runtime.adapter.requests == []
+
+
+@pytest.mark.asyncio
+async def test_external_run_tool_calls_work_in_the_project_inside_the_agents_rules(
+    tmp_path: Path,
+) -> None:
+    seen: list[ToolContext] = []
+
+    def probe(context: ToolContext, _arguments: Any) -> Any:
+        seen.append(context)
+        return tool_success({})
+
+    tools = ToolRegistry()
+    tools.register("lookup", "Look something up.", {"type": "object"}, probe)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    agent = LiveAgent(
+        id="coder",
+        model=MODEL,
+        allowed_tools=["lookup"],
+        workspace=tmp_path / "workspace",
+        root_project_id="proj",
+        permission_rules=normalize_permission_rules(
+            {"read": "work_area", "write": "work_area", "deny": ["Read({workdir}/secrets)"]}
+        ),
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path / "data",
+        agent=agent,
+        adapter=StubAdapter([]),
+        tools=tools,
+        projects=StubProjects({"proj": StubProject("proj", str(repo), [])}),
+    )
+    external = await build_chat_loop(runtime).start_external_run(
+        "coder", model="voice-model", title="Live call"
+    )
+
+    await external.run_tool("call_1", "lookup", {})
+    # The user tightens the rules while the call runs, as vBot saves the edit.
+    runtime.agents._agent = replace(
+        agent, permission_rules=normalize_permission_rules({"write": "scratch"})
+    )
+    with document_change(tmp_path / "data" / "agents" / "coder" / "agent.json"):
+        pass
+    await external.run_tool("call_2", "lookup", {})
+    await external.finish()
+
+    first, second = seen
+    # Relative paths resolve in the Working Project, like a Chat Run's.
+    assert first.cwd == repo
+    boundary = first.permissions
+    assert boundary.check_path(repo / "notes.md", "write") is None
+    denied = boundary.check_path(repo / "secrets" / "key", "read")
+    assert denied is not None and denied.reason == "deny_rule"
+    outside = boundary.check_path(tmp_path / "elsewhere.md", "read")
+    assert outside is not None and outside.reason == "not_permitted"
+    # The edit reaches the next call.
+    refused = second.permissions.check_path(repo / "notes.md", "write")
+    assert refused is not None and refused.reason == "not_permitted"
 
 
 @pytest.mark.asyncio
