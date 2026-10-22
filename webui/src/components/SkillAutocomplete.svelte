@@ -90,22 +90,15 @@
         onclick={() => onSelect(skill)}
       >
         <span class="skill-autocomplete__name">{skill.name}</span>
-        <span class="skill-autocomplete__detail">
-          {#if skill.description}
-            <span class="skill-autocomplete__description">
-              {skill.description}
-            </span>
-          {:else}
-            <span class="skill-autocomplete__description muted">
-              {t('skillAutocomplete.noDescription')}
-            </span>
-          {/if}
-          {#if skill.argumentHint}
-            <span class="skill-autocomplete__hint">
-              {`/${skill.name.replace(/^\/+/u, '')} ${skill.argumentHint}`}
-            </span>
-          {/if}
-        </span>
+        {#if skill.description}
+          <span class="skill-autocomplete__description">
+            {skill.description}
+          </span>
+        {:else}
+          <span class="skill-autocomplete__description muted">
+            {t('skillAutocomplete.noDescription')}
+          </span>
+        {/if}
       </button>
     {/each}
   </div>
@@ -191,24 +184,6 @@
     color: inherit;
     font-family: var(--font-ui);
     font-size: var(--fs-body-sm);
-    line-height: 1.4;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .skill-autocomplete__detail {
-    display: flex;
-    min-width: 0;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  /* What may follow a command's name, written as it is typed. */
-  .skill-autocomplete__hint {
-    overflow: hidden;
-    color: var(--text-lo);
-    font-family: var(--font-mono);
-    font-size: var(--fs-label-sm);
     line-height: 1.4;
     text-overflow: ellipsis;
     white-space: nowrap;

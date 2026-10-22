@@ -184,7 +184,7 @@ class CommandDispatcher:
             "agent",
             "Move this session to another agent; no argument lists the directory.",
             argument="optional",
-            argument_hint="[agent] [task]",
+            argument_hint="Which agent should take over?",
             catalog_result="state_change",
             execution_mode="immediate",
             argument_execution_mode="serialized",
@@ -194,7 +194,7 @@ class CommandDispatcher:
             "compact",
             "Compact the current session's context immediately.",
             argument="optional",
-            argument_hint="[what the summary should keep]",
+            argument_hint="What should the summary keep? (optional)",
             catalog_result="notice",
             execution_mode="serialized",
         ),
@@ -202,7 +202,7 @@ class CommandDispatcher:
             "goal",
             "Set a goal the agent works toward across turns; /goal pause, resume or clear.",
             argument="optional",
-            argument_hint="<objective> [--max N] | pause | resume | clear",
+            argument_hint="Describe your goal",
             catalog_result="state_change",
             execution_mode="immediate",
             new_session_mode="create_session",
@@ -212,7 +212,7 @@ class CommandDispatcher:
             "handoff",
             "Write a handoff and start a new session (optionally for another agent).",
             argument="optional",
-            argument_hint="[agent:<agent>] [instruction]",
+            argument_hint="What should the next session focus on? (optional)",
             catalog_result="state_change",
             execution_mode="serialized",
         ),
@@ -228,7 +228,7 @@ class CommandDispatcher:
             "learn",
             "Author a reusable skill into your own home from a source (folder, URL, or text).",
             argument="optional",
-            argument_hint="[folder, URL or text]",
+            argument_hint="What should the agent learn from? A folder, link or text",
             catalog_result="state_change",
             execution_mode="serialized",
             new_session_mode="create_session",
@@ -237,7 +237,7 @@ class CommandDispatcher:
             "model",
             "Show or permanently set this agent's model (/model reset to clear).",
             argument="optional",
-            argument_hint="[model] | reset",
+            argument_hint="Pick a model",
             catalog_result="state_change",
             execution_mode="immediate",
             argument_execution_mode="serialized",
@@ -255,7 +255,7 @@ class CommandDispatcher:
             "reflect",
             "Review this session in a fork and save durable memory and skill updates.",
             argument="optional",
-            argument_hint="[focus]",
+            argument_hint="What should the reflection focus on? (optional)",
             catalog_result="state_change",
             execution_mode="serialized",
         ),
@@ -263,7 +263,7 @@ class CommandDispatcher:
             "rename",
             "Rename this session; no argument clears the name.",
             argument="optional",
-            argument_hint="[title]",
+            argument_hint="New name for this session",
             catalog_result="notice",
             execution_mode="serialized",
         ),
@@ -271,7 +271,7 @@ class CommandDispatcher:
             "secret",
             "Give the agent a password or key it uses without seeing it.",
             argument="optional",
-            argument_hint="NAME [--permanent | --for 2h | --once] VALUE",
+            argument_hint="Name of the secret, then its value",
             catalog_result="notice",
             # Immediate: the Run may be waiting in a secrets request this answers.
             execution_mode="immediate",
@@ -292,7 +292,7 @@ class CommandDispatcher:
             "Stop the active run; /stop all also stops background commands, terminals and "
             "sub-agents.",
             argument="optional",
-            argument_hint="[all]",
+            argument_hint='Add "all" to also stop background work',
             catalog_result="notice",
             execution_mode="immediate",
         ),
@@ -780,8 +780,7 @@ class CommandDispatcher:
     ) -> CommandOutcome:
         lines = ["Slash commands:"]
         lines.extend(
-            " ".join(part for part in (f"/{spec.name}", spec.argument_hint) if part)
-            + f" - {spec.description}"
+            f"/{spec.name} - {spec.description}"
             for spec in self.catalog()
             if context.reply_surface.kind not in spec.unavailable_surfaces
         )

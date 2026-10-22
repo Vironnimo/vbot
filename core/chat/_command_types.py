@@ -55,8 +55,8 @@ class CommandSpec:
     # The argument can carry a Secret value: accessors keep no copy of the command
     # text, and a Channel removes the user's message where the platform allows.
     secret_argument: bool = False
-    # What may follow the name, as accessors show it after the typed command
-    # (`<objective> [--max N]`); empty for a command without an argument.
+    # A plain-language prompt for the argument (`Describe your goal`), shown
+    # greyed after the typed command; empty for a command without an argument.
     argument_hint: str = ""
 
 

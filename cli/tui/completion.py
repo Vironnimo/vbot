@@ -107,7 +107,7 @@ def matching(suggestions: list[Suggestion], query: str) -> list[Suggestion]:
 
 
 def command_suggestions(items: list[JsonObject]) -> list[Suggestion]:
-    """Offer Commands and Skills as `/<name>` with their argument hint and description."""
+    """Offer Commands and Skills as `/<name>` with their description."""
     result: list[Suggestion] = []
     for item in items:
         if not isinstance(item, dict) or not item.get("name"):
@@ -115,9 +115,7 @@ def command_suggestions(items: list[JsonObject]) -> list[Suggestion]:
         name = str(item["name"]).lstrip(_COMMAND_MARKER)
         kind = str(item.get("type") or "command")
         description = one_line(str(item.get("description") or ""), 58)
-        hint = str(item.get("argument_hint") or "") if kind == "command" else ""
-        usage = f"/{name} {hint}" if hint else f"/{name}"
-        label = f"{usage} · {description}" if description else usage
+        label = f"/{name} · {description}" if description else f"/{name}"
         result.append(Suggestion(label, name, kind, send=item.get("argument") == "none"))
     return result
 

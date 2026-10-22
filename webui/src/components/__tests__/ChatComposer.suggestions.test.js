@@ -126,7 +126,7 @@ describe('ChatComposer suggestions', () => {
       );
     });
 
-    it("shows a command's argument hint after its typed name and in its row", () => {
+    it("shows a command's argument hint after its typed name", () => {
       composer.mount({
         availableSkills: [
           {
@@ -134,7 +134,7 @@ describe('ChatComposer suggestions', () => {
             description: 'Set a goal.',
             type: 'command',
             argument: 'optional',
-            argument_hint: '<objective> [--max N]',
+            argument_hint: 'Describe your goal',
           },
           statusCommand,
         ],
@@ -145,14 +145,11 @@ describe('ChatComposer suggestions', () => {
 
       typeInComposer('/go');
       expect(ghost()).toBeNull();
-      expect(
-        document.body.querySelector('.skill-autocomplete__hint').textContent,
-      ).toBe('/goal <objective> [--max N]');
 
       typeInComposer('/goal');
-      expect(ghost()).toBe(' <objective> [--max N]');
+      expect(ghost()).toBe(' Describe your goal');
       typeInComposer('/GOAL ');
-      expect(ghost()).toBe('<objective> [--max N]');
+      expect(ghost()).toBe('Describe your goal');
 
       // Once the argument starts, and for a command without one, nothing shows.
       typeInComposer('/goal Ship');
