@@ -11,9 +11,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from core.sessions._types import SessionAddress
+if TYPE_CHECKING:
+    # Annotation only: the Session types import the Run stack, and ``ARCHIVE_KINDS``
+    # stays a light member of ``core.sessions`` (the CLI parser offers it as choices).
+    from core.sessions._types import SessionAddress
 
 ARCHIVE_KIND_AGENT = "agent"
 ARCHIVE_KIND_PROJECT = "project"

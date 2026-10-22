@@ -13,11 +13,6 @@ if __package__ in {None, ""}:
 
 if TYPE_CHECKING:
     from cli._commands import (
-        _agent_changes_from_args,
-        _channel_changes_from_args,
-        _model_filters_from_args,
-        _project_add_fields_from_args,
-        _project_set_changes_from_args,
         exit_code_for,
         parse_args,
         print_channel_command_result,
@@ -82,11 +77,6 @@ __all__ = [
     "print_command_result",
     "print_management_command_result",
     "print_channel_command_result",
-    "_agent_changes_from_args",
-    "_channel_changes_from_args",
-    "_model_filters_from_args",
-    "_project_add_fields_from_args",
-    "_project_set_changes_from_args",
 ]
 
 

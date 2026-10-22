@@ -1,4 +1,9 @@
-"""CLI command routing with injectable management operations."""
+"""CLI command routing with injectable management operations.
+
+An area's dispatcher and management operations load only when that area runs, so
+help, parse errors and local commands import no HTTP, database or Settings stack
+(``cli.md`` -> Interfaces). An operation a caller does not inject is the real one.
+"""
 
 from __future__ import annotations
 
@@ -6,52 +11,8 @@ import argparse
 import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from cli._dispatch_agents import (
-    _agent_changes_from_args,
-    _project_add_fields_from_args,
-    _project_set_changes_from_args,
-    dispatch_agent_command,
-    dispatch_agent_secrets_command,
-    dispatch_archive_command,
-    dispatch_chat_command,
-    dispatch_data_store_command,
-    dispatch_project_command,
-    dispatch_session_command,
-)
-from cli._dispatch_connections import (
-    _channel_changes_from_args,
-    _model_filters_from_args,
-    dispatch_channel_command,
-    dispatch_extensions_command,
-    dispatch_model_command,
-    dispatch_provider_command,
-    dispatch_task_model_command,
-)
-from cli._dispatch_lifecycle import (
-    ServerCommandContext,
-    _launch_desktop,
-    dispatch_desktop_command,
-    dispatch_doctor_command,
-    dispatch_server_command,
-)
-from cli._dispatch_operations import (
-    _statistics_report_adapter,
-    dispatch_bootstrap_command,
-    dispatch_config_command,
-    dispatch_cron_command,
-    dispatch_debug_command,
-    dispatch_devices_command,
-    dispatch_librarian_command,
-    dispatch_log_command,
-    dispatch_memory_command,
-    dispatch_performance_command,
-    dispatch_prompt_command,
-    dispatch_skill_command,
-    dispatch_statistics_command,
-    dispatch_tool_command,
-)
 from cli._output import (
     FAILURE_EXIT_CODE,
     SUCCESS_EXIT_CODE,
@@ -65,68 +26,11 @@ from cli._output import (
     print_server_command_start,
     with_command_output,
 )
-from cli._server_target import (
-    SERVER_URL_ENVIRONMENT_VARIABLE,
-    parse_server_url,
-    selected_server_url,
-)
-from cli.agent_management import (
-    agent_create,
-    agent_delete,
-    agent_list,
-    agent_rename,
-    agent_show,
-    agent_update,
-)
-from cli.channel_management import (
-    channel_access,
-    channel_add,
-    channel_disable,
-    channel_enable,
-    channel_grant_admin,
-    channel_identity,
-    channel_list,
-    channel_remove,
-    channel_revoke_admin,
-    channel_set_token,
-    channel_status,
-    channel_update,
-)
-from cli.config_management import (
-    config_describe,
-    config_effective,
-    config_get,
-    config_list,
-    config_patch,
-    config_raw,
-    config_set,
-    config_unset,
-)
-from cli.doctor_management import doctor_config, doctor_settings
-from cli.extensions_management import (
-    extensions_disable,
-    extensions_enable,
-    extensions_list,
-    extensions_reload,
-    extensions_set,
-    extensions_show,
-)
-from cli.log_management import log_list, log_read
-from cli.model_management import model_list, model_refresh, model_show
 from cli.parser import parse_args
-from cli.prompt_management import prompt_list, prompt_preview, prompt_reset, prompt_update
-from cli.provider_management import provider_list, provider_set_key, provider_status, provider_usage
-from cli.server_management import (
-    CommandResult,
-    ServerInstance,
-    get_status,
-    resolve_instance,
-    start_server,
-    stop_server,
-)
-from cli.skill_management import list_skills
-from cli.tool_management import tool_list
 from core.utils.config import VBOT_ROOT, Config
+
+if TYPE_CHECKING:
+    from cli._server_target import CommandResult, ServerInstance
 
 __all__ = [
     "run",
@@ -135,11 +39,6 @@ __all__ = [
     "print_command_result",
     "print_management_command_result",
     "print_channel_command_result",
-    "_agent_changes_from_args",
-    "_channel_changes_from_args",
-    "_model_filters_from_args",
-    "_project_add_fields_from_args",
-    "_project_set_changes_from_args",
 ]
 
 
@@ -147,18 +46,16 @@ __all__ = [
 def run(
     argv: Sequence[str] | None = None,
     *,
-    resolve: Callable[..., ServerInstance] = resolve_instance,
-    start: Callable[[ServerInstance], CommandResult] = start_server,
-    stop: Callable[[ServerInstance], CommandResult] = stop_server,
-    status: Callable[[ServerInstance], CommandResult] = get_status,
-    list_agents: Callable[[ServerInstance], CommandResult] = agent_list,
-    show_agent: Callable[[ServerInstance, str], CommandResult] = agent_show,
-    create_agent: Callable[
-        [ServerInstance, str, str, dict[str, Any]], CommandResult
-    ] = agent_create,
-    update_agent: Callable[[ServerInstance, str, dict[str, Any]], CommandResult] = agent_update,
-    rename_agent: Callable[[ServerInstance, str, str], CommandResult] = agent_rename,
-    delete_agent: Callable[[ServerInstance, str, bool, bool], CommandResult] = agent_delete,
+    resolve: Callable[..., ServerInstance] | None = None,
+    start: Callable[[ServerInstance], CommandResult] | None = None,
+    stop: Callable[[ServerInstance], CommandResult] | None = None,
+    status: Callable[[ServerInstance], CommandResult] | None = None,
+    list_agents: Callable[[ServerInstance], CommandResult] | None = None,
+    show_agent: Callable[[ServerInstance, str], CommandResult] | None = None,
+    create_agent: Callable[[ServerInstance, str, str, dict[str, Any]], CommandResult] | None = None,
+    update_agent: Callable[[ServerInstance, str, dict[str, Any]], CommandResult] | None = None,
+    rename_agent: Callable[[ServerInstance, str, str], CommandResult] | None = None,
+    delete_agent: Callable[[ServerInstance, str, bool, bool], CommandResult] | None = None,
     add_channel: Callable[
         [
             ServerInstance,
@@ -174,65 +71,57 @@ def run(
             str | None,
         ],
         CommandResult,
-    ] = channel_add,
-    list_channels: Callable[[ServerInstance], CommandResult] = channel_list,
-    remove_channel: Callable[[ServerInstance, str], CommandResult] = channel_remove,
-    update_channel: Callable[[ServerInstance, str, dict[str, Any]], CommandResult] = channel_update,
-    enable_channel: Callable[[ServerInstance, str], CommandResult] = channel_enable,
-    disable_channel: Callable[[ServerInstance, str], CommandResult] = channel_disable,
-    channel_status_fn: Callable[[ServerInstance, str], CommandResult] = channel_status,
-    set_channel_token: Callable[[ServerInstance, str, str], CommandResult] = channel_set_token,
-    channel_identity_fn: Callable[
-        [ServerInstance, str, str | None], CommandResult
-    ] = channel_identity,
-    channel_access_fn: Callable[[ServerInstance, str, str], CommandResult] = channel_access,
-    grant_channel_admin_fn: Callable[
-        [ServerInstance, str, str, str], CommandResult
-    ] = channel_grant_admin,
-    revoke_channel_admin_fn: Callable[
-        [ServerInstance, str, str, str], CommandResult
-    ] = channel_revoke_admin,
-    list_tools_fn: Callable[[ServerInstance], CommandResult] = tool_list,
-    list_prompts_fn: Callable[[ServerInstance, str], CommandResult] = prompt_list,
-    update_prompt_fn: Callable[[ServerInstance, str, str, str], CommandResult] = prompt_update,
-    reset_prompt_fn: Callable[[ServerInstance, str, str], CommandResult] = prompt_reset,
-    preview_prompt_fn: Callable[[ServerInstance, str, str], CommandResult] = prompt_preview,
-    list_logs_fn: Callable[[ServerInstance], CommandResult] = log_list,
-    read_log_fn: Callable[[ServerInstance, str], CommandResult] = log_read,
-    list_providers: Callable[..., CommandResult] = provider_list,
-    provider_status_fn: Callable[
-        [ServerInstance, str, str | None], CommandResult
-    ] = provider_status,
-    provider_usage_fn: Callable[
-        [ServerInstance, Sequence[str] | None], CommandResult
-    ] = provider_usage,
+    ]
+    | None = None,
+    list_channels: Callable[[ServerInstance], CommandResult] | None = None,
+    remove_channel: Callable[[ServerInstance, str], CommandResult] | None = None,
+    update_channel: Callable[[ServerInstance, str, dict[str, Any]], CommandResult] | None = None,
+    enable_channel: Callable[[ServerInstance, str], CommandResult] | None = None,
+    disable_channel: Callable[[ServerInstance, str], CommandResult] | None = None,
+    channel_status_fn: Callable[[ServerInstance, str], CommandResult] | None = None,
+    set_channel_token: Callable[[ServerInstance, str, str], CommandResult] | None = None,
+    channel_identity_fn: Callable[[ServerInstance, str, str | None], CommandResult] | None = None,
+    channel_access_fn: Callable[[ServerInstance, str, str], CommandResult] | None = None,
+    grant_channel_admin_fn: Callable[[ServerInstance, str, str, str], CommandResult] | None = None,
+    revoke_channel_admin_fn: Callable[[ServerInstance, str, str, str], CommandResult] | None = None,
+    list_tools_fn: Callable[[ServerInstance], CommandResult] | None = None,
+    list_prompts_fn: Callable[[ServerInstance, str], CommandResult] | None = None,
+    update_prompt_fn: Callable[[ServerInstance, str, str, str], CommandResult] | None = None,
+    reset_prompt_fn: Callable[[ServerInstance, str, str], CommandResult] | None = None,
+    preview_prompt_fn: Callable[[ServerInstance, str, str], CommandResult] | None = None,
+    list_logs_fn: Callable[[ServerInstance], CommandResult] | None = None,
+    read_log_fn: Callable[[ServerInstance, str], CommandResult] | None = None,
+    list_providers: Callable[..., CommandResult] | None = None,
+    provider_status_fn: Callable[[ServerInstance, str, str | None], CommandResult] | None = None,
+    provider_usage_fn: Callable[[ServerInstance, Sequence[str] | None], CommandResult]
+    | None = None,
     set_provider_key: Callable[
         [ServerInstance, str, str, str | None, bool, str | None], CommandResult
-    ] = provider_set_key,
-    list_models_fn: Callable[[ServerInstance, dict[str, Any]], CommandResult] = model_list,
-    show_model_fn: Callable[[ServerInstance, str], CommandResult] = model_show,
-    refresh_models_fn: Callable[[ServerInstance, str | None], CommandResult] = model_refresh,
-    list_skills_fn: Callable[[ServerInstance], CommandResult] = list_skills,
-    statistics_report_fn: Callable[
-        [ServerInstance, str, str | None, str | None], CommandResult
-    ] = _statistics_report_adapter,
-    list_extensions_fn: Callable[[ServerInstance], CommandResult] = extensions_list,
-    reload_extensions_fn: Callable[[ServerInstance], CommandResult] = extensions_reload,
-    enable_extension_fn: Callable[[ServerInstance, str], CommandResult] = extensions_enable,
-    disable_extension_fn: Callable[[ServerInstance, str], CommandResult] = extensions_disable,
-    show_extension_fn: Callable[[ServerInstance, str], CommandResult] = extensions_show,
-    set_extension_fn: Callable[[ServerInstance, str, str, str], CommandResult] = extensions_set,
-    raw_config_fn: Callable[[ServerInstance], CommandResult] = config_raw,
-    list_config_fn: Callable[[ServerInstance, str | None], CommandResult] = config_list,
-    describe_config_fn: Callable[[ServerInstance, str], CommandResult] = config_describe,
-    effective_config_fn: Callable[[ServerInstance], CommandResult] = config_effective,
-    get_config_fn: Callable[[ServerInstance, str], CommandResult] = config_get,
-    set_config_fn: Callable[[ServerInstance, str, Any], CommandResult] = config_set,
-    unset_config_fn: Callable[[ServerInstance, str], CommandResult] = config_unset,
-    patch_config_fn: Callable[[ServerInstance, list[dict[str, Any]]], CommandResult] = config_patch,
-    doctor_settings_fn: Callable[[str | Path | None], CommandResult] = doctor_settings,
-    doctor_config_fn: Callable[[str | Path | None], CommandResult] = doctor_config,
-    launch_desktop_fn: Callable[[Sequence[str]], None] = _launch_desktop,
+    ]
+    | None = None,
+    list_models_fn: Callable[[ServerInstance, dict[str, Any]], CommandResult] | None = None,
+    show_model_fn: Callable[[ServerInstance, str], CommandResult] | None = None,
+    refresh_models_fn: Callable[[ServerInstance, str | None], CommandResult] | None = None,
+    list_skills_fn: Callable[[ServerInstance], CommandResult] | None = None,
+    statistics_report_fn: Callable[[ServerInstance, str, str | None, str | None], CommandResult]
+    | None = None,
+    list_extensions_fn: Callable[[ServerInstance], CommandResult] | None = None,
+    reload_extensions_fn: Callable[[ServerInstance], CommandResult] | None = None,
+    enable_extension_fn: Callable[[ServerInstance, str], CommandResult] | None = None,
+    disable_extension_fn: Callable[[ServerInstance, str], CommandResult] | None = None,
+    show_extension_fn: Callable[[ServerInstance, str], CommandResult] | None = None,
+    set_extension_fn: Callable[[ServerInstance, str, str, str], CommandResult] | None = None,
+    raw_config_fn: Callable[[ServerInstance], CommandResult] | None = None,
+    list_config_fn: Callable[[ServerInstance, str | None], CommandResult] | None = None,
+    describe_config_fn: Callable[[ServerInstance, str], CommandResult] | None = None,
+    effective_config_fn: Callable[[ServerInstance], CommandResult] | None = None,
+    get_config_fn: Callable[[ServerInstance, str], CommandResult] | None = None,
+    set_config_fn: Callable[[ServerInstance, str, Any], CommandResult] | None = None,
+    unset_config_fn: Callable[[ServerInstance, str], CommandResult] | None = None,
+    patch_config_fn: Callable[[ServerInstance, list[dict[str, Any]]], CommandResult] | None = None,
+    doctor_settings_fn: Callable[[str | Path | None], CommandResult] | None = None,
+    doctor_config_fn: Callable[[str | Path | None], CommandResult] | None = None,
+    launch_desktop_fn: Callable[[Sequence[str]], None] | None = None,
 ) -> int:
     """Run the CLI and return an automation-safe process exit code."""
 
@@ -249,33 +138,45 @@ def run(
         return SUCCESS_EXIT_CODE
 
     if args.area == "server":
+        from cli import server_management as servers
+        from cli._dispatch_lifecycle import ServerCommandContext, dispatch_server_command
+
         context = ServerCommandContext(
             command=args.command,
             host=args.host,
             port=args.port,
             data_dir=args.data_dir,
-            resolve=resolve,
-            start=start,
-            stop=stop,
-            status=status,
+            resolve=resolve or servers.resolve_instance,
+            start=start or servers.start_server,
+            stop=stop or servers.stop_server,
+            status=status or servers.get_status,
         )
         result = dispatch_server_command(context, announce=print_server_command_start)
         print_command_result(context.command, result)
         return exit_code_for(context.command, result)
 
     if args.area == "desktop":
-        return dispatch_desktop_command(args, launch_desktop_fn=launch_desktop_fn)
+        from cli._dispatch_lifecycle import _launch_desktop, dispatch_desktop_command
+
+        return dispatch_desktop_command(
+            args, launch_desktop_fn=launch_desktop_fn or _launch_desktop
+        )
 
     if args.area == "doctor":
+        from cli import doctor_management as doctor
+        from cli._dispatch_lifecycle import dispatch_doctor_command
+
         result = dispatch_doctor_command(
             args,
-            doctor_settings_fn=doctor_settings_fn,
-            doctor_config_fn=doctor_config_fn,
+            doctor_settings_fn=doctor_settings_fn or doctor.doctor_settings,
+            doctor_config_fn=doctor_config_fn or doctor.doctor_config,
         )
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
-    instance = resolve(
+    from cli._server_target import resolve_instance
+
+    instance = (resolve or resolve_instance)(
         host=args.host, port=args.port, data_dir=args.data_dir, url=_server_url(args)
     )
     if args.area == "tui":
@@ -284,195 +185,260 @@ def run(
         return dispatch_tui_command(args, instance)
 
     if args.area == "agent":
+        from cli import agent_management as agents
+        from cli._dispatch_agents import dispatch_agent_command
+
         result = dispatch_agent_command(
             args,
             instance,
-            list_agents=list_agents,
-            show_agent=show_agent,
-            create_agent=create_agent,
-            update_agent=update_agent,
-            rename_agent=rename_agent,
-            delete_agent=delete_agent,
+            list_agents=list_agents or agents.agent_list,
+            show_agent=show_agent or agents.agent_show,
+            create_agent=create_agent or agents.agent_create,
+            update_agent=update_agent or agents.agent_update,
+            rename_agent=rename_agent or agents.agent_rename,
+            delete_agent=delete_agent or agents.agent_delete,
         )
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
     if args.area == "project":
+        from cli._dispatch_agents import dispatch_project_command
+
         result = dispatch_project_command(args, instance)
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
     if args.area == "session":
+        from cli._dispatch_agents import dispatch_session_command
+
         result = dispatch_session_command(args, instance)
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
     if args.area == "archive":
+        from cli._dispatch_agents import dispatch_archive_command
+
         result = dispatch_archive_command(args, instance)
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
     if args.area == "chat":
+        from cli._dispatch_agents import dispatch_chat_command
+
         result = dispatch_chat_command(args, instance)
         print_chat_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
     if args.area == "data-store":
+        from cli._dispatch_agents import dispatch_data_store_command
+
         result = dispatch_data_store_command(args, instance)
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
     if args.area == "agent-secrets":
+        from cli._dispatch_agents import dispatch_agent_secrets_command
+
         result = dispatch_agent_secrets_command(args, instance)
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
     if args.area == "channel":
+        from cli import channel_management as channels
+        from cli._dispatch_connections import dispatch_channel_command
+
         result = dispatch_channel_command(
             args,
             instance,
-            add_channel=add_channel,
-            list_channels=list_channels,
-            remove_channel=remove_channel,
-            update_channel=update_channel,
-            enable_channel=enable_channel,
-            disable_channel=disable_channel,
-            channel_status_fn=channel_status_fn,
-            set_channel_token=set_channel_token,
-            channel_identity_fn=channel_identity_fn,
-            channel_access_fn=channel_access_fn,
-            grant_channel_admin_fn=grant_channel_admin_fn,
-            revoke_channel_admin_fn=revoke_channel_admin_fn,
+            add_channel=add_channel or channels.channel_add,
+            list_channels=list_channels or channels.channel_list,
+            remove_channel=remove_channel or channels.channel_remove,
+            update_channel=update_channel or channels.channel_update,
+            enable_channel=enable_channel or channels.channel_enable,
+            disable_channel=disable_channel or channels.channel_disable,
+            channel_status_fn=channel_status_fn or channels.channel_status,
+            set_channel_token=set_channel_token or channels.channel_set_token,
+            channel_identity_fn=channel_identity_fn or channels.channel_identity,
+            channel_access_fn=channel_access_fn or channels.channel_access,
+            grant_channel_admin_fn=grant_channel_admin_fn or channels.channel_grant_admin,
+            revoke_channel_admin_fn=revoke_channel_admin_fn or channels.channel_revoke_admin,
         )
         print_channel_command_result(args.command, result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
     if args.area == "tool":
-        result = dispatch_tool_command(args, instance, list_tools_fn=list_tools_fn)
+        from cli._dispatch_operations import dispatch_tool_command
+        from cli.tool_management import tool_list
+
+        result = dispatch_tool_command(args, instance, list_tools_fn=list_tools_fn or tool_list)
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
     if args.area == "prompt":
+        from cli import prompt_management as prompts
+        from cli._dispatch_operations import dispatch_prompt_command
+
         result = dispatch_prompt_command(
             args,
             instance,
-            list_prompts_fn=list_prompts_fn,
-            update_prompt_fn=update_prompt_fn,
-            reset_prompt_fn=reset_prompt_fn,
-            preview_prompt_fn=preview_prompt_fn,
+            list_prompts_fn=list_prompts_fn or prompts.prompt_list,
+            update_prompt_fn=update_prompt_fn or prompts.prompt_update,
+            reset_prompt_fn=reset_prompt_fn or prompts.prompt_reset,
+            preview_prompt_fn=preview_prompt_fn or prompts.prompt_preview,
         )
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
     if args.area == "log":
+        from cli import log_management as logs
+        from cli._dispatch_operations import dispatch_log_command
+
         result = dispatch_log_command(
             args,
             instance,
-            list_logs_fn=list_logs_fn,
-            read_log_fn=read_log_fn,
+            list_logs_fn=list_logs_fn or logs.log_list,
+            read_log_fn=read_log_fn or logs.log_read,
         )
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
     if args.area == "provider":
+        from cli import provider_management as providers
+        from cli._dispatch_connections import dispatch_provider_command
+
         result = dispatch_provider_command(
             args,
             instance,
-            list_providers=list_providers,
-            provider_status_fn=provider_status_fn,
-            provider_usage_fn=provider_usage_fn,
-            set_provider_key=set_provider_key,
+            list_providers=list_providers or providers.provider_list,
+            provider_status_fn=provider_status_fn or providers.provider_status,
+            provider_usage_fn=provider_usage_fn or providers.provider_usage,
+            set_provider_key=set_provider_key or providers.provider_set_key,
         )
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
     if args.area == "model":
+        from cli import model_management as models
+        from cli._dispatch_connections import dispatch_model_command
+
         result = dispatch_model_command(
             args,
             instance,
-            list_models_fn=list_models_fn,
-            show_model_fn=show_model_fn,
-            refresh_models_fn=refresh_models_fn,
+            list_models_fn=list_models_fn or models.model_list,
+            show_model_fn=show_model_fn or models.model_show,
+            refresh_models_fn=refresh_models_fn or models.model_refresh,
         )
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
     if args.area == "task-model":
+        from cli._dispatch_connections import dispatch_task_model_command
+
         result = dispatch_task_model_command(args, instance)
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
     if args.area == "skill":
-        result = dispatch_skill_command(args, instance, list_skills_fn=list_skills_fn)
+        from cli._dispatch_operations import dispatch_skill_command
+        from cli.skill_management import list_skills
+
+        result = dispatch_skill_command(
+            args, instance, list_skills_fn=list_skills_fn or list_skills
+        )
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
     if args.area == "memory":
+        from cli._dispatch_operations import dispatch_memory_command
+
         result = dispatch_memory_command(args, instance)
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
     if args.area == "librarian":
+        from cli._dispatch_operations import dispatch_librarian_command
+
         result = dispatch_librarian_command(args, instance)
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
     if args.area == "extensions":
+        from cli import extensions_management as extensions
+        from cli._dispatch_connections import dispatch_extensions_command
+
         result = dispatch_extensions_command(
             args,
             instance,
-            list_extensions_fn=list_extensions_fn,
-            reload_extensions_fn=reload_extensions_fn,
-            enable_extension_fn=enable_extension_fn,
-            disable_extension_fn=disable_extension_fn,
-            show_extension_fn=show_extension_fn,
-            set_extension_fn=set_extension_fn,
+            list_extensions_fn=list_extensions_fn or extensions.extensions_list,
+            reload_extensions_fn=reload_extensions_fn or extensions.extensions_reload,
+            enable_extension_fn=enable_extension_fn or extensions.extensions_enable,
+            disable_extension_fn=disable_extension_fn or extensions.extensions_disable,
+            show_extension_fn=show_extension_fn or extensions.extensions_show,
+            set_extension_fn=set_extension_fn or extensions.extensions_set,
         )
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
     if args.area == "cron":
+        from cli._dispatch_operations import dispatch_cron_command
+
         result = dispatch_cron_command(args, instance)
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
     if args.area == "bootstrap":
+        from cli._dispatch_operations import dispatch_bootstrap_command
+
         result = dispatch_bootstrap_command(args, instance)
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
     if args.area == "devices":
+        from cli._dispatch_operations import dispatch_devices_command
+
         result = dispatch_devices_command(args, instance)
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
     if args.area == "statistics":
+        from cli._dispatch_operations import (
+            _statistics_report_adapter,
+            dispatch_statistics_command,
+        )
+
         result = dispatch_statistics_command(
-            args, instance, statistics_report_fn=statistics_report_fn
+            args, instance, statistics_report_fn=statistics_report_fn or _statistics_report_adapter
         )
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
     if args.area == "config":
+        from cli import config_management as configs
+        from cli._dispatch_operations import dispatch_config_command
+
         result = dispatch_config_command(
             args,
             instance,
-            raw_config_fn=raw_config_fn,
-            list_config_fn=list_config_fn,
-            describe_config_fn=describe_config_fn,
-            effective_config_fn=effective_config_fn,
-            get_config_fn=get_config_fn,
-            set_config_fn=set_config_fn,
-            unset_config_fn=unset_config_fn,
-            patch_config_fn=patch_config_fn,
+            raw_config_fn=raw_config_fn or configs.config_raw,
+            list_config_fn=list_config_fn or configs.config_list,
+            describe_config_fn=describe_config_fn or configs.config_describe,
+            effective_config_fn=effective_config_fn or configs.config_effective,
+            get_config_fn=get_config_fn or configs.config_get,
+            set_config_fn=set_config_fn or configs.config_set,
+            unset_config_fn=unset_config_fn or configs.config_unset,
+            patch_config_fn=patch_config_fn or configs.config_patch,
         )
         print_config_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
     if args.area == "debug":
+        from cli._dispatch_operations import dispatch_debug_command
+
         result = dispatch_debug_command(args, instance)
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
     if args.area == "performance":
+        from cli._dispatch_operations import dispatch_performance_command
+
         result = dispatch_performance_command(args, instance)
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
@@ -488,6 +454,12 @@ def _server_url(args: argparse.Namespace) -> str | None:
     (``selected_server_url``). Raises ``ValueError`` for an unreadable
     ``VBOT_SERVER_URL``; argparse already checked ``--url``.
     """
+
+    from cli._server_target import (
+        SERVER_URL_ENVIRONMENT_VARIABLE,
+        parse_server_url,
+        selected_server_url,
+    )
 
     selected = selected_server_url(args)
     if selected is None:
