@@ -219,9 +219,11 @@ class CronScheduler:
                 ):
                     return
                 # After a long sleep of the computer, later due instants may have passed too.
-                owed = _schedule.owed_fire(
-                    self._owner._timezone, _timing._utc_now(), current
-                ) or _schedule.OwedFire(due_at=due_at)
+                owed = _schedule.owed_fire(self._owner._timezone, _timing._utc_now(), current)
+                if owed is None:
+                    # A Run already covers this due time, for example after the
+                    # wall clock stepped back past its fire: wait for the next one.
+                    continue
 
             if current.watch is not None:
                 await self._owner._watcher.fire(current)
