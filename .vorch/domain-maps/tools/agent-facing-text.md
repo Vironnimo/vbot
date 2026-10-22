@@ -1,6 +1,6 @@
 # Tools Agent-facing text
 
-Why each sentence of the shared dispatch texts the Tools domain owns exists: the unknown-Tool, argument-validation and no-arguments refusals, the `tool_execution_error` message, the unknown-field note, and the per-code fallback sentences (`core/tools/tools.py`, `contracts.py`, `_tool_results.py`). The `permission_denied` refusal and its reasons are in `permissions/agent-facing-text.md`. Mechanics and exact conditions: `tools/call-repair.md` and `tools/registry-dispatch.md` -> Failure codes. Rules for this file: `.vorch/workflows/domain-map-workflow.md` -> Agent-facing text; failure modes F1-F6: `tools.md` -> Terms.
+Why each sentence of the shared dispatch texts the Tools domain owns exists: the unknown-Tool, argument-validation and no-arguments refusals, the `tool_execution_error` message, the unknown-field note, and the per-code fallback sentences (`core/tools/tools.py`, `contracts.py`, `_tool_results.py`). Waiting for background work below gives the wording every Tool shares for work that continues in the background. The `permission_denied` refusal and its reasons are in `permissions/agent-facing-text.md`. Mechanics and exact conditions: `tools/call-repair.md` and `tools/registry-dispatch.md` -> Failure codes. Rules for this file: `.vorch/workflows/domain-map-workflow.md` -> Agent-facing text; failure modes F1-F6: `tools.md` -> Terms.
 
 | Text | Reason |
 |---|---|
@@ -15,3 +15,7 @@ Why each sentence of the shared dispatch texts the Tools domain owns exists: the
 | `"<field>" had no effect: <tool> has no such parameter.` (`ignored_fields_note`) | A dropped unknown field runs the call and tells the Agent that the field did nothing, instead of refusing a complete call (F5) or hiding the drop (F4). Swarm run 2026-10-12: 21 calls were refused for unknown fields, among them complete swarm_board posts with `transition` and `commentary`. |
 | Per-code fallbacks for an exception without a message, such as `Tool not allowed: <tool>.` and `Unknown Tool: <tool>.` | Every failure reads as one complete sentence even when the raising code gave no message. |
 | `<tool> was not run: <refusal>` (`secret_unavailable`) when a Secret reference in a sink argument cannot be resolved; the refusals are in `secrets/agent-facing-text.md` -> Substitution refusals | The call did not run, which the Agent must know before it retries; the prefix matches the other dispatch refusals (F4, F5). |
+
+## Waiting for background work
+
+Every Tool result, error and Run instruction that says work continues in the background names how its result arrives (`<It> arrives as a new message when <event>.`) and then the two ways on, in these words: `Continue with other work your task still needs, or end your turn to wait for it.` (`them`, `others` where they fit). One wording everywhere, and "end your turn" rather than "end your reply" or "end this Run", so every Model meets one familiar instruction; "other work your task still needs" keeps a waiting Agent from inventing work to fill the wait (user report 2026-10-22: a MiniMax Flash Model kept doing side work, announcing it had to wait).

@@ -51,7 +51,6 @@ Domain vocabulary. The core Tool term lives in `.vorch/GLOSSARY.md`.
 ## Conventions
 
 - **Tool families** hand data to each other and change together with their guidance blocks and notifications: `read` -> `apply_patch` or `edit`/`write`; `search_files` -> `read`; `bash` -> `background_tasks` (commands that outlive their call) and `terminal` (programs that need input or a terminal); `subagent` -> `background_tasks` (Sub-Agent list, status and stop); `subagent` with its block and completion delivery, and `status`; `web_search` -> `web_fetch`; `memory`, `skill`/`skill_manage` with the Skills prompt section, and `session_search`.
-- **Waiting for background work:** every Tool result, error and Run instruction that says work continues in the background names how its result arrives (`<It> arrives as a new message when <event>.`) and then the two ways on, in these words: `Continue with other work your task still needs, or end your turn to wait for it.` (`them`, `others` where they fit). One wording everywhere, and "end your turn" rather than "end your reply" or "end this Run", so every Model meets one familiar instruction; "other work your task still needs" keeps a waiting Agent from inventing work to fill the wait (user report 2026-10-22: a MiniMax Flash Model kept doing side work, announcing it had to wait).
 - Renaming a Tool or one of its parameters reaches beyond the definition: inventory every place first and keep older call shapes interpreted (`tools/registry-dispatch.md` -> Renaming a Tool).
 
 ## Constraints & Gotchas
