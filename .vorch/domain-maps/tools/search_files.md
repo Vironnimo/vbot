@@ -643,7 +643,10 @@ argument and no check.
 - Below a readable root, `refusable_below` patterns become anchored excluding
   globs after every other glob (`--glob=!/<scope path>/<pattern>`, `--iglob`
   on Windows, where the rules match without case; `[`, `]`, `{`, `}` escaped
-  as classes); results, counts, directory listings and diagnostics are
+  as classes). Elsewhere the rules match case while ripgrep's case flag covers
+  every `--glob`, so `Confinement.arguments` runs with
+  `--no-glob-case-insensitive` and passes each glob that ignored case as
+  `--iglob` (`*.key` leaves out `c.key`, not `D.KEY`). Results, counts, directory listings and diagnostics are
   filtered again by `check_path`, which also covers patterns that do not
   translate into globs (a backslash, or `**` for the whole root). So
   `files_searched` counts only permitted files; the filter also subtracts the

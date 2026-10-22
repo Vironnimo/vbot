@@ -31,6 +31,7 @@ LINKS_NOTE = (
 _PATH_FLAGS = ("--file", "--ignore-file")
 # Rule patterns take these characters literally; ripgrep globs do so inside a class.
 _GLOB_LITERAL = re.compile(r"[\[\]{}]")
+_CASE_FLAGS = ("--glob-case-insensitive", "--no-glob-case-insensitive")
 
 
 @dataclass(frozen=True)
@@ -39,11 +40,39 @@ class Confinement:
 
     ``globs`` are excluding glob arguments placed after every other glob;
     ``filtered`` says that the rules can refuse something below the run's
-    roots, so each path the run reports is checked as well.
+    roots, so each path the run reports is checked as well. ``case_sensitive``:
+    the rules match letter case, as off Windows.
     """
 
     globs: list[str] = field(default_factory=list)
     filtered: bool = False
+    case_sensitive: bool = False
+
+    def arguments(self, selection: list[str]) -> list[str]:
+        """``selection``, a run's other arguments, followed by the excluding globs.
+
+        The search's own globs ignore case by default, and ripgrep applies its
+        case flag to every ``--glob``. Where the rules match case, the run turns
+        case-sensitive globs on and passes each glob that ignored case as an
+        ``--iglob``, so ``*.key`` leaves out ``c.key`` but not ``D.KEY``.
+        """
+        if not self.case_sensitive or not self.globs:
+            return [*selection, *self.globs]
+        insensitive = True
+        kept: list[str] = []
+        for argument in selection:
+            if argument in _CASE_FLAGS:
+                insensitive = argument == "--glob-case-insensitive"
+            else:
+                kept.append(argument)
+        if insensitive:
+            kept = [
+                "--iglob=" + argument.removeprefix("--glob=")
+                if argument.startswith("--glob=")
+                else argument
+                for argument in kept
+            ]
+        return [*kept, "--no-glob-case-insensitive", *self.globs]
 
 
 UNCONFINED = Confinement()
@@ -97,7 +126,7 @@ def scope_confinement(scope: Scope, permissions: PermissionBoundary) -> Confinem
             # ripgrep reads a backslash as an escape; only the filter leaves such paths out.
             if pattern != "**" and "\\" not in glob:
                 globs.append(f"{flag}={glob}")
-    return Confinement(list(dict.fromkeys(globs)), filtered)
+    return Confinement(list(dict.fromkeys(globs)), filtered, case_sensitive=not windows)
 
 
 def permitted(permissions: PermissionBoundary, scope: Scope, reported: str | bytes) -> bool:

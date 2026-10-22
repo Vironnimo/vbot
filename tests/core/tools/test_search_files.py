@@ -937,7 +937,9 @@ def test_a_restricted_search_leaves_out_what_the_rules_refuse(
     assert "secrets" in full
     for refused in ("secrets", ".key", "o.txt", "draft"):
         assert refused not in restricted
-    assert ("KEY" in restricted) is (sys.platform != "win32")
+    # The rules match case off Windows, so D.KEY stays; --dirs lists only folders.
+    if "--dirs" not in arguments.get("args", []):
+        assert ("KEY" in restricted) is (sys.platform != "win32")
     # Like a read listing, the note names what the rules left out, as the rules write it.
     assert "src/secrets/**" in note and "the permission rules refuse reading them" in note
     assert ("src/**/*.key" if "path" in arguments else "**/*.key") in note

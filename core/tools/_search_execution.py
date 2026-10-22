@@ -606,8 +606,7 @@ class SearchExecution:
         # No --debug: only a result without entries names the paths ignore files excluded,
         # and ignored_scan walks for them then.
         arguments = [
-            *_base_arguments(query, scope),
-            *self._confinement(scope).globs,
+            *self._confinement(scope).arguments(_base_arguments(query, scope)),
             *selector,
             *_pattern_arguments(patterns),
             "--",
@@ -646,8 +645,8 @@ class SearchExecution:
             # the listing; with types, ignored_scan walks once more without them instead.
             report = _without_file_types(selection) == selection
         debug = ["--debug"] if report else []
-        confined = self._confinement(scope).globs
-        arguments = [*selection, *confined, *debug, "--files", "--null", "--", *scope.paths]
+        confined = self._confinement(scope).arguments(selection)
+        arguments = [*confined, *debug, "--files", "--null", "--", *scope.paths]
         data, outcome, stopped_by = self._collect(arguments, scope, b"\0")
         result = self._judged(outcome, scope)
         result.stopped_by = stopped_by
@@ -668,10 +667,9 @@ class SearchExecution:
         directories and apply after ignore files, so the walk leaves them out and
         skips the same paths. Its output is bounded like a listing's.
         """
-        selection = [
-            *_without_file_types(_base_arguments(query, scope)),
-            *self._confinement(scope).globs,
-        ]
+        selection = self._confinement(scope).arguments(
+            _without_file_types(_base_arguments(query, scope))
+        )
         arguments = [*selection, "--debug", "--files", "--null", "--", *scope.paths]
         outcome = NativeOutcome()
         records = native_lines(
