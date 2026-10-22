@@ -705,6 +705,16 @@ def _enable_crash_log(data_dir: Path) -> None:
 # the default 5 ms a busy worker thread cuts the loop from thousands of I/O
 # operations per second to about ten. Below 1 ms the loop asks at once.
 _GIL_SWITCH_INTERVAL_SECONDS = 0.0005
+# Cyclic collection thresholds (young, middle, old). The first two are CPython's
+# defaults. CPython 3.14.5 and later collect generationally again: a full
+# collection, which holds the GIL while it traverses every tracked object
+# (150-700 ms with a serving heap), follows every 10th middle collection once
+# a quarter of the old generation is new. 100 makes those ten times rarer;
+# young and middle pauses stay the same, and cyclic garbage that reached the
+# old generation lives longer. Raising the young threshold instead made young
+# pauses longer. CPython 3.14.0-3.14.4 collect incrementally and ignore the
+# third value.
+_GC_THRESHOLDS = (2000, 10, 100)
 
 
 def _prepare_for_serving() -> None:
@@ -713,13 +723,15 @@ def _prepare_for_serving() -> None:
     Modules, classes and Runtime services live as long as the process, yet every
     full collection would traverse them again while holding the GIL and so
     stall the Event Loop. Collecting first keeps startup garbage out of the
-    frozen set. The shorter GIL switch interval lets the Event Loop take the GIL
-    back promptly from worker threads that compute.
+    frozen set, and the raised old-generation threshold keeps full collections
+    of what serving creates rare. The shorter GIL switch interval lets the Event
+    Loop take the GIL back promptly from worker threads that compute.
     """
     sys.setswitchinterval(_GIL_SWITCH_INTERVAL_SECONDS)
     started = perf_counter()
     gc.collect()
     gc.freeze()
+    gc.set_threshold(*_GC_THRESHOLDS)
     _LOGGER.debug(
         "Startup heap frozen (objects=%d collect_ms=%d)",
         gc.get_freeze_count(),
