@@ -39,8 +39,30 @@ export function formatDateTimeInApplicationZone(value, locale, options = {}) {
   }).format(date);
 }
 
+// Date keys of timestamp strings, per zone: the Chat Timeline derives one for
+// every row on each update, and parsing and formatting cost far more than a
+// lookup. A key is a pure function of zone and timestamp.
+const MAX_CACHED_DATE_KEYS = 4096;
+// eslint-disable-next-line svelte/prefer-svelte-reactivity -- a cache, not state: formatting runs inside derived values, which must not write reactive state
+const dateKeys = new Map();
+
 export function dateKeyInApplicationZone(value = new SvelteDate()) {
-  const date = value instanceof Date ? value : new SvelteDate(value);
+  if (typeof value !== 'string') {
+    return formatDateKey(value instanceof Date ? value : new SvelteDate(value));
+  }
+  const cacheKey = `${dateTimePrefs.timeZone} ${value}`;
+  let dateKey = dateKeys.get(cacheKey);
+  if (dateKey === undefined) {
+    dateKey = formatDateKey(new SvelteDate(value));
+    if (dateKeys.size >= MAX_CACHED_DATE_KEYS) {
+      dateKeys.delete(dateKeys.keys().next().value);
+    }
+    dateKeys.set(cacheKey, dateKey);
+  }
+  return dateKey;
+}
+
+function formatDateKey(date) {
   if (Number.isNaN(date.getTime())) {
     return '';
   }

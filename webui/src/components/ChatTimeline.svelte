@@ -14,7 +14,6 @@
   import { nestedScrollConsumes } from '$lib/boundedScroll.js';
   import { provideMountHold } from '$lib/mountHold.js';
 
-  import { assistantRunChildProgressKey } from '../lib/chatState.js';
   import ChatAssistantRun from './chat/ChatAssistantRun.svelte';
   import ChatTimelineEntry from './chat/ChatTimelineEntry.svelte';
   import { createTimelineAnnouncer } from './chat/timelineAnnouncer.js';
@@ -163,9 +162,8 @@
       : '',
   );
   let showJumpToLatest = $state(false);
-  let timelineSignature = $derived(
-    `${timelineItems.map((item) => timelineItemSignature(item)).join('|')}` +
-      `#${transientCards.map((card) => card.id).join(',')}`,
+  let transientCardIds = $derived(
+    transientCards.map((card) => card.id).join(','),
   );
   let sessionScrollKey = $derived(sessionKey ?? '');
   let renderedSessionScrollKey = null;
@@ -351,12 +349,14 @@
   });
 
   // Content changes (streaming deltas, history pages, transient cards)
-  // re-run the coordination. The controller coalesces through one animation
-  // frame — the same frame boundary the browser scrolls on. Deferred so the
-  // read sees the controller even when this effect runs ahead of its
-  // creation during mount.
+  // re-run the coordination. Rows are immutable (`chatTimeline.js`): every
+  // change arrives as a new rows array, so its identity is the change signal.
+  // The controller coalesces through one animation frame — the same frame
+  // boundary the browser scrolls on. Deferred so the read sees the controller
+  // even when this effect runs ahead of its creation during mount.
   $effect(() => {
-    timelineSignature;
+    timelineItems;
+    transientCardIds;
     tick().then(() => controller?.contentChanged());
   });
 
@@ -459,18 +459,6 @@
       window.removeEventListener('resize', reportWidth);
     };
   });
-
-  function timelineItemSignature(item) {
-    if (item.type === 'assistant_run') {
-      return `${item.id}:${item.status}:${(item.items ?? [])
-        .map(
-          (child) =>
-            `${child.id}:${child.type}:${child.sequence ?? ''}:${child.status ?? ''}:${child.streaming ? '1' : '0'}:${assistantRunChildProgressKey(child)}`,
-        )
-        .join('~')}`;
-    }
-    return item.id;
-  }
 
   function handleTimelineClick(event) {
     const preview =
