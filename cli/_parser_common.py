@@ -210,6 +210,10 @@ DATA_STORE_HELP = {
     ),
     "incident": "Manage durable database recovery incidents",
     "unregister": "Release the database of a removed Extension (files move to quarantine)",
+    "convert": (
+        "Convert the documents an older vBot wrote to the current format (the updater does "
+        "this on its own; for data directories it does not update)"
+    ),
     "secrets": (
         "List, set and unset the credentials vBot itself uses in the encrypted Secret "
         "Store, or inspect, convert or replace the store. Values Agents use by reference "

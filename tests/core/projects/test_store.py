@@ -18,6 +18,7 @@ from core.projects._order import ProjectOrderConflictError
 from core.projects.paths import cwd_exists
 from core.projects.projects import (
     PROJECT_DEFAULT_ALLOWED_TOOLS,
+    PROJECT_FORMAT_VERSION,
     InvalidProjectIdError,
     Project,
     ProjectAlreadyExistsError,
@@ -64,7 +65,7 @@ def test_create_writes_the_anchor_with_seeded_defaults(data_dir: Path, repo: Pat
     anchor = data_dir / "projects" / "vbot"
     payload = json.loads((anchor / "project.json").read_text("utf-8"))
     assert not (anchor / "agents").exists()
-    assert payload == {"format_version": 1, **project.to_dict()}
+    assert payload == {"format_version": PROJECT_FORMAT_VERSION, **project.to_dict()}
     assert store.get("vbot") == project
     assert {field: payload[field] for field in _SEEDED_FIELDS} == {
         "cwd": str(Path(os.path.realpath(repo))),
@@ -582,7 +583,7 @@ def test_project_update_keeps_unknown_fields_on_disk(data_dir: Path, repo: Path)
     # An override with no known field overrides nothing but stays an entry.
     assert loaded.overrides == {"builder": {"model": "openai/gpt-5"}, "future_only": {}}
     rewritten = json.loads(config_path.read_text("utf-8"))
-    assert rewritten["format_version"] == 1
+    assert rewritten["format_version"] == PROJECT_FORMAT_VERSION
     assert rewritten["future_field"] == [1, 2]
     assert rewritten["overrides"] == {
         "builder": {
@@ -617,7 +618,11 @@ def test_clearing_the_last_known_override_field_keeps_unknown_fields(
 @pytest.mark.parametrize(
     ("changes", "message"),
     [
-        pytest.param({"format_version": 2}, "written by a newer vBot", id="newer-format"),
+        pytest.param(
+            {"format_version": PROJECT_FORMAT_VERSION + 1},
+            "written by a newer vBot",
+            id="newer-format",
+        ),
         # A rule part this vBot does not know may restrict: the Team member never
         # runs on the rest without it, and no write drops it.
         pytest.param(
@@ -730,7 +735,12 @@ def test_get_defaults_optional_metadata_in_minimal_config(data_dir: Path, repo: 
     config_path.parent.mkdir(parents=True)
     config_path.write_text(
         json.dumps(
-            {"format_version": 1, "project_id": "vbot", "cwd": str(repo), "allowed_tools": []}
+            {
+                "format_version": PROJECT_FORMAT_VERSION,
+                "project_id": "vbot",
+                "cwd": str(repo),
+                "allowed_tools": [],
+            }
         ),
         encoding="utf-8",
     )
@@ -748,12 +758,17 @@ def test_get_defaults_optional_metadata_in_minimal_config(data_dir: Path, repo: 
     ("stored", "message"),
     [
         pytest.param(
-            {"format_version": 1, "project_id": "vbot"},
+            {"format_version": PROJECT_FORMAT_VERSION, "project_id": "vbot"},
             "error $.cwd: is required; error $.allowed_tools: is required",
             id="missing-required-fields",
         ),
         pytest.param(
-            {"format_version": 1, "project_id": "other", "cwd": "/srv/other", "allowed_tools": []},
+            {
+                "format_version": PROJECT_FORMAT_VERSION,
+                "project_id": "other",
+                "cwd": "/srv/other",
+                "allowed_tools": [],
+            },
             "expected vbot, got other",
             id="id-disagrees-with-anchor",
         ),

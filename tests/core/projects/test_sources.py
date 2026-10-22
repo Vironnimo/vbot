@@ -9,6 +9,7 @@ import pytest
 
 from core.agents import TemporaryAgentConfig, TemporaryAgentRegistry
 from core.permissions import permission_rules_to_dict
+from core.projects import PROJECT_FORMAT_VERSION
 from core.projects._resolution_values import profile_tool_access
 from core.projects.scan_report import FindingType
 from core.projects.sources import SourceSelection, read_profile, scan_project
@@ -620,7 +621,7 @@ def test_legacy_anchor_preserves_unknown_fields_overrides_and_sessions(
         assert loaded.overrides == stored["overrides"]
         projects.update("repo", display_name="Renamed")
         saved = json.loads(path.read_text(encoding="utf-8"))
-        assert saved["format_version"] == 1
+        assert saved["format_version"] == PROJECT_FORMAT_VERSION
         assert saved["future_field"] == {"keep": True}
         assert sessions.get(SessionAddress("repo", "reviewer", session.id)) is not None
         expanded = projects.update(

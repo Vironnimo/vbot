@@ -25,6 +25,7 @@ from core.archive import (
     ProjectArchiveOutcome,
     SkippedPurge,
     _purge,
+    convert_archived_projects,
 )
 from core.chat import ChatMessage, ChatSessionError
 from core.runs import RunAdmissionBlockedError, RunKind
@@ -355,6 +356,42 @@ async def test_an_archived_project_returns_and_roots_its_agents_again(
     # Its Sessions work in the Project again, under its new id too.
     if not replace_agent:
         assert world.sessions.metadata_value(notes, SESSION_WORKING_PROJECT_META_KEY) == project_id
+
+
+@pytest.mark.asyncio
+async def test_a_project_archived_in_format_1_returns_once_converted(
+    world: ArchiveWorld, tmp_path: Path
+) -> None:
+    repo = _repo(tmp_path)
+    (repo / "AGENTS.md").write_text("a", encoding="utf-8")
+    (repo / "CLAUDE.md").write_text("c", encoding="utf-8")
+    world.projects.create("vbot", "vBot", repo)
+    archived = await world.service.archive_project("vbot")
+    # As a vBot before format version 2 archived it: its CLAUDE.md Source on.
+    document = world.payload(archived.entry_id, "project") / "project.json"
+    stored = json.loads(document.read_text(encoding="utf-8"))
+    stored.update(
+        format_version=1,
+        auto_load=["AGENTS.md"],
+        sources=[{"id": "claude.instructions", "enabled": True}],
+        created_at="2026-10-01T10:00:00.000000Z",
+    )
+    document.write_text(json.dumps(stored), encoding="utf-8")
+    world.sessions.archive_ledger.update_facts(
+        world.entry(archived.entry_id).entry_key, {"payload_format": 1}
+    )
+    page = await world.service.list(ArchiveEntryFilter())
+    assert [item.restorable for item in page.entries] == [False]
+
+    assert convert_archived_projects(world.data_dir, world.sessions.archive_ledger) == (
+        archived.entry_id,
+    )
+    assert convert_archived_projects(world.data_dir, world.sessions.archive_ledger) == ()
+    await world.service.restore(archived.entry_id)
+
+    restored = world.projects.get("vbot")
+    assert restored.auto_load == ["AGENTS.md", "CLAUDE.md"]
+    assert restored.instruction_files == ["AGENTS.md", "CLAUDE.md"]
 
 
 @pytest.mark.asyncio
