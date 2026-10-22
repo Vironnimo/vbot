@@ -16,7 +16,11 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from core.permissions.commands._directories import change_directory
+from core.permissions.commands._directories import (
+    WILDCARD_FOLDER,
+    change_directory,
+    expands_wildcard,
+)
 from core.permissions.commands._specs import POWERSHELLS, RunnerSpec
 from core.permissions.commands._state import Context, Value, environment_key
 from core.permissions.commands._syntax import RawCommand, Word
@@ -349,7 +353,12 @@ def _nested_powershell(
         if option in ("wd", "workingdirectory") or (
             len(option) >= 2 and "workingdirectory".startswith(option)
         ):
-            if index + 1 < len(arguments):
+            folder = values[index + 1].text if index + 1 < len(values) else None
+            if folder is not None and expands_wildcard(context.shell, arguments[index + 1], folder):
+                # bash expands it before pwsh starts, which then enters what it matched.
+                analysis.unresolve("cwd", arguments[index + 1].source, WILDCARD_FOLDER)
+                cwds = [None]
+            elif index + 1 < len(arguments):
                 accesses = analysis.access(
                     context, raw, "start_dir", arguments[index + 1], glob=False, tier="a"
                 )

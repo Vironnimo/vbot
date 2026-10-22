@@ -51,6 +51,7 @@ What becomes an unresolved `command`: a command line above the limit or that doe
 
 - Handled: `cd`, `chdir`, `Set-Location`/`sl`, `pushd`/`Push-Location`, `popd`/`Pop-Location`, `cd -`, `cd..`, `cd\`, `cd~`, `X:` drive switches, cmd `cd /d`, `env -C`, `pwsh -WorkingDirectory`, `git -C`, runner folder options, `[IO.Directory]::SetCurrentDirectory`.
 - Every change may fail, so the old folder stays a candidate; at most 16 candidates, beyond that the folder is unknown. A dynamic or unplaceable target makes later relative paths unresolved. Every folder changed into is a `start_dir` access.
+- A folder a wildcard picks when the line runs is unknown like a dynamic one (`unresolved` `cwd`), since its text names no folder a rule could match (`cd sec*; cat key.pem` would read `secret/key.pem`): bash expands an unquoted wildcard or brace in any word (`cd`, `git -C`, `env -C`, `pwsh -wd`); cmd's `cd`, `chdir` and `pushd` match `*` and `?` themselves; PowerShell's `Set-Location`/`Push-Location -Path` and `Start-Process -WorkingDirectory` match `*`, `?` and `[`. A quoted bash word, `-LiteralPath`, `pwsh -WorkingDirectory` and cmd's `start /d` take the text literally (`_directories.py::expands_wildcard`).
 - bash scopes changes to subshells, command substitutions, pipeline elements and background commands; PowerShell and cmd have no such scopes.
 - `cd -` without a known previous folder is unresolved (bash falls back to `$OLDPWD`); a bare `cd`/`Set-Location` goes home.
 

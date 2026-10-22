@@ -64,6 +64,17 @@ async def _analyze(line: str, shell: ShellKind) -> Any:
             unresolved=("cwd", "path_write"),
         ),
         case(
+            "cd sec* && cat key.pem; cd 'q*' && cat k",
+            id="a cd target a wildcard picks is unknown, a quoted one literal",
+            paths=("read w/p/key.pem", "start_dir w/p/q*", "read w/p/k", "read w/p/q*/k"),
+            unresolved=("cwd", "path_read"),
+        ),
+        case(
+            "pwsh -wd [s]ub -c 'Get-Content x'",
+            id="bash expands a start folder before pwsh enters it",
+            unresolved=("cwd", "command"),
+        ),
+        case(
             "cat ~/s $HOME/t ${V}/u | grep x",
             id="home and environment expand",
             paths=("read h/s", "read h/t", "read v/u"),
@@ -335,6 +346,12 @@ async def test_bash_plan(line: str, expected: Expected) -> None:
             id="cd to another drive",
             paths=("start_dir D:/x", "write w/p/y", "write D:/x/y"),
             marks=_WINDOWS,
+        ),
+        case(
+            "cd [s]ub & pushd s?b & del y",
+            id="cd and pushd match * and ? themselves",
+            paths=("start_dir w/p/[s]ub", "write w/p/y", "write w/p/[s]ub/y"),
+            unresolved=("cwd", "path_write"),
         ),
         case(
             "D: & del x",
