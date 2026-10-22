@@ -261,9 +261,25 @@ async def test_fires_due_before_activation_or_a_new_schedule_are_not_owed(
             "2026-04-05T01:45:00+11:00",
             "2026-04-05T15:15:00+00:00",
         ),
+        (
+            "Australia/Lord_Howe",
+            "2026-10-03T12:00:00+00:00",
+            "2026-10-03T15:50:00+00:00",
+            "15,30 2 * * *",
+            "2026-10-04T02:45:00+11:00",
+            "2026-10-04T15:15:00+00:00",
+        ),
+        (
+            "Australia/Lord_Howe",
+            "2026-10-03T12:00:00+00:00",
+            "2026-10-05T12:00:00+00:00",
+            "15,30 2 4 10 *",
+            "2026-10-04T02:45:00+11:00",
+            "2027-10-03T15:15:00+00:00",
+        ),
     ],
 )
-async def test_restart_in_the_repeated_hour_catches_up_the_first_occurrence_once(
+async def test_restart_across_dst_catches_up_the_latest_due_instant_once(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     clock: _Clock,

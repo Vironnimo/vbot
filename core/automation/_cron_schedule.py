@@ -213,14 +213,34 @@ def _previous_cron_fire_utc(
             wall_clock += first_offset - offset
     wall_clock += timedelta(microseconds=1)
     schedule = croniter(expression, wall_clock)
+    prior_offset: timedelta | None = None
+    latest: datetime | None = None
     try:
         while True:
             previous_local = cast(datetime, schedule.get_prev(datetime)).replace(tzinfo=timezone)
+            # Across a forward gap, wall-clock order need not be UTC order.
+            # Keep looking until even the earlier offset cannot beat the best
+            # tick (02:15 -> 02:45 can follow an ordinary 02:30 in Lord Howe).
+            if (
+                latest is not None
+                and prior_offset is not None
+                and previous_local.replace(tzinfo=UTC) - prior_offset <= latest
+            ):
+                return latest
             previous_utc = previous_local.astimezone(UTC)
             if previous_utc <= reference_utc:
-                return previous_utc
+                if latest is None:
+                    # The due tick can precede a restart by days or months: the
+                    # offset change must be checked there, not at the restart.
+                    offset = previous_utc.astimezone(timezone).utcoffset()
+                    prior_offset = (
+                        (previous_utc - timedelta(days=1)).astimezone(timezone).utcoffset()
+                    )
+                    if offset is None or prior_offset is None or offset <= prior_offset:
+                        return previous_utc
+                latest = previous_utc if latest is None else max(latest, previous_utc)
     except CroniterBadDateError:
-        return None
+        return latest
 
 
 def format_schedule(job: CronJob) -> str:
