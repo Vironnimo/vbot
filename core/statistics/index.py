@@ -461,17 +461,11 @@ class StatisticsIndex:
         self, sources: _Sources, consume: Callable[[IndexView], Result]
     ) -> Result:
         database = self._database.get()
-        indexed = database.write(
-            lambda connection: _reconcile_sources(connection, sources),
+        consumed = database.write(
+            lambda connection: _reconcile_and_consume(connection, sources, consume),
             patience_s=_WRITE_PATIENCE_S,
         )
-        # Aggregation builds temporary tables, which read-only pooled readers
-        # refuse, so the consumer runs on the writer too; its transaction
-        # changes no index row.
-        return database.write(
-            lambda connection: _consume(connection, indexed, consume),
-            patience_s=_WRITE_PATIENCE_S,
-        )
+        return consumed.result()
 
     def _read_memory[Result](
         self, sources: _Sources, consume: Callable[[IndexView], Result]
@@ -481,26 +475,50 @@ class StatisticsIndex:
             _prepare_connection(connection)
             connection.executescript(_SCHEMA)
             with _transaction(connection, immediate=True):
-                indexed = _reconcile_sources(connection, sources)
-            with _transaction(connection):
-                return _consume(connection, indexed, consume)
+                consumed = _reconcile_and_consume(connection, sources, consume)
+            return consumed.result()
 
 
-def _consume[Result](
-    connection: sqlite3.Connection,
-    indexed: Mapping[tuple[str, str, str], IndexedSession],
-    consume: Callable[[IndexView], Result],
-) -> Result:
-    """Run ``consume`` and drop its temporary tables before the transaction ends.
+@dataclass(frozen=True)
+class _Consumed[Result]:
+    """What a consumer returned, or the error it raised, once the reconcile committed."""
 
-    Temporary tables outlive a commit on the long-lived writer, and some shadow
-    the fact tables by name, so none may survive into the next read. A failed
-    consumer's rollback removes the ones it created.
+    value: Result | None = None
+    error: Exception | None = None
+
+    def result(self) -> Result:
+        if self.error is not None:
+            raise self.error
+        return self.value  # type: ignore[return-value]
+
+
+def _reconcile_and_consume[Result](
+    connection: sqlite3.Connection, sources: _Sources, consume: Callable[[IndexView], Result]
+) -> _Consumed[Result]:
+    """Reconcile, then run ``consume`` in the same write transaction.
+
+    Aggregation builds temporary tables, which read-only pooled readers refuse,
+    so the consumer runs on the writer, in a savepoint: when it fails, its
+    temporary tables roll back while the reconciled index still commits, and
+    the caller raises its error after the commit. Temporary tables outlive a
+    commit on the long-lived writer, and some shadow the fact tables by name,
+    so none may survive into the next read.
     """
-    _drop_temporary_tables(connection)
-    result = consume(IndexView(connection, indexed))
-    _drop_temporary_tables(connection)
-    return result
+    indexed = _reconcile_sources(connection, sources)
+    connection.execute("SAVEPOINT statistics_consume")
+    try:
+        _drop_temporary_tables(connection)
+        value = consume(IndexView(connection, indexed))
+        _drop_temporary_tables(connection)
+    except Exception as error:
+        if not connection.in_transaction:
+            # SQLite already rolled the whole transaction back; nothing commits.
+            raise
+        connection.execute("ROLLBACK TO statistics_consume")
+        connection.execute("RELEASE statistics_consume")
+        return _Consumed(error=error)
+    connection.execute("RELEASE statistics_consume")
+    return _Consumed(value)
 
 
 def _drop_temporary_tables(connection: sqlite3.Connection) -> None:
