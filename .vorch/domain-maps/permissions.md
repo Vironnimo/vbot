@@ -27,16 +27,16 @@ Honest limits, stated wherever "restricted" is shown: programs a command starts 
 Shared term: GLOSSARY -> Permission Rules.
 
 ### Work Area
-The folders a restricted Agent may write by default: its working directory and its Scratch Area. `read: work_area` reads there plus read allow rules. Not the Workspace, which lies in the data directory and is readable but writable only when it is the working directory.
+The folders a restricted Agent may write by default: its working directory and its Scratch Area. Not the Workspace, which lies in the data directory and is writable only when it is the working directory.
 
 ### Permission Boundary
-The effective, placeholder-free rules of one Run: the Agent's own resolved rules expanded for this Run, plus inherited ceilings, plus the protected locations. Every check asks it; `PermissionBoundary.UNRESTRICTED` is full access.
+The effective, placeholder-free rules of one Run: the Agent's own resolved rules expanded for this Run, plus inherited Permission Ceilings, plus the protected locations; every check asks it (Interfaces -> Boundary).
 
-### Ceiling
-A resolved, placeholder-free rule set inherited from whoever caused the Run (the Session that started a Sub-Agent, the Session that created a Cron job, an Extension). The Run may do only what every layer permits.
+### Permission Ceiling
+A resolved, placeholder-free rule set a Run inherits from whoever caused it: the Session that started a Sub-Agent or created a Cron job, or an Extension; the Run may do only what every Layer permits (Interfaces -> Users). Not a Project's Tool or Skill Whitelist.
 
 ### Layer
-One placeholder-free rule set inside a boundary (`PermissionLayer`), tagged with its `source`: `agent` (the Agent's own rules), `parent`, `cron` or `extension`.
+One placeholder-free rule set inside a Permission Boundary, tagged with its source: the Agent's own rules, a parent Session, a Cron job or an Extension.
 
 ## Interfaces
 

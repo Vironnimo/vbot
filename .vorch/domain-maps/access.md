@@ -32,25 +32,25 @@ How each accessor signs in: `access/accessor-contracts.md` -> Accessor notes.
 Core terms (Access Mode, Device, Accessor) live in `.vorch/GLOSSARY.md`.
 
 ### Principal
-Who a request acts for: `host` (local access token), `device` (paired Device) or `open` (credential-free `local`/`lan`). Capabilities resolve their signed issuer; other credential-free exempt requests have no principal (`None`). Its `actor` in logs and the device store is the device id, `host` or `open`.
+Who a request acts for: the host, a paired Device, or an `open` request admitted without a credential in `local`/`lan` (kinds and log names: `access/request-pipeline.md` -> Principal).
 
 ### Effective client
-The address a request counts as coming from: the direct peer, or in `authenticated` mode the address a trusted proxy forwarded. Rate limits, refusal logs and a Device's `last_client` use it.
+The address a request counts as coming from: the direct peer, or in `authenticated` mode the address a trusted proxy forwarded (`access/request-pipeline.md` -> Peer and transport). Rate limits, refusal logs and a Device's last client use it.
 
 ### Local access token
-A `vbl_` bearer token created fresh at every server start and written, once the server listens, to the owner-only `<data-dir>/runtime/local-access-<port>.token`; removed at stop unless a newer server replaced it. The server accepts it only from a direct loopback peer without any forwarding header; where clients may send it: Invariants (file format: `access/accessor-contracts.md` -> Credentials).
+The bearer token that gives tools on the server's own computer host access, created fresh at every server start; it never authenticates through a proxy or from another computer (Invariants; file and format: `access/accessor-contracts.md` -> Credentials).
 
 ### Pairing
-How a new Device gets a token: it requests pairing and shows an 8-character code; someone already signed in (host or Device) approves the code; the new Device claims its token by polling. Requests live in memory for 10 minutes; a settled outcome answers repeated polls for a 60-second claim grace.
+How a new Device gets its token: someone already signed in approves the code the new Device shows (`access/accessor-contracts.md` -> Endpoints; server side: `access/devices-and-pairing.md`).
 
 ### Login ticket
-A single-use, 60-second secret a signed-in principal creates (`auth.login_ticket`) so that a top-level browser navigation to `/auth/ticket/<ticket>` signs the browser in and lands it on the ticket's `next` page: a new browser Device with its cookie, or the browser's existing browser Device when it is signed in already. Accessors holding a credential (Desktop, CLI tray) use it to open the WebUI in a browser or the Desktop window.
+A single-use, short-lived secret with which a signed-in principal signs a browser in through one top-level navigation, so a Desktop or CLI tray can open the WebUI (`access/accessor-contracts.md` -> RPCs, Endpoints).
 
 ### Ticket browser
-A browser Device created by redeeming a login ticket (`via: "ticket"`, `approved_by` the issuer). Revocation and expiry follow its current issuer transitively; another issuer's ticket can renew the delegation. Independently paired Devices (`via: "pairing"`) never join that cascade.
+A browser Device created by redeeming a login ticket, whose revocation and expiry follow its issuer (`access/devices-and-pairing.md` -> Revocation and ticket browsers). Not an independently paired browser Device, which never joins that cascade.
 
 ### Route class
-`classify_route` sorts every request into `exempt` (no Bearer/cookie required), `shell` (the public WebUI shell: any GET/HEAD outside the server namespaces `/api`, `/ws`, `/_vbot`, `/auth`, `/health`) or `protected` (everything else, every WebSocket). It fails closed.
+How the access guard classifies a request by whether it needs a credential: `exempt`, `shell` (the public WebUI shell) or `protected` (`access/request-pipeline.md` -> Route classes).
 
 ## Request pipeline
 

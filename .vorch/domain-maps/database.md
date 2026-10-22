@@ -12,37 +12,37 @@ Not owned here: data-directory placement and creation (`storage.md`; initializat
 
 ## Terms
 
-Core terms (Session, Run, Runtime) live in `.vorch/GLOSSARY.md`.
+Shared terms (Session, Run) live in `.vorch/GLOSSARY.md`.
 
 ### Format generation
-The incompatible-format counter of one database, stored in `PRAGMA user_version`, `kernel_meta.format_generation` and the marker entry. Generation 1 is current. Within a generation only additive changes happen; a new generation needs an explicit offline converter.
+The incompatible-format counter of one database: within a generation only additive changes happen, and a new generation needs an explicit offline conversion (Evolution contract; where it is stored: `database/schema-design.md`).
 
 ### Migration ledger
-The `kernel_migrations` table: one row per applied named data migration with `applied_at`, `applied_by_version` and `breaks_older`. It replaces ad-hoc version keys in owner tables.
+The per-database record of applied named data migrations (Data Model; columns: `database/schema-design.md`).
 
 ### Retired index
-An index a spec no longer declares and lists in `retired_indexes`; the kernel drops it on open. The only object the kernel ever drops, because an index is derived data.
+An index a spec no longer declares but lists as retired, which the kernel drops on open. It is the only object the kernel ever drops, because an index is derived data.
 
 ### Canonical / disposable profile
-Canonical: authoritative data, registered in `data-store.json`, `synchronous=FULL`, included in data snapshots, quarantined and auto-restored on corruption (never on a schema mismatch). Disposable: a rebuildable projection with `kernel_meta.projection_version`, `synchronous=NORMAL`; a version mismatch, foreign/newer file or corruption discards the file with its sidecars and rebuilds it empty. Busy or locked is unavailable in both profiles and never grounds to discard or quarantine.
+Canonical: authoritative data that data snapshots include and recovery quarantines and restores (`database/snapshots-and-recovery.md`). Disposable: a rebuildable projection that the kernel discards and rebuilds empty instead of repairing (`database/disposable.md`).
 
 ### Data snapshot
-A verified copy of the durable data under `<data-dir>/snapshots/<id>/`: one member per canonical database registered in the marker plus the JSON document set (layout: `database/snapshots-and-recovery.md` -> Files). Not a Session-only backup. Databases restore per member; the documents restore only as one set.
+A verified copy of the durable data: every canonical database registered in the marker plus the JSON document set; databases restore per member, the documents only as one set (`database/snapshots-and-recovery.md`). Not a Session-only backup.
 
 ### JSON document set
-Every existing file matching `core.json_documents.SNAPSHOT_DOCUMENTS` (which kinds: `json-documents.md` -> Snapshots and doctor), captured as one snapshot member; symbolic links, Windows junctions and names starting with `.` are never members. The Secret Store `secrets.json` is a member (ciphertext only), but whole-set restores (a snapshot set restore, the update rollback, a full configuration backup restore) keep the live one (`DOCUMENTS_KEPT_BY_RESTORES`; `secrets.md`).
+The durable JSON documents that data snapshots and configuration backups capture, as one snapshot member (which files: `database/snapshots-and-recovery.md` -> Files; restore exceptions: -> JSON document set restore).
 
 ### Compound mutation
-One change that spans a canonical database and durable JSON documents as a unit, such as an Agent rename (Session rows plus `agents/<id>/`). It enters the Runtime's snapshot barrier shared, so an online data snapshot copies it either before or after the whole change (Snapshot consistency). An ordinary write to one database or one document is not one; the member freeze orders those (Capture role).
+One change that spans a canonical database and durable JSON documents as a unit, such as an Agent rename. It enters the Runtime's snapshot barrier shared, so an online data snapshot copies it either before or after the whole change (Snapshot consistency); an ordinary write to one database or one document is not one.
 
 ### Capture role
-How an online data snapshot captures one canonical database (`DatabaseSpec.snapshot_capture`). `held` (the default): its writes, like every snapshot document change, wait while a capture freezes the members. `anchor`: the one database that keeps taking writes during the freeze and fixes the instant the snapshot stands for; today `sessions`, so Runs go on. `trailing`: keeps taking writes too and is copied after the freeze ends, so its copy may be newer than the anchor's; only data that stays correct ahead of the anchor may trail; today `model_usage`. A new canonical owner is held unless it must keep writing during a capture and stays correct ahead of the anchor.
+How an online data snapshot captures one canonical database: whether its writes wait during the capture's freeze, fix the instant the snapshot stands for, or are copied after the freeze (roles and current assignments: `database/snapshot-consistency.md` -> Capture roles).
 
 ### Configuration backup
-A frequent, deduplicated copy of the JSON document set and other configuration files (coverage: `database/config-backups.md` -> Coverage). Not a data snapshot: it holds no database, the Runtime takes it while it runs, and it restores per file.
+A frequent, deduplicated copy of the JSON document set and other configuration files (`database/config-backups.md`). Not a data snapshot: it holds no database, the Runtime takes it while it runs, and it restores per file.
 
 ### Update snapshot
-The data snapshot an updater takes for one update operation, offline after the previous server stopped, bound in memory to a stamp of the data (`update_rollback.UpdateSnapshot`). Only this snapshot may be restored automatically, and only after that operation's candidate failed its verification start.
+The data snapshot an updater takes offline for one update operation: the only snapshot vBot restores as a whole without an operator, and only after that operation's candidate failed its verification start (`database/snapshots-and-recovery.md` -> Update rollback). Not an operator's data snapshot.
 
 ## Evolution contract (Generation 1)
 

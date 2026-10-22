@@ -6,6 +6,8 @@ Every metric, counter and gauge the server and WebUI record, with the owner that
 
 Durations are milliseconds; counters are occurrence totals. Names are dotted lowercase words with low cardinality.
 
+Tracks (one Perfetto process each, only inside a Recording; histograms ignore them): a Session address (`session_track()`: `<agent>@<project>/<session>` or `<agent>/<session>`), `rpc`, `sqlite`, `events` (server-pushed invalidations), `webui` (WebUI client reports), `runtime` (Event Loop lag, stalls, process gauges) and `worker pool <name>`.
+
 - `rpc.<method>` - every registered RPC method in `server/rpc/dispatcher.py::dispatch_method`, track `rpc`. Unknown method names return before measurement.
 - Per kernel database `<name>` (`sessions`, ...): `sqlite.<name>.write_wait` (lock wait; spans only >= 1 ms), `sqlite.<name>.write` (each `BEGIN IMMEDIATE`..`COMMIT`/`ROLLBACK` attempt, so a busy retry counts twice) and `sqlite.<name>.read` (the whole read context including the caller's work, plus the writer-lock wait when no WAL reader is available) - `core/database/_runtime.py`, track `sqlite` (`database.md`). The load suite reads the `sqlite.sessions.*` series.
 - `worker_pool.<pool>.wait` (admission; spans only >= 1 ms) and `.run` (the callable's own time, measured in the worker thread; span named after the callable), gauges `.active`/`.waiting` - every `BoundedWorkerPool` (`core/utils/workers.py`), track `worker pool <pool>`; an `OrderedWorker` records only `.run`. A caller also waits for the Event Loop to take the result back, which `.run` leaves out and a busy loop stretches far beyond the work: that delay shows as `event_loop.lag`.

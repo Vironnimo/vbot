@@ -12,7 +12,7 @@ Not owned here: the `skill` Tool's modes, activation payload, paging and path ru
 
 **Extension Skills.** Each loaded Extension's `skills/` folder (folders only, no code) joins the global scan roots, so its Skills are read-only **global** Skills without allowlist bypass (allowed per Agent, or by a Project's `skills_global_enabled`); the pool refreshes on Extension enable/disable/reload.
 
-**Scoped pool.** `runtime.skills_for(project_id, identity_agent_id=None)` merges the layers with first-found-wins precedence **own > project > shared > global > bundled**: private Skills are always allowed for their owner unless its Agent Skill Exclusions name them, the effective Project set is always allowed inside active Project Context, shared Skills insert between Project and global layers (each owner's resolved packages, never a whole home), and the Agent's `allowed_skills` minus its exclusions governs everything else. Config Agents receive the Project-derived set through their resolved allowlist. Live Runs, compaction, preview, activation and autocomplete share this policy. Shared Skills never enter the receiver's always-allowed set. Scans and caches: `skills/loading.md`.
+**Scoped pool.** `runtime.skills_for(project_id, identity_agent_id=None)` merges the layers with first-found-wins precedence **own > project > shared > global > bundled**: private Skills are always allowed for their owner unless its Agent Skill Exclusions name them, the effective Project set is always allowed inside active Project Context, shared Skills insert between Project and global layers (each owner's resolved packages, never a whole home), and the Agent's `allowed_skills` minus its exclusions governs everything else. Project Agents receive the Project-derived set through their resolved allowlist. Live Runs, compaction, preview, activation and autocomplete share this policy. Shared Skills never enter the receiver's always-allowed set. Scans and caches: `skills/loading.md`.
 
 Skills are playbooks, not Tools: a script-backed bundled Skill registers no Tool; its required binary gates visibility, activation supplies the script path and contract, and the Agent runs it through `bash`.
 
@@ -21,44 +21,34 @@ Skills are playbooks, not Tools: a script-backed bundled Skill registers no Tool
 The core Skill term lives in `.vorch/GLOSSARY.md`.
 
 ### Per-Agent Skill
-**Definition:** A Skill in one Agent's private home `<data_dir>/agents/<id>/skills/`, visible only to that Agent, highest precedence and always allowed for its owner. Agents author their own via `skill_manage` and `/learn`; users curate any Agent's (`agent:<id>` scope).
-**Not:** A global, Project or bundled Skill; Project Context never exposes another Agent's private home.
+A Skill in one Identity Agent's private Skill home, visible only to that Agent, with the highest precedence and always allowed for it unless excluded (Overview, Authoring & Write Scope). Not a global, Project or bundled Skill; Project Context never exposes another Agent's private home.
 
 ### Disabled Skill
-**Definition:** One Skill package the user turned off (user requirement 2026-10-05: exactly that package, never a same-named one): through the Skill Policy, or for a Project Skill through its Project's `skills_project_disabled`. It is skipped at scan before it claims its name, so it vanishes from every runtime consumer, including the owner's always-allowed copy, while the next same-named package in precedence loads; only editor-scope loads still show it.
-**Not:** An allowlist omission or Agent Skill Exclusion - the switch outranks both and acts for every Agent and Project.
+One Skill package the user turned off, for every Agent and Project, so the next same-named package takes its place (`skills/policy.md` -> Disables, exclusions and shares). Not an allowlist omission or Agent Skill Exclusion: the switch outranks both.
 
 ### Agent Skill Exclusion
-**Definition:** A name in an Identity Agent's optional `excluded_skills` list (`agent.md`), removed from what `allowed_skills` grants, also from `*`, so `["*"]` plus exclusions means "all except". It also turns off the Agent's own private Skills of that name (user requirement 2026-09-29: own Skills are toggleable per Agent), but never the active Project's effective set. An excluded Skill stays loaded and editable through `skill_manage` but leaves the Agent's catalog and activation, and Skills depending on it become unavailable. Config, Project and temporary Agents have no exclusions.
-**Not:** A Disabled Skill: the policy switch is the registry's `excluded_packages`, Agent exclusions are `SkillRegistry.allowlist_exclusions`.
+A Skill name an Identity Agent's configuration withholds from that Agent, including its own private Skill of that name, while the Skill stays loaded for others (`skills/policy.md` -> Disables, exclusions and shares). Not a Disabled Skill, which removes one package for everyone.
 
 ### Shared Skill
-**Definition:** An Identity Agent's private Skill the Skill Policy shares with specific receiver Identity Agents: an extra pool layer for each receiver, subject to its own `allowed_skills` and disables, shown like its own Skills without provenance. Receivers co-maintain it through `skill_manage` update actions; `create` and `delete` stay with the owner. Config/Team Agents never see shared Skills; stale entries are ignored with a warning.
-**Not:** A copy or move - edits land at the owner's home; not an all-agents broadcast.
+An Identity Agent's private Skill the Skill Policy shares with named receiver Identity Agents, which see it like their own and may update it (`skills/policy.md` -> Disables, exclusions and shares). Not a copy or move, since edits land in the owner's home, and not a broadcast to all Agents.
 
 ### Skill History
-**Definition:** The append-only revision log `skill-history.jsonl` beside each writable home: every authoring write with its writer and changed files, outside changes as `baseline`/`external` revisions, and each Skill's origin and pin; people revert revisions, all or none (`skills/history.md`).
-**Not:** Version control or a backup (large or non-UTF-8 text is kept by hash only); not the Memory history (`memory/history.md`).
+The append-only revision log beside each writable Skill home: who changed which files of which Skill, outside changes, and each Skill's origin and pin, from which people revert revisions (`skills/history.md`). Not version control or a backup, and not the Memory history (`memory/history.md`).
 
 ### Skill Archive
-**Definition:** The folder `skill-archive/` beside a writable home that a deleted package moves into, with reason `deleted`, `absorbed` (its instructions now live in another Skill of that home, `absorbed_into`), `inactive` (Librarian aging) or `published` (moved into the global home by `publish`). No registry scans it; a person restores or purges a package.
-**Not:** An Archive Entry (`archive.md`): no retention or `archive.*` RPC applies. Deleting an Identity Agent moves its private home, history and Skill Archive into its Archive Entry.
+The folder beside a writable Skill home that a deleted package moves into, until a person restores or purges it (`skills/history.md` -> Archive, restore and purge). Not an Archive Entry (`archive.md`): no retention or `archive.*` RPC applies, though an archived Identity Agent's Entry carries its Skill Archive.
 
 ### Pinned Skill
-**Definition:** A Skill a person pinned (`skill.set_pinned`, `vbot skill pin`, the WebUI); the pin lives in the Skill History and keeps Background Writers off. Only a person pins or unpins.
-**Not:** A write lock - people and attended Agents still change it; not the `PinnedSkillCatalog`.
+A Skill a person pinned to keep Background Writers off it; only a person pins or unpins (`skills/history.md`). Not a write lock, since people and attended Agents still change it, and not the Prompt-Epoch Catalog.
 
 ### Background Writer
-**Definition:** A Skill write by a background actor (`BACKGROUND_ACTORS`): `reflection` for a Reflection Run, `librarian` for the Librarian's aging, its consolidation Run and every call in a Librarian Session (`automation/librarian.md`); `core/tools/skill.py::skill_writer` names the writer. It never changes, deletes or absorbs a pinned Skill, never reverts, never changes a global Skill and never publishes (user requirement 2026-10-05); an unreadable history fails closed. Origin, sharing and automation triggers do not limit it (user decision 2026-10-03: the pin is the one hands-off the user sets). Background Sessions are not Skill use (`statistics/skill-usage.md`).
-**Not:** An attended Agent, which writes with actor `agent` under the ordinary write scope.
+A Skill write by a background actor, a Reflection or the Librarian, which vBot restricts more than an attended Agent's write (`skills/skill-manage.md` -> Calls, `skills/history.md` -> Write rules). Not an attended Agent, which writes under the ordinary write scope.
 
 ### Prompt-Epoch Catalog
-**Definition:** The System Prompt Skill catalog text (`<available_skills>`) snapshotted on a Session's first build and reused until successful Compaction (`PinnedSkillCatalog`; `chat/request-building.md` -> Skills and prompt-cache stability).
-**Not:** A freeze on activation - the `skill` Tool and triggers resolve the live registry.
+The Skill catalog text of the System Prompt, kept fixed for a prompt epoch and rebuilt after a successful Compaction (`chat/request-building.md` -> Skills and prompt-cache stability). Not a freeze on activation: the `skill` Tool and triggers resolve the live registry.
 
 ### Skill Availability Announcement
-**Definition:** A one-time tail `<system-reminder>` when a Skill becomes available+allowed during a prompt epoch and was not shown before, planned against the Session's seen-Skill set (`chat/request-building.md` -> Skills and prompt-cache stability); a Session without one (new, or forked or moved into another Agent or Project) seeds it silently.
-**Not:** A removal notice or a replacement for the Prompt-Epoch Catalog.
+A one-time System Reminder that a Skill became available and allowed during a prompt epoch without having been shown to the Session before (`chat/request-building.md` -> Skills and prompt-cache stability). Not a removal notice or a replacement for the Prompt-Epoch Catalog.
 
 ## Authoring & Write Scope
 

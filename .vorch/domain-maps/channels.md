@@ -13,7 +13,7 @@ Modules: `config.py` (configuration values, schema diagnostics), `storage.py` (`
 ## Terms
 
 ### Conversation anchor and pointer ("Wegweiser")
-A platform conversation's derived Session id is its stable anchor; its pointer in `channel_conversations` names the Session it currently routes to, and without a pointer the anchor itself is that Session. The pointer is Channel state, never Session metadata (`channels/conversation-routing.md`).
+A platform conversation's derived Session id is its stable anchor; its pointer names the Session it currently routes to, and without a pointer the anchor itself is that Session. The pointer is Channel state, never Session metadata (`channels/conversation-routing.md`).
 
 ## Data Model
 

@@ -9,10 +9,10 @@ Used by human users and agents. Local commands are server lifecycle (`server sta
 ## Terms
 
 ### Update channel
-Where an installation installs and updates from: `release` (published releases) or `main` (the rolling `main-build` prerelease of main commits whose CI and packages passed). Recorded as `release_url` in `application.json` (`cli/application.md` -> Update operation). Not a messaging Channel (see `channels.md`).
+Where an installation installs and updates from: the published releases or the rolling build of `main` commits whose CI and packages passed (`cli/application.md` -> Update operation). Not a messaging Channel (see `channels.md`).
 
 ### Development checkout
-A Git checkout running vBot from source for development and tests (`pip install -e ".[dev]"`, Worktrees included). It is not an installation: it has no `application.json`, is updated with git, and refuses the installation commands.
+A Git checkout running vBot from source for development and tests, Worktrees included (setup: PROJECT.md -> Development). Not an installation: it is updated with git and refuses the installation commands (`cli/application.md`).
 
 ## Interfaces
 

@@ -2,6 +2,8 @@
 
 Design rules for every Generation 1 table and later addition in a kernel database, core or Extension. They complement the additive rules of `../database.md` -> Evolution contract, which decide whether a change may ship at all.
 
+- The format generation is stored three times: `PRAGMA user_version`, `kernel_meta.format_generation` and the database's marker entry; generation 1 is current.
+- Applied data migrations are recorded only in the Migration ledger `kernel_migrations` (one row per migration: `name`, `applied_at`, `applied_by_version`, `breaks_older`), never in ad-hoc version keys in owner tables.
 - No enum CHECK constraints on extensible vocabularies (roles, kinds, statuses, causes); CHECK stays for permanent invariants such as `>= 0`, `json_valid`, paired nullability.
 - Hot tables stay narrow, with large payloads in 1:1 side tables.
 - Integer surrogate keys for internal relations.

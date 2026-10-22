@@ -20,16 +20,16 @@ Agent Secrets (`agent_secrets.py` and its helpers) decide which values exist, wh
 Agent Secret is a shared term (`.vorch/GLOSSARY.md`); Secret reference, Sink, Secret Source and Secret request: `secrets/agent-secrets.md` -> Terms.
 
 ### Secret Store
-`<data-dir>/secrets.json` plus its data key. Not the OS keychain: on Windows only the key is wrapped by DPAPI; the entries live in the data directory.
+The encrypted document of a data directory plus its data key (Data Model). Not the OS keychain: on Windows only the key is wrapped by DPAPI; the entries live in the data directory.
 
 ### Data key
-One random 256-bit AES key per store, identified by a key id. Created with the store, never rotated in place; `reset` starts a new store with a new key.
+The one random AES key per store that encrypts its entries; created with the store, never rotated in place (Keys, States).
 
 ### Damaged entry
-An entry that fails authentication under the store's key, name and section. Bulk reads omit it; `entry()` raises. It stays reported and untouched until replaced or removed.
+An entry that fails authentication under the store's key, name and section; it reads as missing and stays reported and untouched until replaced or removed (States).
 
 ### Import record
-The `plaintext_import` field: which plaintext files a conversion imported and the keyed fingerprint of every value it put into the store. It decides which store values the conversion may still replace or remove (`secrets/plaintext-conversion.md`).
+The record of an unfinished plaintext conversion: which files it imported and the keyed fingerprint of each value it stored, which decides what it may still replace or remove (`secrets/plaintext-conversion.md`).
 
 ## Data Model
 
@@ -78,7 +78,7 @@ The document is in `DURABLE_DOCUMENTS` (`"secrets"`, validated by `validate_secr
 ## States
 
 - `absent`: no document. Reads are empty; the first write creates the store and its key. A write never creates a missing data directory, and the data-directory check runs before a key is created.
-- `available`: the key opens the key check. Damaged entries are listed in `status().damaged` and logged once.
+- `available`: the key opens the key check. Damaged entries are left out of bulk reads (`entry` raises), listed in `status().damaged` and logged once.
 - `unavailable`: the document fails to load or validate, its protection is not available on this system, or the key is missing or wrong. Reads are empty, `entry` raises, every write raises `SecretStoreUnavailableError`, and the files stay byte-identical. One WARN names the reason and `vbot data-store secrets reset --yes`; the server keeps starting, credentials report as not configured, `doctor` reports an error on `$.key`, and the data-store status degrades.
 - A read that fails with an I/O error (a scanner or backup tool holding `secrets.json`, a key file that cannot be read now) is retried after 50 ms and 200 ms; when it keeps failing, the store reads as unavailable for that access only (`_View.transient`, never cached), logs its own WARN, and the next access tries again. Format and validation failures can be cached until the document changes; key-file-backed views are rechecked on every access. Loading a new document version also repairs inherited file permissions from earlier releases.
 - `reset()` refuses a store this process opens and a transient failure, then moves the document to `<data-dir>/quarantine/secret-store/<UTC stamp>-<hex>/secrets.json` (never deleted; it opens again with its key, for example with `SecretStore(<that folder>)`) and creates a new empty store. Nothing else ever replaces a store.

@@ -30,7 +30,7 @@ Reports current or targeted agent/session/runtime status through the same status
 
 ## Agent-facing text
 
-Rows cover texts changed in the one-shot shell rebuild (2026-10); the older wording has no recorded reasons yet. Failure modes F1-F6: `tools.md` -> Terms; review labels: `tools/shell/agent-facing-text.md`.
+Rows cover texts changed in the one-shot shell rebuild (2026-10); the older wording has no recorded reasons yet. Failure modes F1-F6: `tools/agent-facing-text.md` -> Failure modes; review labels: `tools/shell/agent-facing-text.md`.
 
 | Text | Failure it prevents | Evidence |
 |---|---|---|

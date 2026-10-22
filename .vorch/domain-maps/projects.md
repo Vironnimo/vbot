@@ -8,47 +8,22 @@ The Projects domain turns a repository location into a persistent vBot execution
 
 ## Terms
 
-Core terms such as Project, Agent, Session, Tool, Skill, and Provider live in `.vorch/GLOSSARY.md`.
+Core terms such as Project, Project Agent, Project Context, Team and Working Project live in `.vorch/GLOSSARY.md`.
 
 ### Project Anchor
-
-**Definition:** The vBot-owned directory `<data-dir>/projects/<project-id>/` containing `project.json`. It is the durable filesystem identity of a Project; Project-scoped Sessions are relationally addressed in the canonical Session database.
-
-**Not:** The repository at the Project's `cwd`; changing `cwd` does not move or replace the Project Anchor.
-
-### Project Agent
-
-**Definition:** An Agent discovered from the Project repository and resolved at runtime from repository configuration plus Project defaults, per-Agent overrides, and global defaults.
-
-**Not:** An Identity Agent stored independently in the global Agent store.
-
-### Ceiling
-
-**Definition:** A Project-level upper bound on capabilities. Resolution can narrow a ceiling for an individual Project Agent but cannot widen it.
+The vBot-owned directory of one Project in the data directory, holding its `project.json`: the Project's durable identity on disk (`projects/configuration.md` -> Anchor Layout). Not the repository at the Project's `cwd`; changing `cwd` does not move or replace it.
 
 ### Project Tool Whitelist
-
-**Definition:** The Project-owned `allowed_tools` set that defines the maximum directly configurable Tools available to every Project Agent. Repository denials narrow the default policy, while an explicit vBot per-Agent Tool override may replace those denials but can never exceed this ceiling; automatic companions may follow an in-ceiling Tool.
+The Project-owned set of directly configurable Tools that bounds every Project Agent: resolution, a vBot per-Agent Tool override included, may narrow it for one Agent but never widen it (`projects/resolution.md` -> Effective Capabilities).
 
 ### Project Skill Whitelist
-
-**Definition:** The Project-owned selection of bundled and global Skills combined with discovered Project Skills; a Project Skill explicitly disabled by name remains unavailable even when a bundled or global Skill has the same name.
+The Project-owned selection of bundled, global and discovered Project Skills that bounds every Project Agent: resolution may narrow it for one Agent but never widen it (`projects/resolution.md` -> Effective Capabilities).
 
 ### Source
-
-An input for Agents, Skills or always-on instructions: a repository location vBot detects, or a Skill folder Source (`folder:<path>`) the user adds, inside or outside the repository. A Project stores one ordered list of Sources with on/off switches; the earliest active definition of an Agent or Skill name wins, and names compete only within one kind. Sources from several ecosystems can contribute to one Team.
+An input for a Project's Agents or Skills: a repository location vBot detects or a Skill folder the user adds, inside or outside the repository. A Project keeps its Sources in one ordered, switchable list in which the earliest active definition of a name wins (`projects/scanning.md`); instruction files are not Sources.
 
 ### Agent Profile
-
-The format-neutral repository definition supplied by a Source adapter: Agent id, display name, delegation description, instructions, Model wish, Tool and permission wishes, Skills, provenance and a translation report. The Profile precedes Project defaults and overrides; it is not a stored Identity Agent or a runtime Agent kind.
-
-### Project Context
-
-**Definition:** The current instructions, absolute Project path, and available Project Skills that tell an Agent how to work in a registered Project. Supplied automatically when that Project is the Agent's working Project, or loaded explicitly by an Identity Agent through the `project` Tool (`tools/project.md`). Its instructions are the repository's main instruction file (`AGENTS.md`, else the first of `CLAUDE.md`, `.claude/CLAUDE.md`, `GEMINI.md`, `.github/copilot-instructions.md`, chosen live by `core/projects/instructions.py` while `auto_instructions` is on) followed by the additional `auto_load` files; `Project.instruction_files` is the one resolver. They enter under the Prompt files cap (`prompts/prompt-files.md`). Folder instructions of subfolders reach the Agent later, as notes (`chat/request-building.md` -> Folder instructions).
-
-**Not:** An Agent type, Project membership, a Working Project or default Project, or a current-working-directory change; an explicit load changes none of those, and every one-shot `bash` call must set `workdir` again.
-
-`resolver.py` keeps the public resolution facade and the Identity and Config Agent chains. `_session_resolution.py` owns Session overrides and Working Project binding, `_team_resolution.py` owns fresh Profiles, Team scans and translation, `_temporary_resolution.py` the temporary Agent chain (bindings, repository Profiles, previews), and `_project_context.py` owns prompt/Skill scope projection; they remain internal parts of the resolver.
+The format-neutral definition of one Team member that a Source adapter reads from the repository, before Project defaults and overrides apply (`projects/scanning.md` -> Ownership and inputs). Not a stored Identity Agent or a runtime Agent kind.
 
 ## Boundary & Invariants
 
@@ -74,7 +49,7 @@ The format-neutral repository definition supplied by a Source adapter: Agent id,
 
 - `normalize_cwd()` resolves an absolute real path, removes trailing separators, and preserves case. `cwd_identity_key()` additionally case-folds only on Windows; use it for duplicate detection instead of comparing display paths.
 - Project ids follow PROJECT.md -> Object IDs: `ProjectStore.create()` and `restore_files` under another id refuse reserved names (`InvalidProjectIdError`), and `project.add`, which derives the id from the display name, refuses such a slug first as `invalid_request`, asking for another `display_name`. Store lookups (`get` and everything built on it, `exists`, `archive_files`, `session_owning_agents`) require an Anchor entry with exactly the requested spelling (`_stored_project_dir`), so a case variant is `ProjectNotFoundError` (RPC `project_not_found`), also through Agent resolution (`projects/resolution.md`); a `project.json` id that disagrees with its Anchor stays a plain `ProjectError` (`test_store.py`, `test_project_methods.py`).
-- Project removal is an archive operation (`ArchiveService.archive_project`; workflow and compensation in `projects/configuration.md` -> Removal Coordination and `archive.md`). Live automations targeting an Agent of the Project refuse it (`project_in_use`, one message naming all of them; `Runtime.automation_references.project_references`, `automation.md`), and it runs under `ChatRunManager.project_admission_guard`, which covers Project-scoped Sessions and Identity Sessions whose Working Project is the target. Identity Sessions working in the Project are not archived: they stay readable, their Runs are refused with `WorkingProjectMissingError` until a matching restore brings the original Project back (reuse of its id does not qualify; under a new id, proven archive-time associations follow it; `sessions/ownership.md` -> Archive scope membership and provenance), and they never fall back to the Workspace (`sessions.md` -> Terms -> Working Project).
+- Project removal is an archive operation (`ArchiveService.archive_project`; workflow and compensation in `projects/configuration.md` -> Removal Coordination and `archive.md`). Live automations targeting an Agent of the Project refuse it (`project_in_use`, one message naming all of them; `Runtime.automation_references.project_references`, `automation.md`), and it runs under `ChatRunManager.project_admission_guard`, which covers Project-scoped Sessions and Identity Sessions whose Working Project is the target. Identity Sessions working in the Project are not archived: they stay readable, their Runs are refused with `WorkingProjectMissingError` until a matching restore brings the original Project back (reuse of its id does not qualify; under a new id, proven archive-time associations follow it; `sessions/ownership.md` -> Archive scope membership and provenance), and they never fall back to the Workspace (GLOSSARY -> Working Project).
 - Team membership and the winning definition may be cached, but resolving a member rereads that definition and its inherited repository settings so configuration edits take effect without rebuilding the Team. New competitors use normal Team rescan/invalidation (`projects/resolution.md`). Do not turn the membership cache into a configuration cache.
 - Address strings use the canonical `agent@project` parsing and formatting in `core/projects/address.py`; do not split or assemble them ad hoc.
 
@@ -84,4 +59,4 @@ Read these only when your task matches - not by default.
 
 - Changing `project.json`, Project CRUD/RPC mutations, overrides, paths, anchor seeding, or archive/removal behavior -> `projects/configuration.md`
 - Changing repository scanning, Source adapters, detection, Agent collisions, or scan findings -> `projects/scanning.md`
-- Changing Project Agent resolution, model/scalar fallback, effective-config provenance, capability ceilings, or working-Project helpers -> `projects/resolution.md`
+- Changing Project Agent resolution, model/scalar fallback, effective-config provenance, capability ceilings, working-Project helpers, or which instruction files Project Context loads -> `projects/resolution.md`

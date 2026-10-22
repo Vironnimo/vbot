@@ -13,23 +13,19 @@ Roots: the tracked system root `resources/models/` is complete for shared Provid
 
 ## Terms
 
-Domain vocabulary. Core terms (Provider, Model, Reasoning) live in `.vorch/GLOSSARY.md`.
+Shared terms (Provider, Model, Reasoning) live in `.vorch/GLOSSARY.md`.
 
 ### Canonical id
-**Definition:** A models.dev-style `lab/model` identifier naming a model independent of any provider - purely an internal join/DB key during assembly, **never sent on the wire**. A provider model reaches its canonical base via explicit `canonical` pointer or exact wire-id match; resolution is deterministic only.
-**Not:** The wire model-id. A missed join is not an error - the model runs on provider + override data.
+A provider-independent identifier naming a Model, used only as an internal join key during assembly and never sent on the wire (join rule: At-load assembly). Not the wire Model id; a missed join is not an error.
 
 ### Refresh
-**Definition:** The DUMB half: fetch feeds, project per file inside an isolated copy of the effective DB, record the fetched catalogs, publish atomically after validation. Network + credential; rare and explicit.
-**Not:** Load. Refresh writes disk from the network; Load selects and assembles without fetching.
+Fetching Provider and models.dev catalogs and writing them to disk per file: needs network and credentials, rare and explicit (Overview; `models/refresh.md`). Not Load.
 
 ### Load
-**Definition:** The SMART half (`ModelRegistry.load`): select each generated catalog file from the root that fetched it last, assemble canonical/provider projections with current Overrides in memory. No network, frequent (startup, cache invalidation).
-**Not:** Refresh, or merging two copies of one catalog file: roots mix per file, never within one.
+Assembling the effective Models in memory from the generated catalogs and the current Overrides, without network; frequent (Overview; At-load assembly). Not Refresh, and not a merge of two copies of one catalog file: roots mix per file, never within one.
 
 ### Reasoning control
-**Definition:** How a provider steers reasoning on the wire - `levels` (effort ladder), `on_off` (toggle), or `budget` (token budget with max); derived at refresh from models.dev `reasoning_options` into `capabilities.reasoning.control`.
-**Not:** The agent's `thinking_effort` setting - control is the capability, effort snaps against the ladder at request time (wiring in `providers/request-policy.md`).
+How a Provider steers a Model's Reasoning on the wire, such as an effort ladder, a toggle or a token budget (Typed reasoning). Not the Agent's thinking effort: control is the capability, and the effort snaps against it at request time (`providers/request-policy.md`).
 
 ## The three layers
 
@@ -62,7 +58,7 @@ Per-model **facts a Provider or catalog reports** live in the Provider-scoped `m
 ## Interfaces
 
 - `models.py` owns the registry and public imports of frozen `Model`, `Capabilities`, and `ReasoningCapabilities`; `_model_record.py` owns records, validation and task derivation. `Capabilities.task_options` holds typed task option specs merged one level deep like other capabilities sub-fields, consumed by `model_tasks.md` option builders. Parameter spec types: `enum`, `range`, `boolean`, and `string`; a spec may carry an optional `default`.
-- `Model.model_id` is the exact wire string - no remapping anywhere. `Model.connections` binds a model to a subset of connection ids (empty = all); `allows_connection(id)` is the single source read by target expansion, `model.list`, the Extension host `catalog()`, WebUI filtering, and save guards.
+- `Model.model_id` is the exact wire string - no remapping anywhere. Users and Agents select a Model as `<provider>/<model-id>`, split at the first `/`, so the wire id may hold further slashes (Connection pin: `chat/run-execution.md`). `Model.connections` binds a model to a subset of connection ids (empty = all); `allows_connection(id)` is the single source read by target expansion, `model.list`, the Extension host `catalog()`, WebUI filtering, and save guards.
 - `ModelRegistry.load/reload` select each catalog file's root, assemble with overrides, overlay Custom Provider models (a manual Custom Model wins same-id collisions). **Reload updates in place** so services holding the registry see refreshed catalogs without restart - do **not** rebind `runtime._models` to a fresh `load()` (that bug left Chat fresh and specialized targets stale). `reload_async` is the Event-Loop-safe variant: it assembles on the `model-registry` worker pool and swaps the contents on the calling loop, so loop readers never see a half-replaced registry (generation guard and change result: `models/refresh.md` -> Reload concurrency).
 - `query(model_query)` is the pure filtered read path; credential gating happens outside it. `get(provider, model)` raises on unknown pairs; `list_for_provider` sorts ascending.
 - `Model.pricing` is optional immutable `TokenPricing` (`core/models/pricing.py`); `ModelRegistry.pricing_for(bare_or_qualified_reference)` returns the effective exact price or None, and Chat and Compaction snapshot the computed cost in canonical Usage (sources, tiers, computation: `models/pricing.md`).

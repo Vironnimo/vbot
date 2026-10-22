@@ -14,53 +14,40 @@ Data snapshots, quarantine, restore, recovery incidents and the data-store marke
 
 ## Terms
 
-Core terms (Session, Agent, Run, Project) live in `.vorch/GLOSSARY.md`.
+Core terms (Session, Agent, Run, Project, Working Project) live in `.vorch/GLOSSARY.md`.
 
 ### Session generation
-**Definition:** One immutable incarnation of a public `(project_id, agent_id, session_id)` address, identified internally by a unique generation id and surrogate `session_key`. Archiving ends the live generation; recreating the same public address starts a new generation without colliding with or inheriting derived state from the archived one.
-**Not:** The public Session id or its history revision.
+One incarnation of a public Session address: archiving ends the live generation, and recreating the address starts a new one that neither collides with nor inherits derived state from the archived one (Storage Contract). Not the public Session id or its history revision.
 
 ### Entry
-**Definition:** One stored history item: an `entries` row with a dense per-Session `seq`, a role and a public Message id (`entry_id`, not unique), with role-specific values in 1:1 side tables. Every role is a physical entry, including Tool results, Run summaries (`run_summary`) and history-edit markers (`history_edit`).
-**Not:** An archive entry (`archive_entries`, `archive.md`), whose public id `arc_...` is also called `entry_id`.
+One stored history item at a dense per-Session sequence number; every role is an entry, Tool results, Run summaries and history-edit markers included (`sessions/storage.md` -> Tables). Not an Archive Entry (GLOSSARY), although both expose an `entry_id`.
 
 ### Current view
-**Definition:** What a Session shows and sends to the Model: its own non-superseded entries plus the entries it inherits through lineage, as sorted disjoint seq ranges (`_store_lineage.view_ranges`).
-**Not:** The own audit.
+What a Session shows and sends to the Model: its own non-superseded entries plus the entries it inherits through lineage (`sessions/lineage.md` -> Views). Not the own audit.
 
 ### Own audit
-**Definition:** Every entry the Session wrote itself from its fork point on, superseded ones included (`ChatSession.load`, `SessionReadBatch.messages`). Statistics consumes it, and the Session's own spend (`session_usage`) sums its Assistant usage.
-**Not:** The current view. Inherited entries and materialized copies precede the fork point and are not the Session's own.
+Every entry the Session wrote itself from its fork point on, superseded ones included; Statistics and the Session's own spend read it (`sessions/lineage.md` -> Views). Not the current view: inherited entries and materialized copies precede the fork point.
 
 ### Lineage and fork point
-**Definition:** A fork's `session_lineage` rows name, per inherited seq range, the ancestor Session that stores those entries and the ancestor's `next_seq` at fork time (`as_of_seq`). Lineage is flat: a fork of a fork references the storing Session directly, so no read follows lineage recursively. The fork point (`sessions.fork_point_seq`) is the seq where the fork's own entries start.
-**Not:** `fork_parent_key`, which only names the direct source for `fork_source` and review forks.
+A fork's lineage names, per inherited range of history, the ancestor Session that stores it and how far that ancestor's history reached at fork time, always the storing Session directly; the fork point is where the fork's own entries start (`sessions/lineage.md` -> Fork). Not the direct fork parent, which only names the Session a fork was made from.
 
 ### Superseded entry
-**Definition:** An entry a history edit replaced; `superseded_at_seq` records the edit's seq. It leaves its owner's current view but stays stored for the own audit and for forks whose lineage was frozen before the edit (`superseded_at_seq >= as_of_seq`). A `history_edit` marker is superseded at its own seq, so no current view contains it.
+An entry a history edit replaced: it leaves its owner's current view but stays stored for the own audit and for forks made before the edit (`sessions/lineage.md` -> History edit).
 
 ### Materialized copy
-**Definition:** When a Session with descendants is deleted, each descendant first receives its own copy of every entry it inherited from it: same `seq` and id, a new `entry_key`, side rows, Tool calls with payloads, and the referenced Runs (`sessions/lineage.md` -> Delete).
-**Not:** The descendant's own history; copies precede its fork point.
+A descendant's own copy of an entry it inherited from a Session being deleted, made before the delete (`sessions/lineage.md` -> Delete). Not the descendant's own history: copies precede its fork point.
 
 ### Review fork
-**Definition:** A fork that reviews its source for a Reflection (`automation.md` -> Reflection): a direct fork classified in its source's own Project and Agent with a reflection Run kind (`reflection`, `memory_reflection`, `skill_reflection`) recorded in the fork's creating write. It stays live and Recall-hidden after its review and follows its source's lifecycle (user decision): archiving the source takes its live review forks into the same entry and a restore brings them back; deleting or purging the source deletes them first, so they never receive materialized copies. A review fork with a running Run stays live and whole.
-**Not:** A user fork, also of a review fork, or a fork into another Agent or Project whatever its Run kind: those stay live when the source goes and receive materialized copies.
+A fork that reviews its source for a Reflection and then follows its source's lifecycle instead of outliving it (`sessions/lineage.md` -> Delete; `automation.md` -> Reflection). Not a user fork or a fork into another Agent or Project, which stays when its source goes.
 
 ### Stream draft
-**Definition:** The streamed Model output of a running Run that no Assistant entry holds yet, stored as ordered chunk rows; restart recovery turns a left-over draft into the Run's `interrupted` Assistant entry (`sessions/runs.md` -> Stream drafts).
-**Not:** History, a journal, or anything a request reads; the draft exists only to survive a crash.
+The streamed Model output of a running Run that no Assistant entry holds yet, kept only so restart recovery can turn it into the Run's `interrupted` Assistant entry (`sessions/runs.md` -> Stream drafts). Not history, a journal, or anything a request reads.
 
 ### Prompt state
-**Definition:** Per-Session prompt inputs kept outside metadata: prompt pins (named `pinned_*` slots, each referencing one content-addressed `prompt_blobs` row that forks share), the seen-Skill set (`session_seen_skills`; `None` until first recorded) and the prompt-cache affinity id. They have dedicated APIs; the metadata facade rejects their keys. A fork or move within one scope (same Project and Agent) carries them; into another scope the Agent-bound pins and seen Skills stay behind and a new affinity id starts, while the Project-qualified Working Project Context pin carries over (`sessions/lineage.md` -> Fork).
+The per-Session prompt inputs kept outside metadata: prompt pins, the seen-Skill set and the prompt-cache affinity id (`sessions/lists-and-metadata.md` -> Prompt state APIs; fork and move: `sessions/lineage.md` -> Fork). Not metadata: the metadata facade rejects their keys.
 
 ### Prompt-cache affinity id
-**Definition:** An opaque per-Session cache-lineage value Chat passes separately from Session identity; Provider adapters decide whether their wire can use it. It is a routing hint only, never a correctness boundary: a Compaction commit and a history edit keep it, so unchanged prefixes still reach the Provider cache that holds them.
-**Not:** A Session id or generation id.
-
-### Working Project
-**Definition:** The Project a Session works in for its whole life: relative file and shell work, `@`-mentions, Project Skills and the Working Project prompt context use its repository. A Project Session works in its address Project. A Session of an Identity Agent works in the Project its `working_project_id` column names, fixed at creation (NULL: the Agent's Workspace): its creator names a Project or the Workspace, else the Agent's default Project applies (GLOSSARY -> Default Project). Move and fork carry it. Once its Project no longer exists, the Session stays readable but its Runs are refused (`WorkingProjectMissingError`, `projects/resolution.md`) until that original Project is restored; it never falls back to the Workspace. APIs, migration and archive associations: `sessions/ownership.md`.
-**Not:** The Agent's default Project, which only seeds new Sessions, or the addressing scope (`project_id`), which stays empty for an Identity Session working in a Project.
+An opaque per-Session cache-lineage value that Chat passes to Provider Adapters apart from Session identity; a routing hint, never a correctness boundary, so Compaction and history edits keep it. Not a Session id or generation id.
 
 ## Extension-owned execution
 

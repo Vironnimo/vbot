@@ -18,26 +18,22 @@ Desktop Voice (`desktop/wakeword/`) and Desktop dictation (`desktop/dictation/`)
 
 ## Terms
 
-Domain-specific vocabulary for the Desktop accessor.
+Domain-specific vocabulary for the Desktop Accessor.
 
 ### Desktop Client
-**Definition:** A Windows packaged installation of the Desktop accessor alone, with no server stack, local WebUI build, server data directory or server autostart, meant to connect to a *remote* vBot server. `install.ps1 -DesktopClient` selects this `desktop-client` shape; `-Desktop` selects the combined `server-desktop` shape (`cli/application.md`).
-**Not:** A full install that happens to include the Desktop, and not the running window itself. The Desktop Client is the *install shape* - the absence of the whole server side - not the GUI process.
+The Windows install shape with the Desktop alone, without server, local WebUI build, server data directory or server autostart, meant to connect to a remote vBot server (shapes and installer: `cli/application.md`). Not a full install that includes the Desktop, and not the running window.
 
 ### Connection screen
-**Definition:** The Desktop shell's own native, in-window server-selection/error screen (`desktop/connection.py`, HTML from `desktop/connection_screen.py`): remembered servers, a connect form, inline probe and sign-in errors with the failed target prefilled, the launch waiting state and the pairing offer (`desktop/connection.md` -> Connection screen).
-**Not:** A WebUI view or page. It is shell-owned native HTML swapped onto the same window via `Window.load_html`; the WebUI (loaded via `Window.load_url`) is the *other* thing that window shows once connected.
+The Desktop shell's own native in-window screen for choosing a server and showing connection and sign-in failures (`desktop/connection.md` -> Connection screen). Not a WebUI page: the same window shows the WebUI only once connected.
 
 ### Desktop Voice
-**Definition:** The Desktop's on-device wake phrase listener (`desktop/wakeword/`, "Voice" in Settings and code). A wake phrase is one active wakeword model; its phrase action decides what a detection does.
-**Not:** Live voice (the page's `live_voice` Task Model call) or the Chat microphone (browser recording in the composer). Both are WebUI features that also run in browsers.
+The Desktop's on-device wake phrase listener, called "Voice" in Settings and code; a wake phrase is one active wakeword model, and its Phrase action decides what a detection does (`desktop/voice.md`). Not Live voice (`model_tasks/live.md`) or the Chat microphone, both WebUI features that also run in browsers.
 
 ### Desktop dictation
-**Definition:** The Desktop's global speech-to-text shortcut (`desktop/dictation/`, "Dictation" in Settings): it records while the user speaks, has the active server transcribe the recording, and pastes the raw transcript at the text cursor of whatever app has the focus.
-**Not:** The Chat microphone (composer recording inside the WebUI) or Terminal dictation; neither leaves the page, and both also run in browsers. Not a Voice command: nothing goes to an Agent.
+The Desktop's global speech-to-text shortcut: it records while the user speaks, has the active server transcribe the recording, and pastes the raw transcript at the text cursor of whatever app has the focus (`desktop/dictation.md`). Not the Chat microphone or Terminal dictation, which stay in the page, and not a Voice command: nothing goes to an Agent.
 
 ### Phrase action
-**Definition:** What a detected wake phrase does on the current server: `command` (record a spoken command and send it to an Agent and Session behavior, defaulting to the server profile's) or `live_voice` (ask the page to start or toggle Live voice; nothing is recorded). Stored per server profile in `phrase_actions` (`desktop/voice.md` -> Stored settings).
+What a detected wake phrase does on the current server: record a spoken command and send it to an Agent, or start or toggle Live voice; set per server profile (`desktop/voice.md` -> Stored settings).
 
 ## Interfaces
 

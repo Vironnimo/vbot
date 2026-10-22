@@ -16,37 +16,20 @@ New listed chat Models are selectable with inferred defaults, even when their ex
 
 Core terms Provider, Model, and Reasoning live in `.vorch/GLOSSARY.md`; Model-DB terms live in `models.md`.
 
-### Adapter
-
-**Definition:** The code owner that translates between vBot's normalized contracts and one or more external Provider wire protocols. It owns request shaping, response/SSE normalization, wire capability, and Provider-specific policy.
-
-**Not:** A Provider config, Connection, Account, or Model.
+### Provider Adapter
+The code owner, called Adapter in this map, that translates between vBot's normalized contracts and one or more external Provider wire protocols, including request shaping, response and stream normalization and Provider-specific policy (Boundaries and invariants). Not a Provider config, Connection, Account or Model, and not the Source adapters of Projects or the platform adapters of Channels.
 
 ### Connection
-
-**Definition:** A statically declared authentication and wire variant inside one Provider, addressed `provider:connection`. It selects auth type, optional base URL, optional discovery endpoint, wire mode, and automatic-catalog behavior.
-
-**Not:** An Account or an HTTP connection. Accounts choose credentials without changing wire or catalog identity.
+A statically declared authentication and wire variant inside one Provider, which decides its auth, endpoints, wire mode and catalog behavior (`providers/connections.md` -> Configuration model). Not an Account or an HTTP connection: Accounts choose credentials without changing wire or catalog identity.
 
 ### Account
-
-**Definition:** A named credential slot on one Connection, addressed `provider:connection[:account]`; the omitted Account resolves deterministically to the first usable slot (`default`, then sorted named Accounts).
-
-`accounts.py::Account` validates a resolved slot and composes its public address; OAuth lifecycle and token operations take this value. `TokenStore` hides durable key encoding.
-
-**Not:** A product user identity or a distinct Model catalog.
+A named credential slot on one Connection; without a named Account the first usable slot applies (`providers/connections.md` -> Identity and Accounts). Not a product user identity or a distinct Model catalog.
 
 ### Usable
+A Connection that is both enabled and credentialed, the gate for all behavior (`providers/connections.md` -> Enablement, credentials, and usability). Not merely configured or reachable: a keyless Connection is credentialed by definition but disabled until the user opts in.
 
-**Definition:** A Connection that is both enabled and credentialed. `ProviderCredentialResolver.is_usable()` is the behavior gate; `has_credentials()` answers only the credential-management question.
-
-**Not:** Merely configured or reachable. A keyless Connection is credentialed by definition but disabled by default until the user opts in.
-
-### ConnectionRef
-
-**Definition:** Frozen Provider Connection selection (`provider_id` plus `provider:connection[:account]`) used by Runtime adapter/token seams and their consumers. An omitted Account resolves later; it differs from `Account` (`accounts.py`).
-
-**Not:** A `ConnectionConfig` (the resolved configuration record) or a credential-resolver query: resolver methods keep the optional-`connection_id` form where `None` means "any Connection of the Provider".
+### Reasoning Replay
+Returning a Model's earlier reasoning state in later requests of the same conversation, where the Provider requires it or the Model benefits (`providers/request-policy.md`). Not the Reasoning capability or Chain of Thought itself.
 
 ## Boundaries and invariants
 

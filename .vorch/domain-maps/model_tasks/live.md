@@ -20,36 +20,37 @@ The server owns everything except media. The provider control channel, Tool exec
 
 ### Live call
 
-One realtime voice conversation: a provider media session plus its control channel, owned by the server. At most one per server; starting another replaces it.
+One realtime voice conversation: a provider media session plus its control channel, owned by the server, which holds at most one; starting another replaces it (Call lifecycle).
 
 ### Live Agents
 
-The two built-in Agents of a Live call (`agent.md` -> Built-in Agents): Live voice (`live-voice`) records the call in a Session of its own, and Live backend (`live-backend`) answers the requests the voice model hands on, in a second Session of the call. Each call gets fresh Sessions; the two Agents never share one. Not the voice model itself, which the `live_voice` binding picks.
+The two built-in Agents of a Live call (`agent/builtin-agents.md`): Live voice records the call in a Session of its own, and Live backend answers the requests the voice model hands on, in a second Session of the call (Live Agents and Sessions). Not the voice model itself, which the `live_voice` binding picks.
 
 ### Voice model / backend
 
-The voice model (the binding target) talks with the user. The backend (option `backend`) answers what the voice model hands on: `vbot` (the Live backend Agent), `openai` (OpenAI's hosted backend model, GPT-Live over an API key only; it fails on the ChatGPT subscription, `model_tasks/live-wires.md`), or `none` (nothing; the voice model uses only its own Tools, xAI only). A start with backend `vbot` is rejected `backend_unavailable` while the Live backend Agent has no Model, since every request would fail; the user picks it in Settings -> Live voice. vBot's coding Agents still do coding work.
+The voice model, the binding target, talks with the user; the backend, a binding option, answers what the voice model hands on: the Live backend Agent, OpenAI's hosted backend model, or nothing (Binding and options).
 
 ### Handed-on request
 
-A request the voice model passes on during the conversation, through `vbot_request` or its Provider's native delegation. It returns one spoken-style answer to the voice model. Requests to the Live backend Agent run one at a time.
+A request the voice model passes on during the conversation, through `vbot_request` or its Provider's native delegation, which returns one spoken-style answer to the voice model (Handed-on requests).
 
 ### Live Tools
 
-The nine registry Tools through which the Live Agents (and OpenAI's hosted backend model) operate vBot as the user: `overview`, `start_agent_session`, `start_coding_terminal`, `send_message`, `read_output`, `stop`, `open`, `manage_terminals`, `end_call`; plus `vbot_request`, the voice Agent's line to the backend Agent. They only organize work; anything else (settings, Cron jobs, research) goes to an Agent as a Session task. Only the Live Agents can have them, and they act only while a call runs. Contracts: `model_tasks/live-operator.md`.
+The registry Tools through which the Live Agents (and OpenAI's hosted backend model) operate vBot as the user, only during a call; they only organize work, and anything else goes to an Agent as a Session task (`model_tasks/live-operator.md`).
 
 ### Ref
 
-An alias (`s1`, `t1`) for a Session or Terminal, assigned in order of first mention in a Live Tool result or Run announcement and stable for the call. It exists only in Live Tool calls, their results, and the Models' instructions; storage and RPCs keep exact ids.
+A short alias for a Session or Terminal, stable for the call, that exists only in Live Tool calls, their results and the Models' instructions; storage and RPCs keep exact ids (Live Agents and Sessions).
 
 ### Owner
 
-The accessor that started the call. It attaches the owner socket and answers UI requests; only it holds media.
+The accessor that started the call. It attaches the owner socket and answers UI requests; only it holds media (Call lifecycle).
 
 ## Binding and options
 
 - Task type `live_voice` is explicit-only (`MODEL_TASK_ORDER`, no modality derivation): voice Models declare it in `task_types`. Catalog entries: `resources/models/openai.overrides.json` has `gpt-live-1` (`api-key` Connection) and `gpt-live-1-codex` (`subscription` Connection); `resources/models/xai.overrides.json` has `grok-voice-think-fast-2.0` (`api-key` and `subscription`, 28 voices, default `eve`). They show in the Chat picker only under "Show all models", like other task-only Models.
 - Options come from `task_options.live_voice.parameters`: `voice` (enum with a declared default), `backend` (enum; OpenAI `vbot` | `openai`, default `vbot`; xAI `none` | `vbot`, default `none`), and `openai_backend_model` (enum `gpt-6-luna` | `gpt-6-sol`, default `gpt-6-luna`; its `options_by` hides it unless `backend` is `openai`). `live_backend_choices(model)` lists the `backend` values a Model offers, its default first. At start, a missing `backend` takes that default (or the wire's fallback); a value the wire or the Model does not offer, or `openai` without an `openai_backend_model`, rejects as `backend_unavailable`. The Live backend Agent's Model, reasoning effort and Tools are its own Agent settings, not options.
+- Backend values: `vbot` (the Live backend Agent), `openai` (OpenAI's hosted backend model, GPT-Live over an API key only; it fails on the ChatGPT subscription, `model_tasks/live-wires.md`), or `none` (nothing; the voice model uses only its own Tools, xAI only). A start is rejected `backend_unavailable` when backend `vbot` finds the Live backend Agent without a Model, since every request would fail (the user picks it in Settings -> Live voice), or backend `openai` has no `openai_backend_model`.
 - `live.status` returns `{configured, usable, target, media}`; `usable` proves credentials only, not account access to the voice Model; `media` is the kind a start must request (`null` when the bound Provider has no Live wire). The accessor shows the control when `settings.model_tasks.live_voice.target` is set. Settings -> Voice -> "Live voice" edits the binding through the shared Task Model editor, the Tools of both Live Agents and the backend Agent's Model, and lists the recent calls (`webui/settings.md`).
 
 ## Call lifecycle
@@ -75,7 +76,7 @@ The accessor that started the call. It attaches the owner socket and answers UI 
 - Backend Session (backend `vbot`): the first request creates a Session of the Live backend Agent (`run_kind` `live`, `auto_title` = the voice Session's title with `auto_title_initialized`, metadata `live_voice_session_id`), and every request is one Chat Run there (`start_run("live-backend", <request>, input_origin="live_voice", run_kind=live, contributes_to_agent_activity=False, context_note=<context note>)`). The Agent's System Prompt is its ordinary one plus the Live call guidance (`backend_instructions(has)`, a Tool prompt block of family `live` gated on the owner `builtin:live_backend`, `core/runtime/_bootstrap.py`), which names only the Tools the Agent has.
 - `sessions` update: `{type: "sessions", voice: {agent_id, session_id}, backend: {agent_id, session_id} | null}`, once when the call starts and again when the backend Session is created.
 - End: media closes and publishes its terminal update before recording cleanup. After a successful `end_call`, the backend finishes its admitted Tool batch (bounded to 3 s), and the voice call/delegation stores that success (bounded to 5 s), instead of recording the hangup as cancelled. The successful Tool asks Chat to end after all sibling results are durable, without another Model request. Other endings cancel the running backend request and settle within 3 s. Both paths unbind the backend Session, store remaining records, and finish the voice Run: completed, or failed with `The connection to the voice model was lost.` (`connection_lost`) or `The voice model's audio did not connect in time.` (`start_timeout`) as a visible error. A user's cancel of the voice Run in the app aborts the call.
-- Both Sessions are listed only in the global scope of the Live Agents and never recalled (`sessions.md`); typed input to them is refused (`chat.md` -> Invariants and conventions). Nothing of a call outlives it in memory: a new call starts with fresh Sessions, refs and no recap.
+- Both Sessions are listed only in the global scope of the Live Agents and never recalled (`sessions.md`); typed input to them is refused (`chat.md` -> Invariants and conventions). Nothing of a call outlives it in memory: a new call starts with fresh Sessions, refs and no recap. Refs (`s1`, `t1`) are assigned in order of first mention in a Live Tool result or Run announcement.
 
 The title resolves `Runtime.timezone_name()` at each call start, so a Settings timezone change applies to the next call; the backend Session inherits that title. Coverage: `test_call_title_uses_the_current_settings_timezone`.
 

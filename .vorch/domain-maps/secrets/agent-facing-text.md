@@ -1,6 +1,6 @@
 # Secrets Agent-facing text
 
-Why each sentence of the Agent-facing text the Secrets domain owns exists: the `secrets` Tool (`core/tools/secrets.py`: definition, results, errors), the `## Secrets` System Prompt block and the Secret line format it shares with results and notes, the note `/secret` and its form add to a Session (`core/chat/secret_giving.py`), and the substitution refusals of `core/secrets/agent_secrets.py`. Rules for this file: `.vorch/workflows/domain-map-workflow.md` -> Agent-facing text. Failure codes F1-F6: `tools.md` -> Terms.
+Why each sentence of the Agent-facing text the Secrets domain owns exists: the `secrets` Tool (`core/tools/secrets.py`: definition, results, errors), the `## Secrets` System Prompt block and the Secret line format it shares with results and notes, the note `/secret` and its form add to a Session (`core/chat/secret_giving.py`), and the substitution refusals of `core/secrets/agent_secrets.py`. Rules for this file: `.vorch/workflows/domain-map-workflow.md` -> Agent-facing text. Failure codes F1-F6: `tools/agent-facing-text.md` -> Failure modes.
 
 The texts were written with the design of 2026-10-21 and have not yet been checked in real Sessions or an eval; the reasons below are the failures each sentence is meant to prevent.
 

@@ -5,16 +5,16 @@ Task-gated reference for Agent Secrets (GLOSSARY -> Agent Secret): records and l
 ## Terms
 
 ### Secret reference
-`{{secret:NAME[.field]}}`: what an Agent writes where a value belongs and what masking shows instead of the value; outside a sink it stays literal text. Its escape `{{!secret:NAME[.field]}}` writes the reference text itself (References and sinks).
+The placeholder an Agent writes where a Secret's value belongs, and the text masking shows instead of the value; outside a sink it stays literal text, and its escaped form writes the reference text itself (References and sinks).
 
 ### Sink
-A class of Tool arguments where vBot substitutes references (`environment`, `terminal`, `files`, `typing`, `external_tools`); each Agent Secret lists its allowed sinks.
+A class of Tool arguments in which vBot substitutes Secret references; each Agent Secret lists the sinks it may be used in (References and sinks).
 
 ### Secret Source
-A password manager an Extension contributes (`SecretSource`) that an Agent Secret can be bound to; it supplies values, never grants. Not an Extension's own credential (`set_secret`).
+A password manager an Extension contributes, to which an Agent Secret can be bound; it supplies values, never grants (Secret Sources). Not a credential an Extension stores for itself.
 
 ### Secret request
-An Agent's `secrets` `request`: a form the user answers or declines within 10 minutes.
+An Agent's request through the `secrets` Tool for a Secret, which the user answers or declines in a form (Secret requests and generate).
 
 ## Source
 

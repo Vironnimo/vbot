@@ -14,4 +14,4 @@ The `on_read` observer receives `(resolved_path, (mtime, size))` captured before
 
 `{include:filename}` accepts safe flat filenames under the agent workspace and renders through `render_prompt_file`: wrapped as `<file name="...">`, an oversized file as its notice, missing/unreadable files dropped with a warning (never aborting a run) - logged once per path and state rather than on every build, with an INFO line once the file loads whole again; unsafe paths in the template raise `PromptError`. That includes do not nest and that an empty workspace never resolves includes are domain rules in `prompts.md` -> Conventions.
 
-Project instruction files (`projects.md` -> Project Context) reach the System Prompt through the `core:working_project` data block (`prompts/core-blocks.md` -> Data blocks), each file through `render_prompt_file`.
+Project instruction files (`projects/resolution.md` -> Project Context instructions) reach the System Prompt through the `core:working_project` data block (`prompts/core-blocks.md` -> Data blocks), each file through `render_prompt_file`.

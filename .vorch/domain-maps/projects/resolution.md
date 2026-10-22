@@ -1,6 +1,6 @@
 # Project Agent Resolution
 
-Read this reference when changing how a Project Agent becomes effective runtime configuration, including fallback order, provenance, model usability, capability ceilings, or working-Project helpers.
+Read this reference when changing how a Project Agent becomes effective runtime configuration, including fallback order, provenance, model usability, capability ceilings, working-Project helpers, or which instruction files Project Context loads.
 
 ## Uniform Resolution Seam
 
@@ -16,7 +16,7 @@ Resolution failures are `AgentResolutionError`. A missing address part keeps its
 
 ### Session Agent overrides
 
-A Session Model wins before the lower Model chain is required to produce a usable default, for both existing Sessions and `new_session_overrides`. Run admission refuses an unusable explicit Session Model instead of falling back. Administration and Command catalogs use `require_model=False` on the same resolver seam: owner/configuration validation remains, Session Model overrides retain their configured id without requiring availability, and an exhausted Config Agent default chain still returns an empty Model. This keeps listing, deletion, read acknowledgement, forking (both endpoints), Compaction Policy changes and `/model` discovery available for recovery.
+A Session Model wins before the lower Model chain is required to produce a usable default, for both existing Sessions and `new_session_overrides`. Run admission refuses an unusable explicit Session Model instead of falling back. Administration and Command catalogs use `require_model=False` on the same resolver seam: owner/configuration validation remains, Session Model overrides retain their configured id without requiring availability, and an exhausted Project Agent default chain still returns an empty Model. This keeps listing, deletion, read acknowledgement, forking (both endpoints), Compaction Policy changes and `/model` discovery available for recovery.
 
 A Session can override its Agent's `model`, `thinking_effort`, `temperature` and `top_p` (`AGENT_OVERRIDE_FIELDS`, frozen `AgentOverrides` in `_runtime_agent.py`). The resolver owns them end to end: `resolve_agent(..., session_id=...)`, `resolve_agent_async(..., session_id=...)` and the temporary variants' `session=` read the Session's stored overrides and return a replaced runtime dataclass; they never mutate the stored Identity Agent, repository Agent, Project overrides or other Sessions. Without a Session, for a Session that does not exist yet, or with nothing stored, resolution is the ordinary path. `new_session_overrides=` (exclusive with `session_id`) resolves the Agent as the first Run of a Session that does not exist yet would run it, so a new Session's override Model is checked before the Session is created. `effective_config(..., session_id=...)` reports an overridden field with source `session`.
 
@@ -60,7 +60,7 @@ Compaction policy and `tool_loading` (On-demand Tools) are supported per-Agent P
 
 ### Permission Rules
 
-`RuntimeAgent.permission_rules` resolves per part with `resolve_rule_set` (`../permissions.md`), most specific level first, then `defaults.agent.permission_rules` (`resolve_permission_rules`, `_resolution_values.py`):
+`RuntimeAgent.permission_rules` (GLOSSARY -> Permission Rules; the rule language: `../permissions.md`) resolves per part with `resolve_rule_set`, most specific level first, then `defaults.agent.permission_rules` (`resolve_permission_rules`, `_resolution_values.py`):
 
 ```text
 Identity Agent:   agent.json -> global default
@@ -113,7 +113,7 @@ Profile Skill rules narrow the effective Skills. Permitted available preloads in
 
 ## Working Project resolution
 
-`AgentResolver` decides which Project a Run works in (`sessions.md` -> Terms -> Working Project). There is no process-global selection, and Workspace equality never establishes Project identity or replaces explicit `project_id` routing.
+`AgentResolver` decides which Project a Run works in (GLOSSARY -> Working Project). There is no process-global selection, and Workspace equality never establishes Project identity or replaces explicit `project_id` routing.
 
 - `new_session_working_project(project_id, agent, requested=AGENT_DEFAULT_PROJECT)` returns where a new Session works (`None`: the Workspace). A Project Agent works in its address Project and takes no other choice (`TEAM_WORKING_PROJECT_MESSAGE`, `AgentResolutionError`). For an Identity Agent, a Project id must exist (`ResolutionProjectNotFoundError`, RPC `project_not_found`), `None` names the Workspace, and `AGENT_DEFAULT_PROJECT` the Agent's `root_project_id`, which must exist too (`DEFAULT_PROJECT_MISSING_MESSAGE`, `AgentResolutionError`, RPC `domain_error`).
 - `resolve_working_project(project_id, agent, *, session_id=None, requested=AGENT_DEFAULT_PROJECT)` and its `_async` twin: an existing Session of an Identity Agent works in its stored Working Project; without a Session, or for one that does not exist yet, the result is `new_session_working_project`'s. The Session owner returns its Project id together with the original-Project archive binding. An unresolved binding (even after archive purge) refuses a different Project reusing that id; only restoring the matching archive clears it. A stored Project that is still archived or no longer exists raises `WorkingProjectMissingError` (an `AgentResolutionError` with `.project_id`, `WORKING_PROJECT_MISSING_MESSAGE`, RPC `domain_error`); it never falls back to the Workspace. The async twin reads the Session on the Session database's pool and checks the Project on the `agent-resolution` pool.
@@ -125,6 +125,10 @@ Texts (Agent- and user-visible; `_runtime_agent.py`, `_session_resolution.py`):
 - `WORKING_PROJECT_MISSING_MESSAGE`: `This Session works in Project {project_id}, which no longer exists. Restore the Project to continue this Session, or start a new Session.`
 - `DEFAULT_PROJECT_MISSING_MESSAGE`: `Agent {agent_id} starts new Sessions in Project {project_id}, which no longer exists. Choose another default Project for the Agent.`
 - `TEAM_WORKING_PROJECT_MESSAGE`: `A Session of Team Agent {agent_id}@{project_id} works in Project {project_id}; it cannot work in another Project.`
+
+## Project Context instructions
+
+The instructions of Project Context (GLOSSARY -> Project Context) are `Project.instruction_files`, the one resolver (`resolve_instruction_files`, `core/projects/instructions.py`): while `auto_instructions` is on, first the repository's main instruction file - `AGENTS.md`, else the first existing of `CLAUDE.md`, `.claude/CLAUDE.md`, `GEMINI.md`, `.github/copilot-instructions.md` in the repository root, chosen anew whenever the frame renders, so a repository that gains an `AGENTS.md` switches on its own - then the additional `auto_load` files, each file once. A candidate whose status cannot be checked counts as present, so a failing file is reported instead of being replaced by the next one. They enter under the prompt file cap (`prompts/prompt-files.md`); folder instructions of subfolders reach the Agent later as notes (`chat/request-building.md` -> Folder instructions). `_project_context.py` projects Project Context into prompt and Skill scopes.
 
 ## Change Rules
 
@@ -144,7 +148,7 @@ and `tests/core/runtime/test_runtime_extension_host.py`.
 
 ## Source & Tests
 
-- Resolution orchestration: `core/projects/resolver.py`; Session overrides and Working Project binding: `_session_resolution.py`; Team freshness and translation: `_team_resolution.py`; temporary Agents: `_temporary_resolution.py`; prompt/Skill scopes: `_project_context.py`
+- Resolution orchestration: `core/projects/resolver.py`; Session overrides and Working Project binding: `_session_resolution.py`; Team freshness and translation: `_team_resolution.py`; temporary Agent chain (bindings, repository Profiles, previews): `_temporary_resolution.py`; prompt/Skill scopes: `_project_context.py`
 - Resolved Agent contracts and Session Agent overrides: `core/projects/_runtime_agent.py`
 - Capability ceilings, scalar fallback and effective provenance: `core/projects/_resolution_values.py`
 - Model usability and Connection gating: `ModelConfigurationChecker` in `core/projects/_model_configuration.py` (public imports remain available through `core.projects` and `resolver.py`)

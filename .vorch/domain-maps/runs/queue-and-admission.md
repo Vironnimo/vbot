@@ -1,6 +1,6 @@
 # Run Queue and Admission
 
-The in-memory Queue of `ChatRunManager` (`core/runs/runs.py`): queued items, `RunAdmission`, steering selection, waiting-work capacity and Extension execution ownership. Terms (Steer, Waiting-Work Admission, Run Admission Guard) and the shared-manager invariants are in `runs.md`.
+The in-memory Queue of `ChatRunManager` (`core/runs/runs.py`): queued items, `RunAdmission`, steering selection, waiting-work capacity and Extension execution ownership. Steer is a shared term (`.vorch/GLOSSARY.md`); Waiting-Work Admission, Run Admission Guard and the shared-manager invariants are in `runs.md`.
 
 ## Admission
 
@@ -18,6 +18,8 @@ The in-memory Queue of `ChatRunManager` (`core/runs/runs.py`): queued items, `Ru
 
 ## Steering
 
+- Runs owns the selection, its pending state, drain order and removal; Chat owns which items are eligible and the Message built from them (last bullet).
+- Steering targets whatever active Run the Session has, whoever started it (user, system delivery, Cron, Calendar, Channel, Sub-Agent), at its next safe Model-request boundary. A steered item stays in the Queue, marked `steering`, until its User message is persisted.
 - A Run takes selected input unless it is Extension-owned or has another working Project. Selected input no Run took before the active one ends starts the next Run ahead of unselected items, in Queue order; the rest of the selection reaches that Run at its first Model request. Delivery resolves the item's future to the Run that took it.
 - `steer_queued(...)` marks eligible input for the Session's next Model request without naming a Run; `pending_steering(run)` returns the selection that Run can take and `deliver_steering` persists it at safe boundaries without holding the global manager lock across persistence.
 - `remove_queued` refuses an item whose steering append is in flight; `clear_queued(...)` empties a Session's Queue for good: such an item is marked withdrawn and leaves the Queue when its append ends, so an append cut off by cancellation cannot start the item as a new Run.

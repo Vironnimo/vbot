@@ -15,15 +15,13 @@ The selected backend fixes at Tool registration. The selectable first-party back
 Session and Tool terms live in `.vorch/GLOSSARY.md`.
 
 ### Semantic Recall
-**Definition:** Meaning-based search using vector embeddings instead of keywords - a session about "vehicles" matches "cars". Enabled via `recall.backend: vector` or `hybrid` plus a configured `text_embedding` model.
-**Not:** Keyword search (that's `canonical_scan`/`sqlite_fts`), curated memory, or session browsing.
+Meaning-based search over vector embeddings instead of keywords, so a Session about "vehicles" matches "cars"; the `vector` and `hybrid` backends provide it (Semantic Indexing, Backends). Not keyword search (`sqlite_fts`), curated Memory, or Session browsing.
 
 ### Passage
-**Definition:** A source-derived overlapping span of eligible canonical Message text - the retrieval and fusion unit of semantic and Hybrid search - carrying stable Message boundaries and offsets so results point back exactly.
-**Not:** A Message, a Session summary, or an independently persisted source of truth.
+A source-derived, overlapping span of eligible canonical Message text that carries stable Message boundaries and offsets, so results point back exactly; the retrieval and fusion unit of semantic and Hybrid search (Passage Policy). Not a Message, a Session summary, or an independently persisted source of truth.
 
 ### Embedding space
-**Definition:** The provider, configured model, binding fingerprint (`EmbeddingSpaceIdentity`), index policy and dimension the Passage index pins in `store_header`. Vectors of two spaces never mix; leaving a space drops every vector. The model name the provider reports serving is recorded but is not part of the space: a router such as OpenRouter answers one configured model from several hosts that report different names (seen live with `baai/bge-m3`), and treating each name as a new space wiped the index on every alternation.
+The embedding identity whose vectors one Passage index holds, so vectors of two spaces never mix and leaving a space drops every vector (`recall/passage-index.md` -> Index storage). Not the model name a provider reports serving.
 
 ## Search Contract
 

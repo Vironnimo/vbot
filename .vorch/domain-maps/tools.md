@@ -11,24 +11,19 @@ Tool contracts and registry, Tool Access Policy resolution, provider definitions
 Domain vocabulary. The core Tool term lives in `.vorch/GLOSSARY.md`.
 
 ### Readiness
-**Definition:** A per-tool, cheap, I/O-free predicate (`Tool.ready`) evaluated at every prompt/tool-definition build; a Tool that is not ready stays out of Provider definitions, and dispatch answers `tool_not_ready` instead of running it (`tools/access-policy.md` -> Readiness).
-**Not:** A permission - policy answers "may this Agent use it", readiness answers "can it run right now". Also not stored Extension state: the Extensions tab's waiting status is a derived display value.
+Whether a Tool can run right now; a Tool that is not ready stays out of the Provider definitions, and dispatch refuses it instead of running it (`tools/access-policy.md` -> Readiness). Not a permission, which answers whether this Agent may use it, and not stored Extension state: the Extensions tab's waiting status is derived.
 
 ### Session Grant
-**Definition:** A capability Chat derives while building one Session's request state and carries through provider definitions and dispatch. Examples: an Extension's private Tools appear only in a Session its temporary binding grants them to (`extensions/host.md`); `update_goal` appears while the Session's goal is open (`tools/update_goal.md`).
-**Not:** A Run-local input, Agent/Project configuration, catalog choice, or permission to address another Session.
+A capability Chat derives while building one Session's request state and carries through Provider definitions and dispatch, such as an Extension's private Tools in the Session its temporary binding grants them to (`extensions/host.md`) or `update_goal` while the Session's goal is open (`tools/update_goal.md`). Not a Run-local input, Agent or Project configuration, catalog choice, or permission to address another Session.
 
 ### Definition Profile
-**Definition:** A model-facing description + input schema selected from stable persisted configuration for an Agent, keyed by an immutable profile key; unchanged configuration must reproduce byte-identical provider definitions, transient state must never select a different profile.
-**Not:** The canonical contract, a per-Run schema, readiness, or an execution-time fallback.
+A Model-facing description and input schema selected for an Agent from stable persisted configuration, so unchanged configuration reproduces byte-identical Provider definitions and transient state never selects another profile. Not the canonical contract, a per-Run schema, readiness, or an execution-time fallback.
 
 ### On-demand Tool
-**Definition:** A Tool an Agent may use whose definition its Tool list leaves out while the Agent's `tool_loading` switch is on and its route serves them (`agent/configuration.md` -> Fields): the System Prompt lists it by name and summary, and the Agent loads its definition with `load_tools` before the first call. `core/tools/on_demand.py::on_demand_tools` is the one classification Chat, `prompt.preview` and `scripts/tool_lab` share (`tools/load_tools.md`).
-**Not:** A permission or a deferred Tool (`deferred=True`): an On-demand Tool is allowed and callable, only its definition is not shown until loaded.
+A Tool an Agent may call whose definition its Tool list leaves out until the Agent loads it; meanwhile the System Prompt lists it by name and summary (`tools/load_tools.md`; the per-Agent switch: `agent/configuration.md` -> Fields). Not a permission or a deferred Tool (`tools/access-policy.md` -> Visibility flags and listing): it is allowed and callable, only its definition is not shown until loaded.
 
 ### Failure modes F1-F6
-**Definition:** The codes that rows of Agent-facing text tables cite for the failure a sentence prevents: F1 wrong choice (another Tool or the shell, or this Tool for the wrong job), F2 malformed call (wrong names or types, placeholders, missing fields), F3 wrong effect (wrong target, misread default or unit), F4 misread result (believes it is done, misses a truncation, polls, rereads to verify), F5 error loop (the error does not say how to fix the call), F6 context waste (long definitions, large or repeated results, extra round trips).
-**Not:** The failure codes of Tool results, such as `invalid_arguments`.
+The codes with which Agent-facing text tables name the kind of Agent failure a sentence prevents, from a wrong Tool choice to context waste (code list: `tools/agent-facing-text.md` -> Failure modes). Not the failure codes of Tool results, such as `invalid_arguments`.
 
 ## Contracts
 

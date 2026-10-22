@@ -8,23 +8,15 @@ Run lifecycle, cancellation, replayable timeline events, and in-memory busy-sess
 
 ## Terms
 
-Core term Run lives in `.vorch/GLOSSARY.md`.
-
-### Steer
-
-An explicit request to deliver a queued User message into the Session's active Run at its next safe Model-request boundary, whatever started that Run (user, system delivery, Cron, Calendar, Channel, Sub-Agent); the item remains in the shared Queue, marked `steering`, until its User message is persisted. Chat owns item eligibility and Message construction; Runs owns the selection, pending state, drain order, and removal (`runs/queue-and-admission.md` -> Steering).
+Core terms Run, Queue and Steer live in `.vorch/GLOSSARY.md`.
 
 ### Waiting-Work Admission
 
-**Definition:** A manager-owned reservation for an inbound item that has been accepted but cannot yet be represented as a queued Run, such as a channel attachment before its download. It atomically becomes a queued Run or is released when work starts or aborts.
-
-**Not:** A second queue or a Run; it only accounts for capacity in the existing `ChatRunManager`.
+A reservation for inbound work that is accepted but cannot yet become a queued Run, such as a Channel attachment before its download; it either becomes a queued Run or is released (`runs/queue-and-admission.md` -> Waiting work). Not a second Queue or a Run: it only counts against the manager's waiting-work capacity.
 
 ### Run Admission Guard
 
-**Definition:** A `ChatRunManager`-owned, async context-managed boundary that atomically verifies a Session, Agent, or Project has no active/queued work and then rejects new `start()` and `enqueue()` calls for that scope until a destructive transition finishes.
-
-**Not:** A cancellation mechanism or persistence lock. It prevents new Run admission; the owning workflow still performs Session, Agent, or Project storage changes through its own domain APIs.
+A block on new Run admission for one Session, Agent or Project scope, which a destructive workflow such as archive, move or delete holds while it changes that scope and can take only while the scope has no active or queued work (Interfaces). Not a cancellation mechanism or a persistence lock: the workflow still makes its storage changes through its own domain's APIs.
 
 ## Data Model
 

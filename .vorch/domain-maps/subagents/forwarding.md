@@ -8,7 +8,7 @@ Forwarding follows `subagent`, `system`, `user` and `channel` Runs in linked Ses
 
 ## Recipient changes
 
-On Run start and steering, Chat selects `parent` for Parent input and `user` for other external input (`subagent_input_reply_target`); internal or already-persisted input keeps the current target. The Session write lock orders the switch with input persistence. A transition to user replies adds `SUBAGENT_REPLY_TO_USER_SYSTEM_REMINDER` before the message and invokes `report_subagent_user_input` after commit. Its non-waking Parent notice is best effort and skipped if Parent replies have already resumed. Repeated user input needs no additional notice until the target changed back to Parent. Parent reminders announce that final answers now go to Parent. The Parent link and all controls remain intact.
+On Run start and steering, Chat selects `parent` for Parent input and `user` for other external input (`subagent_input_reply_target`); internal or already-persisted input keeps the current target. The Session write lock orders the switch with input persistence. A transition to user replies adds `SUBAGENT_REPLY_TO_USER_SYSTEM_REMINDER` before the message and invokes `report_subagent_user_input` after commit. Its non-waking Parent notice is best effort and skipped if Parent replies have already resumed. Repeated user input needs no additional notice until the target changed back to Parent. Parent reminders announce that final answers now go to Parent. Automatic continuations keep the selected recipient. The reply target never changes the Parent link, messaging, visibility, limits or stop controls (user decision 2026-10-14, replacing the former takeover boundary).
 
 ## message_parent
 

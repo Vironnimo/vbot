@@ -8,11 +8,10 @@ Provider-neutral text embedding execution for the configured `text_embedding` ta
 
 ## Terms
 
-Domain-specific vocabulary for embedding execution. The user-facing Semantic Recall term lives in `recall.md`.
+The user-facing Semantic Recall term lives in `recall.md`.
 
 ### Embedding Model
-**Definition:** A specialized model that converts text into numerical vectors (embeddings) for semantic comparison. In vBot, this is a configurable `text_embedding` task-model binding used by the recall `vector` backend to find meaning-related past sessions (e.g. "car" and "vehicle" are nearby in embedding space).
-**Not:** A chat model, a TTS model, or an image generation model. The embedding model produces vectors, not text, speech, or images.
+A Model that converts text into numerical vectors for semantic comparison; in vBot, the target of the configured text-embedding task-model binding, which the Recall `vector` backend uses to find meaning-related past Sessions (Overview). Not a chat, speech or image Model: it produces vectors, not text, speech or images.
 
 ## Interfaces
 

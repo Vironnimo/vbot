@@ -50,7 +50,7 @@ Semantics a caller must know before or without running an artifact (flag consequ
 
 ## Agent-facing text
 
-The reasons for runtime Agent-facing text (Tool descriptions and results, System Prompt blocks, System Reminders, prompts for Model jobs, bundled Skill instructions) live in the owning domain's supplementary file `<domain>/agent-facing-text.md`: a `| Text | Reason |` table with one row per sentence, giving the sentence or its unmistakable start and the failure it prevents, with its evidence where known (failure modes F1-F6: `tools.md` -> Terms).
+The reasons for runtime Agent-facing text (Tool descriptions and results, System Prompt blocks, System Reminders, prompts for Model jobs, bundled Skill instructions) live in the owning domain's supplementary file `<domain>/agent-facing-text.md`: a `| Text | Reason |` table with one row per sentence, giving the sentence or its unmistakable start and the failure it prevents, with its evidence where known (failure modes F1-F6: `tools/agent-facing-text.md` -> Failure modes).
 
 - Read a sentence's reason before you rewrite or delete it: many record a failure seen in real Sessions that reading alone does not show. Change, add or delete its row together with the sentence.
 - The root map keeps a short `## Agent-facing text` section that names the texts the domain owns and points to the file, so an agent changing them finds the reasons without loading a Skill:

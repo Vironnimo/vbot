@@ -1,6 +1,19 @@
 # Tools Agent-facing text
 
-Why each sentence of the shared dispatch texts the Tools domain owns exists: the unknown-Tool, argument-validation and no-arguments refusals, the `tool_execution_error` message, the unknown-field note, and the per-code fallback sentences (`core/tools/tools.py`, `contracts.py`, `_tool_results.py`). Waiting for background work below gives the wording every Tool shares for work that continues in the background. The `permission_denied` refusal and its reasons are in `permissions/agent-facing-text.md`. Mechanics and exact conditions: `tools/call-repair.md` and `tools/registry-dispatch.md` -> Failure codes. Rules for this file: `.vorch/workflows/domain-map-workflow.md` -> Agent-facing text; failure modes F1-F6: `tools.md` -> Terms.
+Why each sentence of the shared dispatch texts the Tools domain owns exists: the unknown-Tool, argument-validation and no-arguments refusals, the `tool_execution_error` message, the unknown-field note, and the per-code fallback sentences (`core/tools/tools.py`, `contracts.py`, `_tool_results.py`). Waiting for background work below gives the wording every Tool shares for work that continues in the background. The `permission_denied` refusal and its reasons are in `permissions/agent-facing-text.md`. Mechanics and exact conditions: `tools/call-repair.md` and `tools/registry-dispatch.md` -> Failure codes. Rules for this file: `.vorch/workflows/domain-map-workflow.md` -> Agent-facing text; failure modes F1-F6: Failure modes below.
+
+## Failure modes
+
+The rows of every domain's Agent-facing text table cite these codes for the failure a sentence prevents (`tools.md` -> Terms -> Failure modes F1-F6):
+
+- F1 wrong choice: another Tool or the shell, or this Tool for the wrong job.
+- F2 malformed call: wrong names or types, placeholders, missing fields.
+- F3 wrong effect: wrong target, misread default or unit.
+- F4 misread result: believes it is done, misses a truncation, polls, rereads to verify.
+- F5 error loop: the error does not say how to fix the call.
+- F6 context waste: long definitions, large or repeated results, extra round trips.
+
+## Shared dispatch texts
 
 | Text | Reason |
 |---|---|

@@ -3,7 +3,7 @@
 What vBot's shared terms mean and what they are not, so they are not confused with the coding agent's own environment or other systems. How a concept currently works lives in its domain map.
 
 ## Agent
-A Session participant that vBot runs: it supplies the identity, instructions and runtime configuration (Model, Tools, Skills) for a Session's Runs. vBot has Identity Agents, Project Agents (Config Agents of a Project's Team) and temporary Agents managed by an Extension (`agent.md`). Not the coding agent working on this repository, a background process, or a Session.
+A Session participant that vBot runs: it supplies the identity, instructions and runtime configuration (Model, Tools, Skills) for a Session's Runs. vBot has Identity Agents, Project Agents and temporary Agents managed by an Extension (`agent.md`). Not the coding agent working on this repository, a background process, or a Session.
 
 ## Agentic Loop
 The chat processing cycle: the Model receives a user message, produces text and/or Tool calls, and receives Tool results until it answers without Tool calls (`chat.md`). Not an event loop, game loop or separate process.
@@ -12,13 +12,10 @@ The chat processing cycle: the Model receives a user message, produces text and/
 An external API service that hosts Models and routes requests to them, connected through vBot's Provider configuration (`providers.md`). Not the Model that processes the requests.
 
 ## Model
-An AI endpoint at one Provider, with its own id, capabilities and context window; the same underlying Model has a separate entry per Provider and is selected as `<provider>/<model-id>` (`models.md`). Not the Provider that hosts it.
+An AI endpoint at one Provider, with its own id, capabilities and context window; the same underlying Model has a separate entry per Provider (`models.md`). Not the Provider that hosts it.
 
 ## Reasoning
 A Model's capability to reason internally before its final answer, which an Agent's thinking effort steers where the Model supports it (`models.md`, `providers.md`). Not Chain of Thought (CoT), the reasoning output itself (`providers.md`).
-
-## Reasoning Replay
-Returning a Model's earlier reasoning state in later requests of the same conversation, where the Provider requires it or the Model benefits (`providers/request-policy.md`). Not the Reasoning capability or Chain of Thought itself.
 
 ## Archive Entry
 The restorable unit a delete creates: deleting an Identity Agent, Project or Session archives it with its Sessions and files instead of erasing it, and the entry is later restored or purged as a whole (`archive.md`). Not a hidden live resource, a compressed file, or a deleted Skill, which moves into its Skill home's own archive (`skills.md` -> Skill Archive).
@@ -26,26 +23,35 @@ The restorable unit a delete creates: deleting an Identity Agent, Project or Ses
 ## Session
 A persisted conversation belonging to exactly one Agent, holding its Message history (`sessions.md`). Distinct from its Agent, Workspace files and an active execution (Run). Not the coding agent's own session or a login session.
 
+## Sub-Agent
+A Session that another Session started through the `subagent` Tool to work on a task and report back, together with the Agent working in it; the starting Session is its Parent Session (`subagents.md`). Not the coding agent's own subagents.
+
 ## Memory
-Curated durable facts about the user and the work, kept as Markdown in an Identity Agent's Workspace (`USER.md` for the user, `MEMORY.md` for the Agent) and available to the Agent through its prompt or the `memory` Tool (`memory.md`). Not scratch notes, Session history, or a search index; recalling earlier conversations uses Sessions and Tools such as `session_search`.
+Curated durable facts about the user and the work, kept as Markdown in an Identity Agent's Workspace and available to the Agent through its prompt or the `memory` Tool (`memory.md`). Not scratch notes, Session history, or a search index; recalling earlier conversations uses Sessions.
 
 ## Run
-One Session execution with a durable identity and lifecycle: an initiating request, any User messages explicitly steered into it, and all Model output, visible thinking blocks, Tool calls/results, and follow-up assistant output until completion, failure, interruption, or cancellation (`runs.md`). Can span multiple Model/Tool steps; not an Agent, Session, or single Provider HTTP request.
+One Session execution with a durable identity and lifecycle: an initiating request, any User messages steered into it, and all Model output and Tool calls until it completes, fails, is interrupted or is cancelled (`runs.md`). Can span multiple Model/Tool steps; not an Agent, Session, or single Provider HTTP request.
+
+## Queue
+A Session's ordered waiting work: messages and other Run requests that arrive while the Session is busy wait there and start as Runs one after another (`runs.md`). Not a background job system or a Provider's request queue.
+
+## Steer
+Delivering a queued User message into the Session's active Run, where the Model sees it at its next request, instead of waiting for a Run of its own (`runs/queue-and-admission.md` -> Steering). Not a new Run, and not a Cancel.
 
 ## Session activity
-Whether a Session's work is finished, as the server reports it to every Accessor: `working` (a Run active or queued), `waiting` (no Run, but pending work that will wake the Session by itself, such as Sub-Agents answering it) or `idle`; its work span runs from leaving `idle` until reaching it again (`activity.md`). Not Agent activity (whether a Run counts toward an Agent's attention status), the background job list (`activity_status`), or a Sub-Agent's activity file.
+Whether a Session's work is finished, as the server reports it to every Accessor; a Session without a Run that still waits for work that will wake it by itself, such as Sub-Agents answering it, is not finished (`activity.md`). Not Agent activity (whether a Run counts toward an Agent's attention status), the background job list, or a Sub-Agent's activity file.
 
 ## Agent Takeover
-Moving the current Session, with its id and full history, to another Agent via `/agent <addr> [task]`; the target owns it from then on and runs the optional task (`chat/commands.md`). Not Handoff (`/handoff`), which writes a summary into a fresh Session.
+Moving the current Session, with its id and full history, to another Agent with the `/agent` command; the target owns it from then on (`chat/commands.md`). Not Handoff (`/handoff`), which writes a summary into a fresh Session.
 
 ## Accessor
-A client-facing interface to vBot (WebUI, Desktop, CLI including its TUI, or Channels), communicating with the server, not directly with Providers. Not a Provider or Adapter.
+A client-facing interface to vBot (WebUI, Desktop, CLI including its TUI, or Channels), communicating with the server, not directly with Providers. Not a Provider or Provider Adapter.
 
 ## Access Mode
-Which clients a vBot server admits and whether they must sign in: `local` ("This computer only"), `lan` ("Home network without login") or `authenticated` ("With login (internet)"). The host chooses it when the server starts; no RPC changes it (`access.md`). Not an Agent's Tool access, a Project's capability ceiling, or the server's startup mode (`normal`/`verification`/`test`, the start line's `mode=`).
+Which clients a vBot server admits and whether they must sign in: `local`, `lan` or `authenticated`, chosen by the host for each server start (`access.md`). Not an Agent's Tool access, a Project's capability ceiling, or the server's startup mode.
 
 ## Device
-A paired client installation, such as a browser profile, a Desktop app or a CLI, that the host or another Device approved to sign in to a server in the Access Mode `authenticated`; it holds its own revocable token and expires after 90 days without use (`access.md`). Not an Accessor kind, a Client in the server's presence registry, a Channel, or the computer itself: one computer can hold several Devices.
+A paired client installation, such as a browser profile, a Desktop app or a CLI, that the host or another Device approved to sign in to a server in the Access Mode `authenticated`, with its own revocable token (`access.md`). Not an Accessor kind, a Client in the server's presence registry, a Channel, or the computer itself: one computer can hold several Devices.
 
 ## Streaming
 Incremental output from an executing Run as the server delivers it to Accessors. Same Run and semantics as a normal send, delivered while it happens; not a separate chat system.
@@ -60,7 +66,7 @@ A reusable Agent playbook: a `SKILL.md` that teaches a task, domain workflow or 
 A note vBot adds to a Session to inform the Model without a visible user message; the Model receives it as a user message in `<system-reminder>` tags (`model-communication.md`). Not a System Prompt, a real user turn, a server or UI notification, or the coding agent's own system reminders.
 
 ## Prompt epoch
-The stretch of a Session from its start or a successful Compaction checkpoint to the next one, during which the System Prompt and the Tool list stay pinned so the Provider prompt cache holds. Tool and prompt-block changes within it reach the Model as System Reminders, other prompt inputs change at the next epoch (`chat/request-building.md`). Not a Run, which is one turn inside an epoch.
+The stretch of a Session from its start or a successful Compaction to the next one, during which the System Prompt and the Tool list stay fixed so the Provider prompt cache holds (`chat/request-building.md`). Not a Run, which is one turn inside an epoch.
 
 ## Tool
 A function vBot offers its Agents, with a name, description and JSON Schema parameters, callable during a Run when the Agent's Tool access allows it (`tools.md`). Not a tool of the coding agent's own harness.
@@ -69,31 +75,37 @@ A function vBot offers its Agents, with a name, description and JSON Schema para
 An Agent's optional rule set that limits which paths its Tools may read or change, which shell commands they may run and which hosts they may reach; an Agent without one has full access (`permissions.md`). Not the Tool Access Policy (which Tools an Agent has), the server's Access Mode, or an OS sandbox.
 
 ## Agent Secret
-A value such as a password, API key or login that the user gives an Agent to use by reference (`{{secret:NAME}}`) without the Agent seeing it; vBot inserts the value only into Tool arguments that accept it and shows the reference everywhere else (`secrets.md`). Not the Secret Store's data-directory credentials or OAuth tokens, such as Provider keys, which vBot itself uses and no Agent can reference.
+A value such as a password, API key or login that the user gives an Agent to use by reference without the Agent seeing it; vBot inserts the value only where a Tool accepts it (`secrets.md`). Not the Secret Store's credentials or OAuth tokens, such as Provider keys, which vBot itself uses and no Agent can reference.
 
 ## Workspace
-An Identity Agent's own home for its identity and Memory files (`SOUL.md`, `USER.md`, `MEMORY.md`) (`agent.md`). Not a Project, the directory a Session's file and shell work uses, or a Session owner; a Workspace path that equals a Project path does not select that Project.
+An Identity Agent's own home for its identity and Memory files (`agent.md`). Not a Project, even when its path equals one, and not a Session owner; a Session of an Identity Agent works in it only when it has no Working Project.
 
 ## Project
-A registered repository that Agents work in, with ordered Sources for instructions, Skills and its Team (repository files, plus Skill folders the user adds), defaults and capability ceilings; runtime Project state lives in vBot's data directory, not in the repository (`projects.md`). Not the repository directory itself, an Agent, or a Workspace.
+A registered repository that Agents work in, with its Sources, Team, defaults and capability ceilings; vBot keeps the Project's runtime state in its data directory, not in the repository (`projects.md`). Not the repository directory itself, an Agent, or a Workspace.
+
+## Working Project
+The Project a Session works in for its whole life: its file and shell work, Project Skills and Project Context come from that repository (`sessions/ownership.md`). Not the Default Project, which only seeds new Sessions, and not the Session's addressing Project, which stays empty for an Identity Agent's Session working in a Project.
+
+## Project Context
+The instructions, Project path and Project Skills that tell an Agent how to work in a registered Project, supplied for its Working Project or loaded explicitly by an Identity Agent through the `project` Tool (`projects.md`, `tools/project.md`). Not Team membership, a Working Project, or a change of the working directory.
 
 ## Scratch Area
 The temporary area in vBot's data directory for one conversation and its Sub-Agent tree, with an own Scratch folder for each participating Session (`tools/scratch.md`). Not a Workspace, Memory, a delivery location for the user, or the coding agent's own scratchpad directory.
 
 ## Team
-A Project's addressable Agents combined from active repository Sources in priority order; the first definition of each name wins and later definitions are shadowed (`projects.md`, `projects/scanning.md`). Membership belongs to the Project, not to vBot's stored Agents; loading Project Context does not make an Identity Agent a member.
+A Project's addressable Agents, combined from the Project's active Sources (`projects.md`, `projects/scanning.md`). Membership belongs to the Project, not to vBot's stored Agents; loading Project Context does not make an Identity Agent a member.
 
-## Config Agent
-The runtime configuration vBot builds for a Team member from its repository definition, Project defaults and overrides (`projects/resolution.md`). It has no Workspace, Memory or stored identity of its own. Not an Identity Agent.
+## Project Agent
+An Agent of a Project's Team, which vBot resolves at runtime from its repository definition, Project defaults and overrides; it has no Workspace, Memory or stored identity of its own (`projects/resolution.md`). Code and older notes call it Config Agent. Not an Identity Agent.
 
 ## Identity Agent
-An Agent that vBot stores with its own configuration, Workspace and Memory, which persist across Sessions (`agent.md`). Not a Config Agent or a temporary Agent.
+An Agent that vBot stores with its own configuration, Workspace and Memory, which persist across Sessions (`agent.md`). Not a Project Agent or a temporary Agent.
 
 ## Built-in Agent
-An Identity Agent vBot creates and keeps itself, hidden from the roster and refused as a delegation, handoff or move target: the Librarian and the two Live Agents of a Live voice call (`agent.md` -> Built-in Agents, `model_tasks/live.md`). Not a bundled template, a Config Agent, or a user's Agent that happens to use the same name.
+An Identity Agent vBot creates and keeps itself and hides from the user's roster, such as the Librarian (`agent.md` -> Built-in Agents). Not a bundled template, a Project Agent, or a user's Agent that happens to use the same name.
 
 ## Librarian
 vBot's built-in hidden Identity Agent that keeps other Identity Agents' own Skills small and current, in passes the user can open as Sessions (`agent.md`, `automation.md` -> Librarian). Not a Tool, a Reflection, or a user's Agent that happens to be named "librarian".
 
 ## Default Project
-The Project in which an Identity Agent's new Sessions work unless their creator names another Project or the Workspace ("Default project" in the WebUI). Changing it moves no existing Session and changes nothing else about the Agent (`agent.md`, `sessions.md` -> Terms -> Working Project). Not Team membership; code names it Rooting (`agent.md` -> Terms -> Rooting).
+The Project in which an Identity Agent's new Sessions work unless their creator names another Project or the Workspace (`agent.md`). Not Team membership; code calls it Rooting (`agent.md` -> Terms -> Rooting).
