@@ -245,6 +245,30 @@ def read_stamps(
     }
 
 
+def read_all_stamps(
+    connection: sqlite3.Connection,
+) -> dict[tuple[str, str], dict[str, SessionVersion]]:
+    """Return every indexed Session's freshness stamp by stored ``(project, agent_id)`` scope."""
+    stamps: dict[tuple[str, str], dict[str, SessionVersion]] = {}
+    for row in connection.execute(
+        "SELECT project_id, agent_id, session_id, generation_id, history_revision "
+        "FROM indexed_sessions"
+    ):
+        stamps.setdefault((str(row[0]), str(row[1])), {})[str(row[2])] = (str(row[3]), int(row[4]))
+    return stamps
+
+
+def is_current(scope: RecallScope, stamps: Mapping[str, SessionVersion]) -> bool:
+    """Whether a scope's catalog already matches *scope*, so a refresh would change nothing.
+
+    It does when every candidate's stamp equals its version and no indexed
+    Session left the live scope.
+    """
+    return all(
+        stamps.get(session_id) == version for session_id, version in scope.candidates.items()
+    ) and all(session_id in scope.live_session_ids for session_id in stamps)
+
+
 def follows_history(connection: sqlite3.Connection, history_id: str) -> bool:
     """Whether the stored freshness stamps were taken from the Session history *history_id*."""
     row = connection.execute("SELECT history_id FROM catalog_history").fetchone()
@@ -634,19 +658,68 @@ class PassageCatalog:
         first. A canonical read failure raises :class:`SourceReadError`.
         """
         project = stored_scope(project_id)
-        history_id = sessions.history_id
+        stamps = await self._stamps(
+            sessions.history_id,
+            lambda connection: read_stamps(connection, agent_id=agent_id, project=project),
+        )
+        await self._refresh_scope(sessions, agent_id, project_id, scope, stamps)
 
-        def current_stamps(connection: sqlite3.Connection) -> dict[str, SessionVersion] | None:
-            if not follows_history(connection, history_id):
-                return None
-            return read_stamps(connection, agent_id=agent_id, project=project)
+    async def refresh_scopes(
+        self,
+        sessions: ChatSessionManager,
+        scopes: Mapping[tuple[str | None, str], RecallScope],
+        *,
+        proceed: Callable[[], bool] | None = None,
+    ) -> None:
+        """Bring the whole catalog in line with *scopes*, keyed ``(project_id, agent_id)``.
 
-        stamps = await self.read(current_stamps)
-        if stamps is None:
-            await self.write(lambda connection: follow_history(connection, history_id))
-            stamps = await self.read(
-                lambda connection: read_stamps(connection, agent_id=agent_id, project=project)
-            )
+        *scopes* names every scope whose Sessions the catalog keeps. One stamp
+        read covers every indexed Session, so a scope that is already current
+        costs no further read; each other scope is refreshed as by
+        :meth:`refresh`. Indexed scopes missing from *scopes* are then evicted
+        in one transaction. Between scopes, a false *proceed* stops the
+        refresh before the eviction.
+        """
+        stamps = await self._stamps(sessions.history_id, read_all_stamps)
+        for (project_id, agent_id), scope in scopes.items():
+            if proceed is not None and not proceed():
+                return
+            indexed = stamps.pop((stored_scope(project_id), agent_id), {})
+            await self._refresh_scope(sessions, agent_id, project_id, scope, indexed)
+        if not stamps:
+            return
+        evicted = [
+            CatalogPlan(agent_id, project, tuple(sorted(indexed)), ())
+            for (project, agent_id), indexed in sorted(stamps.items())
+        ]
+        await self.write(lambda connection: [apply_plan(connection, plan) for plan in evicted])
+
+    async def _stamps[T](self, history_id: str, select: Callable[[sqlite3.Connection], T]) -> T:
+        """Read stamps with *select* once they follow the Session history *history_id*.
+
+        Stamps taken from another history (a restore) are invalidated first.
+        """
+
+        def current(connection: sqlite3.Connection) -> tuple[T] | None:
+            return (select(connection),) if follows_history(connection, history_id) else None
+
+        stamps = await self.read(current)
+        if stamps is not None:
+            return stamps[0]
+        await self.write(lambda connection: follow_history(connection, history_id))
+        return await self.read(select)
+
+    async def _refresh_scope(
+        self,
+        sessions: ChatSessionManager,
+        agent_id: str,
+        project_id: str | None,
+        scope: RecallScope,
+        stamps: Mapping[str, SessionVersion],
+    ) -> None:
+        """Reread the changed candidates of one scope and write the plan."""
+        if is_current(scope, stamps):
+            return
         try:
             plan = await sessions.run_async(
                 plan_refresh, sessions, agent_id, project_id, scope, stamps
