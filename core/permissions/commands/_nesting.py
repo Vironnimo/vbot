@@ -77,11 +77,7 @@ def unwrap(
             len(option) > 2 and not option.startswith("--") and options.get(option[:2])
         )
         if option in ("-C", "--chdir") and wrapper == "env":
-            target = (
-                Word.literal(attached, source=rest[0].source)
-                if attached
-                else (rest[1] if len(rest) > 1 else None)
-            )
+            target = rest[0].part(attached) if attached else (rest[1] if len(rest) > 1 else None)
             if target is not None:
                 change_directory(analysis, context, raw, "set", target, keep_old=False)
         if wrapper == "env" and option in ("-S", "--split-string"):
@@ -134,7 +130,7 @@ def unwrap_runner(
             option, equals, attached = text.partition("=")
             if option in spec.directories:
                 target = (
-                    Word.literal(attached, source=arguments[index].source)
+                    arguments[index].part(attached)
                     if equals
                     else (arguments[index + 1] if index + 1 < len(arguments) else None)
                 )
@@ -164,7 +160,7 @@ def unwrap_runner(
         # hatch run test:pytest: the environment before the colon.
         first = analysis.value(context, rest[0], location).text
         if first is not None and re.match(r"^[\w.-]+:[^\\/]", first):
-            rest[0] = Word.literal(first.split(":", 1)[1], source=rest[0].source)
+            rest[0] = rest[0].part(first.split(":", 1)[1])
     return rest
 
 

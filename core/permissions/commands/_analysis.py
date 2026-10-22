@@ -467,7 +467,7 @@ class Analysis:
             if option not in options.values:
                 break
             if equals:
-                value: Word | None = Word.literal(attached, source=word.source)
+                value: Word | None = word.part(attached)
                 rest = rest[1:]
             else:
                 value = rest[1] if len(rest) > 1 else None
@@ -580,7 +580,7 @@ class Analysis:
                 if option in spec.values or option.lower() in spec.values:
                     kind = spec.values.get(option, spec.values.get(option.lower()))
                     if attached:
-                        values.append((option, Word.literal(attached, source=word.source), kind))
+                        values.append((option, word.part(attached), kind))
                     elif index < len(arguments):
                         values.append((option, arguments[index], kind))
                         index += 1
@@ -589,7 +589,7 @@ class Analysis:
                 flags.add(option)
                 if option in spec.values:
                     if equals:
-                        literal = Word.literal(attached, source=word.source)
+                        literal = word.part(attached)
                         values.append((option, literal, spec.values[option]))
                     elif index < len(arguments):
                         values.append((option, arguments[index], spec.values[option]))
@@ -603,7 +603,7 @@ class Analysis:
                 if short in spec.values:
                     rest = letters[position + 1 :]
                     if rest:
-                        literal = Word.literal(rest, source=word.source)
+                        literal = word.part(rest)
                         values.append((short, literal, spec.values[short]))
                     elif index < len(arguments):
                         values.append((short, arguments[index], spec.values[short]))
@@ -921,7 +921,9 @@ class Analysis:
         """Record the access *word* makes from every candidate location; return the paths.
 
         A wildcard reaches the entries it matches in its literal folder; with
-        *deep* (``Get-ChildItem *.md -Recurse``) the whole folder. With
+        *deep* (``Get-ChildItem *.md -Recurse``) the whole folder. *glob* says
+        whether the program expands a wildcard itself; bash expands an unquoted
+        one before any program runs (``python sec*/key.pem``). With
         *every_depth* (cmd's ``/s``: ``del /s *.tmp``) the last name, wildcard
         or not, matches at every depth below its folder. With
         *mention* (tier B of a command without a path spec), a word that is
@@ -958,11 +960,8 @@ class Analysis:
                 text = _paths.without_long_prefix(text)
                 pattern: str | None = None
                 reaches_below = subtree
-                if (
-                    glob
-                    and (context.shell != "bash" or item.glob)
-                    and _paths.has_glob(text, brace=brace)
-                ):
+                expands = item.glob if context.shell == "bash" else glob
+                if expands and _paths.has_glob(text, brace=brace):
                     split = _paths.glob_split(text, brace=brace)
                     if isinstance(split, Unresolvable):
                         if not mentioned:
@@ -1032,7 +1031,7 @@ class Analysis:
                 target = word.argument
             elif text is not None and re.match(r"^-{0,2}[A-Za-z_][\w.-]*=", text):
                 # --output=../x, DESTDIR=/opt
-                target = Word.literal(text.split("=", 1)[1], source=word.source)
+                target = word.part(text.split("=", 1)[1])
             self.access(context, raw, "read", target, glob=True, tier="b", mention=mentions)
 
     def collect_urls(self, value: Value) -> None:

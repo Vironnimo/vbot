@@ -131,7 +131,7 @@ def _handle_tar(
             option, _, attached = text.partition("=")
             if option in ("--file", "--directory"):
                 value = (
-                    Word.literal(attached, source=word.source)
+                    word.part(attached)
                     if attached
                     else (arguments[index] if index < len(arguments) else None)
                 )
@@ -156,7 +156,7 @@ def _handle_tar(
                 elif letter in "fC":
                     rest = letters[position + 1 :]
                     value = (
-                        Word.literal(rest, source=word.source)
+                        word.part(rest)
                         if rest
                         else (arguments[index] if index < len(arguments) else None)
                     )
@@ -216,7 +216,7 @@ def _handle_dd(
                 context,
                 raw,
                 "read" if key == "if" else "write",
-                Word.literal(value, source=word.source),
+                word.part(value),
                 glob=False,
                 tier="a",
             )
@@ -300,7 +300,7 @@ def _handle_download(
         )
         if option in _DOWNLOAD_VALUES or kind is not None:
             value = (
-                Word.literal(attached, source=word.source)
+                word.part(attached)
                 if equals
                 else (arguments[index] if index < len(arguments) else None)
             )
@@ -319,7 +319,7 @@ def _handle_download(
                 if "@" not in text_value:
                     continue
                 text_value = text_value.split("@", 1)[1].split(";", 1)[0]
-                value = Word.literal(text_value, source=value.source)
+                value = value.part(text_value)
             analysis.access(context, raw, kind, value, glob=False, tier="a")
     if program == "wget" and not any(
         (analysis.value(context, word, location).text or "").startswith(
@@ -653,7 +653,7 @@ def handle_remote_shell(
             option = text[:2]
             if option in _SSH_VALUES:
                 value = (
-                    Word.literal(text[2:], source=word.source)
+                    word.part(text[2:])
                     if len(text) > 2
                     else (arguments[index] if index < len(arguments) else None)
                 )
@@ -716,7 +716,7 @@ def handle_python(
             return
         if text.startswith("-m"):
             module_word = (
-                Word.literal(text[2:], source=word.source)
+                word.part(text[2:])
                 if len(text) > 2
                 else (arguments[index + 1] if index + 1 < len(arguments) else None)
             )
@@ -786,13 +786,13 @@ def _output_values(
         value: Word | None = None
         if option in options:
             if equals:
-                value = Word.literal(attached, source=word.source)
+                value = word.part(attached)
             elif index < len(pairs):
                 value = pairs[index][0]
                 consumed.add(id(value))
                 index += 1
         elif text[:2] in options and text[:2] in ATTACHED_OUTPUT_OPTIONS and len(text) > 2:
-            value = Word.literal(text[2:], source=word.source)
+            value = word.part(text[2:])
         if value is not None:
             consumed.add(id(word))
             # Many name a folder the program fills (pip --target, dotnet -o).
@@ -889,11 +889,11 @@ def _handle_ln(
         for _, text in pairs
     )
     folder: Word | None = None
-    for index, (_, text) in enumerate(pairs):
+    for index, (word, text) in enumerate(pairs):
         if text in ("-t", "--target-directory") and index + 1 < len(pairs):
             folder = pairs[index + 1][0]
         elif text is not None and text.startswith("--target-directory="):
-            folder = Word.literal(text.partition("=")[2], source=raw.source)
+            folder = word.part(text.partition("=")[2])
     operands = [word for word, _ in _operands(pairs, frozenset({"-t", "--target-directory", "-S"}))]
     if folder is None and len(operands) >= 2:
         folder = operands.pop()
@@ -901,7 +901,9 @@ def _handle_ln(
         if folder is None:
             text = analysis.value(context, target, location).text or ""
             link = Word.literal(
-                re.split(r"[\\/]", text.rstrip("/\\"))[-1] or ".", source=raw.source
+                re.split(r"[\\/]", text.rstrip("/\\"))[-1] or ".",
+                source=raw.source,
+                glob=target.glob,
             )
         else:
             link = folder

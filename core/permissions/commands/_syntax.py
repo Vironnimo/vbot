@@ -51,6 +51,15 @@ class Word:
     def literal(cls, text: str, *, source: str | None = None, glob: bool = False) -> Word:
         return cls((Part("text", text),), text if source is None else source, glob=glob)
 
+    def part(self, text: str) -> Word:
+        """*text*, a piece of this word such as an option's attached value, as a literal.
+
+        It keeps ``glob``: bash expands the whole word, so the piece a program
+        reads matches the piece's wildcard (``--file=sec*/k`` becomes
+        ``--file=secret/k`` once a folder of that name exists).
+        """
+        return Word.literal(text, source=self.source, glob=self.glob)
+
 
 @dataclass(frozen=True, slots=True)
 class Redirect:

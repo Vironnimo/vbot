@@ -144,6 +144,7 @@ def joined_path(folder: Word, name: Word | None) -> Word:
     return Word(
         (*folder.parts, separator, *name.parts),
         f"{folder.source} {name.source}",
+        glob=folder.glob or name.glob,
         tilde=folder.tilde,
     )
 

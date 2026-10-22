@@ -74,6 +74,22 @@ async def _analyze(line: str, shell: ShellKind) -> Any:
             id="bash expands a start folder before pwsh enters it",
             unresolved=("cwd", "command"),
         ),
+        # bash expands an unquoted wildcard before the program reads the path, also
+        # in the piece of a word the program reads (--file=, @); a quoted one is literal.
+        case(
+            "python s[e]c/a.py; tar -tf x/[k].tar; tar -t --file=[t].tar; perl 'q[0]/k';"
+            " curl -d @s[e]c/k -o out https://example.com",
+            id="a program reads what bash expands a wildcard to",
+            paths=(
+                "read w/p/s?c/a.py",
+                "read w/p/x/?.tar",
+                "read w/p/?.tar",
+                "read w/p/q[0]/k",
+                "read w/p/s?c/k",
+                "write w/p/out",
+            ),
+            urls=("https://example.com",),
+        ),
         case(
             "cat ~/s $HOME/t ${V}/u | grep x",
             id="home and environment expand",
