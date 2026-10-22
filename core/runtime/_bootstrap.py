@@ -727,6 +727,7 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._chat_run_manager,
             runtime,
             sessions=runtime._chat_sessions,
+            secret_masker=lambda: runtime.agent_secrets.masker,
         )
         runtime._trigger_service.set_owned_completion_starter(runtime._start_owned_completion)
         runtime._trigger_service.set_owned_completion_validator(runtime._validate_owned_completion)

@@ -19,6 +19,7 @@ from core.runs import (
     RunKind,
     WaitingWorkAdmission,
 )
+from core.secrets._references import EMPTY_MASKER, SecretMasker
 from core.sessions import AGENT_DEFAULT_PROJECT, SessionAddress, WorkingProjectChoice
 from core.utils.logging import get_logger
 
@@ -94,6 +95,7 @@ class TriggerService:
         runtime: Runtime,
         *,
         sessions: ChatSessionManager | None = None,
+        secret_masker: Callable[[], SecretMasker] = lambda: EMPTY_MASKER,
     ) -> None:
         self._chat_loop = chat_loop
         self._chat_run_manager = chat_run_manager
@@ -102,6 +104,7 @@ class TriggerService:
             self._chat_loop,
             chat_run_manager,
             sessions,
+            secret_masker,
         )
 
     def submit_completion(

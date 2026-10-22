@@ -234,9 +234,13 @@ async def test_agent_secrets_reach_only_the_command_environment(tmp_path: Path) 
             }
         )
         process = await shell.started()
+        # Live output is masked; a value still being written is held back.
+        process.write("got hunter2-very-secret\nnext hunter2-ve")
+        await eventually(lambda: shell.live_output)
         process.exit(0)
         await shell.returned(call)
 
+    assert shell.live_output[-1]["output"] == "got {{secret:GITHUB.password}}\nnext "
     assert refused["ok"] is False
     assert len(shell.launcher.processes) == 1
     command, env = launched(shell.launcher)

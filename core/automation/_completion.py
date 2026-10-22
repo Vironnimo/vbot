@@ -19,6 +19,7 @@ from core.runs import (
     RunNotFoundError,
     RunStatus,
 )
+from core.secrets._references import EMPTY_MASKER, SecretMasker
 from core.sessions import SessionAddress, SessionNotFoundError
 from core.utils.logging import get_logger
 from core.utils.workers import finish_despite_cancel
@@ -107,10 +108,12 @@ class _CompletionDeliveryCoordinator:
         chat_loop: ChatLoop,
         run_manager: ChatRunManager,
         sessions: ChatSessionManager | None,
+        secret_masker: Callable[[], SecretMasker] = lambda: EMPTY_MASKER,
     ) -> None:
         self._chat_loop = chat_loop
         self._run_manager = run_manager
         self._sessions = sessions
+        self._secret_masker = secret_masker
         self._buckets: dict[SessionAddress, _CompletionBucket] = {}
         self._suppressed_origins: dict[SessionAddress, list[str]] = {}
         self._run_relay: Callable[[Run, ReplySurface], Awaitable[None]] | None = None
@@ -205,7 +208,9 @@ class _CompletionDeliveryCoordinator:
         notice = _CompletionNotice(
             id=notice_id,
             origin_run_id=origin_run_id,
-            body=body,
+            # Results carry command output and terminal screens: every path
+            # into the Session (note, Run input, owned Run) takes this body.
+            body=self._secret_masker().mask(body),
             delivered=delivered,
             boundary_run=boundary_run,
             suppress_run=suppress_run,

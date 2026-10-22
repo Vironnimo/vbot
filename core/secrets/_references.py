@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+from bisect import bisect_left
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, Final, cast
@@ -26,6 +27,10 @@ MIN_MASKED_LENGTH: Final = 8
 # Lines of a multi-line value at least this long are masked on their own too, so
 # a key printed with other line breaks or cut in parts does not leak.
 _MIN_MASKED_LINE = 20
+# How much of the open end of growing text :meth:`SecretMasker.mask_growing`
+# checks, and the shortest beginning of a value it holds back there.
+_GROWING_TAIL_LIMIT = 1024
+_MIN_HELD_PREFIX = 3
 
 
 @dataclass(frozen=True)
@@ -113,6 +118,7 @@ class SecretMasker:
                 if len(variant) >= MIN_MASKED_LENGTH:
                     variants.setdefault(variant, reference)
         self._variants = variants
+        self._ordered = sorted(variants)
         self._pattern = (
             re.compile(
                 "|".join(re.escape(item) for item in sorted(variants, key=len, reverse=True))
@@ -128,6 +134,26 @@ class SecretMasker:
         if self._pattern is None or not text:
             return text
         return self._pattern.sub(lambda match: self._variants[match.group(0)], text)
+
+    def mask_growing(self, text: str) -> str:
+        """``text`` masked, without an end that could be the beginning of a value.
+
+        For snapshots of output still being written: a value cut off at the end
+        does not match yet, so that end is held back until a later snapshot
+        holds the whole value. Only the last line's final
+        ``_GROWING_TAIL_LIMIT`` characters are checked.
+        """
+        masked = self.mask(text)
+        if self._pattern is None:
+            return masked
+        start = max(masked.rfind("\n") + 1, len(masked) - _GROWING_TAIL_LIMIT)
+        ordered = self._ordered
+        for position in range(start, len(masked) - _MIN_HELD_PREFIX + 1):
+            tail = masked[position:]
+            index = bisect_left(ordered, tail)
+            if index < len(ordered) and ordered[index].startswith(tail):
+                return masked[:position]
+        return masked
 
     def mask_value[T](self, value: T) -> T:
         """``value`` (JSON-like) with every string masked; ``value`` itself when none matches."""
