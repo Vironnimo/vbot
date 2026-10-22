@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from core.tools._patch_syntax import _PatchError
-from core.tools._tool_context import PathResolveAccess, is_link_entry
+from core.tools._tool_context import PathResolveAccess, UnusablePathError, is_link_entry
 from core.tools.tools import ToolContext
 
 
@@ -56,6 +56,8 @@ def _resolve(
         if "\x00" in path:
             raise ValueError(path)
         return context.resolve_path(path, access=access, follow_final_link=follow_final_link)
+    except UnusablePathError as error:
+        raise _PatchError("invalid_path", path=path, reason=error.reason) from error
     except (ValueError, OSError, RuntimeError) as error:
         raise _PatchError("invalid_path", path=path, reason=str(error)) from error
 

@@ -75,6 +75,47 @@ async def test_tool_paths_expand_home_without_retargeting_literal_names(tmp_path
     assert seen == [expected.resolve()]
 
 
+_WINDOWS_ONLY = pytest.mark.skipif(os.name != "nt", reason="Windows path grammar")
+_POSIX_ONLY = pytest.mark.skipif(os.name == "nt", reason="POSIX path grammar")
+
+
+@pytest.mark.parametrize(
+    ("spelling", "access", "expected"),
+    [
+        pytest.param("{url}", "write", "intended/out.txt", id="file-url"),
+        pytest.param('"{url}"', "read", "intended/out.txt", id="quoted", marks=_WINDOWS_ONLY),
+        pytest.param("file:notes.txt", "read", "ws/file:notes.txt", id="name", marks=_POSIX_ONLY),
+        pytest.param("file://elsewhere.invalid/a", "read", None, id="remote", marks=_POSIX_ONLY),
+        # Windows resolved these below the server process's working directory.
+        pytest.param("notes/10:30/x.md", "read", None, id="colon-in-folder", marks=_WINDOWS_ONLY),
+        pytest.param("{drive}:notes.txt", "read", None, id="drive-folder", marks=_WINDOWS_ONLY),
+        # A final name with ":" reads an alternate data stream, but cannot be written.
+        pytest.param("10:30.md", "read", "ws/10:30.md", id="stream", marks=_WINDOWS_ONLY),
+        pytest.param("10:30.md", "write", None, id="colon-in-name", marks=_WINDOWS_ONLY),
+    ],
+)
+@pytest.mark.asyncio
+async def test_tool_paths_take_file_urls_and_refuse_names_that_lead_elsewhere(
+    tmp_path: Path, spelling: str, access: Any, expected: str | None
+) -> None:
+    other_drive = "R" if tmp_path.drive.upper().startswith("Q") else "Q"
+    spelling = spelling.format(url=(tmp_path / "intended" / "out.txt").as_uri(), drive=other_drive)
+    registry = ToolRegistry()
+    seen = []
+
+    def probe(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        seen.append(context.resolve_path(spelling, access=access))
+        return tool_success({})
+
+    registry.register("probe", "Probe paths.", {"type": "object"}, probe)
+    result = await _run_one(registry, "probe", workspace=tmp_path / "ws")
+
+    if expected is None:
+        assert (result["error"]["code"], seen) == ("invalid_arguments", [])
+    else:
+        assert seen == [(tmp_path / expected).resolve()]
+
+
 @pytest.mark.asyncio
 async def test_handler_context_carries_the_run_configuration(tmp_path: Path) -> None:
     registry = ToolRegistry()

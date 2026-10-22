@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from contextlib import contextmanager
 from dataclasses import replace
@@ -1327,6 +1328,16 @@ NUL = (
             "not_a_file",
             "sub is not a regular file.",
             id="write-folder",
+        ),
+        # Windows failed only on writing, after creating the folder notes.
+        pytest.param(
+            "write",
+            {"path": "notes/10:30.md", "content": "x"},
+            "invalid_path",
+            'Cannot use path notes/10:30.md: Windows file and folder names cannot contain ":". '
+            'Use another character, such as "-".',
+            id="write-colon",
+            marks=pytest.mark.skipif(os.name != "nt", reason="Windows file names"),
         ),
     ],
 )
