@@ -622,27 +622,51 @@ def test_an_index_of_another_shape_is_discarded_and_rebuilt(
     assert "untimed_records" not in session_columns
 
 
+@pytest.mark.parametrize("holder", ["another-connection", "another-read"])
 def test_busy_index_raises_retryable_error_without_discarding(
     tmp_path: Path,
+    manager: ChatSessionManager,
+    index: StatisticsIndex,
     session: ChatSession,
     statistics: StatisticsFactory,
     monkeypatch: pytest.MonkeyPatch,
+    holder: str,
 ) -> None:
     # The busy index is detected after the SQLite busy timeout and the write
     # patience; both shrink so the test does not wait out the real ones.
     monkeypatch.setattr("core.database._runtime.BUSY_TIMEOUT_MS", 0)
     monkeypatch.setattr("core.statistics.index._WRITE_PATIENCE_S", 0.05)
-    service = statistics()
+    service = statistics(index=index)
     service.report()
     _append_run(session, "run-two", minutes=1, input_tokens=5)
-    blocker = sqlite3.connect(_index_path(tmp_path), isolation_level=None, timeout=0)
-    try:
-        blocker.execute("BEGIN EXCLUSIVE")
-        with pytest.raises(StatisticsUnavailableError):
-            service.report()
-    finally:
-        blocker.execute("ROLLBACK")
-        blocker.close()
+    if holder == "another-connection":
+        blocker = sqlite3.connect(_index_path(tmp_path), isolation_level=None, timeout=0)
+        try:
+            blocker.execute("BEGIN EXCLUSIVE")
+            with pytest.raises(StatisticsUnavailableError):
+                service.report()
+        finally:
+            blocker.execute("ROLLBACK")
+            blocker.close()
+    else:
+        # A long read of this index, such as a rebuild, holds it for minutes.
+        entered, release = threading.Event(), threading.Event()
+
+        def hold(_view: IndexView) -> None:
+            entered.set()
+            release.wait(5)
+
+        reader = threading.Thread(
+            target=index.read, args=(manager, (), hold), kwargs={"prune": False}
+        )
+        reader.start()
+        try:
+            assert entered.wait(5)
+            with pytest.raises(StatisticsUnavailableError):
+                service.report()
+        finally:
+            release.set()
+            reader.join()
     reads = _record_canonical_reads(monkeypatch)
 
     report = service.report()

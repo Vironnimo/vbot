@@ -11,7 +11,8 @@ read without any write. Each Session contributes its own audit only: a fork's
 inherited history belongs to the Session that wrote it, so shared history
 counts once however many forks show it.
 
-Failure policy: a busy or locked index raises :class:`StatisticsUnavailableError`
+Failure policy: a busy or locked index, or one another read holds for longer
+than the write patience (a rebuild), raises :class:`StatisticsUnavailableError`
 so the caller can retry; a damaged or inconsistent index is discarded and
 rebuilt once; an index that cannot be used otherwise (or fails again after the
 rebuild) computes the read from a transient in-memory projection with the same
@@ -85,7 +86,8 @@ _GLOBAL_SCOPE = ""
 # rows change; the kernel adds a new table empty, so a new aggregate needs a
 # bump to be filled.
 _PROJECTION_VERSION = 11
-# A busy index fails the read quickly as retryable instead of queueing it.
+# A busy index fails the read quickly as retryable instead of queueing it,
+# both on the SQLite writer and behind another read of this index.
 _WRITE_PATIENCE_S = 1.0
 
 SESSION_FACT_TABLES = (
@@ -399,53 +401,60 @@ class StatisticsIndex:
         shared index. ``pricing_lookup`` prices calls without a cost snapshot;
         readers of one index pass the same lookup, since a different one
         reprices. Recovery may retry ``consume`` after partial aggregation;
-        mutable result state must be local to each call. After :meth:`close` it raises
-        :class:`~core.database.DatabaseUnavailableError`.
+        mutable result state must be local to each call. A read that waits
+        longer than the write patience for another one (a rebuild can take
+        minutes) raises :class:`StatisticsUnavailableError`. After
+        :meth:`close` it raises :class:`~core.database.DatabaseUnavailableError`.
         """
         sources = _Sources(sessions, scopes, prune, usage_recorder, pricing_lookup)
-        with self._lock:
+        if not self._lock.acquire(timeout=_WRITE_PATIENCE_S):
             if self._database.is_closed():
                 raise DatabaseUnavailableError(f"{self._database.spec.name} is closed")
+            raise StatisticsUnavailableError("Statistics are busy; retry shortly")
+        try:
+            if self._database.is_closed():
+                raise DatabaseUnavailableError(f"{self._database.spec.name} is closed")
+            return self._recovering_read(sources, consume)
+        except (_SourceFailureError, UsageSourceError) as failure:
+            raise failure.error from failure.error.__cause__
+        finally:
+            self._lock.release()
+
+    def _recovering_read[Result](
+        self, sources: _Sources, consume: Callable[[IndexView], Result]
+    ) -> Result:
+        for attempt in range(2):
             try:
-                for attempt in range(2):
+                return self._read_file(sources, consume)
+            except Exception as error:
+                failure = projection_failure(error)
+                if failure is None:
+                    raise
+                if failure == "busy":
+                    raise StatisticsUnavailableError(
+                        "Statistics are busy; retry shortly"
+                    ) from error
+                if failure == "rebuild":
                     try:
-                        return self._read_file(sources, consume)
-                    except Exception as error:
-                        failure = projection_failure(error)
-                        if failure is None:
-                            raise
-                        if failure == "busy":
-                            raise StatisticsUnavailableError(
-                                "Statistics are busy; retry shortly"
-                            ) from error
-                        if failure == "rebuild":
-                            try:
-                                discarded = self._database.discard_for(error)
-                            except DatabaseError as discard_error:
-                                _LOGGER.warning(
-                                    "Could not discard the Statistics index: %s", discard_error
-                                )
-                                break
-                            if not discarded:
-                                _LOGGER.error(
-                                    "Statistics index failed again after a rebuild for the same "
-                                    "failure; not rebuilding it again: %s",
-                                    error,
-                                )
-                                raise
-                            if not attempt:
-                                _LOGGER.warning(
-                                    "Statistics index is inconsistent; rebuilding: %s", error
-                                )
-                                continue
-                        _LOGGER.warning(
-                            "Statistics index unavailable; using a transient projection: %s",
+                        discarded = self._database.discard_for(error)
+                    except DatabaseError as discard_error:
+                        _LOGGER.warning("Could not discard the Statistics index: %s", discard_error)
+                        break
+                    if not discarded:
+                        _LOGGER.error(
+                            "Statistics index failed again after a rebuild for the same "
+                            "failure; not rebuilding it again: %s",
                             error,
                         )
-                        break
-                return self._read_memory(sources, consume)
-            except (_SourceFailureError, UsageSourceError) as failure:
-                raise failure.error from failure.error.__cause__
+                        raise
+                    if not attempt:
+                        _LOGGER.warning("Statistics index is inconsistent; rebuilding: %s", error)
+                        continue
+                _LOGGER.warning(
+                    "Statistics index unavailable; using a transient projection: %s", error
+                )
+                break
+        return self._read_memory(sources, consume)
 
     def discard(self) -> None:
         """Close and delete the disposable database with its SQLite sidecars."""
