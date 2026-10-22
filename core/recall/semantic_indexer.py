@@ -525,7 +525,9 @@ class SemanticIndexer:
 
     def _fail(self, classified: _Classified) -> None:
         self._failures += 1
-        backoff = min(BACKOFF_INITIAL_S * 2 ** (self._failures - 1), BACKOFF_MAX_S)
+        # Bound the exponent too: a long outage must not overflow before min runs.
+        doublings = min(self._failures - 1, math.ceil(math.log2(BACKOFF_MAX_S / BACKOFF_INITIAL_S)))
+        backoff = min(BACKOFF_INITIAL_S * 2**doublings, BACKOFF_MAX_S)
         if classified.retry_after is not None:
             backoff = max(backoff, classified.retry_after)
         self._state = "retrying" if classified.kind == "transient" else "error"
