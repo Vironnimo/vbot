@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sqlite3
 import threading
 from contextlib import closing
@@ -24,6 +25,7 @@ from core.database import (
 from core.sessions import ChatSession, ChatSessionManager
 from core.statistics.index import (
     SESSION_FACT_TABLES,
+    IndexView,
     StatisticsIndex,
     StatisticsScope,
     StatisticsUnavailableError,
@@ -648,6 +650,35 @@ def test_busy_index_raises_retryable_error_without_discarding(
     assert _run_input_tokens(report) == 15
     # The retained index is extended from its cursor, not rebuilt.
     assert [cursor is not None for _session_id, cursor in reads] == [True]
+
+
+def test_a_failure_its_rebuild_cannot_cure_fails_reads_without_another_rebuild(
+    tmp_path: Path,
+    manager: ChatSessionManager,
+    index: StatisticsIndex,
+    session: ChatSession,
+    statistics: StatisticsFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    service = statistics(index=index)
+    expected = _without_generated_at(service.report())
+    original_id = _index_identity(tmp_path)["database_id"]
+
+    def defective(view: IndexView) -> None:
+        view.connection.execute("SELECT * FROM stat_missing")
+
+    rebuilt_ids = []
+    with caplog.at_level(logging.WARNING, logger="vbot.statistics"):
+        for _read in range(2):
+            with pytest.raises(sqlite3.OperationalError, match="stat_missing"):
+                index.read(manager, (), defective, prune=False)
+            rebuilt_ids.append(_index_identity(tmp_path)["database_id"])
+
+    # One rebuild for the failure; once it survives that rebuild, reads fail with it.
+    assert rebuilt_ids[0] != original_id
+    assert rebuilt_ids[1] == rebuilt_ids[0]
+    assert [record.levelname for record in caplog.records] == ["WARNING", "ERROR", "ERROR"]
+    assert _without_generated_at(service.report()) == expected
 
 
 def test_canonical_read_failure_propagates_and_keeps_the_index(

@@ -15,8 +15,11 @@ Failure policy: a busy or locked index raises :class:`StatisticsUnavailableError
 so the caller can retry; a damaged or inconsistent index is discarded and
 rebuilt once; an index that cannot be used otherwise (or fails again after the
 rebuild) computes the read from a transient in-memory projection with the same
-code, so Statistics stay available. After :meth:`StatisticsIndex.close` reads
-raise :class:`~core.database.DatabaseUnavailableError`.
+code, so Statistics stay available. A failure that comes back after the rebuild
+it caused is not rebuilt again in this process: the read fails with it and logs
+an error, since rebuilding cannot cure a defect in the index's own statements.
+After :meth:`StatisticsIndex.close` reads raise
+:class:`~core.database.DatabaseUnavailableError`.
 
 Reconcile also prices retrospective calls and maintains the aggregate tables
 (``core/statistics/_rollups.py``) in the same write transaction, recomputing
@@ -415,20 +418,31 @@ class StatisticsIndex:
                             raise StatisticsUnavailableError(
                                 "Statistics are busy; retry shortly"
                             ) from error
-                        if failure == "unavailable" or attempt:
-                            _LOGGER.warning(
-                                "Statistics index unavailable; using a transient projection: %s",
-                                error,
-                            )
-                            break
-                        _LOGGER.warning("Statistics index is inconsistent; rebuilding: %s", error)
-                        try:
-                            self._database.discard()
-                        except DatabaseError as discard_error:
-                            _LOGGER.warning(
-                                "Could not discard the Statistics index: %s", discard_error
-                            )
-                            break
+                        if failure == "rebuild":
+                            try:
+                                discarded = self._database.discard_for(error)
+                            except DatabaseError as discard_error:
+                                _LOGGER.warning(
+                                    "Could not discard the Statistics index: %s", discard_error
+                                )
+                                break
+                            if not discarded:
+                                _LOGGER.error(
+                                    "Statistics index failed again after a rebuild for the same "
+                                    "failure; not rebuilding it again: %s",
+                                    error,
+                                )
+                                raise
+                            if not attempt:
+                                _LOGGER.warning(
+                                    "Statistics index is inconsistent; rebuilding: %s", error
+                                )
+                                continue
+                        _LOGGER.warning(
+                            "Statistics index unavailable; using a transient projection: %s",
+                            error,
+                        )
+                        break
                 return self._read_memory(sources, consume)
             except (_SourceFailureError, UsageSourceError) as failure:
                 raise failure.error from failure.error.__cause__
