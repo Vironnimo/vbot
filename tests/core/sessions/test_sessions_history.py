@@ -21,6 +21,7 @@ from core.sessions import (
     ChatSession,
     PromptEpoch,
     ToolResultFacts,
+    ToolResultPayload,
     editable_session_message_index,
 )
 from core.sessions.errors import SessionNotFoundError
@@ -481,6 +482,64 @@ def test_role_specific_relational_message_storage_round_trips(
         "paths": ["core/example.py"],
         "source": "git",
     }
+
+
+@pytest.mark.asyncio
+async def test_lone_surrogates_are_stored_as_replacement_characters(manager, tmp_path) -> None:
+    # Half a character, or a byte that was not UTF-8, is a lone surrogate in a
+    # str; UTF-8 cannot encode it, so no write may fail on one.
+    lone = "\ud83d"
+    session = manager.create("coder")
+    writer = session.start_run("run")
+    await writer.append_stream_draft_async(
+        model="test",
+        reasoning_delta=lone,
+        content_delta=f"a{lone}",
+        tool_calls=[{"id": "call-one", "name": "read", "arguments": {"path": lone}}],
+    )
+    with sqlite3.connect(tmp_path / "sessions.db") as connection:
+        assert connection.execute(
+            "SELECT reasoning_delta, content_delta, tool_calls_json FROM run_stream_drafts"
+        ).fetchall() == [
+            (
+                "\ufffd",
+                "a\ufffd",
+                '[{"id": "call-one", "name": "read", "arguments": {"path": "\ufffd"}}]',
+            )
+        ]
+    assistant = ChatMessage.assistant(
+        model="test",
+        content=f"answer {lone}",
+        tool_calls=[ToolCall(id="call-one", name="read", arguments={f"path{lone}": [lone]})],
+    )
+    writer.append_many([ChatMessage.user(f"question {lone}"), assistant])
+    writer.assistant_message_id = assistant.id
+    payload = ToolResultPayload(payload_id="res_one", owner_name="mcp", payload_json=f'"{lone}"')
+    writer.append_many(
+        [
+            ChatMessage.tool(
+                tool_call_id="call-one",
+                name="read",
+                content=f"result {lone}",
+                tool_display={"summary": f"read {lone}"},
+            )
+        ],
+        tool_results={"call-one": ToolResultFacts("completed", True, payloads=(payload,))},
+    )
+
+    user, stored_assistant, tool = session.load()
+    assert (user.content, stored_assistant.content, tool.content) == (
+        "question \ufffd",
+        "answer \ufffd",
+        "result \ufffd",
+    )
+    assert stored_assistant.tool_calls is not None
+    assert stored_assistant.tool_calls[0].arguments == {"path\ufffd": ["\ufffd"]}
+    assert tool.tool_display == {"summary": "read \ufffd"}
+    stored_payload = await manager.tool_result_payload_async(
+        session.address, "res_one", owner_name="mcp"
+    )
+    assert stored_payload == "\ufffd"
 
 
 def test_recall_context_is_bounded_and_a_missing_anchor_has_none(manager) -> None:

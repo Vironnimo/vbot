@@ -263,7 +263,9 @@ async def test_a_deadline_while_a_finished_call_is_stored_returns_its_result(
 
 
 @pytest.mark.asyncio
-async def test_external_run_failure_and_discard(tmp_path: Path) -> None:
+async def test_external_run_failure_and_discard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     runtime = _runtime(tmp_path, _tools())
     loop = build_chat_loop(runtime)
 
@@ -278,6 +280,19 @@ async def test_external_run_failure_and_discard(tmp_path: Path) -> None:
     unused = await loop.start_external_run("coder", model="voice-model", title="Live call")
     await unused.discard()
     assert not runtime.chat_sessions.exists(session_address("coder", unused.session_id))
+
+    # A start that fails after its Run was admitted ends that Run, then removes its Session.
+    async def failing_bind_permissions(self: Any, project_root: Path | None) -> None:
+        raise RuntimeError("boundary build failed")
+
+    monkeypatch.setattr(
+        external_run_module.ExternalRun, "bind_permissions", failing_bind_permissions
+    )
+    sessions = {session.id for session in runtime.chat_sessions.list("coder")}
+    with pytest.raises(RuntimeError, match="boundary build failed"):
+        await loop.start_external_run("coder", model="voice-model", title="Live call")
+    assert runtime.chat_runs.active_runs() == []
+    assert {session.id for session in runtime.chat_sessions.list("coder")} == sessions
 
 
 @pytest.mark.asyncio

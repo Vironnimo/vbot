@@ -79,7 +79,8 @@ async def test_a_completed_tool_call_runs_while_the_model_still_streams(tmp_path
     started: list[str] = []
 
     async def tool_turn() -> AsyncIterator[JsonObject]:
-        yield _call("call_berlin", "Berlin")
+        # Half a character, written as a JSON escape: no UTF-8 text can hold it.
+        yield _call("call_berlin", "Berl\\ud83din")
         yield _call("call_paris", "Paris")
         # The stream moved past the first call: it runs before the turn ends.
         await _until(lambda: started == ["call_berlin"])
@@ -107,6 +108,10 @@ async def test_a_completed_tool_call_runs_while_the_model_still_streams(tmp_path
     assert {event.payload["assistant_message_id"] for event in started_events} == {
         tool_turn_message.id
     }
+    # The early call ran with exactly the arguments its turn persisted.
+    berlin = {"city": "Berl\ufffdin"}
+    assert started_events[0].payload["tool_call"]["arguments"] == berlin
+    assert (tool_turn_message.tool_calls or [])[0].arguments == berlin
 
 
 @pytest.mark.asyncio

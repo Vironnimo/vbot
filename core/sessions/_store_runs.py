@@ -19,6 +19,7 @@ from core.sessions._types import (
     SessionRunAdmission,
     SessionRunCompletion,
 )
+from core.utils.surrogates import replace_lone_surrogates, without_lone_surrogates
 from core.utils.timestamps import utc_now_timestamp
 
 _OWNER_MISMATCH_ERROR = (
@@ -346,6 +347,8 @@ def append_stream_draft(
     """Append streamed output of a running Run's current Model step to its draft.
 
     *tool_calls* are the canonical Tool Calls that started since the last chunk.
+    Lone surrogates, which UTF-8 cannot encode, are stored as U+FFFD, as in the
+    Assistant entry that later holds this output.
     """
     if not model:
         raise ChatSessionError("A stream draft chunk requires its Model")
@@ -358,10 +361,14 @@ def append_stream_draft(
         "VALUES (?, ?, ?, ?, ?)",
         (
             run_key,
-            model,
-            reasoning_delta,
-            content_delta,
-            json.dumps(list(tool_calls), ensure_ascii=False) if tool_calls else None,
+            replace_lone_surrogates(model),
+            replace_lone_surrogates(reasoning_delta),
+            replace_lone_surrogates(content_delta),
+            (
+                json.dumps(without_lone_surrogates(list(tool_calls)), ensure_ascii=False)
+                if tool_calls
+                else None
+            ),
         ),
     )
 

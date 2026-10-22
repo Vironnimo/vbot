@@ -420,6 +420,31 @@ async def test_secret_values_leave_a_tool_call_only_as_references(
 
 
 @pytest.mark.asyncio
+async def test_lone_surrogates_leave_a_tool_call_as_replacement_characters(
+    tmp_path: Path,
+) -> None:
+    # A byte that is not UTF-8, read with surrogateescape, is a lone surrogate.
+    output = b"build \xff log".decode("utf-8", errors="surrogateescape")
+
+    def handler(context: ToolContext, _arguments: JsonObject) -> JsonObject:
+        context.add_display_notice("info", output)
+        return tool_success({"output": output})
+
+    tools = ToolRegistry()
+    tools.register("tail", "Tail a log.", {"type": "object"}, handler)
+    harness = ToolDispatchHarness(tmp_path, tools)
+
+    dispatched = await harness.dispatch([call("tail")])
+
+    [completed] = dispatched.events(TOOL_CALL_RESULT_EVENT)
+    assert completed.payload["result"]["data"]["output"] == "build \ufffd log"
+    assert dispatched.results[0]["data"]["output"] == "build \ufffd log"
+    # The Model, the events and history receive text UTF-8 can encode.
+    json.dumps(completed.payload, ensure_ascii=False).encode()
+    json.dumps([message.to_dict() for message in dispatched.messages], ensure_ascii=False).encode()
+
+
+@pytest.mark.asyncio
 async def test_media_outputs_are_read_media_artifacts_and_loaded_pixels(tmp_path: Path) -> None:
     media = {
         "kind": "read_media",

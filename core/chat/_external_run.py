@@ -40,6 +40,7 @@ from core.providers.adapter import normalize_tool_call_candidate
 from core.runs import (
     ASSISTANT_OUTPUT_EVENT,
     USER_MESSAGE_EVENT,
+    ActiveRunError,
     Run,
     RunAdmission,
     RunKind,
@@ -48,7 +49,8 @@ from core.sessions import AGENT_DEFAULT_PROJECT, ChatSession, SessionAddress
 from core.tools import called_tool_name, tool_failure
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
-from core.utils.workers import finish_despite_cancel
+from core.utils.surrogates import replace_lone_surrogates, without_lone_surrogates
+from core.utils.workers import finish_despite_cancel, settle_before_cancelling
 
 if TYPE_CHECKING:
     from core.chat._request_builder import RequestBuilder
@@ -148,7 +150,7 @@ class ExternalRun:
         """Store what the user said."""
         if text.strip():
             message = ChatMessage.user(
-                masked_content(text, self._dependencies.secret_masker),
+                masked_content(replace_lone_surrogates(text), self._dependencies.secret_masker),
                 input_origin=INPUT_ORIGIN_SPEECH_TRANSCRIPTION,
             )
             if await self._append([message]):
@@ -157,7 +159,9 @@ class ExternalRun:
     async def record_assistant(self, text: str) -> None:
         """Store what the Model said."""
         if text.strip():
-            message = ChatMessage.assistant(model=self._model, content=text)
+            message = ChatMessage.assistant(
+                model=self._model, content=replace_lone_surrogates(text)
+            )
             if await self._append([message]):
                 _emit_message_event(self._require_run(), ASSISTANT_OUTPUT_EVENT, message)
 
@@ -187,16 +191,19 @@ class ExternalRun:
         if self.ended:
             return tool_failure("tool_stopped", _STOPPED)
         permissions = await self._current_permissions(run)
+        # The Tool runs with exactly the arguments that are stored.
         call = ToolCall.from_dict(
-            normalize_tool_call_candidate(
-                tool_call_id=call_id,
-                name=called_tool_name(
-                    name,
-                    self._allowed_tools,
-                    registered=_RegisteredNames(self._dependencies.tools),
-                ),
-                arguments=arguments,
-                fallback_id=new_id("call"),
+            without_lone_surrogates(
+                normalize_tool_call_candidate(
+                    tool_call_id=call_id,
+                    name=called_tool_name(
+                        name,
+                        self._allowed_tools,
+                        registered=_RegisteredNames(self._dependencies.tools),
+                    ),
+                    arguments=arguments,
+                    fallback_id=new_id("call"),
+                )
             )
         )
         self._iteration += 1
@@ -470,15 +477,22 @@ async def start_external_run(
             Path(prompt_project.cwd) if prompt_project is not None else None
         )
     except BaseException:
-        await _discard(dependencies, address)
+        # The Run ends before its Session goes: a Run left on a removed Session
+        # could never store its end, also when the caller was cancelled.
+        await settle_before_cancelling(handle.discard())
         raise
     return handle
 
 
 async def _discard(dependencies: ChatLoopDependencies, address: SessionAddress) -> None:
+    """Remove the Session of a conversation that never started, unless a Run still holds it."""
     sessions = dependencies.sessions
     try:
-        await sessions.run_async(sessions.delete, address)
+        async with dependencies.run_manager.session_admission_guard(address):
+            await sessions.run_async(sessions.delete, address)
+    except ActiveRunError:
+        # A Run that has not ended yet owns the Session; it stays.
+        return
     except Exception:
         _LOGGER.warning(
             "Could not remove the unused Session (agent=%s session=%s)",

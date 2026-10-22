@@ -16,6 +16,9 @@ if TYPE_CHECKING:
 
 STREAM_DRAFT_FLUSH_INTERVAL_SECONDS = 2.0
 
+# Failed writes in a row after which a stream attempt stops storing its draft.
+_MAX_FAILED_WRITES = 3
+
 _LOGGER = get_logger("chat")
 
 
@@ -30,6 +33,11 @@ class StreamDraft:
 
     Tool Calls that start during the stream are written at once, not after the
     flush interval: they may have effects that history must show.
+
+    A failed write keeps its output, in order, for the next write, which waits
+    out the flush interval even for started Tool Calls. After
+    ``_MAX_FAILED_WRITES`` failures in a row the stream attempt stops storing:
+    the stored chunks stay a prefix of its output.
     """
 
     def __init__(
@@ -56,10 +64,13 @@ class StreamDraft:
         # Whether stored chunks may exist that no Assistant entry deleted yet.
         self._stored = False
         self._draining = False
+        self._failed_writes = 0
+        # Whether this stream attempt stopped storing after failed writes.
+        self._stopped = False
 
     def record(self, *, model: str, reasoning: str, content: str) -> None:
         """Add streamed deltas; a write follows within the flush interval."""
-        if not reasoning and not content:
+        if self._stopped or (not reasoning and not content):
             return
         self._model = model
         if reasoning:
@@ -70,7 +81,7 @@ class StreamDraft:
 
     def record_tool_calls(self, *, model: str, tool_calls: Sequence[ToolCall]) -> None:
         """Add Tool Calls that just started; their write follows at once."""
-        if not tool_calls:
+        if self._stopped or not tool_calls:
             return
         self._model = model
         self._tool_calls.extend(call.to_dict() for call in tool_calls)
@@ -87,13 +98,13 @@ class StreamDraft:
         and deletes the stored draft, or the Run's completion, which does too.
         """
         await self._drain()
-        self._clear_pending()
+        self._end_attempt()
         self._stored = False
 
     async def discard(self) -> None:
         """Delete the draft of a stream attempt whose output will not be persisted."""
         await self._drain()
-        self._clear_pending()
+        self._end_attempt()
         if not self._stored:
             return
         try:
@@ -107,7 +118,9 @@ class StreamDraft:
             self._timer = asyncio.create_task(self._write_later(), name="run-stream-draft")
 
     async def _write_later(self) -> None:
-        if not self._tool_calls:
+        # Started Tool Calls go at once, but not right after a failed write:
+        # retrying at once would hammer a store that just failed.
+        if not self._tool_calls or self._failed_writes:
             await self._sleep(max(0.0, self._flush_interval - (self._clock() - self._last_write)))
         self._timer = None
         if not self._has_pending():
@@ -133,12 +146,31 @@ class StreamDraft:
                 tool_calls=tool_calls,
             )
             self._stored = True
+            self._failed_writes = 0
         except Exception:
-            _LOGGER.warning("Failed to store the stream draft", exc_info=True)
-            # Keep the output in order for the next write.
-            self._reasoning.insert(0, reasoning)
-            self._content.insert(0, content)
-            self._tool_calls[:0] = tool_calls
+            self._failed_writes += 1
+            if self._failed_writes < _MAX_FAILED_WRITES:
+                _LOGGER.debug(
+                    "Failed to store the stream draft (run=%s failures=%d)",
+                    self._session.run_id,
+                    self._failed_writes,
+                    exc_info=True,
+                )
+                # Keep the output in order for the next write.
+                self._reasoning.insert(0, reasoning)
+                self._content.insert(0, content)
+                self._tool_calls[:0] = tool_calls
+            else:
+                # Output that never stores would hold back all later output;
+                # skipping it would leave a gap in what restart recovery keeps.
+                self._stopped = True
+                self._clear_pending()
+                _LOGGER.warning(
+                    "Stopped storing the stream draft after failed writes (run=%s failures=%d)",
+                    self._session.run_id,
+                    self._failed_writes,
+                    exc_info=True,
+                )
         finally:
             self._last_write = self._clock()
             self._write = None
@@ -157,6 +189,12 @@ class StreamDraft:
                 await asyncio.shield(write)
         finally:
             self._draining = False
+
+    def _end_attempt(self) -> None:
+        """Drop unwritten output; the next stream attempt stores its draft afresh."""
+        self._clear_pending()
+        self._failed_writes = 0
+        self._stopped = False
 
     def _has_pending(self) -> bool:
         return bool(self._reasoning or self._content or self._tool_calls)
