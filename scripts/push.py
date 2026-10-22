@@ -10,8 +10,8 @@ and the WebUI's format check, lint, Vitest and build.
 On Windows the complete pytest suite also runs on Linux in WSL, using the ordinary
 local worker budget inside a 3 GiB memory limit, alongside the WebUI checks
 (``scripts/linux/push_tests.sh``); without WSL and a systemd user manager it fails.
-Every step runs, whatever failed before it. Backend tests that fail run once more
-alone; those that pass then are reported as flaky without blocking.
+Independent steps still run after a failure. Backend tests that fail run once more
+alone for diagnosis; a passing retry never clears the original failure.
 
 Only when every step passed is exactly the checked commit pushed to origin's main,
 as a fast-forward; the push never forces. When origin's main has commits the local
@@ -57,6 +57,7 @@ from scripts._worktree_seed import (  # noqa: E402
     seed_type_check_cache,
     seed_webui_packages,
 )
+from scripts.test_dependencies import environment_python  # noqa: E402
 
 _worktrees = WorktreeRemoval(WorktreeContext.from_checkout(_checkout_root))
 
@@ -89,7 +90,7 @@ FLAKY_PREFIX = "flaky: "
 
 
 class Step(NamedTuple):
-    """One check's outcome: *details* shows what failed, *note* what did not block."""
+    """One check's outcome: *details* shows what failed, *note* adds diagnostic evidence."""
 
     label: str
     passed: bool
@@ -111,6 +112,13 @@ def _git(root: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
 
 def _run(command: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
     """Run *command* with its output and errors in order in ``stdout``."""
+    environment = {**os.environ, "NO_COLOR": "1"}
+    executable = Path(command[0])
+    virtualenv = executable.parent.parent
+    if executable.is_absolute() and (virtualenv / "pyvenv.cfg").is_file():
+        # Child commands resolved through PATH must use the checked environment too.
+        environment["VIRTUAL_ENV"] = str(virtualenv)
+        environment["PATH"] = str(executable.parent) + os.pathsep + environment.get("PATH", "")
     try:
         return subprocess.run(
             command,
@@ -120,7 +128,7 @@ def _run(command: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
             text=True,
             encoding="utf-8",
             errors="replace",
-            env={**os.environ, "NO_COLOR": "1"},
+            env=environment,
             check=False,
         )
     except OSError as exc:
@@ -159,11 +167,11 @@ def _command_step(
     return Step(label, False, seconds, _excerpt(result.stdout, keep))
 
 
-def _type_check_steps(checkout: Path, log: TextIO) -> list[Step]:
+def _type_check_steps(checkout: Path, log: TextIO, python: str) -> list[Step]:
     """Run mypy for every platform as the commit hook does; every error blocks."""
     start = time.monotonic()
     targets = commit_check.mypy_targets(checkout, [])
-    results = commit_check.check_types(checkout, targets, set(), set())
+    results = commit_check.check_types(checkout, targets, set(), set(), interpreter=python)
     seconds = time.monotonic() - start
     steps = []
     for result in results:
@@ -184,8 +192,8 @@ def _last_failed(checkout: Path) -> set[str]:
     return set(failed) if isinstance(failed, dict) else set()
 
 
-def _pytest_step(checkout: Path, log: TextIO) -> Step:
-    """Run the complete suite; tests that fail run once more alone, as CI does."""
+def _pytest_step(checkout: Path, log: TextIO, python: str) -> Step:
+    """Run the complete suite; retry failures only to help diagnose them."""
     from tests import cpu_pool
 
     def summary(line: str) -> bool:
@@ -193,7 +201,7 @@ def _pytest_step(checkout: Path, log: TextIO) -> Step:
 
     options = ["-rfE", "-q", "--no-header"]
     # The pool hands the run every core once the runs before it are done.
-    complete = [sys.executable, "-m", "pytest", "-n", str(cpu_pool.pool_size()), *options]
+    complete = [python, "-m", "pytest", "-n", str(cpu_pool.pool_size()), *options]
     print(
         "running the complete pytest suite (first waits for the test cores other runs "
         "hold; no output until done)...",
@@ -208,7 +216,7 @@ def _pytest_step(checkout: Path, log: TextIO) -> Step:
     if result.returncode != 1 or not failed:
         return Step("pytest", False, time.monotonic() - start, _excerpt(result.stdout, summary))
 
-    alone = [sys.executable, "-m", "pytest", "--last-failed", "--last-failed-no-failures"]
+    alone = [python, "-m", "pytest", "--last-failed", "--last-failed-no-failures"]
     alone += ["none", "-n", "0", *options]
     rerun_start = time.monotonic()
     rerun = _run(alone, checkout)
@@ -217,10 +225,13 @@ def _pytest_step(checkout: Path, log: TextIO) -> Step:
     flaky = sorted(failed - _last_failed(checkout)) if rerun.returncode in (0, 1) else []
     note = ""
     if flaky:
-        note = "failed under the parallel load, passed alone (not blocking):\n" + "\n".join(flaky)
-    if rerun.returncode == 0:
-        return Step("pytest", True, seconds, note=note)
-    return Step("pytest", False, seconds, _excerpt(rerun.stdout, summary), note)
+        note = "failed in the suite, passed on isolated retry (still blocking):\n" + "\n".join(
+            flaky
+        )
+    details = _excerpt(result.stdout, summary)
+    if rerun.returncode:
+        details += "\nIsolated retry:\n" + _excerpt(rerun.stdout, summary)
+    return Step("pytest", False, seconds, details, note)
 
 
 def _linux_pytest_step(checkout: Path, log: TextIO) -> Step:
@@ -291,8 +302,10 @@ def _linux_pytest_step(checkout: Path, log: TextIO) -> Step:
     ]
     note = ""
     if flaky:
-        note = "failed under the parallel load, passed alone (not blocking):\n" + "\n".join(flaky)
-    if result.returncode == 0:
+        note = "failed in the suite, passed on isolated retry (still blocking):\n" + "\n".join(
+            flaky
+        )
+    if result.returncode == 0 and not flaky:
         return Step(label, True, seconds, note=note)
 
     def summary(line: str) -> bool:
@@ -327,27 +340,42 @@ def run_checks(checkout: Path, log: TextIO) -> list[Step]:
             verdict = "PASS" if step.passed else "FAIL"
             print(f"  {step.label:<14}{verdict}  {step.seconds:6.1f}s", flush=True)
 
-    python = sys.executable
-    # The suite and the WebUI checks run on this interpreter: its SQLite decides the
-    # databases' journal mode, which must be the one installations run.
+    # The isolated environment uses this base interpreter's SQLite, which must
+    # match installations. Its Python packages come only from the checked locks.
     problem = interpreter_problem(checkout)
     record(Step("sqlite", problem is None, 0.0, problem or ""))
     print("preparing the checkout (copies dependencies, no output until done)...", flush=True)
     seed_type_check_cache(_worktrees.context.project_root, checkout)
     seed_native_resources(_worktrees.context.project_root, checkout)
-    engine = _command_step("search engine", [python, "-m", "cli.search_runtime"], checkout, log)
-    if not engine.passed:
-        record(engine)
+    environment = checkout / ".venv"
+    dependencies = _command_step(
+        "backend deps",
+        [
+            sys.executable,
+            "scripts/test_dependencies.py",
+            "install",
+            "--environment",
+            str(environment),
+        ],
+        checkout,
+        log,
+    )
+    record(dependencies)
+    python = str(environment_python(environment))
     packages = _provide_webui_packages(checkout, log)
     if packages is not None:
         record(packages)
 
-    ruff = [python, "-m", "ruff"]
-    record(_command_step("ruff format", [*ruff, "format", "--check", "."], checkout, log))
-    lint = [*ruff, "check", "--output-format", "concise", "."]
-    record(_command_step("ruff check", lint, checkout, log))
-    record(*_type_check_steps(checkout, log))
-    record(_pytest_step(checkout, log))
+    if dependencies.passed:
+        engine = _command_step("search engine", [python, "-m", "cli.search_runtime"], checkout, log)
+        if not engine.passed:
+            record(engine)
+        ruff = [python, "-m", "ruff"]
+        record(_command_step("ruff format", [*ruff, "format", "--check", "."], checkout, log))
+        lint = [*ruff, "check", "--output-format", "concise", "."]
+        record(_command_step("ruff check", lint, checkout, log))
+        record(*_type_check_steps(checkout, log, python))
+        record(_pytest_step(checkout, log, python))
     with ThreadPoolExecutor(max_workers=1) as background:
         linux: Future[Step] | None = None
         # The Linux step logs into its own buffer, copied to the log once it is done.

@@ -20,15 +20,11 @@ The WebUI must be built first (`npm ci --prefix webui && npm run build --prefix 
   SHA256. The builder removes headers, Tcl/Tk, tests and every link, and keeps one
   interpreter, `runtime/bin/python3`.
 - `requirements-server-linux-<arch>.lock` lock the runtime dependencies. All of them install
-  from wheels. Regenerate both from the repository root with the declared `uv==0.12.11`,
-  seeding each from the Windows server lock so that every platform runs the same versions:
-
-  ```bash
-  for arch in aarch64 x86_64; do
-    cp scripts/windows/requirements-server.lock scripts/linux/requirements-server-linux-$arch.lock
-    python -m uv pip compile pyproject.toml --extra server --extra cli --extra application --python-version 3.14 --python-platform $arch-unknown-linux-gnu --generate-hashes --no-emit-package vbot --output-file scripts/linux/requirements-server-linux-$arch.lock
-  done
-  ```
+  from wheels. Regenerate the package locks and fixed test overlays together from the repository
+  root with `python scripts/test_dependencies.py refresh` (requires the declared uv version),
+  then run `python scripts/test_dependencies.py check`. The helper constrains common packages
+  to the Windows server pins and records input fingerprints; bare uv compile commands omit
+  those fingerprints and fail CI/push freshness checks.
 
 - `vbot` is the stable bootstrap. The installation keeps a copy at its root, and the
   `vbot` command on the `PATH` links to it. It runs the CLI of the active version, or with

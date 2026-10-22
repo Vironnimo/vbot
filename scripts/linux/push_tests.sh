@@ -2,14 +2,11 @@
 # The complete backend suite on Linux for scripts/push.py, run inside WSL on the
 # checked commit, which push.py has unpacked into "$1".
 #
-# As in CI: the Python runtime the Linux packages bundle
-# (scripts/linux/python.lock.json) with the dev extra installed editable, the
-# pinned search engine and the token estimation encodings provisioned first,
-# and failed tests run once more alone; those that pass then are printed as
-# "flaky: <node id>" and do not fail the run. Everything lasting lives in
-# ~/.cache/vbot-push: uv (the version pyproject.toml pins), the runtime, one
-# environment per pyproject.toml and runtime, the search engine and the
-# encodings. push.py holds that directory's lock for the whole run.
+# As in CI: the packaged Python runtime and the complete shipped server dependency
+# lock plus its fixed test-only overlay. Failed tests run once more for diagnosis;
+# the original failure always keeps the run failed. The environment cache key
+# includes both dependency locks and the base interpreter. push.py holds the cache
+# lock throughout setup and execution.
 set -u
 
 checkout=$1
@@ -23,20 +20,10 @@ fail() {
     exit 2
 }
 
-uv_version=$(grep -o '"uv==[0-9.]*"' pyproject.toml | head -1 | tr -d '"' | cut -d= -f3)
-[ -n "$uv_version" ] || fail "the uv version pin was not found"
 read -r runtime_url runtime_sha256 < <(python3 -c 'import json, platform
 spec = json.load(open("scripts/linux/python.lock.json"))["runtimes"]["linux-" + platform.machine()]
 print(spec["url"], spec["sha256"])')
 [ -n "${runtime_sha256:-}" ] || fail "no locked Python runtime for $(uname -m)"
-
-uv=$cache/uv-$uv_version/bin/uv
-if [ ! -x "$uv" ]; then
-    rm -rf "$cache/uv-$uv_version"
-    python3 -m venv "$cache/uv-$uv_version" \
-        && "$cache/uv-$uv_version/bin/pip" install -q "uv==$uv_version" \
-        || fail "uv $uv_version could not be installed (needs python3 with venv)"
-fi
 
 runtime=$cache/runtime-$runtime_sha256
 if [ ! -x "$runtime/bin/python3" ]; then
@@ -50,18 +37,17 @@ if [ ! -x "$runtime/bin/python3" ]; then
     rm -rf "$runtime.partial" "$archive"
 fi
 
-key=$( (cat pyproject.toml; echo "$runtime_sha256") | sha256sum | cut -c1-16)
+key=$("$runtime/bin/python3" scripts/test_dependencies.py key) \
+    || fail "dependency locks are stale or inconsistent"
 venv=$cache/venv-$key
 python=$venv/bin/python
 if [ ! -x "$python" ]; then
     find "$cache" -maxdepth 1 -name 'venv-*' -exec rm -rf {} +
-    "$uv" venv -q -p "$runtime/bin/python3" "$venv" \
-        && VIRTUAL_ENV=$venv "$uv" pip install -q -e ".[dev]" \
-        || { rm -rf "$venv"; fail "the test environment could not be created"; }
-else
-    # The environment outlives the checkout; point its editable install here.
-    VIRTUAL_ENV=$venv "$uv" pip install -q --no-deps -e . || fail "vbot could not be installed"
 fi
+"$runtime/bin/python3" scripts/test_dependencies.py install --environment "$venv" \
+    || fail "the locked test environment could not be prepared"
+export VIRTUAL_ENV="$venv"
+export PATH="$venv/bin:$PATH"
 
 native=resources/native
 if [ -d "$cache/native" ]; then mkdir -p "$native" && cp -a "$cache/native/." "$native/"; fi
@@ -96,4 +82,4 @@ still=$(last_failed)
 while read -r test; do
     if [ "$rerun" -eq 0 ] || ! grep -qxF -- "$test" <<<"$still"; then echo "flaky: $test"; fi
 done <<<"$failed"
-exit "$rerun"
+exit "$status"

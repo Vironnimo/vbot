@@ -4,12 +4,11 @@ These files lock the immutable Python 3.14 x86-64 Windows runtimes. Regenerate t
 repository root with the declared `uv==0.12.11` dependency:
 
 ```powershell
-python -m uv pip compile pyproject.toml --extra server --extra cli --extra application --python-version 3.14 --python-platform x86_64-pc-windows-msvc --generate-hashes --no-emit-package vbot --output-file scripts/windows/requirements-server.lock
-python -m uv pip compile pyproject.toml --extra server --extra cli --extra application --extra desktop --python-version 3.14 --python-platform x86_64-pc-windows-msvc --generate-hashes --no-emit-package vbot --output-file scripts/windows/requirements-server-desktop.lock
-python -m uv pip compile pyproject.toml --extra cli --extra application --extra desktop --python-version 3.14 --python-platform x86_64-pc-windows-msvc --generate-hashes --no-emit-package vbot --output-file scripts/windows/requirements-desktop-client.lock
+python scripts/test_dependencies.py refresh
+python scripts/test_dependencies.py check
 ```
 
-Review and commit all lock changes with the corresponding `pyproject.toml` dependency change.
+The helper regenerates all five runtime locks and three test overlays, retains existing versions where possible, and records the dependency-input fingerprints that CI and push require. It constrains common runtime packages to the Windows server pins and Windows test packages to all three shapes. Review and commit the locks with the corresponding `pyproject.toml` change; bare uv compile commands omit the required fingerprints.
 The vBot source is copied separately by the package builder and is deliberately omitted here.
 The builder requires wheels for every locked dependency except the Desktop dependency
 `proxy-tools==0.1.0`, which is published only as a pure-Python source distribution. Its build
