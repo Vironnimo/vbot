@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Container
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -69,6 +69,7 @@ class Shell:
         secrets: AgentSecrets | None = None,
         analyzer: FakeAnalyzer | None = None,
         permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED,
+        credential_names: Container[str] = frozenset(),
     ) -> None:
         self.commands = commands
         self.registry = ToolRegistry()
@@ -78,6 +79,7 @@ class Shell:
             self.registry,
             commands.manager,
             credential_resolver=lambda name: f"value-of-{name}",
+            credential_names=lambda: credential_names,
             update_handoffs=update_handoffs,
             projects=projects,  # type: ignore[arg-type]
             scratch_areas=scratch_areas,

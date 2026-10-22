@@ -18,6 +18,9 @@ from core.tools.terminal_manager import TerminalManager, TerminalRenderHost
 from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_failure_for_exception
 from tests.core.tools.terminal_manager_helpers import TEST_START_WAIT_SECONDS, AdapterFactory
 
+# The credentials vBot knows; a Terminal under Permission Rules starts without them.
+KNOWN_CREDENTIALS = frozenset({"OPENAI_API_KEY"})
+
 
 @pytest_asyncio.fixture
 async def manager(tmp_path: Path) -> AsyncIterator[tuple[TerminalManager, AdapterFactory]]:
@@ -34,6 +37,7 @@ async def manager(tmp_path: Path) -> AsyncIterator[tuple[TerminalManager, Adapte
         idle_seconds=0.06,
         # A fake program that prints nothing ends start's wait for its first screen.
         start_wait_seconds=TEST_START_WAIT_SECONDS,
+        credential_names=lambda: KNOWN_CREDENTIALS,
     )
     manager.start()
     try:

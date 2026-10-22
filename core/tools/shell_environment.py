@@ -30,7 +30,10 @@ One owner builds it from explicit layers, each applied over the previous one:
 A Session with Permission Rules gets a confined environment instead of layer 7:
 without the instance variables of layer 2, the Run identity and this server's
 own ``vbot`` command on ``PATH`` (``VBOT_SCRATCH_DIR`` stays), so a command
-cannot find or address the vBot server through its environment.
+cannot find or address the vBot server through its environment; and without
+the credentials vBot knows (``Runtime.environment_credential_names``) that the
+login base carries, such as a Provider key the server was started with, so a
+command gets a credential only as a granted one (layer 5).
 
 A command's environment comes in two parts (``CommandEnvironment``): layers 1
 to 4 are its shell's start environment, the same for every call until the login
@@ -47,7 +50,7 @@ from __future__ import annotations
 
 import os
 import sys
-from collections.abc import Mapping
+from collections.abc import Container, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -137,14 +140,20 @@ class RunIdentity:
 
 
 def terminal_environment(
-    overlay: Mapping[str, str] | None = None, *, confined: bool = False
+    overlay: Mapping[str, str] | None = None,
+    *,
+    confined: bool = False,
+    credential_names: Container[str] = frozenset(),
 ) -> dict[str, str]:
     """Environment of an interactive Terminal Session, with *overlay* applied last.
 
-    *confined* (a Session with Permission Rules) as for ``command_environment``.
+    *confined* and *credential_names* (a Session with Permission Rules) as for
+    ``command_environment``.
     """
     environment = _instance_environment()
     _apply(environment, {"TERM": _TERMINAL_TERM})
+    if confined:
+        _withhold(environment, credential_names)
     _apply(environment, overlay or {})
     if confined:
         _confine(environment)
@@ -190,16 +199,22 @@ def command_environment(
     credentials: Mapping[str, str] | None = None,
     scratch: ScratchFolder | None = None,
     confined: bool = False,
+    credential_names: Container[str] = frozenset(),
 ) -> CommandEnvironment:
     """Environment of one shell command run by an Agent.
 
     *confined* (a Session with Permission Rules) leaves out what exists only to
     reach or control the vBot server: the instance variables, the Run identity
     and this server's own ``vbot`` command on ``PATH``; ``VBOT_SCRATCH_DIR``
-    stays. *run* is None only for a confined command.
+    stays. It also withholds the login base's variables named in
+    *credential_names*, the names vBot knows as credentials; *variables* and
+    *credentials* apply after that, so a granted credential still arrives.
+    *run* is None only for a confined command.
     """
     base = _command_base()
     environment = dict(base)
+    if confined:
+        _withhold(environment, credential_names)
     _apply(environment, variables or {})
     _apply(environment, credentials or {})
     if scratch is not None:
@@ -221,22 +236,31 @@ def command_environment(
     return CommandEnvironment(base, changes)
 
 
-def unattended_command_environment(*, confined: bool = False) -> CommandEnvironment:
+def unattended_command_environment(
+    *, confined: bool = False, credential_names: Container[str] = frozenset()
+) -> CommandEnvironment:
     """Environment of a command vBot runs outside a Run, such as a Cron watch check.
 
     Layers 1 to 4: no Run identity, Session scratch, variables or credentials.
-    *confined* (a job with a permission ceiling) as for ``command_environment``.
+    *confined* and *credential_names* (a job with a permission ceiling) as for
+    ``command_environment``.
     """
     base = _command_base()
     if not confined:
         return CommandEnvironment(base, {})
     environment = dict(base)
+    _withhold(environment, credential_names)
     _confine(environment)
     changes: dict[str, str | None] = {
         name: value for name, value in environment.items() if base.get(name) != value
     }
     changes.update({name: None for name in base if name not in environment})
     return CommandEnvironment(base, changes)
+
+
+def _withhold(environment: dict[str, str], credential_names: Container[str]) -> None:
+    """Remove the credentials vBot knows from a confined environment's login base."""
+    _remove(environment, tuple(name for name in environment if name in credential_names))
 
 
 def _confine(environment: dict[str, str]) -> None:

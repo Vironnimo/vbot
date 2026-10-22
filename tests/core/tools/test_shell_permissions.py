@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
+import core.tools.shell_environment as shell_environment
 from core.permissions.commands.commands import UnresolvedElement
 from core.tools.model_names import SHELL_MODEL_NAME
 from core.tools.update_handoff import UpdateHandoffs
@@ -154,11 +155,15 @@ async def test_restricted_calls_the_rules_refuse_launch_nothing(
 
 
 @pytest.mark.asyncio
-async def test_a_restricted_shell_starts_only_in_its_area_and_without_vbot_control_variables(
+async def test_a_restricted_shell_starts_only_in_its_area_without_vbot_control_or_credentials(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("VBOT_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("VBOT_SERVER_PORT", str(PORT))
+    # The server's environment carries credentials vBot knows and a variable of the user's.
+    login = shell_environment._login_environment
+    server = {"OPENAI_API_KEY": "sk-server", "API_TOKEN": "server-token", "FLAVOR": "release"}
+    monkeypatch.setattr(shell_environment, "_login_environment", lambda: {**login(), **server})
     outside = tmp_path.parent / f"{tmp_path.name}-outside"
     outside.mkdir()
     handoffs = UpdateHandoffs(tmp_path / "data")
@@ -168,17 +173,27 @@ async def test_a_restricted_shell_starts_only_in_its_area_and_without_vbot_contr
         analyzer=analyzer,
         permissions=restricted(tmp_path),
         update_handoffs=handoffs,
+        credential_names=frozenset({"OPENAI_API_KEY", "API_TOKEN"}),
     ) as shell:
         refused = await shell.call({"command": "build", "workdir": str(outside)})
-        call = shell.call({"command": "build", "env": {"MODE": "ci"}})
+        # Not granted, so not inherited either: the call says so instead of running without it.
+        ungranted = await shell.returned(
+            shell.call({"command": "build", "env_keys": ["OPENAI_API_KEY"]})
+        )
+        call = shell.call({"command": "build", "env": {"MODE": "ci"}, "env_keys": ["API_TOKEN"]})
         (await shell.started()).exit(0)
         assert data(await shell.returned(call))["status"] == "exited"
 
     assert refused["error"]["code"] == "permission_denied"
     assert "working in" in refused["error"]["message"]
+    assert ungranted["error"]["code"] == "invalid_arguments"
+    assert len(shell.launcher.processes) == 1
     command, env = launched(shell.launcher)
-    assert (command, env["MODE"]) == ("build", "ci")
+    assert (command, env["MODE"], env["FLAVOR"]) == ("build", "ci", "release")
+    # A granted credential arrives as resolved for the call; the other one not at all.
+    assert env["API_TOKEN"] == "value-of-API_TOKEN"
     assert not {
+        "OPENAI_API_KEY",
         "VBOT_DATA_DIR",
         "VBOT_SERVER_PORT",
         "VBOT_RUN_AGENT_ID",
@@ -188,7 +203,7 @@ async def test_a_restricted_shell_starts_only_in_its_area_and_without_vbot_contr
     } & set(env)
     # The analysis expanded the call's own variables, in the same confined environment.
     assert analyzer.lines[-1][3]["MODE"] == "ci"
-    assert "VBOT_DATA_DIR" not in analyzer.lines[-1][3]
+    assert not {"VBOT_DATA_DIR", "OPENAI_API_KEY"} & set(analyzer.lines[-1][3])
 
 
 @pytest.mark.asyncio

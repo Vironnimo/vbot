@@ -11,6 +11,7 @@ from collections.abc import (
     Awaitable,
     Callable,
     Collection,
+    Container,
     Iterable,
     Mapping,
     Sequence,
@@ -18,6 +19,7 @@ from collections.abc import (
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import timedelta
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -136,12 +138,15 @@ class TerminalManager:
         process_observer: ProcessTreeTracker | None = None,
         session_view: SessionViewResolver | None = None,
         reserved_call_names: Callable[[], Iterable[str]] | None = None,
+        credential_names: Callable[[], Container[str]] = frozenset,
     ) -> None:
         """*process_observer* watches a program's process tree for work its output
         does not show; without it, only output and declared signals show work.
         *session_view* names the conversation (root Session and title) an Agent
         Session belongs to, so its Terminals show together; *reserved_call_names*
-        are names a Terminal's call name must not take, such as Agent names."""
+        are names a Terminal's call name must not take, such as Agent names.
+        *credential_names* are the names vBot knows as credentials, which the
+        environment of a Terminal under Permission Rules withholds."""
         if scrollback_lines < 1:
             raise ValueError("Terminal scrollback cap must be positive")
         if finished_session_ttl <= timedelta(0):
@@ -191,7 +196,9 @@ class TerminalManager:
             scrollback_lines=scrollback_lines,
             process_observer=process_observer,
             validate_pin=self._catalog.validate_pin,
+            credential_names=credential_names,
         )
+        self._credential_names = credential_names
         self._services = TerminalSessionServices(
             trigger_service=trigger_service,
             reader_executor=self._reader_executor,
@@ -333,6 +340,14 @@ class TerminalManager:
             raise failure
 
     # Starting terminals
+
+    async def confined_environment(self, overlay: Mapping[str, str] | None) -> dict[str, str]:
+        """The environment a Terminal under Permission Rules starts with, before its
+        shell integration: what a permission check expands variables in."""
+        credential_names = self._credential_names()
+        return await asyncio.to_thread(
+            partial(terminal_environment, overlay, confined=True, credential_names=credential_names)
+        )
 
     async def spawn(
         self,

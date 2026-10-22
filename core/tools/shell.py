@@ -6,7 +6,7 @@ import asyncio
 import contextlib
 import shutil
 import sys
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Container, Coroutine
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -96,6 +96,8 @@ from ._shell_definition import (
 _LOGGER = get_logger("tools.shell")
 
 CredentialResolver = Callable[[str], str]
+# The environment names vBot knows as credentials (``Runtime.environment_credential_names``).
+CredentialNames = Callable[[], Container[str]]
 # On Windows a command's processes have a hidden console whose input nothing
 # writes: a program that reads it directly instead of stdin (Python's getpass,
 # $Host.UI.RawUI.ReadKey()) waits silently until stopped instead of failing.
@@ -203,6 +205,7 @@ class ShellTool:
         command_manager: CommandManager,
         *,
         credential_resolver: CredentialResolver | None = None,
+        credential_names: CredentialNames | None = None,
         update_handoffs: UpdateHandoffs | None = None,
         projects: ProjectStore | None = None,
         scratch_areas: ScratchAreas | None = None,
@@ -212,6 +215,7 @@ class ShellTool:
         self._commands = command_manager
         self._checker = command_checker
         self._resolve_credential = credential_resolver or (lambda _name: "")
+        self._credential_names: CredentialNames = credential_names or frozenset
         self._secrets = secrets
         self._update_handoffs = update_handoffs
         self._projects = projects
@@ -222,11 +226,15 @@ class ShellTool:
     async def __call__(self, context: ToolContext, arguments: JsonObject) -> JsonObject:
         names = named_tools(context)
         secrets = self._secrets
+        confined = context.permissions.restricted
+        # A confined command gets a credential vBot knows only as a granted one.
+        withheld = self._credential_names() if confined else frozenset[str]()
         call = _parse_call(
             context,
             arguments,
             self._projects,
             terminal_available=names(TERMINAL_TOOL_NAME),
+            withheld=withheld,
             secret_names=(
                 secrets.environment_names(
                     SessionAddress(context.project_id, context.agent_id, context.session_id),
@@ -237,10 +245,9 @@ class ShellTool:
             ),
         )
         scratch = await self._scratch(context)
-        confined = context.permissions.restricted
         if confined:
             # Before any Agent Secret is used and before the handoff token exists.
-            await self._check_permissions(context, call, scratch)
+            await self._check_permissions(context, call, scratch, withheld)
         try:
             secret_environment = await self._secret_environment(context, call)
         except SecretUseError as error:
@@ -249,7 +256,7 @@ class ShellTool:
         handoff = None if confined else _issue_update_handoff(self._update_handoffs, context)
         try:
             command_id = await self._start(
-                context, call, handoff, names, secret_environment, scratch
+                context, call, handoff, names, secret_environment, scratch, withheld
             )
         except _NotStartedError as failure:
             if handoff is not None:
@@ -279,7 +286,11 @@ class ShellTool:
         return None
 
     async def _check_permissions(
-        self, context: ToolContext, call: _ShellCall, scratch: ScratchFolder | None
+        self,
+        context: ToolContext,
+        call: _ShellCall,
+        scratch: ScratchFolder | None,
+        withheld: Container[str],
     ) -> None:
         """Refuse the call before launch when the Session's Permission Rules refuse it."""
         boundary = context.permissions
@@ -299,6 +310,7 @@ class ShellTool:
                 variables=call.variables,
                 scratch=scratch,
                 confined=True,
+                credential_names=withheld,
             )
         )
         refusal = await self._checker.check_line(
@@ -395,6 +407,7 @@ class ShellTool:
         names: ToolNames,
         secret_environment: dict[str, str],
         scratch: ScratchFolder | None,
+        withheld: Container[str],
     ) -> str:
         credentials = {name: self._resolve_credential(name) for name in call.credential_names}
         if self._secrets is not None:
@@ -415,6 +428,7 @@ class ShellTool:
                 credentials=credentials,
                 scratch=scratch,
                 confined=context.permissions.restricted,
+                credential_names=withheld,
             )
             # PATH lookup probes the filesystem and uses this call's fresh environment.
             return _shell_start(call, environment)
@@ -708,6 +722,7 @@ def register_shell_tool(
     command_manager: CommandManager,
     *,
     credential_resolver: CredentialResolver | None = None,
+    credential_names: CredentialNames | None = None,
     prompt_blocks: ToolPromptBlockRegistry | None = None,
     update_handoffs: UpdateHandoffs | None = None,
     projects: ProjectStore | None = None,
@@ -719,11 +734,13 @@ def register_shell_tool(
 
     *projects* resolves ``workdir: "project:<project-id>"``; without it that form fails.
     *command_checker* checks a restricted Session's commands before launch;
-    without it such a Session cannot run commands.
+    without it such a Session cannot run commands. *credential_names* are the
+    names a restricted Session's commands do not inherit (``shell_environment``).
     """
     tool = ShellTool(
         command_manager,
         credential_resolver=credential_resolver,
+        credential_names=credential_names,
         update_handoffs=update_handoffs,
         projects=projects,
         scratch_areas=scratch_areas,

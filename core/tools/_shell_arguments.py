@@ -17,7 +17,7 @@ import json
 import re
 import shlex
 import sys
-from collections.abc import Mapping
+from collections.abc import Container, Mapping
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path, PurePath
@@ -593,8 +593,10 @@ def _parse_call(
     *,
     terminal_available: bool,
     secret_names: frozenset[str] = frozenset(),
+    withheld: Container[str] = frozenset(),
 ) -> _ShellCall:
-    """*secret_names* are the names ``env_keys`` accepts for the caller's Agent Secrets."""
+    """*secret_names* are the names ``env_keys`` accepts for the caller's Agent Secrets;
+    *withheld* are the credentials a confined command does not inherit."""
     notes: list[str] = []
     command = arguments.get("command")
     if not isinstance(command, str) or not command.strip():
@@ -661,7 +663,7 @@ def _parse_call(
     ]
     ungranted = [name for name in credential_names if name not in granted]
     if ungranted:
-        unknown = [name for name in ungranted if inherited_value(name) is None]
+        unknown = [name for name in ungranted if name in withheld or inherited_value(name) is None]
         if unknown:
             raise ToolContractError(unknown_env_keys_message(unknown, granted))
         notes.append(inherited_env_keys_note(ungranted))

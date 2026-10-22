@@ -7,7 +7,6 @@ import contextlib
 import json
 from collections.abc import Awaitable, Mapping, Sequence
 from copy import deepcopy
-from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -386,7 +385,7 @@ async def _handle_start(
             overlay = scratch_environment(folder)
     scope = permission_scope(context.permissions)
     if scope is not None:
-        confined = await asyncio.to_thread(partial(terminal_environment, overlay, confined=True))
+        confined = await terminal_manager.confined_environment(overlay)
         refused = await check_start(
             command_checker, context.permissions, argv, cwd=workdir, env=confined
         )
