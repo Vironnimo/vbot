@@ -516,6 +516,17 @@ async def test_update_queued_item_replaces_executor_and_display_content() -> Non
         manager.list_queued("coder", "session-one", project_id=None)[0].display_content == "updated"
     )
     assert manager.list_queued("coder", "session-one", project_id=None)[0].editable is False
+    assert not manager.update_queued(
+        "coder",
+        "session-one",
+        item.item_id,
+        original_execute,
+        "stale edit",
+        project_id=None,
+        editable=True,
+    )
+    assert item.display_content == "updated"
+    assert item.editable is False
     assert (
         manager.update_queued(
             "coder", "session-one", "missing", updated_execute, "updated", project_id=None
