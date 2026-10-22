@@ -10,6 +10,7 @@ import respx
 
 from core.chat.messages import ChatMessage
 from core.chat.wire_shaping import note_request_messages
+from core.providers._responses_wire import REASONING_ENCRYPTED_CONTENT_INCLUDE
 from core.providers.adapter import (
     IMAGE_WIRE_MEDIA_TYPES,
     TERMINAL_OUTCOME_STOP,
@@ -21,7 +22,6 @@ from core.providers.github_copilot import (
     MESSAGES_ENDPOINT,
     RESPONSES_ENDPOINT,
 )
-from core.providers.github_copilot_responses import REASONING_ENCRYPTED_CONTENT_INCLUDE
 from core.providers.reasoning import REASONING_REPLAY_FULL_HISTORY
 from tests.core.providers.github_copilot_test_support import (
     API_KEY,
