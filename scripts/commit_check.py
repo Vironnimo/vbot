@@ -31,8 +31,9 @@ change to the packages or to the lint or format configuration lints and
 format-checks every source.
 
 Staged domain maps are checked with ``scripts/domain_maps.py``: non-ASCII prose and
-References entries that name no file block; a root map or ``.vorch/PROJECT.md``
-above its size budget that the change makes larger is reported without blocking.
+References entries that name no file block; a root map, ``.vorch/PROJECT.md`` or
+``.vorch/GLOSSARY.md`` above its size budget that the change makes larger is
+reported without blocking.
 """
 
 from __future__ import annotations

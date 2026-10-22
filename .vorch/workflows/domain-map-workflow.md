@@ -10,9 +10,9 @@ Maps are factual working notes for agents, not architecture documentation or gen
 
 ## Size budget
 
-A root map holds at most 16,000 characters (about 4,000 tokens); `.vorch/PROJECT.md`, which every agent reads in every session, at most 30,000. `python scripts/domain_maps.py` measures them; the commit hook warns when a staged file above its budget grows.
+A root map holds at most 16,000 characters (about 4,000 tokens); `.vorch/PROJECT.md`, which every agent reads in every session, at most 30,000; `.vorch/GLOSSARY.md`, also read in every session, at most 12,000. `python scripts/domain_maps.py` measures them; the commit hook warns when a staged file above its budget grows.
 
-- When your change would leave a file above budget and larger than before, move material out in the same change so the file ends no larger than it started, beginning with the section you touched: from a root map, task-gated material into a supplementary file of that domain; from `.vorch/PROJECT.md`, facts whose use is confined to one domain into that domain's map.
+- When your change would leave a file above budget and larger than before, move material out in the same change so the file ends no larger than it started, beginning with the section you touched: from a root map, task-gated material into a supplementary file of that domain; from `.vorch/PROJECT.md`, facts whose use is confined to one domain into that domain's map; from `.vorch/GLOSSARY.md`, mechanics into the owning maps and terms only one domain uses into that map's Terms.
 - Content that every agent of the domain (for PROJECT.md: every agent) needs stays, even above budget. The budget tells you to look for task-gated material; it is never a reason to split always-needed content, which only forces an extra read.
 
 ## Every map change
@@ -81,9 +81,10 @@ Read these only when your task matches - not by default.
 
 ## Terms
 
-A root map's `## Terms` section defines vocabulary needed only within that domain; shared vocabulary lives in `.vorch/GLOSSARY.md` (`AGENTS.md` -> Terminology). Omit the section when the domain has no terms of its own.
+A root map's `## Terms` section defines vocabulary needed only within that domain; shared vocabulary lives in `.vorch/GLOSSARY.md`. What belongs where and what an entry may hold: `AGENTS.md` -> Terminology. Omit the section when the domain has no terms of its own.
 
 - One `### <Term>` per entry with a definition of one or two sentences, plus a distinction from nearby terms only where confusion is likely.
+- An entry defines meaning. When you find yourself writing how the concept is stored, which states it has, or what code implements it, put that into the owning section (Data Model, Interfaces, a supplementary file) and let the entry point there.
 - Place it after the Overview, where useful opened by one line naming the relevant shared terms ("Core terms (Provider, Model) live in `.vorch/GLOSSARY.md`").
 - Refer to a term in another map plainly ("see `models.md`") and to a shared term as "GLOSSARY -> <Term>". When a term moves, remove its old definition and repair the pointers to it.
 

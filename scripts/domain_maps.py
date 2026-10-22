@@ -3,8 +3,9 @@
 
 A root map is the always-read layer of its domain: every agent working in the
 domain reads all of it, so its size is a budget (``ROOT_BUDGET``) that routine
-updates must not keep raising. ``.vorch/PROJECT.md``, which every agent reads in
-every session, has its own budget (``PROJECT_BUDGET``). The rules behind these
+updates must not keep raising. ``.vorch/PROJECT.md`` and ``.vorch/GLOSSARY.md``,
+which every agent reads in every session, have their own budgets
+(``PROJECT_BUDGET``, ``GLOSSARY_BUDGET``). The rules behind these
 checks live in ``.vorch/workflows/domain-map-workflow.md``.
 
 ``python scripts/domain_maps.py`` prints the corpus report a domain-map audit
@@ -29,6 +30,9 @@ ROOT_BUDGET = 16_000
 """Characters a root map may hold (about 4,000 tokens)."""
 PROJECT_BUDGET = 30_000
 """Characters ``INDEX_FILE`` may hold (about 7,500 tokens)."""
+GLOSSARY_FILE = ".vorch/GLOSSARY.md"
+GLOSSARY_BUDGET = 12_000
+"""Characters ``GLOSSARY_FILE`` may hold (about 3,000 tokens)."""
 AUDIT_THRESHOLD = 5
 """Root maps over budget at which the report calls for a corpus audit."""
 
@@ -57,14 +61,16 @@ def is_root_map(path: str) -> bool:
 
 
 def is_checked(path: str) -> bool:
-    """Return whether the commit check looks at *path*: a map or ``INDEX_FILE``."""
-    return is_map(path) or path == INDEX_FILE
+    """Return whether the commit check looks at *path*: a map, ``INDEX_FILE`` or the glossary."""
+    return is_map(path) or path in (INDEX_FILE, GLOSSARY_FILE)
 
 
 def budget_for(path: str) -> int | None:
     """Return the size budget of an always-read file, or None for any other file."""
     if path == INDEX_FILE:
         return PROJECT_BUDGET
+    if path == GLOSSARY_FILE:
+        return GLOSSARY_BUDGET
     return ROOT_BUDGET if is_root_map(path) else None
 
 
@@ -161,11 +167,15 @@ def staged_findings(root: Path, staged: Iterable[str]) -> list[Finding]:
         if budget is not None and len(text) > budget:
             before = _committed_size(root, path)
             if len(text) > before:
-                remedy = (
-                    "move facts whose use is confined to one domain into that domain's map"
-                    if path == INDEX_FILE
-                    else "move task-gated material of this domain into a supplementary file"
-                )
+                if path == INDEX_FILE:
+                    remedy = "move facts whose use is confined to one domain into that domain's map"
+                elif path == GLOSSARY_FILE:
+                    remedy = (
+                        "move mechanics into the owning maps and terms only one domain uses "
+                        "into that map's Terms"
+                    )
+                else:
+                    remedy = "move task-gated material of this domain into a supplementary file"
                 findings.append(
                     Finding(
                         path,
@@ -187,6 +197,8 @@ class Report:
     findings: list[Finding]
     project_size: int
     """Characters of ``INDEX_FILE``."""
+    glossary_size: int
+    """Characters of ``GLOSSARY_FILE``."""
 
 
 def corpus_report(root: Path) -> Report:
@@ -236,9 +248,14 @@ def corpus_report(root: Path) -> Report:
         for path in sorted(indexed - set(roots))
     )
 
+    glossary_text = _read(root, GLOSSARY_FILE) if (root / GLOSSARY_FILE).is_file() else ""
     sizes = dict(sorted(((path, len(texts[path])) for path in roots), key=lambda item: -item[1]))
     return Report(
-        sizes, {path: len(texts[path]) for path in supplementary}, findings, len(index_text)
+        sizes,
+        {path: len(texts[path]) for path in supplementary},
+        findings,
+        len(index_text),
+        len(glossary_text),
     )
 
 
@@ -257,6 +274,8 @@ def format_report(report: Report) -> str:
         f"{sum(report.supplementary.values())} characters.",
         f"{INDEX_FILE}: {report.project_size} characters (budget {PROJECT_BUDGET})"
         + ("  OVER" if report.project_size > PROJECT_BUDGET else ""),
+        f"{GLOSSARY_FILE}: {report.glossary_size} characters (budget {GLOSSARY_BUDGET})"
+        + ("  OVER" if report.glossary_size > GLOSSARY_BUDGET else ""),
     ]
     if len(over) >= AUDIT_THRESHOLD:
         lines.append(

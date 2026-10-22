@@ -348,6 +348,7 @@ MAPS = "lib/maps"
 
 MAP = f"{MAPS}/map.md"
 PROJECT = "lib/PROJECT.md"
+GLOSSARY = "lib/GLOSSARY.md"
 
 
 @pytest.mark.parametrize(
@@ -359,6 +360,7 @@ PROJECT = "lib/PROJECT.md"
         (MAP, "# Map\n", "# Map\n" + "x" * 80 + "\n", False, True),
         (MAP, "# Map\n" + "x" * 90 + "\n", "# Map\n" + "x" * 80 + "\n", False, False),
         (PROJECT, "# Project\n", "# Project\n" + "x" * 80 + "\n", False, True),
+        (GLOSSARY, "# Glossary\n", "# Glossary\n" + "x" * 80 + "\n", False, True),
     ],
     ids=[
         "literal in code span",
@@ -367,6 +369,7 @@ PROJECT = "lib/PROJECT.md"
         "grows over budget",
         "shrinks",
         "project grows over budget",
+        "glossary grows over budget",
     ],
 )
 def test_staged_domain_maps_are_checked(
@@ -383,6 +386,8 @@ def test_staged_domain_maps_are_checked(
     monkeypatch.setattr(commit_check.domain_maps, "INDEX_FILE", PROJECT)
     monkeypatch.setattr(commit_check.domain_maps, "ROOT_BUDGET", 60)
     monkeypatch.setattr(commit_check.domain_maps, "PROJECT_BUDGET", 60)
+    monkeypatch.setattr(commit_check.domain_maps, "GLOSSARY_FILE", GLOSSARY)
+    monkeypatch.setattr(commit_check.domain_maps, "GLOSSARY_BUDGET", 60)
     (repo / MAPS).mkdir(parents=True)
     _write(repo, path, committed)
     _git(repo, "add", ".")

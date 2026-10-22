@@ -79,9 +79,9 @@ Maintain affected documentation as part of the task with small, factual updates:
 
 ## Terminology
 
-`.vorch/GLOSSARY.md` holds the small shared vocabulary needed to interpret vBot correctly across tasks, especially terms easily confused with the coding agent's own environment or other systems, such as Agent, Tool, Session, and Workspace.
+`.vorch/GLOSSARY.md` holds the terms every agent needs in every task: a term belongs there when several domains use it and an agent would otherwise misread it, especially as a concept of its own environment or of another system, such as Agent, Tool, Session, and Workspace. A term only one domain uses belongs in that domain map's `## Terms` section, even when the user mentions it; when other domains start using it, move it to the glossary and leave a pointer. Standard vocabulary gets no entry.
 
-Terms needed only within a domain belong in that domain map's `## Terms` section, even when the user mentions them. Document project-specific meanings and useful distinctions, not standard vocabulary or implementation: how a concept currently works belongs in its domain map. A glossary entry is at most two sentences of definition plus a "Not ..." distinction where a misreading is realistic; it names the owning map instead of describing mechanisms, examples, paths or enumerations. Give each term one canonical home; use references elsewhere.
+An entry, in the glossary or in a map's Terms, says what the term means, not how it works: at most two sentences of definition plus a "Not ..." distinction where a misreading is realistic, and the map or section that owns the concept. Tables, columns, functions, syntax, limits, states and procedures stay out of entries; they belong in the owning map's Data Model, Interfaces or a supplementary file, which the entry names. Give each term one canonical home; use references elsewhere.
 
 Maintain terminology as part of relevant work when a missing, stale, or ambiguous definition could cause mistakes. Make clear, evidence-backed updates directly; no separate Skill or interview is required. Ask the user when competing meanings would materially affect the work, rather than silently establishing a new meaning.
 
