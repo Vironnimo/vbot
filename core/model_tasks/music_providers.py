@@ -72,7 +72,7 @@ class ProviderMusicClient(ProviderTaskClient):
                 raise ProviderOutcomeUnknownError(
                     f"the music stream broke off: {exc}", operation_key=uuid4().hex
                 ) from exc
-        audio = stream.audio()
+            audio = stream.audio()
         media_type = sniff_media_type(audio, "music")
         return MusicGenerationResult(
             data=audio,
