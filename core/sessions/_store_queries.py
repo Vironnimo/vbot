@@ -201,15 +201,6 @@ def list_addresses(
     return [_store_values._address(row) for row in rows]
 
 
-def list_live_scopes(connection: sqlite3.Connection) -> list[tuple[str | None, str]]:
-    """Return every ``(project_id, agent_id)`` scope with a live Session, sorted."""
-    rows = connection.execute(
-        "SELECT DISTINCT s.project_id, s.agent_id FROM sessions AS s "
-        "WHERE s.state = 'live' ORDER BY s.project_id, s.agent_id"
-    ).fetchall()
-    return [(str(row["project_id"]) or None, str(row["agent_id"])) for row in rows]
-
-
 def list_agent_ids(
     connection: sqlite3.Connection, project_id: str | None, *, exclude_owner_managed: bool
 ) -> list[str]:
@@ -726,27 +717,47 @@ def list_completion_activity(
     return result
 
 
+_HISTORY_REVISION_COLUMNS = (
+    "s.project_id, s.agent_id, s.session_id, s.generation_id, s.history_revision, "
+    f"s.session_key, {_store_values._RECALL_VISIBILITY_SQL} AS recall_visibility"
+)
+
+
 def list_history_revisions(
     connection: sqlite3.Connection, project_id: str | None, agent_id: str
 ) -> list[SessionHistoryRevision]:
     """Return every live Session version of one scope with its Recall visibility."""
     rows = connection.execute(
-        "SELECT s.project_id, s.agent_id, s.session_id, s.generation_id, s.history_revision, "
-        f"s.session_key, {_store_values._RECALL_VISIBILITY_SQL} AS recall_visibility "
-        "FROM sessions AS s "
+        f"SELECT {_HISTORY_REVISION_COLUMNS} FROM sessions AS s "
         "WHERE s.state = 'live' AND s.project_id = ? AND s.agent_id = ? ORDER BY s.session_id",
         (project_id or "", agent_id),
     ).fetchall()
-    return [
-        SessionHistoryRevision(
-            _store_values._address(row),
-            str(row["generation_id"]),
-            int(row["history_revision"]),
-            cast("SessionRecallVisibility", str(row["recall_visibility"])),
-            int(row["session_key"]),
-        )
-        for row in rows
-    ]
+    return [_history_revision(row) for row in rows]
+
+
+def list_all_history_revisions(
+    connection: sqlite3.Connection,
+) -> Callable[[], list[SessionHistoryRevision]]:
+    """Select every live Session version of every scope with its Recall visibility.
+
+    Rows follow the live address index, ordered by scope and Session id; the
+    returned decoder builds the records after the read transaction.
+    """
+    rows = connection.execute(
+        f"SELECT {_HISTORY_REVISION_COLUMNS} FROM sessions AS s "
+        "WHERE s.state = 'live' ORDER BY s.project_id, s.agent_id, s.session_id"
+    ).fetchall()
+    return lambda: [_history_revision(row) for row in rows]
+
+
+def _history_revision(row: sqlite3.Row) -> SessionHistoryRevision:
+    return SessionHistoryRevision(
+        _store_values._address(row),
+        str(row["generation_id"]),
+        int(row["history_revision"]),
+        cast("SessionRecallVisibility", str(row["recall_visibility"])),
+        int(row["session_key"]),
+    )
 
 
 def list_history_versions(

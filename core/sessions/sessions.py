@@ -515,10 +515,6 @@ class ChatSessionManager:
             address, delivery_id, notes, generation_id=generation_id
         )
 
-    def list_live_scopes(self) -> builtins.list[tuple[str | None, str]]:
-        """Return every ``(project_id, agent_id)`` scope with a live Session, sorted."""
-        return self._store.list_live_scopes()
-
     def list_agent_ids(
         self, project_id: str | None = None, *, exclude_owner_managed: bool = False
     ) -> builtins.list[str]:
@@ -623,6 +619,14 @@ class ChatSessionManager:
     ) -> builtins.list[SessionHistoryRevision]:
         """Return every live Session version of one scope with its Recall visibility."""
         return self._store.list_history_revisions(project_id, agent_id)
+
+    def list_all_history_revisions(self) -> builtins.list[SessionHistoryRevision]:
+        """Return every live Session version of every scope with its Recall visibility.
+
+        One read, ordered by scope and Session id: a projection that follows
+        every scope compares its freshness stamps without a read per scope.
+        """
+        return self._store.list_all_history_revisions()
 
     def list_history_versions(
         self, addresses: Sequence[SessionAddress]

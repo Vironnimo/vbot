@@ -24,12 +24,13 @@ from core.models.pricing import TokenPricing, TokenRates
 from core.providers.errors import ProviderAuthError
 from core.recall import IndexStatus, PassageIndex, SemanticIndexer
 from core.runs import RunKind
-from core.sessions import ChatSessionManager, SessionAddress
+from core.sessions import ChatSession, ChatSessionManager, SessionAddress, SessionReadCursor
 from core.utils.errors import ProviderError
 from core.utils.timestamps import format_canonical_timestamp
 from tests.core.recall.recall_test_support import (
     StubEmbeddings,
     connect_store,
+    forbid_database_calls_on_loop,
     timestamp,
 )
 from tests.core.sessions.history_fixtures import admit_run
@@ -354,8 +355,8 @@ async def test_local_embedding_space_costs_nothing_and_names_local_failures(
     assert status.last_error is not None and status.last_error.code == code
 
 
-async def test_pass_indexes_recall_visible_sessions_and_evicts_scopes_that_left(
-    index: PassageIndex, sessions: ChatSessionManager
+async def test_pass_indexes_recall_visible_sessions_rereads_changed_ones_and_evicts_scopes(
+    index: PassageIndex, sessions: ChatSessionManager, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _conversation(sessions, "conversation", "banana fruit", 1)
     for session_id, kinds in (
@@ -375,11 +376,34 @@ async def test_pass_indexes_recall_visible_sessions_and_evicts_scopes_that_left(
     assert await index.indexed_scopes() == {(None, "coder"), (None, "writer")}
     assert set(await index.list_indexed_sessions("coder")) == {"conversation", "delegated"}
 
-    await asyncio.to_thread(
+    # A pass over unchanged Sessions reads the Session store once, whatever the
+    # number of scopes, and writes nothing; later passes reread the history of
+    # only the Sessions that changed.
+    reread: list[str] = []
+    load_since = ChatSession.load_since
+
+    def recording(session: ChatSession, cursor: SessionReadCursor | None = None) -> Any:
+        reread.append(session.address.session_id)
+        return load_since(session, cursor)
+
+    monkeypatch.setattr(ChatSession, "load_since", recording)
+    database_calls = forbid_database_calls_on_loop(monkeypatch)
+    await indexer.run_pass()
+    assert reread == []
+    assert database_calls.count("sessions.read") == 1
+    assert not [call for call in database_calls if call.endswith(".write")]
+    await sessions.run_async(
+        writer.append, ChatMessage.user("draft fruit grown", timestamp=timestamp(4))
+    )
+    await indexer.run_pass()
+    assert reread == ["draft"]
+
+    await sessions.run_async(
         sessions.delete, SessionAddress(project_id=None, agent_id="writer", session_id="draft")
     )
     await indexer.run_pass()
 
+    assert reread == ["draft"]
     assert await index.indexed_scopes() == {(None, "coder")}
     assert (await indexer.status()).indexed == 2
 

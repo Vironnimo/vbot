@@ -766,9 +766,6 @@ class SessionStore:
             )
         )
 
-    def list_live_scopes(self) -> list[tuple[str | None, str]]:
-        return self._read(_store_queries.list_live_scopes)
-
     def list_agent_ids(
         self, project_id: str | None, *, exclude_owner_managed: bool = False
     ) -> list[str]:
@@ -865,6 +862,9 @@ class SessionStore:
                 connection, project_id, agent_id
             )
         )
+
+    def list_all_history_revisions(self) -> list[SessionHistoryRevision]:
+        return self._read_decoded(_store_queries.list_all_history_revisions)
 
     def list_history_versions(
         self, addresses: Sequence[SessionAddress]
