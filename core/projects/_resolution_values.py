@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from core.permissions import (
     PERMISSION_RULE_PARTS,
     PermissionRules,
+    intersect_rule_sets,
     normalize_permission_rules,
     permission_rules_to_dict,
     resolve_rule_set,
@@ -360,13 +361,18 @@ def _override_permission_rules(project: Project, agent_id: str) -> PermissionRul
 
 
 def resolve_permission_rules(
-    levels: tuple[PermissionRules | None, ...], defaults: AgentDefaults
+    levels: tuple[PermissionRules | None, ...],
+    defaults: AgentDefaults,
+    *,
+    repository: PermissionRules | None = None,
 ) -> PermissionRules | None:
     """Resolve rule sets per part over ``levels`` (most specific first), then the defaults.
 
-    The defaults are read only for a part no level sets; an invalid stored
-    default then refuses the Agent (:class:`AgentResolutionError`) instead of
-    giving it full access.
+    ``repository`` (a Team member's translated repository rules) only
+    restricts the defaults (:func:`intersect_rule_sets`), so a repository can
+    never permit more than the user's shared default. The defaults are read
+    unless ``levels`` set every part; an invalid stored default then refuses
+    the Agent (:class:`AgentResolutionError`) instead of giving it full access.
     """
     if all(
         any(level is not None and getattr(level, part) is not None for level in levels)
@@ -377,17 +383,22 @@ def resolve_permission_rules(
         default = defaults.resolved_permission_rules()
     except InvalidPermissionRulesDefaultError as error:
         raise AgentResolutionError(str(error)) from error
-    return resolve_rule_set(*levels, default)
+    return resolve_rule_set(*levels, intersect_rule_sets(repository, default))
 
 
 def permission_rules_source(
-    levels: tuple[tuple[str, PermissionRules | None], ...], defaults: AgentDefaults
+    levels: tuple[tuple[str, PermissionRules | None], ...],
+    defaults: AgentDefaults,
+    *,
+    repository: PermissionRules | None = None,
 ) -> dict[str, Any]:
     """The effective rule set and, per part, the level that supplied it.
 
-    ``levels`` pairs each source name (``override``, ``repository``, ``agent``) with its rule set,
-    most specific first; ``global_default`` follows. ``value`` is ``None`` for
-    full access; ``source`` names the most specific level that set anything.
+    ``levels`` pairs each source name (``override``, ``agent``) with its rule set,
+    most specific first; ``repository`` (restricting the default, as in
+    :func:`resolve_permission_rules`) and ``global_default`` follow. ``value`` is
+    ``None`` for full access; ``source`` names the most specific level that set
+    anything, and ``parts`` the most specific level that set each part.
     """
     try:
         default = defaults.resolved_permission_rules()
@@ -396,8 +407,10 @@ def permission_rules_source(
         invalid: str | None = str(error)
     else:
         invalid = None
-    named = (*levels, ("global_default", default))
-    effective = resolve_rule_set(*(rules for _name, rules in named))
+    effective = resolve_rule_set(
+        *(rules for _name, rules in levels), intersect_rule_sets(repository, default)
+    )
+    named = (*levels, ("repository", repository), ("global_default", default))
     parts: dict[str, str] = {}
     for part in PERMISSION_RULE_PARTS:
         for name, rules in named:
@@ -415,20 +428,20 @@ def permission_rules_source(
 
 
 def inherited_permission_rules(
-    levels: tuple[PermissionRules | None, ...], defaults: AgentDefaults
+    defaults: AgentDefaults, *, repository: PermissionRules | None = None
 ) -> dict[str, Any] | None:
     """The stored form of what an editable level inherits for the parts it leaves unset.
 
-    ``levels`` are the levels below the edited one (a Team member's repository
-    rules), most specific first, then the shared default. ``None`` while nothing
-    is inherited, or while the stored default is invalid, which
+    The shared default, restricted by ``repository`` (a Team member's
+    repository rules) when the edited level is a Project override. ``None``
+    while nothing is inherited, or while the stored default is invalid, which
     :func:`permission_rules_source` reports as ``error``.
     """
     try:
         default = defaults.resolved_permission_rules()
     except InvalidPermissionRulesDefaultError:
         default = None
-    inherited = resolve_rule_set(*levels, default)
+    inherited = resolve_rule_set(intersect_rule_sets(repository, default))
     return permission_rules_to_dict(inherited) if inherited is not None else None
 
 

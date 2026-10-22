@@ -505,7 +505,7 @@ class StubAgentResolver:
         defaults = (
             self._agents._defaults_provider() if self._agents._defaults_provider is not None else {}
         )
-        return inherited_permission_rules((), AgentDefaults.from_dict(defaults))
+        return inherited_permission_rules(AgentDefaults.from_dict(defaults))
 
     def effective_config(
         self, project_id: str | None, agent_id: str, *, session_id: str | None = None
