@@ -447,12 +447,16 @@ async def test_paged_revisions_and_new_run_origins_equal_a_full_rebuild(
     )
 
     def pages(after: int = 0) -> Iterator[UsagePage]:
-        if after == revision:
+        # A rebuild pages through the same changes: calls that changed while
+        # it read come back on later pages.
+        if after == 0:
+            yield UsagePage(revision, (old,))
+        if after in (0, revision):
             yield UsagePage(revision + 2, (fresh, middle))
             yield UsagePage(revision + 3, (replace(fresh, session_id="middle"),))
             yield UsagePage(revision + 5, (final_old, final_fresh))
         else:
-            yield UsagePage(revision + 5, (final_old, final_fresh) if after == 0 else ())
+            yield UsagePage(revision + 5, ())
 
     monkeypatch.setattr(ledger, "read_since", pages)
     incremental = _rollups(index, manager, ledger, prices)

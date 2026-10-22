@@ -339,14 +339,13 @@ class ProjectedRows:
             reasoning_present="reasoning_tokens" in values,
             estimated=input_estimated or output_estimated,
         )
-        snapshot = project_cost(values["cost"]) if "cost" in values else None
-        retrospective = not isinstance(snapshot, dict)
+        # A validated snapshot is final; a call without one is priced later.
+        cost = project_cost(values["cost"]) if "cost" in values else None
+        retrospective = cost is None
         serialized_cost: str | None = None
         cost_class = COST_UNPRICED
         cost_amount: float | None = None
-        if not retrospective:
-            assert isinstance(snapshot, dict)
-            cost = project_cost(snapshot) or dict(UNKNOWN_COST)
+        if cost is not None:
             cost_class, cost_amount = cost_source_class(cost)
             serialized_cost = cost_json(cost)
         speed_tokens, speed_window_ms, speed_estimated, first_token_ms, speed_basis = _speed_facts(
@@ -398,9 +397,14 @@ class ProjectedRows:
         model: str,
         kind: str,
         usage: JsonObject,
+        instant: int | None = None,
     ) -> None:
-        """Project a durable request without creating a Session record."""
-        instant = timestamp_instant(timestamp)
+        """Project a durable request without creating a Session record.
+
+        ``instant`` is the timestamp's instant when the caller already has it.
+        """
+        if instant is None:
+            instant = timestamp_instant(timestamp)
         self._add_call(
             seq,
             {"chat": CALL_KIND_CHAT, "compaction": CALL_KIND_COMPACTION}.get(
