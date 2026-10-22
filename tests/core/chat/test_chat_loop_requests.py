@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import threading
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, override
 
@@ -93,6 +94,22 @@ class _ContextAdapter(StubAdapter):
     @override
     def request_context_kwargs(self, **context: Any) -> JsonObject:
         return {"_test_context": context}
+
+
+class _WhileAnsweringAdapter(StubAdapter):
+    """Run *during_first_answer* while the Model answers the first request."""
+
+    def __init__(
+        self, responses: list[Any], during_first_answer: Callable[[], Awaitable[None]]
+    ) -> None:
+        super().__init__(responses)
+        self._during_first_answer = during_first_answer
+
+    @override
+    async def send(self, messages: list[JsonObject], *, model_id: str, **kwargs: Any) -> JsonObject:
+        if not self.requests:
+            await self._during_first_answer()
+        return await super().send(messages, model_id=model_id, **kwargs)
 
 
 @pytest.mark.asyncio
@@ -578,11 +595,20 @@ async def test_notes_and_retryable_run_errors_are_sent_as_quoted_reminders(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("note_source", ["tool", "context_hook"])
+@pytest.mark.parametrize(
+    "note_source",
+    ["tool", "context_hook", "other_writer_while_answering", "other_writer_between_rounds"],
+)
 async def test_notes_keep_their_position_in_live_requests_replay_and_forks(
     tmp_path: Path, note_source: str
 ) -> None:
     note_text = "Background work completed"
+
+    async def other_writer_note() -> None:
+        # Another accessor of the Session, such as a Secret or a Channel note.
+        async with runtime.chat_sessions.write_lock(SESSION):
+            other = await runtime.chat_sessions.get_async(SESSION)
+            await other.add_note_async(note_text)
 
     def record_note(context: ToolContext, _arguments: ToolJsonObject) -> ToolJsonObject:
         if note_source == "tool":
@@ -593,18 +619,34 @@ async def test_notes_keep_their_position_in_live_requests_replay_and_forks(
     tools.register("record_note", "Record note.", {"type": "object"}, record_note)
     # The Model's key order differs from the sorted order storage persists.
     arguments = {"zeta": 1, "alpha": {"b": 2, "a": 1}}
+    responses: list[Any] = [
+        {
+            "content": None,
+            "tool_calls": [{"id": "call_1", "name": "record_note", "arguments": arguments}],
+        },
+        *_answers(3),
+    ]
     runtime = _runtime(
         tmp_path,
-        [
-            {
-                "content": None,
-                "tool_calls": [{"id": "call_1", "name": "record_note", "arguments": arguments}],
-            },
-            *_answers(3),
-        ],
+        responses,
         tools=tools,
         allowed_tools=["record_note"],
+        adapter=(
+            _WhileAnsweringAdapter(responses, other_writer_note)
+            if note_source == "other_writer_while_answering"
+            else None
+        ),
     )
+    if note_source == "other_writer_between_rounds":
+        boundaries = 0
+
+        async def write_before_second_request(_run: Any, _session: Any) -> None:
+            nonlocal boundaries
+            boundaries += 1
+            if boundaries == 2:
+                await other_writer_note()
+
+        runtime.deliver_background_completions = write_before_second_request
     if note_source == "context_hook":
         runtime.extensions = ExtensionRegistry()
         announced = False
@@ -623,11 +665,13 @@ async def test_notes_keep_their_position_in_live_requests_replay_and_forks(
     await loop.send("coder", "Run tool", session_id="session-one")
 
     same_run = runtime.adapter.requests[1]["messages"]
-    note_index = 4 if note_source == "tool" else 2
-    assistant_index = 2 if note_source == "tool" else 3
+    # A note written while the Model answered precedes that answer.
+    after_tools = note_source in {"tool", "other_writer_between_rounds"}
+    note_index = 4 if after_tools else 2
+    assistant_index = 2 if after_tools else 3
     expected_roles = (
         ["system", "user", "assistant", "tool", "user"]
-        if note_source == "tool"
+        if after_tools
         else ["system", "user", "user", "assistant", "tool"]
     )
     assert [message["role"] for message in same_run] == expected_roles
@@ -637,11 +681,14 @@ async def test_notes_keep_their_position_in_live_requests_replay_and_forks(
     persisted = history(runtime)
     assert persisted_roles(persisted) == (
         ["user", "assistant", "tool", "note", "assistant"]
-        if note_source == "tool"
+        if after_tools
         else ["user", "note", "assistant", "tool", "assistant"]
     )
     assert persisted[note_index - 1].content == note_text
-    assert all(message.run_id for message in persisted)
+    # Only the other writer's note belongs to no Run.
+    assert [message for message in persisted if not message.run_id] == (
+        [persisted[note_index - 1]] if note_source.startswith("other_writer") else []
+    )
 
     await loop.send("coder", "Follow up", session_id="session-one")
 

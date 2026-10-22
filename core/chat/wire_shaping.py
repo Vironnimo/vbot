@@ -771,11 +771,7 @@ def extend_request_with_notes(
     """
     if not notes:
         return
-    start = len(history)
-    while start > 0 and not _sends_itself(
-        history[start - 1], replay_policy=replay_policy, agent_model=agent_model
-    ):
-        start -= 1
+    start = _request_tail_start(history, replay_policy=replay_policy, agent_model=agent_model)
     if start > 0:
         start -= 1
     parts = list(
@@ -805,9 +801,42 @@ def extend_request_with_notes(
         request_messages.extend(note_request_messages(list(group)))
 
 
+def _request_tail_start(
+    history: Sequence[ChatMessage],
+    *,
+    replay_policy: ReasoningReplayPolicy,
+    agent_model: str | None,
+) -> int:
+    """Return the index after the last *history* message a request sends itself."""
+    start = len(history)
+    while start > 0 and not _sends_itself(
+        history[start - 1], replay_policy=replay_policy, agent_model=agent_model
+    ):
+        start -= 1
+    return start
+
+
+def request_tail_notes(
+    history: Sequence[ChatMessage],
+    *,
+    replay_policy: ReasoningReplayPolicy = DEFAULT_REASONING_REPLAY_POLICY,
+    agent_model: str | None = None,
+) -> list[ChatMessage]:
+    """Return the notes after the last *history* message a request sends.
+
+    Replay ends the request with them, so :func:`extend_request_with_notes`
+    can add any of them to a live request exactly where replay shows them.
+    """
+    start = _request_tail_start(history, replay_policy=replay_policy, agent_model=agent_model)
+    return [message for message in history[start:] if message.role == "note"]
+
+
 def notes_missing_from_request(
     history: Sequence[ChatMessage],
     request_messages: Sequence[JsonObject],
+    *,
+    replay_policy: ReasoningReplayPolicy = DEFAULT_REASONING_REPLAY_POLICY,
+    agent_model: str | None = None,
 ) -> list[ChatMessage]:
     """Return the notes of *history* that *request_messages* does not render.
 
@@ -816,7 +845,8 @@ def notes_missing_from_request(
     request. Replay renders every note group directly before the next message
     the request sends; a group whose rendering is not exactly the request
     messages there is reported whole, so a note that cannot be verified is
-    reported rather than assumed delivered.
+    reported rather than assumed delivered. *replay_policy* and *agent_model*
+    are the request's own, which decide what replay sends.
     """
     request_indices = {
         message_id: index
@@ -839,7 +869,7 @@ def notes_missing_from_request(
         rendered.clear()
 
     for part in _history_request_parts(
-        history, replay_policy=DEFAULT_REASONING_REPLAY_POLICY, agent_model=None
+        history, replay_policy=replay_policy, agent_model=agent_model
     ):
         if isinstance(part, tuple):
             group.extend(part)

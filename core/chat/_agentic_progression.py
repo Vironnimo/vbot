@@ -19,7 +19,7 @@ from core.chat._queued_input import (
     rebuild_after_steering,
 )
 from core.chat._request_history import _prepare_tool_context
-from core.chat._run_state import refresh_run_permissions
+from core.chat._run_state import RequestBuildInputs, refresh_run_permissions
 from core.chat._step_outcomes import (
     MAX_IDENTICAL_FAILED_TOOL_CALLS,
     MAX_TOOL_FINALIZATION_VIOLATIONS,
@@ -191,8 +191,29 @@ class AgenticProgression:
                     continue
                 break
             awaiting_steering = False
+            rebuilt = delivered
             if delivered:
                 await rebuild_after_steering(context, target, self._requests)
+            else:
+                # A note another writer added while the Model answered (a Secret,
+                # a Channel or goal note) is replayed before that answer; the
+                # request shows it there from now on, as the next Run would.
+                _missing, rebuilt = await context.session_snapshot.missing_arrived_notes(
+                    messages,
+                    replay_policy=target.replay_policy,
+                    agent_model=target.model_reference,
+                )
+                if rebuilt:
+                    context.request_state = await self._requests.rebuild_live_request_state(
+                        context.agent,
+                        session,
+                        inputs=RequestBuildInputs.from_context(
+                            context, target
+                        ).with_session_messages(context.session_snapshot.active_messages),
+                        live_messages=messages,
+                    )
+            if rebuilt:
+                context.session_snapshot.forget_arrived_notes()
                 assert context.request_state is not None
                 state = context.request_state
                 messages = state.messages
@@ -324,11 +345,19 @@ class AgenticProgression:
                 finally:
                     await context.session_snapshot.flush_deferred_notes(session)
                 boundary_notes.extend(session.drain_pending_notes())
+            # Notes other writers added since the last request join it as well.
+            arrived_notes, _misplaced = await context.session_snapshot.missing_arrived_notes(
+                messages,
+                replay_policy=target.replay_policy,
+                agent_model=target.model_reference,
+                delivering=boundary_notes,
+            )
+            context.session_snapshot.forget_arrived_notes()
             # Rendered as the next request replays them, grouped with the notes
             # this request already ends with, so the history bytes stay stable.
             extend_request_with_notes(
                 messages,
-                boundary_notes,
+                [*arrived_notes, *boundary_notes],
                 context.session_snapshot.active_messages,
                 replay_policy=target.replay_policy,
                 agent_model=target.model_reference,
