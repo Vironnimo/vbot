@@ -1312,6 +1312,7 @@ async def run_real(tmp_path: Path, command: str, *, tools: tuple[str, ...] = ())
         vbot_root=tmp_path,
         data_root=tmp_path,
         cwd=tmp_path,
+        permissions=PermissionBoundary.UNRESTRICTED,
     )
     async with real_shell(tmp_path) as registry:
         result = await asyncio.wait_for(

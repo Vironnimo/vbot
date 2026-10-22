@@ -25,6 +25,7 @@ from core.extensions import (
 from core.extensions.databases import Database, ExtensionDatabases, extension_database_spec
 from core.extensions.extensions import ExtensionDeclarations
 from core.extensions.operations import ExtensionHost
+from core.permissions import PermissionBoundary
 from core.runs import ChatRunManager, RunExecutionOwner
 from core.sessions import ChatSessionManager
 from core.tools import ToolContext, ToolRegistry
@@ -204,6 +205,7 @@ async def board(
                 generation_id=binding.generation_id,
             ),
             delivery_receipt_hook=lambda *_: None,
+            permissions=PermissionBoundary.UNRESTRICTED,
         )
         for index, binding in enumerate(bindings)
     ]

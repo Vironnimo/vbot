@@ -14,6 +14,7 @@ from typing import Any
 
 from core.model_tasks import ImageUnderstandingRunContext
 from core.model_tasks.image_profile import ImageProfile
+from core.permissions import PermissionBoundary
 from core.tools.image import (
     ANALYZE_IMAGE_TOOL_NAME,
     GENERATE_IMAGE_TOOL_NAME,
@@ -55,6 +56,7 @@ def make_context(root: Path, tool_name: str, **overrides: Any) -> ToolContext:
         workspace=root,
         vbot_root=root,
         data_root=root,
+        permissions=PermissionBoundary.UNRESTRICTED,
     )
     return replace(context, **overrides)
 

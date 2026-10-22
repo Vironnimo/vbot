@@ -18,6 +18,7 @@ import pytest
 import yaml
 
 import core.skills.skills as skill_module
+from core.permissions import PermissionBoundary
 from core.runs import RunKind
 from core.runtime.runtime import Runtime
 from core.skills.policy import SkillPackageRef
@@ -380,6 +381,7 @@ async def test_shared_skill_mutations_target_the_package_that_activation_resolve
             cwd=tmp_path,
             skill_project_id=project_id,
             run_kind=RunKind.REFLECTION,
+            permissions=PermissionBoundary.UNRESTRICTED,
         )
 
         result = await runtime.tools.dispatch(
@@ -542,6 +544,7 @@ async def test_a_deleted_skills_shares_and_automations_follow_it_or_are_named(
             vbot_root=tmp_path,
             data_root=data_dir,
             cwd=tmp_path,
+            permissions=PermissionBoundary.UNRESTRICTED,
         )
         home = runtime.agent_skills_dir("main")
         protected_files = [
@@ -704,6 +707,7 @@ async def test_skill_manage_publishes_into_and_changes_only_the_global_home(
             vbot_root=tmp_path,
             data_root=data_dir,
             cwd=tmp_path,
+            permissions=PermissionBoundary.UNRESTRICTED,
         )
 
         async def call(arguments: dict[str, Any]) -> dict[str, Any]:

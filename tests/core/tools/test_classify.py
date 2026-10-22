@@ -9,6 +9,7 @@ import pytest
 from core.model_tasks import TaskUsageContext
 from core.model_tasks.decision_types import DecisionError, validate_input
 from core.model_tasks.decisions import DecisionService
+from core.permissions import PermissionBoundary
 from core.providers.adapter import tool_result_text
 from core.tools.classify import register_classify_tool
 from core.tools.tools import ToolContext, ToolRegistry
@@ -26,6 +27,7 @@ def _context(tmp_path) -> ToolContext:
         workspace=tmp_path,
         vbot_root=tmp_path,
         data_root=tmp_path,
+        permissions=PermissionBoundary.UNRESTRICTED,
     )
 
 

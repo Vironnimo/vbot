@@ -13,6 +13,7 @@ from unittest.mock import Mock
 from core.agents.agents import Agent
 from core.database import write_bootstrap_marker
 from core.models.models import ModelRegistry
+from core.permissions import PermissionBoundary
 from core.runs import ChatRunManager
 from core.sessions import ChatSessionManager
 from core.tools import ToolAccess, ToolContext, ToolRegistry, tool_failure
@@ -100,6 +101,7 @@ async def status_case(
                 workspace=root,
                 vbot_root=root,
                 data_root=root,
+                permissions=PermissionBoundary.UNRESTRICTED,
             )
             try:
                 results.append(await registry.dispatch(context, call["arguments"], ["status"]))

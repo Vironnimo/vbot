@@ -12,6 +12,7 @@ import httpx
 import respx
 
 from core.extensions import ExtensionRegistry
+from core.permissions import PermissionBoundary
 from core.tools import ToolContext, ToolRegistry, tool_failure
 from scripts.provider_probe.choices import HA_CALL_SERVICE_CASES
 from scripts.provider_probe.scenario_extensions import _ha_call_service_scenario
@@ -186,6 +187,7 @@ async def ha_case(adapter: Any, args: argparse.Namespace, case: dict[str, Any]) 
                     workspace=root,
                     vbot_root=root,
                     data_root=root,
+                    permissions=PermissionBoundary.UNRESTRICTED,
                 )
                 try:
                     results.append(await registry.dispatch(context, call["arguments"], [name]))

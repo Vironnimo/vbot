@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from core.memory import MemoryService
+from core.permissions import PermissionBoundary
 from core.runs import RunKind
 from core.tools.memory import MEMORY_TOOL_NAME, register_memory_tool
 from core.tools.tools import (
@@ -67,6 +68,7 @@ def run(
         data_root=workspace.parent,
         vbot_root=workspace.parent,
         allowed_tools=[MEMORY_TOOL_NAME],
+        permissions=PermissionBoundary.UNRESTRICTED,
     )
     tool_calls = [
         ToolCall(id=f"call-{index}", name=MEMORY_TOOL_NAME, arguments=arguments)
@@ -199,6 +201,7 @@ def test_the_user_sees_each_changed_entry_and_its_memory_revision(
             vbot_root=workspace.parent,
             data_root=workspace.parent,
             run_kind=RunKind.MEMORY_REFLECTION,
+            permissions=PermissionBoundary.UNRESTRICTED,
         )
         result = asyncio.run(registry.dispatch(context, arguments, [MEMORY_TOOL_NAME]))
         display = registry.display_for_call(

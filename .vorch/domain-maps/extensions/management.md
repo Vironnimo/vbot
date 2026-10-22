@@ -27,6 +27,7 @@ What each `API_VERSION` (`extensions.md` -> Loading and identity invariants) add
 - v12: server folder listing for pages (`extensionPageClient.listDirectory`, `webui/extension-pages.md` -> Capabilities). v13: Tool summaries (`api.register_tool(..., summary=...)`, `tools/load_tools.md` -> Tool summaries). v14: replaces `definition_change_note` with declared Tool-change announcements (`announce_changes`, `tools.md` -> Tool changes in a Session): a changed Tool definition reaches a Session mid-epoch only for the parts its Tool names. v15: asynchronous Tool-Agent resolution, canonical deferred-call receipts (`extensions/host.md` -> Deferred Tool outcomes) and manifest-declared offline document validators (below).
 - v16: windowed Run steps for pages (`history.read` `query.child_limit`, `run.subscribe` `child_limit`, `extensionPageClient.readRunChildren`; `webui/extension-pages.md` -> Run streams and history).
 - v17: Secret Sources for Agent Secrets (`api.register_secret_source`, a `core.secrets.sources.SecretSource`; `secrets/agent-secrets.md` -> Secret Sources).
+- v18: `host.resolve_permissions(project_id, agent_id)`, the Permission Boundary of a new Session of an Agent, for Tool calls an Extension makes as that Agent outside any Session (`extensions/host.md`).
 
 ## Offline document validation
 

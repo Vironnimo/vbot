@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from core.extensions.operations import ExtensionOperations
+from core.permissions import PermissionBoundary
 from core.runs import RunCancelledError
 from core.sessions import SessionAddress
 from core.tools import ToolContext, ToolRegistry, tool_failure, tool_success
@@ -185,6 +186,7 @@ def test_calls_outside_a_session_cannot_attach_payloads(tmp_path) -> None:
         workspace=tmp_path,
         vbot_root=tmp_path,
         data_root=tmp_path,
+        permissions=PermissionBoundary.UNRESTRICTED,
     )
 
     assert not context.result_payloads_available

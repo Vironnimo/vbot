@@ -10,6 +10,7 @@ from tempfile import TemporaryDirectory
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
+from core.permissions import PermissionBoundary
 from core.tools import ToolContext, ToolRegistry, tool_failure
 from core.tools._public_http import PublicResponse
 from core.tools.web_fetch import register_web_fetch_tool
@@ -105,6 +106,7 @@ async def web_case(adapter: Any, args: argparse.Namespace, case: dict[str, Any])
                 workspace=root,
                 vbot_root=root,
                 data_root=root,
+                permissions=PermissionBoundary.UNRESTRICTED,
             )
             try:
                 results.append(await registry.dispatch(context, call["arguments"], ["web_fetch"]))

@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, Mock
 from core.channels import ChannelConfig, ChannelService
 from core.channels.adapter import RouteFacts
 from core.database import write_bootstrap_marker
+from core.permissions import PermissionBoundary
 from core.sessions import ChatSessionManager
 from core.tools import ToolContext, ToolRegistry, tool_failure
 from core.tools._tool_context import PathResolveAccess
@@ -166,6 +167,7 @@ async def channel_case(
                     vbot_root=root,
                     data_root=root,
                     input_contract=contract,
+                    permissions=PermissionBoundary.UNRESTRICTED,
                 )
                 try:
                     results.append(

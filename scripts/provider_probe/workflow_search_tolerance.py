@@ -12,6 +12,7 @@ from typing import Any
 import httpx
 import respx
 
+from core.permissions import PermissionBoundary
 from core.tools import ToolContext, ToolRegistry, tool_failure
 from core.tools.web_search import register_web_search_tool
 from scripts.provider_probe.choices import WEB_SEARCH_CASES
@@ -121,6 +122,7 @@ async def search_case(
                 workspace=root,
                 vbot_root=root,
                 data_root=root,
+                permissions=PermissionBoundary.UNRESTRICTED,
             )
             try:
                 results.append(await registry.dispatch(context, call["arguments"], ["web_search"]))

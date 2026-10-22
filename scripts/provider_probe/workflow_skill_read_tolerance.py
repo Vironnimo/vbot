@@ -8,6 +8,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
+from core.permissions import PermissionBoundary
 from core.skills import SkillRegistry
 from core.skills.authoring import SkillAuthoringService, SkillWriter
 from core.tools import ToolContext, ToolRegistry, tool_failure
@@ -91,6 +92,7 @@ async def skill_read_case(
                 workspace=root,
                 vbot_root=root,
                 data_root=root,
+                permissions=PermissionBoundary.UNRESTRICTED,
             )
             try:
                 results.append(await registry.dispatch(context, call["arguments"], ["skill"]))
