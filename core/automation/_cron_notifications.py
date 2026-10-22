@@ -3,18 +3,19 @@
 from __future__ import annotations
 
 import asyncio
-import time
 from contextlib import suppress
 from dataclasses import replace
+from datetime import timedelta
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from core.automation import _cron_timing as _timing
 from core.automation._cron_delivery import CronFailureAlert, outbound_note
 from core.automation._cron_jobs import CronJob, CronStorageError
 from core.automation._cron_notification_model import CronNotification
-from core.automation._cron_timing import _utc_now_iso
 from core.channels import ChannelError
 from core.utils.logging import get_logger
+from core.utils.timestamps import format_canonical_timestamp
 from core.utils.workers import settle_before_cancelling
 
 if TYPE_CHECKING:
@@ -90,7 +91,7 @@ class CronNotifications:
             job = self._owner._jobs[job_id]
             previous = job.notifications
             job.notifications = tuple(
-                replace(item, state="pending", error=None, retry_at=0) for item in previous
+                replace(item, state="pending", error=None, retry_after_at=None) for item in previous
             )
             await self._owner._save_edit(lambda: setattr(job, "notifications", previous))
         self.wake()
@@ -106,7 +107,7 @@ class CronNotifications:
                     if item.state == "sending":
                         await self._update(key, replace(item, state="uncertain", error=_UNCERTAIN))
                         self._alert(key)
-                    elif item.state == "pending" and item.retry_at <= time.time():
+                    elif item.state == "pending" and item.due(_timing._utc_now()):
                         await self._send(key, item)
                     # Keep a conversation's notifications in order.
                     latest = self._owner._jobs.get(key)
@@ -126,7 +127,7 @@ class CronNotifications:
             if not (sent and old.id == item.id)
         )
         if sent:
-            job.last_delivered_at = _utc_now_iso()
+            job.last_delivered_at = _timing._utc_now_iso()
         try:
             await settle_before_cancelling(self._owner._save_jobs_async())
         except CronStorageError:
@@ -197,8 +198,10 @@ class CronNotifications:
                 job_id,
                 item.channel_id,
             )
+        retry_after_at = format_canonical_timestamp(_timing._utc_now() + timedelta(seconds=delay))
         await self._update(
-            job_id, replace(item, state="pending", error=message, retry_at=time.time() + delay)
+            job_id,
+            replace(item, state="pending", error=message, retry_after_at=retry_after_at),
         )
 
     def _alert(self, job_id: str) -> None:

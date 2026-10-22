@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from typing import Any, Literal, cast
+
+from core.utils.timestamps import is_canonical_timestamp, parse_canonical_timestamp
 
 NOTIFICATION_FIELDS = frozenset(
     (
@@ -17,7 +20,7 @@ NOTIFICATION_FIELDS = frozenset(
         "session_id",
         "state",
         "error",
-        "retry_at",
+        "retry_after_at",
     )
 )
 
@@ -34,10 +37,14 @@ class CronNotification:
     session_id: str | None = None
     state: Literal["pending", "sending", "uncertain"] = "pending"
     error: str | None = None
-    retry_at: float = 0
+    # Canonical UTC timestamp before which a known-unsent message waits; None: send now.
+    retry_after_at: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+    def due(self, now: datetime) -> bool:
+        return self.retry_after_at is None or parse_canonical_timestamp(self.retry_after_at) <= now
 
     @classmethod
     def from_dict(cls, value: Any) -> CronNotification:
@@ -52,13 +59,9 @@ class CronNotification:
         state = value.get("state", "pending")
         if state not in ("pending", "sending", "uncertain"):
             raise ValueError("notification state must be pending, sending or uncertain")
-        retry_at = value.get("retry_at", 0)
-        if (
-            isinstance(retry_at, bool)
-            or not isinstance(retry_at, (int, float))
-            or not 0 <= retry_at < 1e12
-        ):
-            raise ValueError("notification retry_at must be a finite non-negative timestamp")
+        retry_after_at = value.get("retry_after_at")
+        if retry_after_at is not None and not is_canonical_timestamp(retry_after_at):
+            raise ValueError("notification retry_after_at must be a UTC timestamp or null")
         return cls(
             id=value["id"],
             agent_id=value["agent_id"],
@@ -70,5 +73,5 @@ class CronNotification:
             session_id=value.get("session_id"),
             state=cast('Literal["pending", "sending", "uncertain"]', state),
             error=value.get("error"),
-            retry_at=retry_at,
+            retry_after_at=retry_after_at,
         )
