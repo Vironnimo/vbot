@@ -504,8 +504,8 @@ def _normalize_reflection_interval(key: str, value: Any) -> int:
 def normalize_librarian_settings(librarian: Any) -> dict[str, Any]:
     """Return the normalized Librarian settings section.
 
-    Fields it does not know are left out, among them ``model`` of an earlier vBot,
-    so the next write of the section drops them.
+    Fields it does not know are left out. The document shape retires ``model``
+    of an earlier vBot; writes still preserve other unknown fields on disk.
     """
 
     if librarian is None:

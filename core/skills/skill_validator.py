@@ -50,6 +50,16 @@ _SKILL_NAME_SAFE_CHARSET_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
 _SCALAR_WITH_COLON_PATTERN = re.compile(r"^(?P<key>[A-Za-z0-9_-]+):(?P<space>\s+)(?P<value>.+)$")
 _QUOTED_OR_STRUCTURED_PREFIXES = ('"', "'", "[", "{", "&", "*", "!", ">", "|", "#")
+# SafeConstructor also raises ordinary value errors for invalid tagged scalars
+# (for example a date outside the calendar or an unparseable !!timestamp).
+_YAML_READ_ERRORS = (
+    yaml.YAMLError,
+    RecursionError,
+    ValueError,
+    TypeError,
+    AttributeError,
+    OverflowError,
+)
 
 _LibyamlEventLoader: type | None = None
 if yaml.__with_libyaml__:
@@ -172,12 +182,12 @@ def parse_skill_front_matter(front_matter: str) -> tuple[Any, list[str]]:
         return {}, []
     try:
         return _load_yaml(front_matter) or {}, []
-    except yaml.YAMLError, RecursionError:
+    except _YAML_READ_ERRORS:
         repaired = repair_colon_scalars(front_matter)
         if repaired != front_matter:
             try:
                 return _load_yaml(repaired) or {}, [MALFORMED_YAML_FALLBACK_WARNING]
-            except yaml.YAMLError, RecursionError:
+            except _YAML_READ_ERRORS:
                 pass
         return _parse_simple_key_values(front_matter), [SIMPLE_KEY_VALUE_FALLBACK_WARNING]
 
@@ -268,6 +278,8 @@ def _oversized_instructions_warning(body: str) -> str | None:
 def _parse_simple_key_values(front_matter: str) -> dict[str, Any]:
     fields: dict[str, Any] = {}
     for line in front_matter.splitlines():
+        if line[:1].isspace():
+            continue  # Nested mappings and block text are not top-level metadata.
         stripped = line.strip()
         if not stripped or stripped.startswith("#") or ":" not in stripped:
             continue

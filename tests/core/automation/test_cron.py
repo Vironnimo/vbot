@@ -268,8 +268,22 @@ def test_jobs_json_is_created_on_demand(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_terminal_job_status_cannot_be_changed_through_update(tmp_path: Path) -> None:
-    terminal_status: CronJobStatus = "completed"
+@pytest.mark.parametrize("terminal_status", ["completed", "missed"])
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"status": "active"},
+        {"run_at": "2099-01-01T09:00:00+00:00"},
+        {"schedule_type": "interval", "interval_seconds": 3600},
+        {"remaining_runs": 1},
+        {"name": "New name"},
+        {"prompt": "New instruction"},
+        {"agent_id": "agent-two"},
+    ],
+)
+async def test_terminal_jobs_cannot_be_changed_through_update(
+    tmp_path: Path, terminal_status: CronJobStatus, changes: dict[str, Any]
+) -> None:
     service, _trigger_service = make_service(tmp_path)
     job = await service.create_job(
         agent_id="agent-one",
@@ -277,13 +291,19 @@ async def test_terminal_job_status_cannot_be_changed_through_update(tmp_path: Pa
         schedule_type="once",
         run_at=(datetime.now(UTC) + timedelta(minutes=15)).isoformat(),
     )
-    await service.update_job(job.id, status=terminal_status)
+    terminal = await service.update_job(job.id, status=terminal_status, remaining_runs=0)
+    jobs_path = tmp_path / "cron" / "jobs.json"
+    saved = jobs_path.read_bytes()
 
     with pytest.raises(CronJobValidationError):
-        await service.update_job(job.id, status="active")
+        await service.update_job(job.id, **changes)
 
-    assert service.get_job(job.id).status == terminal_status
+    assert service.get_job(job.id) == terminal
+    assert jobs_path.read_bytes() == saved
     assert service.can_fire(service.get_job(job.id)) is False
+    assert await service.update_job(job.id, name=terminal.name) == terminal
+    await service.delete_job(job.id)
+    assert service.list_jobs() == []
 
 
 @pytest.mark.asyncio

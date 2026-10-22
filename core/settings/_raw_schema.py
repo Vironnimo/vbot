@@ -191,7 +191,7 @@ SETTINGS_SHAPE: JsonShape = json_document(
         ),
         "recall": json_object(RECALL_FIELDS),
         "reflection": json_object(REFLECTION_FIELDS),
-        "librarian": json_object(LIBRARIAN_FIELDS),
+        "librarian": json_object(LIBRARIAN_FIELDS, retired={"model"}),
         "session_titles": json_object(SESSION_TITLE_FIELDS),
         "speech": json_object(
             SPEECH_FIELDS, {"transcription_audio": json_object(TRANSCRIPTION_AUDIO_FIELDS)}

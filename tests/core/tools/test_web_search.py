@@ -461,6 +461,17 @@ async def test_a_start_date_uses_the_shortest_covering_window(tmp_path: Path, br
         ({"query": "python", "count": 21}, '"count" must be at most 20; received 21.'),
         ({"query": "python", "page": 0}, '"page" must be at least 1; received 0.'),
         ({"query": "python", "page": 11}, '"page" must be at most 10; received 11.'),
+        *[
+            ({"query": "python", field: value}, f'"{field}"')
+            for field, value in (
+                ("country", "DE"),
+                ("language", "de"),
+                ("search_depth", "advanced"),
+                ("topic", "news"),
+                ("searchDepth", "advanced"),
+                ("Language", "de"),
+            )
+        ],
     ],
 )
 async def test_unclear_or_impossible_requests_are_refused_before_searching(

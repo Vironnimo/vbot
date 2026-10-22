@@ -13,7 +13,12 @@ import pytest
 from core.automation import _cron_notifications as cron_notifications
 from core.automation import _cron_timing as cron_timing
 from core.automation._cron_delivery import CHAT_MESSAGE_MAX_CHARS
-from core.automation.cron import CronDelivery, CronFailureAlert, CronStorageError
+from core.automation.cron import (
+    CronDelivery,
+    CronFailureAlert,
+    CronJobValidationError,
+    CronStorageError,
+)
 from core.channels import ChannelError
 from core.runs import RunStatus
 from tests.core.automation.cron_test_support import FakeChats, make_service, scripted_runs
@@ -58,8 +63,9 @@ async def test_notifications_survive_restart_without_repeating_a_completed_run(
     assert trigger.trigger_run.await_count == 1
     await service.aclose()
 
-    # Reconfiguration must not redirect the retained message to a different chat.
-    await service.update_job(job.id, delivery=CronDelivery(kind="none"))
+    # The finished job stays history; its pending delivery still completes independently.
+    with pytest.raises(CronJobValidationError):
+        await service.update_job(job.id, delivery=CronDelivery(kind="none"))
     # An epoch-seconds retry time of earlier builds is an unknown field: kept, never read.
     jobs_file = tmp_path / "cron" / "jobs.json"
     stored = json.loads(jobs_file.read_text(encoding="utf-8"))

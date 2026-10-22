@@ -137,6 +137,7 @@ class JsonShape:
 
     - ``object``: ``fields`` are the declared keys; every other key is unknown.
       ``nested`` gives the shape of declared keys whose values are modeled too.
+      Explicitly ``retired`` keys are neither loaded nor preserved on writes.
     - ``map``: every key is data. ``values`` is the shape of each value;
       ``known`` overrides it for specific keys. With ``drop_empty`` an entry
       whose value is an empty object once the unknown fields are merged back is
@@ -155,6 +156,7 @@ class JsonShape:
     items: JsonShape | None = None
     key: str | None = None
     drop_empty: bool = False
+    retired: frozenset[str] = frozenset()
 
 
 OPAQUE = JsonShape("opaque")
@@ -163,15 +165,20 @@ OPAQUE = JsonShape("opaque")
 def json_object(
     fields: Iterable[str],
     nested: Mapping[str, JsonShape] | None = None,
+    *,
+    retired: Iterable[str] = (),
 ) -> JsonShape:
     """Return the shape of an object with declared ``fields``."""
 
     declared = frozenset(fields)
+    retired_fields = frozenset(retired)
+    if declared & retired_fields:
+        raise ValueError("retired fields cannot also be declared")
     nested_shapes = dict(nested or {})
     undeclared = sorted(set(nested_shapes) - declared)
     if undeclared:
         raise ValueError(f"nested shapes for undeclared fields: {', '.join(undeclared)}")
-    return JsonShape("object", fields=declared, nested=nested_shapes)
+    return JsonShape("object", fields=declared, nested=nested_shapes, retired=retired_fields)
 
 
 def json_map(
@@ -379,7 +386,7 @@ def preserve_unknown_fields(previous: Any, current: Any, shape: JsonShape) -> An
             for key, item in current.items()
         }
         for key, item in previous.items():
-            if key not in shape.fields and key not in merged:
+            if key not in shape.fields and key not in shape.retired and key not in merged:
                 merged[key] = copy.deepcopy(item)
         return merged
     if shape.kind == "map":
@@ -442,7 +449,7 @@ def write_json_document(
             if previous is not None:
                 payload = preserve_unknown_fields(previous, payload, fmt.shape)
                 payload.pop(FORMAT_VERSION_FIELD, None)
-        payload = _drop_empty_entries(payload, fmt.shape)
+        payload = _prepare_document_fields(payload, fmt.shape)
         text = render_json_document(payload, version=fmt.version, sort_keys=fmt.sort_keys)
         path.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_text(path, text, data_dir=data_dir, mode=mode, owner_only=owner_only)
@@ -617,25 +624,27 @@ def _refusal_message(path: Path, fmt: JsonDocumentFormat, report: JsonValidation
     )
 
 
-def _drop_empty_entries(value: Any, shape: JsonShape | None) -> Any:
-    """Leave out the empty entries of every ``drop_empty`` map within ``value``."""
+def _prepare_document_fields(value: Any, shape: JsonShape | None) -> Any:
+    """Leave out retired fields and empty entries of ``drop_empty`` maps."""
 
     if shape is None:
         return value
     if shape.kind == "object" and isinstance(value, dict):
         return {
-            key: _drop_empty_entries(item, shape.nested.get(key)) for key, item in value.items()
+            key: _prepare_document_fields(item, shape.nested.get(key))
+            for key, item in value.items()
+            if key not in shape.retired
         }
     if shape.kind == "map" and isinstance(value, dict):
         entries = {
-            key: _drop_empty_entries(item, _map_value_shape(shape, key))
+            key: _prepare_document_fields(item, _map_value_shape(shape, key))
             for key, item in value.items()
         }
         if shape.drop_empty:
             return {key: item for key, item in entries.items() if item != {}}
         return entries
     if shape.kind == "list" and isinstance(value, list):
-        return [_drop_empty_entries(item, shape.items) for item in value]
+        return [_prepare_document_fields(item, shape.items) for item in value]
     return value
 
 

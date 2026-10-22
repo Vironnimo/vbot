@@ -11,7 +11,7 @@ from unittest.mock import Mock
 import pytest
 
 import core.tools.cron as cron_tool_module
-from core.automation.cron import CronDelivery, WatchCheckError
+from core.automation.cron import CronDelivery, CronJobStatus, WatchCheckError
 from core.chat import ReplySurface
 from core.permissions import BoundaryContext, PermissionBoundary, normalize_permission_rules
 from core.projects import (
@@ -476,17 +476,35 @@ def test_past_one_time_schedule_asks_for_a_future_time(tmp_path: Path) -> None:
     tool.trigger.trigger_run.assert_not_called()
 
 
-def test_finished_job_cannot_resume(tmp_path: Path) -> None:
+@pytest.mark.parametrize("status", ["completed", "missed"])
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"action": "enable"},
+        {"action": "update", "schedule": "in 30m"},
+        {"action": "update", "prompt": "Changed instruction"},
+    ],
+)
+def test_finished_job_cannot_resume_or_change(
+    tmp_path: Path, status: CronJobStatus, arguments: dict[str, Any]
+) -> None:
     tool = cron_tool(tmp_path)
     created, _ = tool.call({"action": "create", "prompt": PROMPT, "schedule": "every 2h"})
     job_id = created["data"]["id"]
-    tool.service._jobs[job_id].status = "completed"
+    tool.service._jobs[job_id].status = status
+    before = tool.only_job().to_dict()
+    jobs_path = tmp_path / "cron" / "jobs.json"
+    saved = jobs_path.read_bytes()
 
-    envelope, _text = tool.call({"action": "enable", "id": job_id})
+    envelope, _text = tool.call({**arguments, "id": job_id})
 
     message = _error(envelope)["message"]
     assert "The job has finished; create a new job instead" in message
     assert f'{{"action":"delete","id":"{job_id}"}}' in message
+    assert _error(envelope)["code"] == "invalid_arguments"
+    assert tool.only_job().to_dict() == before
+    assert jobs_path.read_bytes() == saved
+    tool.trigger.trigger_run.assert_not_called()
 
 
 @pytest.mark.parametrize(
