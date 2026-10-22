@@ -354,6 +354,7 @@ async def test_bash_plan(line: str, expected: Expected) -> None:
             id="built-in names end before a dot or slash",
             commands=("cd ..\\x", "del y"),
             paths=("start_dir w/x", "write w/p/y", "write w/x/y"),
+            marks=_WINDOWS,
         ),
         case(
             "mklink link target",

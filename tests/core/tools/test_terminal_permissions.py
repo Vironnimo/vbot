@@ -8,6 +8,7 @@ from typing import Any, cast
 
 import pytest
 
+import core.tools.terminal as terminal_module
 import core.tools.terminal_manager as manager_module
 from core.permissions import PermissionBoundary
 from core.tools._terminal_permissions import permission_scope
@@ -119,7 +120,8 @@ async def test_a_restricted_shell_starts_confined_and_its_prompt_lines_are_check
     work: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(manager_module, "default_terminal_argv", lambda env: ["pwsh.exe"])
+    # The terminal Tool picks the shell an argument-less start runs.
+    monkeypatch.setattr(terminal_module, "default_terminal_argv", lambda env: ["pwsh.exe"])
     monkeypatch.setenv("VBOT_DATA_DIR", str(work.parent / "data"))
     terminal_manager, factory = manager
     factory.initial_output = _prompt(work)
