@@ -172,6 +172,7 @@ class WireRequestRunner:
         message_id: str | None = None,
         on_tool_calls: ToolCallSink | None = None,
         effort: EffortState | None = None,
+        session_generation_id: str | None = None,
     ) -> _AssistantStep:
         """Send one Model step; its Assistant messages name ``public_model``.
 
@@ -184,6 +185,8 @@ class WireRequestRunner:
         keeps the output so far with exactly the passed calls (see
         :data:`TOOL_CALLS_STREAM_RECOVERY_NOTE`). ``effort`` is the Session's
         thinking effort state; without it the request uses the Agent's effort.
+        ``session_generation_id`` is the Session generation the Run works in,
+        recorded with each attempt's Usage.
         """
         messages, effort_kwargs = route_effort(
             effort, messages, adapter=adapter, model_id=model_id, fallback=agent.thinking_effort
@@ -257,6 +260,7 @@ class WireRequestRunner:
                                 recovery_deadline=budget.deadline(response_model),
                                 message_id=message_id,
                                 on_tool_calls=on_tool_calls,
+                                session_generation_id=session_generation_id,
                             )
                         else:
                             deadline = budget.deadline(response_model)
@@ -280,6 +284,7 @@ class WireRequestRunner:
                                         temperature=temperature,
                                         top_p=top_p,
                                         message_id=message_id,
+                                        session_generation_id=session_generation_id,
                                     )
                             except TimeoutError as exc:
                                 raise ProviderTimeoutError(
@@ -345,11 +350,12 @@ class WireRequestRunner:
         temperature: float | None,
         top_p: float | None,
         message_id: str | None,
+        session_generation_id: str | None = None,
     ) -> _AssistantStep:
         """Ask for a completed response: only after the Provider refused to stream."""
         send_started = time.perf_counter()
         recorder = self._dependencies.usage_recorder
-        call_id = await self._start_usage_call(public_model, run)
+        call_id = await self._start_usage_call(public_model, run, session_generation_id)
         normalized: JsonObject | None = None
         try:
             with timing.request_scope(
@@ -403,7 +409,9 @@ class WireRequestRunner:
             step = replace(step, message=replace(step.message, usage=usage))
         return step
 
-    async def _start_usage_call(self, public_model: str, run: Run) -> str | None:
+    async def _start_usage_call(
+        self, public_model: str, run: Run, session_generation_id: str | None
+    ) -> str | None:
         recorder = self._dependencies.usage_recorder
         if recorder is None:
             return None
@@ -416,6 +424,7 @@ class WireRequestRunner:
             run_id=run.id,
             owner_name=run.execution_owner.extension if run.execution_owner is not None else None,
             group_id=run.execution_owner.group_id if run.execution_owner is not None else None,
+            session_generation_id=session_generation_id,
         )
 
     async def _consume_stream_attempt(
@@ -440,10 +449,11 @@ class WireRequestRunner:
         recovery_deadline: float | None = None,
         message_id: str | None = None,
         on_tool_calls: ToolCallSink | None = None,
+        session_generation_id: str | None = None,
     ) -> _AssistantStep:
         accumulator = StreamingAccumulator()
         recorder = self._dependencies.usage_recorder
-        call_id = await self._start_usage_call(public_model, run)
+        call_id = await self._start_usage_call(public_model, run, session_generation_id)
         try:
             with timing.request_scope(
                 run=run.id, iteration=run.iteration_count + 1, model=public_model

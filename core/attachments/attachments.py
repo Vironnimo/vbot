@@ -311,6 +311,11 @@ class AttachmentStore:
 
         return self._get_record(attachment_id, require_blob=True)
 
+    async def get_async(self, attachment_id: str) -> AttachmentRecord:
+        """Event-Loop-safe :meth:`get`, run on the ``attachments`` worker pool."""
+
+        return await _STORE_WORKERS.run(self.get, attachment_id)
+
     def _get_record(self, attachment_id: str, *, require_blob: bool) -> AttachmentRecord:
 
         normalized_id = _normalize_attachment_id(attachment_id)

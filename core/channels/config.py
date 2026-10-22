@@ -7,6 +7,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+from core.channels._choices import (
+    ALLOWED_CHANNEL_DM_SCOPES,
+    ALLOWED_CHANNEL_PLATFORMS,
+    ALLOWED_CHANNEL_RESPONSE_MODES,
+)
 from core.config_validation import (
     JsonConfigValidationError,
     JsonDiagnostic,
@@ -36,18 +41,7 @@ if TYPE_CHECKING:
 _DEFAULT_DM_SCOPE = "per_conversation"
 
 
-ALLOWED_CHANNEL_DM_SCOPES = frozenset(
-    ("per_conversation", "main", "per_peer", "per_account_channel_peer")
-)
-
-
 _DEFAULT_RESPONSE_MODE = "mention"
-
-
-ALLOWED_CHANNEL_RESPONSE_MODES = frozenset(("mention", "all"))
-
-
-ALLOWED_CHANNEL_PLATFORMS = frozenset(("discord", "telegram", "slack", "mattermost", "whatsapp"))
 
 
 MANAGED_CHANNEL_TOKEN_ENV_PREFIX = "VBOT_CHANNEL_TOKEN__"

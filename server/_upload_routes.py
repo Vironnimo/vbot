@@ -80,7 +80,7 @@ def register_upload_routes(app: FastAPIType) -> None:
     async def get_attachment(request: Request, attachment_id: str) -> FileResponse:
         attachment_store = request.app.state.runtime.attachment_store
         try:
-            record = attachment_store.get(attachment_id)
+            record = await attachment_store.get_async(attachment_id)
         except AttachmentNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except AttachmentError as exc:

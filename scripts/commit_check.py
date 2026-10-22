@@ -309,12 +309,17 @@ def check_python(root: Path, staged: list[str], dirty: set[str]) -> list[StepRes
 
 
 def check_types(
-    root: Path, targets: list[str], staged: set[str], dirty: set[str]
+    root: Path,
+    targets: list[str],
+    staged: set[str],
+    dirty: set[str],
+    *,
+    interpreter: str | None = None,
 ) -> list[StepResult]:
     """Run mypy over *targets* for every platform in ``MYPY_PLATFORMS``, concurrently."""
 
     def run(platform: str) -> subprocess.CompletedProcess[str]:
-        command = [sys.executable, "-m", "mypy"]
+        command = [interpreter or sys.executable, "-m", "mypy"]
         if platform != sys.platform:
             command += ["--platform", platform, "--cache-dir", f".mypy_cache/{platform}"]
         return _run([*command, *targets], root)

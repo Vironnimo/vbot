@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sqlite3
 import threading
 from contextlib import closing
@@ -24,6 +25,7 @@ from core.database import (
 from core.sessions import ChatSession, ChatSessionManager
 from core.statistics.index import (
     SESSION_FACT_TABLES,
+    IndexView,
     StatisticsIndex,
     StatisticsScope,
     StatisticsUnavailableError,
@@ -620,27 +622,51 @@ def test_an_index_of_another_shape_is_discarded_and_rebuilt(
     assert "untimed_records" not in session_columns
 
 
+@pytest.mark.parametrize("holder", ["another-connection", "another-read"])
 def test_busy_index_raises_retryable_error_without_discarding(
     tmp_path: Path,
+    manager: ChatSessionManager,
+    index: StatisticsIndex,
     session: ChatSession,
     statistics: StatisticsFactory,
     monkeypatch: pytest.MonkeyPatch,
+    holder: str,
 ) -> None:
     # The busy index is detected after the SQLite busy timeout and the write
     # patience; both shrink so the test does not wait out the real ones.
     monkeypatch.setattr("core.database._runtime.BUSY_TIMEOUT_MS", 0)
     monkeypatch.setattr("core.statistics.index._WRITE_PATIENCE_S", 0.05)
-    service = statistics()
+    service = statistics(index=index)
     service.report()
     _append_run(session, "run-two", minutes=1, input_tokens=5)
-    blocker = sqlite3.connect(_index_path(tmp_path), isolation_level=None, timeout=0)
-    try:
-        blocker.execute("BEGIN EXCLUSIVE")
-        with pytest.raises(StatisticsUnavailableError):
-            service.report()
-    finally:
-        blocker.execute("ROLLBACK")
-        blocker.close()
+    if holder == "another-connection":
+        blocker = sqlite3.connect(_index_path(tmp_path), isolation_level=None, timeout=0)
+        try:
+            blocker.execute("BEGIN EXCLUSIVE")
+            with pytest.raises(StatisticsUnavailableError):
+                service.report()
+        finally:
+            blocker.execute("ROLLBACK")
+            blocker.close()
+    else:
+        # A long read of this index, such as a rebuild, holds it for minutes.
+        entered, release = threading.Event(), threading.Event()
+
+        def hold(_view: IndexView) -> None:
+            entered.set()
+            release.wait(5)
+
+        reader = threading.Thread(
+            target=index.read, args=(manager, (), hold), kwargs={"prune": False}
+        )
+        reader.start()
+        try:
+            assert entered.wait(5)
+            with pytest.raises(StatisticsUnavailableError):
+                service.report()
+        finally:
+            release.set()
+            reader.join()
     reads = _record_canonical_reads(monkeypatch)
 
     report = service.report()
@@ -648,6 +674,35 @@ def test_busy_index_raises_retryable_error_without_discarding(
     assert _run_input_tokens(report) == 15
     # The retained index is extended from its cursor, not rebuilt.
     assert [cursor is not None for _session_id, cursor in reads] == [True]
+
+
+def test_a_failure_its_rebuild_cannot_cure_fails_reads_without_another_rebuild(
+    tmp_path: Path,
+    manager: ChatSessionManager,
+    index: StatisticsIndex,
+    session: ChatSession,
+    statistics: StatisticsFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    service = statistics(index=index)
+    expected = _without_generated_at(service.report())
+    original_id = _index_identity(tmp_path)["database_id"]
+
+    def defective(view: IndexView) -> None:
+        view.connection.execute("SELECT * FROM stat_missing")
+
+    rebuilt_ids = []
+    with caplog.at_level(logging.WARNING, logger="vbot.statistics"):
+        for _read in range(2):
+            with pytest.raises(sqlite3.OperationalError, match="stat_missing"):
+                index.read(manager, (), defective, prune=False)
+            rebuilt_ids.append(_index_identity(tmp_path)["database_id"])
+
+    # One rebuild for the failure; once it survives that rebuild, reads fail with it.
+    assert rebuilt_ids[0] != original_id
+    assert rebuilt_ids[1] == rebuilt_ids[0]
+    assert [record.levelname for record in caplog.records] == ["WARNING", "ERROR", "ERROR"]
+    assert _without_generated_at(service.report()) == expected
 
 
 def test_canonical_read_failure_propagates_and_keeps_the_index(

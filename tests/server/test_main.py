@@ -120,6 +120,7 @@ def _patch_serving(
     # The real hook would freeze the test process heap for the rest of the session.
     monkeypatch.setattr(server_main.gc, "collect", lambda: None)
     monkeypatch.setattr(server_main.gc, "freeze", lambda: None)
+    monkeypatch.setattr(server_main.gc, "set_threshold", lambda *_thresholds: None)
     monkeypatch.setattr(server_main.sys, "setswitchinterval", lambda _interval: None)
     # The real fault handler would take over the test process's own.
     monkeypatch.setattr(server_main, "faulthandler", SimpleNamespace(enable=_close_crash_log))
@@ -182,9 +183,10 @@ def test_main_starts_uvicorn_with_configured_app(tmp_path: Path, monkeypatch, ac
         assert app["shutdown_event"].is_set()
 
     calls = _patch_serving(monkeypatch, run)
-    heap: list[str] = []
+    heap: list[object] = []
     monkeypatch.setattr(server_main.gc, "collect", lambda: heap.append("collect"))
     monkeypatch.setattr(server_main.gc, "freeze", lambda: heap.append("freeze"))
+    monkeypatch.setattr(server_main.gc, "set_threshold", lambda *values: heap.append(values))
     intervals: list[float] = []
     monkeypatch.setattr(server_main.sys, "setswitchinterval", intervals.append)
 
@@ -225,9 +227,10 @@ def test_main_starts_uvicorn_with_configured_app(tmp_path: Path, monkeypatch, ac
         "port_source": "cli",
     }
     assert calls[0]["app"]["shutdown_token"]
-    # Once ready, the server freezes its collected startup heap and lets the
+    # Once ready, the server freezes its collected startup heap, makes full
+    # collections rarer while keeping the young and middle thresholds, and lets the
     # Event Loop take the GIL back from computing threads below Windows' 1 ms wait.
-    assert heap == ["collect", "freeze"]
+    assert heap == ["collect", "freeze", (2000, 10, 100)]
     assert intervals and intervals[0] < 0.001
     assert not (tmp_path / "data" / "runtime" / "server-8765.json").exists()
     # A restart the server scheduled for itself is its stop reason.

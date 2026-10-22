@@ -109,9 +109,11 @@ beforeEach(() => {
     if (method === 'agent.list')
       return { agents: [{ id: 'alice', name: 'Alice' }] };
     if (method === 'project.list')
-      return { projects: [{ project_id: 'studio' }] };
-    if (method === 'project.show')
-      return { scan: { team: [{ agent_id: 'artist' }] } };
+      return {
+        projects: [
+          { project_id: 'studio', scan: { team: [{ agent_id: 'artist' }] } },
+        ],
+      };
     if (method === 'extensions.operation') {
       const { operation, arguments: args } = params;
       if (operation === 'list')

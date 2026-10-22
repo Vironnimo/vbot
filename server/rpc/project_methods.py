@@ -31,6 +31,7 @@ automation references and default-Project updates (``RPC_ERROR_PROJECT_IN_USE``)
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -332,27 +333,36 @@ async def _show_project(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"project_id"}, "project.show")
 
     project_id = _required_string(params, "project_id")
+    # Open is a full per-project refresh point. The Team is re-scanned on every
+    # show and this Project's Skills are rescanned, so the skill pool — and the
+    # next resolve's effective skills — reflect the current repo together: a skill
+    # newly added under .opencode/skills surfaces here just like a newly added repo
+    # agent does. Runs never call project.show, so per-run caching is unaffected.
+    # Read global sources too so hand-edited Skills reach the opt-in pool. Pickers
+    # open every Project at once; starting the global rescan with the Source
+    # refresh lets those opens share it. An unchanged global catalog or Project
+    # Skill rescan leaves the cached registries intact.
+    reload_skills = getattr(state.runtime, "reload_skills_async", None)
+    reloading = (
+        asyncio.ensure_future(reload_skills(only_if_changed=True))
+        if callable(reload_skills)
+        else None
+    )
     try:
         project = await _PROJECT_WORKERS.run(_projects(state).refresh_sources, project_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-
-    # Open is a full per-project cache-refresh point. The Team is re-scanned on
-    # every show, so drop both per-project caches first so the skill pool — and the
-    # next resolve's effective skills — reflect the current repo together: a skill
-    # newly added under .opencode/skills surfaces here just like a newly added repo
-    # agent does. Runs never call project.show, so per-run caching is unaffected.
-    # Read global sources too so hand-edited Skills reach the opt-in pool. An
-    # unchanged global catalog leaves unrelated Project/Agent registries intact;
-    # only this Project needs its repository Skills refreshed on every open.
-    reload_skills = getattr(state.runtime, "reload_skills_async", None)
-    if callable(reload_skills):
-        await reload_skills(only_if_changed=True)
-    _invalidate_project_caches(state, project_id)
+    finally:
+        if reloading is not None:
+            await reloading
+    _agent_resolver(state).invalidate_team_cache(project_id)
     return await _PROJECT_WORKERS.run(_project_show_response, state, project)
 
 
 def _project_show_response(state: Any, project: Project) -> JsonObject:
+    refresh_project_skills = getattr(state.runtime, "refresh_project_skills", None)
+    if callable(refresh_project_skills):
+        refresh_project_skills(project)
     scan = _scan_preview(state, project)
     return {"project": _project_response(project), "scan": scan}
 

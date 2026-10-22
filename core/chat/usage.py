@@ -229,8 +229,18 @@ class RequestContextUsage:
         request, tokens = self._count(key, target, messages, tools)
         return RequestContextEstimate(target.model_reference, key, request, tokens)
 
-    def observe_prepared(self, usage: Mapping[str, Any], prepared: RequestContextEstimate) -> None:
-        """Anchor on the response to an exactly prepared request; blocking calibration write."""
+    def observe_prepared(
+        self,
+        usage: Mapping[str, Any],
+        prepared: RequestContextEstimate,
+        *,
+        calibrated: bool = False,
+    ) -> None:
+        """Anchor on the response to an exactly prepared request; blocking calibration write.
+
+        ``calibrated`` says the calibration already learned this sample (Chat's
+        Usage recorder update records it with the call), so only the anchor moves.
+        """
         tokens = _optional_non_negative_int(usage.get("input_tokens"))
         if tokens is None or usage_token_is_estimated(usage, "input_tokens"):
             return
@@ -242,7 +252,7 @@ class RequestContextUsage:
         self._anchor = _Anchor(
             prepared.key, prepared.request, tokens, output_tokens, prepared.tokens
         )
-        if self.calibration is not None:
+        if self.calibration is not None and not calibrated:
             self.calibration.record_input_estimate(
                 prepared.model_reference, measured=tokens, estimated=prepared.tokens
             )

@@ -188,7 +188,7 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
         typeof data.epoch !== 'string'
       )
         return;
-      rejectPending('Extension page was reloaded');
+      rejectPending(t('extensions.page.reloaded'));
       context = {
         nonce: data.nonce,
         epoch: data.epoch,
@@ -456,7 +456,7 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
     dispose() {
       window.removeEventListener('message', onMessage);
       forwardHistoryInput(false);
-      rejectPending('Extension page was disposed');
+      rejectPending(t('extensions.page.disposed'));
       invalidationListeners.clear();
       contextListeners.clear();
       runEventListeners.clear();

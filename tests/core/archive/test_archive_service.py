@@ -29,6 +29,7 @@ from core.archive import (
     convert_archived_projects,
 )
 from core.chat import ChatMessage, ChatSessionError
+from core.projects import ProjectError
 from core.runs import RunAdmissionBlockedError, RunKind
 from core.sessions import (
     ARCHIVE_KIND_FILES,
@@ -36,6 +37,7 @@ from core.sessions import (
     SESSION_WORKING_PROJECT_META_KEY,
     ArchiveEntry,
     ArchiveEntryFilter,
+    ArchiveScope,
     ArchiveTree,
     SessionAddress,
 )
@@ -451,8 +453,13 @@ async def test_project_restore_keeps_a_later_fork_in_the_replacement_repository(
 
 
 @pytest.mark.asyncio
-async def test_a_failed_project_archive_leaves_the_project_its_agents_and_no_entry(
-    world: ArchiveWorld, tmp_path: Path
+@pytest.mark.parametrize("payload_state", ["returned", "unavailable"])
+async def test_a_failed_project_archive_preserves_the_project_and_its_agents(
+    world: ArchiveWorld,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    deny_access: Callable[[Path], None],
+    payload_state: str,
 ) -> None:
     world.projects.create("vbot", "vBot", _repo(tmp_path))
     workspace = world.agents.create("coder", workspace=tmp_path / "identity-home").workspace
@@ -469,8 +476,37 @@ async def test_a_failed_project_archive_leaves_the_project_its_agents_and_no_ent
         SessionAddress("vbot", "tmp_participant", "ses_participant")
     )
 
-    with pytest.raises(ChatSessionError, match=r"managed by an Extension \(swarm\)"):
+    ledger = world.sessions.archive_ledger
+    if payload_state == "unavailable":
+        commit_scope = ledger.commit_scope
+
+        def refuse_return(source: Path, _destination: Path) -> None:
+            raise PermissionError(errno.EACCES, "Cannot return archive payload", str(source))
+
+        def deny_payload_before_commit(entry_key: int, scope: ArchiveScope) -> int:
+            entry = ledger.entry_by_key(entry_key)
+            assert entry is not None
+            deny_access((world.data_dir / entry.trees[0].path).parent)
+            # The fixture denies reads only; the rollback rename fails too.
+            monkeypatch.setattr("core.projects.store.move_tree", refuse_return)
+            return commit_scope(entry_key, scope)
+
+        monkeypatch.setattr(ledger, "commit_scope", deny_payload_before_commit)
+
+    expected_error = ProjectError if payload_state == "unavailable" else ChatSessionError
+    with pytest.raises(expected_error) as failure:
         await world.service.archive_project("vbot")
+
+    if payload_state == "unavailable":
+        # Compensation could not return the payload. Its recovery provenance
+        # must survive the failed presence check, as must the original failure.
+        assert isinstance(failure.value.__cause__, PermissionError)
+        [pending] = ledger.unsettled()
+        assert pending.state == "archiving"
+        assert pending.trees[0].source_path == "projects/vbot"
+        monkeypatch.undo()
+        assert (world.data_dir / pending.trees[0].path).is_dir()
+        world.service.recover()
 
     assert world.projects.get("vbot").display_name == "vBot"
     coder = world.agents.get("coder")

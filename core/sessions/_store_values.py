@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
@@ -717,9 +718,22 @@ def _metadata_storage_of(state: sqlite3.Row) -> _MetadataStorage:
     return _MetadataStorage(tuple(state[column] for column in _METADATA_WRITE_COLUMNS))
 
 
+# Set when this thread's write transaction rewrote a Session's metadata
+# storage; ``SessionStore`` advances its metadata revision once it ends.
+_metadata_storage_written = threading.local()
+
+
+def take_metadata_storage_written() -> bool:
+    """Whether this thread wrote metadata storage since the last call; resets it."""
+    written = bool(getattr(_metadata_storage_written, "value", False))
+    _metadata_storage_written.value = False
+    return written
+
+
 def _write_metadata_storage(
     connection: sqlite3.Connection, session_key: int, storage: _MetadataStorage
 ) -> None:
+    _metadata_storage_written.value = True
     previous = _state_by_key(connection, session_key)
     parent_columns = tuple(column for _key, column in _SUBAGENT_PARENT_FIELDS)
     parent = tuple(

@@ -24,6 +24,7 @@ from core.utils.server_control import (
     is_authorized_control_token,
     normalize_stop_initiator,
 )
+from core.utils.surrogates import without_lone_surrogates
 from server._app_lifecycle import (
     _app_chat_runs,
     _fire_extension_startup,
@@ -59,11 +60,13 @@ from server._http_dependencies import (
     FastAPIType,
     FileResponse,
     HTTPException,
+    PydanticSerializationError,
     RedirectResponse,
     Request,
     Response,
     StaticFiles,
     StreamingResponse,
+    TypeAdapter,
     WebSocket,
     WebSocketDisconnect,
 )
@@ -409,34 +412,39 @@ def create_app(
         return {"status": "stopping"}
 
     @app.post("/api/rpc")
-    async def rpc(request: Request, response: Response) -> JsonObject:
+    async def rpc(request: Request) -> Response:
         _require_json_media_type(request)
         try:
             payload = await _read_json_payload_with_limit(request)
         except ValueError:
-            return {
-                "ok": False,
-                "error": {
-                    "code": RPC_ERROR_INVALID_REQUEST,
-                    "message": "RPC request body must be valid JSON",
-                },
-            }
+            return _rpc_response(
+                {
+                    "ok": False,
+                    "error": {
+                        "code": RPC_ERROR_INVALID_REQUEST,
+                        "message": "RPC request body must be valid JSON",
+                    },
+                }
+            )
         try:
             # Only handlers of this request act for its principal, never tasks it starts.
             with bound_principal(scope_principal(request.scope)):
                 result = await dispatch_rpc(request.app.state, payload)
                 principal = scope_principal(request.scope)
-                return cast(
+                answer = cast(
                     JsonObject,
                     file_delivery.bind_payload(result, principal.actor if principal else None),
                 )
         except Exception:
             # The dispatcher logged the original failure; never expose its details.
-            response.status_code = 500
-            return {
-                "ok": False,
-                "error": {"code": RPC_ERROR_INTERNAL, "message": "Internal server error"},
-            }
+            return _rpc_response(
+                {
+                    "ok": False,
+                    "error": {"code": RPC_ERROR_INTERNAL, "message": "Internal server error"},
+                },
+                status_code=500,
+            )
+        return _rpc_response(answer)
 
     register_upload_routes(app)
     register_speech_routes(app)
@@ -820,6 +828,24 @@ def create_app(
     _mount_webui(app)
 
     return app
+
+
+_RPC_ANSWER: Any = TypeAdapter(JsonObject) if TypeAdapter is not None else None
+
+
+def _rpc_response(answer: JsonObject, *, status_code: int = 200) -> Response:
+    """Encode one RPC answer the way FastAPI encodes a returned object.
+
+    Text a Model, a file name or a Provider produced can hold lone surrogates,
+    which UTF-8 cannot encode. Such an answer is encoded again with each one
+    replaced by U+FFFD instead of failing the request; every other answer takes
+    FastAPI's own single encoding pass.
+    """
+    try:
+        body = _RPC_ANSWER.dump_json(answer)
+    except PydanticSerializationError:
+        body = _RPC_ANSWER.dump_json(without_lone_surrogates(answer))
+    return Response(content=body, media_type="application/json", status_code=status_code)
 
 
 def _file_actor(scope: Mapping[str, Any]) -> str | None:

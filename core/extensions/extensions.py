@@ -82,6 +82,7 @@ from core.extensions.interactions import (
 )
 from core.extensions.operations import ExtensionHost, ExtensionOperations
 from core.utils.logging import get_logger
+from core.utils.workers import BoundedWorkerPool
 
 if TYPE_CHECKING:
     from core.chat.commands import CommandDispatcher
@@ -89,6 +90,7 @@ if TYPE_CHECKING:
     from core.tools.tools import ToolRegistry
 
 _LOGGER = get_logger("extensions")
+_LOAD_WORKERS = BoundedWorkerPool(name="extension-load", max_workers=1)
 
 
 # Sentinel distinguishing "handler raised and was skipped" from a handler that
@@ -203,9 +205,11 @@ class ExtensionRegistry:
         worker loops behind a deadline-bounded join. On the serving loop use
         :meth:`aload`, which drives the same coroutines without freezing it.
         """
-        registry, pending = cls._scan_and_collect(
+        pending: list[tuple[ExtensionRecord, Any]] = []
+        registry = cls._scan_and_collect(
             extensions_dir,
             extra_dirs,
+            pending=pending,
             disabled=disabled,
             config=config,
             bundled_dir=bundled_dir,
@@ -232,25 +236,36 @@ class ExtensionRegistry:
     ) -> ExtensionRegistry:
         """Async :meth:`load` variant for the serving event loop.
 
-        Same discovery, registration, and apply phases; async ``register()``
-        coroutines run on the live loop under the same per-registration hard
-        deadline instead of blocking it with a thread join. Runtime startup
-        and ``reload_extensions`` use this so one slow Extension cannot stall
-        every concurrent Session.
+        Discovery, imports and synchronous registration run on a bounded loader
+        worker. Async registration stays on this loop under its per-registration
+        deadline; only after it settles are page paths resolved on the worker and
+        declarations applied on this loop. Cancelling an admitted scan waits for
+        it and closes the coroutine registrations it collected without starting them.
         """
-        registry, pending = cls._scan_and_collect(
-            extensions_dir,
-            extra_dirs,
-            disabled=disabled,
-            config=config,
-            bundled_dir=bundled_dir,
-            config_provider=config_provider,
-            credential_resolver=credential_resolver,
-        )
+        pending: list[tuple[ExtensionRecord, Any]] = []
+        try:
+            registry = await _LOAD_WORKERS.run(
+                cls._scan_and_collect,
+                extensions_dir,
+                extra_dirs,
+                pending=pending,
+                disabled=disabled,
+                config=config,
+                bundled_dir=bundled_dir,
+                config_provider=config_provider,
+                credential_resolver=credential_resolver,
+            )
+        except BaseException:
+            # The worker settles before cancellation reaches here. No collected
+            # coroutine has started yet, and no worker can append another one.
+            for _, coroutine in pending:
+                coroutine.close()
+            raise
         await _await_pending_registers_async(pending)
+        pages = await _LOAD_WORKERS.run(resolve_pages, registry._records)
         registry._apply_declarations()
         registry._interaction_handlers = install_interaction_handlers(registry._records)
-        registry._pages = resolve_pages(registry._records)
+        registry._pages = pages
         return registry
 
     @classmethod
@@ -259,12 +274,13 @@ class ExtensionRegistry:
         extensions_dir: Path,
         extra_dirs: list[Path] | None = None,
         *,
+        pending: list[tuple[ExtensionRecord, Any]],
         disabled: set[str] | None = None,
         config: dict[str, dict[str, Any]] | None = None,
         bundled_dir: Path | None = None,
         config_provider: Callable[[str], dict[str, Any]] | None = None,
         credential_resolver: Callable[[str], str] | None = None,
-    ) -> tuple[ExtensionRegistry, list[tuple[ExtensionRecord, Any]]]:
+    ) -> ExtensionRegistry:
         """Discovery + registration phase shared by :meth:`load` and :meth:`aload`.
 
         Scans immediate children of each root in this order: the data-dir
@@ -279,13 +295,14 @@ class ExtensionRegistry:
 
         Extensions named in *disabled* are recorded as ``disabled`` and never
         imported. *config* maps extension name → its ``api.config`` snapshot.
-        Async ``register()`` coroutines land in the returned ``pending`` list for
-        the caller's awaiter; declarations are applied only after it drains.
+        Async ``register()`` coroutines land in the caller-owned ``pending`` list
+        for its awaiter; declarations are applied only after it drains. Keeping
+        the list outside the worker lets a cancelled caller close every unstarted
+        coroutine after the scan settles, even though its return value is discarded.
         """
         registry = cls()
         disabled_names = set(disabled or ())
         config_map = dict(config or {})
-        pending: list[tuple[ExtensionRecord, Any]] = []
         scan_roots = [extensions_dir, *(extra_dirs or []), bundled_dir]
         claimed: dict[str, ExtensionRecord] = {}
         registry._discovery_complete = True
@@ -311,7 +328,7 @@ class ExtensionRegistry:
                 )
                 registry._records.append(record)
                 claimed[discovered.name] = record
-        return registry, pending
+        return registry
 
     def install_handler(self, extension_name: str, event: str, handler: HookHandler) -> None:
         """Add one hook handler to the live dispatch table under *extension_name*.

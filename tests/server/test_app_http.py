@@ -253,6 +253,32 @@ def test_rpc_unexpected_failure_preserves_json_envelope(
     )
 
 
+def test_rpc_answers_replace_lone_surrogates_instead_of_failing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lone = chr(0xDC00)
+
+    def answer(_state: Any, _params: Any) -> Any:
+        # A Model's or file name's unpaired half of a character, also as a key.
+        return {"title": f"draft{lone}", lone: [lone, 1]}
+
+    async def dispatch(state: Any, request: Any) -> Any:
+        return await dispatch_rpc(state, request, {"test.answer": answer})
+
+    monkeypatch.setattr(server_app, "dispatch_rpc", dispatch)
+    app = create_app(runtime=ServerStubRuntime(tmp_path))
+
+    with TestClient(app) as client:
+        response = client.post("/api/rpc", json={"method": "test.answer"})
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/json"
+    assert response.json() == {
+        "ok": True,
+        "result": {"title": "draft\ufffd", "\ufffd": ["\ufffd", 1]},
+    }
+
+
 def test_webui_build_serves_the_app_shell_without_shadowing_server_routes(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

@@ -6,7 +6,6 @@ import {
   mount,
   rpcMock,
   listProjectsMock,
-  showProjectMock,
   SystemPromptView,
   baseBlocks,
   createRpcMock,
@@ -348,10 +347,14 @@ describe('SystemPromptView scope and preview', () => {
   );
 
   it('offers Project Agents in the preview picker and previews by address', async () => {
-    listProjectsMock.mockResolvedValue({ projects: [{ project_id: 'vbot' }] });
-    showProjectMock.mockResolvedValue({
-      project: { display_name: 'vBot' },
-      scan: { team: [{ agent_id: 'builder', display_name: 'Builder' }] },
+    listProjectsMock.mockResolvedValue({
+      projects: [
+        {
+          project_id: 'vbot',
+          display_name: 'vBot',
+          scan: { team: [{ agent_id: 'builder', display_name: 'Builder' }] },
+        },
+      ],
     });
     rpcMock.mockImplementation(
       createRpcMock({

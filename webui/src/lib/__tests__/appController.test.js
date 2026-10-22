@@ -16,6 +16,8 @@ function setup(overrides = {}) {
     onAppError: vi.fn(),
     onLoadProjects: vi.fn(),
     onReloadAgents: vi.fn(),
+    readDataStoreStatus: vi.fn().mockResolvedValue({ incidents: [] }),
+    readBackgroundActivity: vi.fn().mockResolvedValue({ activities: [] }),
   };
   const controller = createAppController({
     state,
@@ -291,8 +293,11 @@ describe('App controller', () => {
   });
 
   it('loads background activity on every connection and applies its pushes', async () => {
-    const onLoadBackgroundActivity = vi.fn().mockResolvedValue(undefined);
-    const { controller, state } = setup({ onLoadBackgroundActivity });
+    const initial = [{ id: 'setup', state: 'running' }];
+    const readBackgroundActivity = vi
+      .fn()
+      .mockResolvedValue({ activities: initial });
+    const { controller, state } = setup({ readBackgroundActivity });
     expect(state.backgroundActivity).toEqual([]);
 
     for (const replayStatus of ['resumed', 'epoch_changed']) {
@@ -302,13 +307,24 @@ describe('App controller', () => {
         active_runs: [],
       });
     }
-    expect(onLoadBackgroundActivity).toHaveBeenCalledTimes(2);
+    expect(readBackgroundActivity).toHaveBeenCalledTimes(2);
+    expect(state.backgroundActivity).toEqual(initial);
+
+    const oldRead = Promise.withResolvers();
+    readBackgroundActivity.mockReturnValueOnce(oldRead.promise);
+    const reconnect = controller.handleServerEvent({
+      type: 'connection_ready',
+    });
+    await Promise.resolve();
 
     const activities = [{ id: 'recall_index', state: 'running' }];
     await controller.handleServerEvent({
       type: 'activity_status',
       payload: { activities },
     });
+    expect(state.backgroundActivity).toEqual(activities);
+    oldRead.resolve({ activities: initial });
+    await reconnect;
     expect(state.backgroundActivity).toEqual(activities);
     await controller.handleServerEvent({
       type: 'activity_status',
@@ -318,8 +334,12 @@ describe('App controller', () => {
   });
 
   it('reloads the data-store projection on connect and invalidation', async () => {
-    const onLoadDataStoreStatus = vi.fn().mockResolvedValue(undefined);
-    const { controller, state } = setup({ onLoadDataStoreStatus });
+    const status = {
+      incidents: [{ incident_id: 'recovery-one' }],
+      secrets: { available: true },
+    };
+    const readDataStoreStatus = vi.fn().mockResolvedValue(status);
+    const { controller, state } = setup({ readDataStoreStatus });
     expect(state).toMatchObject({ dataStoreIncident: null });
 
     await controller.handleServerEvent({
@@ -329,7 +349,132 @@ describe('App controller', () => {
     });
     await controller.handleServerEvent(resourceChanged('data_store'));
 
-    expect(onLoadDataStoreStatus).toHaveBeenCalledTimes(2);
+    expect(readDataStoreStatus).toHaveBeenCalledTimes(2);
+    expect(state.dataStoreIncident).toEqual(status.incidents[0]);
+    expect(state.secretStore).toEqual(status.secrets);
+  });
+
+  it.each(['activity', 'data store'])(
+    'keeps only the newest %s read and preserves it through failure and teardown',
+    async (projection) => {
+      const activity = projection === 'activity';
+      const read = vi.fn();
+      const { controller, state } = setup({
+        [activity ? 'readBackgroundActivity' : 'readDataStoreStatus']: read,
+      });
+      const snapshot = (id) =>
+        activity
+          ? { activities: [{ id }] }
+          : { incidents: [{ incident_id: id }], secrets: { id } };
+      const refresh = () =>
+        controller.handleServerEvent(
+          activity
+            ? { type: 'connection_ready' }
+            : resourceChanged('data_store'),
+        );
+      const shown = () =>
+        activity
+          ? state.backgroundActivity
+          : [state.dataStoreIncident, state.secretStore];
+      const expected = activity
+        ? [{ id: 'new' }]
+        : [{ incident_id: 'new' }, { id: 'new' }];
+      const oldRead = Promise.withResolvers();
+      const newRead = Promise.withResolvers();
+      read
+        .mockReturnValueOnce(oldRead.promise)
+        .mockReturnValueOnce(newRead.promise);
+      const oldRefresh = refresh();
+      const newRefresh = refresh();
+      await Promise.resolve();
+      newRead.resolve(snapshot('new'));
+      await newRefresh;
+      oldRead.resolve(snapshot('old'));
+      await oldRefresh;
+      expect(shown()).toEqual(expected);
+
+      read.mockRejectedValueOnce(new Error('offline'));
+      await refresh();
+      expect(shown()).toEqual(expected);
+
+      const teardownRead = Promise.withResolvers();
+      read.mockReturnValueOnce(teardownRead.promise);
+      const teardownRefresh = refresh();
+      await Promise.resolve();
+      controller.destroy();
+      teardownRead.resolve(snapshot('after-destroy'));
+      await teardownRefresh;
+      expect(shown()).toEqual(expected);
+    },
+  );
+
+  it('orders data-store reads around an acknowledgement without repeating its mutation', async () => {
+    const oldRead = Promise.withResolvers();
+    const afterWriteRead = Promise.withResolvers();
+    const acknowledgement = Promise.withResolvers();
+    const readDataStoreStatus = vi
+      .fn()
+      .mockReturnValueOnce(oldRead.promise)
+      .mockReturnValueOnce(afterWriteRead.promise);
+    const acknowledgeIncident = vi.fn(() => acknowledgement.promise);
+    const { controller, state } = setup({
+      readDataStoreStatus,
+      acknowledgeIncident,
+    });
+    state.dataStoreIncident = { incident_id: 'recovery-one' };
+    const oldRefresh = controller.handleServerEvent(
+      resourceChanged('data_store'),
+    );
+    const ack = controller.acknowledgeDataStoreRecovery();
+    expect(controller.acknowledgeDataStoreRecovery()).toBe(ack);
+    const invalidation = controller.handleServerEvent(
+      resourceChanged('data_store'),
+    );
+    await Promise.resolve();
+    expect(acknowledgeIncident).toHaveBeenCalledExactlyOnceWith('recovery-one');
+    expect(readDataStoreStatus).toHaveBeenCalledOnce();
+
+    const next = {
+      incidents: [{ incident_id: 'recovery-two' }],
+      secrets: { available: true },
+    };
+    acknowledgement.resolve(next);
+    await ack;
+    expect(state.dataStoreIncident).toEqual(next.incidents[0]);
+    expect(state.secretStore).toEqual(next.secrets);
+
+    oldRead.resolve({ incidents: [{ incident_id: 'recovery-one' }] });
+    await oldRefresh;
+    expect(state.dataStoreIncident).toEqual(next.incidents[0]);
+    expect(state.secretStore).toEqual(next.secrets);
+    expect(readDataStoreStatus).toHaveBeenCalledTimes(2);
+
+    afterWriteRead.resolve({ incidents: [], secrets: { available: false } });
+    await invalidation;
+    expect(state.dataStoreIncident).toBeNull();
+    expect(state.secretStore).toEqual({ available: false });
+  });
+
+  it('keeps a failed acknowledgement visible and lets a waiting status read proceed', async () => {
+    const acknowledgement = Promise.withResolvers();
+    const incident = { incident_id: 'recovery-one' };
+    const failure = new Error('acknowledgement refused');
+    const readDataStoreStatus = vi
+      .fn()
+      .mockResolvedValue({ incidents: [incident] });
+    const { controller, state } = setup({
+      readDataStoreStatus,
+      acknowledgeIncident: () => acknowledgement.promise,
+    });
+    state.dataStoreIncident = incident;
+    const ack = controller.acknowledgeDataStoreRecovery();
+    const rejected = expect(ack).rejects.toBe(failure);
+    const refresh = controller.handleServerEvent(resourceChanged('data_store'));
+    acknowledgement.reject(failure);
+    await rejected;
+    await refresh;
+    expect(state.dataStoreIncident).toEqual(incident);
+    expect(readDataStoreStatus).toHaveBeenCalledOnce();
   });
 
   it('refreshes Extension page descriptors on each bounded reconnect without replaying mutations', async () => {
@@ -348,7 +493,7 @@ describe('App controller', () => {
   it('starts independent replay-gap recovery without waiting for optional projections', async () => {
     let finishStatus;
     let finishPages;
-    const onLoadDataStoreStatus = vi.fn(
+    const readDataStoreStatus = vi.fn(
       () =>
         new Promise((resolve) => {
           finishStatus = resolve;
@@ -361,7 +506,7 @@ describe('App controller', () => {
         }),
     );
     const { actions, controller, state } = setup({
-      onLoadDataStoreStatus,
+      readDataStoreStatus,
       onReloadExtensionPages,
     });
 
@@ -377,7 +522,7 @@ describe('App controller', () => {
     expect(state.sessionsRefreshToken).toBe(1);
     expect(actions.onLoadProjects).toHaveBeenCalledOnce();
     expect(actions.onReloadAgents).toHaveBeenCalledOnce();
-    expect(onLoadDataStoreStatus).toHaveBeenCalledOnce();
+    expect(readDataStoreStatus).toHaveBeenCalledOnce();
     expect(onReloadExtensionPages).toHaveBeenCalledOnce();
     controller.destroy();
     finishStatus();
@@ -389,13 +534,13 @@ describe('App controller', () => {
 
   it('starts every recovery owner even when another owner fails synchronously', async () => {
     const failure = new Error('optional projection failed');
-    const onLoadDataStoreStatus = vi.fn(() => {
+    const onReloadExtensionPages = vi.fn(() => {
       throw failure;
     });
-    const onReloadExtensionPages = vi.fn();
+    const readDataStoreStatus = vi.fn();
     const onCheckWebuiBuild = vi.fn();
     const { actions, controller, state } = setup({
-      onLoadDataStoreStatus,
+      readDataStoreStatus,
       onReloadExtensionPages,
       onCheckWebuiBuild,
     });

@@ -481,31 +481,44 @@ async def test_temporary_compaction_policy_is_the_participant_agent_policy(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("delegated_child", [False, True], ids=["participant", "delegated-child"])
 async def test_manual_compaction_of_a_temporary_session_keeps_its_admitted_configuration(
-    tmp_path: Path,
+    tmp_path: Path, delegated_child: bool
 ) -> None:
-    """``/compact`` on an owner-managed Session compacts the request its Runs send."""
+    """``/compact`` on a temporary Agent's Session compacts the request its Runs send.
+
+    Only the owner-managed Session itself has the Extension's Session Tools and
+    prompt blocks; a child Session the Agent delegated to itself has no binding.
+    """
     runtime = _participant_runtime(tmp_path, "participant result")
     binding = _bind_participant(runtime, tmp_path)
     loop = build_chat_loop(runtime)
     try:
-        await (await loop.start_temporary_run(binding, "shared goal")).wait()
-        checkpoint = seed_tail(runtime.chat_sessions.get(binding.address))
+        if delegated_child:
+            session = runtime.chat_sessions.create(binding.address.agent_id, session_id="child")
+        else:
+            await (await loop.start_temporary_run(binding, "shared goal")).wait()
+            session = runtime.chat_sessions.get(binding.address)
+        checkpoint = seed_tail(session)
         service = StubCompactionService(should_auto=False, checkpoint=checkpoint)
         loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
 
         run = await loop.start_compaction_run(
-            binding.address.agent_id,
-            binding.address.session_id,
-            project_id=binding.address.project_id,
+            session.address.agent_id,
+            session.address.session_id,
+            project_id=session.address.project_id,
         )
         await run.wait()
 
+        assert run.status == "completed"
         assert not run.contributes_to_agent_activity
+        # The temporary Agent has no Identity or Team record to resolve.
+        assert runtime.agent_resolver.calls == []
         [call] = service.compact_calls
-        assert "fixture_private" in {tool["name"] for tool in call["active_tools"]}
-        assert "swarm-orientation" in str(call["request_messages"][0])
-        messages = runtime.chat_sessions.get(binding.address).load()
+        tools = {tool["name"] for tool in call["active_tools"]}
+        assert ("fixture_private" in tools) is not delegated_child
+        assert ("swarm-orientation" in str(call["request_messages"][0])) is not delegated_child
+        messages = runtime.chat_sessions.get(session.address).load()
         assert "compaction_checkpoint" in [message.role for message in messages]
     finally:
         runtime.chat_sessions.close()

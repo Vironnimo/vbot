@@ -14,7 +14,7 @@ from types import SimpleNamespace
 import pytest
 
 from cli import data_store_management
-from cli.main import dispatch_data_store_command
+from cli._dispatch_agents import dispatch_data_store_command
 from cli.parser import parse_args
 from cli.server_management import CommandResult, HealthProbeResult, ServerInstance, ServerState
 from core.chat import ChatMessage

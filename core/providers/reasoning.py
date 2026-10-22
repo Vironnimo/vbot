@@ -7,10 +7,7 @@ from collections.abc import Callable, Iterable, Mapping, MutableMapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from core.models.models import (
-    REASONING_CONTROL_BUDGET,
-    REASONING_CONTROL_ON_OFF,
-)
+from core.models import REASONING_CONTROL_BUDGET, REASONING_CONTROL_ON_OFF
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("providers.reasoning")

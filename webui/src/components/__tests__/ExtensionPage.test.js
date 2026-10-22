@@ -246,6 +246,61 @@ describe('ExtensionPage frame bridge', () => {
     ]);
   });
 
+  it('holds the changes of a hidden tab and delivers them as one when it shows', () => {
+    const page = openPage();
+    const invalidations = () =>
+      page.posted().filter((data) => data.type === 'vbot.extension.invalidate');
+    let hidden = false;
+    vi.spyOn(document, 'hidden', 'get').mockImplementation(() => hidden);
+    const setHidden = (value) => {
+      hidden = value;
+      document.dispatchEvent(new Event('visibilitychange'));
+    };
+    const swarms = (ids, revision) => ({ resource: 'swarms', ids, revision });
+
+    setHidden(true);
+    component.invalidate({
+      owner: 'alpha',
+      change: swarms(['one'], 4),
+      revision: 1,
+    });
+    component.invalidate({
+      owner: 'alpha',
+      change: swarms(['two', 'one'], 6),
+      revision: 2,
+    });
+    expect(invalidations()).toEqual([]);
+    setHidden(false);
+    // One resource: its records together.
+    expect(invalidations()).toEqual([
+      expect.objectContaining({
+        nonce: page.init.nonce,
+        revision: 2,
+        change: swarms(['one', 'two'], 6),
+      }),
+    ]);
+    setHidden(true);
+    setHidden(false);
+    expect(invalidations()).toHaveLength(1);
+
+    // Changes of several resources refresh everything.
+    setHidden(true);
+    component.invalidate({
+      owner: 'alpha',
+      change: swarms(['one'], 7),
+      revision: 3,
+    });
+    component.invalidate({
+      owner: 'alpha',
+      change: { resource: 'wiki', ids: ['one'], revision: 8 },
+      revision: 4,
+    });
+    setHidden(false);
+    expect(invalidations()).toHaveLength(2);
+    expect(invalidations()[1]).toMatchObject({ revision: 4 });
+    expect(invalidations()[1]).not.toHaveProperty('change');
+  });
+
   it.each([
     [
       'reload',

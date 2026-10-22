@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any, override
@@ -10,7 +11,7 @@ import pytest
 from fastapi import HTTPException, Request  # type: ignore[import-not-found]
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
-from core.attachments import AttachmentStore
+from core.attachments import AttachmentRecord, AttachmentStore
 from server._request_bodies import (
     MULTIPART_BODY_OVERHEAD_ALLOWANCE_BYTES,
     _parse_upload_file_with_limit,
@@ -25,11 +26,22 @@ class _RecordingAttachmentStore(AttachmentStore):
     def __init__(self, data_dir: Path, *, max_size_bytes: int) -> None:
         super().__init__(data_dir, max_size_bytes=max_size_bytes)
         self.stored: list[str] = []
+        self.reads_on_event_loop: list[bool] = []
 
     @override
     def store(self, filename: str, data: bytes) -> Any:
         self.stored.append(filename)
         return super().store(filename, data)
+
+    @override
+    def get(self, attachment_id: str) -> AttachmentRecord:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            self.reads_on_event_loop.append(False)
+        else:
+            self.reads_on_event_loop.append(True)
+        return super().get(attachment_id)
 
 
 def test_upload_returns_metadata_serves_the_original_and_blocks_executables(
@@ -37,8 +49,9 @@ def test_upload_returns_metadata_serves_the_original_and_blocks_executables(
 ) -> None:
     text = b"hello from text file\nsecond line"
     executable = b"MZ\x90\x00\x03\x00\x00\x00\x04\x00\x00\x00"
+    store = _RecordingAttachmentStore(tmp_path / "data", max_size_bytes=20_971_520)
 
-    with _client(tmp_path) as client:
+    with _client(tmp_path, store) as client:
         photo = client.post("/api/upload", files={"file": ("photo.jpg", _JPEG, "image/jpeg")})
         note = client.post("/api/upload", files={"file": ("note.txt", text, "text/plain")})
         blocked = client.post(
@@ -63,6 +76,7 @@ def test_upload_returns_metadata_serves_the_original_and_blocks_executables(
     assert served.content == _JPEG
     assert unknown.status_code == 404
     assert blocked.status_code == 415
+    assert store.reads_on_event_loop == [False, False]
 
 
 def test_upload_limit_rejects_before_storing(tmp_path: Path) -> None:

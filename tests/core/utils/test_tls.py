@@ -129,7 +129,10 @@ def test_every_server_httpx_client_uses_an_explicit_tls_context() -> None:
     """A bare httpx client re-parses the CA bundle, blocking the Event Loop per client.
 
     ``httpx2`` (the MCP SDK's client) would instead verify through the system trust
-    store, unlike every other outbound client.
+    store, unlike every other outbound client. A client skips ``verify`` only for a
+    transport it builds in the call itself: any other ``transport=`` value may be
+    ``None`` at runtime, and the client then builds its default transport from
+    ``verify``.
     """
     missing: list[str] = []
     for relative, tree in _server_modules("httpx"):
@@ -141,9 +144,10 @@ def test_every_server_httpx_client_uses_an_explicit_tls_context() -> None:
                 continue
             if node.func.attr not in _HTTPX_CONSTRUCTORS:
                 continue
-            keywords = {keyword.arg for keyword in node.keywords}
-            if not keywords & {"verify", "transport"}:
-                missing.append(f"{relative}:{node.lineno}")
+            keywords = {keyword.arg: keyword.value for keyword in node.keywords}
+            if "verify" in keywords or isinstance(keywords.get("transport"), ast.Call):
+                continue
+            missing.append(f"{relative}:{node.lineno}")
 
     assert missing == []
 

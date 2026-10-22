@@ -7,7 +7,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from cli._progress import status_line
-from cli.server_management import CommandResult, ServerInstance
+from cli._server_target import CommandResult, ServerInstance
 from core.settings import (
     JsonDiagnostic,
     JsonValidationReport,

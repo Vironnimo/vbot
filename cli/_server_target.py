@@ -11,15 +11,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urlsplit
 
-import psutil  # type: ignore[import-untyped]
-
 from core.utils.config import DEFAULT_HOST, Config, resolve_port
 from core.utils.logging import resolve_daily_log_path
 
 if TYPE_CHECKING:
-    # httpx loads on the first request, so commands that never reach a server
-    # (help, parse errors) skip its import.
+    # httpx loads on the first request and psutil on the first local listener
+    # check, so commands that never need them (help, parse errors) skip both.
     import httpx
+    import psutil  # type: ignore[import-untyped]
 
 DEFAULT_PROBE_TIMEOUT_SECONDS = 0.5
 
@@ -46,6 +45,16 @@ _DEFAULT_PORTS = {"http": 80, "https": 443}
 
 
 WEBUI_PATH = "/"
+
+
+# Lifecycle outcomes (`server_management.classify_server`) that `_output` compares
+# results with; they live here so loading `_output` does not load the lifecycle stack.
+# Another process, not vBot, holds the target port.
+NON_VBOT_LISTENER_MESSAGE = "port occupied by non-vBot process"
+
+# A vBot server answers on the target port, but the target data directory's control
+# record does not name it: it belongs to another data directory and is left running.
+UNRECORDED_SERVER_MESSAGE = "port occupied by a vBot server of another data directory"
 
 
 @dataclass(frozen=True)
@@ -415,6 +424,8 @@ WILDCARD_HOSTS = {"", "*", "0.0.0.0", "::"}
 def find_listening_process(instance: ServerInstance) -> psutil.Process | None:
     """Find the local process listening on the resolved TCP host and port."""
 
+    import psutil  # type: ignore[import-untyped]
+
     if not is_local_target(instance):
         return None
     for process in psutil.process_iter():
@@ -437,6 +448,8 @@ def has_local_listener(instance: ServerInstance) -> bool:
     per-process scan to name the owner. An unreadable table counts as no listener,
     so a lifecycle decision falls back to the quick probe's verdict.
     """
+
+    import psutil  # type: ignore[import-untyped]
 
     if not is_local_target(instance):
         return False
@@ -472,6 +485,8 @@ def is_local_target(instance: ServerInstance) -> bool:
         return False
     if all(address.is_loopback for address in addresses):
         return True
+    import psutil  # type: ignore[import-untyped]
+
     try:
         interfaces = psutil.net_if_addrs()
     except psutil.Error, OSError:

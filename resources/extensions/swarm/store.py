@@ -31,6 +31,7 @@ from ._store_delivery import (
     _prepare_automatic_delivery,
     _prepare_delivery,
     _prepared_delivery,
+    _unchanged_automatic_delivery,
 )
 from ._store_lifecycle import (
     _begin_resume,
@@ -423,13 +424,8 @@ class SwarmStore:
             raise SwarmStoreError("invalid_arguments", field="admission_boundary")
         if type(expected_epoch) is not int or expected_epoch < 0:
             raise SwarmStoreError("invalid_arguments", field="expected_epoch")
-        return await self._run(
-            _prepare_automatic_delivery,
-            swarm_id,
-            participant_id,
-            expected_epoch,
-            admission_boundary,
-            False,
+        return await self._prepare_automatic(
+            swarm_id, participant_id, expected_epoch, admission_boundary, False
         )
 
     async def prepare_wake(
@@ -448,13 +444,38 @@ class SwarmStore:
         """
         if type(expected_epoch) is not int or expected_epoch < 0:
             raise SwarmStoreError("invalid_arguments", field="expected_epoch")
+        return await self._prepare_automatic(
+            swarm_id, participant_id, expected_epoch, None, True, announce, wake_routes
+        )
+
+    async def _prepare_automatic(
+        self,
+        swarm_id: str,
+        participant_id: str,
+        expected_epoch: int,
+        boundary: int | None,
+        wake_only: bool,
+        announce: bool = True,
+        wake_routes: frozenset[str] | None = None,
+    ) -> Json:
+        """Prepare automatic delivery; a read answers when it would write nothing.
+
+        Why the read cannot lose a delivery: ``_unchanged_automatic_delivery``.
+        """
+        unchanged = await self._database.read(
+            lambda connection: _unchanged_automatic_delivery(
+                connection, swarm_id, participant_id, expected_epoch, boundary, wake_only
+            )
+        )
+        if unchanged is not None:
+            return unchanged
         return await self._run(
             _prepare_automatic_delivery,
             swarm_id,
             participant_id,
             expected_epoch,
-            None,
-            True,
+            boundary,
+            wake_only,
             announce,
             wake_routes,
         )

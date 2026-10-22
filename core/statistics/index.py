@@ -11,12 +11,16 @@ read without any write. Each Session contributes its own audit only: a fork's
 inherited history belongs to the Session that wrote it, so shared history
 counts once however many forks show it.
 
-Failure policy: a busy or locked index raises :class:`StatisticsUnavailableError`
+Failure policy: a busy or locked index, or one another read holds for longer
+than the write patience (a rebuild), raises :class:`StatisticsUnavailableError`
 so the caller can retry; a damaged or inconsistent index is discarded and
 rebuilt once; an index that cannot be used otherwise (or fails again after the
 rebuild) computes the read from a transient in-memory projection with the same
-code, so Statistics stay available. After :meth:`StatisticsIndex.close` reads
-raise :class:`~core.database.DatabaseUnavailableError`.
+code, so Statistics stay available. A failure that comes back after the rebuild
+it caused is not rebuilt again in this process: the read fails with it and logs
+an error, since rebuilding cannot cure a defect in the index's own statements.
+After :meth:`StatisticsIndex.close` reads raise
+:class:`~core.database.DatabaseUnavailableError`.
 
 Reconcile also prices retrospective calls and maintains the aggregate tables
 (``core/statistics/_rollups.py``) in the same write transaction, recomputing
@@ -82,7 +86,8 @@ _GLOBAL_SCOPE = ""
 # rows change; the kernel adds a new table empty, so a new aggregate needs a
 # bump to be filled.
 _PROJECTION_VERSION = 11
-# A busy index fails the read quickly as retryable instead of queueing it.
+# A busy index fails the read quickly as retryable instead of queueing it,
+# both on the SQLite writer and behind another read of this index.
 _WRITE_PATIENCE_S = 1.0
 
 SESSION_FACT_TABLES = (
@@ -396,42 +401,60 @@ class StatisticsIndex:
         shared index. ``pricing_lookup`` prices calls without a cost snapshot;
         readers of one index pass the same lookup, since a different one
         reprices. Recovery may retry ``consume`` after partial aggregation;
-        mutable result state must be local to each call. After :meth:`close` it raises
-        :class:`~core.database.DatabaseUnavailableError`.
+        mutable result state must be local to each call. A read that waits
+        longer than the write patience for another one (a rebuild can take
+        minutes) raises :class:`StatisticsUnavailableError`. After
+        :meth:`close` it raises :class:`~core.database.DatabaseUnavailableError`.
         """
         sources = _Sources(sessions, scopes, prune, usage_recorder, pricing_lookup)
-        with self._lock:
+        if not self._lock.acquire(timeout=_WRITE_PATIENCE_S):
             if self._database.is_closed():
                 raise DatabaseUnavailableError(f"{self._database.spec.name} is closed")
+            raise StatisticsUnavailableError("Statistics are busy; retry shortly")
+        try:
+            if self._database.is_closed():
+                raise DatabaseUnavailableError(f"{self._database.spec.name} is closed")
+            return self._recovering_read(sources, consume)
+        except (_SourceFailureError, UsageSourceError) as failure:
+            raise failure.error from failure.error.__cause__
+        finally:
+            self._lock.release()
+
+    def _recovering_read[Result](
+        self, sources: _Sources, consume: Callable[[IndexView], Result]
+    ) -> Result:
+        for attempt in range(2):
             try:
-                for attempt in range(2):
+                return self._read_file(sources, consume)
+            except Exception as error:
+                failure = projection_failure(error)
+                if failure is None:
+                    raise
+                if failure == "busy":
+                    raise StatisticsUnavailableError(
+                        "Statistics are busy; retry shortly"
+                    ) from error
+                if failure == "rebuild":
                     try:
-                        return self._read_file(sources, consume)
-                    except Exception as error:
-                        failure = projection_failure(error)
-                        if failure is None:
-                            raise
-                        if failure == "busy":
-                            raise StatisticsUnavailableError(
-                                "Statistics are busy; retry shortly"
-                            ) from error
-                        if failure == "unavailable" or attempt:
-                            _LOGGER.warning(
-                                "Statistics index unavailable; using a transient projection: %s",
-                                error,
-                            )
-                            break
+                        discarded = self._database.discard_for(error)
+                    except DatabaseError as discard_error:
+                        _LOGGER.warning("Could not discard the Statistics index: %s", discard_error)
+                        break
+                    if not discarded:
+                        _LOGGER.error(
+                            "Statistics index failed again after a rebuild for the same "
+                            "failure; not rebuilding it again: %s",
+                            error,
+                        )
+                        raise
+                    if not attempt:
                         _LOGGER.warning("Statistics index is inconsistent; rebuilding: %s", error)
-                        try:
-                            self._database.discard()
-                        except DatabaseError as discard_error:
-                            _LOGGER.warning(
-                                "Could not discard the Statistics index: %s", discard_error
-                            )
-                            break
-                return self._read_memory(sources, consume)
-            except (_SourceFailureError, UsageSourceError) as failure:
-                raise failure.error from failure.error.__cause__
+                        continue
+                _LOGGER.warning(
+                    "Statistics index unavailable; using a transient projection: %s", error
+                )
+                break
+        return self._read_memory(sources, consume)
 
     def discard(self) -> None:
         """Close and delete the disposable database with its SQLite sidecars."""
@@ -461,17 +484,11 @@ class StatisticsIndex:
         self, sources: _Sources, consume: Callable[[IndexView], Result]
     ) -> Result:
         database = self._database.get()
-        indexed = database.write(
-            lambda connection: _reconcile_sources(connection, sources),
+        consumed = database.write(
+            lambda connection: _reconcile_and_consume(connection, sources, consume),
             patience_s=_WRITE_PATIENCE_S,
         )
-        # Aggregation builds temporary tables, which read-only pooled readers
-        # refuse, so the consumer runs on the writer too; its transaction
-        # changes no index row.
-        return database.write(
-            lambda connection: _consume(connection, indexed, consume),
-            patience_s=_WRITE_PATIENCE_S,
-        )
+        return consumed.result()
 
     def _read_memory[Result](
         self, sources: _Sources, consume: Callable[[IndexView], Result]
@@ -481,26 +498,50 @@ class StatisticsIndex:
             _prepare_connection(connection)
             connection.executescript(_SCHEMA)
             with _transaction(connection, immediate=True):
-                indexed = _reconcile_sources(connection, sources)
-            with _transaction(connection):
-                return _consume(connection, indexed, consume)
+                consumed = _reconcile_and_consume(connection, sources, consume)
+            return consumed.result()
 
 
-def _consume[Result](
-    connection: sqlite3.Connection,
-    indexed: Mapping[tuple[str, str, str], IndexedSession],
-    consume: Callable[[IndexView], Result],
-) -> Result:
-    """Run ``consume`` and drop its temporary tables before the transaction ends.
+@dataclass(frozen=True)
+class _Consumed[Result]:
+    """What a consumer returned, or the error it raised, once the reconcile committed."""
 
-    Temporary tables outlive a commit on the long-lived writer, and some shadow
-    the fact tables by name, so none may survive into the next read. A failed
-    consumer's rollback removes the ones it created.
+    value: Result | None = None
+    error: Exception | None = None
+
+    def result(self) -> Result:
+        if self.error is not None:
+            raise self.error
+        return self.value  # type: ignore[return-value]
+
+
+def _reconcile_and_consume[Result](
+    connection: sqlite3.Connection, sources: _Sources, consume: Callable[[IndexView], Result]
+) -> _Consumed[Result]:
+    """Reconcile, then run ``consume`` in the same write transaction.
+
+    Aggregation builds temporary tables, which read-only pooled readers refuse,
+    so the consumer runs on the writer, in a savepoint: when it fails, its
+    temporary tables roll back while the reconciled index still commits, and
+    the caller raises its error after the commit. Temporary tables outlive a
+    commit on the long-lived writer, and some shadow the fact tables by name,
+    so none may survive into the next read.
     """
-    _drop_temporary_tables(connection)
-    result = consume(IndexView(connection, indexed))
-    _drop_temporary_tables(connection)
-    return result
+    indexed = _reconcile_sources(connection, sources)
+    connection.execute("SAVEPOINT statistics_consume")
+    try:
+        _drop_temporary_tables(connection)
+        value = consume(IndexView(connection, indexed))
+        _drop_temporary_tables(connection)
+    except Exception as error:
+        if not connection.in_transaction:
+            # SQLite already rolled the whole transaction back; nothing commits.
+            raise
+        connection.execute("ROLLBACK TO statistics_consume")
+        connection.execute("RELEASE statistics_consume")
+        return _Consumed(error=error)
+    connection.execute("RELEASE statistics_consume")
+    return _Consumed(value)
 
 
 def _drop_temporary_tables(connection: sqlite3.Connection) -> None:

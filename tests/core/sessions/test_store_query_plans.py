@@ -380,6 +380,14 @@ def test_session_owning_agents_read_distinct_ids_from_the_live_address_index(his
     assert not [detail for detail in details if "TEMP B-TREE" in detail], details
 
 
+def test_all_scope_revision_read_walks_only_the_live_address_index(history) -> None:
+    """The background Recall indexer reads every live Session without archived rows or a sort."""
+    _address, _anchor, connection = history
+    recorder, statements = _recording(connection)
+    assert _store_queries.list_all_history_revisions(recorder)()
+    assert _plans(connection, statements) == ["SCAN s USING INDEX sessions_one_live_address"]
+
+
 def test_delta_read_reads_only_the_entries_after_the_cursor(history) -> None:
     address, _anchor, connection = history
     full = _store_history.message_rows_since(connection, address, None)

@@ -31,7 +31,9 @@ from urllib.parse import quote, unquote_plus
 import httpx
 
 from core.tools.portal_registry import PortalRegistry
+from core.utils.log_conditions import LoggedConditions
 from core.utils.logging import get_logger
+from core.utils.tls import ssl_context_for
 from server.access._service import AccessError, AccessService
 
 if TYPE_CHECKING:
@@ -49,6 +51,8 @@ PORTAL_QUERY = "vbot_portal"
 PORTAL_COOKIE_PREFIX = "vbot_portal_"
 #: WebSocket close code for a Portal request without its credential.
 WEBSOCKET_PRIVATE = 4401
+# Every forwarded request goes to an app on this computer over plain HTTP.
+_UPSTREAM_ORIGIN = "http://localhost"
 _CONNECT_TIMEOUT_SECONDS = 5.0
 _POOL_TIMEOUT_SECONDS = 10.0
 # How long closing all Portals waits for their requests to end before cancelling.
@@ -109,10 +113,16 @@ class PortalServer:
             ),
             follow_redirects=False,
             trust_env=False,
+            # The app is always plain HTTP on this computer: a context without CA
+            # parsing, which a bare client would do on the Event Loop.
+            verify=ssl_context_for(_UPSTREAM_ORIGIN),
             transport=transport,
         )
         # The browser's headers go through as they are; no client defaults.
         self._client.headers.clear()
+        # Per Portal, the kind of failure its requests last logged: a failing app
+        # logs once, not once per request, and once more when it answers again.
+        self._request_failures = LoggedConditions()
 
     async def open(self, portal_id: str, target_port: int) -> int:
         app = _PortalApp(self, portal_id, target_port)
@@ -122,6 +132,7 @@ class PortalServer:
         return listener.port
 
     def close(self, portal_id: str) -> None:
+        self._request_failures.ended(portal_id)
         listener = self._listeners.pop(portal_id, None)
         if listener is not None:
             listener.close()
@@ -419,14 +430,18 @@ class _PortalApp:
                 await self._waiting(scope, send)
                 return
             except httpx.HTTPError as exc:
-                _LOGGER.info(
-                    "Portal request failed (id=%s error=%s)", self._portal_id, type(exc).__name__
-                )
+                failure = type(exc).__name__
+                if self._server._request_failures.started(self._portal_id, failure):
+                    _LOGGER.warning(
+                        "Portal request failed (id=%s error=%s)", self._portal_id, failure
+                    )
                 await _plain(send, 502, "The app did not answer this request.")
                 return
             if response is None:
                 return
             self._server._registry.report_listening(self._portal_id, True)
+            if self._server._request_failures.ended(self._portal_id):
+                _LOGGER.info("Portal requests answered again (id=%s)", self._portal_id)
             try:
                 await _unless_left(left, self._relay(response, send))
             finally:

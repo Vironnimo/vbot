@@ -152,7 +152,7 @@ def test_push_never_overwrites_a_moved_origin(
     ("wsl", "code", "output", "passed", "shown"),
     [
         (False, 0, "", False, "WSL is not installed"),
-        (True, 0, "1 passed\nflaky: tests/test_b.py::test_b\n", True, "tests/test_b.py::test_b"),
+        (True, 0, "1 passed\nflaky: tests/test_b.py::test_b\n", False, "tests/test_b.py::test_b"),
         (True, 1, f"{FAILURE}\n1 failed\n", False, FAILURE),
         (True, 2, "linux tests: uv 1.0 could not be installed\n", False, "uv 1.0 could not"),
     ],
@@ -197,5 +197,36 @@ def test_linux_step_runs_the_checked_commit_in_wsl_and_never_skips(
     step = push._linux_pytest_step(repo, io.StringIO())
 
     assert step.passed is passed
-    assert shown in (step.note if passed else step.details)
+    assert shown in step.note + step.details
     assert ("feature.txt" in received) is wsl
+
+
+@pytest.mark.parametrize(("initial", "retry"), [(0, None), (1, 0), (1, 1), (1, 2), (2, None)])
+def test_backend_gate_keeps_the_original_failure_after_a_diagnostic_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, initial: int, retry: int | None
+) -> None:
+    commands: list[list[str]] = []
+    outcomes = iter([initial] if retry is None else [initial, retry])
+    failed = iter(
+        [{"tests/test_a.py::test_a"}, set() if retry == 0 else {"tests/test_a.py::test_a"}]
+    )
+
+    def run(command: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        code = next(outcomes)
+        return subprocess.CompletedProcess(command, code, FAILURE if code else "1 passed")
+
+    monkeypatch.setattr(push, "_run", run)
+    monkeypatch.setattr(push, "_last_failed", lambda _root: next(failed))
+    log = io.StringIO()
+
+    step = push._pytest_step(tmp_path, log, "locked-python")
+
+    assert step.passed is (initial == 0)
+    assert len(commands) == (1 if retry is None else 2)
+    assert all(command[:3] == ["locked-python", "-m", "pytest"] for command in commands)
+    if retry is not None:
+        assert commands[1][3:8] == ["--last-failed", "--last-failed-no-failures", "none", "-n", "0"]
+        assert FAILURE in step.details
+    if retry == 0:
+        assert "tests/test_a.py::test_a" in step.note

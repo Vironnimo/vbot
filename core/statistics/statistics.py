@@ -10,7 +10,12 @@ from typing import TYPE_CHECKING
 
 from core.models.pricing import TokenPricing
 from core.projects.address import format_agent_address
-from core.sessions import OwnedRunRecord, SessionAddress
+from core.sessions import (
+    OwnedRunRecord,
+    OwnedSessionSummary,
+    SessionAddress,
+    SessionNotFoundError,
+)
 from core.statistics._extensions import ExtensionSliceKey, extension_actor_key
 from core.statistics._group_usage import OwnedRun, group_usage
 from core.statistics._run_activity import load_run_activity
@@ -395,10 +400,7 @@ class StatisticsService:
     ) -> JsonObject:
         self._import_session_usage()
         addresses = (session, *subagents)
-        owned = {
-            owner.address: owner
-            for owner in self._sessions.list_owned_session_summaries(metadata_keys=("seen_skills",))
-        }
+        owned = self._owned_sessions(addresses)
 
         def consume(view: IndexView) -> JsonObject:
             keys = [
@@ -420,6 +422,30 @@ class StatisticsService:
             usage_recorder=self._usage_recorder,
             pricing_lookup=self._pricing_lookup,
         )
+
+    def _owned_sessions(
+        self, addresses: Sequence[SessionAddress]
+    ) -> dict[SessionAddress, OwnedSessionSummary]:
+        """The Extension-owned Sessions among ``addresses``, listed per owner group.
+
+        Listing only the groups that bind one of ``addresses`` keeps a
+        single-Session read independent of how many owned Sessions exist.
+        """
+        groups: set[tuple[str, str]] = set()
+        for address in addresses:
+            try:
+                binding = self._sessions.temporary_binding(address)
+            except SessionNotFoundError:
+                continue
+            if binding is not None:
+                groups.add((binding.owner_name, binding.group_id))
+        return {
+            owner.address: owner
+            for owner_name, group_id in groups
+            for owner in self._sessions.list_owned_session_summaries(
+                owner_name=owner_name, group_id=group_id, metadata_keys=("seen_skills",)
+            )
+        }
 
     def _import_session_usage(self) -> None:
         if self._usage_recorder is not None:

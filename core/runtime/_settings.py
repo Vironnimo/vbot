@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
+from functools import partial
 from typing import TYPE_CHECKING, Any, cast
 
 from core.model_tasks.constants import TASK_SPEECH_TO_TEXT, TASK_TEXT_TO_SPEECH
@@ -17,6 +18,7 @@ from core.settings.settings import effective_timezone_name
 from core.skills.skills import SkillRegistry
 from core.tools import register_skill_manage_tool, register_skill_tool
 from core.utils.logging import get_logger
+from core.utils.workers import SharedRefresh
 
 if TYPE_CHECKING:
     from core.runtime.runtime import Runtime
@@ -137,9 +139,23 @@ def reload_skills(runtime: Runtime) -> None:
 
 
 async def reload_skills_async(runtime: Runtime, *, only_if_changed: bool = False) -> None:
-    """Read Skills off the loop; an editor refresh can preserve unchanged scopes."""
-    owner = runtime._skill_operations()
+    """Read Skills off the loop; an editor refresh can preserve unchanged scopes.
+
+    Concurrent callers share rescans: each waits for one that started after its
+    call, so it sees every change made before it asked (``SharedRefresh``).
+    """
+    runtime._skill_operations()  # Fails fast while Skills are unavailable.
     runtime._skill_reload_required |= not only_if_changed
+    reloads = runtime._skill_reloads
+    if reloads is None:
+        reloads = runtime._skill_reloads = SharedRefresh(
+            partial(_rescan_skills, runtime), name="skill-reload"
+        )
+    await reloads.run()
+
+
+async def _rescan_skills(runtime: Runtime) -> None:
+    owner = runtime._skill_operations()
     generation = runtime._skill_reload_generation = object()
     credential_snapshot = runtime._fallback_environment
     skills = await _RUNTIME_WORKERS.run(owner.load_global_registry)

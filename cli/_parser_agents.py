@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from typing import TYPE_CHECKING
 
 from cli._parser_common import (
     AGENT_HELP,
@@ -18,9 +19,11 @@ from cli._parser_common import (
     _json_object_argument,
 )
 from core.memory import MEMORY_PROMPT_MODES
-from core.permissions import PermissionRulesError, PresetName, preset_name
 from core.providers.reasoning import THINKING_EFFORT_ORDER
 from core.sessions import ARCHIVE_KINDS
+
+if TYPE_CHECKING:
+    from core.permissions import PresetName
 
 # The Identity Agent a fresh installation creates first.
 DEFAULT_CHAT_AGENT = "main"
@@ -334,6 +337,9 @@ def _permissions_argument(raw: str) -> PresetName | dict[str, object]:
     """``--permissions``: a preset name or a JSON rule set object."""
     if raw.lstrip().startswith("{"):
         return _json_object_argument(raw)
+    # Loaded when the option is parsed, so building the parser skips the rule stack.
+    from core.permissions import PermissionRulesError, preset_name
+
     try:
         return preset_name(raw)
     except PermissionRulesError as error:

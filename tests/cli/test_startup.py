@@ -1,6 +1,7 @@
 """Fresh-process import boundaries of the CLI entry points.
 
-The native Desktop shortcut must not initialize the console or server stack, and a
+The native Desktop shortcut must not initialize the console or server stack, help
+and parse errors must not load the HTTP, database or Settings stack, and a
 CLI/Desktop-only install without the ``server`` extra (no fastapi) must still load
 the complete CLI.
 """
@@ -89,24 +90,48 @@ assert not any(name.startswith('VBOT_RUN_') for name in options['env'])
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_cli_imports_without_the_server_package_or_fastapi() -> None:
+def test_cli_import_boundaries() -> None:
+    """Help and parse errors load no HTTP, database or Settings stack (``cli.md``), and
+    every command area loads without the ``server`` package or fastapi."""
     script = """
 import importlib.abc
 import sys
 
-class BlockServerStack(importlib.abc.MetaPathFinder):
+HEAVY = (
+    'httpx', 'rich', 'sqlite3', 'core.database', 'core.json_documents', 'core.settings',
+    'core.sessions._types',
+)
+
+class Boundaries(importlib.abc.MetaPathFinder):
+    parsing = True
+
     def find_spec(self, fullname, path, target=None):
         if fullname.split('.', 1)[0] in ('fastapi', 'server'):
             raise ModuleNotFoundError(f'blocked import of {fullname!r}', name=fullname)
+        if self.parsing and any(
+            fullname == name or fullname.startswith(name + '.') for name in HEAVY
+        ):
+            raise AssertionError(f'parsing the command line imported {fullname}')
 
-sys.meta_path.insert(0, BlockServerStack())
+boundaries = Boundaries()
+sys.meta_path.insert(0, boundaries)
 try:
     import server
 except ModuleNotFoundError:
     pass
 else:
     raise AssertionError('the blocker must make the server package unimportable')
-import cli._commands, cli.parser, cli.main
+from cli.main import run
+for argv, expected in ((['--help'], 0), (['agent', 'lst'], 2)):
+    try:
+        run(argv)
+    except SystemExit as exit:
+        assert exit.code == expected, (argv, exit.code)
+    else:
+        raise AssertionError(f'{argv} did not stop at parsing')
+boundaries.parsing = False
+import cli._dispatch_agents, cli._dispatch_connections, cli._dispatch_lifecycle
+import cli._dispatch_operations, cli._dispatch_tui
 """
     result = subprocess.run(
         [sys.executable, "-c", script],

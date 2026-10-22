@@ -9,7 +9,14 @@ from typing import override
 import httpx
 import pytest
 
-from cli import _commands, _output, _progress, main
+from cli import (
+    _dispatch_agents,
+    _dispatch_connections,
+    _dispatch_operations,
+    _output,
+    _progress,
+    main,
+)
 from cli._parser_common import AREA_HELP, COMMAND_PATHS
 from cli._progress import ProgressPrinter, current_progress
 from cli.formatting import output_mode, record_fields
@@ -229,9 +236,13 @@ def test_all_management_areas_report_outcomes_without_changing_payload(
     )
     payload = '{"content": "warning: user text is data", "id": "exact-id"}'
     result = CommandResult(ok, payload, instance, attention=attention)
-    monkeypatch.setattr(
-        _commands, f"dispatch_{area.replace('-', '_')}_command", lambda *a, **kw: result
+    name = f"dispatch_{area.replace('-', '_')}_command"
+    owner = next(
+        module
+        for module in (_dispatch_agents, _dispatch_connections, _dispatch_operations)
+        if hasattr(module, name)
     )
+    monkeypatch.setattr(owner, name, lambda *a, **kw: result)
     code = main.run([area, *tokens], resolve=lambda **kw: instance)
     out, err = capsys.readouterr()
     assert code == (0 if ok else 1)

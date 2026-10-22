@@ -583,15 +583,32 @@ def test_legacy_import_counts_compaction_and_distinct_entries_with_same_message_
 
 
 @pytest.mark.asyncio
-async def test_input_estimate_calibration_learns_per_model_and_survives_restart(recorder):
+@pytest.mark.parametrize("with_call", [False, True], ids=["record", "call_update"])
+async def test_input_estimate_calibration_learns_per_model_and_survives_restart(
+    recorder, with_call
+):
     model = "anthropic/claude::anthropic:api"
+
+    async def learn(measured: int, estimated: int, **flags: bool) -> None:
+        if not with_call:
+            recorder.record_input_estimate(model, measured=measured, estimated=estimated)
+            return
+        # A call's measured input teaches the calibration with its Usage update.
+        call = await recorder.start(model=model, kind="chat")
+        await recorder.update(
+            call, {"input_tokens": measured, **flags}, input_estimate=(model, estimated)
+        )
+
     assert recorder.input_estimate_factor(model) == 1.0
     # Tiny requests and implausible ratios are not evidence.
-    recorder.record_input_estimate(model, measured=900, estimated=600)
-    recorder.record_input_estimate(model, measured=500_000, estimated=100_000)
+    await learn(900, 600)
+    await learn(500_000, 100_000)
+    if with_call:
+        # Nor is an estimated input.
+        await learn(125_000, 100_000, input_tokens_estimated=True)
     assert recorder.input_estimate_factor(model) == 1.0
     for _ in range(40):
-        recorder.record_input_estimate(model, measured=125_000, estimated=100_000)
+        await learn(125_000, 100_000)
     learned = recorder.input_estimate_factor(model)
     assert 1.2 < learned < 1.25
     # The Connection scope is not part of the calibrated identity; other Models are unaffected.
@@ -604,6 +621,31 @@ async def test_input_estimate_calibration_learns_per_model_and_survives_restart(
         assert reopened.input_estimate_factor(model) == learned
     finally:
         reopened.close()
+
+
+@pytest.mark.asyncio
+async def test_a_known_session_generation_is_recorded_without_a_session_read(tmp_path):
+    class UnreadSessions:
+        def list_history_versions(self, addresses):
+            raise AssertionError("the caller already knows the generation")
+
+        async def run_async(self, function, *arguments, **keyword_arguments):
+            return function(*arguments, **keyword_arguments)
+
+    write_bootstrap_marker(tmp_path)
+    owner = UsageRecorder(tmp_path / "model-usage.db", session_source=UnreadSessions())
+    try:
+        await owner.start(
+            model="p/m",
+            kind="chat",
+            agent_id="agent",
+            session_id="session",
+            session_generation_id="generation-one",
+        )
+        [record] = read_ledger(owner)[1]
+        assert record.session_generation_id == "generation-one"
+    finally:
+        owner.close()
 
 
 @pytest.mark.asyncio

@@ -70,44 +70,35 @@ describe('buildAgentTargetDropdownOptions', () => {
 });
 
 describe('Agent target catalog loading', () => {
-  it('reads each listed Project team once and retains healthy Teams when one Project cannot load', async () => {
-    const error = new Error('unavailable-project');
-    const showProject = vi.fn(async (id) => {
-      if (id === 'bad') throw error;
-      if (id === 'empty') return { project: {}, scan: {} };
-      return {
-        project: { display_name: 'vBot' },
-        scan: {
-          team: [
-            { agent_id: 'builder', display_name: 'Builder' },
-            { agent_id: 'coder' },
-            { agent_id: '' },
-          ],
+  it('reads every Team from one Project list and retains healthy Teams when a repository cannot be read', async () => {
+    const listProjects = vi.fn(async () => ({
+      projects: [
+        { project_id: 'bad', scan: null },
+        {
+          project_id: 'vbot',
+          display_name: 'vBot',
+          scan: {
+            team: [
+              { agent_id: 'builder', display_name: 'Builder' },
+              { agent_id: 'coder' },
+              { agent_id: '' },
+            ],
+          },
         },
-      };
-    });
+        { project_id: 'vbot', scan: { team: [{ agent_id: 'twin' }] } },
+        { project_id: 'empty', scan: {} },
+        { project_id: '' },
+        {},
+      ],
+    }));
     const loader = createAgentTargetCatalogLoader({
       listAgents: async () => ({ agents: [{ id: 'main' }] }),
-      listProjects: async () => ({
-        projects: [
-          { project_id: 'bad' },
-          { project_id: 'vbot' },
-          { project_id: 'vbot' },
-          { project_id: 'empty' },
-          { project_id: '' },
-          {},
-        ],
-      }),
-      showProject,
+      listProjects,
     });
 
     const catalog = await loader.load();
 
-    expect(showProject.mock.calls.map(([id]) => id)).toEqual([
-      'bad',
-      'vbot',
-      'empty',
-    ]);
+    expect(listProjects.mock.calls).toEqual([[{ includeScan: true }]]);
     expect(catalog.projectTeams).toEqual([
       {
         projectId: 'vbot',
@@ -124,24 +115,22 @@ describe('Agent target catalog loading', () => {
         (item) => item.value,
       ),
     ).toEqual(['main', 'builder@vbot', 'coder@vbot']);
-    expect(catalog.failedProjects).toEqual([{ projectId: 'bad', error }]);
+    expect(catalog.failedProjects).toEqual([{ projectId: 'bad' }]);
   });
 
   it('retains Identity targets when the Project list fails', async () => {
     const error = new Error('catalog-unavailable');
-    const showProject = vi.fn();
     const loader = createAgentTargetCatalogLoader({
       listAgents: async () => ({ agents: [{ id: 'main' }] }),
       listProjects: async () => {
         throw error;
       },
-      showProject,
     });
     expect(await loader.load()).toMatchObject({
       agents: [{ id: 'main' }],
+      projectTeams: [],
       projectError: error,
     });
-    expect(showProject).not.toHaveBeenCalled();
   });
 
   it('rejects a superseded catalog and a catalog completed after disposal', async () => {
@@ -154,7 +143,6 @@ describe('Agent target catalog loading', () => {
         .fn()
         .mockReturnValueOnce(old)
         .mockResolvedValue({ projects: [] }),
-      showProject: vi.fn(),
     });
     const first = loader.load();
     expect(await loader.load()).toMatchObject({ projects: [] });

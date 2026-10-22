@@ -269,8 +269,9 @@ def _collect(connection: sqlite3.Connection, changes: RollupChanges) -> None:
     insert("rollup_generations", ((generation,) for generation in changes.generations))
     insert("rollup_unit_runs", changes.unit_runs)
     # Whole Sessions recompute every current Run; changed requests recompute
-    # the Run of their unit's Session; a changed Session recomputes the
-    # ledger units at its address.
+    # the Run of their unit's Session (through the partial generation index,
+    # see ``_usage_select``); a changed Session recomputes the ledger units at
+    # its address.
     connection.execute(
         "INSERT OR IGNORE INTO temp.rollup_runs SELECT rr.session_key, rr.run_id "
         "FROM temp.rollup_sessions d CROSS JOIN stat_run_records rr "
@@ -280,7 +281,7 @@ def _collect(connection: sqlite3.Connection, changes: RollupChanges) -> None:
         "INSERT OR IGNORE INTO temp.rollup_runs SELECT s.session_key, d.run_id "
         "FROM temp.rollup_unit_runs d CROSS JOIN stat_usage_units u ON u.session_key = d.unit_key "
         "CROSS JOIN stat_sessions s ON s.generation_id = u.session_generation_id "
-        "AND u.session_generation_id <> ''"
+        "AND s.generation_id <> ''"
     )
     connection.execute(
         "INSERT OR IGNORE INTO temp.rollup_units SELECT u.session_key "
@@ -867,7 +868,9 @@ def _usage_select(
     )
     # SQLite resolves a GROUP BY name to a source column before a result
     # alias, and a before-image source has columns named like the keys, so
-    # the keys group by their expressions.
+    # the keys group by their expressions. The Session join names its own
+    # ``s.generation_id <> ''``: only that term lets SQLite use the partial
+    # generation index instead of scanning ``stat_sessions`` per request.
     keys = (
         f"{'r.seq, ' if sequence else ''}{_HOUR}, r.session_key, {USAGE_ORIGIN_SQL}, "
         "c.model_key, c.purpose, r.status, COALESCE(r.failure_class, ''), "
@@ -884,7 +887,7 @@ def _usage_select(
         CROSS JOIN stat_usage_units u ON u.session_key = r.session_key
         CROSS JOIN stat_usage_calls c ON c.session_key = r.session_key AND c.seq = r.seq
         LEFT JOIN stat_sessions s ON s.generation_id = u.session_generation_id
-            AND u.session_generation_id <> ''
+            AND s.generation_id <> ''
         LEFT JOIN stat_run_records rr ON rr.session_key = s.session_key AND rr.run_id = r.run_id
         WHERE {where}
             {"AND c.first_token_ms IS NOT NULL" if first_token else ""}

@@ -12,6 +12,7 @@ from core.sessions import (
     OwnedRunRecord,
     OwnedSessionSummary,
     SessionAddress,
+    TemporarySessionBinding,
 )
 from core.statistics._extensions import extension_actor_key
 from core.statistics.index import (
@@ -101,6 +102,8 @@ class SessionSource(Protocol):
         after: int = 0,
         limit: int = 100,
     ) -> list[OwnedRunRecord]: ...
+
+    def temporary_binding(self, address: SessionAddress) -> TemporarySessionBinding | None: ...
 
     def list_owned_session_summaries(
         self,

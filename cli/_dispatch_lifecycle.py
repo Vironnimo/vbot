@@ -11,7 +11,7 @@ from cli._output import (
     FAILURE_EXIT_CODE,
     SUCCESS_EXIT_CODE,
 )
-from cli.server_management import CommandResult, ServerInstance
+from cli._server_target import CommandResult, ServerInstance
 from core.utils.config import Config
 
 
