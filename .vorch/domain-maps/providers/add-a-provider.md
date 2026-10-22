@@ -19,7 +19,7 @@ Name the existing deep owner that can absorb the behavior before adding another 
 2. Add `resources/providers/<id>.json` with a valid id, Adapter selector, base URL, at least one `connections` entry, and only verified defaults/headers/discovery settings. Choose `api_key`, `oauth`, or `none` based on actual auth semantics.
 3. Reuse or implement the Adapter in `core/providers/`. Keep wire mechanics deep, normalized output canonical, and secrets behind the injected `TokenGetter`. Declare the protocols it speaks in `WIRE_PROTOCOLS` and build every request from its resolved wire profile (`self.wire_profile(model_id)`) through the shared codecs; per-Model request differences never become Adapter branches.
 4. Add `resources/wire/<id>.json` for every request rule that differs from the protocol defaults (`core/providers/_wire_protocol_defaults.py`): protocol per Model or Connection, reasoning dialect, ladder and off/unset spelling, parameter rules and `exclusive_parameters` groups, output-limit field, Tool-call ids, replay scope, fidelity and carriers, media types and documented request limits (`media.request_max_bytes`, `media.request_max_images`), prompt caching, admission (`providers/wire-profiles.md` -> Profile layers, `providers/request-policy.md`). Prefer `defaults` and `rules` matching catalog facts over per-Model entries, and state the evidence in each rule's `note`. Facts nobody verified are left to the defaults and to rejection learning.
-5. If the Adapter selector is new, register it in both the Runtime map `ADAPTER_TYPES` (`core/providers/adapter_types.py`) and discovery `_DISCOVERY_ADAPTER_MAP` (`core/models/discovery.py`); export public contract types only when another domain needs them.
+5. If the Adapter selector is new, register it once in `ADAPTER_TYPES` (`core/providers/adapter_types.py`), shared by Runtime and discovery. Keep any explicit discovery-class exception in that same Provider owner; export public contract types only when another domain needs them.
 6. Implement catalog hooks only for facts the Provider exposes: filters/normalization, headers/params, optional enrichment, or task feeds. Discovery must tag/merge by Connection and remain fail-soft at the documented boundaries.
 7. Add or refresh the Provider Model projection, then use override files only for durable facts the feeds omit. Verify Model ids exactly match what the runtime endpoint expects.
 8. Add a task-gated `providers/<id>.md` reference when the Provider has non-obvious auth, routing, reasoning, catalog, retry, media, or usage contracts; add a sharp trigger in `providers.md`, never a PROJECT index row.
@@ -37,7 +37,7 @@ Do not invent a capability because a compatible API documents it generally. Spar
 
 - Provider and Connection ids satisfy compositional-id constraints and Account/token filenames remain unambiguous.
 - Keyless Connections default disabled; keyed Connections use usability rather than credential-only behavior gates.
-- Adapter and discovery selector maps agree.
+- The shared Adapter registration selects the intended chat and discovery behavior.
 - Auth headers rebuild inside retry attempts; secrets never enter logs, fixtures, catalogs, or response payloads.
 - `send()`, `stream()`, and `normalize_response()` agree on routing and canonical shapes.
 - Every new request path renders its payload through a `RequestPlan` and `prepare_request()`, so building and encoding stay off the Event Loop (`providers/request-policy.md` -> HTTP, retry, and streaming); `test_request_preparation.py` lists every path.

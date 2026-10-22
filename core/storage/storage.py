@@ -41,6 +41,7 @@ from core.settings import (
     load_validated_settings_json,
     unusable_settings_fallback,
 )
+from core.settings import updates as settings_updates
 from core.settings.normalizers import (
     SUPPORTED_APPEARANCE_LANGUAGES,
     custom_provider_revision,
@@ -72,7 +73,6 @@ from core.settings.paths import (
     apply_settings_patch,
 )
 from core.settings.settings import SETTINGS_UPDATE_SECTIONS
-from core.storage import _settings_updates as settings_updates
 from core.storage.errors import SettingsConflictError, StorageError
 from core.storage.layout import DataDirectoryLayout, initialize_data_directory
 from core.storage.prompt_blocks import PromptBlockStore

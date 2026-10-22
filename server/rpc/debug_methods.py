@@ -32,7 +32,6 @@ from server.rpc.errors import RPC_ERROR_DOMAIN, RPC_ERROR_INVALID_REQUEST, RpcEr
 from server.rpc.event_bridge import publish_resource_changed
 from server.rpc.provider_access import (
     _connection_models_endpoint,
-    _discovery_credential,
     _provider_connection,
 )
 from server.rpc.validation import _reject_unsupported, _required_string
@@ -275,7 +274,9 @@ async def _debug_model_probe(state: Any, params: JsonObject) -> JsonObject:
         )
 
     try:
-        async with _discovery_credential(runtime, provider_id, connection_id, connection) as (
+        async with runtime.provider_discovery_credential(
+            provider_id, connection_id, connection
+        ) as (
             discovery_connection,
             credential,
         ):

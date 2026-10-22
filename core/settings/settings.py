@@ -15,15 +15,23 @@ from core.settings._json_settings import normalize_json_object
 from core.settings._rules import (
     AGENT_ID_PATTERN,
     ALLOWED_THINKING_EFFORTS,
+    APPEARANCE_FIELDS,
+    ARCHIVE_FIELDS,
     ARCHIVE_RETENTION_DAYS_RULE,
+    COMPACTION_FIELDS,
+    DEBUG_FIELDS,
     DEFAULT_APPEARANCE_CHAT_WIDTH,
     DEFAULT_APPEARANCE_CHAT_WORKING_MODE,
+    DEFAULTS_SECTIONS,
+    EXTENSIONS_FIELDS,
     LIBRARIAN_BOOLEAN_FIELDS,
     LIBRARIAN_DAY_FIELDS,
     LIBRARIAN_DAYS_RULE,
+    LIBRARIAN_FIELDS,
     MAX_ARCHIVE_RETENTION_DAYS,
     MAX_FALLBACK_MODELS,
     MAX_LIBRARIAN_DAYS,
+    MAX_TRACE_LIMIT,
     MIN_ARCHIVE_RETENTION_DAYS,
     NOTIFICATION_FIELDS,
     OPENROUTER_MODEL_ID_MAX_LENGTH,
@@ -35,11 +43,16 @@ from core.settings._rules import (
     PROJECT_ID_PATTERN,
     PROJECT_TOOL_ALLOWLIST_WILDCARD,
     RECALL_BACKEND_PATTERN,
+    RECALL_FIELDS,
+    REFLECTION_FIELDS,
     REFLECTION_INTERVAL_FIELDS,
+    SESSION_TITLE_FIELDS,
     SETTINGS_UPDATE_SECTIONS,
     SUBAGENT_SETTING_FIELDS,
     SUPPORTED_APPEARANCE_CHAT_WIDTHS,
     SUPPORTED_APPEARANCE_CHAT_WORKING_MODES,
+    WEB_SEARCH_FIELDS,
+    WEB_SEARCH_SEARXNG_FIELDS,
     JsonObject,
     SettingsValidationError,
     _positive_integer,
@@ -196,7 +209,7 @@ def _parse_session_titles_update(session_titles: Any) -> JsonObject:
     if not isinstance(session_titles, dict):
         raise SettingsValidationError("params.session_titles must be an object")
 
-    unsupported_fields = sorted(set(session_titles) - {"enabled", "model"})
+    unsupported_fields = sorted(set(session_titles) - SESSION_TITLE_FIELDS)
     if unsupported_fields:
         raise SettingsValidationError(
             f"unsupported session_titles settings: {', '.join(unsupported_fields)}"
@@ -217,8 +230,7 @@ def _parse_reflection_update(reflection: Any) -> JsonObject:
     if not isinstance(reflection, dict):
         raise SettingsValidationError("params.reflection must be an object")
 
-    supported_fields = {"enabled", *REFLECTION_INTERVAL_FIELDS}
-    unsupported_fields = sorted(set(reflection) - supported_fields)
+    unsupported_fields = sorted(set(reflection) - REFLECTION_FIELDS)
     if unsupported_fields:
         raise SettingsValidationError(
             f"unsupported reflection settings: {', '.join(unsupported_fields)}"
@@ -241,8 +253,7 @@ def _parse_librarian_update(librarian: Any) -> JsonObject:
     if not isinstance(librarian, dict):
         raise SettingsValidationError("params.librarian must be an object")
 
-    supported_fields = {*LIBRARIAN_BOOLEAN_FIELDS, *LIBRARIAN_DAY_FIELDS}
-    unsupported_fields = sorted(set(librarian) - supported_fields)
+    unsupported_fields = sorted(set(librarian) - LIBRARIAN_FIELDS)
     if unsupported_fields:
         raise SettingsValidationError(
             f"unsupported librarian settings: {', '.join(unsupported_fields)}"
@@ -277,7 +288,7 @@ def _parse_extensions_update(extensions: Any) -> JsonObject:
     if not isinstance(extensions, dict):
         raise SettingsValidationError("params.extensions must be an object")
 
-    unsupported_fields = sorted(set(extensions) - {"disabled", "config"})
+    unsupported_fields = sorted(set(extensions) - EXTENSIONS_FIELDS)
     if unsupported_fields:
         raise SettingsValidationError(
             f"unsupported extensions settings: {', '.join(unsupported_fields)}"
@@ -311,7 +322,7 @@ def _parse_web_search_update(web_search: Any) -> JsonObject:
     if not isinstance(web_search, dict):
         raise SettingsValidationError("params.web_search must be an object")
 
-    unsupported_fields = sorted(set(web_search) - {"provider", "default_count", "searxng"})
+    unsupported_fields = sorted(set(web_search) - WEB_SEARCH_FIELDS)
     if unsupported_fields:
         raise SettingsValidationError(
             f"unsupported web_search settings: {', '.join(unsupported_fields)}"
@@ -344,7 +355,7 @@ def _parse_searxng_settings(searxng: Any) -> JsonObject:
     if not isinstance(searxng, dict):
         raise SettingsValidationError("params.web_search.searxng must be an object")
 
-    unsupported_fields = sorted(set(searxng) - {"base_url"})
+    unsupported_fields = sorted(set(searxng) - WEB_SEARCH_SEARXNG_FIELDS)
     if unsupported_fields:
         raise SettingsValidationError(
             f"unsupported SearXNG settings: {', '.join(unsupported_fields)}"
@@ -360,7 +371,7 @@ def _parse_recall_update(recall: Any) -> JsonObject:
     if not isinstance(recall, dict):
         raise SettingsValidationError("params.recall must be an object")
 
-    unsupported_fields = sorted(set(recall) - {"backend"})
+    unsupported_fields = sorted(set(recall) - RECALL_FIELDS)
     if unsupported_fields:
         raise SettingsValidationError(
             f"unsupported recall settings: {', '.join(unsupported_fields)}"
@@ -380,7 +391,7 @@ def _parse_defaults_update(defaults: Any) -> JsonObject:
     if not isinstance(defaults, dict):
         raise SettingsValidationError("params.defaults must be an object")
 
-    unsupported_sections = sorted(set(defaults) - {"agent"})
+    unsupported_sections = sorted(set(defaults) - DEFAULTS_SECTIONS)
     if unsupported_sections:
         raise SettingsValidationError(
             f"unsupported defaults settings: {', '.join(unsupported_sections)}"
@@ -415,7 +426,7 @@ def _parse_appearance_update(appearance: Any) -> JsonObject:
     if not isinstance(appearance, dict):
         raise SettingsValidationError("params.appearance must be an object")
 
-    unsupported_fields = sorted(set(appearance) - {"language", "chat_width", "chat_working_mode"})
+    unsupported_fields = sorted(set(appearance) - APPEARANCE_FIELDS)
     if unsupported_fields:
         raise SettingsValidationError(
             f"unsupported appearance settings: {', '.join(unsupported_fields)}"
@@ -499,8 +510,7 @@ def _parse_compaction_update(compaction: Any) -> JsonObject:
     if not isinstance(compaction, dict):
         raise SettingsValidationError("params.compaction must be an object")
 
-    supported_fields = {"enabled", "trigger", "strategy"}
-    unsupported_fields = sorted(set(compaction) - supported_fields)
+    unsupported_fields = sorted(set(compaction) - COMPACTION_FIELDS)
     if unsupported_fields:
         raise SettingsValidationError(
             f"unsupported compaction settings: {', '.join(unsupported_fields)}"
@@ -590,7 +600,7 @@ def _parse_debug_update(debug: Any) -> JsonObject:
     if not isinstance(debug, dict):
         raise SettingsValidationError("params.debug must be an object")
 
-    unsupported_fields = sorted(set(debug) - {"enabled", "trace_limit"})
+    unsupported_fields = sorted(set(debug) - DEBUG_FIELDS)
     if unsupported_fields:
         raise SettingsValidationError(
             f"unsupported debug settings: {', '.join(unsupported_fields)}"
@@ -606,8 +616,10 @@ def _parse_debug_update(debug: Any) -> JsonObject:
 
     if "trace_limit" in debug:
         trace_limit = _positive_integer(debug["trace_limit"], "params.debug.trace_limit")
-        if trace_limit > 500:
-            raise SettingsValidationError("params.debug.trace_limit must not exceed 500")
+        if trace_limit > MAX_TRACE_LIMIT:
+            raise SettingsValidationError(
+                f"params.debug.trace_limit must not exceed {MAX_TRACE_LIMIT}"
+            )
         parsed["trace_limit"] = trace_limit
 
     return parsed
@@ -617,7 +629,7 @@ def _parse_archive_update(archive: Any) -> JsonObject:
     if not isinstance(archive, dict):
         raise SettingsValidationError("params.archive must be an object")
 
-    unsupported_fields = sorted(set(archive) - {"retention_days"})
+    unsupported_fields = sorted(set(archive) - ARCHIVE_FIELDS)
     if unsupported_fields:
         raise SettingsValidationError(
             f"unsupported archive settings: {', '.join(unsupported_fields)}"

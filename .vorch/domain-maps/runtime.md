@@ -62,7 +62,7 @@ Reload methods refresh already-wired consumers without restart. Provider/Model r
 
 ### Provider operations
 
-Runtime preserves `get_adapter(ConnectionRef)`, token getter/extra access, Reasoning description, local Context-window reads, and local-catalog refresh as facade methods. `core/providers/runtime.py::ProviderRuntime` owns their implementation, including the authoritative Adapter map, credential/token construction, Debug recorder injection, local Context resolver, refresh throttle/staging, and Connection reachability state. `ConnectionRef` is a frozen dataclass in `core/providers/accounts.py` bundling the Provider id and its compositional `provider:connection[:account]` Connection id.
+Runtime preserves `get_adapter(ConnectionRef)`, token getter/extra access, Reasoning description, local Context-window reads, and local-catalog refresh as facade methods. `core/providers/runtime.py::ProviderRuntime` owns their implementation, including the authoritative Adapter map, credential/token construction, Debug recorder injection, local Context resolver, catalog refresh policy/staging and background Task ownership, and Connection reachability state (`providers/catalog-discovery.md`). `ConnectionRef` is a frozen dataclass in `core/providers/accounts.py` bundling the Provider id and its compositional `provider:connection[:account]` Connection id.
 
 ### Identity Agent rename
 

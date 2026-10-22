@@ -46,20 +46,29 @@ from core.settings._provider_settings import (
     normalize_local_models_settings,
     normalize_providers_settings,
 )
-from core.settings.agent_defaults import AGENT_DEFAULT_FIELDS, normalize_agent_default_value
-from core.settings.settings import (
+from core.settings._rules import (
     ARCHIVE_RETENTION_DAYS_RULE,
     DEFAULT_APPEARANCE_CHAT_WIDTH,
     DEFAULT_APPEARANCE_CHAT_WORKING_MODE,
+    DEFAULTS_SECTIONS,
+    EXTENSIONS_FIELDS,
     LIBRARIAN_BOOLEAN_FIELDS,
     LIBRARIAN_DAY_FIELDS,
     LIBRARIAN_DAYS_RULE,
     MAX_LIBRARIAN_DAYS,
+    MAX_TRACE_LIMIT,
+    MODEL_TASK_BINDING_FIELDS,
     NOTIFICATION_FIELDS,
+    SESSION_TITLE_FIELDS,
+    SPEECH_FIELDS,
     SUPPORTED_APPEARANCE_CHAT_WIDTHS,
     SUPPORTED_APPEARANCE_CHAT_WORKING_MODES,
+    TRANSCRIPTION_AUDIO_FIELDS,
+    WEB_SEARCH_FIELDS,
+    WEB_SEARCH_SEARXNG_FIELDS,
     is_archive_retention_days,
 )
+from core.settings.agent_defaults import AGENT_DEFAULT_FIELDS, normalize_agent_default_value
 from core.utils.errors import StorageError
 
 DEFAULT_APPEARANCE_LANGUAGE = "en"
@@ -121,7 +130,7 @@ def normalize_speech_settings(speech: Any) -> dict[str, Any]:
     else:
         raise StorageError("Speech settings must be a mapping")
 
-    unsupported_fields = sorted(set(section) - {"transcription_audio"})
+    unsupported_fields = sorted(set(section) - SPEECH_FIELDS)
     if unsupported_fields:
         raise StorageError(f"Unsupported speech settings: {', '.join(unsupported_fields)}")
 
@@ -140,7 +149,7 @@ def normalize_transcription_audio_settings(value: Any) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise StorageError("speech.transcription_audio must be a mapping")
 
-    unsupported_fields = sorted(set(value) - {"profile", "format", "sample_rate_hz"})
+    unsupported_fields = sorted(set(value) - TRANSCRIPTION_AUDIO_FIELDS)
     if unsupported_fields:
         raise StorageError(
             f"Unsupported speech.transcription_audio settings: {', '.join(unsupported_fields)}"
@@ -294,7 +303,7 @@ def coerce_defaults_update(defaults: Any) -> dict[str, Any]:
 
     if not isinstance(defaults, Mapping):
         raise StorageError("Defaults settings must be a mapping")
-    unsupported_sections = sorted(set(defaults) - {"agent"})
+    unsupported_sections = sorted(set(defaults) - DEFAULTS_SECTIONS)
     if unsupported_sections:
         raise StorageError(f"Unsupported defaults settings: {', '.join(unsupported_sections)}")
     if "agent" not in defaults:
@@ -321,7 +330,7 @@ def normalize_session_title_settings(session_titles: Any) -> dict[str, Any]:
     if not isinstance(session_titles, Mapping):
         raise StorageError("Expected settings.session_titles to be an object")
 
-    unsupported_fields = sorted(set(session_titles) - {"enabled", "model"})
+    unsupported_fields = sorted(set(session_titles) - SESSION_TITLE_FIELDS)
     if unsupported_fields:
         raise StorageError(f"Unsupported session_titles settings: {', '.join(unsupported_fields)}")
 
@@ -446,8 +455,8 @@ def _normalize_debug_trace_limit(value: Any) -> int:
         raise StorageError("Debug setting trace_limit must be an integer")
     if value <= 0:
         raise StorageError("Debug setting trace_limit must be positive")
-    if value > 500:
-        raise StorageError("Debug setting trace_limit must be at most 500")
+    if value > MAX_TRACE_LIMIT:
+        raise StorageError(f"Debug setting trace_limit must be at most {MAX_TRACE_LIMIT}")
     return value
 
 
@@ -570,7 +579,7 @@ def normalize_web_search_settings(web_search: Any) -> dict[str, Any]:
     if not isinstance(searxng, Mapping):
         raise StorageError("Expected settings.web_search.searxng to be an object")
 
-    unsupported_searxng_fields = sorted(set(searxng) - {"base_url"})
+    unsupported_searxng_fields = sorted(set(searxng) - WEB_SEARCH_SEARXNG_FIELDS)
     if unsupported_searxng_fields:
         raise StorageError("Unsupported SearXNG settings: " + ", ".join(unsupported_searxng_fields))
 
@@ -601,7 +610,7 @@ def _coerce_web_search_section(web_search: Any) -> dict[str, Any]:
         return {}
     if not isinstance(web_search, Mapping):
         raise StorageError("Expected settings.web_search to be an object")
-    unsupported_fields = sorted(set(web_search) - {"provider", "default_count", "searxng"})
+    unsupported_fields = sorted(set(web_search) - WEB_SEARCH_FIELDS)
     if unsupported_fields:
         raise StorageError(f"Unsupported web_search settings: {', '.join(unsupported_fields)}")
     return dict(web_search)
@@ -619,7 +628,7 @@ def normalize_model_task_settings(model_tasks: Any) -> dict[str, dict[str, Any]]
         if not isinstance(raw_binding, Mapping):
             raise StorageError(f"Expected settings.model_tasks.{task_type} to be an object")
 
-        unsupported_fields = sorted(set(raw_binding) - {"target", "options"})
+        unsupported_fields = sorted(set(raw_binding) - MODEL_TASK_BINDING_FIELDS)
         if unsupported_fields:
             raise StorageError(
                 f"Unsupported model task settings for {task_type}: {', '.join(unsupported_fields)}"
@@ -689,7 +698,7 @@ def _coerce_extensions_section(extensions: Any) -> dict[str, Any]:
         return {}
     if not isinstance(extensions, Mapping):
         raise StorageError("Expected settings.extensions to be an object")
-    unsupported_fields = sorted(set(extensions) - {"disabled", "config"})
+    unsupported_fields = sorted(set(extensions) - EXTENSIONS_FIELDS)
     if unsupported_fields:
         raise StorageError(f"Unsupported extensions settings: {', '.join(unsupported_fields)}")
     return dict(extensions)

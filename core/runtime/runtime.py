@@ -30,6 +30,7 @@ from core.models.models import Model
 from core.providers._wire_profile_files import WireProfileFile
 from core.providers.accounts import ConnectionRef, split_connection_id
 from core.providers.adapter import ProviderAdapter
+from core.providers.providers import ConnectionConfig
 from core.providers.reasoning import ReasoningIntent
 from core.providers.runtime import ProviderRuntime
 from core.providers.token_getter import TokenGetter
@@ -1052,6 +1053,35 @@ class Runtime(RuntimeServiceGraph):
         """Coordinate manual and automatic Model DB refresh transactions."""
         return self._provider_operations().model_database_refresh()
 
+    async def refresh_model_database(
+        self, *, provider_id: str | None = None, target: str = "runtime"
+    ) -> dict[str, Any]:
+        """Refresh and publish Provider catalogs through the Provider owner."""
+        return await self._provider_operations().refresh_model_database(
+            provider_id=provider_id, target=target
+        )
+
+    def provider_discovery_credential(
+        self, provider_id: str, connection_id: str, connection: ConnectionConfig
+    ) -> AbstractAsyncContextManager[tuple[ConnectionConfig, str | TokenGetter]]:
+        """Resolve a catalog credential and its current token-derived endpoint."""
+        return self._provider_operations().discovery_credential(
+            provider_id, connection_id, connection
+        )
+
+    def start_local_catalog_refresh(self) -> asyncio.Task[None]:
+        """Start a local sweep that Runtime shutdown cancels and drains."""
+        return self._provider_operations().start_local_catalog_refresh()
+
+    def start_installation_catalog_restore(self) -> asyncio.Task[None] | None:
+        """Restore a lost installation catalog once, before local startup sweeps."""
+        return self._provider_operations().start_installation_catalog_restore()
+
+    async def shutdown_catalog_refreshes(self) -> None:
+        """Cancel and drain the Provider owner's background catalog operations."""
+        if self._provider_runtime is not None:
+            await self._provider_runtime.shutdown_catalog_refreshes()
+
     async def maybe_refresh_local_catalogs(self, *, force: bool = False) -> None:
         """Refresh enabled local Provider catalogs without disrupting live registries."""
         if self._provider_runtime is None:
@@ -1061,7 +1091,7 @@ class Runtime(RuntimeServiceGraph):
     def add_model_catalog_changed_callback(
         self, callback: Callable[[], None]
     ) -> Callable[[], None]:
-        """Subscribe to Model catalog changes a local catalog sweep publishes.
+        """Subscribe to automatic catalog changes and successful startup restores.
 
         Returns an unsubscribe function.
         """

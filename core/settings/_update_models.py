@@ -16,12 +16,17 @@ from core.model_tasks.constants import (
 from core.model_tasks.options import TaskModelOptionValidationError, validate_text_embedding_options
 from core.settings._json_settings import normalize_json_object
 from core.settings._rules import (
+    LOCAL_MODELS_FIELDS,
+    MODEL_TASK_BINDING_FIELDS,
     OPENROUTER_MODEL_ID_MAX_LENGTH,
+    OPENROUTER_PROVIDER_FIELDS,
     OPENROUTER_PROVIDER_SLUG_MAX_LENGTH,
     OPENROUTER_PROVIDER_SLUG_PATTERN,
     OPENROUTER_ROUTING_FIELDS,
     OPENROUTER_ROUTING_MODES,
     OPENROUTER_ROUTING_POLICY_FIELDS,
+    SPEECH_FIELDS,
+    TRANSCRIPTION_AUDIO_FIELDS,
     JsonObject,
     SettingsValidationError,
     _positive_integer,
@@ -32,7 +37,7 @@ from core.utils.errors import StorageError
 def _parse_speech_update(speech: Any) -> JsonObject:
     if not isinstance(speech, Mapping):
         raise SettingsValidationError("params.speech must be an object")
-    unsupported_fields = sorted(set(speech) - {"transcription_audio"})
+    unsupported_fields = sorted(set(speech) - SPEECH_FIELDS)
     if unsupported_fields:
         raise SettingsValidationError(
             f"unsupported speech settings: {', '.join(unsupported_fields)}"
@@ -43,14 +48,13 @@ def _parse_speech_update(speech: Any) -> JsonObject:
     audio = speech["transcription_audio"]
     if not isinstance(audio, Mapping):
         raise SettingsValidationError("params.speech.transcription_audio must be an object")
-    required_fields = {"profile", "format", "sample_rate_hz"}
-    unsupported_audio_fields = sorted(set(audio) - required_fields)
+    unsupported_audio_fields = sorted(set(audio) - TRANSCRIPTION_AUDIO_FIELDS)
     if unsupported_audio_fields:
         raise SettingsValidationError(
             "unsupported speech.transcription_audio settings: "
             f"{', '.join(unsupported_audio_fields)}"
         )
-    missing_fields = sorted(required_fields - set(audio))
+    missing_fields = sorted(TRANSCRIPTION_AUDIO_FIELDS - set(audio))
     if missing_fields:
         raise SettingsValidationError(
             f"params.speech.transcription_audio requires {', '.join(missing_fields)}"
@@ -123,7 +127,7 @@ def _parse_providers_update(providers: Any) -> JsonObject:
     openrouter = providers["openrouter"]
     if not isinstance(openrouter, Mapping):
         raise SettingsValidationError("params.providers.openrouter must be an object")
-    unsupported_openrouter_fields = sorted(set(openrouter) - {"routing"})
+    unsupported_openrouter_fields = sorted(set(openrouter) - OPENROUTER_PROVIDER_FIELDS)
     if unsupported_openrouter_fields:
         raise SettingsValidationError(
             f"unsupported providers.openrouter settings: {', '.join(unsupported_openrouter_fields)}"
@@ -261,7 +265,7 @@ def _parse_local_models_update(local_models: Any) -> JsonObject:
     if not isinstance(local_models, dict):
         raise SettingsValidationError("params.local_models must be an object")
 
-    unsupported_fields = sorted(set(local_models) - {"context_windows"})
+    unsupported_fields = sorted(set(local_models) - LOCAL_MODELS_FIELDS)
     if unsupported_fields:
         raise SettingsValidationError(
             f"unsupported local_models settings: {', '.join(unsupported_fields)}"
@@ -303,7 +307,7 @@ def _parse_model_tasks_update(model_tasks: Any) -> JsonObject:
         if not isinstance(raw_binding, dict):
             raise SettingsValidationError(f"params.model_tasks.{task_type} must be an object")
 
-        unsupported_fields = sorted(set(raw_binding) - {"target", "options"})
+        unsupported_fields = sorted(set(raw_binding) - MODEL_TASK_BINDING_FIELDS)
         if unsupported_fields:
             raise SettingsValidationError(
                 f"unsupported model task settings for {task_type}: {', '.join(unsupported_fields)}"

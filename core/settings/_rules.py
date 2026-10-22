@@ -101,6 +101,28 @@ SETTINGS_UPDATE_SECTIONS = frozenset(
 )
 
 
+# Field membership is shared by raw documents, strict updates and tolerant
+# normalization; each boundary keeps its own required fields and value rules.
+APPEARANCE_FIELDS = frozenset({"language", "chat_width", "chat_working_mode"})
+ARCHIVE_FIELDS = frozenset({"retention_days"})
+COMPACTION_FIELDS = frozenset({"enabled", "trigger", "strategy"})
+DEFAULTS_SECTIONS = frozenset({"agent"})
+DEBUG_FIELDS = frozenset({"enabled", "trace_limit"})
+EXTENSIONS_FIELDS = frozenset({"disabled", "config"})
+LOCAL_MODELS_FIELDS = frozenset({"context_windows"})
+MODEL_TASK_BINDING_FIELDS = frozenset({"target", "options"})
+OPENROUTER_PROVIDER_FIELDS = frozenset({"routing"})
+RECALL_FIELDS = frozenset({"backend"})
+SESSION_TITLE_FIELDS = frozenset({"enabled", "model"})
+SPEECH_FIELDS = frozenset({"transcription_audio"})
+TRANSCRIPTION_AUDIO_FIELDS = frozenset({"profile", "format", "sample_rate_hz"})
+WEB_SEARCH_FIELDS = frozenset({"provider", "default_count", "searxng"})
+WEB_SEARCH_SEARXNG_FIELDS = frozenset({"base_url"})
+
+
+MAX_TRACE_LIMIT = 500
+
+
 # Desktop notification kinds the Windows tray application shows. Each field is
 # an independent boolean switch; defaults live in ``normalizers.py``.
 NOTIFICATION_FIELDS = (
@@ -133,12 +155,18 @@ OPENROUTER_MODEL_ID_MAX_LENGTH = 256
 REFLECTION_INTERVAL_FIELDS = ("memory_turn_interval", "skill_model_step_interval")
 
 
+REFLECTION_FIELDS = frozenset({"enabled", *REFLECTION_INTERVAL_FIELDS})
+
+
 # The Librarian section: switches, and day counts from 1 to 3650 (ten years,
 # like archive retention), which keeps every date computed from them valid.
 LIBRARIAN_BOOLEAN_FIELDS = ("enabled", "consolidate")
 
 
 LIBRARIAN_DAY_FIELDS = ("interval_days", "archive_after_days")
+
+
+LIBRARIAN_FIELDS = frozenset({*LIBRARIAN_BOOLEAN_FIELDS, *LIBRARIAN_DAY_FIELDS})
 
 
 MAX_LIBRARIAN_DAYS = 3650

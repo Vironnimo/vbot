@@ -332,7 +332,7 @@ def _unregister_skill_change_bridge(state: Any) -> None:
 
 
 def _register_model_catalog_change_bridge(state: Any) -> Any:
-    """Publish Model catalog changes an automatic local catalog sweep makes."""
+    """Publish automatic catalog changes and successful startup restores."""
     return state.runtime.add_model_catalog_changed_callback(
         lambda: publish_resource_changed(state, RESOURCE_KIND_MODELS)
     )
@@ -486,9 +486,7 @@ async def _shutdown_runtime(runtime: Any) -> bool:
 
 async def _shutdown_model_list_refreshes(runtime: Any) -> None:
     """Drain refresh tasks spawned by timed-out model.list requests."""
-    from server.rpc.model_methods import shutdown_background_refresh_tasks
-
-    await shutdown_background_refresh_tasks(runtime)
+    await runtime.shutdown_catalog_refreshes()
 
 
 async def _shutdown_device_flow_engine(engine: Any, logger: logging.Logger) -> None:

@@ -42,9 +42,6 @@ from core.sessions import SessionAddress
 from core.settings import AgentDefaults, bake_agent_defaults
 from core.tools.availability import ToolAccess
 from core.tools.tool_loading import complete_tool_loading
-from server.rpc import (
-    model_methods,
-)
 from server.rpc.methods import dispatch_rpc
 
 JsonObject = dict[str, Any]
@@ -94,7 +91,7 @@ def _no_models_dev_fetch(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _none_catalog() -> None:
         return None
 
-    monkeypatch.setattr(model_methods, "fetch_catalog", _none_catalog)
+    monkeypatch.setattr("core.providers._catalog_refresh.fetch_catalog", _none_catalog)
 
 
 @dataclass(frozen=True)

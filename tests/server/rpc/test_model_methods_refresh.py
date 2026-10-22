@@ -17,6 +17,7 @@ import pytest
 import respx
 
 from core.database import write_bootstrap_marker
+from core.models import discovery
 from core.models.database import (
     ModelDatabaseRefresh,
     read_model_database_manifest,
@@ -24,6 +25,7 @@ from core.models.database import (
 )
 from core.models.discovery import ModelDiscoveryError
 from core.models.models import ModelRegistry
+from core.providers import _catalog_refresh
 from core.providers.accounts import Account, ConnectionRef
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.errors import NetworkError, ProviderAuthError
@@ -33,7 +35,6 @@ from core.runtime import Runtime
 from core.utils.config import Config
 from core.utils.retry import MAX_RETRIES, retry_async
 from server.events import ServerEventBus
-from server.rpc import model_methods
 from tests.server.rpc.oauth_provider_test_support import (
     api_key_connection,
     copilot_provider,
@@ -70,7 +71,7 @@ def fake_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
     FAKE_REFRESH_MODEL_PROVIDER_IDS.clear()
     FAKE_REFRESH_MODEL_CALLS.clear()
     FAKE_REFRESH_MODEL_KWARGS.clear()
-    monkeypatch.setattr(model_methods, "refresh_models", fake_refresh_models)
+    monkeypatch.setattr(discovery, "refresh_models", fake_refresh_models)
 
 
 def _api_key_provider(provider_id: str, credential_key: str) -> SimpleNamespace:
@@ -182,7 +183,7 @@ async def test_model_refresh_uses_started_runtime_storage_paths(
 
         for name in ("begin_runtime_model_database_refresh", "begin_system_model_database_refresh"):
             monkeypatch.setattr(
-                model_methods, name, off_loop("stage", getattr(model_methods, name))
+                _catalog_refresh, name, off_loop("stage", getattr(_catalog_refresh, name))
             )
         monkeypatch.setattr(ModelRegistry, "validate", off_loop("validate", ModelRegistry.validate))
         for name in ("commit", "discard"):
@@ -243,7 +244,7 @@ async def test_refresh_cancellation_settles_publication_and_discards_staging(
     entered = asyncio.Event()
     release = threading.Event()
     staged: list[ModelDatabaseRefresh] = []
-    begin = model_methods.begin_runtime_model_database_refresh
+    begin = _catalog_refresh.begin_runtime_model_database_refresh
     commit = ModelDatabaseRefresh.commit
 
     def pause() -> None:
@@ -263,7 +264,7 @@ async def test_refresh_cancellation_settles_publication_and_discards_staging(
             pause()
         return result
 
-    monkeypatch.setattr(model_methods, "begin_runtime_model_database_refresh", stage)
+    monkeypatch.setattr(_catalog_refresh, "begin_runtime_model_database_refresh", stage)
     monkeypatch.setattr(ModelDatabaseRefresh, "commit", publish)
     task = asyncio.create_task(rpc_result(state, "model.refresh_db", provider_id="openrouter"))
     try:
@@ -361,9 +362,9 @@ async def test_global_refresh_covers_only_eligible_providers(
         )
         return {"model_count": 0}
 
-    monkeypatch.setattr(model_methods, "fetch_catalog", fetch_models_dev_catalog)
+    monkeypatch.setattr(_catalog_refresh, "fetch_catalog", fetch_models_dev_catalog)
     monkeypatch.setattr(
-        model_methods, "_refresh_canonical_layer_if_possible", project_canonical_layer
+        _catalog_refresh, "_refresh_canonical_layer_if_possible", project_canonical_layer
     )
 
     result = await rpc_result(state, "model.refresh_db", **params)
@@ -421,7 +422,6 @@ async def test_manual_and_local_refreshes_preserve_each_others_complete_snapshot
             await release_first.wait()
         return await fake_refresh_models(provider, credential, target_resources, **kwargs)
 
-    monkeypatch.setattr(model_methods, "refresh_models", refresh)
     monkeypatch.setattr(discovery, "refresh_models", refresh)
     runtime = Runtime(Config(data_dir=data_dir), safe_startup_mode="test")
     runtime.start()
@@ -558,8 +558,11 @@ async def test_startup_rebuilds_a_lost_runtime_model_db_once(
         manifest_path = runtime_models_dir / "manifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         manifest_path.write_text(json.dumps(manifest | {"schema_version": 1}), encoding="utf-8")
-    with caplog.at_level(logging.INFO, logger=model_methods._LOGGER.name):
-        task = model_methods.start_installation_catalog_restore(state)
+    from server._app_lifecycle import _register_model_catalog_change_bridge
+
+    _register_model_catalog_change_bridge(state)
+    with caplog.at_level(logging.INFO, logger=_catalog_refresh._LOGGER.name):
+        task = state.runtime.start_installation_catalog_restore()
         if task is not None:
             await task
 
@@ -584,7 +587,7 @@ async def test_startup_rebuilds_a_lost_runtime_model_db_once(
     if custom_provider:
         assert state.runtime.models.get("custom", "fresh-model").name == "Fresh Model"
     # The rebuilt root is compatible, so the next startup leaves it alone.
-    assert model_methods.start_installation_catalog_restore(state) is None
+    assert state.runtime.start_installation_catalog_restore() is None
 
 
 # ---------------------------------------------------------------------------
@@ -692,7 +695,7 @@ def _openai_with_failing_connections(
     monkeypatch.setenv("OPENAI_PRIMARY_KEY", "primary-key")
     monkeypatch.setenv("OPENAI_SECONDARY_KEY", "secondary-key")
     monkeypatch.delenv("OPENAI_MISSING_KEY", raising=False)
-    monkeypatch.setattr(model_methods, "refresh_models", selective_refresh_models)
+    monkeypatch.setattr(discovery, "refresh_models", selective_refresh_models)
     monkeypatch.setattr("core.utils.retry._sleep", skip_backoff)
     state = make_state(tmp_path, StubAdapter())
     provider = _multi_connection_openai()
@@ -759,7 +762,7 @@ async def test_global_refresh_continues_when_one_provider_fails(
     monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
     monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
     monkeypatch.setenv("SECONDARY_API_KEY", "secondary-key")
-    monkeypatch.setattr(model_methods, "refresh_models", selective_refresh_models)
+    monkeypatch.setattr(discovery, "refresh_models", selective_refresh_models)
     state = make_state(tmp_path, StubAdapter())
     state.runtime.providers.add(openrouter_provider())
     state.runtime.providers.add(_api_key_provider("secondary", "SECONDARY_API_KEY"))
@@ -934,8 +937,8 @@ async def test_model_refresh_db_uses_oauth_token_getter_for_fresh_token(
             "fetched_at": "2026-05-12T00:00:00+00:00",
         }
 
-    monkeypatch.setattr("server.rpc.provider_access.OAuthTokenGetter", StubOAuthTokenGetter)
-    monkeypatch.setattr(model_methods, "refresh_models", fake_refresh)
+    monkeypatch.setattr("core.providers._catalog_refresh.OAuthTokenGetter", StubOAuthTokenGetter)
+    monkeypatch.setattr(discovery, "refresh_models", fake_refresh)
 
     await rpc_result(state, "model.refresh_db", provider_id="github-copilot")
 

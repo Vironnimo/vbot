@@ -113,7 +113,6 @@ from server.portals import PortalServer
 from server.rpc.errors import RPC_ERROR_INTERNAL, RPC_ERROR_INVALID_REQUEST
 from server.rpc.event_bridge import publish_resource_changed
 from server.rpc.methods import dispatch_rpc
-from server.rpc.model_methods import start_installation_catalog_restore
 
 if TYPE_CHECKING:
     from server.access.tls import TlsContextHolder
@@ -279,16 +278,14 @@ def create_app(
                 _start_speech_preload(app_runtime)
                 # A missing or incompatible runtime Model DB is detected before the
                 # sweep below can publish a new one.
-                start_installation_catalog_restore(app.state)
+                app_runtime.start_installation_catalog_restore()
             # Local model catalogs (auto_refresh connections, e.g. Ollama) refresh
             # in the background — never blocking startup; the method itself is
             # throttled and swallows failures.
             app.state.local_catalog_refresh_task = (
                 None
                 if effective_safe_mode is not None
-                else asyncio.create_task(
-                    app_runtime.maybe_refresh_local_catalogs(), name="local-catalog-refresh"
-                )
+                else app_runtime.start_local_catalog_refresh()
             )
             server_logger.debug(
                 "Server application ready on %s:%s",

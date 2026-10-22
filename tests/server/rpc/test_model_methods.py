@@ -15,7 +15,6 @@ import pytest
 from core.models import Capabilities, Model, ReasoningCapabilities
 from core.providers._wire_profile_files import parse_wire_profile_file
 from server.rpc import model_methods
-from server.rpc.model_methods import shutdown_background_refresh_tasks
 from tests.server.rpc_test_support import (
     JsonObject,
     StubAdapter,
@@ -597,7 +596,7 @@ async def test_model_list_serves_the_stale_catalog_while_a_slow_sweep_finishes(
         fresh = await rpc_result(state, "model.list", provider_id="openai")
     finally:
         release.set()
-        await shutdown_background_refresh_tasks(state.runtime)
+        await state.runtime.shutdown_catalog_refreshes()
 
     assert "openai/local-fresh" not in [model["id"] for model in stale["models"]]
     assert "openai/local-fresh" in [model["id"] for model in fresh["models"]]
@@ -624,7 +623,7 @@ async def test_shutdown_cancels_and_drains_background_local_catalog_sweeps(
     await rpc_result(state, "model.list")
     await asyncio.wait_for(started.wait(), timeout=1.0)
 
-    await shutdown_background_refresh_tasks(state.runtime)
+    await state.runtime.shutdown_catalog_refreshes()
 
     assert cancelled.is_set()
 

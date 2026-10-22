@@ -4,17 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import threading
-import time
 from collections.abc import AsyncIterator, Callable, Iterable, Mapping
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import UTC, tzinfo
 from pathlib import Path
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
 from core.debug import DebugTraceStore, ProviderDebugRecorder
-from core.models.database import ModelDatabaseRefresh, begin_runtime_model_database_refresh
 from core.models.models import Model, ModelRegistry
+from core.providers import _catalog_refresh
 from core.providers._responses_websocket import ResponsesTransports, responses_conversation_id
 from core.providers._wire_profile_files import WireProfileFile
 from core.providers.accounts import DEFAULT_ACCOUNT_ID, Account, ConnectionRef, split_connection_id
@@ -57,18 +56,8 @@ from core.settings.settings import effective_timezone_name
 from core.storage import StorageManager
 from core.utils.errors import ConfigError, StorageError
 from core.utils.logging import get_logger
-from core.utils.retry import caller_owns_retries
-from core.utils.workers import BoundedWorkerPool, settle_before_cancelling
 
 _LOGGER = get_logger("providers.runtime")
-
-# Minimum pause between automatic local sweeps, measured from the end of the
-# previous sweep. It is also the probes' retry policy: each sweep makes one
-# discovery attempt per Connection.
-LOCAL_CATALOG_REFRESH_TTL_SECONDS = 30.0
-# Automatic local catalog refreshes stage, validate, publish, and discard the
-# complete Model DB copy here, never on the Event Loop.
-_LOCAL_CATALOG_WORKERS = BoundedWorkerPool(name="local-catalog", max_workers=1)
 
 
 class ProviderRuntime:
@@ -94,6 +83,7 @@ class ProviderRuntime:
         self._resources_path = resources_path
         self._logger = logger
         self._catalog_refresh_lock: asyncio.Lock | None = None
+        self._catalog_refresh_tasks: set[asyncio.Task[None]] = set()
         self._catalog_changed_callbacks: list[Callable[[], None]] = []
         self.refresh_at: float | None = None
         self._connection_reachability: dict[str, bool] = {}
@@ -332,118 +322,51 @@ class ProviderRuntime:
         async with self._catalog_refresh_lock:
             yield
 
-    async def maybe_refresh_local_catalogs(self, *, force: bool = False) -> None:
-        async with self.model_database_refresh():
-            now = time.monotonic()
-            if (
-                not force
-                and self.refresh_at is not None
-                and now - self.refresh_at < LOCAL_CATALOG_REFRESH_TTL_SECONDS
-            ):
-                return
-            targets = await _LOCAL_CATALOG_WORKERS.run(self._auto_refresh_targets)
-            if not targets:
-                return
-
-            from core.models.discovery import ModelDiscoveryError, refresh_models
-
-            # Filled on the worker thread, so a cancelled staging hop still
-            # discards its copy.
-            staged: list[ModelDatabaseRefresh] = []
-            refreshed: set[str] = set()
-            try:
-                await _LOCAL_CATALOG_WORKERS.run(
-                    _stage_runtime_refresh,
-                    self._resources_path,
-                    self._storage.data_dir,
-                    staged,
-                )
-                database_refresh = staged[0]
-                refresh_resources_dir = database_refresh.resources_dir
-                for provider_id, provider, connection in targets:
-                    connection_id = f"{provider_id}:{connection.id}"
-                    try:
-                        credential_value = await _LOCAL_CATALOG_WORKERS.run(
-                            self._credentials.get_credentials,
-                            provider_id,
-                            connection_id,
-                        )
-                    except ConfigError as error:
-                        self._logger.debug(
-                            "Skipping local catalog refresh for %s: %s",
-                            connection_id,
-                            error,
-                        )
-                        continue
-                    try:
-                        with caller_owns_retries():
-                            await refresh_models(
-                                provider,
-                                credential_value,
-                                refresh_resources_dir,
-                                credential_connection=connection,
-                                wire_files=self._wire_profiles.files,
-                            )
-                    except ModelDiscoveryError as error:
-                        previous = self._connection_reachability.get(connection_id)
-                        self._connection_reachability[connection_id] = False
-                        if previous is True:
-                            self._logger.warning(
-                                "Local provider connection became unreachable "
-                                "(provider=%s connection=%s): %s",
-                                provider_id,
-                                connection.id,
-                                error,
-                            )
-                        else:
-                            self._logger.debug(
-                                "Local catalog refresh failed for %s: %s",
-                                connection_id,
-                                error,
-                            )
-                        continue
-                    previous = self._connection_reachability.get(connection_id)
-                    self._connection_reachability[connection_id] = True
-                    if previous is False:
-                        self._logger.info(
-                            "Local provider connection recovered (provider=%s connection=%s)",
-                            provider_id,
-                            connection.id,
-                        )
-                    refreshed.add(provider_id)
-
-                if refreshed:
-                    await settle_before_cancelling(
-                        self._publish_and_reload_catalog(database_refresh, refreshed)
-                    )
-            except Exception as error:
-                self._logger.warning("Local catalog refresh could not be published: %s", error)
-            finally:
-                # Throttle from completion, failures included: a sweep slower
-                # than the TTL must not let the next caller start another one.
-                self.refresh_at = time.monotonic()
-                for staged_refresh in staged:
-                    await _LOCAL_CATALOG_WORKERS.run(_discard_staged_refresh, staged_refresh)
-
-    async def _publish_and_reload_catalog(
-        self, database_refresh: ModelDatabaseRefresh, refreshed: set[str]
-    ) -> None:
-        """Finish the live swap after publication even when the sweep is cancelled."""
-        custom_providers = await _LOCAL_CATALOG_WORKERS.run(
-            self._publish_staged_catalog, database_refresh, refreshed
+    async def refresh_model_database(
+        self, *, provider_id: str | None = None, target: str = "runtime"
+    ) -> dict[str, Any]:
+        return await _catalog_refresh.refresh_model_database(
+            self, provider_id=provider_id, target=target
         )
-        if await self._models.reload_async(
-            self._resources_path,
-            runtime_models_dir=self._storage.layout.models,
-            custom_providers=custom_providers,
-        ):
-            self._notify_catalog_changed()
+
+    def discovery_credential(
+        self, provider_id: str, connection_id: str, connection: ConnectionConfig
+    ) -> AbstractAsyncContextManager[tuple[ConnectionConfig, str | TokenGetter]]:
+        return _catalog_refresh.discovery_credential(self, provider_id, connection_id, connection)
+
+    async def maybe_refresh_local_catalogs(self, *, force: bool = False) -> None:
+        await _catalog_refresh.maybe_refresh_local_catalogs(self, force=force)
+
+    def start_local_catalog_refresh(self) -> asyncio.Task[None]:
+        task = asyncio.create_task(
+            self.maybe_refresh_local_catalogs(), name="local-catalog-refresh"
+        )
+        self._track_catalog_refresh(task)
+        return task
+
+    def start_installation_catalog_restore(self) -> asyncio.Task[None] | None:
+        return _catalog_refresh.start_installation_catalog_restore(self)
+
+    def _track_catalog_refresh(self, task: asyncio.Task[None]) -> None:
+        self._catalog_refresh_tasks.add(task)
+        task.add_done_callback(self._catalog_refresh_tasks.discard)
+
+    def cancel_catalog_refreshes(self) -> None:
+        for task in tuple(self._catalog_refresh_tasks):
+            task.cancel()
+
+    async def shutdown_catalog_refreshes(self) -> None:
+        tasks = tuple(self._catalog_refresh_tasks)
+        self.cancel_catalog_refreshes()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+            self._catalog_refresh_tasks.difference_update(tasks)
 
     def add_catalog_changed_callback(self, callback: Callable[[], None]) -> Callable[[], None]:
-        """Subscribe to Model catalog changes a local catalog sweep publishes.
+        """Subscribe to automatic catalog changes and successful startup restores.
 
         A manual Model DB refresh reports its own result; this channel covers
-        the automatic sweeps. Returns an unsubscribe function.
+        the automatic sweeps and startup restoration. Returns an unsubscribe function.
         """
         self._catalog_changed_callbacks.append(callback)
 
@@ -463,22 +386,6 @@ class ProviderRuntime:
                     error,
                     exc_info=(type(error), error, error.__traceback__),
                 )
-
-    def _publish_staged_catalog(
-        self,
-        database_refresh: ModelDatabaseRefresh,
-        refreshed: set[str],
-    ) -> dict[str, dict[str, Any]]:
-        """Validate and commit a staged Model DB; return the overlays to reload with.
-
-        Only the ``refreshed`` local Providers are recorded as fetched now, so the
-        sweep never makes another catalog look newer than the bundled one.
-        """
-        # The live reload after publication logs what Load ignores; validating
-        # silently here keeps each entry to one log line per sweep.
-        ModelRegistry.validate(database_refresh.resources_dir)
-        database_refresh.commit(providers=refreshed)
-        return self._storage.load_custom_providers_settings()
 
     def connection_reachability(self, connection_id: str) -> bool | None:
         return self._connection_reachability.get(connection_id)
@@ -655,16 +562,3 @@ class ProviderRuntime:
             raise ConfigError(
                 f"Unknown connection id '{connection_id}' for provider '{provider_config.id}'"
             ) from error
-
-
-def _stage_runtime_refresh(
-    resources_path: Path,
-    data_dir: Path,
-    staged: list[ModelDatabaseRefresh],
-) -> None:
-    staged.append(begin_runtime_model_database_refresh(resources_path, data_dir))
-
-
-def _discard_staged_refresh(database_refresh: ModelDatabaseRefresh) -> None:
-    ModelRegistry.invalidate(database_refresh.resources_dir)
-    database_refresh.discard()

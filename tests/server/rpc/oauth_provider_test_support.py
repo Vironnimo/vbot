@@ -6,7 +6,6 @@ the ``model.refresh_db`` OAuth credential tests.
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -128,7 +127,6 @@ def oauth_provider_state(tmp_path: Path, provider: ProviderConfig) -> SimpleName
     whose kept-open Provider transports the RPCs closed.
     """
 
-    refresh_lock = asyncio.Lock()
     secrets = SecretStore(tmp_path)
     closed_transports: list[tuple[str, str | None]] = []
 
@@ -137,11 +135,10 @@ def oauth_provider_state(tmp_path: Path, provider: ProviderConfig) -> SimpleName
     ) -> None:
         closed_transports.append((provider_id, connection_id))
 
-    return SimpleNamespace(
+    state = SimpleNamespace(
         runtime=SimpleNamespace(
             closed_transports=closed_transports,
             close_connection_transports=close_connection_transports,
-            model_database_refresh=lambda: refresh_lock,
             providers=_ProviderRegistry(provider),
             token_store=TokenStore(secrets),
             provider_credentials=_ProviderCredentials(
@@ -159,3 +156,16 @@ def oauth_provider_state(tmp_path: Path, provider: ProviderConfig) -> SimpleName
         ),
         event_bus=ServerEventBus(),
     )
+
+    from core.runtime.runtime import Runtime
+    from tests.server.rpc_test_support_runtime import provider_runtime_for
+
+    runtime = state.runtime
+    runtime._provider_operations = lambda: provider_runtime_for(runtime)
+    runtime.refresh_model_database = lambda **kwargs: Runtime.refresh_model_database(
+        runtime, **kwargs
+    )
+    runtime.provider_discovery_credential = lambda *args: Runtime.provider_discovery_credential(
+        runtime, *args
+    )
+    return state

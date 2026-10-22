@@ -9,25 +9,12 @@ from typing import Any
 
 import httpx
 
-from core.providers.anthropic import AnthropicAdapter
+from core.providers.adapter import ProviderAdapter
+from core.providers.adapter_types import discovery_adapter_type
 from core.providers.errors import NetworkError
-from core.providers.github_copilot import GitHubCopilotAdapter
 from core.providers.http import classify_http_status, wrap_network_error
-from core.providers.kimi import KimiAdapter
-from core.providers.lmstudio import LMStudioAdapter
-from core.providers.minimax import MiniMaxAdapter
-from core.providers.mistral import MistralAdapter
-from core.providers.nous import NousAdapter
-from core.providers.ollama import OllamaAdapter
-from core.providers.openai import OpenAIAdapter
-from core.providers.openai_compatible import OpenAICompatibleAdapter
-from core.providers.opencode_go import OpenCodeGoAdapter
-from core.providers.opencode_zen import OpenCodeZenAdapter
-from core.providers.openrouter import OpenRouterAdapter
 from core.providers.providers import ConnectionConfig, ProviderConfig
-from core.providers.stepfun import StepFunAdapter
 from core.providers.token_getter import OAuthRequestRecovery
-from core.providers.xai import XAIAdapter
 from core.utils.errors import ProviderError
 from core.utils.logging import get_logger
 from core.utils.retry import retry_async
@@ -279,8 +266,8 @@ def _resolve_discovery_target(
     return base_url, models_endpoint
 
 
-def _adapter_class_for_discovery(adapter: str):
-    adapter_class = _DISCOVERY_ADAPTER_MAP.get(adapter)
+def _adapter_class_for_discovery(adapter: str) -> type[ProviderAdapter]:
+    adapter_class = discovery_adapter_type(adapter)
     if adapter_class is None:
         raise ValueError(f"No model normalizer registered for adapter '{adapter}'")
     return adapter_class
@@ -356,25 +343,3 @@ def _append_query_params(url: str, params: dict[str, str]) -> str:
     separator = "&" if "?" in url else "?"
     encoded = "&".join(f"{k}={v}" for k, v in params.items())
     return f"{url}{separator}{encoded}"
-
-
-_DISCOVERY_ADAPTER_MAP = {
-    "openai_compatible": OpenAICompatibleAdapter,
-    "openai": OpenAIAdapter,
-    "anthropic": AnthropicAdapter,
-    "opencode_go": OpenCodeGoAdapter,
-    "opencode_zen": OpenCodeZenAdapter,
-    "openrouter": OpenRouterAdapter,
-    "kimi": KimiAdapter,
-    "minimax": MiniMaxAdapter,
-    "mistral": MistralAdapter,
-    "nous": NousAdapter,
-    "stepfun": StepFunAdapter,
-    "github_copilot": GitHubCopilotAdapter,
-    "ollama": OllamaAdapter,
-    # Direct Cloud chat uses OpenAI compatibility, but model discovery remains
-    # Ollama-native (/api/tags + /api/show).
-    "ollama_cloud": OllamaAdapter,
-    "lmstudio": LMStudioAdapter,
-    "xai": XAIAdapter,
-}
