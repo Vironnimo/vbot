@@ -21,9 +21,9 @@ export const AGENT_TARGET_GROUP_PROJECT = 'project';
 
 // `identityAgents` is the `agent.list` projection (`{ id, name }`); `projectTeams`
 // is a list of `{ projectId, displayName, team: [{ agent_id, display_name }] }`
-// gathered lazily from `project.list` → `project.show`. The result is a flat
-// option list whose `group` discriminates identity vs. project for an optgroup-
-// style UI.
+// from the cached Teams `project.list` carries. The result is a flat option
+// list whose `group` discriminates identity vs. project for an optgroup-style
+// UI.
 export function buildAgentTargetOptions(identityAgents, projectTeams) {
   const options = [];
 
@@ -112,19 +112,15 @@ export function buildAgentTargetDropdownOptions(
   return result;
 }
 
-// Project a `project.show` response (`{ project, scan }`) plus the project id
-// into the `{ projectId, displayName, team }` entry `buildAgentTargetOptions`
-// consumes. The team is read straight from `scan.team` (the repo is the source
-// of truth); only the bare `agent_id`/`display_name` the dropdown needs are
-// kept. An empty/bare project yields an empty team, which is normal.
-function projectTeamEntry(projectId, showResponse) {
-  const id = asText(projectId);
-  const rawTeam = Array.isArray(showResponse?.scan?.team)
-    ? showResponse.scan.team
-    : [];
+// Project one `project.list` entry with its cached `scan` into the
+// `{ projectId, displayName, team }` entry `buildAgentTargetOptions` consumes;
+// only the bare `agent_id`/`display_name` the dropdown needs are kept. An
+// empty/bare project yields an empty team, which is normal.
+function projectTeamEntry(projectId, project) {
+  const rawTeam = Array.isArray(project?.scan?.team) ? project.scan.team : [];
   return {
-    projectId: id,
-    displayName: asText(showResponse?.project?.display_name) || id,
+    projectId,
+    displayName: asText(project?.display_name) || projectId,
     team: rawTeam
       .map((member) => ({
         agent_id: asText(member?.agent_id),
@@ -134,21 +130,14 @@ function projectTeamEntry(projectId, showResponse) {
   };
 }
 
-// The project ids to scan for teams, read from a `project.list` response. Lazy
-// scanning (one `project.show` per id, on demand) avoids an N+1 scan on every
-// render.
-function projectIdsFromList(listResponse) {
-  return listResponse.projects
-    .map((project) => asText(project?.project_id))
-    .filter((projectId) => projectId.length > 0);
-}
-
-// Own the catalog read as one request generation. Failed Project reads retain
-// successful siblings and Identity Agents; callers decide how to present errors.
-// A retired request returns null and never publishes into a newer selection.
+// Own the catalog read as one request generation: `project.list` with each
+// Project's cached Team (`includeScan`), so one request covers every Project
+// instead of a `project.show` re-scan per Project. A Project whose repository
+// could not be read (`scan: null`) is a failed Project; the other Teams and
+// the Identity Agents stay, and callers decide how to present errors. A
+// retired request returns null and never publishes into a newer selection.
 export function createAgentTargetCatalogLoader({
   listProjects,
-  showProject,
   listAgents = null,
 }) {
   let generation = 0;
@@ -159,7 +148,7 @@ export function createAgentTargetCatalogLoader({
       const request = ++generation;
       const current = () => !disposed && request === generation;
       const [projectResult, agentResult] = await Promise.allSettled([
-        listProjects(),
+        listProjects({ includeScan: true }),
         listAgents ? listAgents() : Promise.resolve({ agents: [] }),
       ]);
       if (!current()) return null;
@@ -168,11 +157,16 @@ export function createAgentTargetCatalogLoader({
         Array.isArray(projectResult.value?.projects)
           ? projectResult.value.projects
           : [];
-      const ids = [...new Set(projectIdsFromList({ projects }))];
-      const results = await Promise.allSettled(
-        ids.map(async (id) => projectTeamEntry(id, await showProject(id))),
-      );
-      if (!current()) return null;
+      const projectTeams = [];
+      const failedProjects = [];
+      const seen = new Set();
+      for (const project of projects) {
+        const projectId = asText(project?.project_id);
+        if (!projectId || seen.has(projectId)) continue;
+        seen.add(projectId);
+        if (project.scan === null) failedProjects.push({ projectId });
+        else projectTeams.push(projectTeamEntry(projectId, project));
+      }
       return {
         projects,
         agents:
@@ -180,14 +174,8 @@ export function createAgentTargetCatalogLoader({
           Array.isArray(agentResult.value?.agents)
             ? agentResult.value.agents
             : [],
-        projectTeams: results
-          .filter((entry) => entry.status === 'fulfilled')
-          .map((entry) => entry.value),
-        failedProjects: results.flatMap((entry, index) =>
-          entry.status === 'rejected'
-            ? [{ projectId: ids[index], error: entry.reason }]
-            : [],
-        ),
+        projectTeams,
+        failedProjects,
         projectError:
           projectResult.status === 'rejected' ? projectResult.reason : null,
         agentError:

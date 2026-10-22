@@ -402,7 +402,12 @@ it('keeps an existing job editable through slow autosave, failure, and a protect
 it.each([
   [
     'another Team fails',
-    { projects: [{ project_id: 'broken' }, { project_id: 'healthy' }] },
+    {
+      projects: [
+        { project_id: 'broken', scan: null },
+        { project_id: 'healthy', scan: { team: [{ agent_id: 'coder' }] } },
+      ],
+    },
     ['Main', 'coder@healthy'],
     () => t('calendar.jobs.targetsPartial'),
   ],
@@ -415,17 +420,12 @@ it.each([
 ])(
   'keeps Identity and healthy Project targets when %s',
   async (_label, projectList, targets, message) => {
-    rpcMock.mockImplementation(async (method, params) => {
+    rpcMock.mockImplementation(async (method) => {
       if (method === 'agent.list')
         return { agents: [{ id: 'main', name: 'Main' }] };
       if (method === 'project.list') {
         if (projectList instanceof Error) throw projectList;
         return projectList;
-      }
-      if (method === 'project.show') {
-        if (params.project_id === 'broken')
-          throw new Error('test-project-unavailable');
-        return { scan: { team: [{ agent_id: 'coder' }] } };
       }
       return { sessions: [] };
     });

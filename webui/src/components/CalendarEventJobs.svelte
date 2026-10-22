@@ -32,7 +32,6 @@
     deleteCronJob,
     listAgents,
     listProjects,
-    showProject,
     listSessions,
   } from '$lib/api.js';
   import {
@@ -158,7 +157,6 @@
   const targetCatalog = createAgentTargetCatalogLoader({
     listAgents,
     listProjects,
-    showProject,
   });
   onMount(() => {
     async function loadTargets() {

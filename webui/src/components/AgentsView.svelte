@@ -10,7 +10,6 @@
     listProjects,
     listTools,
     reorderAgents,
-    showProject,
     skillInventory,
   } from '$lib/api.js';
   import { buildAgentTargetCatalog } from '$lib/agentForm.js';
@@ -187,7 +186,6 @@
   let loadingAgentListRequestId = 0;
   const targetCatalog = createAgentTargetCatalogLoader({
     listProjects,
-    showProject,
   });
 
   let selectedAgent = $derived(
