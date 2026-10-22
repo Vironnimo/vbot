@@ -1,17 +1,23 @@
 """Contracts of the Skill registry: discovery, metadata, requirements and origins."""
 
 import logging
+from collections import Counter
 from pathlib import Path
 
 import pytest
 
 from core.skills import skills as skills_module
 from core.skills.requirements import environment_requirement_names
-from core.skills.skill_validator import MAX_SKILL_DESCRIPTION_LENGTH, MAX_SKILL_NAME_LENGTH
+from core.skills.skill_validator import (
+    MAX_SKILL_DESCRIPTION_LENGTH,
+    MAX_SKILL_NAME_LENGTH,
+    ValidationResult,
+)
 from core.skills.skills import (
     SKILL_ORIGIN_AGENT,
     SKILL_ORIGIN_BUNDLED,
     SKILL_ORIGIN_GLOBAL,
+    SkillMetadata,
     SkillRegistry,
     SkillScan,
     find_skill_package_dir,
@@ -237,6 +243,23 @@ def oversized_instructions(kilobytes: int, lines: int) -> str:
             "[unterminated",
             ["YAML front matter was read with the simple key: value fallback."],
             id="unrepairable-yaml",
+        ),
+        # libyaml reads these two without an error; the pure-Python reading decides.
+        pytest.param(
+            "tabbed",
+            "---\nname: tabbed\ndescription: Use it.\t\n---\n",
+            "tabbed",
+            "Use it.",
+            ["YAML front matter was read with the simple key: value fallback."],
+            id="tab-after-value",
+        ),
+        pytest.param(
+            "noted",
+            "---\nname: noted\ndescription: |# note\n  Use it.\n---\n",
+            "noted",
+            "|# note",
+            ["YAML front matter was read with the simple key: value fallback."],
+            id="comment-after-block-scalar-header",
         ),
         *[
             pytest.param(
@@ -513,6 +536,46 @@ def test_roots_load_in_order_with_origins_and_first_found_name_wins(tmp_path: Pa
         assert [skill.name for skill in reused.list_all()] == [alias.name]
         assert reused.list_all() == fresh.list_all()
         assert reused.diagnostics() == fresh.diagnostics()
+
+
+def test_unchanged_skill_files_are_parsed_once_per_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = 0
+    cache = skills_module._ParsedSkillFiles(clock=lambda: now)  # noqa: SLF001
+    monkeypatch.setattr(skills_module, "_PARSED_SKILL_FILES", cache)
+    parses: Counter[str] = Counter()
+    read = skills_module._read_skill_metadata  # noqa: SLF001 - the metadata I/O seam.
+
+    def counted(skill_file: Path) -> tuple[SkillMetadata | None, ValidationResult]:
+        parses[skill_file.parent.name] += 1
+        return read(skill_file)
+
+    monkeypatch.setattr(skills_module, "_read_skill_metadata", counted)
+    skill_file = write_skill(tmp_path, "deploy", description="First.")
+    write_skill(tmp_path, "broken", requirements_document("broken", "{provider: openai}"))
+    settled_ns = skill_file.stat().st_mtime_ns + 3_000_000_000
+
+    # A file changed within the last seconds is reread: a write within the same
+    # timestamp tick would otherwise go unnoticed.
+    now = settled_ns - 2_000_000_000
+    SkillRegistry.load(tmp_path)
+    now = settled_ns
+    first = SkillRegistry.load(tmp_path)
+    cached = SkillRegistry.load(tmp_path)
+    assert parses == {"deploy": 2, "broken": 3}
+    assert cached.list_all() == first.list_all()
+    assert cached.diagnostics() == first.diagnostics()
+    # Every reader gets its own copy of the mutable fields.
+    first.get("deploy").metadata["changed"] = True
+    assert SkillRegistry.load(tmp_path).get("deploy").metadata == {}
+
+    skill_file.write_text(
+        "---\nname: deploy\ndescription: Second.\n---\n\nUse it.\n", encoding="utf-8"
+    )
+    now = skill_file.stat().st_mtime_ns + 3_000_000_000
+    assert SkillRegistry.load(tmp_path).get("deploy").description == "Second."
+    assert parses == {"deploy": 3, "broken": 5}
 
 
 def test_metadata_diagnostic_is_logged_once_per_process_with_its_path(
