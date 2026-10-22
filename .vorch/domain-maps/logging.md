@@ -21,6 +21,8 @@ Everything that happens per step, per call, per attempt or per poll belongs at D
 
 ## Level rules
 
+Debug Mode additionally enables only the content-free `vbot.debug.timing` DEBUG records in daily files, independently of the configured level; see `debug.md` -> Tool Call timing. They keep DEBUG severity and normal log retention.
+
 - **INFO** - process lifecycle (one start line, one stop line with the reason); Run terminal outcome; each material control-plane mutation, once, after the change; recovery back to healthy; rare significant events (update phases, schema evolution, data snapshots).
 - **WARNING** - expected operational failures and degradation: a failed Run, a Provider or Channel that stops working, a scheduled job disabled after failures, an invalid user file that is ignored.
 - **ERROR** - unexpected failures (with traceback) and events that risk or cause data loss (automatic restore after corruption, a Channel reply that could not be delivered).

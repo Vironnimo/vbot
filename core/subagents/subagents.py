@@ -17,6 +17,7 @@ from contextlib import AsyncExitStack
 from typing import TYPE_CHECKING, Any, cast
 
 from core.chat.messages import SubAgentMessage
+from core.debug import timing
 from core.projects import (
     InvalidAgentAddressError,
     WorkingProjectMissingError,
@@ -509,7 +510,19 @@ class SubAgentCoordinator:
                 SUBAGENT_DEPTH_LIMIT_MESSAGE_TEMPLATE.format(limit=depth_limit),
             )
         settings = _load_subagent_settings(runtime)
+        timing.mark(
+            "subagent_admission_wait",
+            run=context.run_id,
+            iteration=context.iteration_number,
+            call=context.tool_call_id,
+        )
         async with self._admission_lock:
+            timing.mark(
+                "subagent_admission_acquired",
+                run=context.run_id,
+                iteration=context.iteration_number,
+                call=context.tool_call_id,
+            )
             refusal = await self._limit_refusal(
                 caller, settings, can_stop=context.can_call(BACKGROUND_TASKS_TOOL_NAME)
             )
@@ -603,6 +616,15 @@ class SubAgentCoordinator:
                     ),
                 )
                 await run.wait_admitted()
+                timing.mark(
+                    "subagent_admitted",
+                    run=context.run_id,
+                    iteration=context.iteration_number,
+                    call=context.tool_call_id,
+                    child_run=run.id,
+                    child_session=address.session_id,
+                    subagent=new_subagent_id,
+                )
             except Exception:
                 assert session.generation_id is not None
                 await _remove_unstarted_session(runtime, address, session.generation_id)

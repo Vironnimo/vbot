@@ -82,8 +82,9 @@ async def _background_command(
 
 
 async def test_run_starts_a_linked_subagent_in_the_background(
-    harness: SubAgentHarness, monkeypatch: pytest.MonkeyPatch
+    harness: SubAgentHarness, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
+    caplog.set_level("DEBUG", logger="vbot.debug.timing")
     snapshots: list[dict[str, Any]] = []
     create = harness.sessions.create
 
@@ -121,6 +122,14 @@ async def test_run_starts_a_linked_subagent_in_the_background(
     assert turn.run.work_id == data["id"]
     assert "activity_note" in data
     assert harness.triggers.notices == []
+    marks = [r.tool_timing for r in caplog.records if hasattr(r, "tool_timing")]
+    admitted = next(m for m in marks if m["phase"] == "subagent_admitted")
+    started = next(m for m in marks if m["phase"] == "run_executor_started")
+    assert admitted["call"] == "tool-call-one"
+    assert admitted["child_run"] == started["run"] == turn.run.id
+    phases = [m["phase"] for m in marks]
+    assert phases.index("subagent_admission_wait") < phases.index("subagent_admission_acquired")
+    assert phases.index("subagent_admission_acquired") < phases.index("subagent_admitted")
 
 
 async def test_run_passes_only_named_secrets_the_parent_can_use(

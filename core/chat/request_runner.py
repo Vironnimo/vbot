@@ -45,6 +45,7 @@ from core.chat.wire_shaping import (
     model_facing_request,
     route_effort,
 )
+from core.debug import timing
 from core.providers.adapter import (
     TERMINAL_OUTCOME_OUTPUT_TRUNCATED,
     terminal_outcome_from_response,
@@ -351,27 +352,38 @@ class WireRequestRunner:
         call_id = await self._start_usage_call(public_model, run)
         normalized: JsonObject | None = None
         try:
-            response = await adapter.send(
-                messages,
-                model_id=model_id,
-                temperature=temperature,
-                top_p=top_p,
-                tools=tools,
-                **request_context,
-            )
-            # Without streaming, the first output arrives with the whole response.
-            _record_first_token(run, send_started)
-            normalized = await _CHAT_TRANSFORM_WORKERS.run(
-                adapter.normalize_response, response, model_id=model_id
-            )
-            step = await _CHAT_TRANSFORM_WORKERS.run(
-                _normalize_non_streaming_step,
-                normalized,
-                model_id=model_id,
-                response_model=response_model,
-                public_model=public_model,
-                message_id=message_id,
-            )
+            with timing.request_scope(
+                run=run.id, iteration=run.iteration_count + 1, model=public_model
+            ):
+                response = await adapter.send(
+                    messages,
+                    model_id=model_id,
+                    temperature=temperature,
+                    top_p=top_p,
+                    tools=tools,
+                    **request_context,
+                )
+                # Without streaming, the first output arrives with the whole response.
+                _record_first_token(run, send_started)
+                normalized = await _CHAT_TRANSFORM_WORKERS.run(
+                    adapter.normalize_response, response, model_id=model_id
+                )
+                step = await _CHAT_TRANSFORM_WORKERS.run(
+                    _normalize_non_streaming_step,
+                    normalized,
+                    model_id=model_id,
+                    response_model=response_model,
+                    public_model=public_model,
+                    message_id=message_id,
+                )
+                for index, tool_call in enumerate(step.message.tool_calls or []):
+                    timing.mark(
+                        "call_finalized",
+                        call=tool_call.id,
+                        index=index,
+                        mode="non_streaming",
+                        terminal_outcome=step.terminal_outcome,
+                    )
         except BaseException as exc:
             if recorder is not None and call_id is not None:
                 await recorder.finish(
@@ -433,28 +445,31 @@ class WireRequestRunner:
         recorder = self._dependencies.usage_recorder
         call_id = await self._start_usage_call(public_model, run)
         try:
-            step = await consume_stream_response(
-                agent,
-                adapter,
-                model_id,
-                response_model,
-                messages,
-                tools,
-                run,
-                accumulator,
-                public_model=public_model,
-                can_restart=can_restart,
-                output_scope=output_scope,
-                chunk_timeout_seconds=chunk_timeout_seconds,
-                request_context=request_context,
-                stream_draft=stream_draft,
-                temperature=temperature,
-                top_p=top_p,
-                fallback_follows=fallback_follows,
-                recovery_deadline=recovery_deadline,
-                message_id=message_id,
-                on_tool_calls=on_tool_calls,
-            )
+            with timing.request_scope(
+                run=run.id, iteration=run.iteration_count + 1, model=public_model
+            ):
+                step = await consume_stream_response(
+                    agent,
+                    adapter,
+                    model_id,
+                    response_model,
+                    messages,
+                    tools,
+                    run,
+                    accumulator,
+                    public_model=public_model,
+                    can_restart=can_restart,
+                    output_scope=output_scope,
+                    chunk_timeout_seconds=chunk_timeout_seconds,
+                    request_context=request_context,
+                    stream_draft=stream_draft,
+                    temperature=temperature,
+                    top_p=top_p,
+                    fallback_follows=fallback_follows,
+                    recovery_deadline=recovery_deadline,
+                    message_id=message_id,
+                    on_tool_calls=on_tool_calls,
+                )
         except BaseException as exc:
             if recorder is not None and call_id is not None:
                 await recorder.finish(

@@ -75,7 +75,10 @@ async def _until(condition: Callable[[], bool]) -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_completed_tool_call_runs_while_the_model_still_streams(tmp_path: Path) -> None:
+async def test_a_completed_tool_call_runs_while_the_model_still_streams(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level("DEBUG", logger="vbot.debug.timing")
     started: list[str] = []
 
     async def tool_turn() -> AsyncIterator[JsonObject]:
@@ -112,6 +115,17 @@ async def test_a_completed_tool_call_runs_while_the_model_still_streams(tmp_path
     berlin = {"city": "Berl\ufffdin"}
     assert started_events[0].payload["tool_call"]["arguments"] == berlin
     assert (tool_turn_message.tool_calls or [])[0].arguments == berlin
+    marks = [r.tool_timing for r in caplog.records if hasattr(r, "tool_timing")]
+    for call in ("call_berlin", "call_paris"):
+        phases = [m["phase"] for m in marks if m.get("call") == call]
+        assert phases.index("call_received") < phases.index("arguments_complete")
+        assert phases.index("arguments_complete") < phases.index("call_scheduled")
+        assert phases.index("call_scheduled") < phases.index("dispatch_started")
+        assert phases.index("dispatch_started") < phases.index("handler_started")
+        assert all(m["iteration"] == 1 for m in marks if m.get("call") == call)
+    requests = [m for m in marks if m["phase"] == "request_started"]
+    assert len(requests) == 2 and requests[0]["request"] != requests[1]["request"]
+    assert not any("Paris" in r.getMessage() for r in caplog.records if hasattr(r, "tool_timing"))
 
 
 @pytest.mark.asyncio
