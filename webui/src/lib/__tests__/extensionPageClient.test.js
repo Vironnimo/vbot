@@ -406,7 +406,7 @@ describe('extension page client', () => {
     const oldCall = target.postMessage.mock.calls.at(-1)[0];
 
     initialize(target, 'nonce-b', 'epoch-b');
-    await expect(pending).rejects.toThrow('reloaded');
+    await expect(pending).rejects.toThrow(t('extensions.page.reloaded'));
 
     dispatchFrom(target, {
       ...oldCall,
@@ -464,7 +464,7 @@ describe('extension page client', () => {
     const pending = client.replaceRoute('/next');
 
     client.dispose();
-    await expect(pending).rejects.toThrow('disposed');
+    await expect(pending).rejects.toThrow(t('extensions.page.disposed'));
     dispatchFrom(target, {
       type: 'vbot.extension.invalidate',
       version: 1,

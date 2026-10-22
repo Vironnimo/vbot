@@ -18,6 +18,7 @@ from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
 from cli.application.state import (
+    CHANNEL_DOWNLOADS,
     ApplicationError,
     Installation,
     contained,
@@ -51,6 +52,12 @@ _BYTECODE_CACHE = re.compile(r"[^/]+\.pyc(?:\.[0-9]+)?")
 #: version from about 45 s to 7 s. Reads and hashing release the GIL.
 FILE_WORKERS = 16
 _LOGGER = logging.getLogger("vbot.application.packages")
+# The numeric release part of a version (`0.4.25` of `0.4.25` or `1.1.0.dev3`).
+_RELEASE_NUMBERS = re.compile(r"[0-9]+(?:\.[0-9]+)*")
+
+
+class OlderReleaseError(ApplicationError):
+    """The update channel offers a version that is not newer than the active one."""
 
 
 def version_label(manifest: dict[str, Any]) -> str:
@@ -374,7 +381,8 @@ def download_release(
     from the release it names, all from release downloads; it never queries the
     GitHub API, whose anonymous request limit shared IP addresses exhaust.
     Returns ``None`` without downloading when the channel publishes the version
-    that is already active.
+    that is already active, and raises ``OlderReleaseError`` without downloading
+    when it publishes one that is not newer (``_not_newer``).
     """
     if not install.release_public_key:
         raise ApplicationError("Official updates require a configured release signing key")
@@ -395,6 +403,9 @@ def download_release(
             if progress:
                 progress("The published version is already installed", label)
             return None
+        active = read_json(install.version() / "release.json", limit=32 * 1024**2)
+        if _not_newer(identity, active):
+            raise OlderReleaseError(_older_release_message(install, label, active))
         base = install.asset_base(identity.get("version"))
         if progress:
             progress("Downloading the application package", label)
@@ -403,6 +414,51 @@ def download_release(
             limit = 1024 if name.endswith(".sig") else MAX_ARCHIVE_BYTES
             _download(client, f"{base}/{name}", directory / name, limit)
     return directory / expected
+
+
+def _release_numbers(manifest: dict[str, Any]) -> tuple[int, ...] | None:
+    version = manifest.get("version")
+    match = _RELEASE_NUMBERS.match(version) if isinstance(version, str) else None
+    if match is None:
+        return None
+    numbers = [int(part) for part in match.group().split(".")]
+    while len(numbers) > 1 and numbers[-1] == 0:
+        numbers.pop()
+    return tuple(numbers)
+
+
+def _not_newer(offered: dict[str, Any], active: dict[str, Any]) -> bool:
+    """Whether the channel's *offered* build would take the *active* one back.
+
+    Versions order by their numeric release part. A version's main builds start
+    with the commit that bumps the version for its release, so a release build
+    of the version a main build carries is the earlier build (the very same
+    build has the same version id and never gets here). Versions that do not
+    parse are not ordered.
+    """
+    offered_numbers = _release_numbers(offered)
+    active_numbers = _release_numbers(active)
+    if offered_numbers is None or active_numbers is None:
+        return False
+    if offered_numbers != active_numbers:
+        return offered_numbers < active_numbers
+    return offered.get("channel") == "release" and active.get("channel") == "main"
+
+
+def _older_release_message(install: Installation, label: str, active: dict[str, Any]) -> str:
+    active_channel = active.get("channel")
+    back = (
+        f"Switch back with vbot application channel {active_channel} to keep receiving "
+        "updates, or install"
+        if active_channel in CHANNEL_DOWNLOADS and active_channel != install.channel
+        else "Wait for a newer version, or install"
+    )
+    return (
+        f"The {install.channel} channel offers vBot {label}, which is not newer than the "
+        f"active vBot {version_label(active)}, and vbot update never goes back to an "
+        f"older version. {back} that version deliberately with vbot update --package "
+        "<its downloaded package file>."
+    )
 
 
 def _release_identity(client: httpx.Client, url: str) -> dict[str, Any]:

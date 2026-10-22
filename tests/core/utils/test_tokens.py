@@ -42,6 +42,7 @@ def _forget_estimation_encoding() -> None:
 
 @pytest.fixture(autouse=True)
 def _stub_tiktoken_encoding(monkeypatch: pytest.MonkeyPatch):
+    real_encoding = token_utils._estimation_encoding()
     encoding = _DeterministicEncoding()
     monkeypatch.setattr(token_utils.tiktoken, "get_encoding", lambda _name: encoding)
     _forget_estimation_encoding()
@@ -49,7 +50,12 @@ def _stub_tiktoken_encoding(monkeypatch: pytest.MonkeyPatch):
     token_utils._COUNT_CACHE.clear()
     token_utils._IMAGE_CACHE.clear()
     yield
-    _forget_estimation_encoding()
+    # Later tests on this worker count with the encoding the session loaded
+    # (tests/conftest.py); a cold one would load mid-test and change counts.
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(token_utils.tiktoken, "get_encoding", lambda _name: real_encoding)
+        _forget_estimation_encoding()
+        token_utils._estimation_encoding()
     token_utils._COUNT_CACHE.clear()
     token_utils._IMAGE_CACHE.clear()
 

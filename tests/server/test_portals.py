@@ -201,6 +201,42 @@ async def test_a_portal_bridges_websockets_and_waits_for_an_app_that_is_not_up()
 
 
 @pytest.mark.asyncio
+async def test_an_app_that_breaks_off_requests_is_logged_once_until_it_answers_again(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def app(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/broken":
+            raise httpx.RemoteProtocolError("server disconnected without a response")
+        return httpx.Response(200, stream=httpx.ByteStream(b"app page"))
+
+    delivery = FileDelivery()
+    access = AccessService(access_config("local"), local_token=None, bind_host="127.0.0.1")
+    registry, server = _portal_server(access, delivery, transport=httpx.MockTransport(app))
+    portal, _opened = await registry.open(_OWNER, target_port=5999, title="t", path="/")
+    cookie = f"vbot_portal_{portal.listen_port}={delivery.portal_token(portal.id)}"
+    caplog.set_level(logging.DEBUG, logger="vbot.server.portals")
+    async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{portal.listen_port}") as browser:
+        statuses = [
+            (await browser.get(path, headers={"cookie": cookie})).status_code
+            for path in ("/broken", "/broken", "/", "/", "/broken")
+        ]
+    await registry.aclose()
+    await server.aclose()
+
+    assert statuses == [502, 502, 200, 200, 502]
+    # A failure is no INFO, and a failing app logs on each change, not per request.
+    assert [
+        (record.levelno, record.getMessage())
+        for record in caplog.records
+        if record.name == "vbot.server.portals"
+    ] == [
+        (logging.WARNING, f"Portal request failed (id={portal.id} error=RemoteProtocolError)"),
+        (logging.INFO, f"Portal requests answered again (id={portal.id})"),
+        (logging.WARNING, f"Portal request failed (id={portal.id} error=RemoteProtocolError)"),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_an_endless_answer_ends_when_the_browser_leaves_or_the_portal_closes(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

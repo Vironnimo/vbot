@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from core.utils.atomic import read_replaced_text
 from core.utils.file_status import exists_strict
 
 DiagnosticSeverity = Literal["error", "warning"]
@@ -269,7 +270,7 @@ def _load_and_validate_json_file(
         )
 
     try:
-        data = json.loads(file_path.read_text(encoding="utf-8"))
+        data = json.loads(read_replaced_text(file_path))
     except UnicodeError as exc:
         return _ValidatedDocument(
             report=JsonValidationReport(

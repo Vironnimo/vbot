@@ -6,6 +6,7 @@ import re
 import stat
 import sys
 from pathlib import Path
+from typing import override
 
 import pytest
 
@@ -15,6 +16,7 @@ from core.utils.atomic import (
     atomic_write_bytes,
     atomic_write_stream,
     atomic_write_text,
+    read_replaced_text,
     temporary_path,
     write_new_bytes,
 )
@@ -250,6 +252,49 @@ def test_atomic_write_does_not_wait_for_a_read_only_target(
         target.chmod(stat.S_IWRITE | stat.S_IREAD)
 
     assert target.read_text(encoding="utf-8") == "old\n"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="only Windows refuses a reader during a replace")
+@pytest.mark.parametrize(
+    ("refusals", "outlasted"),
+    [
+        pytest.param(3, True, id="replace-finishes"),
+        pytest.param(len(atomic._REPLACE_RETRY_DELAYS) + 1, False, id="held-longer"),
+    ],
+)
+def test_a_reader_outlasts_the_moment_a_replace_refuses_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, refusals: int, outlasted: bool
+) -> None:
+    target = tmp_path / "librarian.json"
+    target.write_text("{}\n", encoding="utf-8")
+    reads: list[int] = []
+
+    class BeingReplaced(Path):
+        """Refused like a file ``os.replace`` swaps: errno 13, no Windows error code."""
+
+        @override
+        def read_text(
+            self, encoding: str | None = None, errors: str | None = None, newline: str | None = None
+        ) -> str:
+            reads.append(1)
+            if len(reads) <= refusals:
+                raise PermissionError(errno.EACCES, "Permission denied")
+            return super().read_text(encoding, errors, newline)
+
+    sleeps: list[float] = []
+    monkeypatch.setattr(atomic, "_sleep", sleeps.append)
+
+    if outlasted:
+        assert read_replaced_text(BeingReplaced(target)) == "{}\n"
+        assert sleeps == list(atomic._REPLACE_RETRY_DELAYS[:refusals])
+    else:
+        with pytest.raises(PermissionError):
+            read_replaced_text(BeingReplaced(target))
+        assert sum(sleeps) < 1
+    # A directory refuses for good and is never waited for.
+    monkeypatch.setattr(atomic, "_sleep", lambda _delay: pytest.fail("must not wait"))
+    with pytest.raises(PermissionError):
+        read_replaced_text(tmp_path)
 
 
 @pytest.mark.parametrize("write_bytes", [False, True])

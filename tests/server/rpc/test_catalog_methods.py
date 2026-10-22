@@ -365,7 +365,7 @@ async def test_extension_commands_come_from_live_dispatcher_catalog() -> None:
         unavailable_surfaces={"tui"},
         argument_hint="optional: what the workflow should achieve",
     )
-    state = _state(global_names=[], command_dispatcher=dispatcher)
+    state = _state(global_names=["debugging", "Status", "workflow"], command_dispatcher=dispatcher)
 
     result = await _list_commands(state, {})
 
@@ -379,7 +379,15 @@ async def test_extension_commands_come_from_live_dispatcher_catalog() -> None:
         "output": "toast",
     }
     tui_result = await _list_commands(state, {"reply_surface": "tui"})
-    assert "workflow" not in [item["name"] for item in tui_result["items"]]
+    assert "workflow" not in [
+        item["name"] for item in tui_result["items"] if item["type"] == "command"
+    ]
+    # A command takes `/name` (case-insensitively), even where it is
+    # unavailable, so the Skill of that name runs only as `$name`.
+    for response in (result, tui_result):
+        assert {
+            item["name"]: item["slash"] for item in response["items"] if item["type"] == "skill"
+        } == {"debugging": True, "Status": False, "workflow": False}
 
 
 @pytest.mark.asyncio

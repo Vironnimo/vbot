@@ -249,7 +249,7 @@ vbot update
 vbot application status            # shows the version, shape and channel
 ```
 
-The channel cannot change while an update is pending. Switching from main to release installs the latest release even when it is older than the running main build; that release lacks whatever the main build added since.
+The channel cannot change while an update is pending. `vbot update` never goes back to an older version: after switching from main to release, it installs nothing until a release newer than the running main build appears (a release of the same version counts as older, since main builds of a version follow its release). The refusal changes nothing and names the way back, `vbot application channel main`. To install an older version deliberately, download its package for your platform and shape from the release and run `vbot update --package <file>`; an older version may refuse data that a newer one already converted, in which case the update rolls back.
 
 When called through Bash in a vBot Run, the command saves its operation before returning and automatically arranges a continuation in the same Session. The updater waits for the whole Tool batch to enter Session history, registers that continuation, and then stops the server, which cancels the originating Run together with every other active Run. The continuation checks the saved result; acceptance alone is not update success. Do not create an additional Bootstrap for this update path.
 
