@@ -332,6 +332,28 @@ class _RecordingBackend(httpcore2.AsyncNetworkBackend):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [httpcore2.ConnectError, httpcore2.ConnectTimeout])
+async def test_connections_try_other_permitted_addresses_after_a_connection_failure(failure):
+    attempted = []
+
+    class Backend(httpcore2.AsyncNetworkBackend):
+        @override
+        async def connect_tcp(self, host, port, **kwargs):
+            attempted.append(host)
+            if host == "2606:4700:4700::1111":
+                raise failure("test-owned unreachable address")
+            return httpcore2.AsyncMockStream([])
+
+    async def resolve(host, port):
+        return ["2606:4700:4700::1111", "10.0.0.5", "1.1.1.1"]
+
+    guard = DestinationGuard("mcp.example", resolve=resolve, inner=Backend())
+    stream = await guard.connect_tcp("mcp.example", 443)
+    assert attempted == ["2606:4700:4700::1111", "1.1.1.1"]
+    await stream.aclose()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "server, target, connected",
     [
