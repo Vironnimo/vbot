@@ -30,6 +30,7 @@ from ._calls import (
     UnsupportedOperationError,
     _Call,
 )
+from ._discovery import remote_tool_name, tool_contract_problem
 from ._events import dump
 from ._tasks import (
     TASKS_EXTENSION,
@@ -129,6 +130,8 @@ class ConnectionProtocol:
         self._runner = runner
         self._refreshing = asyncio.Lock()
         self._published: str | None = None
+        # Remote Tools left out of the current catalog (``_skip_unusable_tools``).
+        self._skipped: set[str] = set()
         self._subscriptions: dict[str, asyncio.Task[None]] = {}
         self._resource_watches: dict[str, tuple[asyncio.Task[None], asyncio.Future[None]]] = {}
         self._resource_subscriptions: set[str] = set()
@@ -188,6 +191,7 @@ class ConnectionProtocol:
                 if capability is not None:
                     catalog[field], pages[field] = await self._all(method, field)
             catalog["pages"] = pages
+            self._skip_unusable_tools(catalog)
             fingerprint = hashlib.sha256(
                 json.dumps(catalog, sort_keys=True, default=str).encode()
             ).hexdigest()
@@ -196,6 +200,33 @@ class ConnectionProtocol:
                 self._published = fingerprint
             self._runner.catalog = catalog
             return catalog
+
+    def _skip_unusable_tools(self, catalog: dict[str, Any]) -> None:
+        """Leave out the Tools whose input schema vBot's Tool contract refuses.
+
+        One such schema must not cost the connection its other Tools, nor list a
+        Tool that no call could reach. Each Tool records a ``tool_skipped`` event and
+        logs one WARNING, without its schema, when it starts being skipped.
+        """
+        usable: list[dict[str, Any]] = []
+        skipped: set[str] = set()
+        for tool in catalog["tools"]:
+            problem = tool_contract_problem(self._runner.id, tool)
+            if problem is None:
+                usable.append(tool)
+                continue
+            skipped.add(tool["name"])
+            if tool["name"] in self._skipped:
+                continue
+            self._runner._events.record("tool_skipped", {"tool": tool["name"], "problem": problem})
+            _LOGGER.warning(
+                "MCP tool skipped: its input schema does not fit the Tool contract "
+                "(connection=%s tool=%s)",
+                self._runner.id,
+                remote_tool_name(self._runner.id, tool["name"]),
+            )
+        catalog["tools"] = usable
+        self._skipped = skipped
 
     def _client(self) -> Client:
         if self._runner.client is None:
