@@ -207,6 +207,7 @@ _TOOL_FRAGMENT = _delta_chunk(tool_calls=[{"index": 0, "function": {"name": "sea
         pytest.param([], "length", "output_truncated", id="length"),
         pytest.param([_TOOL_FRAGMENT], "stop", "tool_calls", id="stop-after-tool-fragment"),
         pytest.param([_TOOL_FRAGMENT], "provider_tool_stop", "unknown", id="unknown-stays-unsafe"),
+        pytest.param([], "sensitive", "content_filtered", id="glm-content-safety-block"),
     ],
 )
 @pytest.mark.asyncio
@@ -219,19 +220,24 @@ async def test_stream_finish_maps_the_terminal_outcome(
 
 
 @pytest.mark.parametrize(
-    ("native_reason", "error_type"),
-    [("network_error", NetworkError), ("server_error", ProviderError)],
+    ("finish_reason", "native_reason", "error_type"),
+    [
+        pytest.param("stop", "network_error", NetworkError, id="stop-concealing-network-error"),
+        pytest.param("stop", "server_error", ProviderError, id="stop-concealing-server-error"),
+        # GLM (Z.ai) reports a failed inference as finish_reason network_error.
+        pytest.param("network_error", None, NetworkError, id="glm-network-error"),
+    ],
 )
 @pytest.mark.asyncio
-async def test_stop_concealing_a_native_transport_failure_is_retryable(
-    native_reason, error_type
+async def test_a_transport_failure_finish_is_retryable(
+    finish_reason, native_reason, error_type
 ) -> None:
     body = sse(
         {
             "choices": [
                 {
                     "delta": {"content": ""},
-                    "finish_reason": "stop",
+                    "finish_reason": finish_reason,
                     "native_finish_reason": native_reason,
                 }
             ]

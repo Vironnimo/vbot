@@ -20,7 +20,7 @@ from core.providers._chat_completions_wire import (
     _extract_stream_usage,
     _find_openai_reasoning,
     _normalize_openai_finish_reason,
-    _openai_concealed_transport_failure,
+    _openai_transport_failure,
 )
 from core.providers.errors import (
     ProviderError,
@@ -59,7 +59,7 @@ def _normalize_openai_stream_chunk(
 
         finish_reason = choice.get("finish_reason")
         if finish_reason is not None:
-            transport_failure = _openai_concealed_transport_failure(
+            transport_failure = _openai_transport_failure(
                 finish_reason,
                 choice.get("native_finish_reason"),
             )

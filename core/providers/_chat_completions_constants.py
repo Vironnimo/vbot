@@ -32,11 +32,14 @@ OPENAI_TRUNCATED_FINISH_REASONS = frozenset(
     {"length", "model_length", "model_context_window_exceeded"}
 )
 
+# Besides ``content_filter``, GLM (Z.ai) names a turn its content-safety review
+# blocked ``sensitive``.
+OPENAI_CONTENT_FILTER_FINISH_REASONS = frozenset({"content_filter", "sensitive"})
+
 OPENAI_ERROR_FINISH_REASONS = {
     "cancelled",
     "error",
     "failed",
-    "network_error",
     "server_error",
 }
 

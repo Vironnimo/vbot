@@ -258,7 +258,9 @@ async def test_the_field_reasoning_arrives_in_is_learned_for_the_model(mode: str
         ("model_length", "output_truncated"),
         ("model_context_window_exceeded", "output_truncated"),
         ("content_filter", "content_filtered"),
-        ("network_error", "error"),
+        # GLM (Z.ai) names a response its content-safety review blocked "sensitive".
+        ("sensitive", "content_filtered"),
+        ("error", "error"),
         ("provider_added_reason", "unknown"),
     ],
 )
@@ -268,10 +270,19 @@ def test_normalize_response_maps_the_terminal_outcome(finish_reason, expected_ou
     assert make_adapter().normalize_response(response)["terminal_outcome"] == expected_outcome
 
 
-def test_stop_concealing_a_native_network_error_raises_network_error() -> None:
-    response = _response(
-        {"content": ""}, finish_reason="stop", native_finish_reason="network_error"
-    )
+@pytest.mark.parametrize(
+    "choice_fields",
+    [
+        pytest.param(
+            {"finish_reason": "stop", "native_finish_reason": "network_error"},
+            id="stop-concealing-a-native-network-error",
+        ),
+        # GLM (Z.ai) reports a failed inference as finish_reason network_error.
+        pytest.param({"finish_reason": "network_error"}, id="glm-network-error"),
+    ],
+)
+def test_a_network_error_finish_raises_network_error(choice_fields: dict[str, Any]) -> None:
+    response = _response({"content": ""}, **choice_fields)
 
     with pytest.raises(NetworkError):
         make_adapter().normalize_response(response)
