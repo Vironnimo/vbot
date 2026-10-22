@@ -5,6 +5,7 @@ import { flushSync, mount, unmount } from 'svelte';
 
 import { init, t } from '../../lib/i18n.js';
 import { rpcBackedApiMock } from './apiMock.support.js';
+import { reactiveProps } from './reactiveProps.support.svelte.js';
 
 const rpcMock = vi.fn();
 const onRefreshProviderSettingsMock = vi.fn();
@@ -262,17 +263,53 @@ describe('OpenRouterRoutingSettings', () => {
     expect(document.body.textContent).toContain('deepinfra');
   });
 
-  function mountEditor(routing = defaultRouting) {
+  // An empty or failed catalog read is not repeated at once; the next
+  // activation or a changed model catalog reads it again.
+  it.each([
+    ['an empty catalog', () => Promise.resolve({ models: [] }), 0],
+    ['a failed read', () => Promise.reject(new Error('upstream down')), 1],
+  ])(
+    'reads %s once per activation and catalog change',
+    async (_case, answer, errorsPerRead) => {
+      const fallback = rpcMock.getMockImplementation();
+      rpcMock.mockImplementation((method, params) =>
+        method === 'model.list' ? answer() : fallback(method, params),
+      );
+      const onError = vi.fn();
+      const props = mountEditor(defaultRouting, { onError });
+      await waitForCondition(() => routingCalls().length === 1);
+      await settle();
+      expect(modelCalls()).toHaveLength(1);
+      expect(onError).toHaveBeenCalledTimes(errorsPerRead);
+
+      props.modelsRefreshToken += 1;
+      await settle();
+      expect(modelCalls()).toHaveLength(2);
+
+      props.active = false;
+      await settle();
+      props.active = true;
+      await settle();
+      expect(modelCalls()).toHaveLength(3);
+      expect(onError).toHaveBeenCalledTimes(3 * errorsPerRead);
+    },
+  );
+
+  function mountEditor(routing = defaultRouting, extraProps = {}) {
+    const props = reactiveProps({
+      provider: { id: 'openrouter', routing },
+      active: true,
+      modelsRefreshToken: 0,
+      onRefreshProviderSettings: onRefreshProviderSettingsMock,
+      onToast: onToastMock,
+      ...extraProps,
+    });
     mountedComponent = mount(OpenRouterRoutingSettings, {
       target: document.body,
-      props: {
-        provider: { id: 'openrouter', routing },
-        active: true,
-        onRefreshProviderSettings: onRefreshProviderSettingsMock,
-        onToast: onToastMock,
-      },
+      props,
     });
     flushSync();
+    return props;
   }
 });
 
@@ -302,6 +339,17 @@ function routingCalls() {
 
 function updateCalls() {
   return rpcMock.mock.calls.filter((call) => call[0] === 'settings.update');
+}
+
+function modelCalls() {
+  return rpcMock.mock.calls.filter((call) => call[0] === 'model.list');
+}
+
+async function settle() {
+  for (let index = 0; index < 5; index += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    flushSync();
+  }
 }
 
 async function waitForCondition(check, attempts = 30) {
