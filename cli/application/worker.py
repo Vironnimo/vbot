@@ -402,8 +402,14 @@ def execute(install: Installation, operation: Operation) -> None:
 
     progress("Checking for updates")
     if operation.package:
-        progress("Unpacking and verifying the selected package")
-        candidate = stage_package(install, Path(operation.package), local=operation.local_package)
+        package = Path(operation.package)
+        # A prepared version (`update activate`) is already unpacked.
+        progress(
+            "Verifying the prepared version"
+            if package.is_dir()
+            else "Unpacking and verifying the selected package"
+        )
+        candidate = stage_package(install, package, local=operation.local_package)
     else:
         archive = download_release(install, operation.id, progress=progress)
         if archive is None:

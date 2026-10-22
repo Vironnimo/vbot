@@ -269,7 +269,14 @@ def validate_release(
 
 
 def stage_package(install: Installation, archive: Path, *, local: bool = False) -> str:
+    """Install the package *archive* as a version and return its version id.
+
+    A directory instead names a version this installation already holds, the
+    prepared update ``update activate`` selects: it is verified in place.
+    """
     archive = archive.expanduser().resolve()
+    if archive.is_dir():
+        return _verify_installed_version(install, archive)
     if archive.stat().st_size > MAX_ARCHIVE_BYTES:
         raise ApplicationError("Release archive exceeds the size limit")
     if not local:
@@ -339,6 +346,24 @@ def stage_package(install: Installation, archive: Path, *, local: bool = False) 
             # This path was created exclusively under our validated staging root.
             contained(staging, temporary.name)
             shutil.rmtree(temporary)
+
+
+def _verify_installed_version(install: Installation, version: Path) -> str:
+    """Verify an installed version exactly as staging its package would."""
+
+    if version.parent != contained(install.root, "versions").resolve():
+        raise ApplicationError("The selected application package is not an installed version")
+    manifest = validate_release(
+        version,
+        shape=install.install_shape,
+        platform=current_platform(),
+        access=install.access,
+        remove_bytecode_caches=True,
+    )
+    version_id = str(manifest["version_id"])
+    if install.version(version_id).resolve() != version:
+        raise ApplicationError("The installed version does not match its release identity")
+    return version_id
 
 
 def download_release(
