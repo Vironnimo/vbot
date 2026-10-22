@@ -182,7 +182,7 @@ class TestSaveTrace:
             f"{TRACE_ID_3}.json"
         }
 
-    def test_next_save_removes_crash_orphans_and_partial_atomic_files(self, tmp_path):
+    def test_a_save_removes_crash_orphans_whenever_the_index_was_read(self, tmp_path):
         store = DebugTraceStore(tmp_path, trace_limit=1)
         traces = store.get_data_dir() / "traces"
         traces.mkdir(parents=True)
@@ -190,6 +190,14 @@ class TestSaveTrace:
         (traces / f".{TRACE_ID_2}.json.{TRACE_ID_3}.tmp").write_text("partial wire body")
         store.save_trace(TRACE_ID_4, _make_trace_data(TRACE_ID_4, "2025-01-04T00:00:00Z"))
         assert [path.name for path in traces.iterdir()] == [f"{TRACE_ID_4}.json"]
+
+        # Another writer (an operator, an older process) replaced the index:
+        # it is read again, and what it does not list is swept.
+        (traces / f"{TRACE_ID_1}.json").write_text("raw orphan")
+        (store.get_data_dir() / "index.json").write_text("[]", encoding="utf-8")
+        assert store.get_traces() == []
+        store.save_trace(TRACE_ID_2, _make_trace_data(TRACE_ID_2, "2025-01-02T00:00:00Z"))
+        assert [path.name for path in traces.iterdir()] == [f"{TRACE_ID_2}.json"]
 
     @pytest.mark.parametrize("unreadable_after_publication", [False, True])
     def test_failure_after_index_publication_keeps_the_published_capture(
@@ -241,7 +249,7 @@ class TestSaveTrace:
         assert (store.get_data_dir() / "traces" / f"{TRACE_ID_1}.json").is_file()
         assert store.get_trace(TRACE_ID_1) == trace_data
         # Index entries never embed request or response bodies.
-        assert store.get_traces() == [
+        expected = [
             {
                 "trace_id": TRACE_ID_1,
                 "type": "provider_request",
@@ -254,6 +262,11 @@ class TestSaveTrace:
                 "duration_ms": 150,
             }
         ]
+        listed = store.get_traces()
+        assert listed == expected
+        # Each listing is the caller's own copy.
+        listed[0]["url"] = "changed"
+        assert store.get_traces() == expected
 
     def test_replaces_lone_surrogates_instead_of_losing_the_capture(self, tmp_path: Path) -> None:
         store = DebugTraceStore(tmp_path, trace_limit=10)

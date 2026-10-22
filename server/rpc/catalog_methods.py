@@ -135,6 +135,7 @@ async def _list_commands(state: Any, params: JsonObject) -> JsonObject:
         params, None if address is None else address[1], session_id
     )
     try:
+        command_specs = state.command_dispatcher.catalog()
         command_items = [
             {
                 "name": spec.name,
@@ -146,17 +147,22 @@ async def _list_commands(state: Any, params: JsonObject) -> JsonObject:
                 "argument_hint": spec.argument_hint,
                 "output": _COMMAND_CATALOG_OUTPUT[spec.catalog_result],
             }
-            for spec in state.command_dispatcher.catalog()
+            for spec in command_specs
             if reply_surface.kind not in spec.unavailable_surfaces
         ]
         skills = await _command_skill_suggestions(state, address, session_id, working_project_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
+    # Chat takes `/name` as the command of that name, also where the command is
+    # unavailable (it refuses it there), so a Skill a command shadows runs only
+    # as `$name`: `slash` tells accessors whether to offer it under `/`.
+    command_names = {spec.name for spec in command_specs}
     skill_items = [
         {
             "name": skill.name,
             "description": skill.description,
             "type": "skill",
+            "slash": skill.name.lower() not in command_names,
         }
         for skill in skills
     ]

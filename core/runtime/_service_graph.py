@@ -94,6 +94,7 @@ from core.tools.tools import ToolPromptBlockRegistry, ToolRegistry
 from core.tools.web_fetch import PageBrowser
 from core.usage import UsageRecorder
 from core.utils.version import BuildIdentity
+from core.utils.workers import SharedRefresh
 
 
 class RuntimeServiceGraph:
@@ -108,6 +109,7 @@ class RuntimeServiceGraph:
         self._credential_reload_generation = object()
         self._provider_reload_generation = object()
         self._skill_reload_required = False
+        self._skill_reloads: SharedRefresh[None] | None = None
         self._extension_host_factory: ExtensionHostFactory | None = None
         self._started: bool = False
         self._started_at: datetime | None = None

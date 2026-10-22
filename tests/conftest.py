@@ -19,7 +19,7 @@ from typing import Any
 
 import pytest
 
-from core.utils import config
+from core.utils import config, tokens
 from tests import cpu_pool
 
 # Tests run git in temporary repositories. Started from a git hook, pytest inherits
@@ -138,6 +138,20 @@ def _durable_disk_syncs(
         return
     monkeypatch.setattr("core.database.database.SYNCHRONOUS_OVERRIDE", None)
     monkeypatch.setattr(os, "fsync", _REAL_FSYNC)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _warm_token_estimation_encoding() -> None:
+    """Load the token estimation encoding once per worker, before the first test.
+
+    Production loads it on a background thread and counts with the character
+    fallback until then, so a test whose counts straddle that load sees two
+    counts for the same text (a Status snapshot one token off its in-memory
+    facts, a request preview that changes between two calls). Loaded up front,
+    every test counts with the real encoding. CI and the push workflow prepare
+    tiktoken's cache, so this reads it from disk (about 0.3 s).
+    """
+    tokens._estimation_encoding()
 
 
 @pytest.fixture(scope="session")

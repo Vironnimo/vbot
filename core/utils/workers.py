@@ -10,6 +10,9 @@ completion while an already-started worker is still mutating process state.
 run in exactly the order the Event Loop submitted them, such as full-document
 snapshots written by a scheduler and by operator edits.
 
+``SharedRefresh`` lets concurrent callers of a rescan share runs while each still
+gets one that started after its call.
+
 Every pool records its admission wait and run durations
 (``worker_pool.<name>.wait`` / ``.run``, the latter in the worker thread) and its
 ``.active`` / ``.waiting`` gauges; an ordered worker records
@@ -27,7 +30,7 @@ from collections.abc import Awaitable, Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from functools import partial
 from time import perf_counter
-from typing import Any
+from typing import Any, cast
 
 from core.performance.performance import measure, record_span, set_gauge
 from core.utils.errors import VBotError
@@ -317,6 +320,73 @@ async def finish_despite_cancel[FinishedResult](work: Awaitable[FinishedResult])
         except asyncio.CancelledError:
             if future.done():
                 return future.result()
+
+
+_NO_MARK = object()
+
+
+class SharedRefresh[RefreshResult]:
+    """Run one refresh at a time and share it among callers, fresh for each of them.
+
+    For a refresh that rereads state others may have changed, such as a rescan
+    of files: :meth:`run` returns the outcome of a run that started after the
+    call, so a caller sees every change made before it asked. Every caller
+    arriving before a run starts shares it. A caller arriving while a run is in
+    progress waits for the one follow-up run that starts when the running one
+    settles, so at most one run waits behind the running one however many
+    callers come. ``start_mark`` is read when a run starts; a caller that passes
+    an equal ``current_mark`` joins the running run instead, because nothing it
+    depends on has changed since that run began. Finished runs are not kept.
+
+    Callers wait with :func:`settle_before_cancelling`: cancelling one never
+    cancels a run the others share. The state is per Event Loop.
+    """
+
+    def __init__(
+        self,
+        refresh: Callable[[], Awaitable[RefreshResult]],
+        *,
+        name: str,
+        start_mark: Callable[[], object] | None = None,
+    ) -> None:
+        self._refresh = refresh
+        self._name = name
+        self._start_mark = start_mark
+        self._running: tuple[asyncio.Task[RefreshResult], object] | None = None
+        self._waiting: asyncio.Task[RefreshResult] | None = None
+
+    async def run(self, *, current_mark: object = _NO_MARK) -> RefreshResult:
+        """Return a run that started after this call, or the still-current running one."""
+        loop = asyncio.get_running_loop()
+        waiting = self._waiting
+        if waiting is not None and not waiting.done() and waiting.get_loop() is loop:
+            return await settle_before_cancelling(waiting)
+        running = self._running
+        previous: asyncio.Task[RefreshResult] | None = None
+        if running is not None and not running[0].done() and running[0].get_loop() is loop:
+            if current_mark is not _NO_MARK and current_mark == running[1]:
+                return await settle_before_cancelling(running[0])
+            previous = running[0]
+        task = loop.create_task(self._start(previous), name=self._name)
+        self._waiting = task
+        task.add_done_callback(self._forget)
+        return await settle_before_cancelling(task)
+
+    async def _start(self, previous: asyncio.Task[RefreshResult] | None) -> RefreshResult:
+        if previous is not None:
+            # The previous run's outcome belongs to its own callers.
+            await asyncio.wait((previous,))
+        task = cast("asyncio.Task[RefreshResult]", asyncio.current_task())
+        if self._waiting is task:
+            self._waiting = None
+        self._running = (task, self._start_mark() if self._start_mark is not None else _NO_MARK)
+        return await self._refresh()
+
+    def _forget(self, task: asyncio.Task[RefreshResult]) -> None:
+        if self._running is not None and self._running[0] is task:
+            self._running = None
+        if self._waiting is task:
+            self._waiting = None
 
 
 def _log_late_failure(work: str, error: BaseException) -> None:

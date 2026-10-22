@@ -5,7 +5,6 @@ import {
 } from '$lib/agentTargetOptions.js';
 import {
   listProjects,
-  showProject,
   listAgents,
   listPrompts,
   previewPrompt,
@@ -57,16 +56,15 @@ export function createPromptScope(context) {
   let previewRefreshTimer = null;
 
   // Project teams power the project-agent options in the preview agent picker.
-  // Identity agents come from `agent.list`; project agents are scanned lazily
-  // (one `project.show` per project) and cached, so the N+1 scan never runs on
-  // every render. A scan failure is non-fatal — identity agents still preview.
+  // Identity agents come from `agent.list`; project agents come lazily from the
+  // cached Teams of one `project.list` and are kept, so they are never read on
+  // every render. A failure is non-fatal — identity agents still preview.
   let projectTeams = $state([]);
 
   let projectTeamsLoaded = false;
 
   const targetCatalog = createAgentTargetCatalogLoader({
     listProjects,
-    showProject,
   });
 
   let selectedScope = $derived(
@@ -148,7 +146,7 @@ export function createPromptScope(context) {
     });
   }
 
-  // Lazily scan project teams so the preview picker can offer project agents as
+  // Lazily load project teams so the preview picker can offer project agents as
   // `agent@projekt`. Kicked off on mount; a failure is non-fatal (identity
   // agents still preview) and leaves the cache unset so a reload can retry.
   async function loadProjectTeams() {

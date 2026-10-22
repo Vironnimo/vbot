@@ -158,20 +158,24 @@ async def test_video_job_survives_transient_poll_failures_and_reports_refusals(
 
 
 @pytest.mark.parametrize(
-    ("poll", "reason"),
+    ("poll", "poll_timeout", "reason"),
     [
         pytest.param(
             AsyncMock(return_value={"status": "pending"}),
+            0.05,
             "it had not finished after 1 minutes",
             id="deadline",
         ),
+        # A generous deadline: these fail on their own, and a slow worker must not reach it.
         pytest.param(
             AsyncMock(side_effect=ProviderError("404 Not Found", retryable=False)),
+            30,
             "checking its status failed",
             id="job-lost",
         ),
         pytest.param(
             AsyncMock(side_effect=[{"status": "completed"}, ProviderError("500", retryable=True)]),
+            30,
             "the finished video could not be downloaded",
             id="download-failed",
         ),
@@ -179,14 +183,14 @@ async def test_video_job_survives_transient_poll_failures_and_reports_refusals(
 )
 @pytest.mark.asyncio
 async def test_video_job_whose_result_is_not_collected_names_the_job(
-    monkeypatch: pytest.MonkeyPatch, poll: AsyncMock, reason: str
+    monkeypatch: pytest.MonkeyPatch, poll: AsyncMock, poll_timeout: float, reason: str
 ) -> None:
     client = _openrouter_video_client()
     monkeypatch.setattr(client, "post_and_parse", AsyncMock(return_value=("job-1", {})))
     monkeypatch.setattr(client, "get_and_parse", poll)
 
     with pytest.raises(VideoJobUnfinishedError) as caught:
-        await client.generate("A river", options={}, poll_timeout=0.05, poll_interval=0.01)
+        await client.generate("A river", options={}, poll_timeout=poll_timeout, poll_interval=0.01)
 
     assert caught.value.job_id == "job-1"
     assert caught.value.reason.startswith(reason)

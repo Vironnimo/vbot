@@ -262,6 +262,14 @@ def test_a_disposable_database_is_discarded_at_runtime_and_rebuilt_empty(
         assert rebuilt is not first
         assert note_bodies(rebuilt) == []
         assert rebuilt.database_id != first.database_id
+        # Damage an operation met discards once; when the same failure comes
+        # back after that rebuild, rebuilding again cannot cure it.
+        assert projection.discard_for(sqlite3.OperationalError("no such table: notes"))
+        again = projection.get()
+        assert not projection.discard_for(sqlite3.OperationalError("no such table: notes"))
+        assert projection.get() is again
+        assert projection.discard_for(sqlite3.OperationalError("no such column: body"))
+        assert again.is_closed()
     finally:
         projection.close()
     with pytest.raises(DatabaseUnavailableError, match="closed"):

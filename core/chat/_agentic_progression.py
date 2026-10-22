@@ -370,6 +370,7 @@ class AgenticProgression:
                 # withdrawal ended the Run), complete Tool Results and pending
                 # notes are present, and hooks/media have shaped the exact input.
                 run.raise_if_cancelled()
+                attempts = context.compaction_attempts
                 compacted_state = await self._compaction_runs.maybe_auto_compact_state(
                     context,
                     target,
@@ -379,6 +380,10 @@ class AgenticProgression:
                     allow_continuation=True,
                 )
                 context.request_state = compacted_state
+                if context.compaction_attempts != attempts:
+                    # The attempt is measured as ``chat.compaction``, also when it
+                    # failed and left the request unchanged.
+                    build_started = time.perf_counter()
                 if compacted_state is not state:
                     state = compacted_state
                     messages = state.messages
@@ -530,6 +535,9 @@ class AgenticProgression:
                             message_id=assistant_message_id,
                             on_tool_calls=start_tool_calls if tool_round is not None else None,
                             effort=state.effort,
+                            # Run Admission Guards keep the Session in this
+                            # generation while the Run is active.
+                            session_generation_id=context.session_snapshot.cursor.generation_id,
                         )
                 except ProviderRequestTooLargeError as exc:
                     smaller = await _CHAT_TRANSFORM_WORKERS.run(

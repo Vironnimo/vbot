@@ -947,9 +947,16 @@ class StubStorage:
         self.data_dir = data_dir or Path("data")
         # Sub-Agent limits as stored; missing ones take their defaults.
         self.subagent_settings: JsonObject = {}
+        self.settings_revision = 0
+        self.compaction_settings_loads = 0
 
     def load_compaction_settings(self) -> JsonObject:
+        self.compaction_settings_loads += 1
         return dict(self._compaction_settings)
+
+    def save_compaction_settings(self, settings: JsonObject) -> None:
+        self._compaction_settings = dict(settings)
+        self.settings_revision += 1
 
     def load_subagent_settings(self) -> JsonObject:
         return dict(self.subagent_settings)

@@ -30,7 +30,7 @@ from core.runs import ChatRunManager, RunExecutionOwner
 from core.sessions import ChatSessionManager
 from core.tools import ToolContext, ToolRegistry
 from core.tools.availability import ToolAccess
-from resources.extensions.swarm import _store_values
+from resources.extensions.swarm import _change_pacing, _store_values
 from resources.extensions.swarm._store_database import DATABASE_NAME
 from resources.extensions.swarm.extension import register
 from resources.extensions.swarm.store import SCHEMA_SQL, SwarmStore
@@ -78,6 +78,15 @@ def _wake_without_default_delay(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(_store_values._DELIVERY_DEFAULTS, "coalesce_ms", 0)
 
 
+def _publish_changes_at_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Publish every Swarm change at once instead of at most once a second.
+
+    Tests of what an operation publishes read the changes right after it; the
+    pacing has its own test (``test_swarm_change_pacing.py``).
+    """
+    monkeypatch.setattr(_change_pacing, "INTERVAL_SECONDS", 0)
+
+
 @pytest.fixture
 def swarm_database(tmp_path: Path, swarm_data_template: Path) -> Iterator[Database]:
     _clone_swarm_data(swarm_data_template, tmp_path, sessions=False)
@@ -110,6 +119,7 @@ async def board(
     inbox = getattr(request, "param", True)
     _clone_swarm_data(swarm_data_template, tmp_path)
     _wake_without_default_delay(monkeypatch)
+    _publish_changes_at_once(monkeypatch)
     sessions = ChatSessionManager(tmp_path)
     manager = ChatRunManager()
     identity = SimpleNamespace(name="swarm", epoch="registration")
@@ -245,6 +255,7 @@ async def lifecycle(
     earlier_tasks = asyncio.all_tasks()
     _clone_swarm_data(swarm_data_template, tmp_path)
     _wake_without_default_delay(monkeypatch)
+    _publish_changes_at_once(monkeypatch)
     responses = [{"content": "Run finished"} for index in range(40)] + [
         {"content": "completion recorded"} for _ in range(40)
     ]

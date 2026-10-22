@@ -1,5 +1,6 @@
 import { untrack } from 'svelte';
 
+import { isRunActive } from '$lib/chatState.js';
 import {
   runChangeStats,
   sessionChangeStats,
@@ -7,8 +8,11 @@ import {
 import { sessionDisplayName } from '$lib/sessionListView.js';
 
 // Live progress reads again at most this often; opening the panel, another
-// Session and a Sessions refresh read at once.
-const LIVE_READ_INTERVAL_MS = 2000;
+// Session, a Sessions refresh and the end of the displayed Session's Run read
+// at once. Every Model request reports progress, and the tree-wide usage read
+// is the server's most expensive one, so a shorter interval costs the server
+// far more than the panel gains.
+const LIVE_READ_INTERVAL_MS = 10_000;
 
 // What the Session information panel shows about the displayed Session and
 // the Sub-Agents below it: its list row (name, creation, last activity;
@@ -17,12 +21,17 @@ const LIVE_READ_INTERVAL_MS = 2000;
 // at every depth (`session.change_stats` with `include_subagents`,
 // `statistics.session_usage`), not only the loaded History. The server owns
 // all of it, so it is read while the panel shows it: when it opens, when the
-// displayed Session or a Sessions refresh changes, and as work progresses -
-// a loaded Run's own statistics or the Session's usage change, or a Sub-Agent
-// status arrives. Reads run one at a time; progress arriving meanwhile is read
-// once the last read ended and the interval passed. The server stores a Run's
-// statistics before it streams them, so a read prompted by a live update
-// already includes it.
+// displayed Session or a Sessions refresh changes, when the displayed
+// Session's Run ends, and as work progresses - a loaded Run's own statistics
+// or the Session's usage change, or a Sub-Agent status arrives. Reads run one
+// at a time; progress arriving meanwhile is read once the last read ended and
+// the interval passed, so the last progress is always read. The server stores
+// a Run's statistics and usage before it streams them, so a read prompted by
+// a live update or the Run's end already includes them.
+//
+// The Run events carry only the Session's own token counts, without cost and
+// without its Sub-Agents, so the panel's usage cannot follow them and stays a
+// server read.
 //
 // `stats` is undefined until the first read for the displayed Session answers,
 // then null (no changes) or the presented statistics. `summary` and `usage`
@@ -40,6 +49,8 @@ export function createSessionInfo(context) {
   let reading = false;
   let lastReadAt = 0;
   let timer = null;
+  // Whether the displayed Session's Run was active at the last look.
+  let wasRunning = false;
 
   let runRevision = $derived(runStatsRevision(context.timelineItems));
   let usageRevision = $derived(sessionUsageRevision(context.sessionUsage));
@@ -53,6 +64,7 @@ export function createSessionInfo(context) {
     const live = open
       ? `${runRevision}::${usageRevision}::${statusesRevision(context.subAgentStatuses)}`
       : '';
+    const running = open && isRunActive(context.target.activeSessionState);
     untrack(() => {
       if (displayKey !== infoSessionKey) {
         infoSessionKey = displayKey;
@@ -61,7 +73,11 @@ export function createSessionInfo(context) {
         usage = null;
         subAgents = [];
         baseKey = '';
+        wasRunning = false;
       }
+      // The Run's end reads its final figures without waiting.
+      const runEnded = wasRunning && !running;
+      wasRunning = running;
       if (!open) {
         // Reopening reads again; what the panel showed stays until then.
         baseKey = '';
@@ -71,7 +87,7 @@ export function createSessionInfo(context) {
       if (!displayKey || !addressing.agentAddress || !addressing.sessionId) {
         return;
       }
-      const urgent = base !== baseKey;
+      const urgent = base !== baseKey || runEnded;
       if (!urgent && live === liveKey) {
         return;
       }

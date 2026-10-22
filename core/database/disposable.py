@@ -4,8 +4,10 @@
 version, identity or file is bad when it opens. Damage an operation meets later
 reaches the owner, which classifies the failure with
 :func:`projection_failure` and, for ``rebuild``, calls
-:meth:`DisposableDatabase.discard`: the handle closes, the files go, and the
-next :meth:`DisposableDatabase.get` creates the projection empty.
+:meth:`DisposableDatabase.discard_for`: the handle closes, the files go, and the
+next :meth:`DisposableDatabase.get` creates the projection empty. The same
+failure discards at most once per process: when it comes back after the
+rebuild, rebuilding cannot cure it, and the owner fails the operation instead.
 
 A disposable database keeps one bounded worker pool for its whole life: its
 own asynchronous operations and every handle it opens run on it, so a rebuild
@@ -61,6 +63,16 @@ def projection_failure(error: BaseException) -> ProjectionFailure | None:
     return "rebuild"
 
 
+def _failure_signature(error: BaseException) -> tuple[str, ...]:
+    """Identify a failure by the types and messages of the error and its causes."""
+    signature: list[str] = []
+    current: BaseException | None = error
+    while current is not None and len(signature) < 8:
+        signature += (type(current).__qualname__, str(current))
+        current = current.__cause__
+    return tuple(signature)
+
+
 def _caused_by_contention(error: BaseException) -> bool:
     cause = error.__cause__
     while cause is not None:
@@ -75,8 +87,9 @@ class DisposableDatabase:
 
     ``get`` opens the projection on first use and returns the open handle
     afterwards; ``discard`` closes it and deletes the files so the next ``get``
-    rebuilds it; ``close`` releases it for good. Operations that already hold
-    the old handle when ``discard`` runs fail as unavailable.
+    rebuilds it; ``discard_for`` does so for damage an operation met, once per
+    failure; ``close`` releases it for good. Operations that already hold the
+    old handle when ``discard`` runs fail as unavailable.
 
     ``run_async``, ``get_async`` and ``discard_async`` run on the database's
     bounded worker pool, which every handle ``get`` opens shares; after
@@ -91,6 +104,8 @@ class DisposableDatabase:
         self._database: Database | None = None
         self._closed = False
         self._workers = database_worker_pool(spec)
+        # The failures that already discarded this database in this process.
+        self._discarded_for: set[tuple[str, ...]] = set()
 
     @property
     def path(self) -> Path:
@@ -141,6 +156,24 @@ class DisposableDatabase:
         with self._lock:
             self._release()
             _discard(self.spec)
+
+    def discard_for(self, error: BaseException) -> bool:
+        """Discard for the damage ``error`` showed, at most once per failure.
+
+        A failure (its exception types and messages, causes included) that
+        already discarded this database in this process came back after the
+        rebuild, so another rebuild cannot cure it: a defect in the owner's
+        own statements, or damage that persists. Then nothing is discarded and
+        it returns ``False``; the owner fails the operation instead of
+        rebuilding on every call. Otherwise it discards like :meth:`discard`
+        and returns ``True``.
+        """
+        signature = _failure_signature(error)
+        if signature in self._discarded_for:
+            return False
+        self.discard()
+        self._discarded_for.add(signature)
+        return True
 
     async def discard_async(self) -> None:
         """``discard`` for the Event Loop: closing and deleting run on the worker pool."""

@@ -216,6 +216,7 @@ describe('command suggestions', () => {
           argument_hint: '<objective>',
         },
         { name: 'review', type: 'skill', description: 'Review code' },
+        { name: 'help', type: 'skill', slash: false },
       ],
     });
     const { chatState, controller } = setupController({
@@ -228,7 +229,8 @@ describe('command suggestions', () => {
     expect(chatState.availableSkills).toMatchObject([
       { name: 'help', type: 'command' },
       { name: 'goal', type: 'command', argument_hint: '<objective>' },
-      { name: 'review', type: 'skill' },
+      { name: 'review', type: 'skill', slash: true },
+      { name: 'help', type: 'skill', slash: false },
     ]);
   });
 

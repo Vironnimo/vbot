@@ -447,14 +447,21 @@ def test_settings_changes_are_read_after_every_kind_of_write(tmp_path: Path) -> 
     _write_raw(storage, '{"format_version": 1, "port": 8421}')
     _age(storage.settings_path)
     assert storage.load_settings() == {"port": 8421}
+    # The settings revision changes only when the served Settings may have.
+    revision = storage.settings_revision
+    storage.load_settings()
+    assert storage.settings_revision == revision
 
     # An external in-place edit of the same size keeps the file identity.
     storage.settings_path.write_text('{"format_version": 1, "port": 8422}', encoding="utf-8")
     assert storage.load_settings() == {"port": 8422}
+    assert storage.settings_revision != revision
 
     _age(storage.settings_path)
     storage.load_settings()
+    revision = storage.settings_revision
     storage.save_settings({"keep_awake": True, "port": 8426})
+    assert storage.settings_revision != revision
     assert storage.load_settings() == {"keep_awake": True, "port": 8426}
 
     storage.settings_path.unlink()

@@ -35,7 +35,4 @@ export {
   resolveAgentAddressing,
   pickProjectAgentSessionId,
 } from './chatState/addressing.js';
-export {
-  assistantRunChildProgressKey,
-  visibleTimelineItemsForRender,
-} from './chatTimeline.js';
+export { visibleTimelineItemsForRender } from './chatTimeline.js';

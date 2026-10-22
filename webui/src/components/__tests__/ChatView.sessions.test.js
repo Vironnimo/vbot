@@ -28,6 +28,7 @@ import {
   setupChatViewTestSuite,
   subscribeRunEventsMock,
   testChatStateRefs,
+  testRunStreamRefs,
   tick,
   waitForCondition,
   waitForText,
@@ -203,6 +204,71 @@ describe('ChatView Sessions', () => {
       flushSync();
       await waitForCondition(() => statsText().includes('+5'));
       expect(rpcCalls('session.change_stats')).toHaveLength(2);
+    });
+
+    it('reads Run progress at most every 10 s and the end of the Run at once', async () => {
+      const fallback = createChatRpcMock();
+      rpcMock.mockImplementation(async (method, params) => {
+        if (method === 'session.change_stats') return { change_stats: null };
+        if (method === 'statistics.session_usage') {
+          const total = { input_tokens: 1000, output_tokens: 10 };
+          return { session: total, subagents: null, total, subagent_count: 0 };
+        }
+        if (method === 'subagent.tree') return { subagents: [] };
+        return fallback(method, params);
+      });
+      await chat.mountChat();
+      const reads = () => rpcCalls('statistics.session_usage').length;
+      document.querySelector('.chat-header__info-toggle').click();
+      flushSync();
+      await waitForCondition(() => reads() === 1);
+      vi.useFakeTimers();
+      const run = {
+        run_id: 'run-live',
+        agent_id: 'alpha',
+        project_id: null,
+        session_id: 'session-1',
+      };
+      let sequence = 0;
+      const emit = (type, runEventType, output) => {
+        sequence += 1;
+        testRunStreamRefs[0].handleServerEvent({
+          type,
+          payload: {
+            ...run,
+            run_event_type: runEventType,
+            run_event_sequence: sequence,
+            output,
+          },
+        });
+        flushSync();
+      };
+      const modelStep = (inputTokens) =>
+        emit('run_output', 'model_step_usage', {
+          session_usage: { input_tokens: inputTokens, output_tokens: 10 },
+        });
+
+      // Every Model request reports progress; it is read once the interval
+      // since the last read passed.
+      emit('run_started', 'run_started', { status: 'running' });
+      modelStep(100);
+      modelStep(200);
+      await vi.advanceTimersByTimeAsync(9_000);
+      expect(reads()).toBe(1);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(reads()).toBe(2);
+
+      modelStep(300);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(reads()).toBe(2);
+      // The Run's end reads its final figures without waiting.
+      emit('run_completed', 'run_completed', {
+        status: 'completed',
+        session_usage: { input_tokens: 400, output_tokens: 10 },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(reads()).toBe(3);
+      expect(rpcCalls('session.change_stats')).toHaveLength(3);
     });
   });
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -35,6 +36,7 @@ class SkillInventory:
         self,
         projects: list[Project] | None = None,
         agents: list[Agent] | None = None,
+        resolve: Callable[[Path], Path] = Path.resolve,
     ) -> list[_ManagerSource]:
         global_roots = self._owner._global_roots(self._owner._storage.load_settings())
         origins = _origin_layers([root.root for root in global_roots])
@@ -68,12 +70,17 @@ class SkillInventory:
         )
         unique_sources: dict[tuple[Path, str | None], _ManagerSource] = {}
         for source in sources:
-            unique_sources.setdefault((source.root.resolve(), source.owner_id), source)
+            unique_sources.setdefault((resolve(source.root), source.owner_id), source)
         return list(unique_sources.values())
 
     @staticmethod
-    def _manager_entry_id(root: Path, path: Path, owner_id: str | None) -> str:
-        identity = f"{root.resolve().as_posix()}\0{path.resolve().as_posix()}\0{owner_id or ''}"
+    def _manager_entry_id(
+        root: Path,
+        path: Path,
+        owner_id: str | None,
+        resolve: Callable[[Path], Path] = Path.resolve,
+    ) -> str:
+        identity = f"{resolve(root).as_posix()}\0{resolve(path).as_posix()}\0{owner_id or ''}"
         return hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
     def _inventoried_package(
@@ -178,7 +185,7 @@ class SkillInventory:
             merged_roots.append(source.root)
             merged_origins.append(source.origin)
 
-        for source in self._manager_sources(projects, agents):
+        for source in self._manager_sources(projects, agents, scan.resolve):
             add_root(source)
 
         merged = SkillRegistry.load(
@@ -188,7 +195,7 @@ class SkillInventory:
             origins=merged_origins,
             scan=scan,
         )
-        global_root = self._owner.global_skills_dir.resolve()
+        global_root = scan.resolve(self._owner.global_skills_dir)
         records = self._home_records(agents)
         skills: list[dict[str, Any]] = []
         package_ids: dict[Path, str] = {}
@@ -214,7 +221,7 @@ class SkillInventory:
                 status = "disabled"
             owner_shared = policy.shared.get(owner_id, {}) if owner_id else {}
             shared_receivers = owner_shared.get(skill.name, frozenset())
-            entry_id = self._manager_entry_id(root, skill.path, owner_id)
+            entry_id = self._manager_entry_id(root, skill.path, owner_id, scan.resolve)
             if loadable:
                 package_ids.setdefault(skill.path, entry_id)
             editable_scope = (
@@ -222,7 +229,7 @@ class SkillInventory:
                     f"agent:{owner_id}"
                     if owner_id
                     else "global"
-                    if root.resolve() == global_root
+                    if scan.resolve(root) == global_root
                     else None
                 )
                 if loadable
@@ -236,7 +243,7 @@ class SkillInventory:
             # Policy entries use the visible name; usage must distinguish the
             # concrete loaded directory even when frontmatter names collide.
             package = source.package_ref(skill.path.parent.name) or SkillPackageRef(
-                "folder", skill.path.parent.name, source.root.resolve().as_posix()
+                "folder", skill.path.parent.name, scan.resolve(root).as_posix()
             )
             skills.append(
                 {
@@ -245,7 +252,7 @@ class SkillInventory:
                     "editable_scope": editable_scope,
                     "source_kind": source.kind,
                     "source_label": (root.parent.name if root.name == "skills" else root.name)
-                    if origin == SKILL_ORIGIN_GLOBAL and root.resolve() != global_root
+                    if origin == SKILL_ORIGIN_GLOBAL and scan.resolve(root) != global_root
                     else None,
                     "name": skill.name,
                     "description": skill.description,

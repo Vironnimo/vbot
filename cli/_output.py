@@ -13,17 +13,13 @@ from typing import TYPE_CHECKING
 
 from cli._progress import ProgressPrinter, Status, current_progress, status_line
 from cli._recovery import format_command, recovery_guidance
+from cli._server_target import NON_VBOT_LISTENER_MESSAGE, UNRECORDED_SERVER_MESSAGE
 from cli.formatting import output_mode
 from cli.parser import parse_args
-from cli.server_management import (
-    NON_VBOT_LISTENER_MESSAGE,
-    UNRECORDED_SERVER_MESSAGE,
-    CommandResult,
-    ServerInstance,
-)
 from core.utils.errors import ConfigError
 
 if TYPE_CHECKING:
+    from cli._server_target import CommandResult, ServerInstance
     from cli.application.state import Installation, Operation
 
 SUCCESS_EXIT_CODE = 0

@@ -281,6 +281,9 @@
       ready: false,
       allowedUrls: [],
       autosaveFlushes: new Map(),
+      // What changed while the browser tab was hidden (`{revision, change}`),
+      // delivered once it shows again.
+      heldInvalidation: null,
       // Where the App moves on the Back/Forward keys and mouse buttons (the
       // Desktop app), the page forwards the ones pressed inside its frame,
       // which never reach the App window.
@@ -729,10 +732,36 @@
   // An invalidation without `owner` refreshes whichever page is open. One
   // with `owner` reaches only that Extension's page, carrying the records it
   // changed as `change`; an unusable change degrades to a full refresh.
+  //
+  // While the browser tab is hidden, the frame's invalidations wait: the page
+  // would only refresh what nobody sees. Showing the tab delivers them as one:
+  // the records they all named when they name one resource, else a full
+  // refresh. A reload drops what waited, as the new frame reads everything.
   function forwardInvalidation(next) {
     const context = frameContext;
     if (!context?.ready) return;
     if (next.owner != null && next.owner !== context.descriptor.owner) return;
+    const invalidation = {
+      revision: next.revision ?? null,
+      change: validChange(next.change)
+        ? {
+            resource: next.change.resource,
+            ids: next.change.ids,
+            revision: next.change.revision,
+          }
+        : null,
+    };
+    if (document.hidden) {
+      context.heldInvalidation = mergeInvalidations(
+        context.heldInvalidation,
+        invalidation,
+      );
+      return;
+    }
+    postInvalidation(context, invalidation);
+  }
+
+  function postInvalidation(context, { revision, change }) {
     noteExtensionPageInvalidation('change');
     const message = {
       type: 'vbot.extension.invalidate',
@@ -740,15 +769,8 @@
       nonce: context.nonce,
       epoch: context.descriptor.epoch,
       descriptor: context.descriptor,
-      revision: next.revision ?? null,
+      revision,
     };
-    const change = validChange(next.change)
-      ? {
-          resource: next.change.resource,
-          ids: next.change.ids,
-          revision: next.change.revision,
-        }
-      : null;
     post(
       context,
       change && valid({ ...message, change }, MAX_HOST_MESSAGE_BYTES)
@@ -757,14 +779,51 @@
     );
   }
 
+  // Beyond this many records a held change becomes a full refresh.
+  const MAX_HELD_CHANGE_IDS = 1000;
+
+  function mergeInvalidations(held, next) {
+    if (!held) return next;
+    const sameResource =
+      held.change &&
+      next.change &&
+      held.change.resource === next.change.resource;
+    const ids = sameResource
+      ? [...new Set([...held.change.ids, ...next.change.ids])]
+      : [];
+    return {
+      revision: next.revision,
+      change:
+        sameResource && ids.length <= MAX_HELD_CHANGE_IDS
+          ? {
+              resource: next.change.resource,
+              ids,
+              revision: Math.max(held.change.revision, next.change.revision),
+            }
+          : null,
+    };
+  }
+
+  function onVisibilityChange() {
+    const context = frameContext;
+    if (document.hidden || !context?.heldInvalidation) return;
+    const held = context.heldInvalidation;
+    context.heldInvalidation = null;
+    postInvalidation(context, held);
+  }
+
   $effect(() => subscribeInvalidations?.(forwardInvalidation));
 
-  onMount(() => window.addEventListener('message', onMessage));
+  onMount(() => {
+    window.addEventListener('message', onMessage);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+  });
   onDestroy(() => {
     disposed = true;
     unregisterAutosave();
     invalidateContext('disposed');
     window.removeEventListener('message', onMessage);
+    document.removeEventListener('visibilitychange', onVisibilityChange);
   });
 </script>
 

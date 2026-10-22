@@ -72,25 +72,49 @@ async def test_older_skill_scan_cannot_overwrite_newer_policy(
     runtime = Runtime(config, safe_startup_mode="test")
     runtime.start()
     entered, release = _pause_first_global_scan(runtime, monkeypatch)
+    owner = runtime._skill_operations()  # noqa: SLF001 - the worker scan seam.
+    paused_load = owner.load_global_registry
+    scans: list[None] = []
+
+    def counted_load() -> SkillRegistry:
+        scans.append(None)
+        return paused_load()
+
+    monkeypatch.setattr(owner, "load_global_registry", counted_load)
     older = asyncio.create_task(runtime.reload_skills_async())
+    newer: list[asyncio.Task[None]] = []
     try:
         await asyncio.wait_for(entered.wait(), 5)
         runtime.skill_policy.set_package_disabled(RELOADED_PACKAGE, disabled=True)
         if newer_reload == "sync":
             runtime.reload_skills()
+            latest = runtime.skills
+            with pytest.raises(KeyError):
+                latest.get(RELOADED_SKILL_NAME)
         else:
-            await runtime.reload_skills_async(only_if_changed=newer_reload == "editor")
-        latest = runtime.skills
-        with pytest.raises(KeyError):
-            latest.get(RELOADED_SKILL_NAME)
+            # Newer async reloads wait for the running scan, then share one rescan.
+            newer = [
+                asyncio.create_task(
+                    runtime.reload_skills_async(only_if_changed=newer_reload == "editor")
+                )
+                for _ in range(2)
+            ]
+            for _ in range(5):
+                await asyncio.sleep(0)
+            assert not any(task.done() for task in newer)
         release.set()
-        await asyncio.wait_for(older, 5)
-        assert runtime.skills is latest
+        await asyncio.wait_for(asyncio.gather(older, *newer), 5)
+        if newer_reload == "sync":
+            assert runtime.skills is latest
+        else:
+            assert len(scans) == 2
+        with pytest.raises(KeyError):
+            runtime.skills.get(RELOADED_SKILL_NAME)
         with pytest.raises(KeyError):
             runtime.skills_for(None, "main").get(RELOADED_SKILL_NAME)
     finally:
         release.set()
-        await asyncio.gather(older, return_exceptions=True)
+        await asyncio.gather(older, *newer, return_exceptions=True)
         await runtime.aclose()
 
 
@@ -103,7 +127,8 @@ async def test_unchanged_editor_scan_preserves_a_pending_explicit_reload(
     write_skill(runtime.agent_skills_dir("main"), "private", "Before fixture.")
     previous = runtime.skills_for(None, "main")
     entered, release = _pause_first_global_scan(runtime, monkeypatch)
-    pending = asyncio.create_task(runtime.reload_skills_async())
+    editor = asyncio.create_task(runtime.reload_skills_async(only_if_changed=True))
+    explicit: asyncio.Task[None] | None = None
     try:
         await asyncio.wait_for(entered.wait(), 5)
         path = runtime.agent_skills_dir("main") / "private" / "SKILL.md"
@@ -111,18 +136,17 @@ async def test_unchanged_editor_scan_preserves_a_pending_explicit_reload(
             path.read_text(encoding="utf-8").replace("Before fixture", "After fixture"),
             encoding="utf-8",
         )
-        # The global catalog did not change, but the explicit full refresh must
-        # still invalidate the previously cached private registry.
-        await runtime.reload_skills_async(only_if_changed=True)
+        # The global catalog did not change, but the explicit full refresh queued
+        # behind the editor scan must still invalidate the cached private registry.
+        explicit = asyncio.create_task(runtime.reload_skills_async())
+        release.set()
+        await asyncio.wait_for(asyncio.gather(editor, explicit), 5)
         current = runtime.skills_for(None, "main")
         assert current is not previous
         assert current.get("private").description == "After fixture."
-        release.set()
-        await pending
-        assert runtime.skills_for(None, "main") is current
     finally:
         release.set()
-        await asyncio.gather(pending, return_exceptions=True)
+        await asyncio.gather(editor, *([explicit] if explicit else []), return_exceptions=True)
         await runtime.aclose()
 
 

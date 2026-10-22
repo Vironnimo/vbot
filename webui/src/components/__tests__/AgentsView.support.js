@@ -301,20 +301,15 @@ export function createAgentsRpcMock(options = {}) {
       return options.skills ?? skillInventory(agents);
     }
 
+    // Projects carry their cached `scan` (Team) the way `include_scan`
+    // lists them.
     if (method === 'project.list') {
-      return { projects: options.projects ?? [] };
-    }
-
-    if (method === 'project.show') {
-      const projectId = params?.project_id;
-      const configured = options.projectScans?.[projectId];
-      if (configured) {
-        return configured;
-      }
-      const project = (options.projects ?? []).find(
-        (candidate) => candidate.project_id === projectId,
-      );
-      return { project: project ?? {}, scan: { team: [] } };
+      return {
+        projects: (options.projects ?? []).map((project) => ({
+          scan: { team: [] },
+          ...project,
+        })),
+      };
     }
 
     if (method === 'agent.list') {

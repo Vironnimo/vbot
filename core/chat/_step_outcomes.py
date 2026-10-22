@@ -110,11 +110,13 @@ def _prepare_assistant_context(
     tools: list[JsonObject],
     scope: str,
     context_window: int | None,
+    calibrated: bool = False,
 ) -> tuple[ChatMessage, JsonObject, list[JsonObject], JsonObject, RequestContextEstimate]:
     """Record measured input and project the Assistant continuation off the Event Loop.
 
-    Usage normalization and its durable recorder update precede this boundary.
-    Calibration writes, replay shaping and the new request count stay together.
+    Usage normalization and its durable recorder update precede this boundary;
+    ``calibrated`` says that update already taught the calibration. Otherwise
+    the calibration write, replay shaping and the new request count stay together.
     """
     request_message = _assistant_continuation_dict(assistant, replay_policy=replay_policy)
     # Interrupted Reasoning can disappear during replay; do not send an empty entry.
@@ -127,7 +129,7 @@ def _prepare_assistant_context(
         else []
     )
     assert isinstance(assistant.usage, dict)
-    accounting.observe_prepared(assistant.usage, request_estimate)
+    accounting.observe_prepared(assistant.usage, request_estimate, calibrated=calibrated)
     continuation_estimate = (
         accounting.prepare(
             [*request_messages, *request_delta], target=target, tools=tools, scope=scope

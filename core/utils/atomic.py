@@ -17,7 +17,9 @@ On Windows a replace that fails because another program briefly holds
 the target or the temp file open (antivirus scanners, search indexers) is
 retried for at most about 0.4 s in total. On failure the temp file is removed
 and the error (normally an ``OSError``) re-raised for the caller to translate
-into its own domain error.
+into its own domain error. A reader that opens the file during a replace on
+Windows is refused for a moment as well; ``read_replaced_text`` retries that
+with the same budget.
 
 ``write_new_bytes`` is the counterpart for a file that must never replace
 another: it creates the target exclusively and writes it in place with the
@@ -210,6 +212,27 @@ def replace_path(temp_path: Path, target_path: Path) -> None:
                 raise
         _sleep(delay)
     os.replace(temp_path, target_path)
+
+
+def read_replaced_text(path: Path) -> str:
+    """Read a UTF-8 file that atomic writes replace, outlasting a replace on Windows.
+
+    While ``os.replace`` swaps a file on Windows, opening it fails with
+    "permission denied" for a moment: a live probe (2026-10-22) saw about one
+    failed read per replace while one thread read continuously. Python's
+    ``open`` reports no Windows error code for it, so on Windows every
+    ``PermissionError`` except a directory's is retried with the replace's
+    delays (about 0.4 s in total) before it surfaces.
+    """
+
+    for delay in _REPLACE_RETRY_DELAYS:
+        try:
+            return path.read_text(encoding="utf-8")
+        except PermissionError:
+            if os.name != "nt" or path.is_dir():
+                raise
+        _sleep(delay)
+    return path.read_text(encoding="utf-8")
 
 
 def preserve_windows_file_metadata(source: Path, replacement: Path) -> None:

@@ -5,7 +5,7 @@ import json
 import logging
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from concurrent.futures import Future
 from pathlib import Path
 
@@ -14,7 +14,7 @@ import pytest
 from core.performance import PerformanceService
 from core.performance.performance import reset_for_tests
 from core.utils.errors import VBotError
-from core.utils.workers import BoundedWorkerPool, OrderedWorker, cancel_and_wait
+from core.utils.workers import BoundedWorkerPool, OrderedWorker, SharedRefresh, cancel_and_wait
 
 
 @pytest.mark.asyncio
@@ -306,3 +306,71 @@ async def test_ordered_worker_call_runs_inline_on_its_own_thread() -> None:
 
     assert outer_thread == inner_thread
     assert outer_thread.startswith("vbot-test-ordered-nested")
+
+
+class _HeldRefreshes:
+    """A refresh whose runs each wait for their own release and return their number."""
+
+    def __init__(self) -> None:
+        self.releases: list[asyncio.Event] = []
+
+    async def __call__(self) -> int:
+        release = asyncio.Event()
+        self.releases.append(release)
+        await release.wait()
+        return len(self.releases)
+
+    async def started(self, count: int) -> None:
+        await _until(lambda: len(self.releases) == count)
+
+
+async def _until(condition: Callable[[], bool]) -> None:
+    for _ in range(100):
+        if condition():
+            return
+        await asyncio.sleep(0)
+    raise AssertionError("condition not reached")
+
+
+@pytest.mark.asyncio
+async def test_shared_refresh_gives_each_caller_a_run_that_started_after_it() -> None:
+    refresh = _HeldRefreshes()
+    shared = SharedRefresh(refresh, name="test-refresh")
+
+    # Callers arriving before a run starts share it.
+    first = [asyncio.create_task(shared.run()) for _ in range(2)]
+    await refresh.started(1)
+    # Callers arriving during it share one follow-up, however many come.
+    later = [asyncio.create_task(shared.run()) for _ in range(3)]
+    await asyncio.sleep(0)
+    # A cancelled caller waits for its run but never cancels it for the others.
+    later[0].cancel()
+    refresh.releases[0].set()
+
+    assert await asyncio.gather(*first) == [1, 1]
+    await refresh.started(2)
+    assert not later[0].done()
+    refresh.releases[1].set()
+    assert await asyncio.gather(*later[1:]) == [2, 2]
+    with pytest.raises(asyncio.CancelledError):
+        await later[0]
+    assert len(refresh.releases) == 2
+
+
+@pytest.mark.asyncio
+async def test_shared_refresh_joins_the_running_run_while_its_mark_is_current() -> None:
+    refresh = _HeldRefreshes()
+    mark = 0
+    shared = SharedRefresh(refresh, name="test-marked-refresh", start_mark=lambda: mark)
+
+    first = asyncio.create_task(shared.run(current_mark=0))
+    await refresh.started(1)
+    joined = asyncio.create_task(shared.run(current_mark=0))
+    mark = 1
+    fresh = asyncio.create_task(shared.run(current_mark=mark))
+    refresh.releases[0].set()
+
+    assert (await first, await joined) == (1, 1)
+    await refresh.started(2)
+    refresh.releases[1].set()
+    assert await fresh == 2

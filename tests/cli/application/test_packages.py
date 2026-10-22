@@ -528,6 +528,19 @@ def test_download_bounds_release_identity_while_reading_and_closes_the_stream(
     assert not (install.root / "downloads").exists()
 
 
+def _active_install(tmp_path: Path, channel: str, active: dict[str, str]) -> Installation:
+    """An installation on *channel* whose active version `rel_active` is *active*."""
+    install = replace(
+        _install(tmp_path / "install", public_key="key"), release_url=CHANNEL_URLS[channel]
+    )
+    (install.root / "versions" / "rel_active").mkdir(parents=True)
+    (install.root / "versions" / "rel_active" / "release.json").write_text(
+        json.dumps(active), encoding="utf-8"
+    )
+    (install.root / "active-version").write_text("rel_active\n", encoding="ascii")
+    return install
+
+
 @pytest.mark.parametrize(
     ("channel", "identity_channel", "published", "version", "package_published"),
     [
@@ -553,11 +566,7 @@ def test_download_fetches_the_platform_package_only_for_a_version_not_yet_active
     package_published: bool,
 ) -> None:
     respx = pytest.importorskip("respx")
-    install = replace(
-        _install(tmp_path / "install", public_key="key"), release_url=CHANNEL_URLS[channel]
-    )
-    (install.root / "versions" / "rel_active").mkdir(parents=True)
-    (install.root / "active-version").write_text("rel_active\n", encoding="ascii")
+    install = _active_install(tmp_path, channel, {"version": "0.9.0", "channel": "release"})
     archive = package_name("server")
     # Only these release downloads are mocked, so a GitHub API request fails. The
     # release channel downloads the packages from the tag the latest identity names,
@@ -612,3 +621,73 @@ def test_download_fetches_the_platform_package_only_for_a_version_not_yet_active
         assert result is not None and result.name == archive
         assert result.read_bytes() == b"zip"
         assert result.with_suffix(".zip.sig").read_bytes() == b"sig"
+
+
+_MAIN_REVISION = "a" * 40
+
+
+@pytest.mark.parametrize(
+    ("channel", "active", "offered", "refused"),
+    [
+        # Switching from main to release: the release of the version the main
+        # build carries, or an earlier one, would take the installation back.
+        pytest.param("release", ("0.4.25", "main"), "0.4.25", True, id="release-of-main-version"),
+        pytest.param("release", ("0.4.25", "main"), "0.4.24", True, id="earlier-release"),
+        pytest.param("main", ("0.4.26", "release"), "0.4.25", True, id="earlier-main-build"),
+        pytest.param("release", ("1.10.0", "release"), "1.9.9", True, id="numeric-order"),
+        pytest.param("release", ("0.4.25", "main"), "0.4.26", False, id="newer-release"),
+        pytest.param("main", ("0.4.25", "release"), "0.4.25", False, id="main-after-its-release"),
+        pytest.param("main", ("0.4.25", "main"), "0.4.25", False, id="next-main-build"),
+        pytest.param("release", ("1.0", "release"), "1.0.1", False, id="padded-version"),
+        pytest.param("release", ("unknown", "main"), "0.4.24", False, id="unordered-version"),
+    ],
+)
+def test_download_refuses_a_channel_version_not_newer_than_the_active_one(
+    tmp_path: Path,
+    channel: str,
+    active: tuple[str, str],
+    offered: str,
+    refused: bool,
+) -> None:
+    respx = pytest.importorskip("respx")
+    active_version, active_channel = active
+    install = _active_install(
+        tmp_path,
+        channel,
+        {"version": active_version, "revision": _MAIN_REVISION, "channel": active_channel},
+    )
+    archive = package_name("server")
+    identity_base, package_base = {
+        "release": (f"{_DOWNLOADS}/latest/download", f"{_DOWNLOADS}/download/v{offered}"),
+        "main": (f"{_DOWNLOADS}/download/main-build", f"{_DOWNLOADS}/download/main-build"),
+    }[channel]
+    identity = {
+        "schema_version": 1,
+        "version_id": "rel_offered",
+        "version": offered,
+        "revision": "b" * 40,
+        "channel": channel,
+    }
+    with respx.mock(assert_all_called=False) as router:
+        router.get(f"{identity_base}/{RELEASE_IDENTITY_ASSET}").respond(json=identity)
+        package = router.get(f"{package_base}/{archive}").respond(content=b"zip")
+        router.get(f"{package_base}/{archive}.sig").respond(content=b"sig")
+
+        if not refused:
+            assert download_release(install, "upd_order") is not None
+            assert package.called
+            return
+        with pytest.raises(packages.OlderReleaseError) as refusal:
+            download_release(install, "upd_order")
+
+    assert not package.called
+    assert not (install.root / "downloads").exists()
+    message = str(refusal.value)
+    assert f"vBot {offered} (bbbbbbbb)" in message
+    assert f"active vBot {active_version} (aaaaaaaa)" in message
+    # The way back to updates names the channel the active version came from.
+    assert "vbot update --package" in message
+    if active_channel != channel:
+        assert f"vbot application channel {active_channel}" in message
+    else:
+        assert "vbot application channel" not in message

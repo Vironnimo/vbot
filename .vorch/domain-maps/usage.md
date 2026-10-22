@@ -23,8 +23,11 @@ attribution snapshots without foreign keys to removable domain records.
 The optional `session_generation_id` identifies the exact canonical Session for
 Run diagnostics after moves; it never rewrites those accounting snapshots.
 Runtime injects Sessions into the recorder so `start` captures that generation
-off the Event Loop before dispatch. Requests without a resolvable Session keep
-it absent; public address or Run-id reuse never proves historical ownership.
+off the Event Loop before dispatch. A caller that already knows it passes
+`session_generation_id` and `start` reads no Session: Chat passes its Run's
+admitted generation, which Run Admission Guards keep current while the Run is
+active (`runs.md`). Requests without a resolvable Session keep it absent;
+public address or Run-id reuse never proves historical ownership.
 
 ## Interfaces
 
@@ -38,7 +41,10 @@ it absent; public address or Run-id reuse never proves historical ownership.
   output `speed` (`chat/usage.md` -> Output speed) and the request outcome
   (Failures); other producer metadata such as `context_usage` returns to the
   caller unpersisted.
-- `update(id, usage)` enriches the same call without changing its outcome.
+- `update(id, usage, *, input_estimate=None)` enriches the same call without
+  changing its outcome. With `input_estimate=(model, estimate)` a measured
+  input in the merged Usage also teaches the calibration in the same write
+  transaction (Chat's per-step update).
   Cumulative Live Voice reports replace counters instead of adding repeated
   snapshots. Chat enriches its record with final estimates before appending the
   Assistant Message. Token-only or estimated-cost updates keep an existing
@@ -50,7 +56,8 @@ it absent; public address or Run-id reuse never proves historical ownership.
   Providers tokenize privately, so local estimates miss by a stable per-Model
   ratio. Chat's Context accounting records each step whose Provider measured its
   input together with the uncorrected local estimate of exactly that request
-  (`chat/usage.md` -> One Context rule); `record_input_estimate` writes
+  (`chat/usage.md` -> One Context rule), through that step's `update`;
+  `record_input_estimate` writes
   synchronously, so its callers run it on their workers (Chat on its transform
   workers, Compaction on the Compaction workers); the
   factor is the ratio of their exponentially decayed sums (decay 0.98 per

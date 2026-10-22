@@ -16,6 +16,10 @@ Async tests and fixtures on a worker share one session-scoped Event Loop, so a t
 - A wait until the loop is quiet covers only the tasks started since the test began (compare with `asyncio.all_tasks()` taken at its start), never every task on the loop: earlier tests' tasks may run far longer (Swarm `settled`).
 - Never patch the process-wide `asyncio.sleep`. A module whose waits tests skip exposes a module-local `_sleep` seam (for example `core.utils.retry._sleep`), and tests patch that seam. `tests/core/conftest.py` skips the `core.utils.retry` backoff waits in every core test, and `tests/core/chat/conftest.py` records the Chat recovery backoff (`core.chat.recovery._sleep`) instead of waiting; a test that observes those waits patches the seam itself.
 
+## Process-wide caches
+
+- **Token estimation encoding:** production loads tiktoken's encoding on a background thread and counts with the character fallback until it is loaded (`providers/request-policy.md`), so a test that started with a cold encoding saw two counts for the same text when the load finished mid-test. The root `tests/conftest.py` loads it once per worker before the first test. A test that replaces or clears it restores the loaded one afterwards, as the fixture of `tests/core/utils/test_tokens.py` does; a test that needs the fallback patches `core.utils.tokens._load_estimation_encoding` for itself.
+
 ## Filesystem isolation
 
 - **Home:** the root `tests/conftest.py` gives every test an empty home directory (`HOME` and `USERPROFILE`, `XDG_CONFIG_HOME` unset), so `Path.home()` and `~` never reach the real home, its `~/.vbot` data or its Git configuration. A value computed from the home at import time, such as `core.storage.storage.DEFAULT_DATA_DIR`, still names the real home: tests pass an explicit data directory.

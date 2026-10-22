@@ -95,16 +95,8 @@ function agentGroupsFixture(allowed) {
     projects: ['vbot', 'demo'].map((project_id) => ({
       project_id,
       display_name: project_id,
+      scan: { team: [{ agent_id: 'builder', display_name: 'Builder' }] },
     })),
-    projectScans: Object.fromEntries(
-      ['vbot', 'demo'].map((project_id) => [
-        project_id,
-        {
-          project: { project_id, display_name: project_id },
-          scan: { team: [{ agent_id: 'builder', display_name: 'Builder' }] },
-        },
-      ]),
-    ),
   };
 }
 
@@ -515,16 +507,15 @@ describe('AgentsView behavior and access', () => {
       createAgentsRpcMock({
         agents: [{ ...baseAgent(), root_project_id: 'vbot' }, worker],
         projects: [
-          { project_id: 'vbot', display_name: 'vBot', cwd: 'C:/repos/vbot' },
-        ],
-        projectScans: {
-          vbot: {
-            project: { project_id: 'vbot', display_name: 'vBot' },
+          {
+            project_id: 'vbot',
+            display_name: 'vBot',
+            cwd: 'C:/repos/vbot',
             scan: {
               team: [{ agent_id: 'builder', display_name: 'Builder' }],
             },
           },
-        },
+        ],
       }),
     );
 

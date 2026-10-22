@@ -18,7 +18,9 @@ import psutil  # type: ignore[import-untyped]
 from cli._server_target import (
     DEFAULT_PROBE_TIMEOUT_SECONDS,
     HEALTH_PATH,
+    NON_VBOT_LISTENER_MESSAGE,
     PATIENT_PROBE_TIMEOUT_SECONDS,
+    UNRECORDED_SERVER_MESSAGE,
     WEBUI_PATH,
     WILDCARD_HOSTS,
     CommandResult,
@@ -78,15 +80,10 @@ _monotonic = time.monotonic
 # A local listener holds the target port but never answered `/health`, so it is
 # neither confirmed as vBot nor known to be foreign.
 UNRESPONSIVE_LISTENER_MESSAGE = "port occupied by unresponsive process"
-NON_VBOT_LISTENER_MESSAGE = "port occupied by non-vBot process"
 
 # The control record names a live server process for the target, but the target does
 # not answer `/health`: the server is busy, still starting or already stopping.
 UNRESPONSIVE_SERVER_MESSAGE = "the server process is running but does not answer its health check"
-
-# A vBot server answers on the target port, but the target data directory's control
-# record does not name it: it belongs to another data directory and is left running.
-UNRECORDED_SERVER_MESSAGE = "port occupied by a vBot server of another data directory"
 
 
 PROCESS_CREATE_TIME_TOLERANCE_SECONDS = 0.001

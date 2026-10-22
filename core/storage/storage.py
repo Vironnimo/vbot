@@ -124,6 +124,7 @@ class StorageManager:
         self._settings_cache: tuple[tuple[int, int, int], str] | None = None
         # The last loaded Settings as JSON, served while the file cannot be read.
         self._settings_last_loaded: str | None = None
+        self._settings_revision = 0
         self.temporary_files = TemporaryFileManager(self.data_dir)
         self._prompt_fragments = PromptFragmentStore(
             data_dir=self.data_dir,
@@ -140,6 +141,17 @@ class StorageManager:
         """Path to the instance settings JSON file."""
 
         return self.layout.settings_file
+
+    @property
+    def settings_revision(self) -> int:
+        """A process-local number that changes when the served Settings may have.
+
+        It advances after every save (successful or not) and when a load serves
+        a file version whose Settings differ from the last loaded ones. An
+        external edit is therefore noticed by the next load, not by this value
+        alone. Read it before the Settings it validates.
+        """
+        return self._settings_revision
 
     @property
     def prompts_dir(self) -> Path:
@@ -262,6 +274,8 @@ class StorageManager:
                     return unusable_settings_fallback(self.settings_path)
                 return cast(dict[str, Any], json.loads(last))
             encoded = json.dumps(settings)
+            if encoded != self._settings_last_loaded:
+                self._settings_revision += 1
             self._settings_last_loaded = encoded
             self._settings_cache = None
             if stamp is not None and time.time_ns() - stamp[0] >= _SETTINGS_RACY_WINDOW_NS:
@@ -753,6 +767,8 @@ class StorageManager:
                 ) from exc
             except OSError as exc:
                 raise StorageError(f"Cannot write {self.settings_path}: {exc}") from exc
+            finally:
+                self._settings_revision += 1
 
     def copy_agent_prompt_fragments(self, agent_id: str, *, overwrite: bool = False) -> list[Path]:
         """Seed an Agent prompt scope from the currently effective default fragments."""
