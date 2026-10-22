@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyTimelineEvent,
-  assistantRunChildProgressKey,
   loadTimelineItems,
   mergeTimelineItems,
   visibleTimelineItemsForRender,
@@ -109,10 +108,14 @@ describe('server Timeline projection', () => {
     const children = Array.from({ length: 1000 }, (_, position) =>
       outputItem(`step ${position}`, { id: `step-${position}`, position }),
     );
-    const first = timelineRowsForViewport([assistantRun('one', children)]);
+    const run = assistantRun('one', children);
+    const first = timelineRowsForViewport([run]);
     expect(
       Math.max(...first.map((part) => part.items.length)),
     ).toBeLessThanOrEqual(30);
+    // An unchanged Run keeps its part objects, so its rows do not render again.
+    const again = timelineRowsForViewport([run]);
+    expect(again.every((part, index) => part === first[index])).toBe(true);
     expect(first.flatMap((part) => part.items)).toEqual(children);
     expect(first.at(-1).segment_tail).toBe(true);
     expect(
@@ -386,19 +389,5 @@ describe('server Timeline projection', () => {
       separator,
       failed,
     ]);
-  });
-
-  it('changes the progress key for growing text, Tool arguments and settled state', () => {
-    const child = outputItem('Hello', { streaming: true });
-    const key = assistantRunChildProgressKey(child);
-    expect(
-      assistantRunChildProgressKey({ ...child, content: 'Hello world' }),
-    ).not.toBe(key);
-    expect(
-      assistantRunChildProgressKey({ ...child, partialArgumentsText: '{}' }),
-    ).not.toBe(key);
-    expect(
-      assistantRunChildProgressKey({ ...child, status: 'completed' }),
-    ).not.toBe(key);
   });
 });

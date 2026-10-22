@@ -4,6 +4,7 @@ import {
   SESSION_WORKING,
   agentSessionActivity,
 } from '../sessionActivity.js';
+import { withRawTimelineItems } from './timelineItems.svelte.js';
 
 export const CHAT_STATUS_IDLE = 'idle';
 
@@ -193,7 +194,7 @@ export function supersedeRenamedSessionKey(versions, oldKey, newKey) {
 export function ensureSessionState(state, agentId, sessionId) {
   const key = sessionKey(agentId, sessionId);
   if (!state.sessions[key]) {
-    state.sessions[key] = {
+    state.sessions[key] = withRawTimelineItems({
       key,
       agentId,
       sessionId,
@@ -259,7 +260,7 @@ export function ensureSessionState(state, agentId, sessionId) {
       lastActiveAt: '',
       markReadPendingRunId: '',
       markReadFailedRunId: '',
-    };
+    });
   }
   return state.sessions[key];
 }

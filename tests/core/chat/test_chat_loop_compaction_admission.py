@@ -12,13 +12,14 @@ from core.chat import ChatMessage, ToolCall
 from core.compaction import CompactionService
 from core.providers.errors import ProviderError
 from core.providers.providers import GLOBAL_CONTEXT_WINDOW_FLOOR, LOCAL_CONTEXT_DEFAULT_CAP
-from core.runs import COMPACTION_STARTED_EVENT
+from core.runs import COMPACTION_STARTED_EVENT, Run
 from core.tools import tool_success
 from core.utils.tokens import estimate_request_input_tokens
 from tests.core.chat.chat_loop_compaction_test_support import (
     JsonObject,
     RecordingCompactionAdapter,
     auto_compact,
+    boundary_context,
     compaction_runtime,
     real_compaction_runtime,
 )
@@ -28,6 +29,7 @@ from tests.core.chat.chat_loop_support import (
     StubCompactionService,
     StubModels,
     build_chat_loop,
+    build_request_messages,
 )
 
 _UNUSED_CHECKPOINT = ChatMessage.compaction_checkpoint(
@@ -115,6 +117,53 @@ async def test_automatic_compaction_needs_an_enabled_policy_a_trigger_and_new_co
     assert service.should_auto_calls == ([(90, 100, 0.8)] if evaluated else [])
     assert len(service.compactable_context_calls) == context_checks
     assert service.compact_calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_policy_change_applies_to_the_runs_next_compaction_decision(
+    tmp_path: Path,
+) -> None:
+    runtime = compaction_runtime(tmp_path)
+    agent = runtime.agents.get("coder")
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("Hi"))
+    service = StubCompactionService(should_auto=False)
+    loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
+    run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+    request = await build_request_messages(loop, agent, session)
+    context = await boundary_context(loop, run, session, request)
+
+    async def decide() -> float | None:
+        calls = len(service.should_auto_calls)
+        await loop._compaction_runs.maybe_auto_compact_state(context, context.primary_target, None)
+        return service.should_auto_calls[-1][2] if len(service.should_auto_calls) > calls else None
+
+    assert await decide() == await decide() == 0.8
+    # An unchanged Policy is not resolved again.
+    assert runtime.storage.compaction_settings_loads == 1
+
+    def session_policy(policy: JsonObject | None) -> None:
+        runtime.chat_sessions.mutate_metadata(
+            session.address,
+            lambda metadata: (
+                metadata.pop("compaction_policy", None)
+                if policy is None
+                else metadata.__setitem__("compaction_policy", policy)
+            ),
+        )
+
+    disabled = {
+        "enabled": False,
+        "trigger": {"type": "context_ratio", "threshold": 0.8},
+        "strategy": {"type": "summary_tail", "tail_tokens": 15_000},
+    }
+    session_policy(disabled)
+    assert await decide() is None
+    session_policy(None)
+    runtime.storage.save_compaction_settings(
+        {**disabled, "enabled": True, "trigger": {"type": "context_ratio", "threshold": 0.5}}
+    )
+    assert await decide() == 0.5
 
 
 @pytest.mark.asyncio

@@ -338,6 +338,11 @@ class ChatSessionManager:
         """Read one metadata value (``None`` when absent) from the Session row alone."""
         return self._store.metadata_value(address, key)
 
+    @property
+    def metadata_revision(self) -> int:
+        """Changes after every metadata write of this process (``SessionStore``)."""
+        return self._store.metadata_revision
+
     async def metadata_value_async(self, address: SessionAddress, key: str) -> Any:
         return await self._store.run_async(self.metadata_value, address, key)
 

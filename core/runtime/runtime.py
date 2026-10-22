@@ -74,7 +74,7 @@ from core.utils.logging import LogManager
 
 if TYPE_CHECKING:
     from core.permissions import PermissionBoundary, PermissionCeiling
-    from core.projects import RuntimeAgent
+    from core.projects import Project, RuntimeAgent
     from core.sessions import SessionAddress
 
 # Windows environment variable names are case-insensitive. The data-directory
@@ -635,6 +635,9 @@ class Runtime(RuntimeServiceGraph):
 
     def invalidate_project_skills(self, project_id: str | None = None) -> None:
         self._skill_operations().invalidate_project_skills(project_id)
+
+    def refresh_project_skills(self, project: Project) -> None:
+        self._skill_operations().refresh_project_skills(project)
 
     def invalidate_agent_skills(self, agent_id: str | None = None) -> None:
         self._skill_operations().invalidate_agent_skills(agent_id)

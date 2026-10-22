@@ -23,7 +23,7 @@ from typing import Any, NamedTuple, Protocol
 from core.database import Database, open_database
 from core.models.pricing import TokenPricing, nonnegative_amount, price_usage, project_cost
 from core.sessions import SessionAddress
-from core.usage._calibration import InputEstimateCalibration
+from core.usage._calibration import InputEstimateCalibration, LearnedSample
 from core.usage._failures import classify_failure
 from core.usage._schema import usage_database_spec
 from core.utils.errors import FailureClass
@@ -300,11 +300,18 @@ class UsageRecorder:
         session_title: str | None = None,
         owner_name: str | None = None,
         group_id: str | None = None,
+        session_generation_id: str | None = None,
     ) -> str:
+        """Durably record a call immediately before its dispatch; returns its id.
+
+        ``session_generation_id`` is the Session generation the caller already
+        knows it works in (a Run's admitted Session); without it, the generation
+        live at the Session address is looked up.
+        """
         if not model or not kind:
             raise ValueError("Usage requires a Model and request kind")
-        generation_id = None
-        if self._session_source is not None and agent_id and session_id:
+        generation_id = session_generation_id if agent_id and session_id else None
+        if generation_id is None and self._session_source is not None and agent_id and session_id:
             address = SessionAddress(project_id, agent_id, session_id)
             versions = await self._session_source.run_async(
                 self._session_source.list_history_versions, [address]
@@ -378,8 +385,21 @@ class UsageRecorder:
             call_id, usage, status, _Settlement(duration_ms, failure_class, http_status)
         )
 
-    async def update(self, call_id: str, usage: Mapping[str, Any] | None) -> dict[str, Any]:
-        return await self._settle_save(call_id, usage, None, None)
+    async def update(
+        self,
+        call_id: str,
+        usage: Mapping[str, Any] | None,
+        *,
+        input_estimate: tuple[str, int] | None = None,
+    ) -> dict[str, Any]:
+        """Enrich a call's Usage without changing its outcome.
+
+        ``input_estimate`` is the request's Model and the uncorrected local
+        estimate of exactly that request's input. When the call's Usage then
+        holds a Provider-measured input, the pair teaches the input estimate
+        calibration in the same transaction (see :meth:`record_input_estimate`).
+        """
+        return await self._settle_save(call_id, usage, None, None, input_estimate)
 
     def input_estimate_factor(self, model: str) -> float:
         """Correction for local input estimates of ``model``; 1.0 without evidence.
@@ -404,12 +424,15 @@ class UsageRecorder:
         usage: Mapping[str, Any] | None,
         status: str | None,
         settlement: _Settlement | None,
+        input_estimate: tuple[str, int] | None = None,
     ) -> dict[str, Any]:
         # Once a response has supplied Usage, cancellation must not discard it
         # while its persistence is waiting for worker admission.
         result, cancelled = await _settled(
             asyncio.create_task(
-                self.database.run_async(self._save, call_id, usage, status, settlement)
+                self.database.run_async(
+                    self._save, call_id, usage, status, settlement, input_estimate
+                )
             )
         )
         if cancelled is not None:
@@ -422,10 +445,13 @@ class UsageRecorder:
         usage: Mapping[str, Any] | None,
         status: str | None,
         settlement: _Settlement | None,
+        input_estimate: tuple[str, int] | None,
     ) -> dict[str, Any]:
         incoming = _usage_fields(usage)
 
-        def operation(connection: sqlite3.Connection) -> dict[str, Any]:
+        def operation(
+            connection: sqlite3.Connection,
+        ) -> tuple[dict[str, Any], LearnedSample | None]:
             row = connection.execute(
                 "SELECT model,status,usage_json,duration_ms,failure_class,http_status "
                 "FROM usage_calls WHERE id=?",
@@ -484,9 +510,20 @@ class UsageRecorder:
                 if key
                 not in (*_COUNTERS, *_FLAGS, "cost", "reported_cost_usd", "speed", "usage_call_id")
             }
-            return {**result, **merged}
+            learned = None
+            measured = merged.get("input_tokens")
+            if (
+                input_estimate is not None
+                and isinstance(measured, int)
+                and merged.get("input_tokens_estimated") is not True
+            ):
+                model, estimated = input_estimate
+                learned = self._calibration.write(connection, model, measured, estimated)
+            return {**result, **merged}, learned
 
-        return self.database.write(operation)
+        saved, learned = self.database.write(operation)
+        self._calibration.adopt(learned)
+        return saved
 
     def read_since(
         self, revision: int = 0, *, page_size: int = READ_PAGE_SIZE

@@ -37,7 +37,20 @@ class RecordingUsageRecorder:
         row["failure_class"] = classify_failure(failure)[0] if status == "failed" else None
         return await self.update(call_id, usage or {})
 
-    async def update(self, call_id: str, usage: Mapping[str, Any]) -> dict[str, Any]:
+    async def update(
+        self,
+        call_id: str,
+        usage: Mapping[str, Any],
+        *,
+        input_estimate: tuple[str, int] | None = None,
+    ) -> dict[str, Any]:
         row = next(call for call in self.calls if call["id"] == call_id)
         row["usage"] = {**usage, "usage_call_id": call_id}
+        measured = usage.get("input_tokens")
+        if (
+            input_estimate is not None
+            and isinstance(measured, int)
+            and usage.get("input_tokens_estimated") is not True
+        ):
+            self.input_estimates.append((input_estimate[0], measured, input_estimate[1]))
         return dict(row["usage"])

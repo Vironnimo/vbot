@@ -230,6 +230,62 @@ def _prepare_delivery(
     return db._write(operation)
 
 
+def _unchanged_automatic_delivery(
+    connection: sqlite3.Connection,
+    swarm_id: str,
+    participant_id: str,
+    expected_epoch: int,
+    boundary: int | None,
+    wake_only: bool,
+) -> Json | None:
+    """The result of an automatic preparation that writes nothing, else ``None``.
+
+    Without an unacknowledged automatic batch to replay and without a pending
+    post there is nothing to prepare and no wake to announce, and a wake scan
+    prepares nothing for a participant that is not idle. Most Model requests
+    end here, so the Store answers them from a read transaction instead of
+    queueing a write behind Board posts. That loses no delivery: a post or batch
+    committed after this read stays pending, exactly as one committed after a
+    preparation's write transaction, and reaches the participant at its next
+    request, a wake or the Inbox. Anything that may write runs the complete
+    preparation, which decides again inside its write transaction.
+    """
+    _assert_epoch(connection, swarm_id, expected_epoch)
+    participant = _participant(connection, swarm_id, participant_id)
+    # Busy participants select their batch at the next request boundary;
+    # freezing it in the wake scan could replay content read by a Tool.
+    if wake_only and participant["state"] != "idle":
+        return {
+            "entries": [],
+            "wake": False,
+            "pending_remaining": _pending_count(connection, swarm_id, participant_id),
+        }
+    if participant["state"] in {"failed", "cancelled", "interrupted"}:
+        return {"entries": [], "wake": False, "pending_remaining": 0}
+    waiting = connection.execute(
+        "SELECT EXISTS(SELECT 1 FROM delivery_batches WHERE participant_id=? "
+        "AND effect_kind='swarm_automatic' AND acknowledged_at IS NULL) "
+        "OR EXISTS(SELECT 1 FROM recipients r INDEXED BY recipients_pending_participant "
+        "JOIN posts p ON p.id=r.post_id WHERE p.swarm_id=? AND r.participant_id=? "
+        "AND r.delivered_at IS NULL)",
+        (participant_id, swarm_id, participant_id),
+    ).fetchone()[0]
+    if waiting:
+        return None
+    revision = connection.execute(
+        "SELECT revision FROM swarm_settings WHERE swarm_id=?", (swarm_id,)
+    ).fetchone()["revision"]
+    return {
+        "entries": [],
+        "wake": False,
+        "pending_remaining": 0,
+        "settings_revision": int(revision),
+        "admission_boundary": int(participant["idle_boundary"] or 0)
+        if boundary is None
+        else boundary,
+    }
+
+
 def _prepare_automatic_delivery(
     db: SwarmDatabase,
     swarm_id: str,
@@ -247,19 +303,13 @@ def _prepare_automatic_delivery(
         )
 
     def operation(connection: sqlite3.Connection) -> Json:
-        _assert_epoch(connection, swarm_id, expected_epoch)
+        unchanged = _unchanged_automatic_delivery(
+            connection, swarm_id, participant_id, expected_epoch, boundary, wake_only
+        )
+        if unchanged is not None:
+            return unchanged
         participant = _participant(connection, swarm_id, participant_id)
-        # Busy participants select their batch at the next request boundary;
-        # freezing it in the wake scan could replay content read by a Tool.
-        if wake_only and participant["state"] != "idle":
-            return {
-                "entries": [],
-                "wake": False,
-                "pending_remaining": _pending_count(connection, swarm_id, participant_id),
-            }
         resolved_boundary = int(participant["idle_boundary"] or 0) if boundary is None else boundary
-        if participant["state"] in {"failed", "cancelled", "interrupted"}:
-            return {"entries": [], "wake": False, "pending_remaining": 0}
         settings_row = connection.execute(
             "SELECT revision,delivery_json FROM swarm_settings WHERE swarm_id=?", (swarm_id,)
         ).fetchone()
