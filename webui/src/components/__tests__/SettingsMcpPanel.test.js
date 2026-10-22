@@ -647,6 +647,37 @@ describe('MCP management surface', () => {
     );
     expect(button('Import 2')).toBeTruthy();
   });
+  it('changes nothing when the editor closed while its fill was read', async () => {
+    const reading = Promise.withResolvers();
+    const handler = rpc.getMockImplementation();
+    rpc.mockImplementation(async (method, params) =>
+      params?.operation === 'import'
+        ? reading.promise
+        : handler(method, params),
+    );
+    component = mount(Panel, { target: document.body });
+    await settle();
+    button('Add MCP connection').click();
+    await settle();
+    input('Command line or URL (optional)', 'test-owned-setup');
+    button('Fill in').click();
+    await settle();
+    button('Cancel').click();
+    await settle();
+    reading.resolve({
+      servers: ['one', 'two'].map((name) => ({
+        name,
+        id: name,
+        selected: true,
+        enabled: true,
+        connection: { ...original, id: name },
+        credentials: [],
+        warnings: [],
+      })),
+    });
+    await settle();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+  });
   it('reconciles enablement and requires confirmation before removal', async () => {
     records = [
       {
