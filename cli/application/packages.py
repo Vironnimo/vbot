@@ -15,9 +15,7 @@ import zipfile
 from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path, PurePosixPath
-from typing import Any
-
-import httpx
+from typing import TYPE_CHECKING, Any
 
 from cli.application.state import (
     ApplicationError,
@@ -31,6 +29,9 @@ from cli.application.state import (
 from core.access.config import AccessConfig
 from core.utils.file_status import is_link_status
 from core.utils.ids import is_reserved_name
+
+if TYPE_CHECKING:
+    import httpx
 
 MAX_ARCHIVE_BYTES = 4 * 1024**3
 MAX_PAYLOAD_BYTES = 12 * 1024**3
@@ -377,6 +378,10 @@ def download_release(
     """
     if not install.release_public_key:
         raise ApplicationError("Official updates require a configured release signing key")
+    # Imported here: the CLI parser loads this module through `install`, and help
+    # must not load httpx.
+    import httpx
+
     directory = contained(install.root, f"downloads/{safe_id(operation_id)}")
     expected = package_name(install.install_shape)
     with httpx.Client(timeout=60, follow_redirects=True, trust_env=False) as client:
