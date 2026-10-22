@@ -89,7 +89,7 @@ outcome and never permits replaying the mutation. Evidence: `test_mcp_tasks.py`
 
 ## Server requests: sampling and roots
 
-Sampling maps MCP image and audio inputs to canonical `media` content blocks, retaining MIME type and base64 data so the selected Provider wire can render them (`test_mcp_protocol.py`).
+Sampling maps MCP image and audio inputs to canonical `media` content blocks, retaining MIME type and base64 data so the selected Provider wire can render them (`test_mcp_protocol.py`). The Tools a sampling request offers reach the Provider with their `inputSchema` in the 2020-12 form `current_dialect_schema` gives, like listed remote Tools (`test_sampling_tools_reach_the_model_in_the_contract_dialect`); they are not compiled as Tool contracts.
 
 Each connection has a `sampling` policy (`off`, `ask`, `allow`) and a `roots` policy (`off`, `workspace`); `validate_connection` defaults both to `off`, so connections saved before these fields offer neither. `ConnectionRunner._run` passes the SDK a sampling callback and capability only when `sampling` is not `off`, and a roots callback only for `workspace`, so an `off` capability is never advertised; a legacy connection sends the roots list-changed notification only with `workspace`. Changing a policy is a non-description save and replaces the connection.
 
