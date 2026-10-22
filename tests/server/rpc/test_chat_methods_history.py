@@ -706,38 +706,64 @@ async def test_history_cursor_is_positional_when_message_ids_repeat(
 async def test_timeline_bounds_run_delivery_and_pages_the_same_durable_children(
     history: _History,
 ) -> None:
+    # Each step has Reasoning, an answer and a Tool call; the window of four
+    # starts at the third step's Tool call, which is answered after the boundary.
+    steps = []
+    for index in range(4):
+        call_id = f"call-{index}"
+        steps += [
+            ChatMessage.assistant(
+                model="test/model",
+                content=f"Step {index}",
+                reasoning=f"Thinking {index}",
+                tool_calls=[ToolCall(id=call_id, name="read", arguments={"path": f"{index}.txt"})],
+            ),
+            ChatMessage.tool(
+                tool_call_id=call_id, name="read", content=json.dumps(tool_success({"n": index}))
+            ),
+        ]
     seed_history(
         history.session(),
-        [
-            ChatMessage.user("Question"),
-            *[
-                ChatMessage.assistant(model="test/model", content=f"Step {index}")
-                for index in range(10)
-            ],
-            _summary("run-one", "summary"),
-        ],
+        [ChatMessage.user("Question"), *steps, _summary("run-one", "summary")],
     )
     full = await history.read(method="chat.timeline")
-    bounded = await history.read(method="chat.timeline", child_limit=2)
+    bounded = await history.read(method="chat.timeline", child_limit=4)
     full_run = next(item for item in full["items"] if item["type"] == "assistant_run")
     run = next(item for item in bounded["items"] if item["type"] == "assistant_run")
-    gap = run["items"][0]
-    assert len(full_run["items"]) == 10
-    assert len(run["items"]) == 3
-    assert [child["id"] for child in run["items"][1:]] == [
-        child["id"] for child in full_run["items"][-2:]
+    gap, *window = run["items"]
+    children = full_run["items"]
+    assert [child["type"] for child in children[8:]] == [
+        "tool_call",
+        "reasoning",
+        "assistant_output",
+        "tool_call",
     ]
+    # The window is the complete Run cut: the same steps and Run, positioned.
+    assert {key: value for key, value in run.items() if key != "items"} == {
+        **{key: value for key, value in full_run.items() if key != "items"},
+        "window_start": 8,
+    }
+    assert window == [{**child, "position": 8 + index} for index, child in enumerate(children[8:])]
+    assert window[0]["status"] == "success"
+    assert (gap["type"], gap["before"], gap["remaining"]) == ("history_gap", children[8]["id"], 8)
     assert [message["role"] for message in bounded["messages"]] == ["user"]
-    page = await history.read(
-        method="chat.timeline_children",
-        session_id="session-one",
-        run_id="run-one",
-        before=gap["before"],
-        history_generation=bounded["history_generation"],
-        limit=3,
-    )
-    assert [child["id"] for child in page["items"][1:]] == [
-        child["id"] for child in full_run["items"][-5:-2]
+    # Paging back from the gap delivers every earlier step once, in place.
+    pages: list[dict[str, Any]] = []
+    before = gap["before"]
+    while before:
+        page = await history.read(
+            method="chat.timeline_children",
+            session_id="session-one",
+            run_id="run-one",
+            before=before,
+            history_generation=bounded["history_generation"],
+            limit=3,
+        )
+        steps_page = [child for child in page["items"] if child["type"] != "history_gap"]
+        pages = steps_page + pages
+        before = page["items"][0]["before"] if page["has_more"] else None
+    assert [(child["id"], child["position"]) for child in pages] == [
+        (child["id"], index) for index, child in enumerate(children[:8])
     ]
     rejected = await call(
         history.state,
