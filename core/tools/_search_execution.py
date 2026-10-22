@@ -43,8 +43,15 @@ from core.tools._search_native import MAX_PROTOCOL_LINE as MAX_PROTOCOL_LINE
 from core.tools._search_native import NativeOutcome as NativeOutcome
 from core.tools._search_native import SearchBoundError as SearchBoundError
 
-# Defaults that differ from ripgrep's own; later args items override them.
-DEFAULT_ARGUMENTS = ("--no-config", "--hidden", "--no-require-git", "--glob-case-insensitive")
+# Defaults that differ from ripgrep's own; later args items override them. --crlf lets
+# ^ and $ match at the CRLF line ends that read shows as plain lines.
+DEFAULT_ARGUMENTS = (
+    "--no-config",
+    "--hidden",
+    "--no-require-git",
+    "--glob-case-insensitive",
+    "--crlf",
+)
 ALWAYS_EXCLUDED = "!.git"
 # Python bytecode caches, skipped like .git unless the call asks for them (``skips_caches``).
 CACHES_EXCLUDED = "!__pycache__"
