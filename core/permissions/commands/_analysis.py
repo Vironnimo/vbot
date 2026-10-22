@@ -610,6 +610,12 @@ class Analysis:
                         index += 1
                     break
         subtree = spec.subtree or bool(flags & spec.subtree_flags)
+        for option, value, _ in values:
+            choice = self.value(context, value, location).text
+            if any(flag.startswith(f"{option}=") for flag in spec.subtree_flags) and (
+                choice is None or f"{option}={choice}" in spec.subtree_flags
+            ):
+                subtree = True  # grep -d recurse
         pruned = self._pruned(context, raw, name, values)
         operand_kind = spec.operands
         if spec.write_flags and (
@@ -659,12 +665,13 @@ class Analysis:
                 # copy x / xcopy x: the copy lands in the working directory.
                 here = Word.literal(".", source=raw.source)
                 self.access(context, raw, spec.last, here, glob=False, tier="a")
-        if not paths and spec.default is not None and not fed:
+        default = spec.subtree_default if subtree and spec.default is None else spec.default
+        if not paths and default is not None and not fed:
             here = Word.literal(".", source=raw.source)
             self.access(
                 context,
                 raw,
-                spec.default,
+                default,
                 here,
                 glob=False,
                 tier="a",

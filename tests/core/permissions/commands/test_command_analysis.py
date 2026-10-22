@@ -257,6 +257,11 @@ async def _analyze(line: str, shell: ShellKind) -> Any:
             paths=("read w/p/** !secrets", "read w/p/src/**"),
         ),
         case(
+            "grep -rn TODO; egrep -d recurse x lib; grep y < f",
+            id="recursive grep without a path searches the working directory",
+            paths=("read w/p/**", "read w/p/lib/**", "read w/p/f"),
+        ),
+        case(
             "awk '{print $1}' notes/a.txt; jq -r .key --from-file=q.jq; echo secrets/key",
             id="words of programs without a spec are mentions",
             mentions=(
