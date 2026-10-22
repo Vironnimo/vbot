@@ -221,6 +221,52 @@ describe('composerMemory across browser tabs', () => {
     );
   }
 
+  it('retains local changes after a failed persist until storage accepts them', () => {
+    const attachment = {
+      attachment_id: 'first',
+      filename: 'first.pdf',
+      media_type: 'application/pdf',
+    };
+    const write = vi
+      .spyOn(Storage.prototype, 'setItem')
+      .mockImplementation(() => {
+        throw new DOMException('Storage is full', 'QuotaExceededError');
+      });
+    try {
+      setDraft('alpha::s1', 'first draft');
+      pushHistory('alpha', 'first send');
+      setPendingAttachments('alpha::s1', [attachment]);
+      flushComposerMemory();
+      expect(getDraft('alpha::s1')).toBe('first draft');
+      expect(getHistory('alpha')).toEqual(['first send']);
+      expect(getPendingAttachments('alpha::s1')).toEqual([attachment]);
+    } finally {
+      write.mockRestore();
+    }
+
+    setDraft('alpha::s2', 'second draft');
+    pushHistory('alpha', 'second send');
+    setPendingAttachments('alpha::s2', [
+      { ...attachment, attachment_id: 'second' },
+    ]);
+    flushComposerMemory();
+
+    expect(getDraft('alpha::s1')).toBe('first draft');
+    expect(getHistory('alpha')).toEqual(['second send', 'first send']);
+    expect(getPendingAttachments('alpha::s1')).toEqual([attachment]);
+    expect(storedDrafts()).toEqual({
+      'alpha::s1': 'first draft',
+      'alpha::s2': 'second draft',
+    });
+    expect(JSON.parse(localStorage.getItem(HISTORY)).alpha).toEqual([
+      'second send',
+      'first send',
+    ]);
+    expect(JSON.parse(localStorage.getItem(ATTACHMENTS))['alpha::s1']).toEqual([
+      attachment,
+    ]);
+  });
+
   it.each([
     'before removal',
     'before storage event',
@@ -300,29 +346,37 @@ describe('composerMemory across browser tabs', () => {
     expect(storedDrafts()).toEqual({ 'alpha::s2': 'unrelated' });
   });
 
-  it("adopts another tab's writes while keeping unsaved local edits", async () => {
-    const tabB = await openTab();
-    tabB.setDraft('alpha::local', 'still typing here');
-    tabB.pushHistory('alpha', 'local send');
+  it.each(['unsaved', 'saved before the event'])(
+    "adopts another tab's writes while keeping %s local edits",
+    async (localState) => {
+      const tabB = await openTab();
+      tabB.setDraft('alpha::local', 'still typing here');
+      tabB.pushHistory('alpha', 'local send');
 
-    localStorage.setItem(
-      DRAFTS,
-      JSON.stringify({ 'alpha::s1': 'from tab A', 'alpha::local': 'older' }),
-    );
-    localStorage.setItem(HISTORY, JSON.stringify({ alpha: ['remote send'] }));
-    announceStorageWrite(DRAFTS);
-    announceStorageWrite(HISTORY);
+      localStorage.setItem(
+        DRAFTS,
+        JSON.stringify({ 'alpha::s1': 'from tab A', 'alpha::local': 'older' }),
+      );
+      localStorage.setItem(HISTORY, JSON.stringify({ alpha: ['remote send'] }));
+      const draftEvent = localStorage.getItem(DRAFTS);
+      const historyEvent = localStorage.getItem(HISTORY);
+      if (localState === 'saved before the event') tabB.flushComposerMemory();
+      announceStorageWrite(DRAFTS, draftEvent);
+      announceStorageWrite(HISTORY, historyEvent);
 
-    expect(tabB.getDraft('alpha::s1')).toBe('from tab A');
-    expect(tabB.getDraft('alpha::local')).toBe('still typing here');
-    expect(tabB.getHistory('alpha')).toEqual(['local send', 'remote send']);
+      expect(tabB.getDraft('alpha::s1')).toBe('from tab A');
+      expect(tabB.getDraft('alpha::local')).toBe('still typing here');
+      expect(tabB.getHistory('alpha')).toEqual(['local send', 'remote send']);
 
-    localStorage.setItem(DRAFTS, JSON.stringify({}));
-    announceStorageWrite(DRAFTS);
+      localStorage.setItem(DRAFTS, JSON.stringify({}));
+      announceStorageWrite(DRAFTS);
 
-    expect(tabB.getDraft('alpha::s1')).toBe('');
-    expect(tabB.getDraft('alpha::local')).toBe('still typing here');
-  });
+      expect(tabB.getDraft('alpha::s1')).toBe('');
+      expect(tabB.getDraft('alpha::local')).toBe(
+        localState === 'unsaved' ? 'still typing here' : '',
+      );
+    },
+  );
 
   it("moves a renamed Agent's composer memory in every tab", async () => {
     localStorage.setItem(HISTORY, JSON.stringify({ gamma: ['former gamma'] }));
