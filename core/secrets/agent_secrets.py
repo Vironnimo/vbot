@@ -45,6 +45,7 @@ from core.secrets._agent_secret_model import (
     check_sinks,
     decode_record,
     encode_record,
+    main_field_name,
     normalize_secret_name,
     session_address,
     with_given_lifetime,
@@ -90,6 +91,7 @@ __all__ = [
     "describe_uses",
     "find_references",
     "has_reference",
+    "main_field_name",
     "normalize_secret_name",
 ]
 
