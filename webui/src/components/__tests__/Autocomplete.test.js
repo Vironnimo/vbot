@@ -57,6 +57,41 @@ describe.each([
   });
 });
 
+describe('skill autocomplete', () => {
+  let mountedComponent;
+
+  afterEach(async () => {
+    if (mountedComponent) {
+      await unmount(mountedComponent);
+    }
+    document.body.innerHTML = '';
+  });
+
+  // Commands and Skills share one list, so a Skill may carry a command's name.
+  it('lists a command and a Skill of the same name as separate rows', () => {
+    init('en');
+    const command = { name: 'handoff', type: 'command', argument: 'optional' };
+    const skill = { name: 'handoff', type: 'skill' };
+    const onSelect = vi.fn();
+    mountedComponent = mount(SkillAutocomplete, {
+      target: document.body,
+      props: {
+        skills: [command, skill],
+        query: 'hand',
+        activeIndex: 1,
+        onSelect,
+      },
+    });
+    flushSync();
+
+    expect(document.querySelectorAll('[role="option"]')).toHaveLength(2);
+    expect(mountedComponent.selectActive()).toBe(true);
+    expect(onSelect).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'handoff', type: 'skill' }),
+    );
+  });
+});
+
 describe('model autocomplete', () => {
   let mountedComponent;
 

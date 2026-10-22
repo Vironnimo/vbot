@@ -196,6 +196,34 @@ describe('message presentation', () => {
           }),
         }),
     ],
+    // A duration rounds before it picks its unit.
+    [
+      'a duration that rounds up to whole seconds',
+      { durationMs: 9_960 },
+      () =>
+        t('chat.compactedWithTiming', {
+          duration: t('chat.durationSeconds', { seconds: 10 }),
+        }),
+    ],
+    [
+      'a duration that rounds up to a minute',
+      { durationMs: 59_600 },
+      () =>
+        t('chat.compactedWithTiming', {
+          duration: t('chat.durationMinutesSeconds', {
+            minutes: 1,
+            seconds: 0,
+          }),
+        }),
+    ],
+    [
+      'a duration that rounds up to the next hour',
+      { durationMs: 14_370_000 },
+      () =>
+        t('chat.compactedWithTiming', {
+          duration: t('chat.durationHoursMinutes', { hours: 4, minutes: 0 }),
+        }),
+    ],
     [
       'tokens without a known duration (reloaded History)',
       { contextTokensBefore: 254_224, contextTokensAfter: 40_289 },

@@ -133,6 +133,10 @@ describe('statisticsView numbers', () => {
     expect(
       [null, 850, 12_340, 245_000, 7_800_000].map(formatDurationMs),
     ).toEqual(['—', '850 ms', '12.3 s', '4m 05s', '2h 10m']);
+    // A duration rounds before it picks its unit.
+    expect(
+      [999.6, 59_960, 3_599_600, 14_370_000].map(formatDurationMs),
+    ).toEqual(['1.0 s', '1m 00s', '1h 0m', '4h 0m']);
     // Output speed rounds like the composer footer: one decimal below 10.
     expect(
       [null, 4.25, 9.96, 48.4, 1234.6].map((rate) =>

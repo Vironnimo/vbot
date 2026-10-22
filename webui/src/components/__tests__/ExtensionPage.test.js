@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 import { isTerminalRunEvent } from '../../lib/api/events.js';
+import { t } from '../../lib/i18n.js';
 
 vi.mock(
   'svelte',
@@ -590,6 +591,10 @@ describe('ExtensionPage file links', () => {
       ['https://example.com/report', ...OPEN_OPTIONS],
     ]);
     expect(page.errors()).toEqual(['forged', 'script']);
+    expect(page.reply('forged').error).toBe(
+      t('extensions.page.fileUnavailable'),
+    );
+    expect(page.reply('script').error).toBe(t('extensions.page.invalidLink'));
 
     const reloaded = loadFrame();
     reloaded.ready();

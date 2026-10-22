@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { t } from '../../lib/i18n.js';
+import { setApplicationTimeZone } from '../../lib/dateTimePrefs.svelte.js';
 import {
   flushComposerMemory,
   getPendingAttachments,
@@ -517,6 +518,38 @@ describe('ChatComposer', () => {
         ]);
       },
     );
+
+    it('names a pasted screenshot by the time in the application zone', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      // 20:00:05 on New Year's Eve in New York is 2027 in UTC.
+      vi.setSystemTime(new Date('2027-01-01T01:00:05Z'));
+      setApplicationTimeZone('America/New_York');
+      try {
+        uploadAttachment.mockResolvedValue(
+          uploaded('attachment-1', 'pasted.png', 'image/png'),
+        );
+        composer.mount();
+        const paste = new Event('paste', { bubbles: true, cancelable: true });
+        paste.clipboardData = {
+          items: [
+            {
+              kind: 'file',
+              type: 'image/png',
+              getAsFile: () => new File(['png'], '', { type: 'image/png' }),
+            },
+          ],
+        };
+        composerInput().dispatchEvent(paste);
+        await settle();
+
+        expect(uploadAttachment.mock.calls[0][0].name).toBe(
+          'screenshot-2026-12-31-20-00-05.png',
+        );
+      } finally {
+        setApplicationTimeZone('UTC');
+        vi.useRealTimers();
+      }
+    });
 
     it('offers changed widget states as chips and sends the ones not removed', async () => {
       resetWidgetStates();

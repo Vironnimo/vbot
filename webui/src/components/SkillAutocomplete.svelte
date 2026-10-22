@@ -78,7 +78,7 @@
     <div class="skill-autocomplete__eyebrow">
       {eyebrowText()}
     </div>
-    {#each matchingSkills as skill, index (skill.name)}
+    {#each matchingSkills as skill, index (`${skill.type}:${skill.name}`)}
       <button
         type="button"
         class="skill-autocomplete__option"

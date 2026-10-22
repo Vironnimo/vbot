@@ -218,7 +218,8 @@ function validDate(year, month, day) {
  * Reads a typed date. Accepts the field's own display ("Wed, Sep 23, 2026"),
  * month names ("23 September", "sep 23"), numeric dates in the language's
  * order ("9/23/2026", "9/23") and ISO dates ("2026-09-23"). A missing year is
- * taken from `referenceValue` (the field's current date) or today's.
+ * taken from `referenceValue` (the field's date, else today's in the
+ * application zone), without one from the current UTC year.
  *
  * @returns {string|null} a date value, '' for empty text, or null when the
  *   text is no date.
