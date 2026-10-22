@@ -781,6 +781,8 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   errors 5/32/33; completed entries are never replayed. Exhausted failures report
   retry eligibility and the actual attempt count. A destination is written and checked before
   its source is deleted; both paths are rechecked before deleting the source.
+  Entry renames recheck both paths after creating the destination's parent and
+  before renaming, so a changed source or a newly occupied destination stays untouched.
   A move that wrote its destination but could not delete its source reports
   completed/pending paths and blocks follow-up entries on both. An observation
   failure after writing also retains the completed effect in a partial result.
@@ -803,7 +805,9 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
 - Successful surviving files, including verified no-ops, receive Session read
   stamps. Moves, including case-only renames, carry the source's unread-change
   protection to the destination (`file_state.md`); a move result is not a read
-  of that content. Metadata drift can produce a post-success warning. Text mutations
+  of that content. A refused replacement that shows the whole current file records
+  the stamp captured before its verification read, never a later writer's unseen bytes.
+  Metadata drift can produce a post-success warning. Text mutations
   feed the existing ChangeTracker with actual before/after contents and publish
   presentation-only counts: added and removed lines, the applied edits (each
   hunk, Add, Delete and Move; for `edit`, each edit that was not skipped; `write`

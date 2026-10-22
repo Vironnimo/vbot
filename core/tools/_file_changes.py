@@ -480,9 +480,10 @@ def _guard_failure(
         text is not None
         and len(payload) <= _GUARD_CONTENT_MAX_BYTES
         and len(lines) <= _GUARD_CONTENT_MAX_LINES
+        and (stamp := state.stamp(path)) is not None
         and _snapshot(path) == snapshot
     ):
-        state.record_read(context.session_id, path)
+        state.record_stamp(context.session_id, path, stamp)
         partial = batch.templates.get("partial_change", "change only the parts that need it")
         # A CRLF file shows plain line breaks, as read shows it.
         plain = [plain_line_end(line) for line in lines]
