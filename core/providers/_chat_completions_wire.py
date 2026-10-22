@@ -13,6 +13,7 @@ from core.providers._chat_completions_constants import (
     OPENAI_REASONING_KEYS,
     OPENAI_REASONING_META_KEYS,
     OPENAI_TOOL_FINISH_REASONS,
+    OPENAI_TRUNCATED_FINISH_REASONS,
 )
 from core.providers.adapter import (
     TERMINAL_OUTCOME_CONTENT_FILTERED,
@@ -72,7 +73,7 @@ def _normalize_openai_finish_reason(
         return TERMINAL_OUTCOME_TOOL_CALLS
     if finish_reason == "stop":
         return TERMINAL_OUTCOME_TOOL_CALLS if has_tool_calls else TERMINAL_OUTCOME_STOP
-    if finish_reason == "length":
+    if finish_reason in OPENAI_TRUNCATED_FINISH_REASONS:
         return TERMINAL_OUTCOME_OUTPUT_TRUNCATED
     if finish_reason == "content_filter":
         return TERMINAL_OUTCOME_CONTENT_FILTERED
