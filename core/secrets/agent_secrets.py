@@ -582,6 +582,61 @@ class AgentSecrets:
         for change in changes:
             self._notify(change)
 
+    def granted_to_agent(self, agent: str) -> list[AgentSecret]:
+        """The Secrets granted to Agent address ``agent``, directly or as pass-through root."""
+        with self._lock:
+            return [
+                secret
+                for secret in self._records.values()
+                if agent in secret.agents
+                or any(grant.agent == agent for grant in secret.session_grants)
+            ]
+
+    def retarget_agent(self, agent_id: str, new_agent_id: str) -> int:
+        """Move the grants of Identity Agent ``agent_id`` to ``new_agent_id`` (blocking).
+
+        For an Identity Agent rename, whose Sessions keep their ids: the Agent
+        grants, the Secrets of its Sessions and pass-through paths through them
+        follow in one store write. Selects only what names ``agent_id``, so
+        swapping the ids reverts it. Returns how many Secrets changed.
+        """
+
+        def moved(address: SessionAddress) -> SessionAddress:
+            if address.project_id is None and address.agent_id == agent_id:
+                return replace(address, agent_id=new_agent_id)
+            return address
+
+        with self._lock:
+            changed: list[AgentSecret] = []
+            for secret in self._records.values():
+                agents = tuple(
+                    dict.fromkeys(
+                        new_agent_id if item == agent_id else item for item in secret.agents
+                    )
+                )
+                grants = tuple(
+                    SessionGrant(
+                        new_agent_id if grant.agent == agent_id else grant.agent,
+                        tuple(moved(address) for address in grant.path),
+                    )
+                    for grant in secret.session_grants
+                )
+                if agents != secret.agents or grants != secret.session_grants:
+                    changed.append(replace(secret, agents=agents, session_grants=grants))
+            if changed:
+                texts = {secret.id: encode_record(secret) for secret in changed}
+
+                def write(change: SecretTransaction) -> None:
+                    for key, text in texts.items():
+                        change.set(AGENT_SECRETS, key, text)
+
+                self._store.update(write)
+                for secret in changed:
+                    self._records[secret.id] = secret
+        for secret in changed:
+            self._notify(SecretChange("changed", secret, "agent renamed"))
+        return len(changed)
+
     def sweep(self) -> int:
         """Remove expired Secrets (blocking); how many were removed."""
         now = self._clock()

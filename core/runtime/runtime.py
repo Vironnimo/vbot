@@ -790,6 +790,7 @@ class Runtime(RuntimeServiceGraph):
             terminals=self._terminal_manager,
             commands=self._command_manager,
             portals=self._portals,
+            secrets=self._agent_secrets,
         )
 
     def reload_skills(self) -> None:
