@@ -42,8 +42,9 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Literal, Protocol
+from zoneinfo import ZoneInfo
 
 from core.agents import LIVE_BACKEND_AGENT_ID, LIVE_VOICE_AGENT_ID
 from core.model_tasks._live_backend import LiveBackend
@@ -274,6 +275,8 @@ class LiveRuntime(Protocol):
 
     def get_adapter(self, connection: Any) -> Any: ...
 
+    def timezone_name(self) -> str: ...
+
 
 @dataclass(frozen=True)
 class _WireSetup:
@@ -369,7 +372,7 @@ class LiveVoiceService:
         *,
         hosts: LiveToolHosts,
         usage_recorder: UsageRecorder | None = None,
-        clock: Callable[[], datetime] = lambda: datetime.now().astimezone(),
+        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._model_tasks = model_tasks
         self._runtime = runtime
@@ -422,7 +425,8 @@ class LiveVoiceService:
             target_ref.provider_id, target_ref.model_id, target_ref.local_connection_id
         )
         chat = self._runtime.chat_loop
-        title = f"Live call · {self._clock():%Y-%m-%d %H:%M}"
+        started_at = self._clock().astimezone(ZoneInfo(self._runtime.timezone_name()))
+        title = f"Live call · {started_at:%Y-%m-%d %H:%M}"
         call: LiveCallSession | None = None
 
         def end_call() -> None:

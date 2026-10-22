@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import datetime
+from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -44,6 +45,8 @@ from core.providers.errors import (
     ProviderOutcomeUnknownError,
     ProviderRateLimitError,
 )
+from core.settings.settings import effective_timezone_name
+from core.storage import StorageManager
 from core.tools.live import LiveToolHosts
 from core.usage import UsageRecorder
 from core.utils.errors import ConfigError, VBotError
@@ -1033,7 +1036,10 @@ class FakeModelTasks:
 
 
 def _service(
-    model_tasks: FakeModelTasks | None = None, *, backend_agent_model: str = "openai/gpt-6-sol"
+    model_tasks: FakeModelTasks | None = None,
+    *,
+    backend_agent_model: str = "openai/gpt-6-sol",
+    timezone_name: Callable[[], str] = lambda: "UTC",
 ) -> tuple[LiveVoiceService, FakeChat]:
     hosts = LiveToolHosts()
     chat = FakeChat(hosts)
@@ -1043,12 +1049,13 @@ def _service(
         chat_loop=chat,
         chat_sessions=object(),
         agents=SimpleNamespace(get=lambda agent_id: backend_agent),
+        timezone_name=timezone_name,
     )
     service = LiveVoiceService(
         model_tasks or FakeModelTasks(),
         runtime,  # type: ignore[arg-type]
         hosts=hosts,
-        clock=lambda: datetime(2026, 10, 7, 12, 30),
+        clock=lambda: datetime(2026, 10, 7, 12, 30, tzinfo=UTC),
     )
     return service, chat
 
@@ -1184,6 +1191,25 @@ async def test_creation_failures_map_to_stable_codes_and_drop_the_voice_session(
     assert [voice.discarded for voice in chat.voices] == [True]
     # A call the Provider created but vBot could not join keeps its id out of the log.
     assert "rtc_1" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_call_title_uses_the_current_settings_timezone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    storage = StorageManager(tmp_path)
+    service, chat = _service(timezone_name=lambda: effective_timezone_name(storage.load_settings()))
+    for zone, title in (
+        ("Europe/Berlin", "Live call · 2026-10-07 14:30"),
+        ("Pacific/Auckland", "Live call · 2026-10-08 01:30"),
+    ):
+        storage.save_settings({"timezone": zone})
+        _opening(monkeypatch, "open_openai_live_wire", FakeWire())
+        call = await service.start_call(media="webrtc", offer_sdp=OFFER, host=FakeHost())
+        try:
+            assert chat.started[-1]["title"] == title
+        finally:
+            await call.abort()
 
 
 @pytest.mark.asyncio
