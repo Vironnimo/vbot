@@ -373,11 +373,11 @@ def test_startup_checks_the_runtime_model_db_before_the_local_catalog_sweep(
     async def refresh() -> None:
         calls.append("local sweep")
 
+    runtime = ServerStubRuntime(tmp_path, maybe_refresh_local_catalogs=refresh)
     monkeypatch.setattr(
-        "server.app.start_installation_catalog_restore",
-        lambda _state: calls.append("restore check"),
+        runtime, "start_installation_catalog_restore", lambda: calls.append("restore check")
     )
-    app = create_app(runtime=ServerStubRuntime(tmp_path, maybe_refresh_local_catalogs=refresh))
+    app = create_app(runtime=runtime)
     with TestClient(app) as client:
         assert client.portal is not None
         client.portal.call(asyncio.wait_for, app.state.local_catalog_refresh_task, 5)

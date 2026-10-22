@@ -14,7 +14,7 @@ import pytest
 import respx
 
 import core.models.discovery as discovery_module
-import core.providers.runtime as provider_runtime_module
+import core.providers._catalog_refresh as provider_runtime_module
 from core.chat.streaming import stream_stall_timeout
 from core.models.database import read_model_database_manifest
 from core.models.discovery import ModelDiscoveryError

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from collections import OrderedDict
 from collections.abc import Callable, Collection, Mapping, Sequence
@@ -38,6 +39,7 @@ from core.providers.accounts import (
     split_connection_id,
 )
 from core.providers.reasoning import DEFAULT_REASONING_REPLAY_POLICY, ReasoningReplayPolicy
+from core.providers.runtime import ProviderRuntime
 from core.providers.wire_observations import ObservedFacts, WireObservations
 from core.providers.wire_profile import ProfileStatus, Verification, WireProfile
 from core.providers.wire_profiles import WireProfiles
@@ -499,9 +501,35 @@ class StubSessionActivity:
             callback(address, state, finished)
 
 
+def provider_runtime_for(runtime: Any) -> ProviderRuntime:
+    """Use the real Provider owner behind RPC doubles, with their replaceable inputs."""
+    dependencies: dict[str, Any] = {
+        "providers": runtime.providers,
+        "models": runtime.models,
+        "credentials": runtime.provider_credentials,
+        "token_store": getattr(runtime, "token_store", None),
+        "storage": runtime.storage,
+        "logger": logging.getLogger("vbot.providers.runtime"),
+    }
+    owner = getattr(runtime, "_provider_runtime", None)
+    if owner is None:
+        owner = ProviderRuntime(**dependencies, resources_path=runtime.storage.resources_dir)
+        runtime._provider_runtime = owner
+    else:
+        owner.rebind(**dependencies)
+    owner._wire_profiles.replace_files(runtime.wire_profile_files())
+    if hasattr(runtime, "model_catalog_changed_callbacks"):
+        owner._catalog_changed_callbacks = runtime.model_catalog_changed_callbacks
+    if hasattr(runtime, "maybe_refresh_local_catalogs"):
+        cast(Any, owner).maybe_refresh_local_catalogs = runtime.maybe_refresh_local_catalogs
+    if hasattr(runtime, "get_connection_token_extra"):
+        cast(Any, owner).get_connection_token_extra = runtime.get_connection_token_extra
+    return cast(ProviderRuntime, owner)
+
+
 class StubRuntime:
     def __init__(self, tmp_path: Path, adapter: StubAdapter) -> None:
-        self._model_database_refresh_lock = asyncio.Lock()
+        self._provider_runtime: ProviderRuntime | None = None
         # Connection ids the stub's credential resolver reports as disabled.
         self.disabled_connections: set[str] = set()
         self.storage = StorageManager(tmp_path)
@@ -724,8 +752,15 @@ class StubRuntime:
     ) -> ObservedFacts:
         return self.wire_observations.facts_for(provider_id, connection_id, model_id)
 
-    def model_database_refresh(self) -> asyncio.Lock:
-        return self._model_database_refresh_lock
+    def _provider_operations(self) -> ProviderRuntime:
+        return provider_runtime_for(self)
+
+    model_database_refresh = Runtime.model_database_refresh
+    refresh_model_database = Runtime.refresh_model_database
+    provider_discovery_credential = Runtime.provider_discovery_credential
+    start_local_catalog_refresh = Runtime.start_local_catalog_refresh
+    start_installation_catalog_restore = Runtime.start_installation_catalog_restore
+    shutdown_catalog_refreshes = Runtime.shutdown_catalog_refreshes
 
     def has_provider_credentials(self, provider_id: str) -> bool:
         provider = cast(Any, self.providers.get(provider_id))

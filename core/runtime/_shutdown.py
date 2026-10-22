@@ -167,6 +167,11 @@ def _steps(runtime: Runtime) -> Iterator[_Step]:
     if provider_usage is not None:
         yield _Step("provider_usage", provider_usage.close, provider_usage.aclose)
     if (provider_runtime := runtime._provider_runtime) is not None:
+        yield _Step(
+            "provider_catalogs",
+            provider_runtime.cancel_catalog_refreshes,
+            provider_runtime.shutdown_catalog_refreshes,
+        )
         # Every Provider call has ended; close the connections kept for the next Run.
         yield _Step(
             "provider_transports",

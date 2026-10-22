@@ -1,20 +1,20 @@
-"""Account resolution for the OAuth credential that RPCs open on a Connection.
-
-The settings and ``connection.list`` projections are covered through their RPCs
-in ``test_connection_methods.py``. This account-suffix path is reachable only via
-``debug.model_probe``, so it is exercised on the helper directly.
-"""
+"""Account selection for the Provider-owned catalog discovery credential."""
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-from typing import Any
+import logging
+from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
-import server.rpc.provider_access as provider_access
+import core.providers._catalog_refresh as catalog_refresh
+from core.models.models import ModelRegistry
 from core.providers.accounts import Account
-from server.rpc.provider_access import _runtime_provider_credential
+from core.providers.providers import AuthConfig, ConnectionConfig, OAuthConfig, ProviderRegistry
+from core.providers.runtime import ProviderRuntime
+from core.providers.token_store import TokenStore
+from core.storage import StorageManager
 
 
 class _RecordingTokenGetter:
@@ -48,20 +48,39 @@ class _AccountResolvingCredentials:
     ],
 )
 async def test_oauth_credential_honors_explicit_account_suffix(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     connection_id: str,
     expected_request: str | None,
     expected_account: str,
 ) -> None:
     _RecordingTokenGetter.instances = []
-    monkeypatch.setattr(provider_access, "OAuthTokenGetter", _RecordingTokenGetter)
+    monkeypatch.setattr(catalog_refresh, "OAuthTokenGetter", _RecordingTokenGetter)
     credentials = _AccountResolvingCredentials()
-    runtime = SimpleNamespace(provider_credentials=credentials, token_store=object())
-    connection = SimpleNamespace(id="subscription", type="oauth", oauth=object())
+    storage = StorageManager(tmp_path)
+    runtime = ProviderRuntime(
+        providers=ProviderRegistry({}),
+        models=ModelRegistry({}),
+        credentials=cast(Any, credentials),
+        token_store=TokenStore(storage.secrets),
+        storage=storage,
+        resources_path=storage.resources_dir,
+        logger=logging.getLogger("vbot.providers.runtime"),
+    )
+    connection = ConnectionConfig(
+        id="subscription",
+        type="oauth",
+        label="Subscription",
+        auth=AuthConfig(header="Authorization", prefix="Bearer "),
+        oauth=OAuthConfig(
+            flow="device", client_id="client", device_auth_url="", token_url="", scopes=[]
+        ),
+    )
 
-    async with _runtime_provider_credential(
-        runtime, "openai", connection_id, connection
-    ) as credential:
+    async with runtime.discovery_credential("openai", connection_id, connection) as (
+        _connection,
+        credential,
+    ):
         assert not isinstance(credential, str)
         assert await credential() == f"token-for-{expected_account}"
 
