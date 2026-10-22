@@ -227,6 +227,11 @@ def normalize_secret_name(raw: str) -> str:
     return text
 
 
+def main_field_name(kind: SecretKind) -> str:
+    """The field one value given without a field name fills in a new Secret of ``kind``."""
+    return "password" if kind == "login" else VALUE_FIELD
+
+
 def normalize_field_name(raw: str) -> str:
     text = re.sub(r"[\s.\-]+", "_", str(raw).strip()).lower()
     if FIELD_NAME_PATTERN.fullmatch(text) is None:

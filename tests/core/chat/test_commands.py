@@ -737,3 +737,15 @@ async def test_secret_stores_the_value_and_tells_the_agent_only_its_reference(
     assert outcome.status == "stored" and outcome.secret is not None
     assert outcome.secret.lifetime == "permanent" and answered.feedback is not None
     assert usage.feedback is not None and usage.feedback.text.startswith("/secret NAME VALUE")
+
+    # A value without a kind replaces the login's password, not a new field.
+    await _execute(dispatcher, "/secret github new-password-456")
+    replaced = secrets.lookup(SessionAddress(None, "coder", "session-one"), "GITHUB")
+    assert replaced is not None
+    assert [item.name for item in replaced.fields] == ["username", "password"]
+    assert (
+        secrets.substitute(
+            SessionAddress(None, "coder", "session-one"), "{{secret:GITHUB}}", "terminal"
+        )[0]
+        == "new-password-456"
+    )

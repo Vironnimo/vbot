@@ -14,6 +14,7 @@ import pytest
 import core.agents._workspace as workspace_ops
 from core.agents import AgentReferencedError
 from core.runtime.runtime import Runtime
+from core.secrets.agent_secrets import Lifetime
 from core.sessions import SessionAddress
 from core.utils.config import Config
 
@@ -53,6 +54,19 @@ async def _seed(runtime: Runtime, *, channel_enabled: bool = False) -> str:
         agent_id="coder", prompt="Check in", schedule_type="interval", interval_seconds=3600
     )
     runtime.bootstrap_service.create_job(agent_id="coder", prompt="Verify", mode="once")
+    # An Agent-wide Secret given in the Session (a grant path through it) and a
+    # Session Secret.
+    lifetimes: tuple[tuple[str, Lifetime], ...] = (("GITHUB", "permanent"), ("SCRATCH", "session"))
+    for name, lifetime in lifetimes:
+        runtime.agent_secrets.create(
+            name=name,
+            kind="token",
+            values={"value": f"{name.lower()}-value-123"},
+            actor="user",
+            lifetime=lifetime,
+            session_id="kept",
+            agents=["coder"],
+        )
     return coder.current_session_id
 
 
@@ -64,6 +78,14 @@ def _assert_agent_is(runtime: Runtime, agent_id: str, current_session_id: str) -
     assert [channel.agent_id for channel in runtime.channel_service.list_channels()] == [agent_id]
     assert [job.agent_id for job in runtime.cron_service.list_jobs()] == [agent_id]
     assert [job.agent_id for job in runtime.bootstrap_service.list_jobs()] == [agent_id]
+    secrets = runtime.agent_secrets
+    kept = SessionAddress(None, agent_id, "kept")
+    assert [secret.name for secret in secrets.usable(kept)] == ["GITHUB", "SCRATCH"]
+    assert [secret.name for secret in secrets.usable(kept, passed_only=True)] == [
+        "GITHUB",
+        "SCRATCH",
+    ]
+    assert len(secrets.granted_to_agent(agent_id)) == len(secrets.all()) == 2
     assert not (runtime.storage.data_dir / "agents" / "rename-pending.json").exists()
 
 
@@ -253,6 +275,13 @@ async def test_a_rename_to_an_id_that_references_still_name_changes_nothing(
         leftover = await runtime.cron_service.create_job(
             agent_id="researcher", prompt="Report", schedule_type="interval", interval_seconds=60
         )
+        runtime.agent_secrets.create(
+            name="LEFT",
+            kind="token",
+            values={"value": "left-value-123"},
+            actor="user",
+            agents=["researcher"],
+        )
         runtime.agents.update("coder", tools={"subagent": {"allowed_agents": ["researcher"]}})
         with monkeypatch.context() as unchecked:
             unchecked.setattr(runtime.automation_references, "agent_references", lambda _id: ())
@@ -262,7 +291,8 @@ async def test_a_rename_to_an_id_that_references_still_name_changes_nothing(
         with pytest.raises(AgentReferencedError) as refused:
             await runtime.rename_agent("coder", "researcher")
 
-        assert refused.value.references == (f"cron:{leftover.id}",)
+        # A Secret grant left for the id refuses the rename too; deletion checks only automations.
+        assert refused.value.references == (f"cron:{leftover.id}", "secret:LEFT")
         assert await runtime.agent_references("researcher") == (f"cron:{leftover.id}",)
         assert len(channel_reads) > 0
         assert threading.get_ident() not in channel_reads

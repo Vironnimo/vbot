@@ -29,6 +29,8 @@ SECRET_COMMAND_USAGE: Final = (
 _DURATION = re.compile(r"(\d+)\s*([mhdw])", re.IGNORECASE)
 _DURATION_UNITS: Final = {"m": "minutes", "h": "hours", "d": "days", "w": "weeks"}
 _VALUE_OPTIONS: Final = frozenset({"--for", "--kind", "--user", "--description"})
+# Any whitespace separates the name and the options, line breaks included.
+_SEPARATOR = re.compile(r"\s+")
 
 
 class SecretCommandError(ValueError):
@@ -51,15 +53,14 @@ def parse_secret_command(arguments: str) -> SecretCommand:
     text = arguments.strip()
     if not text:
         return SecretCommand(name=None, value="")
-    name, _, rest = text.partition(" ")
+    name, rest = _first_word(text)
     if name.startswith("--"):
         raise SecretCommandError(f"Name the Secret first. {SECRET_COMMAND_USAGE}")
     options: dict[str, str] = {}
     flags: set[str] = set()
     rest = rest.lstrip()
     while rest.startswith("--"):
-        token, _, remainder = rest.partition(" ")
-        rest = remainder.lstrip()
+        token, rest = _first_word(rest)
         if token == "--":
             break
         option = token.lower()
@@ -71,15 +72,18 @@ def parse_secret_command(arguments: str) -> SecretCommand:
                 options[option] = rest[1:closing]
                 rest = rest[closing + 1 :].lstrip()
                 continue
-            argument, _, remainder = rest.partition(" ")
+            argument, rest = _first_word(rest)
             if not argument:
-                raise SecretCommandError(f"{token} needs a value. {SECRET_COMMAND_USAGE}")
+                raise SecretCommandError(f"{option} needs a value. {SECRET_COMMAND_USAGE}")
             options[option] = argument
-            rest = remainder.lstrip()
         elif option in {"--permanent", "--once"}:
             flags.add(option)
         else:
-            raise SecretCommandError(f"Unknown option {token}. {SECRET_COMMAND_USAGE}")
+            # The token may be a value that starts with --: never repeat it.
+            raise SecretCommandError(
+                "An option before the value is unknown; write -- before a value that "
+                f"starts with --. {SECRET_COMMAND_USAGE}"
+            )
     lifetime: Lifetime = "session"
     duration = None
     chosen = [item for item in ("--permanent", "--once", "--for") if item in flags | set(options)]
@@ -127,10 +131,19 @@ def secret_command_example(name: str, kind: SecretKind, lifetime: Lifetime) -> s
     return " ".join(parts)
 
 
+def _first_word(text: str) -> tuple[str, str]:
+    """The text up to the first whitespace, and the rest after that whitespace."""
+    match = _SEPARATOR.search(text)
+    if match is None:
+        return text, ""
+    return text[: match.start()], text[match.end() :]
+
+
 def _duration(text: str) -> timedelta:
     match = _DURATION.fullmatch(text.strip())
     if match is None:
-        raise SecretCommandError(f"--for takes a duration such as 30m, 2h, 7d or 2w; got {text}.")
+        # The argument may be the value itself: never repeat it.
+        raise SecretCommandError("--for takes a duration such as 30m, 2h, 7d or 2w.")
     amount = int(match.group(1))
     if amount <= 0:
         raise SecretCommandError("--for needs a duration above zero.")

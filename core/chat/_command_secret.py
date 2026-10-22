@@ -57,11 +57,8 @@ async def execute_secret(
     except SecretRecordError as error:
         return _notice(str(error))
     kind = parsed.kind or ("text" if "\n" in parsed.value else "token")
-    values = (
-        {"password": parsed.value, **({"username": parsed.username} if parsed.username else {})}
-        if kind == "login"
-        else {"value": parsed.value}
-    )
+    # The value goes to the main field of the Secret it replaces or creates.
+    values = {"username": parsed.username} if parsed.username else {}
     now = secrets.now()
     expires_at = now + parsed.duration if parsed.duration is not None else None
     try:
@@ -73,6 +70,7 @@ async def execute_secret(
             name=name,
             kind=kind,
             values=values,
+            value=parsed.value,
             lifetime=parsed.lifetime,
             expires_at=expires_at,
             description=parsed.description,
