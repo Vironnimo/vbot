@@ -41,6 +41,25 @@ MAX_PENDING_CAPTURES = 32
 # file for an orphan), orders an operator clear after earlier captures, and lets
 # a listing observe every capture handed off before it.
 _TRACE_THREAD = OrderedWorker(name="debug-traces")
+# Trace files and the index are written compactly: nothing reads their layout.
+_COMPACT = (",", ":")
+
+
+@dataclass
+class _LoadedIndex:
+    """An index file as the trace thread last read or wrote it."""
+
+    # ``(mtime_ns, size, inode)`` of the file, ``None`` while it is missing.
+    stamp: tuple[int, int, int] | None
+    entries: list[dict[str, Any]]
+    # Orphan captures of this catalog were removed since it was read.
+    swept: bool
+
+
+# Index files by path, shared by every store of the process and touched only on
+# the trace thread. A changed stamp means another writer (an operator, an older
+# process) replaced the file: it is read again and its orphans are swept again.
+_LOADED_INDEXES: dict[Path, _LoadedIndex] = {}
 
 
 async def drain_debug_traces() -> None:
@@ -203,7 +222,9 @@ class DebugTraceStore:
     def _save(self, trace_path: Path, trace_id: str, trace_data: dict[str, Any]) -> None:
         # A Provider's JSON can decode to a lone surrogate, which UTF-8 cannot
         # write; the capture keeps U+FFFD in its place instead of failing.
-        trace_json = replace_lone_surrogates(json.dumps(trace_data, ensure_ascii=False, indent=2))
+        trace_json = replace_lone_surrogates(
+            json.dumps(trace_data, ensure_ascii=False, separators=_COMPACT)
+        )
         request = trace_data.get("request") or {}
         response = trace_data.get("response") or {}
         entry = _TraceIndexEntry(
@@ -219,15 +240,22 @@ class DebugTraceStore:
         )
 
         self._ensure_directories()
-        previous = self._read_index() or []
-        self._remove_unindexed_files(previous)
-        entries = [item for item in previous if item.get("trace_id") != trace_id]
+        catalog = self._catalog()
+        if not catalog.swept:
+            # Captures and temporary files an interrupted earlier save left.
+            self._remove_unindexed_files(catalog.entries)
+            catalog.swept = True
+        entries = [item for item in catalog.entries if item.get("trace_id") != trace_id]
         entries.append(without_lone_surrogates(asdict(entry)))
-        entries = self._prune_oldest(entries)
+        retained = self._prune_oldest(list(entries))
+        pruned = {item["trace_id"] for item in entries} - {item["trace_id"] for item in retained}
         try:
             atomic_write_text(trace_path, trace_json)
-            self._write_index(entries)
+            self._write_index(retained)
         except OSError:
+            # The next operation reads the index again and sweeps what this
+            # save may have left.
+            _LOADED_INDEXES.pop(self._index_path, None)
             # Re-read publication state: a directory fsync can fail after
             # replacement already committed the new index.
             try:
@@ -237,11 +265,15 @@ class DebugTraceStore:
             except OSError, ValueError:
                 _logger.warning("Failed to remove unindexed debug traces", exc_info=True)
             raise
-        self._remove_unindexed_files(entries)
+        # Should checking the published file fail, the previous catalog stays
+        # and no longer matches it: the next operation reads it and sweeps.
+        _LOADED_INDEXES[self._index_path] = _LoadedIndex(self._index_stamp(), retained, True)
+        for pruned_id in pruned:
+            self._trace_path(pruned_id).unlink(missing_ok=True)
 
     def _list(self) -> list[dict[str, Any]]:
         try:
-            entries = self._read_index() or []
+            entries = [dict(entry) for entry in self._catalog().entries]
         except OSError, ValueError:
             _logger.warning("Debug trace index is unreadable; traces left unchanged")
             return []
@@ -258,6 +290,7 @@ class DebugTraceStore:
         return data
 
     def _clear(self) -> None:
+        _LOADED_INDEXES.pop(self._index_path, None)
         if self._traces_dir.is_symlink():
             self._traces_dir.unlink()
         elif self._traces_dir.is_junction():
@@ -281,6 +314,28 @@ class DebugTraceStore:
         if not isinstance(trace_id, str) or _TRACE_ID_PATTERN.fullmatch(trace_id) is None:
             raise InvalidTraceIdError("Invalid debug trace id")
         return self._traces_dir / f"{trace_id}.json"
+
+    def _catalog(self) -> _LoadedIndex:
+        """The current index entries, read from disk only after the file changed.
+
+        Raises like :meth:`_read_index` for an unusable index, and with the
+        error of checking the file (for example a denied ``stat``).
+        """
+        loaded = _LOADED_INDEXES.get(self._index_path)
+        stamp = self._index_stamp()
+        if loaded is not None and loaded.stamp == stamp:
+            return loaded
+        _LOADED_INDEXES.pop(self._index_path, None)
+        loaded = _LoadedIndex(stamp, self._read_index() or [], swept=False)
+        _LOADED_INDEXES[self._index_path] = loaded
+        return loaded
+
+    def _index_stamp(self) -> tuple[int, int, int] | None:
+        try:
+            stat = self._index_path.stat()
+        except FileNotFoundError:
+            return None
+        return (stat.st_mtime_ns, stat.st_size, stat.st_ino)
 
     def _read_index(self) -> list[dict[str, Any]] | None:
         """Read the complete index; only a missing file returns ``None``.
@@ -306,7 +361,9 @@ class DebugTraceStore:
     def _write_index(self, entries: list[dict[str, Any]]) -> None:
         """Write the index entries to disk."""
         self._ensure_directories()
-        atomic_write_text(self._index_path, json.dumps(entries, ensure_ascii=False, indent=2))
+        atomic_write_text(
+            self._index_path, json.dumps(entries, ensure_ascii=False, separators=_COMPACT)
+        )
 
     def _prune_oldest(self, entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Remove oldest entries until count is within the configured limit.
