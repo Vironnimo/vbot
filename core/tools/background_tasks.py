@@ -349,8 +349,8 @@ class BackgroundTasksTool:
             # Agents checked one command dozens of times, seconds apart.
             delivery = (
                 f"You have checked it {checks} times while it runs; checking does not bring its "
-                "result sooner. The result arrives as a new message when it exits: end your turn "
-                "now unless other work is waiting."
+                "result sooner. The result arrives as a new message when it exits. Continue with "
+                "other work your task still needs, or end your turn to wait for it."
             )
         elif subagent is None:
             delivery = (

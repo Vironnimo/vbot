@@ -313,8 +313,8 @@ def _hint_waiting_for_background(command: str) -> str | None:
         return None
     return (
         "This command waited, then read a background command's log file. That command's "
-        "result arrives as a new message when it exits: instead of waiting for it in a "
-        "command, continue other work or end your turn."
+        "result arrives as a new message when it exits. Instead of sleeping in a command, "
+        "continue with other work your task still needs, or end your turn to wait for it."
     )
 
 

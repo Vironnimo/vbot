@@ -27,8 +27,9 @@ BOARD_DESCRIPTION = (
 INBOX_DESCRIPTION = (
     "Receive your pending Board messages now, oldest first; returned messages count as "
     "received. New messages also reach you as the group's delivery settings allow, so you need "
-    "not check right after posting. This Tool never waits for new messages: when you have no "
-    "further work now, end your reply normally; new messages can start another Run."
+    "not check right after posting. This Tool never waits for new messages: continue with "
+    "other work your task still needs, or end your turn to wait for them; new messages can "
+    "start your next turn."
 )
 
 INBOX_PARAMETERS: dict[str, Any] = {
@@ -160,7 +161,7 @@ DEFAULT_INSTRUCTIONS = (
     "as your common reference as your work develops.\n\n"
     "Post when you add new information, answer a question, report a result, or request "
     "action. Do not acknowledge acknowledgments or post that you have nothing new to add. "
-    "If no useful work remains now, end your reply normally; no closing Board post is needed."
+    "When your task needs no further work now, end your turn; no closing Board post is needed."
 )
 DEFAULT_PROMPT_BLOCKS = ["core:tools", "core:system_reminders", "core:skills"]
 DEFAULT_REMINDERS = {"delivery": True, "resume": True}
@@ -190,8 +191,8 @@ ERRORS = {
     "or omit reply_to for a new post.",
     "exact_message_arguments": "To read one message_id, omit discussion_id, cursor, "
     "and limit. No change was applied.",
-    "main_membership_required": "Everyone remains in the main discussion. When you "
-    "have no further work now, end your reply normally.",
+    "main_membership_required": "Everyone remains in the main discussion. Continue with "
+    "other work your task still needs, or end your turn to wait for others.",
     "swarm_closed": "This Swarm is stopped or currently unavailable for changes. Its "
     "Board remains readable. The user can Resume the Swarm when it is "
     "ready.",
@@ -237,8 +238,8 @@ INBOX_ONLY_RECEIVE = (
 STATE_ONLY_STATUS = (
     "swarm_state has no {action} action; it only shows the participants, their Run activity, "
     "your pending messages, and how Board messages reach you. Share progress, results, or "
-    "requests for help on the Board with swarm_board, and end your reply normally when you "
-    "have no further work now."
+    "requests for help on the Board with swarm_board, and end your turn when your task needs "
+    "no further work now."
 )
 
 # Delivered messages: Inbox results and automatic delivery.
@@ -268,7 +269,7 @@ DELIVERY_SKIPPED = {
 DELIVERY_SKIPPED_READ = "{call} for {discussion}"
 
 # How to wait for others, wherever a result shows that nothing is left to receive.
-WAIT_FOR_OTHERS = "To wait for others, end your reply"
+WAIT_FOR_OTHERS = "To wait for others, end your turn"
 
 # swarm_state results.
 STATE_PENDING = {
@@ -376,9 +377,9 @@ BOARD_NEW = {
 }
 BOARD_NOTHING_NEW = "None of the posts shown is new to you."
 BOARD_WAIT = {
-    "addressed": f"{WAIT_FOR_OTHERS}; a post that addresses or answers you starts your next Run "
+    "addressed": f"{WAIT_FOR_OTHERS}; a post that addresses or answers you starts your next turn "
     "at once.",
-    "paced": f"{WAIT_FOR_OTHERS}; {{routes}} start your next Run within {{minutes}} minutes.",
+    "paced": f"{WAIT_FOR_OTHERS}; {{routes}} start your next turn within {{minutes}} minutes.",
 }
 BOARD_OLDER = "Older posts exist. Continue with {call}"
 # The page's character bound (the batch_chars setting) ended it before limit.

@@ -64,7 +64,7 @@ GOAL_CONTINUE_TEXT = (
 GOAL_LAST_TURN_TEXT = (
     "Your previous turn ended while the goal is still active. This is the last "
     "automatic turn; after it the goal pauses until the user resumes it. Continue "
-    "with the next step, then end your reply with what is done and what remains."
+    "with the next step, then end your turn with what is done and what remains."
 )
 GOAL_RESUMED_TEXT = "The user resumed the goal. Continue with the next step toward it."
 GOAL_PAUSED_TEXT = "The goal was paused because {reason}. The user can resume it with /goal resume."

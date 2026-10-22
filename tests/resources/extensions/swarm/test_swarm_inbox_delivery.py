@@ -217,8 +217,8 @@ async def test_inbox_lowers_a_large_limit_with_a_note(board):
             {"action": "done", "summary": "Finished"},
             "swarm_state has no done action; it only shows the participants, their Run "
             "activity, your pending messages, and how Board messages reach you. Share progress, "
-            "results, or requests for help on the Board with swarm_board, and end your reply "
-            "normally when you have no further work now.",
+            "results, or requests for help on the Board with swarm_board, and end your turn "
+            "when your task needs no further work now.",
         ),
     ],
 )

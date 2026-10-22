@@ -152,7 +152,7 @@ in the `update_goal` definition; reasons for those sentences:
 | `The user set a goal for this session with /goal:` + quoted objective | The Agent must know what to pursue; quoting keeps it user data, not kernel voice. |
 | `When your turn ends while the goal is active, vBot starts your next turn automatically, until you mark the goal complete or blocked with update_goal.` | Without it Agents ask "Shall I continue?" or wrap up each turn as finished (Goose, Hermes). It names only complete and blocked: naming paused invites pausing on the Agent's own initiative. |
 | `Your previous turn ended while the goal is still active. Continue with the next step toward it.` | Without it the Agent reads a turn without user text as a new request and recaps instead of working. A standing rule never goes into this repeated reminder. |
-| `This is the last automatic turn; ... end your reply with what is done and what remains.` | Without it the pause cuts the work off mid-step and the user gets no account of what remains. |
+| `This is the last automatic turn; ... end your turn with what is done and what remains.` | Without it the pause cuts the work off mid-step and the user gets no account of what remains. |
 | `The user resumed the goal. Continue with the next step toward it.` | Context note before the user's `/goal resume`; without it the Agent cannot tell that the command resumed work and what to do. |
 | `The goal was paused because <reason>. The user can resume it with /goal resume.` | When the user later asks why work stopped, the Agent can only answer from it. Written as a fact, not a state that can change after the note. |
 

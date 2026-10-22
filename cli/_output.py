@@ -284,7 +284,7 @@ def print_application_update_result(
         print(f"  Activate: vbot update activate {operation.id}")
     if handoff and not operation.terminal:
         print(
-            "End this Run after the Tool result is saved. The updater will arrange a continuation "
+            "End your turn now. The updater will arrange a continuation "
             "in this Session before restarting the server. Do not repeat the update or create "
             "another Bootstrap."
         )

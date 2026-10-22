@@ -635,8 +635,8 @@ def _running_next(
             "new message when it exits; do not start it again, and do not sleep or poll for "
             "that result. If it runs until stopped, such as a server, check that it is ready "
             "before you use it, for example with a request to its port, and stop it "
-            f"{stop} once it is no longer needed. Otherwise continue other work, or end your "
-            "turn if your next step needs the result."
+            f"{stop} once it is no longer needed. Otherwise continue with other work your task "
+            "still needs, or end your turn to wait for it."
         )
     # "or it runs until stopped" keeps an Agent from waiting for a server's exit.
     stopping = (
@@ -662,8 +662,8 @@ def _running_next(
         )
     tail = (
         "Its result arrives as a new message when it exits; do not start it again, and do not "
-        f"sleep or poll for that result. {stopping} Otherwise continue other work, or end "
-        "your turn if your next step needs the result."
+        f"sleep or poll for that result. {stopping} Otherwise continue with other work your "
+        "task still needs, or end your turn to wait for it."
     )
     if reason == "moved":
         return (

@@ -134,7 +134,8 @@ def _unread_screen_result(
 # What an attached interactive program sends on its own; Agents polled for it.
 _DELIVERIES_TEXT = (
     "While it runs, its screen arrives as a new message each time it goes idle showing something "
-    "new, and so does its exit. Continue with your next step instead of polling with status."
+    "new, and so does its exit, so do not poll with status. Continue with other work your task "
+    "still needs, or end your turn to wait for it."
 )
 
 
@@ -158,9 +159,9 @@ def _first_screen_pending_text(terminal_id: str) -> str:
 def _reply_pending_text(terminal_id: str) -> str:
     """What to do when an interactive program still works as input's wait ended."""
     return (
-        "It is still working: its screen arrives as a new message once it goes idle; continue "
-        f"other work or end your turn. To wait for it now instead, call terminal "
-        f"{_call('wait', terminal_id)}."
+        "It is still working: its screen arrives as a new message once it goes idle. Continue "
+        "with other work your task still needs, or end your turn to wait for it; to wait "
+        f"within this turn, call terminal {_call('wait', terminal_id)}."
     )
 
 

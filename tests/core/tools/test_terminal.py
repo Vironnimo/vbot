@@ -142,7 +142,8 @@ def test_definition_follows_flat_action_conventions_within_its_budget(tmp_path: 
 
 _DELIVERIES = (
     "While it runs, its screen arrives as a new message each time it goes idle showing something "
-    "new, and so does its exit. Continue with your next step instead of polling with status."
+    "new, and so does its exit, so do not poll with status. Continue with other work your task "
+    "still needs, or end your turn to wait for it."
 )
 
 

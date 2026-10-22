@@ -14,8 +14,8 @@ FORWARDED_RUN_KINDS = frozenset({"subagent", "system", "user", "channel"})
 
 # Results of the ``subagent`` Tool.
 SUBAGENT_STARTED_NOTE = (
-    "Started in the background. Its final answers arrive at your next step, or start a new "
-    "turn if you are idle. Continue other work, or end your turn to wait."
+    "Started in the background. Its final answers arrive as new messages. Continue with other "
+    "work your task still needs, or end your turn to wait for them."
 )
 # A note in the Sub-Agent's Session; {secrets} is one line per Secret (core/tools/secrets.py).
 SUBAGENT_SECRETS_NOTE_TEMPLATE = (
