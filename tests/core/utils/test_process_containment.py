@@ -189,6 +189,57 @@ def test_guarded_posix_launch_wraps_exact_argv_and_lifetime_descriptor(
     assert launch.pass_fds == pass_fds
 
 
+@pytest.mark.parametrize("outcome", ["guardian", "ordinary", "gone", "zombie", "unavailable"])
+def test_guardian_detection_waits_for_a_starting_process_command_line(
+    monkeypatch: pytest.MonkeyPatch, outcome: str
+) -> None:
+    clock = 0.0
+    reads = 0
+
+    def sleep(seconds: float) -> None:
+        nonlocal clock
+        clock += seconds
+
+    def command_line() -> list[str]:
+        nonlocal reads
+        reads += 1
+        if reads == 1 or outcome in {"zombie", "unavailable"}:
+            return []
+        if outcome == "gone":
+            raise psutil.NoSuchProcess(123)
+        if outcome == "ordinary":
+            return ["python", "-c", "pass"]
+        return [
+            "python",
+            *process_utils._GUARDIAN_INTERPRETER_OPTIONS,
+            process_utils._GUARDIAN_SCRIPT,
+            "--lifetime-fd",
+            "4",
+            "--",
+            "command",
+        ]
+
+    process = SimpleNamespace(
+        cmdline=command_line,
+        is_running=lambda: True,
+        status=lambda: psutil.STATUS_ZOMBIE if outcome == "zombie" else psutil.STATUS_RUNNING,
+    )
+    monkeypatch.setattr(process_utils.sys, "platform", "linux")
+    monkeypatch.setattr(psutil, "Process", lambda pid: process)
+    monkeypatch.setattr(
+        process_utils, "time", SimpleNamespace(monotonic=lambda: clock, sleep=sleep)
+    )
+
+    if outcome == "unavailable":
+        with pytest.raises(OSError):
+            process_utils.find_process_guardian(123)
+        assert clock >= process_utils._GUARDIAN_DISCOVERY_SECONDS
+    else:
+        result = process_utils.find_process_guardian(123)
+        assert result is (process if outcome == "guardian" else None)
+        assert reads == (1 if outcome == "zombie" else 2)
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX lifetime pipe contract")
 @pytest.mark.parametrize("scenario", ["ordinary", "escaped", "explicit-stop"])
 def test_guardian_kills_child_group_when_server_pipe_closes(
