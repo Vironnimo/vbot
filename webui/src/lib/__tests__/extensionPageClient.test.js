@@ -141,7 +141,9 @@ describe('extension page client', () => {
     const target = parent();
     client = createExtensionPageClient({ target });
     initialize(target);
-    const failed = expect(client.operation('catalog')).rejects.toThrow();
+    const failed = expect(client.operation('catalog')).rejects.toThrow(
+      t('extensions.page.requestTimedOut'),
+    );
     await vi.advanceTimersByTimeAsync(30_000);
     await failed;
     const pending = client.operation('catalog');
@@ -478,9 +480,12 @@ describe('extension page client', () => {
     client = createExtensionPageClient({ target });
     initialize(parent());
     expect(client.context).toBeNull();
+    await expect(client.operation('read')).rejects.toThrow(
+      t('extensions.page.hostUnavailable'),
+    );
     initialize(target);
     await expect(
       client.operation('read', { text: 'x'.repeat(64 * 1024) }),
-    ).rejects.toThrow('too large');
+    ).rejects.toThrow(t('extensions.page.requestTooLarge'));
   });
 });
