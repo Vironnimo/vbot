@@ -5,6 +5,7 @@ from __future__ import annotations
 import inspect
 import json
 import os
+import re
 from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -29,6 +30,7 @@ from core.tools.change_tracker import ChangeTracker
 from core.tools.contracts import JsonObject, ToolContract, ToolContractError
 from core.tools.model_names import model_tool_name
 from core.utils.file_status import is_link_status
+from core.utils.paths import file_url_path
 
 if TYPE_CHECKING:
     from core.chat.messages import ReplySurface
@@ -55,6 +57,84 @@ def _path_argument(path: str | Path, *, windows: bool) -> str | Path:
     # Single quotes are legal on Windows. POSIX also permits double quotes and
     # backslashes. Existence must not redirect a missing literal to another file.
     return path
+
+
+class UnusablePathError(ToolContractError):
+    """A path that names no file on this computer, refused before any filesystem access.
+
+    ``reason`` completes "cannot use path X: ..." for callers that name the path
+    in their own sentence, such as the change pipeline.
+    """
+
+    def __init__(self, tool_name: str, path: str, reason: str) -> None:
+        self.reason = reason
+        super().__init__(
+            f'{model_tool_name(tool_name)} was not run: cannot use path "{path}": {reason}.'
+        )
+
+
+_SEPARATOR = re.compile(r"([\\/])")
+_COLON_IN_NAME = (
+    'Windows file and folder names cannot contain ":". Use another character, such as "-"'
+)
+_NO_FULL_PATH = (
+    "it does not lead to a complete path on this computer. Send an absolute path, or one "
+    "relative to the working directory"
+)
+
+
+def _local_path_text(text: str, *, windows: bool) -> str | None:
+    """Return the path a ``file:`` URL names, ``text`` itself when it is no such URL.
+
+    ``None`` for a URL naming a file on another computer. On POSIX ``file:``
+    must be followed by ``/``, since ``file:notes.txt`` is a legal file name there.
+    """
+    if text[:5].casefold() != "file:" or not (windows or text[5:6] == "/"):
+        return text
+    return file_url_path(text)
+
+
+def _names(path: Path) -> tuple[str, ...]:
+    return path.parts[1:] if path.anchor else path.parts
+
+
+def _windows_name_problem(text: str, candidate: Path, access: PathResolveAccess) -> str | None:
+    """Return why Windows cannot use the names of ``candidate``, or ``None``.
+
+    A ``:`` inside a name makes Windows read the path as another drive's current
+    folder or an alternate data stream; in a folder name it can lead to a file
+    outside the working directory. A final name keeps one for a read, which
+    opens that stream; a change or a working directory could only fail on it.
+    Windows drops the dots and spaces that end a name, so a change refuses such
+    a name and names the path it would change instead; a read just opens it.
+    """
+    names = _names(candidate)
+    if any(":" in name for name in names[:-1]) or (access != "read" and names and ":" in names[-1]):
+        return _COLON_IN_NAME
+    if access != "write" or all(name in {".", ".."} or name[-1:] not in " ." for name in names):
+        return None
+    pieces = _SEPARATOR.split(text)
+    kept = [
+        piece if piece in {".", ".."} or _SEPARATOR.fullmatch(piece) else piece.rstrip(" .")
+        for piece in pieces
+    ]
+    if any(piece and not shortened for piece, shortened in zip(pieces, kept, strict=True)):
+        return "Windows file and folder names cannot end with a dot or space. Choose another name"
+    named = "".join(kept)
+    return (
+        "Windows drops the dot or space at the end of a file or folder name, so this path "
+        f'names "{named}". Send "{named}" if you mean that path'
+    )
+
+
+def _drive_relative_problem(text: str, candidate: Path) -> str:
+    """Explain a drive letter without ``/`` after it, as in ``D:notes.txt``."""
+    drive = candidate.drive
+    rest = text[len(drive) :] if text[: len(drive)].casefold() == drive.casefold() else text
+    return (
+        f'"{drive}" needs "/" after it. Send "{drive}/{rest}" for that path on drive {drive}, '
+        f'or "{rest}" for one in the working directory'
+    )
 
 
 def is_link_entry(path: Path) -> bool:
@@ -296,6 +376,10 @@ class ToolContext:
         symbolic link or junction names the link entry itself (as Delete or Move
         of that entry requires) and the final name keeps the requested spelling.
         A path containing NUL is refused before anything touches the filesystem.
+        A ``file:`` URL names its local path. :class:`UnusablePathError` refuses,
+        also before any access, a path that would lead elsewhere than it names:
+        a file on another computer, and on Windows a ``:`` inside a name or a
+        drive letter without ``/`` after it (another drive's current folder).
         """
         if "\x00" in str(path):
             name = model_tool_name(self.tool_name)
@@ -304,20 +388,48 @@ class ToolContext:
                 f"character (U+0000), which no file path can contain. Remove it and call "
                 f"{name} again."
             )
-        spelling = _path_argument(path, windows=os.name == "nt")
+        windows = os.name == "nt"
+        spelling = _path_argument(path, windows=windows)
+        if isinstance(spelling, str):
+            local = _local_path_text(spelling, windows=windows)
+            if local is None:
+                raise UnusablePathError(
+                    self.tool_name,
+                    spelling,
+                    "it names a file on another computer. Send the path of a file on this computer",
+                )
+            spelling = local
         candidate = Path(spelling)
         # Windows invents a sibling home for ~name; that spelling is an ordinary
         # filename here. An explicitly relative ./~name is literal on every host.
         if str(spelling).startswith("~") and (os.name != "nt" or candidate.parts[0] == "~"):
             candidate = candidate.expanduser()
+        problem = _windows_name_problem(str(spelling), candidate, access) if windows else None
         target = candidate if candidate.is_absolute() else self.effective_cwd / candidate
+        if problem is None and not target.is_absolute():
+            problem = (
+                _drive_relative_problem(str(spelling), candidate)
+                if candidate.drive and not candidate.root
+                else _NO_FULL_PATH
+            )
+        if problem is not None:
+            raise UnusablePathError(self.tool_name, str(path), problem)
         if access != "display" and self.permissions.restricted:
             refusal = self.permissions.check_path(target, access, base=self.effective_cwd)
             if refusal is not None:
                 raise PermissionDenied(refusal)
         if follow_final_link or target.name in {"", ".", ".."}:
-            return target.resolve()
-        return target.parent.resolve() / target.name
+            resolved = target.resolve()
+        else:
+            resolved = target.parent.resolve() / target.name
+        if not resolved.is_absolute():
+            # ntpath.realpath falls back to a drive-relative result for a stream
+            # name below a missing folder.
+            colon = any(":" in name for name in _names(candidate))
+            raise UnusablePathError(
+                self.tool_name, str(path), _COLON_IN_NAME if colon else _NO_FULL_PATH
+            )
+        return resolved
 
     def can_call(self, tool_name: str) -> bool:
         """Return whether this Run lets the Agent call the Tool named *tool_name*.

@@ -31,7 +31,13 @@ from tests.core.tools.search_files_test_support import context, dispatch, search
 from tests.directory_links import link_directory
 
 # The flags search_files always passes, in the form a ripgrep command line takes them.
-_RG_DEFAULTS = ["--no-config", "--hidden", "--no-require-git", "--glob-case-insensitive"]
+_RG_DEFAULTS = [
+    "--no-config",
+    "--hidden",
+    "--no-require-git",
+    "--glob-case-insensitive",
+    "--crlf",
+]
 _RG_TEXT = ["--heading", "--with-filename", "--line-number", "--color=never"]
 # ripgrep flags whose output lists files or counts instead of lines.
 _RG_ENTRY_FLAGS = {"-c", "-l", "--count-matches", "--files-without-match"}
@@ -152,6 +158,8 @@ _CONTENT_CASES = [
     ({"pattern": "needle", "args": ["-t", "py"]}, ["-t", "py"], ["needle"]),
     ({"pattern": "needle", "args": ["-T", "py", "-T", "md"]}, ["-Tpy", "-Tmd"], ["needle"]),
     ({"pattern": "needle", "args": ["-w"]}, ["-w"], ["needle"]),
+    # $ also ends the lines of docs/notes.txt, which end in CRLF, as read shows them.
+    ({"pattern": "needle$"}, [], ["needle$"]),
     ({"pattern": "needle hidden", "args": ["-x"]}, ["-x"], ["needle hidden"]),
     ({"pattern": "needle", "path": "src", "args": ["-v"]}, ["-v"], ["needle", "src"]),
     ({"pattern": "needle", "args": ["-m", "1"]}, ["-m1"], ["needle"]),

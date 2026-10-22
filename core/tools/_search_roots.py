@@ -19,6 +19,7 @@ from core.tools._path_suggestions import corrected_paths, refused_note
 from core.tools._search_query import (
     SearchArgumentError,
     SearchQuery,
+    glob_separators,
 )
 from core.tools._search_results import (
     path_label,
@@ -47,6 +48,7 @@ def _resolve_roots(query: SearchQuery, cwd: Path, permissions: PermissionBoundar
     ``src`` with that glob, ``{src,tests}`` and ``src,tests`` search both. A
     missing path written as ``!vendor/**`` is the excluding glob it reads as.
     """
+    _local_globs(query, cwd, permissions)
     roots = _Roots()
     excluded = False
     for raw in query.roots or [str(cwd)]:
@@ -176,6 +178,72 @@ def _nothing_searched(warnings: list[str], roots: _Roots, query: SearchQuery) ->
     else:
         fix = "Correct path, or omit it to search the working directory."
     return f"{' '.join(warnings)} Nothing was searched. {fix}"
+
+
+def _local_globs(query: SearchQuery, cwd: Path, permissions: PermissionBoundary) -> None:
+    """Read globs written as absolute paths as the globs they select.
+
+    ripgrep matches globs against paths below the searched directory, so an
+    absolute glob matched nothing. One whose fixed directory lies in the
+    working directory is anchored there (``/src/*.py``); one outside it, in a
+    call without path, searches that directory with the rest of the glob.
+    """
+    globs: list[str] = []
+    outside: Path | None = None
+    for glob in query.globs:
+        negated = glob.startswith("!")
+        split = _absolute_glob(glob_separators(glob[1:] if negated else glob), cwd, permissions)
+        if split is None:
+            globs.append(glob)
+            continue
+        base, remainder = split
+        if base.is_relative_to(cwd):
+            globs.append(
+                ("!" if negated else "") + "/".join(("", *base.relative_to(cwd).parts, remainder))
+            )
+        elif not negated and not query.roots and outside in (None, base):
+            outside = base
+            globs.append(f"/{remainder}")
+            query.notes.append(
+                f'glob "{glob}" is an absolute path, so {path_label(base, cwd)} was searched '
+                f'with glob "/{remainder}".'
+            )
+        else:
+            globs.append(glob)
+    query.globs = globs
+    if outside is not None:
+        query.roots = [str(outside)]
+
+
+def _absolute_glob(
+    glob: str, cwd: Path, permissions: PermissionBoundary
+) -> tuple[Path, str] | None:
+    """Split an absolute glob into its existing fixed directory and the glob below it.
+
+    Off Windows, ``/src/*.py`` stays ripgrep's glob anchored at the searched
+    directory when that directory holds ``src``.
+    """
+    path = Path(glob)
+    if not path.is_absolute():
+        return None
+    parts = path.parts
+    fixed = next(
+        (index for index, part in enumerate(parts) if _GLOB_SYNTAX.search(part)),
+        len(parts) - 1,
+    )
+    if fixed < 1:
+        return None
+    base = Path(*parts[:fixed])
+    anchored = cwd.joinpath(*parts[1:fixed])
+    if os.name != "nt" and _readable_dir(anchored, permissions):
+        return None
+    if not _readable_dir(base, permissions):
+        return None
+    return base, "/".join(parts[fixed:])
+
+
+def _readable_dir(path: Path, permissions: PermissionBoundary) -> bool:
+    return permissions.check_path(path, "read") is None and is_dir_strict(path)
 
 
 def _absolute(text: str, cwd: Path) -> Path:

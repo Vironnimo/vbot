@@ -577,6 +577,50 @@ async def test_a_path_written_as_a_glob_or_list_searches_what_it_names(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("glob", "workdir", "content", "note"),
+    [
+        pytest.param(
+            "src\\*.py",
+            ".",
+            "src/app.py\n2:def load():",
+            None,
+            id="backslashes",
+            marks=pytest.mark.skipif(os.name != "nt", reason="Windows separators"),
+        ),
+        pytest.param("{root}{sep}src{sep}*.py", ".", "src/app.py\n2:def load():", None, id="abs"),
+        pytest.param(
+            "{root}/docs",
+            ".",
+            "docs/guide.md\n1:Call load() first.",
+            'glob "/docs" names a directory',
+            id="absolute-directory",
+        ),
+        # Outside the working directory, the glob's fixed directory is searched.
+        pytest.param(
+            "{root}/docs/*.md",
+            "src",
+            "{root}/docs/guide.md\n1:Call load() first.",
+            'is an absolute path, so {root}/docs was searched with glob "/*.md".',
+            id="outside",
+        ),
+    ],
+)
+async def test_a_glob_written_as_a_windows_or_absolute_path_selects_what_it_names(
+    project: Path, glob: str, workdir: str, content: str, note: str | None
+) -> None:
+    # Both matched nothing: ripgrep reads \ as an escape and matches globs below the root.
+    root = project.as_posix()
+    arguments = {"pattern": "load", "glob": glob.format(root=root, sep=os.sep)}
+    result = await dispatch(project / workdir, arguments)
+    assert result["data"]["content"] == content.format(root=root)
+    if note is None:
+        assert "note" not in result["data"]
+    else:
+        assert note.format(root=root) in result["data"]["note"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "arguments",
     [
         {"pattern": "load", "query": "other"},

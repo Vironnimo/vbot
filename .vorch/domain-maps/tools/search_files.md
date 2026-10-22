@@ -343,9 +343,12 @@ Roots (`_resolve_roots`):
 ## Engine Contract
 
 Every ripgrep run gets `DEFAULT_ARGUMENTS`
-(`--no-config --hidden --no-require-git --glob-case-insensitive`), then the
+(`--no-config --hidden --no-require-git --glob-case-insensitive --crlf`), then the
 query's rg arguments, so later `args` override them (`--no-hidden`,
-`--no-glob-case-insensitive`). `--glob=!.git` always comes last, preceded by
+`--no-glob-case-insensitive`, `--no-crlf`). `--crlf` lets `^` and `$` match at CRLF
+line ends, which `read` shows as plain lines and its `pattern` filter matches
+(review 2026-10-22: `needle$` found only the LF copy of a file); a literal line
+break in a multi-line pattern still matches only LF. `--glob=!.git` always comes last, preceded by
 `--glob=!__pycache__` unless the call asks for the caches (`skips_caches`). This
 gives the following selection:
 
@@ -369,6 +372,15 @@ letter as `[xX]`; `-t py` then finds `b.PY` (first-use probe, 2026-10).
 `--no-glob-case-insensitive` keeps ripgrep's case-sensitive types. Globs without `/` match
 names at any depth. A glob with `/` is anchored at the cwd scope and also at each
 searched directory root (`rg_globs`), and `./` anchors like `/`.
+On Windows a backslash in a glob separates folders unless it escapes `[`, `]`,
+`{`, `}` or `!`, which a Windows name can hold (`_search_query.glob_separators`):
+ripgrep read `src\*.py` as `src` followed by a literal `*`. An absolute glob
+(`_search_roots._local_globs`) whose fixed directory exists in the cwd is
+anchored there (`C:\ws\src\*.py` -> `/src/*.py`, silently); one outside the cwd,
+in a call without `path`, searches that directory with the rest anchored at it,
+with a `note`. Both matched nothing before (review 2026-10-22). Off Windows,
+`/src/*.py` stays anchored when the cwd holds `src`. Coverage:
+`test_search_files_arguments.py::test_a_glob_written_as_a_windows_or_absolute_path_selects_what_it_names`.
 ripgrep matches globs against files, so a glob that is exactly the name or path
 of a directory below the cwd or a root (`minidb`, `src/minidb/`) matched
 nothing; `_directory_globs` adds `**/minidb/**` (or `src/minidb/**`, `/x/**`
@@ -711,6 +723,7 @@ blank placeholders, so no sentence has to warn about them.
 | `Nothing was searched. Could not check <path>: <reason>. Check access to this path and retry.` | A failed root check is an unavailable path, not a missing one; it fails with `search_error` before any search, preventing false absence claims or advice to broaden the scope. |
 | `path_not_found` for a page number: `w2 is not a file or directory. Swarm Wiki page w2 reads with swarm_wiki {...}.` | Three searches named a Wiki page number as `path` and got `Path not found` (Swarm Sessions, 2026-10-12). Only when `swarm_wiki` is offered. |
 | Bare flag beside its field: `--glob in args had no value and was ignored; glob gives "tools/*.py".` | The call runs as the named field says; the note tells the Agent the flag had no effect, so it does not repeat it (Swarm run 2026-10-12: one call failed with `needs a value as the next item` although `glob` gave the value). |
+| Absolute glob outside the cwd: `glob "D:/data/*.csv" is an absolute path, so D:/data was searched with glob "/*.csv".` | The search root moved from the working directory to the glob's directory, which the Agent did not ask for as `path`; the note names that root and the glob that ran, so result paths outside the working directory are explained (review 2026-10-22). |
 | Across lines: `Within one line, pattern matches nothing; across lines it occurs in 1 file. Add -U to args to let a match span lines.` | A search whose regex was written to cross a line break (`[\s\S]`) found nothing without `-U`, and the empty result gave no cause (Sessions, 2026-10-13). Names the flag; only when the `-U` count finds the text, so the note never sends the Agent to a search that also comes back empty. |
 | Wrapped phrase, no match within lines: `Within one line, pattern matches nothing; with a line break between its words it occurs 1 time in 1 file. To find it, pass pattern "and\s+the\s+feed-in" and add -U to args.` | Swarm run 2026-10-20: a phrase searched to confirm it was gone answered `No matches` while it occurred wrapped in HTML, which reads as a false "gone" (F4). `-U` alone does not help a literal space, so the note gives the pattern to send; `replace -F with -U in args` (or `remove -F from args`) when the call was literal, since the suggested pattern is a regex. Only when the count finds the text. |
 | Wrapped phrase beside matches: `The results leave out 1 match in 1 file with a line break between words of pattern. To include it, pass pattern "feed-in\s+tariff" and add -U to args.` | 11 of the 12 plain multi-word searches that missed a wrapped occurrence in that Run had other matches, so a note only for empty results would have missed them (F4). "leave out" says the shown results are short of the whole; the suggested call finds every occurrence, those within lines included. |

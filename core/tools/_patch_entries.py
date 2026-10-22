@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from core.tools._patch_syntax import _PatchError
-from core.tools._tool_context import PathResolveAccess, is_link_entry
+from core.tools._tool_context import PathResolveAccess, UnusablePathError, is_link_entry
 from core.tools.tools import ToolContext
 
 
@@ -42,7 +42,14 @@ def _snapshot(path: Path) -> _Snapshot:
         return _Snapshot(None, link=os.readlink(path))
     if not stat.S_ISREG(info.st_mode):
         raise _PatchError("not_a_file", path=path)
-    return _Snapshot(path.read_bytes(), stat.S_IMODE(info.st_mode))
+    try:
+        payload = path.read_bytes()
+    except OSError as error:
+        # A failed read of the opened file names no file, unlike a failed open.
+        if error.filename is None:
+            error.filename = str(path)
+        raise
+    return _Snapshot(payload, stat.S_IMODE(info.st_mode))
 
 
 def _resolve(
@@ -56,6 +63,8 @@ def _resolve(
         if "\x00" in path:
             raise ValueError(path)
         return context.resolve_path(path, access=access, follow_final_link=follow_final_link)
+    except UnusablePathError as error:
+        raise _PatchError("invalid_path", path=path, reason=error.reason) from error
     except (ValueError, OSError, RuntimeError) as error:
         raise _PatchError("invalid_path", path=path, reason=str(error)) from error
 

@@ -810,6 +810,11 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   retries add `The write was attempted N times.` Swarm Agents met a file held
   open for 5 to 30 seconds and read the former `permission denied` as a real
   permission problem (Sessions, 2026-09).
+- An Add (also `write` and an `edit` with empty `old_string`) whose path ends with
+  `/` (on Windows also `\`) fails as `invalid_path` before any effect
+  (`_file_changes._folder_problem`): the path resolved to the folder's own name,
+  so `write "new/"` created a regular file `new` (review 2026-10-22,
+  `test_edit_tools.py::test_failed_changes_change_nothing_and_say_what_to_send`).
 - Successful surviving files, including verified no-ops, receive Session read
   stamps. Moves, including case-only renames, carry the source's unread-change
   protection to the destination (`file_state.md`); a move result is not a read
@@ -854,6 +859,7 @@ replacements still went through Delete File plus Add File (agent-eval
 | Text | Reason |
 |---|---|
 | `Could not change X: Y is a file, not a directory. Check this path before resending this change.` (shared with `write`) | A Windows parent-directory creation can report that the parent already exists; saying the requested child already exists invents an obstruction at the wrong path (review probe, 2026-10-18). Names the actual parent so the Agent can correct the target without changing its contents (F5). This wording requires strict confirmation that the parent is a file: Python 3.14's failed non-strict directory check also leaves a directory-creation EEXIST for an unavailable directory. A link move blocked by its destination parent names that destination; naming only the source obscures where the failure happened (independent verification, 2026-10-18). |
+| `Cannot use path new/: it ends with "/", so it names a folder, not a file. Add the file name after "new/"; missing folders are created with the file.` (shared with `write` and `edit`) | `write "new/"` created a regular file `new` and reported it as created (review 2026-10-22). Names the cause and the call that works; the last clause keeps the Agent from creating the folder with the shell first. |
 | `Could not change X: Y could not be checked: <reason>. Check this path before resending this change.` (shared with `write`) | A failed parent status check cannot establish its kind. Names the parent and the actual permission or I/O problem, so the Agent does not replace a directory it was incorrectly told was a file (F3, F5; independent verification, 2026-10-18). |
 | `Edit, create, replace, delete or move files with a patch.` | Names every effect, so deletes and renames do not go through the shell, which bypasses read stamps and change tracking (F1). `replace`: GPT-6 Luna replaced a README with Delete File and then Add File in two calls plus a verification read (agent-eval 2026-10-10). |
 | `patch`: `Patch text from *** Begin Patch to *** End Patch.` | Pins `patch` to V4A by its frame, so a Model does not send a unified diff (F2). |

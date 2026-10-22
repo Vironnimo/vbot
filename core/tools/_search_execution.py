@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from core.tools._search_confinement import Confinement, permitted, scope_confinement
-from core.tools._search_query import SearchQuery
+from core.tools._search_query import SearchQuery, glob_separators
 from core.tools.file_state import os_error_reason
 
 if TYPE_CHECKING:
@@ -43,8 +43,15 @@ from core.tools._search_native import MAX_PROTOCOL_LINE as MAX_PROTOCOL_LINE
 from core.tools._search_native import NativeOutcome as NativeOutcome
 from core.tools._search_native import SearchBoundError as SearchBoundError
 
-# Defaults that differ from ripgrep's own; later args items override them.
-DEFAULT_ARGUMENTS = ("--no-config", "--hidden", "--no-require-git", "--glob-case-insensitive")
+# Defaults that differ from ripgrep's own; later args items override them. --crlf lets
+# ^ and $ match at the CRLF line ends that read shows as plain lines.
+DEFAULT_ARGUMENTS = (
+    "--no-config",
+    "--hidden",
+    "--no-require-git",
+    "--glob-case-insensitive",
+    "--crlf",
+)
 ALWAYS_EXCLUDED = "!.git"
 # Python bytecode caches, skipped like .git unless the call asks for them (``skips_caches``).
 CACHES_EXCLUDED = "!__pycache__"
@@ -115,9 +122,7 @@ def rg_globs(globs: list[str], prefixes: list[str], *, skip_caches: bool = False
     arguments: list[str] = []
     for glob in globs:
         negated = glob.startswith("!")
-        body = glob[1:] if negated else glob
-        if os.name == "nt":
-            body = re.sub(r"\\(?![*?\[\]{}!\\])", "/", body)
+        body = glob_separators(glob[1:] if negated else glob)
         if body.startswith("./"):
             body = "/" + body[2:].lstrip("/")
         variants = [body]

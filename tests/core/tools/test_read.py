@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import os
 import re
 from dataclasses import replace
 from pathlib import Path
@@ -32,6 +33,7 @@ from core.tools import (
 )
 from core.tools.file_state import StaleReason
 from core.tools.search_files import register_search_files_tool
+from tests.core.tools.file_state_test_support import held_by_another_program
 from tests.core.tools.read_test_support import (
     FakeAttachmentStore,
     FakeSpeech,
@@ -46,6 +48,8 @@ from tests.core.tools.read_test_support import (
     read_registry,
     xlsx_bytes,
 )
+
+_WINDOWS_ONLY = pytest.mark.skipif(os.name != "nt", reason="Windows sharing and lock violations")
 
 
 def test_register_read_tool_exposes_provider_schema_without_description_property() -> None:
@@ -256,20 +260,37 @@ async def test_a_directory_is_listed_and_paged_without_being_stamped(tmp_path: P
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("check_denied", [False, True])
+@pytest.mark.parametrize(
+    "cause",
+    [
+        "open-fails",
+        "denied",
+        # Windows reports a file another program holds or locks as "permission denied".
+        pytest.param("open", marks=_WINDOWS_ONLY),
+        pytest.param("lock", marks=_WINDOWS_ONLY),
+    ],
+)
 async def test_a_read_time_filesystem_error_names_the_reason(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     deny_access,
-    check_denied: bool,
+    cause: str,
 ) -> None:
-    tmp_path.joinpath("notes.txt").write_bytes(b"hello\n")
+    notes = tmp_path.joinpath("notes.txt")
+    notes.write_bytes(b"hello\n")
 
     def raise_permission_error(self: Path, *args: object, **kwargs: object) -> Any:
         raise PermissionError("access denied while reading")
 
-    if check_denied:
-        deny_access(tmp_path / "notes.txt")
+    if cause in {"open", "lock"}:
+        with held_by_another_program(notes, "lock" if cause == "lock" else "open"):
+            result = await read(tmp_path, {"path": "notes.txt"})
+        assert failure(result, "file_read_error") == (
+            "Could not read notes.txt: another program is using it."
+        )
+        return
+    if cause == "denied":
+        deny_access(notes)
     else:
         monkeypatch.setattr(Path, "open", raise_permission_error)
 
