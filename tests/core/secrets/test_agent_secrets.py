@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import base64
 import json
+import threading
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 from urllib.parse import quote, quote_plus
 
 import pytest
@@ -442,6 +445,44 @@ def test_masking_replaces_known_values_and_their_encodings_with_references(
     # Too short to recognize safely.
     assert masker.mask("abc") == "abc"
     assert masker.mask_value(untouched) is untouched
+
+
+def test_reads_and_masking_never_wait_for_a_store_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = open_store(tmp_path, data_directory(tmp_path))
+    secrets = AgentSecrets(store, clock=Clock())
+    secrets.reload()
+    _login(secrets)
+    writing, release = threading.Event(), threading.Event()
+    update = store.update
+
+    def slow_update(change: Any) -> None:
+        writing.set()
+        release.wait(5)
+        update(change)
+
+    monkeypatch.setattr(store, "update", slow_update)
+
+    def read() -> tuple[str, list[str]]:
+        secrets.remember_value("runtime-value-123", "{{secret:RUNTIME}}")
+        return secrets.masker.mask(PASSWORD), [item.name for item in secrets.all()]
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        created = pool.submit(
+            secrets.create, name="api", kind="token", values={"value": TOKEN}, actor="user"
+        )
+        assert writing.wait(5)
+        # The write holds its lock across the store write; the Event Loop's
+        # reads and masking do not wait for it.
+        masked, names = pool.submit(read).result(timeout=2)
+        release.set()
+        created.result(timeout=5)
+
+    assert (masked, names) == ("{{secret:GITHUB.password}}", ["GITHUB"])
+    assert secrets.masker.mask(f"{TOKEN} runtime-value-123") == (
+        "{{secret:API}} {{secret:RUNTIME}}"
+    )
 
 
 @pytest.mark.parametrize("lifetime", ["permanent", "session", "once"])

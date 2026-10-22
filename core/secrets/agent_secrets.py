@@ -181,14 +181,21 @@ class AgentSecrets:
         self._store = store
         self._clock = clock
         self._credential_names = credential_names
+        # Serializes record writes, which hold it across the Secret Store write.
         self._lock = RLock()
+        # Guards the in-memory state below; never held during I/O, so the
+        # Event Loop's reads and masking never wait for a store write.
+        self._memory_lock = RLock()
+        # Replaced, never changed in place, after each committed write: readers
+        # take no lock.
         self._records: dict[str, AgentSecret] = {}
         self._sources: dict[str, SecretSource] = {}
         # Values known only in memory: system credentials and values a source
         # delivered in this process, each with the reference that masks it.
         self._runtime_values: dict[str, str] = {}
         self._system_values: dict[str, str] = {}
-        self._masker: SecretMasker | None = None
+        # Rebuilt after every change of the known values; read without a lock.
+        self._masker: SecretMasker = EMPTY_MASKER
         self._listeners: list[ChangeListener] = []
         self._loaded = False
         # The latest uses of each Secret since this process started, newest last.
@@ -205,11 +212,11 @@ class AgentSecrets:
                 records[secret_id] = decode_record(secret_id, text)
             except SecretRecordError as error:
                 _LOGGER.warning("Agent Secret %s is unreadable and ignored: %s", secret_id, error)
-        with self._lock:
+        with self._lock, self._memory_lock:
             for previous in self._records.values():
                 self._remember(previous)
             self._records = records
-            self._masker = None
+            self._publish_masker()
             self._loaded = True
         self.sweep()
 
@@ -232,7 +239,7 @@ class AgentSecrets:
     def replace_sources(self, sources: Iterable[SecretSource]) -> None:
         """Offer exactly ``sources``; a source that goes away is locked first."""
         offered = {source.name: source for source in sources}
-        with self._lock:
+        with self._memory_lock:
             removed = [
                 source for name, source in self._sources.items() if offered.get(name) is not source
             ]
@@ -244,12 +251,10 @@ class AgentSecrets:
                 _LOGGER.warning("Secret Source %s did not lock", source.name, exc_info=True)
 
     def sources(self) -> list[SecretSource]:
-        with self._lock:
-            return list(self._sources.values())
+        return list(self._sources.values())
 
     def source(self, name: str) -> SecretSource | None:
-        with self._lock:
-            return self._sources.get(name)
+        return self._sources.get(name)
 
     def source_status(self, name: str) -> SourceStatus:
         source = self.source(name)
@@ -265,15 +270,13 @@ class AgentSecrets:
     def all(self) -> list[AgentSecret]:
         """Every live Secret, in name order."""
         now = self._clock()
-        with self._lock:
-            return sorted(
-                (item for item in self._records.values() if not item.expired(now)),
-                key=lambda item: (item.name, item.id),
-            )
+        return sorted(
+            (item for item in self._records.values() if not item.expired(now)),
+            key=lambda item: (item.name, item.id),
+        )
 
     def get(self, secret_id: str) -> AgentSecret | None:
-        with self._lock:
-            secret = self._records.get(secret_id)
+        secret = self._records.get(secret_id)
         return None if secret is None or secret.expired(self._clock()) else secret
 
     def usable(self, address: SessionAddress, *, passed_only: bool = False) -> list[AgentSecret]:
@@ -584,13 +587,12 @@ class AgentSecrets:
 
     def granted_to_agent(self, agent: str) -> list[AgentSecret]:
         """The Secrets granted to Agent address ``agent``, directly or as pass-through root."""
-        with self._lock:
-            return [
-                secret
-                for secret in self._records.values()
-                if agent in secret.agents
-                or any(grant.agent == agent for grant in secret.session_grants)
-            ]
+        return [
+            secret
+            for secret in self._records.values()
+            if agent in secret.agents
+            or any(grant.agent == agent for grant in secret.session_grants)
+        ]
 
     def retarget_agent(self, agent_id: str, new_agent_id: str) -> int:
         """Move the grants of Identity Agent ``agent_id`` to ``new_agent_id`` (blocking).
@@ -631,8 +633,7 @@ class AgentSecrets:
                         change.set(AGENT_SECRETS, key, text)
 
                 self._store.update(write)
-                for secret in changed:
-                    self._records[secret.id] = secret
+                self._commit({secret.id: secret for secret in changed})
         for secret in changed:
             self._notify(SecretChange("changed", secret, "agent renamed"))
         return len(changed)
@@ -739,10 +740,7 @@ class AgentSecrets:
                         change.remove(AGENT_SECRETS, key)
 
                 self._store.update(remove)
-                for secret in once.values():
-                    self._remember(secret)
-                    self._records.pop(secret.id)
-                self._masker = None
+                self._commit(dict.fromkeys(once))
         for secret in once.values():
             self._notify(SecretChange("deleted", secret, "used once"))
 
@@ -869,14 +867,14 @@ class AgentSecrets:
 
     def recent_uses(self, secret_id: str) -> list[RecordedUse]:
         """The latest uses of a Secret since this process started, newest first."""
-        with self._lock:
+        with self._memory_lock:
             return list(reversed(self._uses.get(secret_id, ())))
 
     def _record_use(
         self, secret: AgentSecret, field_name: str, sink: SinkClass, address: SessionAddress
     ) -> None:
         use = RecordedUse(field_name, sink, address.agent_id, address.session_id, self._clock())
-        with self._lock:
+        with self._memory_lock:
             self._uses.setdefault(secret.id, deque(maxlen=_RECENT_USES)).append(use)
         _LOGGER.debug(
             "Agent Secret %s.%s used (sink=%s agent=%s)",
@@ -890,39 +888,40 @@ class AgentSecrets:
 
     @property
     def masker(self) -> SecretMasker:
-        """Masks every value vBot knows; rebuilt only after a change."""
-        with self._lock:
-            if self._masker is None:
-                known: dict[str, str] = {}
-                for name, value in self._system_values.items():
-                    known.setdefault(value, f"{{{{secret:{name}}}}}")
-                known.update(self._runtime_values)
-                for secret in self._records.values():
-                    for item in secret.fields:
-                        if item.value is not None and item.concealed:
-                            known[item.value] = secret.reference(item.name)
-                self._masker = SecretMasker(known) if known else EMPTY_MASKER
-            return self._masker
+        """Masks every value vBot knows; rebuilt after each change, read without a lock."""
+        return self._masker
+
+    def _publish_masker(self) -> None:
+        """Build the masker over the current values; the caller holds ``_memory_lock``."""
+        known: dict[str, str] = {}
+        for name, value in self._system_values.items():
+            known.setdefault(value, f"{{{{secret:{name}}}}}")
+        known.update(self._runtime_values)
+        for secret in self._records.values():
+            for item in secret.fields:
+                if item.value is not None and item.concealed:
+                    known[item.value] = secret.reference(item.name)
+        self._masker = SecretMasker(known) if known else EMPTY_MASKER
 
     def set_system_values(self, values: Mapping[str, str]) -> None:
         """Replace the system credential values masked as ``{{secret:<ENV_NAME>}}``."""
-        with self._lock:
+        with self._memory_lock:
             self._system_values = {
                 credential_name_key(name).upper(): value
                 for name, value in values.items()
                 if isinstance(value, str) and len(value) >= MIN_MASKED_LENGTH
             }
-            self._masker = None
+            self._publish_masker()
 
     def remember_value(self, value: str, reference: str) -> None:
         """Mask a value that reached a process from outside the store (a source, the shell)."""
         if len(value) < MIN_MASKED_LENGTH:
             return
-        with self._lock:
+        with self._memory_lock:
             if self._runtime_values.get(value) == reference:
                 return
             self._runtime_values[value] = reference
-            self._masker = None
+            self._publish_masker()
 
     # -- internals -------------------------------------------------------------
 
@@ -1015,22 +1014,35 @@ class AgentSecrets:
     def _write(self, secret: AgentSecret) -> None:
         text = encode_record(secret)
         self._store.update(lambda change: change.set(AGENT_SECRETS, secret.id, text))
-        if previous := self._records.get(secret.id):
-            self._remember(previous)
-        self._records[secret.id] = secret
-        self._masker = None
+        self._commit({secret.id: secret})
 
     def _remove(self, secret: AgentSecret) -> None:
         self._store.update(lambda change: change.remove(AGENT_SECRETS, secret.id))
-        self._remember(secret)
-        self._records.pop(secret.id, None)
-        self._masker = None
+        self._commit({secret.id: None})
+
+    def _commit(self, changes: Mapping[str, AgentSecret | None]) -> None:
+        """Publish records a store write committed (``None``: removed) and the new masker.
+
+        The caller holds ``_lock``; readers see either the old records or the new ones.
+        """
+        records = dict(self._records)
+        with self._memory_lock:
+            for secret_id, secret in changes.items():
+                if previous := records.pop(secret_id, None):
+                    self._remember(previous)
+                if secret is not None:
+                    records[secret_id] = secret
+            self._records = records
+            self._publish_masker()
 
     def _remember(self, secret: AgentSecret) -> None:
-        """Keep redacting retired values for this process, like resolved source values."""
+        """Keep redacting retired values for this process, like resolved source values.
+
+        The caller holds ``_memory_lock`` and publishes the masker afterwards.
+        """
         for item in secret.fields:
-            if item.concealed and item.value is not None:
-                self.remember_value(item.value, secret.reference(item.name))
+            if item.concealed and item.value is not None and len(item.value) >= MIN_MASKED_LENGTH:
+                self._runtime_values[item.value] = secret.reference(item.name)
 
 
 _SINK_WORDS: Final[Mapping[SinkClass, str]] = {
