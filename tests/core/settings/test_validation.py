@@ -14,6 +14,7 @@ from core.secrets import CREDENTIALS, KeyFileProtection, SecretStore
 from core.settings import (
     SettingsValidationError,
     load_runtime_settings_json,
+    load_validated_settings_json,
     validate_data_dir_config,
     validate_settings_data,
     validate_settings_document,
@@ -248,6 +249,12 @@ def test_validate_data_dir_config_refuses_documents_before_generation_1(tmp_path
             id="invalid-json",
         ),
         pytest.param("[]", False, [("error", "$", "Expected a JSON object, got list")], id="array"),
+        pytest.param(
+            "[" * 100_000 + "0" + "]" * 100_000,
+            False,
+            [("error", "$", "JSON exceeds decoder limits")],
+            id="decoder-nesting-limit",
+        ),
         # Unknown fields warn for forward compatibility; the file stays valid.
         pytest.param(
             json.dumps({"format_version": 1, "debug": {"enabled": True, "extra": 1}}),
@@ -268,6 +275,10 @@ def test_validate_settings_file_reports_the_document(
 
     assert (report.ok, report.exists) == (ok, content is not None)
     assert _diagnostics(report.diagnostics) == diagnostics
+    if not ok:
+        for load in (load_validated_settings_json, load_runtime_settings_json):
+            with pytest.raises(SettingsValidationError):
+                load(path)
 
 
 def test_validate_settings_file_accepts_every_known_section(tmp_path: Path) -> None:
