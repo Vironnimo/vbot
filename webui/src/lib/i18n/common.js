@@ -213,6 +213,8 @@ export default Object.freeze({
   'status.serverRestoredMessage': 'The current view has been refreshed.',
   'status.retryNow': 'Retry now',
   'status.switchServer': 'Switch server',
+  'audioRecording.unavailable': 'This browser cannot record audio.',
+  'audioRecording.failed': 'Audio recording failed.',
   'voice.state.off': 'Disabled',
   'voice.state.starting': 'Starting',
   'voice.state.listening': 'Listening',

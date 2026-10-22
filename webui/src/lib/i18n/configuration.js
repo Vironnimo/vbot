@@ -1,5 +1,9 @@
 export default Object.freeze({
   'extensions.pageUnavailable': 'This Extension page is unavailable.',
+  'extensions.page.invalidLink': 'This link cannot be opened.',
+  'extensions.page.fileUnavailable': 'This local file is no longer available.',
+  'extensions.page.responseTooLarge':
+    'The answer is too large for this Extension page.',
   'extensions.inputWaiting': '{count} Extension requests need your response.',
   'extensions.inputWaitingOne': 'An Extension request needs your response.',
   'extensions.reviewInput': 'Review request',
@@ -1425,6 +1429,7 @@ export default Object.freeze({
   'settings.voice.importTooLargeTitle': 'Wakeword model is too large.',
   'settings.voice.importTooLargeMessage':
     'Choose a TFLite model no larger than 20 MiB.',
+  'settings.voice.importReadFailed': 'The wakeword model could not be read.',
   'settings.voice.deleteConfirmTitle': 'Delete wakeword model “{name}”?',
   'settings.voice.deleteConfirm':
     'vBot deletes its stored TFLite file from this Desktop.',
