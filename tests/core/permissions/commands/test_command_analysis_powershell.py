@@ -1,8 +1,10 @@
 """PowerShell command analysis: the plan table against real pwsh, and the helper's lifecycle.
 
 The table needs PowerShell 7 on Windows, the only host where the Shell Tool
-runs PowerShell; one helper serves the whole module. The lifecycle tests use a
-fake helper and run everywhere.
+runs PowerShell; one helper serves the whole module. Elsewhere a nested
+``pwsh -c`` is analyzed too, and pwsh expands a native program's wildcards
+there: that test runs wherever pwsh is, for both platforms. The lifecycle
+tests use a fake helper and run everywhere.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ from typing import Any
 import pytest
 import pytest_asyncio
 
+from core.permissions.commands import _powershell
 from core.permissions.commands.commands import (
     CommandAnalysisUnavailable,
     CommandAnalyzer,
@@ -251,6 +254,23 @@ async def analyzer() -> AsyncIterator[CommandAnalyzer]:
 )
 async def test_powershell_plan(analyzer: CommandAnalyzer, line: str, expected: Expected) -> None:
     check(await analyzer.analyze(line, shell="powershell", cwd=CWD, env=_ENV, home=HOME), expected)
+
+
+@pytest.mark.skipif(_PWSH is None, reason="PowerShell 7")
+@pytest.mark.asyncio
+@pytest.mark.parametrize("posix", [False, True], ids=["windows", "posix"])
+async def test_pwsh_expands_native_program_wildcards_outside_windows(
+    analyzer: CommandAnalyzer, monkeypatch: pytest.MonkeyPatch, posix: bool
+) -> None:
+    """Outside Windows pwsh expands a native program's unquoted wildcards, as bash does."""
+    monkeypatch.setattr(_powershell, "NATIVE_GLOBS", posix)
+    line = (
+        "python s*/a.py; python 's*/b.py'; python ('s*/c.py'); "
+        "python 'q*',s*/d; Get-Content -LiteralPath s*/e"
+    )
+    plan = await analyzer.analyze(line, shell="powershell", cwd=CWD, env=_ENV, home=HOME)
+    globs = {access.glob for access in plan.paths if access.glob is not None}
+    assert globs == ({"s*/a.py", "s*/c.py", "q*", "s*/d"} if posix else set())
 
 
 # Lifecycle ---------------------------------------------------------------------

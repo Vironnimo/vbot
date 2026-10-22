@@ -923,7 +923,8 @@ class Analysis:
         A wildcard reaches the entries it matches in its literal folder; with
         *deep* (``Get-ChildItem *.md -Recurse``) the whole folder. *glob* says
         whether the program expands a wildcard itself; bash expands an unquoted
-        one before any program runs (``python sec*/key.pem``). With
+        one before any program runs (``python sec*/key.pem``), and so does pwsh
+        outside Windows in a native program's argument (``Word.glob``). With
         *every_depth* (cmd's ``/s``: ``del /s *.tmp``) the last name, wildcard
         or not, matches at every depth below its folder. With
         *mention* (tier B of a command without a path spec), a word that is
@@ -960,7 +961,11 @@ class Analysis:
                 text = _paths.without_long_prefix(text)
                 pattern: str | None = None
                 reaches_below = subtree
-                expands = item.glob if context.shell == "bash" else glob
+                expands = (
+                    item.glob
+                    if context.shell == "bash"
+                    else glob or (context.shell == "powershell" and item.glob)
+                )
                 if expands and _paths.has_glob(text, brace=brace):
                     split = _paths.glob_split(text, brace=brace)
                     if isinstance(split, Unresolvable):

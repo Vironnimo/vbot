@@ -94,6 +94,8 @@ function ConvertTo-Word($Ast) {
             if ($null -ne $inner) {
                 $converted = ConvertTo-Word $inner
                 $converted.source = $Ast.Extent.Text
+                # A native program gets ('x*') unquoted: pwsh expands it outside Windows.
+                $converted.Remove('quoted')
                 return $converted
             }
             $word.parts.Add(@{ k = 'd'; v = $Ast.Extent.Text })
