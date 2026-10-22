@@ -198,6 +198,7 @@ class StubAgents:
             agents=tuple(self.list()),
             order_revision=self._order_revision,
             order_changed=False,
+            persisted=dict(self._agents),
         )
 
     def reorder(self, agent_ids: builtins.list[str], *, expected_revision: int) -> Any:
@@ -221,6 +222,7 @@ class StubAgents:
             agents=tuple(self.list()),
             order_revision=self._order_revision,
             order_changed=True,
+            persisted=dict(self._agents),
         )
 
     def create(self, agent_id: str, name: str | None = None, **changes: Any) -> StubAgent:
@@ -523,10 +525,20 @@ class StubAgentResolver:
             raw = self._agents.get_raw(agent_id)
         except KeyError as error:
             raise ResolutionAgentNotFoundError(str(error)) from error
+        effective = self.effective_config_for_identity(raw)
+        if session_id is not None:
+            overrides = self.session_overrides(SessionAddress(project_id, agent_id, session_id))
+            for name, value in overrides.agent_changes().items():
+                if name in effective:
+                    effective[name] = {"value": value, "source": "session"}
+        return effective
+
+    def effective_config_for_identity(self, raw: Any) -> dict[str, dict[str, Any]]:
+        """The identity provenance of persisted values the caller holds, as the real resolver."""
         defaults = (
             self._agents._defaults_provider() if self._agents._defaults_provider is not None else {}
         )
-        effective = {
+        return {
             "model": _identity_source(raw.model, defaults, "model", empty=""),
             "fallback_models": _identity_source(
                 raw.fallback_models,
@@ -539,12 +551,6 @@ class StubAgentResolver:
                 raw.thinking_effort, defaults, "thinking_effort", empty=None
             ),
         }
-        if session_id is not None:
-            overrides = self.session_overrides(SessionAddress(project_id, agent_id, session_id))
-            for name, value in overrides.agent_changes().items():
-                if name in effective:
-                    effective[name] = {"value": value, "source": "session"}
-        return effective
 
 
 def _identity_source(

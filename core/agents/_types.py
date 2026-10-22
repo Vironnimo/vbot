@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -230,6 +230,9 @@ class AgentListResult:
     agents: tuple[Agent, ...]
     order_revision: int
     order_changed: bool = False
+    # Each listed Agent's persisted values by id, as ``AgentStore.get_raw``
+    # returns them, so a caller that needs both views reads no file again.
+    persisted: Mapping[str, Agent] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

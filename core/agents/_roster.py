@@ -93,11 +93,13 @@ class AgentRoster:
         # One Session read verifies every current pointer of the roster.
         live = self._owner._live_current_session_agent_ids([agent for _path, agent in loaded])
         agents: list[Agent] = []
+        persisted: dict[str, Agent] = {}
         for agent_path, raw_agent in loaded:
             try:
                 if raw_agent.current_session_id and raw_agent.id not in live:
                     raw_agent = self._owner._clear_current_session(raw_agent)
                 agents.append(_apply_defaults(raw_agent, defaults))
+                persisted[raw_agent.id] = raw_agent
             except (AgentError, OSError) as error:
                 _LOGGER.warning("Skipping invalid Agent config %s: %s", agent_path, error)
 
@@ -138,6 +140,7 @@ class AgentRoster:
         return AgentListResult(
             agents=tuple(ordered_agents),
             order_revision=order.revision if order is not None else 0,
+            persisted=persisted,
         )
 
     def reorder(
@@ -188,6 +191,7 @@ class AgentRoster:
                 agents=tuple(agents_by_id[agent_id] for agent_id in agent_ids),
                 order_revision=next_order.revision,
                 order_changed=True,
+                persisted=current.persisted,
             )
 
     def _load_agent_order(self) -> _AgentOrderDocument | None:

@@ -53,6 +53,12 @@ def test_reads_resolve_live_defaults_while_files_and_raw_reads_keep_own_values(
     assert {field: persisted(store, "inherits")[field] for field in _UNSET} == _UNSET
     assert settings(store.get("own")) == own
     assert settings(store.get_raw("own")) == own
+    # The roster carries both views from one read.
+    roster = store.list_with_order()
+    assert [settings(agent) for agent in roster.agents] == [defaults, own]
+    assert roster.persisted == {
+        agent_id: store.get_raw(agent_id) for agent_id in ("inherits", "own")
+    }
 
     # A default change applies to the next read without rewriting the Agent file.
     defaults.update(model="openrouter/anthropic/claude-sonnet-4", temperature=0.9)

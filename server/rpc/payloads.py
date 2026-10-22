@@ -205,7 +205,14 @@ def _global_compaction_policy_loader(state: Any) -> Callable[[], JsonObject]:
     return load
 
 
-def _agent_response(state: Any, agent: Any) -> JsonObject:
+def _agent_response(state: Any, agent: Any, persisted: Any = None) -> JsonObject:
+    """Build an Identity Agent's payload.
+
+    *persisted* is the Agent's ``get_raw`` view when the caller already holds
+    it, as a roster read does; otherwise it is read here, once.
+    """
+    if persisted is None:
+        persisted = state.runtime.agents.get_raw(agent.id)
     agent_policy = getattr(agent, "compaction_policy", None)
     if not isinstance(agent_policy, dict):
         agent_policy = None
@@ -261,10 +268,10 @@ def _agent_response(state: Any, agent: Any) -> JsonObject:
         # Raw own values (pre-default-bake), so the editor can distinguish an
         # explicit per-agent value from an inherited global default. Top-level keys
         # above keep today's baked semantics unchanged.
-        "config": _agent_raw_config(state, agent.id),
+        "config": _agent_raw_config(persisted),
         # Per-field effective value + winning tier ("agent"/"global_default"/null),
         # the provenance seam shared with the resolver.
-        "effective": _agent_effective(state, agent.id),
+        "effective": _agent_effective(state, persisted),
         "created_at": agent.created_at,
         "updated_at": agent.updated_at,
     }
@@ -287,9 +294,8 @@ def _effective_permission_rules_payload(agent: Any) -> JsonObject | None:
     return permission_rules_to_dict(resolved) if resolved is not None else None
 
 
-def _agent_raw_config(state: Any, agent_id: str) -> JsonObject:
+def _agent_raw_config(raw: Any) -> JsonObject:
     """Return an identity agent's raw own values (``""``/``None`` preserved)."""
-    raw = state.runtime.agents.get_raw(agent_id)
     raw_policy = getattr(raw, "compaction_policy", None)
     if not isinstance(raw_policy, dict):
         raw_policy = None
@@ -305,9 +311,9 @@ def _agent_raw_config(state: Any, agent_id: str) -> JsonObject:
     }
 
 
-def _agent_effective(state: Any, agent_id: str) -> JsonObject:
+def _agent_effective(state: Any, raw: Any) -> JsonObject:
     """Return an identity agent's per-field effective value + source map."""
-    return cast(JsonObject, state.runtime.agent_resolver.effective_config(None, agent_id))
+    return cast(JsonObject, state.runtime.agent_resolver.effective_config_for_identity(raw))
 
 
 def _model_response(

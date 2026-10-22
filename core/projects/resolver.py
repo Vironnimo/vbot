@@ -645,7 +645,13 @@ class AgentResolver:
         with source ``"session"``.
         """
         if project_id is None:
-            effective = self._identity_effective_config(agent_id)
+            from core.agents.agents import AgentError
+
+            try:
+                raw = self._agents.get_raw(agent_id)
+            except AgentError as error:
+                raise _identity_resolution_error(error) from error
+            effective = self.effective_config_for_identity(raw)
         else:
             effective = self._config_effective_config(project_id, agent_id)
         if session_id is not None:
@@ -703,13 +709,13 @@ class AgentResolver:
         global_defaults = AgentDefaults.from_dict(self._global_agent_defaults())
         return self._config_effective_from_scanned(project, scanned, global_defaults)
 
-    def _identity_effective_config(self, agent_id: str) -> dict[str, dict[str, Any]]:
-        from core.agents.agents import AgentError
+    def effective_config_for_identity(self, raw: Agent) -> dict[str, dict[str, Any]]:
+        """Compute an Identity Agent's effective config from its persisted values.
 
-        try:
-            raw = self._agents.get_raw(agent_id)
-        except AgentError as error:
-            raise _identity_resolution_error(error) from error
+        The cheap seam behind the Agent listing, like :meth:`effective_config_for_member`:
+        *raw* is what ``AgentStore.get_raw`` returns, which the caller already
+        holds, so a roster read never rereads each ``agent.json``.
+        """
         defaults = AgentDefaults.from_dict(self._global_agent_defaults())
         return {
             "model": _identity_string_source(raw.model, defaults.model),
