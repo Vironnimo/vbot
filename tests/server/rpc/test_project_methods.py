@@ -562,6 +562,8 @@ async def test_show_reloads_skills_and_reports_the_editor_skill_pool(tmp_path: P
         reload_calls.append(only_if_changed)
 
     state.runtime.reload_skills_async = reload_skills_async
+    refreshed: list[Any] = []
+    state.runtime.refresh_project_skills = refreshed.append
     # The Skill runtime owns the classification (shadowing, global vs. bundled);
     # the editor response projects each group to name and description.
     state.runtime.project_skill_pool = lambda _project_id: {
@@ -576,8 +578,9 @@ async def test_show_reloads_skills_and_reports_the_editor_skill_pool(tmp_path: P
     result = await rpc_result(state, "project.show", project_id="vbot")
 
     # A show reloads the global registry, so a hand-dropped global skill surfaces
-    # without a restart.
+    # without a restart, and rescans the Project's own Skills from its Sources.
     assert reload_calls == [True]
+    assert [project.project_id for project in refreshed] == ["vbot"]
     assert result["scan"]["skills"] == {
         "project": [
             {"name": "glossary", "description": "Maintain the glossary."},

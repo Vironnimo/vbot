@@ -69,6 +69,10 @@ def metadata_reads(monkeypatch: pytest.MonkeyPatch) -> Counter[Path]:
         return original(path)
 
     monkeypatch.setattr(skill_module, "_read_skill_metadata", read)
+    # Count every parse: no file is old enough for the process-wide parse cache.
+    monkeypatch.setattr(
+        skill_module, "_PARSED_SKILL_FILES", skill_module._ParsedSkillFiles(clock=lambda: 0)
+    )
     return reads
 
 

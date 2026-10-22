@@ -265,6 +265,19 @@ def test_scoped_skill_registries_stay_cached_until_their_sources_are_invalidated
     assert runtime.skills_for(None, "main") is main_skills
     project_skills = runtime.skills_for(project_id)
 
+    # Opening the Project rescans its Skills: an unchanged rescan keeps the
+    # registries, a changed one replaces them and those embedding them.
+    main_project_skills = runtime.skills_for(project_id, "main")
+    runtime.refresh_project_skills(runtime.projects.refresh_sources(project_id))
+    assert runtime.skills_for(project_id) is project_skills
+    assert runtime.skills_for(project_id, "main") is main_project_skills
+    write_project_skill(repo_b, "opened", "Added before the open.")
+    runtime.refresh_project_skills(runtime.projects.refresh_sources(project_id))
+    assert runtime.project_skill_names(project_id) == frozenset({"skill-b", "opened"})
+    assert "opened" in _names(runtime.skills_for(project_id, "main"))
+    assert runtime.skills_for(None, "main") is main_skills
+    project_skills = runtime.skills_for(project_id)
+
     # A global reload makes every scoped registry stale.
     runtime.reload_skills()
     assert runtime.skills_for(project_id) is not project_skills

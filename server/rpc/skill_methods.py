@@ -26,7 +26,6 @@ Skill use from Statistics.
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Callable, Sequence
 from functools import partial
 from pathlib import Path
@@ -45,7 +44,7 @@ from core.skills import (
 from core.skills.policy import SkillPackageRef
 from core.statistics.skills import SkillActivationUse
 from core.utils.logging import get_logger
-from core.utils.workers import BoundedWorkerPool, settle_before_cancelling
+from core.utils.workers import BoundedWorkerPool, SharedRefresh
 from server.events import RESOURCE_KIND_PROJECTS, RESOURCE_KIND_SKILLS
 from server.rpc._mutations import MutationHandler, serialized_mutation
 from server.rpc.agent_refs import _agent_reference_lock
@@ -474,30 +473,24 @@ async def _skill_inventory(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _inventory_read(state: Any) -> JsonObject:
-    """Join a concurrent scan until a server event invalidates its snapshot.
+    """Return a scan that began after this request or after the last server event.
 
-    Results are never cached after completion: opening the catalog again still
-    sees filesystem edits. A cancelled caller leaves other readers' scan intact.
+    A request joins the running scan while no server event happened since it
+    began; otherwise it waits for the one follow-up scan that every later
+    request shares, so scans never queue up behind each other. Results are
+    never cached after completion: opening the catalog again still sees
+    filesystem edits. A cancelled caller leaves other readers' scan intact and
+    waits for it, since inventory reads may record initial Skill history.
     """
-    sequence = state.event_bus.last_sequence
-    flight = getattr(state, "_skill_inventory_flight", None)
-    if flight is None or flight[0] != sequence or flight[1].done():
-        task = asyncio.create_task(
-            _SKILL_READ_WORKERS.run(state.runtime.skill_inventory), name="skill-inventory"
+    scans: SharedRefresh[JsonObject] | None = getattr(state, "_skill_inventory_scans", None)
+    if scans is None:
+        scans = SharedRefresh(
+            lambda: _SKILL_READ_WORKERS.run(state.runtime.skill_inventory),
+            name="skill-inventory",
+            start_mark=lambda: state.event_bus.last_sequence,
         )
-        state._skill_inventory_flight = (sequence, task)
-
-        def finished(completed: asyncio.Task[JsonObject]) -> None:
-            current = getattr(state, "_skill_inventory_flight", None)
-            if current is not None and current[1] is completed:
-                state._skill_inventory_flight = None
-
-        task.add_done_callback(finished)
-    else:
-        task = flight[1]
-    # Inventory reads may record initial Skill history. Keep cancellation within
-    # the worker's settle-before-cancelling contract, including the last reader.
-    return cast(JsonObject, await settle_before_cancelling(task))
+        state._skill_inventory_scans = scans
+    return await scans.run(current_mark=state.event_bus.last_sequence)
 
 
 async def _skill_usage(state: Any, params: JsonObject) -> JsonObject:

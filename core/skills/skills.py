@@ -8,9 +8,12 @@ for prompt metadata and filters it through an agent's ``allowed_skills`` list.
 
 from __future__ import annotations
 
+import copy
 import os
 import shutil
-from collections.abc import Collection, Iterable, Mapping, Sequence
+import threading
+import time
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from html import escape
 from pathlib import Path
@@ -232,9 +235,15 @@ class SkillScan:
         ] = {}
 
     def resolve(self, path: Path) -> Path:
-        """Resolve each input once; Windows canonicalization is filesystem I/O too."""
+        """Resolve each input once; Windows canonicalization is filesystem I/O too.
+
+        A resolved path resolves to itself, so this operation never asks the
+        filesystem again for a path it returned.
+        """
         if path not in self._paths:
-            self._paths[path] = path.resolve()
+            resolved = path.resolve()
+            self._paths[path] = resolved
+            self._paths.setdefault(resolved, resolved)
         return self._paths[path]
 
     def directories(self, root: Path) -> tuple[Path, ...]:
@@ -249,11 +258,11 @@ class SkillScan:
             raise result
         return result
 
-    def metadata(self, path: Path) -> tuple[SkillMetadata | None, ValidationResult]:
+    def metadata(self, path: Path, resolved: Path) -> tuple[SkillMetadata | None, ValidationResult]:
         key = str(path)
         if key not in self._metadata:
             try:
-                self._metadata[key] = _read_skill_metadata(path)
+                self._metadata[key] = _PARSED_SKILL_FILES.read(path, resolved)
             except (OSError, ValueError) as error:
                 self._metadata[key] = error
         result = self._metadata[key]
@@ -338,12 +347,13 @@ class SkillRegistry:
         scan_roots = [skills_dir, *(extra_dirs or [])]
         origin_tags = list(origins) if origins is not None else []
         exclusion = _PackageExclusion(frozenset(excluded_packages or ()))
+        resolve: Callable[[Path], Path] = scan.resolve if scan is not None else Path.resolve
         for index, scan_root in enumerate(scan_roots):
             origin = origin_tags[index] if index < len(origin_tags) else None
             source = (
                 package_sources[index]
                 if package_sources is not None and index < len(package_sources)
-                else ("folder", scan_root.resolve().as_posix())
+                else ("folder", resolve(scan_root).as_posix())
             )
             _load_skill_root(scan_root, skills, diagnostics, origin, exclusion, scan, source)
 
@@ -591,12 +601,12 @@ class _PackageExclusion:
     packages: frozenset[tuple[Path, str]]
     skipped: dict[str, SkillMetadata] = field(default_factory=dict)
 
-    def skips(self, skill: SkillMetadata, skill_dir: Path) -> bool:
-        # The home is the directory the package was scanned in (also for a
-        # package-root scan), so a linked package directory still matches.
+    def skips(self, skill: SkillMetadata, home: Path) -> bool:
+        # The home is the resolved directory the package was scanned in (also for
+        # a package-root scan), so a linked package directory still matches.
         if not self.packages:
             return False
-        if (skill_dir.parent.resolve(), skill.name) not in self.packages:
+        if (home, skill.name) not in self.packages:
             return False
         self.skipped.setdefault(skill.name, skill)
         return True
@@ -629,9 +639,23 @@ def _load_skill_root(
         _log_validation_warnings(skills_dir.name, skills_dir, warnings)
         return
 
+    resolve: Callable[[Path], Path] = scan.resolve if scan is not None else Path.resolve
+    # Every package of a root shares one home (the root, or its parent for a
+    # package root): resolve it once, not once per package.
+    homes: dict[Path, Path] = {}
     for skill_dir in skill_directories:
+        parent = skill_dir.parent
+        if parent not in homes:
+            homes[parent] = resolve(parent)
         _load_skill_directory(
-            skill_dir, skills, diagnostics, origin, exclusion, scan, package_source
+            skill_dir,
+            homes[parent],
+            skills,
+            diagnostics,
+            origin,
+            exclusion,
+            scan,
+            package_source,
         )
 
 
@@ -650,6 +674,7 @@ def _skill_directories(root: Path) -> tuple[Path, ...]:
 
 def _load_skill_directory(
     skill_dir: Path,
+    home: Path,
     skills: dict[str, SkillMetadata],
     diagnostics: list[SkillDiagnostic],
     origin: str | None = None,
@@ -657,13 +682,15 @@ def _load_skill_directory(
     scan: SkillScan | None = None,
     package_source: tuple[str, str | None] | None = None,
 ) -> None:
-    """Read one skill package directory into the accumulated load state."""
+    """Read one skill package directory (in the resolved ``home``) into the load state."""
     skill_file = skill_dir / SKILL_FILENAME
 
     resolved_skill_file = scan.resolve(skill_file) if scan is not None else skill_file.resolve()
     try:
         skill, result = (
-            scan.metadata(skill_file) if scan is not None else _read_skill_metadata(skill_file)
+            scan.metadata(skill_file, resolved_skill_file)
+            if scan is not None
+            else _PARSED_SKILL_FILES.read(skill_file, resolved_skill_file)
         )
     except OSError as exc:
         warnings = [f"Cannot read skill metadata {skill_file}: {exc}"]
@@ -705,11 +732,11 @@ def _load_skill_directory(
         _log_validation_warnings(skill_dir.name, resolved_skill_file, result.warnings)
         return
 
-    source, location = package_source or ("folder", skill_dir.parent.resolve().as_posix())
+    source, location = package_source or ("folder", home.as_posix())
     skill = replace(
         skill, origin=origin, package_ref=SkillPackageRef(source, skill_dir.name, location)
     )
-    if exclusion is not None and exclusion.skips(skill, skill_dir):
+    if exclusion is not None and exclusion.skips(skill, home):
         return
     if skill.name in skills:
         warnings = [
@@ -776,6 +803,89 @@ def _read_skill_metadata(skill_file: Path) -> tuple[SkillMetadata | None, Valida
         ),
         result,
     )
+
+
+# A second write within one timestamp tick of the filesystem (up to two seconds
+# on FAT) can keep a file's size and modification time, so a parse is reused
+# only for a file that has been left alone at least that long.
+_SETTLED_FILE_AGE_NS = 2_000_000_000
+_PARSED_FILE_LIMIT = 4096
+
+
+class _ParsedSkillFiles:
+    """Parsed ``SKILL.md`` files of this process, reused while the file is unchanged.
+
+    Reading a file is a pure function of its input path (the fallback name and
+    diagnostics name it), its resolved path and its content. An entry is
+    therefore keyed by the input path and reused only while the resolved path,
+    the file's identity, size and modification time are still the same; every
+    reader gets its own copies of the mutable fields. Only loadable packages
+    are kept, and only once their modification time is a few seconds old: a
+    write within the same timestamp tick could otherwise go unnoticed.
+    Registries reload on every Project open, inventory and explicit refresh,
+    so this spares re-parsing YAML that has not changed.
+    """
+
+    def __init__(self, *, clock: Callable[[], int] = time.time_ns) -> None:
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._entries: dict[
+            str, tuple[tuple[object, ...], SkillMetadata | None, ValidationResult]
+        ] = {}
+
+    def read(
+        self, skill_file: Path, resolved: Path
+    ) -> tuple[SkillMetadata | None, ValidationResult]:
+        try:
+            status = os.stat(resolved)
+        except OSError:
+            # The read reports why the file is unavailable.
+            return _read_skill_metadata(skill_file)
+        signature = (resolved, status.st_dev, status.st_ino, status.st_size, status.st_mtime_ns)
+        key = str(skill_file)
+        with self._lock:
+            entry = self._entries.get(key)
+        if entry is not None and entry[0] == signature:
+            copied = _copied_skill_file(entry[1], entry[2])
+            if copied is not None:
+                return copied
+        skill, result = _read_skill_metadata(skill_file)
+        settled = self._clock() - status.st_mtime_ns >= _SETTLED_FILE_AGE_NS
+        if not settled or skill is None or skill.path != resolved:
+            return skill, result
+        copied = _copied_skill_file(skill, result)
+        if copied is None:
+            return skill, result
+        with self._lock:
+            self._entries.pop(key, None)
+            self._entries[key] = (signature, skill, result)
+            while len(self._entries) > _PARSED_FILE_LIMIT:
+                del self._entries[next(iter(self._entries))]
+        return copied
+
+
+def _copied_skill_file(
+    skill: SkillMetadata | None, result: ValidationResult
+) -> tuple[SkillMetadata | None, ValidationResult] | None:
+    """Copy the mutable parts of one read; ``None`` when they nest too deeply to copy."""
+    copied_result = ValidationResult(valid=result.valid, warnings=list(result.warnings))
+    if skill is None:
+        return None, copied_result
+    try:
+        return (
+            replace(
+                skill,
+                metadata=copy.deepcopy(skill.metadata),
+                compatibility=copy.deepcopy(skill.compatibility),
+                allowed_tools=list(skill.allowed_tools),
+            ),
+            copied_result,
+        )
+    except RecursionError:
+        return None
+
+
+_PARSED_SKILL_FILES = _ParsedSkillFiles()
 
 
 def scan_skill_resources(skill_dir: Path) -> list[str]:

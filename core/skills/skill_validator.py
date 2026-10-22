@@ -51,6 +51,51 @@ _SKILL_NAME_SAFE_CHARSET_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 _SCALAR_WITH_COLON_PATTERN = re.compile(r"^(?P<key>[A-Za-z0-9_-]+):(?P<space>\s+)(?P<value>.+)$")
 _QUOTED_OR_STRUCTURED_PREFIXES = ('"', "'", "[", "{", "&", "*", "!", ">", "|", "#")
 
+_LibyamlEventLoader: type | None = None
+if yaml.__with_libyaml__:
+
+    class _LibyamlEventLoader(  # type: ignore[no-redef]
+        yaml.composer.Composer,
+        yaml.cyaml.CParser,
+        yaml.constructor.SafeConstructor,
+        yaml.resolver.Resolver,
+    ):
+        """``yaml.SafeLoader`` with libyaml's scanner and parser.
+
+        Only reading the events moves to C: composing and constructing stay
+        PyYAML's Python code, so nesting still ends in ``RecursionError`` at the
+        same depth and the constructed values are the same.
+        """
+
+        def __init__(self, stream: str) -> None:
+            yaml.cyaml.CParser.__init__(self, stream)
+            yaml.composer.Composer.__init__(self)
+            yaml.constructor.SafeConstructor.__init__(self)
+            yaml.resolver.Resolver.__init__(self)
+
+
+# libyaml accepts some front matter the pure-Python scanner rejects, or reads
+# it differently: tabs as separators, a byte order mark after the start, tags,
+# a comment right after a block scalar header, and ``?`` in flow collections.
+# Such text goes straight to the pure-Python loader, which stays the reference.
+_PURE_LOADER_TEXT = re.compile(r"[\t﻿]|(?:^|[\s\[\]{},:?-])!|[|>][-+0-9]*#")
+
+
+def _load_yaml(text: str) -> Any:
+    """``yaml.safe_load`` with the same results, several times faster where it can be.
+
+    The pure-Python loader decides every document the libyaml reader is not
+    known to read alike, and every document libyaml fails on.
+    """
+    if _LibyamlEventLoader is not None and not (
+        _PURE_LOADER_TEXT.search(text) or ("?" in text and ("[" in text or "{" in text))
+    ):
+        try:
+            return yaml.load(text, Loader=_LibyamlEventLoader)
+        except Exception:
+            pass  # The pure-Python loader below decides how this document fails.
+    return yaml.safe_load(text)
+
 
 def triggered_skill_names(content: str) -> list[str]:
     """Return the Skill names a message triggers, in order and without repeats.
@@ -126,12 +171,12 @@ def parse_skill_front_matter(front_matter: str) -> tuple[Any, list[str]]:
     if not front_matter.strip():
         return {}, []
     try:
-        return yaml.safe_load(front_matter) or {}, []
+        return _load_yaml(front_matter) or {}, []
     except yaml.YAMLError, RecursionError:
         repaired = repair_colon_scalars(front_matter)
         if repaired != front_matter:
             try:
-                return yaml.safe_load(repaired) or {}, [MALFORMED_YAML_FALLBACK_WARNING]
+                return _load_yaml(repaired) or {}, [MALFORMED_YAML_FALLBACK_WARNING]
             except yaml.YAMLError, RecursionError:
                 pass
         return _parse_simple_key_values(front_matter), [SIMPLE_KEY_VALUE_FALLBACK_WARNING]

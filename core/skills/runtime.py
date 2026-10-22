@@ -57,6 +57,16 @@ from core.utils.log_conditions import LoggedConditions
 class _ProjectSkillBundle:
     registry: SkillRegistry
     names: frozenset[str]
+    # The Project record the bundle was built from, Sources included.
+    project: Project
+
+    def same_as(self, other: _ProjectSkillBundle) -> bool:
+        """Whether ``other`` leaves this bundle and its dependent registries current."""
+        return (
+            self.project == other.project
+            and self.names == other.names
+            and self.registry.same_catalog(other.registry)
+        )
 
 
 class SkillRuntime:
@@ -605,6 +615,30 @@ class SkillRuntime:
             self._project_skills.pop(project_id, None)
             self._drop_agent_skills(lambda key: key[0] == project_id)
 
+    def refresh_project_skills(self, project: Project) -> None:
+        """Rescan one Project's Skills; keep its caches when the rescan changes nothing.
+
+        ``project`` is the freshly read record with current Sources. A rescan equal
+        to the cached one (same record, Skill names and catalog) keeps that bundle
+        and the Agent registries embedding it, so repeated opens neither rebuild
+        them nor discard scoped scans running meanwhile. Otherwise the rescan
+        replaces the bundle and those Agent registries rebuild, as after
+        :meth:`invalidate_project_skills`.
+        """
+        project_id = project.project_id
+        with self._cache_lock:
+            generation = self._cache_generation
+            cached = self._project_skills.get(project_id)
+        fresh = self._build_project_skill_bundle(project_id, project=project)
+        with self._cache_lock:
+            if generation != self._cache_generation:
+                # Caches were invalidated during the rescan, which may predate that.
+                self.invalidate_project_skills(project_id)
+            elif cached is None or not cached.same_as(fresh):
+                self._cache_generation += 1
+                self._project_skills[project_id] = fresh
+                self._drop_agent_skills(lambda key: key[0] == project_id)
+
     def invalidate_agent_skills(self, agent_id: str | None = None) -> None:
         """Drop a Skill owner's and its receivers' caches, or all when ``None``.
 
@@ -963,7 +997,7 @@ class SkillRuntime:
         # A Project's own Skills are turned off by the Project itself
         # (``skills_project_disabled``), never by the Skill Policy.
         names = scan_project_skill_names(project.skill_roots, environment, scan=scan)
-        return _ProjectSkillBundle(registry=registry, names=names)
+        return _ProjectSkillBundle(registry=registry, names=names, project=project)
 
 
 __all__ = ["load_global_skill_registry"]

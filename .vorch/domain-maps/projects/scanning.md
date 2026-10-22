@@ -44,7 +44,7 @@ Membership and its winning definition can be cached; each Run uses the adapter's
 
 ## Source and evidence
 
-Skill inventory passes its operation-local `SkillScan` through `ProjectStore.refresh_sources` and `detect_sources`, reusing those package reads for the inventory's later projections. Project opening still rescans the Team and that Project's Skills, but an unchanged global Skill catalog no longer invalidates unrelated Project/Agent scopes (`skills/manager.md` -> Invalidation).
+Skill inventory passes its operation-local `SkillScan` through `ProjectStore.refresh_sources` and `detect_sources`, reusing those package reads for the inventory's later projections. Project opening still rescans the Team and that Project's Skills, but an unchanged global Skill catalog no longer invalidates unrelated Project/Agent scopes, and an unchanged Project Skill rescan keeps that Project's cached registries (`skills/manager.md` -> Invalidation).
 
 - `core/projects/sources/`, `source_migration.py`, `scan_report.py`
 - `tests/core/projects/test_sources.py`: mixed sources, collisions, all adapters, empty/scoped permissions, Permission Rules translation per source, legacy anchors, Models, preloads and participant snapshots
