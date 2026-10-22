@@ -334,6 +334,9 @@
     get selectedProjectId() {
       return selectedProjectId;
     },
+    get agentsRefreshToken() {
+      return agentsRefreshToken;
+    },
     get sessionsRefreshToken() {
       return sessionsRefreshToken;
     },
