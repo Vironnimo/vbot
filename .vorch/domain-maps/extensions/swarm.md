@@ -698,6 +698,16 @@ delivers it, whose acknowledgment clears `recipients.skipped`
 loads no post bodies.
 The partial `delivery_batches_pending_participant` index finds an unacknowledged
 automatic batch without scanning retained acknowledged batches.
+`SwarmStore.prepare_automatic_delivery` and `prepare_wake` first read whether the
+preparation would write anything (`_store_delivery._unchanged_automatic_delivery`):
+without an unacknowledged automatic batch and without a pending post, or in a wake
+scan for a participant that is not idle, they return from that read transaction;
+anything else runs the complete preparation, which decides again inside its write
+transaction. A post committed after the read stays pending, as one committed after
+the write transaction would, so no delivery is lost. Most Model requests find
+nothing pending: in a 5-participant probe Swarm (85 Model requests) the write
+transactions of request-time and wake-scan preparation fell from 180 to 65
+(2026-10).
 
 Store delivery entries retain the Swarm-wide post sequence, UTC creation time,
 author identity, discussion id/title, reply target, addressed participants
@@ -834,6 +844,13 @@ inspection, not the presence of a retained Run id. The recomputation
 `swarm_state_changed`. Their callbacks (`_drain_wakes`, `_before_request`,
 `_run_finished`) publish `participants` and, only when the state changed, also
 `swarms`, so the Swarm list reloads for its own changes only. `_before_request`
+calls `record_run_started` only when the Run differs from the participant's
+lifecycle Run the registration remembers (`SwarmExtension._lifecycle_runs`, kept
+equal to the stored one by every lifecycle write: Start and Resume admission
+through `_record_run_started`, wake admission; an unknown participant, as after a
+restart, asks the Store), so the later Model requests of a Run write nothing for
+it (5-participant probe Swarm: 90 such writes fell to the 5 of Start admission,
+2026-10); the delivery preparation keeps their epoch check. It
 publishes when `record_run_started` recorded a Run the Store did not know yet
 (`recorded`): a Run started outside Start, Resume and wake admission, or a wake
 Run whose first request beats its admission record
@@ -881,7 +898,7 @@ Resume request, not replay of the old Start/Resume request. Evidence:
 
 ## Verification routes
 
-Store source routing: `store.py` retains asynchronous validation/admission and the public `SwarmStore` API. `_store_database.py` wraps the host-opened kernel `Database`: each `_write` is one kernel write transaction (retried as a whole on a busy database), each `_read` one read transaction, and the signed cursor key is cached at open. `_store_profiles.py`, `_store_lifecycle.py`, `_store_delivery.py`, `_store_reads.py` and `_store_board.py` implement concrete operations against that database capability; they do not receive the Swarm service or public Store. Shared row checks/projections live in `_store_records.py`, pure input/value rules in `_store_values.py`, and the existing name pool in `_participant_names.py`. Worker dispatch (`SwarmDatabase.run`) runs each operation on the host database's own worker pool through `Database.run_async`, without a Store lock or a Swarm pool; once the host closes the database, Store operations raise the kernel's `DatabaseUnavailableError`; the kernel serializes writes, so a state-dependent decision belongs inside the write operation, not in a preceding read. Delivery receipt lookups run outside any database transaction. Store tests open the same kernel spec offline through `open_swarm_database` (`tests/resources/extensions/swarm/swarm_test_support.py`).
+Store source routing: `store.py` retains asynchronous validation/admission and the public `SwarmStore` API. `_store_database.py` wraps the host-opened kernel `Database`: each `_write` is one kernel write transaction (retried as a whole on a busy database), each `_read` one read transaction (`read` runs one on the worker pool and, like a write, retries it on contention), and the signed cursor key is cached at open. `_store_profiles.py`, `_store_lifecycle.py`, `_store_delivery.py`, `_store_reads.py` and `_store_board.py` implement concrete operations against that database capability; they do not receive the Swarm service or public Store. Shared row checks/projections live in `_store_records.py`, pure input/value rules in `_store_values.py`, and the existing name pool in `_participant_names.py`. Worker dispatch (`SwarmDatabase.run`) runs each operation on the host database's own worker pool through `Database.run_async`, without a Store lock or a Swarm pool; once the host closes the database, Store operations raise the kernel's `DatabaseUnavailableError`; the kernel serializes writes, so a state-dependent decision belongs inside the write operation, not in a preceding read; a preceding read may only answer an outcome that writes nothing (`_unchanged_automatic_delivery`). Delivery receipt lookups run outside any database transaction. Store tests open the same kernel spec offline through `open_swarm_database` (`tests/resources/extensions/swarm/swarm_test_support.py`).
 
 Internal Extension source routing: `extension.py` owns the live Swarm service and participant callbacks; `_management.py` owns operator operations; `_extension_values.py` holds pure argument/projection/configuration helpers, `_operation_schemas.py` the management schemas, and `_registration.py` binds the existing service to Extension capabilities. Registration constructs that service lazily to keep imports acyclic. Tool/schema/reminder wording is preserved.
 

@@ -142,6 +142,11 @@ class SwarmExtension:
         self._title_tasks: set[asyncio.Task[None]] = set()
         self._wake_tasks: dict[str, asyncio.Task[None]] = {}
         self._wake_dirty: set[str] = set()
+        # The lifecycle Run this registration last stored per (Swarm, participant).
+        # Every write of a participant's lifecycle Run goes through
+        # ``_record_run_started`` or wake admission, which keep it equal to the
+        # stored value; an unknown participant, as after a restart, asks the Store.
+        self._lifecycle_runs: dict[tuple[str, str], str] = {}
         self._pacing = WakePacing(self._enqueue_wakes)
         self.management = SwarmManagement(self)
 
@@ -220,7 +225,14 @@ class SwarmExtension:
         if self.store is not None:
             await self.store.close()
             self.store = None
+        self._lifecycle_runs.clear()
         self.host = None
+
+    def _forget(self, swarm_id: str) -> None:
+        """Drop what this registration remembers of a stopped or deleted Swarm's Runs."""
+        self._pacing.forget(swarm_id)
+        for key in [key for key in self._lifecycle_runs if key[0] == swarm_id]:
+            del self._lifecycle_runs[key]
 
     async def _quiesce(self) -> None:
         if self.host is not None and self.host.temporary_agents is not None:
@@ -643,6 +655,7 @@ class SwarmExtension:
                         run_id=admission.run_id,
                         boundary=claim["boundary"],
                     )
+                    self._lifecycle_runs[(swarm_id, wake["participant_id"])] = admission.run_id
                     self._participants_changed(swarm_id, admitted, swarm["settings_revision"])
                 if claimed_count == 0 or len(page.entries) < 100:
                     break
@@ -821,11 +834,8 @@ class SwarmExtension:
                     participant_id,
                     input,
                 )
-                await self._store().record_run_started(
-                    swarm_id,
-                    participant_id,
-                    run_id=admission.run_id,
-                    expected_epoch=snapshot["epoch"],
+                await self._record_run_started(
+                    swarm_id, participant_id, admission.run_id, snapshot["epoch"]
                 )
                 admissions.append({"participant_id": participant_id, "run_id": admission.run_id})
             except Exception as error:
@@ -870,14 +880,20 @@ class SwarmExtension:
                     request_id,
                 ),
             )
-            await self._store().record_run_started(
-                swarm["id"],
-                participant["id"],
-                run_id=admission.run_id,
-                expected_epoch=swarm["epoch"],
+            await self._record_run_started(
+                swarm["id"], participant["id"], admission.run_id, swarm["epoch"]
             )
             admissions.append({"participant_id": participant["id"], "run_id": admission.run_id})
         return admissions
+
+    async def _record_run_started(
+        self, swarm_id: str, participant_id: str, run_id: str, epoch: int
+    ) -> Json:
+        started = await self._store().record_run_started(
+            swarm_id, participant_id, run_id=run_id, expected_epoch=epoch
+        )
+        self._lifecycle_runs[(swarm_id, participant_id)] = run_id
+        return started
 
     async def _before_request(
         self, context: SessionRequestContext
@@ -887,17 +903,17 @@ class SwarmExtension:
         if owner is None or owner.extension != "swarm" or binding.group_id != owner.group_id:
             raise SwarmStoreError("participant_inactive")
         swarm = await self._store().get_swarm(binding.group_id)
-        started = await self._store().record_run_started(
-            binding.group_id,
-            binding.participant_id,
-            run_id=context.run_id,
-            expected_epoch=swarm["epoch"],
-        )
-        # Start, resume and wake admission record their Runs themselves; a Run
-        # recorded here (another Run, or a wake Run whose first request beats its
-        # admission) changes what the open page shows.
-        if started["recorded"]:
-            self._participants_changed(binding.group_id, started, swarm["settings_revision"])
+        # Every Model request of a Run lands here; only its first one can record
+        # it. The epoch check of a skipped recording is the delivery's own.
+        if self._lifecycle_runs.get((binding.group_id, binding.participant_id)) != context.run_id:
+            started = await self._record_run_started(
+                binding.group_id, binding.participant_id, context.run_id, swarm["epoch"]
+            )
+            # Start, resume and wake admission record their Runs themselves; a Run
+            # recorded here (another Run, or a wake Run whose first request beats its
+            # admission) changes what the open page shows.
+            if started["recorded"]:
+                self._participants_changed(binding.group_id, started, swarm["settings_revision"])
         prepared = await self._store().prepare_automatic_delivery(
             binding.group_id,
             binding.participant_id,
