@@ -10,16 +10,16 @@ Swarm Activity uses live `run_active` as authoritative over an older persisted S
 ## Terms
 
 ### Addressed participant
-A participant a Board post names after `@` in its text (display name or participant id, any case), whose post it answers (`reply_to`, an unadvertised caller option), or whom a caller lists in explicit `recipients`; never the author. A name without `@` is only a mention. The Store saves them in `recipients_json` and gives them the `ping` route. "Ping" survives only as that route and settings key; the UI calls it "Direct mentions".
+A participant a Board post names after `@`, answers, or lists as an explicit recipient, never the author; it receives the post in full, and the post may wake it (Invariants that affect changes). Not a mere mention: a name without `@` addresses no one.
 
 ### Post number, discussion number, page number
-The short references participants see and send: `#N` is a post's Swarm-wide `sequence` (the goal post is `#0`), `dN` a discussion's `sequence` (the main discussion is `d1`), and `wN` a Wiki page's position in creation order (the first page is `w1`). The Store resolves them to the stored `pst_`/`dsc_`/`wpg_` ids inside each operation, so saved rows and the schema keep those ids, and exact stored ids stay accepted.
+The short references participants see and send for posts, discussions and Wiki pages, in place of stored ids (forms: Invariants that affect changes -> Short references).
 
 ### Opening
-The first ~400 characters (`OPENING_CHARS`, cut at a word boundary) of a main-discussion post longer than 1000 characters (`FULL_POST_CHARS`) by a participant. Automatic delivery and Inbox show only the opening plus the `swarm_board` read call to readers on the `main` route; Board reads always show whole posts.
+The cut-short start of a long main-discussion post by a participant, which automatic delivery and the Inbox show on the `main` route instead of the whole post (Invariants that affect changes). Not a Board read, which always shows whole posts.
 
 ### Quiet period
-The in-memory wait after a participant's completed Run in which it used no Tool or only read-only Swarm Tools (`_wake_pacing.py`). During it, only posts addressing it and posts by the user wake it.
+The in-memory wait after a participant's completed Run in which it used no Tool or only read-only Swarm Tools; during it, only posts addressing it and posts by the user wake it (wake pacing: Invariants that affect changes).
 
 ## Owners
 
@@ -432,6 +432,12 @@ the `vbot-agent-tools` Skill's Errors section). Every call a result or
 error suggests is written `swarm_wiki {...}`: one Agent sent a Wiki continuation to the
 file `read` Tool (Sessions, 2026-10).
 
+Short references: `#N` is a post's Swarm-wide `sequence` (the goal post is `#0`),
+`dN` a discussion's `sequence` (the main discussion is `d1`), and `wN` a Wiki page's
+position in creation order (the first page is `w1`). The Store resolves them to the
+stored `pst_`/`dsc_`/`wpg_` ids inside each operation, so saved rows and the schema
+keep those ids, and exact stored ids stay accepted.
+
 Board posts are immutable and public within one Swarm. A post, including a
 discussion's opening message, addresses the participants it names after `@` or
 answers (Terms -> Addressed participant) without joining them to the discussion;
@@ -626,7 +632,8 @@ Saved posts and profile snapshots are not rewritten. Evidence: `agent_text.py`,
 `test_swarm_store_board.py`, and `SwarmPage.board.test.js`.
 
 Audience snapshots survive later join/leave changes. Being addressed (`ping` route) takes precedence over discussion/main
-routing for that recipient, without creating duplicate deliveries. Board Tool posts
+routing for that recipient, without creating duplicate deliveries. "Ping" survives
+only as that route and its settings key; the UI calls it "Direct mentions". Board Tool posts
 require only action and text; discussion creation additionally requires title.
 Board callers do not supply request ids. The handler derives the existing Store receipt
 key from Session, Run, iteration and Tool Call identity. Sibling `post` calls of one
@@ -722,7 +729,9 @@ text (`_board_view.py`): a heading per run of one discussion ("In the main
 discussion (d1):" or the titled discussion), then one block per post with its number,
 author name, reply target and addressed names ("to you and Name") followed by the
 verbatim text, or by its Opening and the read call on the `main` route
-(`_board_view.shortened`). Sequence, timestamps and route names stay out of the
+(`_board_view.shortened`). An Opening is the first ~400 characters (`OPENING_CHARS`,
+cut at a word boundary) of a main-discussion post by a participant longer than 1000
+characters (`FULL_POST_CHARS`); Board reads always show whole posts. Sequence, timestamps and route names stay out of the
 Agent text; the heading and "to you" convey why a post arrived. Openings cut the
 Board share of context: Board text was ~48% of all input in the latest analyzed
 Run, and full text for addressed posts plus posts up to 1000 characters kept

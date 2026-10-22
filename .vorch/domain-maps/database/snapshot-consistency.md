@@ -2,6 +2,10 @@
 
 How an online data snapshot equals a crash at one instant: the capture order, why a whole-snapshot restore is crash-equivalent, the member freeze and the snapshot barrier in detail, and the limits of the guarantee. The rules every owner follows are in `../database.md` -> Snapshot consistency.
 
+## Capture roles
+
+A canonical database's Capture role is its spec's `snapshot_capture`. `held` (the default): its writes, like every snapshot document change, wait while a capture freezes the members. `anchor`: the one database that keeps taking writes during the freeze and fixes the instant the snapshot stands for; today `sessions`, so Runs go on. `trailing`: keeps taking writes too and is copied after the freeze ends, so its copy may be newer than the anchor's; only data that stays correct ahead of the anchor may trail; today `model_usage`. A new canonical owner is held unless it must keep writing during a capture and stays correct ahead of the anchor.
+
 ## Capture order
 
 An online snapshot shows exactly what a crash at one instant would have left - the start of the anchor copy - and holds every compound mutation whole. `create_data_snapshot` runs `capture_members` after taking the operation lock and verifies the copies after it returns. The capture order:

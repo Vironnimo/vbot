@@ -15,22 +15,22 @@ Module split: `performance.py` (public API, sink, service), `_metrics.py` (log-s
 Shared terms (Run, Session, Tool) live in `.vorch/GLOSSARY.md`.
 
 ### Recording
-One bounded, explicitly started capture window. At most one is active per process. While active, measurements with a track also become trace spans, counted occurrences with a track become instant events, gauges become counter samples, and stalls become instant events; the Recording keeps its own window histograms, gauge maxima, counters and stalls. It stops on request or at `max_seconds`, then writes a trace and a summary file. Not a Debug trace (`debug.md`).
+One bounded, explicitly started capture window, at most one per process, that turns measurements into a Perfetto-compatible trace and a summary of that window (what becomes which trace event: `performance/rpc-and-files.md` -> Trace events). Not a Debug trace (`debug.md`).
 
 ### Track
-The trace group a measurement belongs to, rendered as one Perfetto process: a Session address (`session_track()`: `<agent>@<project>/<session>` or `<agent>/<session>`), `rpc`, `sqlite`, `events` (server-pushed invalidations), `webui` (WebUI client reports), `runtime` (Event Loop lag, stalls, process gauges) or `worker pool <name>`. Tracks exist only inside a Recording; histograms ignore them.
+The trace group a measurement belongs to, rendered as one Perfetto process, such as a Session address or the RPC layer; it exists only inside a Recording (list: `performance/metric-catalog.md`).
 
 ### Lane
-A trace thread inside one Track. A span takes the lowest lane that is free at its start, so concurrent spans of one Track never overlap on a lane. Lane numbers carry no identity (lane 0 is not a particular Run).
+A trace thread inside one Track. A span takes the lowest lane that is free at its start, so concurrent spans of one Track never overlap on a lane; lane numbers carry no identity (lane 0 is not a particular Run).
 
 ### History Window
-A fixed stretch of server time (10 minutes, `HISTORY_INTERVAL_SECONDS`) whose measurement changes are appended as one JSON line to disk when it ends, and at shutdown. Windows start when the service starts; each holds what the process-lifetime histograms and counters gained during it, the gauges' last and highest values, and its stalls. They survive restarts, unlike the snapshot, and need no preparation, unlike a Recording.
+A fixed stretch of server time whose measurement changes are appended to disk when it ends and at shutdown (contents and files: `performance/rpc-and-files.md`). Not the snapshot, which a restart clears, and not a Recording: it needs no preparation.
 
 ### Heap Census
-An on-demand count of the objects the cyclic garbage collector tracks, per generation and by module-qualified type name (`module.qualname`), aggregated by module (first two package segments). Changes are relative to the same service's previous census. Objects frozen at startup (`server/process-lifecycle.md` -> `create_app` hooks) are only counted as `frozen`, so the generations show what serving created. Not a memory size: it counts container objects, whose number drives full-collection pauses.
+An on-demand count of the objects the cyclic garbage collector tracks, by generation, type and module (`performance/diagnosis.md` -> Heap Census cost). Not a memory size: it counts container objects, whose number drives full-collection pauses.
 
 ### Stall
-An Event Loop tick overdue by more than the stall threshold (250 ms). The watchdog thread samples the loop thread's Python stack every 50 ms during the stall and aggregates identical stacks; frames are `path:line qualname` only. A stall also records the Tasks awaiting the Task the loop ran (`awaited_by`), the CPU of the loop and of other busy threads, and the cyclic garbage collection pause time (`gc_ms`); how they are captured and read: `performance/diagnosis.md`.
+An Event Loop tick overdue by more than the stall threshold, captured with the loop thread's stacks and the context that explains it (`performance/diagnosis.md` -> Stall capture). Not Event Loop lag, the measured delay of every tick.
 
 ## Interfaces
 

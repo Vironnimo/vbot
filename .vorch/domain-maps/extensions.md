@@ -12,23 +12,16 @@ The bundled `vbot-docs` Extension references each fit one `skill` Tool read (`te
 
 ## Terms
 
-Core cross-cutting terms live in `.vorch/GLOSSARY.md`; these terms are specific to the Extensions domain.
+Shared terms (Tool, Skill, Session) live in `.vorch/GLOSSARY.md`.
 
 ### Bundled Extension
-
-**Definition:** An Extension shipped under `resources/extensions/`, scanned after user roots and default-on unless its identity is disabled. An earlier same-name Extension shadows it.
-
-**Not:** A separate runtime mechanism; after loading, bundled and user Extensions use the same records, declarations, and dispatch paths.
+An Extension that ships with vBot in its install tree; it loads after the user's Extensions, so a same-name user Extension shadows it (Loading and identity invariants). Not a separate runtime mechanism: once loaded, bundled and user Extensions use the same records, declarations and dispatch paths.
 
 ### Extension Reload
-
-**Definition:** The serialized, restart-equivalent rebuild in `core/extensions/runtime.py::ExtensionRuntime`, exposed through `Runtime.reload_extensions()`. It picks up added, deleted, edited, fixed, and newly enabled Extensions without restarting the server process.
-
-**Not:** Live disable, which surgically deactivates only the newly disabled loaded Extension.
+The serialized, restart-equivalent rebuild of the Extension layer that picks up added, deleted, edited, fixed and newly enabled Extensions without restarting the server process (`extensions/management.md` -> Full reload sequence). Not live disable, which deactivates only the newly disabled loaded Extension.
 
 ### Extension Settings Schema
-
-**Definition:** The typed field declarations an Extension registers in code to validate and render its configuration. Non-secret values live under the Extension's persisted config; secret fields point to explicit environment keys and never store or return the credential value as normal config.
+The typed field declarations an Extension registers in code to validate and render its configuration (`extensions/management.md` -> Settings schemas and live values). Not a credential store: a secret field names an environment key, and its value is never stored or returned as normal config.
 
 ## Loading and identity invariants
 
