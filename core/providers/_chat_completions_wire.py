@@ -62,6 +62,7 @@ def _openai_transport_failure(
         return NetworkError("Provider stream ended with finish_reason=network_error")
     if (
         finish_reason != "stop"
+        or not isinstance(native_finish_reason, str)
         or native_finish_reason not in OPENAI_NATIVE_TRANSPORT_FINISH_REASONS
     ):
         return None
@@ -78,6 +79,9 @@ def _normalize_openai_finish_reason(
     *,
     has_tool_calls: bool,
 ) -> TerminalOutcome:
+    if not isinstance(finish_reason, str):
+        # A malformed reason (an array, an object) names no outcome.
+        return TERMINAL_OUTCOME_UNKNOWN
     if finish_reason in OPENAI_TOOL_FINISH_REASONS:
         return TERMINAL_OUTCOME_TOOL_CALLS
     if finish_reason == "stop":
