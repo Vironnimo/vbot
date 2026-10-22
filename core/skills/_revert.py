@@ -229,6 +229,8 @@ def _check_conflicts(
 
 
 def _inverse(history: SkillHistory, root: Path, target: SkillRevision) -> _Step:
+    if target.archive_id is not None and not _is_entry_name(target.archive_id):
+        raise RevertError(f"Revision {target.id} names an unsafe archive id: {target.archive_id!r}")
     if target.live is False:
         if target.archive_id is None:
             raise RevertError(
@@ -432,14 +434,18 @@ def _digests(states: dict[str, FileState]) -> dict[str, str]:
 
 
 def _skill_path(root: Path, skill: str) -> Path:
-    if (
-        not skill
-        or skill in {".", ".."}
-        or any(separator in skill for separator in "/\\\x00")
-        or skill != skill.strip()
-    ):
+    if not _is_entry_name(skill) or skill != skill.strip():
         raise RevertError(f"The history names an unsafe Skill name: {skill!r}")
     return root / skill
+
+
+def _is_entry_name(name: str) -> bool:
+    """Whether *name* joins a directory as exactly one entry of that name.
+
+    The history is a file in the data directory, so its names are checked like
+    any input: on Windows a drive-relative name ("C:..") joins as the parent.
+    """
+    return bool(name) and name not in {".", ".."} and not any(char in name for char in "/\\:\x00")
 
 
 def _package_path(package: Path, path: str, revision: int) -> Path:
@@ -448,8 +454,7 @@ def _package_path(package: Path, path: str, revision: int) -> Path:
         not parts
         or path.startswith("/")
         or "\\" in path
-        or "\x00" in path
-        or any(part in {"", ".", ".."} for part in parts)
+        or not all(_is_entry_name(part) for part in parts)
         or excluded(path)
     ):
         raise RevertError(f"Revision {revision} names an unsafe file path: {path!r}")

@@ -29,7 +29,7 @@ from core.skills._history import (
 )
 from core.skills._packages import is_redirect
 from core.skills.skills import SKILL_FILENAME
-from core.utils.ids import new_id
+from core.utils.ids import has_id_entry, new_id
 from core.utils.logging import get_logger
 from core.utils.timestamps import format_canonical_timestamp
 
@@ -238,8 +238,18 @@ class SkillArchives:
             or any(separator in archive_id for separator in "/\\\x00")
         ):
             raise SkillAuthoringError(f"Illegal archive id: {archive_id!r}")
-        _reject_redirect(history.archive_root)
-        package = history.archive_root / archive_id
+        archive_root = history.archive_root
+        _reject_redirect(archive_root)
+        package = archive_root / archive_id
+        # Only an archive entry spelled exactly like the id names a package. On
+        # Windows a drive-relative id ("C:..") joins as the archive's parent, and
+        # a case variant opens the real entry under a spelling no history knows.
+        if (
+            package.name != archive_id
+            or package.parent != archive_root
+            or not has_id_entry(archive_root, archive_id)
+        ):
+            raise SkillAuthoringError(f"Archived Skill '{archive_id}' not found.")
         _reject_redirect(package)
         if not package.is_dir():
             raise SkillAuthoringError(f"Archived Skill '{archive_id}' not found.")

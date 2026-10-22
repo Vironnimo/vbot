@@ -281,6 +281,10 @@ def test_archived_skills_are_restored_with_their_provenance_or_purged(
         service.restore(root, str(first.archive_id), writer=HUMAN_WRITER)
 
     second = service.delete(root, "demo", writer=HUMAN_WRITER)
+    # Only the exact entry name counts: a case variant opens it on Windows but
+    # names no archive the history knows.
+    with pytest.raises(SkillAuthoringError, match="not found"):
+        service.restore(root, str(first.archive_id).upper(), writer=HUMAN_WRITER)
     restored = service.restore(root, str(first.archive_id), writer=HUMAN_WRITER)
 
     assert restored.name == "demo"
@@ -296,6 +300,10 @@ def test_archived_skills_are_restored_with_their_provenance_or_purged(
         service.restore(root, str(second.archive_id), writer=HUMAN_WRITER)
     with pytest.raises(SkillAuthoringError, match="Illegal archive id"):
         service.purge(root, "../skills")
+    # On Windows "C:.." joins the archive as its parent, the home's data directory.
+    with pytest.raises(SkillAuthoringError, match="not found"):
+        service.purge(root, f"{root.drive or 'C:'}..")
+    assert (root / "demo" / "SKILL.md").is_file()
 
 
 def test_publish_moves_a_skill_into_another_home_with_its_provenance(
@@ -561,3 +569,27 @@ def test_revert_refuses_what_the_history_cannot_restore(
         service.revert(root, [2], writer=HUMAN_WRITER)
     with pytest.raises(SkillAuthoringError, match="does not exist"):
         service.revert(root, [99], writer=HUMAN_WRITER)
+    # Names from a hand-edited history never reach outside the home, also not a
+    # drive-relative "C:..", which joins as the parent directory on Windows.
+    unsafe: tuple[tuple[dict[str, Any], str], ...] = (
+        (
+            {
+                "skill": "found",
+                "files": [{"path": "assets/C:../../SKILL.md", "change": "deleted", "before": "0"}],
+            },
+            "unsafe file path",
+        ),
+        ({"skill": "C:.."}, "unsafe Skill name"),
+        (
+            {"skill": "ghost", "kind": "archive", "live": False, "archive_id": "C:.."},
+            "unsafe archive",
+        ),
+    )
+    for revision_id, (fields, problem) in enumerate(unsafe, start=len(service.history(root)) + 1):
+        line: dict[str, Any] = {"v": 1, "id": revision_id, "at": "2026-01-01T00:00:00.000000Z"}
+        line |= {"kind": "change", "actor": "human", "files": [], **fields}
+        with (root.parent / "skill-history.jsonl").open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(line) + "\n")
+        with pytest.raises(SkillAuthoringError, match=problem):
+            service.revert(root, [revision_id], writer=HUMAN_WRITER)
+    assert (root / "found" / "SKILL.md").is_file()
