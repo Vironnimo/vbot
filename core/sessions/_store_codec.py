@@ -18,6 +18,7 @@ from core.sessions import _store_attachments, _store_fts, _store_values
 from core.sessions._types import JsonObject, ToolResultFacts, ToolResultPayload
 from core.sessions.errors import SessionStoreCorruptError
 from core.utils.ids import is_safe_id
+from core.utils.surrogates import replace_lone_surrogates, without_lone_surrogates
 
 if TYPE_CHECKING:
     from core.chat.messages import ChatMessage
@@ -123,6 +124,22 @@ def validate_appendable(message: ChatMessage) -> None:
     message.validate()
     if message.role not in APPENDABLE_ROLES:
         raise ChatSessionError(f"{message.role} entries are written by their Session operation")
+
+
+def storable(message: ChatMessage) -> ChatMessage:
+    """Return *message* as SQLite can store it: every lone surrogate replaced with U+FFFD.
+
+    UTF-8 cannot encode a lone surrogate, so one anywhere in a Message would
+    fail its whole write, and the Run that writes it. Chat replaces them where
+    Model output and Tool Results enter a Run; this guards every other path.
+    """
+    data = message.to_dict()
+    replaced = without_lone_surrogates(data)
+    if replaced is data:
+        return message
+    from core.chat.messages import ChatMessage
+
+    return ChatMessage.from_dict(replaced)
 
 
 def validate_tool_results(
@@ -476,16 +493,20 @@ def link_tool_result(
     )
     if facts is not None and facts.payloads:
         created_at = _store_values._timestamp(message.timestamp, "Message timestamp")
+        payloads = [
+            (payload.payload_id, payload.owner_name, replace_lone_surrogates(payload.payload_json))
+            for payload in facts.payloads
+        ]
         connection.executemany(
             "INSERT INTO tool_result_payloads (payload_id, call_key, owner_name, created_at, "
             "payload_json) VALUES (?, ?, ?, ?, ?)",
             [
-                (payload.payload_id, call_key, payload.owner_name, created_at, payload.payload_json)
-                for payload in facts.payloads
+                (payload_id, call_key, owner_name, created_at, payload_json)
+                for payload_id, owner_name, payload_json in payloads
             ],
         )
-        for payload in facts.payloads:
-            _store_attachments.record(connection, entry_key, json.loads(payload.payload_json))
+        for _payload_id, _owner_name, payload_json in payloads:
+            _store_attachments.record(connection, entry_key, json.loads(payload_json))
 
 
 @dataclass

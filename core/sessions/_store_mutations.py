@@ -290,7 +290,7 @@ def append_messages(
     keys: list[int] = []
     reply_target = _store_values.subagent_reply_target(state)
     for message in messages:
-        message = replace(message, subagent_reply_target=reply_target)
+        message = _store_codec.storable(replace(message, subagent_reply_target=reply_target))
         entry_key = _store_codec.insert_entry(
             connection, session_key, seq, message, run_key=run_key
         )

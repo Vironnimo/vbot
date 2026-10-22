@@ -34,6 +34,7 @@ from core.tools import (
     tool_failure_for_exception,
 )
 from core.utils.logging import get_logger
+from core.utils.surrogates import without_lone_surrogates
 
 _LOGGER = get_logger("chat")
 
@@ -310,10 +311,10 @@ class _EmittingToolRegistry(ToolRegistry):
                 result = await self._finish_result_hooks(
                     context, effective_arguments, result, result_contract
                 )
-            # No Secret value leaves the call: not to the Model, the events or
-            # the persisted Tool Result.
+            # No Secret value and no lone surrogate leaves the call: not to the
+            # Model, the events or the persisted Tool Result.
             masker = self._secret_masker()
-            result = masker.mask_value(result)
+            result = _leaving_call(masker, result)
 
             if result.get("ok") is True:
                 context._commit_owned_effects()
@@ -325,14 +326,15 @@ class _EmittingToolRegistry(ToolRegistry):
                 self._tool_media[context.tool_call_id] = context.result_media
             timing = _timing_payload(started_at, started_perf)
             self._tool_timings[context.tool_call_id] = timing
-            completed_display = masker.mask_value(
+            completed_display = _leaving_call(
+                masker,
                 _tool_display_payload(
                     self._registry,
                     context.tool_name,
                     effective_arguments,
                     context=context,
                     result=result,
-                )
+                ),
             )
             self._tool_displays[context.tool_call_id] = completed_display
             error = result.get("error")
@@ -471,16 +473,17 @@ class _EmittingToolRegistry(ToolRegistry):
     ) -> JsonObject:
         """Finish the lifecycle of a call whose hooks or bookkeeping raised."""
         masker = self._secret_masker()
-        result = masker.mask_value(tool_failure_for_exception(context.tool_name, error))
+        result = _leaving_call(masker, tool_failure_for_exception(context.tool_name, error))
         try:
-            display = masker.mask_value(
+            display = _leaving_call(
+                masker,
                 _tool_display_payload(
                     self._registry,
                     context.tool_name,
                     events.arguments,
                     context=context,
                     result=result,
-                )
+                ),
             )
         except Exception:
             display = _empty_tool_display_payload()
@@ -608,6 +611,15 @@ class _EmittingToolRegistry(ToolRegistry):
                 timer.discard()
                 raise
             return self.validate_result(context.tool_name, result, contract=context.result_contract)
+
+
+def _leaving_call[T](masker: SecretMasker, value: T) -> T:
+    """*value* as it leaves a call: Secret values masked, lone surrogates replaced.
+
+    A Tool's text can hold a lone surrogate (a byte that was no UTF-8, read
+    with ``surrogateescape``); UTF-8 cannot encode it for history or a Provider.
+    """
+    return without_lone_surrogates(masker.mask_value(value))
 
 
 def _safe_schema_fingerprint(registry: Any, tool_name: str) -> str:

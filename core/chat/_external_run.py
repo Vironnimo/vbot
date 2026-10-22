@@ -48,6 +48,7 @@ from core.sessions import AGENT_DEFAULT_PROJECT, ChatSession, SessionAddress
 from core.tools import called_tool_name, tool_failure
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
+from core.utils.surrogates import replace_lone_surrogates, without_lone_surrogates
 from core.utils.workers import finish_despite_cancel
 
 if TYPE_CHECKING:
@@ -148,7 +149,7 @@ class ExternalRun:
         """Store what the user said."""
         if text.strip():
             message = ChatMessage.user(
-                masked_content(text, self._dependencies.secret_masker),
+                masked_content(replace_lone_surrogates(text), self._dependencies.secret_masker),
                 input_origin=INPUT_ORIGIN_SPEECH_TRANSCRIPTION,
             )
             if await self._append([message]):
@@ -157,7 +158,9 @@ class ExternalRun:
     async def record_assistant(self, text: str) -> None:
         """Store what the Model said."""
         if text.strip():
-            message = ChatMessage.assistant(model=self._model, content=text)
+            message = ChatMessage.assistant(
+                model=self._model, content=replace_lone_surrogates(text)
+            )
             if await self._append([message]):
                 _emit_message_event(self._require_run(), ASSISTANT_OUTPUT_EVENT, message)
 
@@ -187,16 +190,19 @@ class ExternalRun:
         if self.ended:
             return tool_failure("tool_stopped", _STOPPED)
         permissions = await self._current_permissions(run)
+        # The Tool runs with exactly the arguments that are stored.
         call = ToolCall.from_dict(
-            normalize_tool_call_candidate(
-                tool_call_id=call_id,
-                name=called_tool_name(
-                    name,
-                    self._allowed_tools,
-                    registered=_RegisteredNames(self._dependencies.tools),
-                ),
-                arguments=arguments,
-                fallback_id=new_id("call"),
+            without_lone_surrogates(
+                normalize_tool_call_candidate(
+                    tool_call_id=call_id,
+                    name=called_tool_name(
+                        name,
+                        self._allowed_tools,
+                        registered=_RegisteredNames(self._dependencies.tools),
+                    ),
+                    arguments=arguments,
+                    fallback_id=new_id("call"),
+                )
             )
         )
         self._iteration += 1
