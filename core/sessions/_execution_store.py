@@ -137,6 +137,15 @@ class SessionExecutionStore:
             lambda connection: _store_owned.temporary_binding(connection, address)
         )
 
+    def temporary_agent_binding(
+        self, project_id: str | None, agent_id: str
+    ) -> TemporarySessionBinding | None:
+        return self._store._read_decoded(
+            lambda connection: _store_owned.temporary_agent_binding(
+                connection, project_id, agent_id
+            )
+        )
+
     def temporary_binding_by_participant(
         self, *, owner_name: str, group_id: str, participant_id: str
     ) -> TemporarySessionBinding | None:

@@ -664,6 +664,17 @@ class ChatSessionManager:
     def temporary_binding(self, address: SessionAddress) -> TemporarySessionBinding | None:
         return self._store.execution.temporary_binding(address)
 
+    def temporary_agent_binding(
+        self, project_id: str | None, agent_id: str
+    ) -> TemporarySessionBinding | None:
+        """Return the live binding of the temporary Agent *agent_id*, or ``None``.
+
+        Every Session under a temporary Agent's id runs as that Agent: its bound
+        Session and the child Sessions it delegated to itself, which have no
+        binding of their own. Bindings that share an id name no single Agent.
+        """
+        return self._store.execution.temporary_agent_binding(project_id, agent_id)
+
     def temporary_binding_by_participant(
         self, *, owner_name: str, group_id: str, participant_id: str
     ) -> TemporarySessionBinding | None:
