@@ -255,6 +255,8 @@ async def test_the_field_reasoning_arrives_in_is_learned_for_the_model(mode: str
         ("stop", "stop"),
         ("tool_calls", "tool_calls"),
         ("length", "output_truncated"),
+        ("model_length", "output_truncated"),
+        ("model_context_window_exceeded", "output_truncated"),
         ("content_filter", "content_filtered"),
         ("network_error", "error"),
         ("provider_added_reason", "unknown"),
