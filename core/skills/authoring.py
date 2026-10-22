@@ -683,9 +683,13 @@ class SkillAuthoringService:
             candidate /= part
             _reject_redirect(candidate)
         candidate = self._resolve(candidate)
-        if candidate == skill_dir_resolved or not _is_within(
-            candidate,
-            skill_dir_resolved,
+        # A support file lives in a resource folder, so it never resolves to a
+        # direct child of the package such as SKILL.md, which only validated
+        # document writes may change.
+        if (
+            candidate == skill_dir_resolved
+            or candidate.parent == skill_dir_resolved
+            or not _is_within(candidate, skill_dir_resolved)
         ):
             raise SkillAuthoringError(f"Illegal support file path: {relative_path}")
         return candidate
