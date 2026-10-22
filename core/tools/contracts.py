@@ -492,47 +492,38 @@ def _compile_schema(
     return canonical
 
 
+# Keywords whose values are instance data, never schemas: schema rules do not
+# apply inside them, even where the data looks like a schema.
+_DATA_KEYWORDS = frozenset({"const", "default", "enum", "examples"})
+# Keywords whose values map names to schemas; the map itself is no schema.
+_SCHEMA_MAPS = frozenset(
+    {"$defs", "definitions", "dependentSchemas", "patternProperties", "properties"}
+)
+
+
 def _validate_schema_invariants(
     node: Any,
     *,
     label: str,
     path: tuple[str | int, ...],
     require_closed_objects: bool,
+    schema: bool = True,
 ) -> None:
+    """Check every schema inside *node*; *schema* says whether *node* is one itself."""
     if isinstance(node, dict):
-        reference = node.get("$ref")
-        if isinstance(reference, str) and not reference.startswith("#/"):
-            raise ToolContractError(
-                f"Tool {label} schema{_format_path(path)} uses an external $ref"
+        if schema:
+            _validate_schema_node(
+                node, label=label, path=path, require_closed_objects=require_closed_objects
             )
-        if node.get("type") == "object" and "properties" in node:
-            if require_closed_objects and node.get("additionalProperties") is not False:
-                raise ToolContractError(
-                    f"Tool {label} schema{_format_path(path)} must set "
-                    "additionalProperties to false"
-                )
-            properties = node.get("properties")
-            if not isinstance(properties, dict):
-                raise ToolContractError(
-                    f"Tool {label} schema{_format_path(path)} properties must be an object"
-                )
-            required = node.get("required", [])
-            if not isinstance(required, list):
-                raise ToolContractError(
-                    f"Tool {label} schema{_format_path(path)} required must be an array"
-                )
-            unknown_required = sorted(set(required).difference(properties))
-            if unknown_required:
-                names = ", ".join(unknown_required)
-                raise ToolContractError(
-                    f"Tool {label} schema{_format_path(path)} requires unknown properties: {names}"
-                )
         for key, value in node.items():
+            if schema and key in _DATA_KEYWORDS:
+                continue
             _validate_schema_invariants(
                 value,
                 label=label,
                 path=(*path, key),
                 require_closed_objects=require_closed_objects,
+                schema=not (schema and key in _SCHEMA_MAPS),
             )
     elif isinstance(node, list):
         for index, value in enumerate(node):
@@ -542,6 +533,41 @@ def _validate_schema_invariants(
                 path=(*path, index),
                 require_closed_objects=require_closed_objects,
             )
+
+
+def _validate_schema_node(
+    node: JsonObject,
+    *,
+    label: str,
+    path: tuple[str | int, ...],
+    require_closed_objects: bool,
+) -> None:
+    reference = node.get("$ref")
+    # A fragment (``#``, ``#/$defs/...``, ``#anchor``) stays inside this schema.
+    if isinstance(reference, str) and not reference.startswith("#"):
+        raise ToolContractError(f"Tool {label} schema{_format_path(path)} uses an external $ref")
+    if node.get("type") != "object" or "properties" not in node:
+        return
+    if require_closed_objects and node.get("additionalProperties") is not False:
+        raise ToolContractError(
+            f"Tool {label} schema{_format_path(path)} must set additionalProperties to false"
+        )
+    properties = node.get("properties")
+    if not isinstance(properties, dict):
+        raise ToolContractError(
+            f"Tool {label} schema{_format_path(path)} properties must be an object"
+        )
+    required = node.get("required", [])
+    if not isinstance(required, list):
+        raise ToolContractError(
+            f"Tool {label} schema{_format_path(path)} required must be an array"
+        )
+    unknown_required = sorted(set(required).difference(properties))
+    if unknown_required:
+        names = ", ".join(unknown_required)
+        raise ToolContractError(
+            f"Tool {label} schema{_format_path(path)} requires unknown properties: {names}"
+        )
 
 
 def _closed_root_parameters(schema: Any) -> tuple[str, ...] | None:
