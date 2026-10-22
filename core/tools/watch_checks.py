@@ -26,7 +26,8 @@ status outside 2xx and content that is not text fail the check.
 Permission Rules. A job a restricted Session created or changed keeps that
 Session's boundary as its ceiling (``CronJob.permission_ceiling``), and every
 check applies it: the command is checked as a host-shell line in the job's
-working directory (``CommandChecker``) and runs in the confined environment;
+working directory (``CommandChecker``) and runs in the confined environment,
+which withholds the credentials vBot knows (``credential_names``);
 the URL is fetched through the public-HTTP guard (``fetch_public``: public
 addresses only, every redirect hop revalidated and checked with ``check_url``)
 instead of the open GET above. A refused check fails with the refusal as its
@@ -38,7 +39,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Container, Sequence
 from functools import partial
 from pathlib import Path
 from typing import Any, Protocol
@@ -116,8 +117,10 @@ class WatchCheckRunner:
         transport: httpx.AsyncBaseTransport | None = None,
         command_checker: CommandChecker | None = None,
         ceiling_boundary: CeilingBoundary | None = None,
+        credential_names: Callable[[], Container[str]] = frozenset,
     ) -> None:
         self._agents = agents
+        self._credential_names = credential_names
         self._projects = projects
         self._data_root = data_root
         self._launch = launch
@@ -148,7 +151,9 @@ class WatchCheckRunner:
             boundary = await self._boundary(ceiling, agent_id, project_id)
         except WatchCheckError:
             return None
-        return await self._command_refusal(watch.target, workdir, boundary)
+        return await self._command_refusal(
+            watch.target, workdir, boundary, self._credential_names()
+        )
 
     async def run_command(
         self,
@@ -160,13 +165,15 @@ class WatchCheckRunner:
     ) -> str:
         """Run ``command`` in the job's working directory; its output."""
         workdir = await self._workdir(agent_id, project_id)
+        withheld: Container[str] | None = None
         if ceiling is not None:
+            withheld = self._credential_names()
             boundary = await self._boundary(ceiling, agent_id, project_id)
-            refused = await self._command_refusal(command, workdir, boundary)
+            refused = await self._command_refusal(command, workdir, boundary, withheld)
             if refused is not None:
                 raise WatchCheckError(_refused(refused))
         try:
-            start = await _WORKERS.run(_shell_start, command, workdir, ceiling is not None)
+            start = await _WORKERS.run(_shell_start, command, workdir, withheld)
         except HostShellMissingError as error:
             raise WatchCheckError(f"The check command did not run: {error}") from error
         try:
@@ -277,7 +284,11 @@ class WatchCheckRunner:
             ) from error
 
     async def _command_refusal(
-        self, command: str, workdir: Path, boundary: PermissionBoundary
+        self,
+        command: str,
+        workdir: Path,
+        boundary: PermissionBoundary,
+        credential_names: Container[str],
     ) -> PermissionRefusal | None:
         if self._checker is None:
             return boundary.refusal(
@@ -286,7 +297,11 @@ class WatchCheckRunner:
                 "unanalyzable",
                 detail="this vBot cannot analyze commands to check them",
             )
-        environment = await _WORKERS.run(partial(unattended_command_environment, confined=True))
+        environment = await _WORKERS.run(
+            partial(
+                unattended_command_environment, confined=True, credential_names=credential_names
+            )
+        )
         return await self._checker.check_line(
             boundary,
             command,
@@ -322,9 +337,13 @@ class WatchCheckRunner:
         return path
 
 
-def _shell_start(command: str, workdir: Path, confined: bool) -> HostShellStart:
-    """The host shell for a check; blocking: the environment reads the registry on Windows."""
-    return host_shell_start(command, workdir, unattended_command_environment(confined=confined))
+def _shell_start(command: str, workdir: Path, withheld: Container[str] | None) -> HostShellStart:
+    """The host shell for a check, confined when *withheld* (the credentials vBot
+    knows) is given; blocking: the environment reads the registry on Windows."""
+    environment = unattended_command_environment(
+        confined=withheld is not None, credential_names=withheld or frozenset()
+    )
+    return host_shell_start(command, workdir, environment)
 
 
 def _refused(refusal: PermissionRefusal) -> str:

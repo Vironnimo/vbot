@@ -46,6 +46,7 @@ from core.runtime._agent_rename import (
 from core.runtime._bootstrap import bootstrap, start_event_loop_service
 from core.runtime._config_backups import ConfigBackupSchedule
 from core.runtime._configuration import _resolve_data_dir
+from core.runtime._credential_names import CredentialNames, known_credential_names
 from core.runtime._extension_host import ExtensionHostFactory
 from core.runtime._extension_sampling import sample_extension
 from core.runtime._prompt_blocks import refresh_prompt_blocks
@@ -127,6 +128,8 @@ class Runtime(RuntimeServiceGraph):
         # The serving port, which restricted Runs may not reach on loopback.
         self._server_port: int | None = None
         self._server_hosts: Callable[[], tuple[str, ...]] | None = None
+        # Every name resolved as an environment credential in this process.
+        self._resolved_credential_names: set[str] = set()
         self._close_task: asyncio.Task[None] | None = None
         # Lives as long as the Runtime: a restart keeps coordinating with a
         # data snapshot that is still copying.
@@ -472,7 +475,12 @@ class Runtime(RuntimeServiceGraph):
         start_event_loop_service(self._channel_service, "Channel service not available")
 
     def resolve_environment_credential(self, key: str) -> str:
-        """Resolve one environment credential using runtime precedence rules."""
+        """Resolve one environment credential using runtime precedence rules.
+
+        The name counts as a credential vBot uses from then on
+        (``environment_credential_names``).
+        """
+        self._resolved_credential_names.add(key)
         if key in os.environ:
             return os.environ[key]
         fallback = self._fallback_credential(key)
@@ -485,6 +493,25 @@ class Runtime(RuntimeServiceGraph):
         if self._fallback_credential(key) is not None:
             return "data_dir"
         return None
+
+    def environment_credential_names(self) -> CredentialNames:
+        """The environment names vBot knows as credentials, as of now.
+
+        Provider Connection keys with their Account variants, Channel token
+        variables, Extension secret settings, web service keys, the
+        data-directory credentials and every name resolved through
+        ``resolve_environment_credential``. A confined shell environment
+        withholds them (``core.tools.shell_environment``). Reads memory only.
+        """
+        channels = self._channel_service
+        extensions = self._extensions
+        return known_credential_names(
+            stored=self._fallback_environment,
+            resolved=frozenset(self._resolved_credential_names),
+            providers=self._providers,
+            channels=channels.list_channels() if channels is not None else (),
+            extensions=extensions.records() if extensions is not None else (),
+        )
 
     def _fallback_credential(self, key: str) -> str | None:
         """Return the data-directory credential for *key* under host naming rules.

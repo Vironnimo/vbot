@@ -8,6 +8,7 @@ from typing import Any, cast
 
 import pytest
 
+import core.tools.shell_environment as shell_environment
 import core.tools.terminal as terminal_module
 import core.tools.terminal_manager as manager_module
 from core.permissions import PermissionBoundary
@@ -123,6 +124,9 @@ async def test_a_restricted_shell_starts_confined_and_its_prompt_lines_are_check
     # The terminal Tool picks the shell an argument-less start runs.
     monkeypatch.setattr(terminal_module, "default_terminal_argv", lambda env: ["pwsh.exe"])
     monkeypatch.setenv("VBOT_DATA_DIR", str(work.parent / "data"))
+    login = shell_environment._login_environment
+    server = {"OPENAI_API_KEY": "sk-server", "FLAVOR": "release"}
+    monkeypatch.setattr(shell_environment, "_login_environment", lambda: {**login(), **server})
     terminal_manager, factory = manager
     factory.initial_output = _prompt(work)
     analyzer = FakeAnalyzer(plan("Remove-Item secret.txt"))
@@ -137,9 +141,11 @@ async def test_a_restricted_shell_starts_confined_and_its_prompt_lines_are_check
         return await terminal({"action": "input", "terminal_id": terminal_id, **arguments})
 
     # The shell itself runs nothing, so only its folder is checked; it keeps the
-    # Session's rules and starts without vBot's control variables.
+    # Session's rules and starts without vBot's control variables or the credentials
+    # vBot knows (``KNOWN_CREDENTIALS``).
     assert analyzer.argvs == []
-    assert "VBOT_DATA_DIR" not in factory.calls[0][2]
+    assert not {"VBOT_DATA_DIR", "OPENAI_API_KEY"} & set(factory.calls[0][2])
+    assert factory.calls[0][2]["FLAVOR"] == "release"
     assert terminal_manager.terminal(terminal_id, _OWNER).permission_scope == permission_scope(
         boundary
     )

@@ -16,9 +16,10 @@ import pytest
 from core.automation.cron import CronWatch, WatchCheckError
 from core.permissions import BoundaryContext, PermissionBoundary, PermissionCeiling
 from core.tools import _public_http as public_http
-from core.tools import watch_checks
+from core.tools import shell_environment, watch_checks
 from core.tools._powershell import PowerShellRequest
 from core.tools.shell import HostShellStart
+from core.tools.shell_environment import CommandEnvironment
 from core.tools.watch_checks import COMMAND_OUTPUT_MAX_BYTES, URL_MAX_BYTES, WatchCheckRunner
 from tests.core.permissions.command_check_support import (
     FakeAnalyzer,
@@ -87,10 +88,15 @@ def _runner(tmp_path: Path, launches: _Launches | None = None, **kwargs: Any) ->
 
 
 @pytest.fixture(autouse=True)
-def _host_shell(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A PowerShell-like host shell that takes its command as a request."""
+def _host_shell(monkeypatch: pytest.MonkeyPatch) -> list[CommandEnvironment]:
+    """A PowerShell-like host shell that takes its command as a request.
 
-    def start(command: str, workdir: Path, _environment: Any) -> HostShellStart:
+    Records the environment each check's shell starts with.
+    """
+    environments: list[CommandEnvironment] = []
+
+    def start(command: str, workdir: Path, environment: CommandEnvironment) -> HostShellStart:
+        environments.append(environment)
         request = PowerShellRequest(
             f"{workdir}|{command}".encode(),
             {_NOT_RUN: "request_unreadable", _NOT_RUN + 1: "workdir_unavailable"},
@@ -98,6 +104,7 @@ def _host_shell(monkeypatch: pytest.MonkeyPatch) -> None:
         return HostShellStart(["pwsh", "-Command", "bootstrap"], {}, request)
 
     monkeypatch.setattr(watch_checks, "host_shell_start", start)
+    return environments
 
 
 @pytest.mark.asyncio
@@ -226,9 +233,12 @@ async def test_a_watched_url_fails_with_what_went_wrong(
 
 @pytest.mark.asyncio
 async def test_a_job_with_a_permission_ceiling_runs_only_checks_its_rules_allow(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _host_shell: list[CommandEnvironment]
 ) -> None:
     monkeypatch.setenv("VBOT_DATA_DIR", str(tmp_path / "data"))
+    login = shell_environment._login_environment
+    server = {"OPENAI_API_KEY": "sk-server", "FLAVOR": "release"}
+    monkeypatch.setattr(shell_environment, "_login_environment", lambda: {**login(), **server})
     project = tmp_path / "project"
     analyzer = FakeAnalyzer(plan("Remove-Item", subtree_writes=[tmp_path / "elsewhere"]))
     launches = _Launches(lambda shell: shell.exit(0))
@@ -245,7 +255,11 @@ async def test_a_job_with_a_permission_ceiling_runs_only_checks_its_rules_allow(
         return PermissionBoundary.build(None, context, ceilings=(stored,))
 
     runner = _runner(
-        tmp_path, launches, command_checker=fake_checker(analyzer), ceiling_boundary=boundary
+        tmp_path,
+        launches,
+        command_checker=fake_checker(analyzer),
+        ceiling_boundary=boundary,
+        credential_names=lambda: frozenset({"OPENAI_API_KEY"}),
     )
 
     # Worded for the user's alert as for the Agent: no "you", and how to fix the watch.
@@ -268,7 +282,8 @@ async def test_a_job_with_a_permission_ceiling_runs_only_checks_its_rules_allow(
 
     assert launches.calls == []
     assert refused_url is not None and refused_url.target == "intranet.example"
-    # Checked in the job's directory with the confined environment, then run.
+    # Checked in the job's directory with the confined environment, then run in it:
+    # without vBot's control variables and the credentials vBot knows.
     analyzer.result = plan("Get-Content", reads=[project / "status.txt"])
     output = await runner.run_command(
         "Get-Content status.txt", agent_id="agent-one", project_id="project-a", ceiling=ceiling
@@ -276,7 +291,10 @@ async def test_a_job_with_a_permission_ceiling_runs_only_checks_its_rules_allow(
     assert output == ""
     line, _shell, cwd, environment = analyzer.lines[-1]
     assert (line, cwd) == ("Get-Content status.txt", project)
-    assert "VBOT_DATA_DIR" not in environment
+    started = _host_shell[-1].complete()
+    for confined in (environment, started):
+        assert not {"VBOT_DATA_DIR", "OPENAI_API_KEY"} & set(confined)
+        assert confined["FLAVOR"] == "release"
     assert len(launches.calls) == 1
 
     # An allowed URL's longer body is cut at 1 MB, as without a ceiling, never refused,

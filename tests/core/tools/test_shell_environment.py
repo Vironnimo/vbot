@@ -99,6 +99,32 @@ def test_command_layers_apply_in_order_and_the_run_identity_wins(
     assert command_environment(RunIdentity("agent-1", "session-1", None)).base["PYTHONUTF8"] == "0"
 
 
+def test_a_confined_environment_withholds_known_credentials_but_applies_granted_ones(
+    login_base: dict[str, str],
+) -> None:
+    login_base.update({"OPENAI_API_KEY": "sk-server", "API_TOKEN": "server-token"})
+    known = frozenset({"OPENAI_API_KEY", "API_TOKEN", "UNSET_KEY"})
+
+    layers = command_environment(
+        None, credentials={"API_TOKEN": "granted"}, confined=True, credential_names=known
+    )
+
+    # The shell's start environment stays the one every call shares; the call removes.
+    assert layers.base == command_environment(None).base
+    assert layers.changes["OPENAI_API_KEY"] is None
+    environment = layers.complete()
+    assert "OPENAI_API_KEY" not in environment
+    assert (environment["API_TOKEN"], environment["PAGER"]) == ("granted", "cat")
+    unattended = unattended_command_environment(confined=True, credential_names=known)
+    assert unattended.changes["OPENAI_API_KEY"] is None
+    assert not {"OPENAI_API_KEY", "API_TOKEN"} & unattended.complete().keys()
+    terminal = terminal_environment({"EXTRA": "1"}, confined=True, credential_names=known)
+    assert not {"OPENAI_API_KEY", "API_TOKEN"} & terminal.keys()
+    assert terminal["EXTRA"] == "1"
+    # Without Permission Rules the login's credentials stay.
+    assert terminal_environment(credential_names=known)["OPENAI_API_KEY"] == "sk-server"
+
+
 def test_terminal_environment_has_no_command_layers(login_base: dict[str, str]) -> None:
     environment = terminal_environment({"EXTRA": "1"})
 

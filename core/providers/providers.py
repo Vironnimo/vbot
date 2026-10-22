@@ -630,6 +630,19 @@ class ProviderRegistry:
         """Return a sorted list of all registered provider IDs."""
         return sorted(self._configs.keys())
 
+    def credential_keys(self) -> frozenset[str]:
+        """The base environment key of every Connection that has one.
+
+        Each Account of such a Connection reads the key derived from it
+        (``accounts.derive_credential_key``).
+        """
+        return frozenset(
+            connection.auth.credential_key
+            for config in self._configs.values()
+            for connection in config.connections
+            if connection.auth.credential_key
+        )
+
     def reload(
         self,
         resources_dir: Path,

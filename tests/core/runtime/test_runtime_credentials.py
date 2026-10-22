@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import threading
+from dataclasses import replace
 
 import pytest
 
@@ -15,6 +16,8 @@ from core.runtime.runtime import Runtime
 from core.secrets import CREDENTIALS, SecretStore
 from core.utils.config import Config
 from core.utils.errors import ConfigError
+from tests.core.channels.channels_test_support import make_config
+from tests.core.extensions.extension_test_support import write_extension
 
 OPENROUTER = ConnectionRef("openrouter", "openrouter:api-key")
 
@@ -117,6 +120,49 @@ def test_environment_credentials_prefer_the_process_and_reload_into_live_resolve
         runtime.agent_resolver.require_model_configured(model)
     finally:
         runtime.stop()
+
+
+@pytest.mark.asyncio
+async def test_environment_credential_names_join_every_owner_and_each_resolved_name(
+    config: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write_extension(
+        config.data_dir / "extensions",
+        "hub",
+        "def register(api):\n"
+        "    api.register_settings([\n"
+        "        {'key': 'token', 'type': 'secret', 'label': 'Token', 'env_key': 'HUB_TOKEN'},\n"
+        "    ])\n",
+    )
+    runtime = Runtime(config, safe_startup_mode="test")
+    runtime.start()
+    try:
+        await runtime.channel_service.create_channel(
+            replace(make_config(enabled=False), agent_id="main")
+        )
+        await runtime.reload_extensions()
+        runtime.storage.set_data_dir_credential("STORED_TOKEN", "stored")
+        runtime.reload_environment_credentials()
+
+        names = runtime.environment_credential_names()
+        for name in (
+            "OPENAI_API_KEY",
+            "OPENAI_API_KEY__WORK",  # an Account of the Connection
+            "BRAVE_API_KEY",
+            "TELEGRAM_BOT_TOKEN_TG_ASSISTANT",
+            "HUB_TOKEN",
+            "STORED_TOKEN",
+        ):
+            assert name in names
+        assert not any(name in names for name in ("PATH", "OPENAI_API_KEY__DEFAULT", "MCP_TOKEN"))
+        # A name vBot's consumers resolve, such as an MCP credential reference, counts from then on.
+        runtime.resolve_environment_credential("MCP_TOKEN")
+        assert "MCP_TOKEN" in runtime.environment_credential_names()
+        # Names compare as the host compares them.
+        monkeypatch.setattr("core.secrets.store.CREDENTIAL_NAMES_IGNORE_CASE", True)
+        assert "openai_api_key__work" in runtime.environment_credential_names()
+    finally:
+        await runtime.aclose()
 
 
 @pytest.mark.asyncio

@@ -841,6 +841,7 @@ def bootstrap(runtime: Runtime) -> None:
                 data_root=runtime._storage.data_dir,
                 command_checker=runtime._command_checker,
                 ceiling_boundary=partial(_watch_boundary, runtime, Path(runtime._storage.data_dir)),
+                credential_names=runtime.environment_credential_names,
             )
         )
         runtime._cron_service.set_webhook_secrets(runtime._storage.secrets)
@@ -873,6 +874,7 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._tools,
             runtime._command_manager,
             credential_resolver=runtime.resolve_environment_credential,
+            credential_names=runtime.environment_credential_names,
             prompt_blocks=runtime._tool_prompt_blocks,
             update_handoffs=runtime._update_handoffs,
             projects=runtime._projects,

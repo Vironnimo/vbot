@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 from collections.abc import (
     Callable,
+    Container,
     Mapping,
     Sequence,
 )
@@ -56,13 +57,16 @@ class TerminalSessionFactory:
         scrollback_lines: int,
         process_observer: ProcessTreeTracker | None,
         validate_pin: Callable[[str | None], None],
+        credential_names: Callable[[], Container[str]] = frozenset,
     ) -> None:
+        """*credential_names*: what a confined Terminal's environment withholds."""
         self._temporary_files = temporary_files
         self._adapter_factory = adapter_factory
         self._render_host = render_host
         self._scrollback_lines = scrollback_lines
         self._process_observer = process_observer
         self._validate_pin = validate_pin
+        self._credential_names = credential_names
 
     async def start(
         self,
@@ -104,8 +108,14 @@ class TerminalSessionFactory:
         try:
             screen = await self.open_screen(columns, rows)
             log_path, log_handle, log_lease = await asyncio.to_thread(self._open_raw_log, owner)
+            confined = launch.permission_scope is not None
             process_env = await asyncio.to_thread(
-                partial(terminal_environment, env, confined=launch.permission_scope is not None)
+                partial(
+                    terminal_environment,
+                    env,
+                    confined=confined,
+                    credential_names=self._credential_names() if confined else frozenset(),
+                )
             )
             if integrate_shell:
                 kind = integrated_shell_kind(argv)
