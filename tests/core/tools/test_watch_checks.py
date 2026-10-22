@@ -189,11 +189,15 @@ async def test_a_watched_url_answers_with_its_main_text(tmp_path: Path) -> None:
     )
     page = _runner(tmp_path, transport=_page(200, "text/html; charset=utf-8", html))
     data = _runner(tmp_path, transport=_page(200, "application/json", b'{"ok": true}'))
+    # The 1 MB cut splits the last character; the rest still decodes as UTF-8.
+    log = "x" + "ä" * (URL_MAX_BYTES // 2)
+    long = _runner(tmp_path, transport=_page(200, "application/json", log.encode()))
 
     assert await page.fetch_url("https://status.example/") == (
         "# Service status\n\nAll systems are up since this morning."
     )
     assert await data.fetch_url("https://status.example/api") == '{"ok": true}'
+    assert await long.fetch_url("https://status.example/log") == log[:-1]
 
 
 @pytest.mark.asyncio
