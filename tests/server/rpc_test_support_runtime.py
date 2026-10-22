@@ -396,6 +396,14 @@ class StubJobService:
     async def receive_webhook(self, _job_id: str, _headers: Any, _body: bytes) -> str:
         return "refused"
 
+    def retarget_notifications(self, _agent_id: str, _new_agent_id: str) -> tuple[str, ...]:
+        return ()
+
+    async def retarget_notifications_async(
+        self, _agent_id: str, _new_agent_id: str
+    ) -> tuple[str, ...]:
+        return ()
+
 
 class StubChannelService:
     """Channel service double that holds no Channels."""
