@@ -13,13 +13,18 @@
   // the checks (`.vorch/domain-maps/permissions.md`). A Session that stores
   // inherited limits (from the Session that started it or a scheduled job)
   // offers to remove them, after a confirmation
-  // (`permissions.clear_session_ceiling`).
+  // (`permissions.clear_session_ceiling`). The limits change elsewhere (the
+  // Agent's rules, the shared default, a Project override, the stored
+  // ceiling), so they are read again when `revision` changes and whenever
+  // the card is about to open.
   let {
     agentAddress = '',
     sessionId = '',
     // A draft's chosen Working Project (null: the Agent's Workspace);
     // undefined for a Session or a Team member, whose folder is known.
     workingProjectId = undefined,
+    // Changes when the server may have changed the Agent or the Session.
+    revision = '',
   } = $props();
 
   let summary = $state(null);
@@ -29,7 +34,12 @@
   let sequence = 0;
 
   let requestKey = $derived(
-    JSON.stringify([agentAddress, sessionId, workingProjectId ?? '\u0000']),
+    JSON.stringify([
+      agentAddress,
+      sessionId,
+      workingProjectId ?? '\u0000',
+      revision,
+    ]),
   );
 
   $effect(() => {
@@ -173,6 +183,8 @@
     <button
       type="button"
       class="session-permissions"
+      onpointerenter={() => void load(requestKey)}
+      onfocus={() => void load(requestKey)}
       aria-label={`${t('permissions.session.badge')}: ${t('permissions.session.title')}`}
       data-session-permissions
     >

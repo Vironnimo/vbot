@@ -241,7 +241,13 @@ class WatchCheckRunner:
         """GET ``url`` for a job with a ceiling: public addresses its rules allow."""
         try:
             async with asyncio.timeout(URL_TIMEOUT_SECONDS):
-                response = await fetch_public(url, accept=_HEADERS["Accept"], permissions=boundary)
+                response = await fetch_public(
+                    url,
+                    accept=_HEADERS["Accept"],
+                    max_bytes=URL_MAX_BYTES,
+                    permissions=boundary,
+                    truncate=True,
+                )
         except TimeoutError:
             raise WatchCheckError(
                 f"The watched URL did not answer within {URL_TIMEOUT_SECONDS} seconds"
@@ -252,9 +258,8 @@ class WatchCheckRunner:
             raise WatchCheckError(
                 f"The watched URL could not be fetched: {str(error).rstrip('.')}"
             ) from error
-        body = response.content[:URL_MAX_BYTES]
         content_type = response.headers.get("content-type", "")
-        return await _WORKERS.run(_page_text, body, content_type, response.url)
+        return await _WORKERS.run(_page_text, response.content, content_type, response.url)
 
     async def _boundary(
         self, ceiling: PermissionCeiling, agent_id: str | None, project_id: str | None

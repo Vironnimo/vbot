@@ -450,6 +450,7 @@
     <SessionPermissionsBadge
       agentAddress={view.agentAddress}
       sessionId={view.sessionId}
+      revision={view.revision}
       workingProjectId={view.kind === 'draft' && !view.project.team
         ? (view.project.value ?? null)
         : undefined}

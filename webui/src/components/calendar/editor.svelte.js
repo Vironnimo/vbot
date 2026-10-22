@@ -6,7 +6,6 @@ import {
   eventFormPayload,
   eventFormProblem,
   eventFormValues,
-  monthlyChoices,
   moveEventStart,
   occurrenceFormValues,
   weekdayCode,
@@ -150,7 +149,6 @@ export function createCalendarEventEditor(context) {
   // A new start keeps the event's length.
   function setStart(patch) {
     moveEventStart(formValues, patch);
-    keepMonthlyChoice();
     formError = '';
   }
 
@@ -168,7 +166,6 @@ export function createCalendarEventEditor(context) {
     if (freq === 'weekly' && formValues.by_weekday.length === 0) {
       formValues.by_weekday = [weekdayCode(formValues.start_date)];
     }
-    keepMonthlyChoice();
     formError = '';
   }
 
@@ -176,16 +173,6 @@ export function createCalendarEventEditor(context) {
     formValues.by_weekday = formValues.by_weekday.includes(code)
       ? formValues.by_weekday.filter((day) => day !== code)
       : [...formValues.by_weekday, code];
-  }
-
-  // A monthly weekday choice the new start day no longer offers falls back
-  // to its day of the month.
-  function keepMonthlyChoice() {
-    if (
-      !monthlyChoices(formValues.start_date).includes(formValues.monthly_by)
-    ) {
-      formValues.monthly_by = 'day';
-    }
   }
 
   async function submitForm() {
