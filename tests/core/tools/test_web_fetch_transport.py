@@ -198,7 +198,9 @@ async def test_a_redirect_back_after_a_login_service_set_cookies_reaches_the_pag
     login = "https://idp.example.org/authorize"
     requested: list[str] = []
 
-    async def http_get(session: StreamingSession, url: str, max_bytes: int) -> PublicResponse:
+    async def http_get(
+        session: StreamingSession, url: str, max_bytes: int, **_options: Any
+    ) -> PublicResponse:
         del max_bytes
         requested.append(url)
         if url == login:
@@ -603,7 +605,7 @@ async def test_redirect_hosts_use_the_same_canonical_url_and_dns_pin(
     calls: list[tuple[str, list[str]]] = []
     redirects = ["https://bücher.example.:8443/page", f"https://[{IPV6_ADDRESS}]/page"]
 
-    async def get(session: Any, url: str, max_bytes: int) -> PublicResponse:
+    async def get(session: Any, url: str, max_bytes: int, **_options: Any) -> PublicResponse:
         calls.append((url, list(session.curl_options[CurlOpt.RESOLVE])))
         if len(calls) <= len(redirects):
             return make_result(status_code=302, headers={"Location": redirects[len(calls) - 1]})
@@ -629,7 +631,7 @@ async def test_calls_share_a_bounded_number_of_requests_per_host(
     peak: Counter[str] = Counter()
     release = asyncio.Event()
 
-    async def get(session: Any, url: str, max_bytes: int) -> PublicResponse:
+    async def get(session: Any, url: str, max_bytes: int, **_options: Any) -> PublicResponse:
         host = urlparse(url).hostname or ""
         active[host] += 1
         peak[host] = max(peak[host], active[host])

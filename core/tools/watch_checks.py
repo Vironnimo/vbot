@@ -385,6 +385,20 @@ def _last_line(output: str) -> str:
     return last if len(last) <= _ERROR_TAIL_CHARS else f"{last[: _ERROR_TAIL_CHARS - 1]}…"
 
 
+def _whole_characters(content: bytes) -> bytes:
+    """A cut body without the UTF-8 character the cut split.
+
+    That one character would fail the whole body as UTF-8, so it would decode as
+    Windows-1252. A body that is not UTF-8 before its end stays as it is.
+    """
+    try:
+        content.decode("utf-8")
+    except UnicodeDecodeError as error:
+        if error.reason == "unexpected end of data":
+            return content[: error.start]
+    return content
+
+
 def _page_text(content: bytes, content_type: str, url: str) -> str:
     """A fetched body as text: an HTML page's main text, other text decoded; blocking."""
     media_type = content_type.split(";", 1)[0].strip().lower()
@@ -394,6 +408,8 @@ def _page_text(content: bytes, content_type: str, url: str) -> str:
         raise WatchCheckError(
             f"The watched URL answered with {media_type or 'binary data'}, not text"
         )
+    if len(content) >= URL_MAX_BYTES:
+        content = _whole_characters(content)
     text = _decoded(content, content_type)
     if not is_html_page(media_type, text):
         return text

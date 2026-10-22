@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
 
-from core.automation import _cron_notifications as notifications
+from core.automation import _cron_timing as cron_timing
 from core.automation.cron import CronDelivery, CronStorageError
 from core.channels import ChannelError
 from core.runs import RunStatus
@@ -57,11 +58,16 @@ async def test_notifications_survive_restart_without_repeating_a_completed_run(
 
     # Reconfiguration must not redirect the retained message to a different chat.
     await service.update_job(job.id, delivery=CronDelivery(kind="none"))
+    # An epoch-seconds retry time of earlier builds is an unknown field: kept, never read.
+    jobs_file = tmp_path / "cron" / "jobs.json"
+    stored = json.loads(jobs_file.read_text(encoding="utf-8"))
+    stored["jobs"][0]["notifications"][0]["retry_at"] = 4102444800.0
+    jobs_file.write_text(json.dumps(stored), encoding="utf-8")
     recovered, recovered_trigger = make_service(tmp_path)
     recovered_chats = FakeChats()
     recovered.set_chat_delivery(recovered_chats)
-    now = notifications.time.time()
-    monkeypatch.setattr(notifications.time, "time", lambda: now + 60)
+    now = cron_timing._utc_now()
+    monkeypatch.setattr(cron_timing, "_utc_now", lambda: now + timedelta(seconds=60))
     if failure == "offline":
         delivered = asyncio.Event()
         original_send = recovered_chats.send
@@ -82,6 +88,8 @@ async def test_notifications_survive_restart_without_repeating_a_completed_run(
         assert recovered_chats.sent == []
         assert recovered.get_job(job.id).delivery_progress()["uncertain"] == 1
         await recovered.retry_delivery(job.id)
+        kept = json.loads(jobs_file.read_text(encoding="utf-8"))["jobs"][0]["notifications"]
+        assert (kept[0]["retry_at"], kept[0]["retry_after_at"]) == (4102444800.0, None)
         await recovered._notifications.flush()
     assert recovered_chats.sent == [("tg-main", "The result.", "chat-42", "7")]
     assert recovered.get_job(job.id).delivery_progress()["waiting"] == 0
@@ -89,7 +97,7 @@ async def test_notifications_survive_restart_without_repeating_a_completed_run(
     assert recovered_trigger.trigger_run.await_count == 0
     await recovered._notifications.flush()
     assert len(recovered_chats.sent) == 1
-    persisted = json.loads((tmp_path / "cron" / "jobs.json").read_text(encoding="utf-8"))
+    persisted = json.loads(jobs_file.read_text(encoding="utf-8"))
     assert "notifications" not in persisted["jobs"][0]
     await recovered.aclose()
 
@@ -172,3 +180,38 @@ async def test_slow_delivery_never_holds_a_cron_run_slot(
         await service._notifications.flush()
         await service.aclose()
     assert [text for _, text, *_ in chats.sent] == ["First.", "Second."]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("started", [True, False], ids=["live", "at-startup"])
+async def test_an_agent_rename_takes_the_waiting_notifications_along(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, started: bool
+) -> None:
+    service, trigger = make_service(tmp_path)
+    chats = FakeChats()
+    service.set_chat_delivery(chats)
+    job = await service.create_job(
+        agent_id="agent-one",
+        prompt="Check",
+        schedule_type="interval",
+        interval_seconds=60,
+        delivery=_CHAT,
+    )
+    scripted_runs(trigger, (RunStatus.COMPLETED, "The result."))
+    service.set_chat_delivery(None)
+    assert (await service._execution._trigger_job_run(job)).succeeded
+    # The rename moves the Channel first; until the job follows, the message waits.
+    chats.owners["tg-main"] = "agent-two"
+    service.set_chat_delivery(chats)
+    await service._notifications.flush()
+    assert chats.sent == []
+    if started:
+        await service.retarget_agent_async(job.id, "agent-two")
+    else:
+        service.retarget_agent(job.id, "agent-two")
+    now = cron_timing._utc_now()
+    monkeypatch.setattr(cron_timing, "_utc_now", lambda: now + timedelta(seconds=30))
+    await service._notifications.flush()
+    assert chats.sent == [("tg-main", "The result.", "chat-42", "7")]
+    assert service.get_job(job.id).delivery_progress()["waiting"] == 0
+    await service.aclose()

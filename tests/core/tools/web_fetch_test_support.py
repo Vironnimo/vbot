@@ -155,8 +155,10 @@ def install_http_get(
     a transport error.
     """
 
-    async def _fake_http_get(session: object, url: str, max_bytes: int) -> PublicResponse:
-        del session, max_bytes
+    async def _fake_http_get(
+        session: object, url: str, max_bytes: int, *, truncate: bool = False
+    ) -> PublicResponse:
+        del session, max_bytes, truncate
         return responder(url)
 
     monkeypatch.setattr(public_http, "_http_get", _fake_http_get)
