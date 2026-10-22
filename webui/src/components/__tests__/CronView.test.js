@@ -17,6 +17,7 @@ const deleteCronJobMock = vi.fn();
 const enableCronJobMock = vi.fn();
 const disableCronJobMock = vi.fn();
 const retryCronDeliveryMock = vi.fn();
+const acknowledgeCronAlertMock = vi.fn();
 
 vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
@@ -31,6 +32,7 @@ vi.mock('$lib/api.js', () =>
     enableCronJob: (...args) => enableCronJobMock(...args),
     disableCronJob: (...args) => disableCronJobMock(...args),
     retryCronDelivery: (...args) => retryCronDeliveryMock(...args),
+    acknowledgeCronAlert: (...args) => acknowledgeCronAlertMock(...args),
   }),
 );
 
@@ -56,6 +58,7 @@ describe('CronView', () => {
     enableCronJobMock.mockReset();
     disableCronJobMock.mockReset();
     retryCronDeliveryMock.mockReset();
+    acknowledgeCronAlertMock.mockReset();
 
     rpcMock.mockImplementation(createAgentListRpcMock());
     listCronJobsMock.mockResolvedValue({ jobs: [] });
@@ -65,6 +68,7 @@ describe('CronView', () => {
     enableCronJobMock.mockResolvedValue({ ok: true });
     disableCronJobMock.mockResolvedValue({ ok: true });
     retryCronDeliveryMock.mockResolvedValue({ ok: true });
+    acknowledgeCronAlertMock.mockResolvedValue({ ok: true });
   });
 
   afterEach(async () => {
@@ -706,6 +710,11 @@ describe('CronView', () => {
             uncertain: 1,
             error: 'Unknown delivery',
           },
+          unread_alert: {
+            message: 'Delivery could not be confirmed.',
+            at: '2026-05-14T10:06:00.000000Z',
+            kind: 'delivery',
+          },
         }),
       ],
     });
@@ -713,6 +722,15 @@ describe('CronView', () => {
     await waitForCondition(() =>
       document.querySelector('[data-testid="cron-delivery-progress"]'),
     );
+    // The unread alert shows on the job's row and in its view until marked read.
+    expect(
+      document
+        .querySelector('[data-testid="cron-item-alert-job-done"]')
+        .getAttribute('aria-label'),
+    ).toBe(t('cron.alert.unread'));
+    expect(
+      document.querySelector('[data-testid="cron-unread-alert"]').textContent,
+    ).toContain('Delivery could not be confirmed.');
     const banner = document.querySelector(
       '[data-testid="cron-delivery-progress"]',
     );
@@ -722,6 +740,15 @@ describe('CronView', () => {
     expect(retryCronDeliveryMock).toHaveBeenCalledWith('job-done');
     expect(enableCronJobMock).not.toHaveBeenCalled();
     expect(updateCronJobMock).not.toHaveBeenCalled();
+
+    const alert = () =>
+      document.querySelector('[data-testid="cron-unread-alert"] button');
+    await waitForCondition(() => !alert().disabled);
+    alert().click();
+    await waitForCondition(
+      () => acknowledgeCronAlertMock.mock.calls.length === 1,
+    );
+    expect(acknowledgeCronAlertMock).toHaveBeenCalledWith('job-done');
   });
 
   it('shows a silent Run and the last answer and delivers to a chat of the Agent', async () => {
@@ -803,6 +830,31 @@ describe('CronView', () => {
         },
       }),
     );
+  });
+
+  it('offers no chat delivery to a job of a Project Agent', async () => {
+    listCronJobsMock.mockResolvedValue({
+      jobs: [
+        cronJob({
+          id: 'job-project',
+          agent_id: 'builder',
+          project_id: 'vbot',
+          target: 'builder@vbot',
+          delivery: { kind: 'app' },
+        }),
+      ],
+    });
+    mountView();
+    await waitForCondition(() => document.getElementById('cron-job-delivery'));
+    document.getElementById('cron-job-delivery').click();
+    flushSync();
+    const kinds = [...document.querySelectorAll('.dropdown-option')].map(
+      (option) => option.textContent.trim(),
+    );
+    expect(kinds).toEqual([
+      t('cron.deliveryKind.app'),
+      t('cron.deliveryKind.none'),
+    ]);
   });
 
   it('checks a web page before each Run and shows its last check and change', async () => {
