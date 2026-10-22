@@ -582,6 +582,8 @@ class CompactionRunCoordinator:
 
         compaction_started_perf = time.perf_counter()
         compaction_track = session_track(run.agent_id, run.session_id, run.project_id)
+        # Chat restarts its request-build measurement after any attempt.
+        context.compaction_attempts += 1
         try:
             # Keep the acquired Adapter owned here even if cancellation wins the
             # worker await after construction has already completed.
