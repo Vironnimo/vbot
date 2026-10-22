@@ -66,7 +66,7 @@ Owner-managed temporary Agents resolve through `AgentResolver.resolve_temporary_
 
 ## Agent-facing text
 
-This domain owns the description suggestion prompt (`AGENT_DESCRIPTION_SYSTEM_PROMPT`, `core/runtime/_agent_description.py`), a prompt for another Model job. Before you change, add or delete a sentence of it, read `agent/agent-facing-text.md`: it records why each sentence exists. Update its row for every sentence you change and add one for every sentence you add.
+`description.py` owns description drafting with injected collaborators. This domain owns its prompt (`AGENT_DESCRIPTION_SYSTEM_PROMPT`, `core/agents/description.py`), a prompt for another Model job. Before you change, add or delete a sentence of it, read `agent/agent-facing-text.md`: it records why each sentence exists. Update its row for every sentence you change and add one for every sentence you add.
 
 ## References
 

@@ -695,9 +695,7 @@ class StubRuntime:
         return self.adapter
 
     async def suggest_agent_description(self, agent_id: str) -> str:
-        from core.runtime._agent_description import suggest_agent_description
-
-        return await suggest_agent_description(cast(Any, self), agent_id)
+        return await Runtime.suggest_agent_description(cast(Any, self), agent_id)
 
     def _wire_profile_model(self, provider_id: str, model_id: str) -> Any:
         try:
