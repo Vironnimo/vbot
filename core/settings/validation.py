@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
@@ -208,11 +209,16 @@ def unusable_settings_fallback(settings_path: str | Path) -> JsonObject:
         return {}
     except OSError:
         raw = None
-    if raw is not None and not any(
-        _PERMISSION_RULES_KEY.encode(encoding) in raw
-        for encoding in ("utf-8", "utf-16-le", "utf-16-be")
-    ):
-        return {}
+    if raw is not None:
+        # Look for evidence even in broken JSON. ASCII keys may use JSON escapes
+        # or UTF-16/32; neither spelling may turn unreadable rules into full access.
+        key_evidence = re.sub(
+            rb"\\u00([0-9a-fA-F]{2})",
+            lambda match: bytes([int(match[1], 16)]),
+            raw.replace(b"\x00", b""),
+        )
+        if _PERMISSION_RULES_KEY.encode("ascii") not in key_evidence:
+            return {}
     return {"defaults": {"agent": {_PERMISSION_RULES_KEY: INVALID_PERMISSION_RULES}}}
 
 
