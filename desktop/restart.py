@@ -53,7 +53,7 @@ import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Protocol, TypeGuard
+from typing import Any, Literal, Protocol, TypeGuard, cast
 
 logger = logging.getLogger("vbot.desktop.restart")
 
@@ -279,12 +279,17 @@ def _placement(value: Any) -> WindowPlacement | None:
     if not isinstance(value, dict):
         return None
     state, width, height = value.get("state"), value.get("width"), value.get("height")
-    if state not in _WINDOW_STATES or not _is_dimension(width) or not _is_dimension(height):
+    if (
+        not isinstance(state, str)
+        or state not in _WINDOW_STATES
+        or not _is_dimension(width)
+        or not _is_dimension(height)
+    ):
         return None
     x, y = value.get("x"), value.get("y")
     position = state == "normal" and _is_coordinate(x) and _is_coordinate(y)
     return WindowPlacement(
-        state=state,
+        state=cast(WindowState, state),
         width=width,
         height=height,
         x=x if position else None,
