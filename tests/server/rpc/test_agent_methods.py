@@ -389,6 +389,15 @@ async def test_agent_list_reports_the_effective_context_window(
             id="bash-env-grants-normalized",
         ),
         pytest.param(
+            {"subagent_allow": ["reviewer"]},
+            "tools",
+            {
+                "bash": {"allowed_env": ["BUILD_TOKEN"]},
+                "subagent": {"allowed_agents": ["reviewer"]},
+            },
+            id="delegation-preserves-bash-grants",
+        ),
+        pytest.param(
             {"excluded_skills": ["pdf"]}, "excluded_skills", ["pdf"], id="excluded-skills"
         ),
         # "All Skills except ..." is one partial patch of both Skill fields.
@@ -427,6 +436,7 @@ async def test_agent_update_applies_a_mutable_field(
         temperature=0.9,
         tool_loading={"on_demand": True},
         permission_rules=PermissionRules(write="scratch"),
+        tools={"bash": {"allowed_env": ["BUILD_TOKEN"]}},
     )
 
     updated = await rpc_result(state, "agent.update", id="coder", **params)
@@ -475,6 +485,12 @@ async def test_workspace_is_set_by_update_only(tmp_path: Path) -> None:
         ("agent.update", {"id": "coder", "excluded_skills": ["pdf", ""]}, "excluded_skills"),
         ("agent.update", {"id": "coder", "excluded_skills": ["*"]}, "allowed_skills to []"),
         ("agent.update", {"id": "coder", "tools": "worker"}, "tools"),
+        ("agent.update", {"id": "coder", "subagent_allow": "worker"}, "subagent_allow"),
+        (
+            "agent.update",
+            {"id": "coder", "subagent_allow": [], "tools": {}},
+            "subagent_allow",
+        ),
         (
             "agent.create",
             {"id": "writer", "tools": {"subagent": {"allowed_agents": ["worker", None]}}},

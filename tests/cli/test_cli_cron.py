@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -95,6 +96,26 @@ def test_cron_create_sends_the_schedule_fields(
     assert code == 0
     assert rpc.calls == [("cron.create", CREATED | schedule)]
     assert "job-1" in out
+
+
+@pytest.mark.parametrize("command", ["create", "update"])
+@pytest.mark.parametrize("valid_file", [True, False])
+def test_cron_prompt_file_is_decoded_before_the_request(
+    rpc: FakeRpc, run_cli: RunCli, tmp_path: Path, command: str, valid_file: bool
+) -> None:
+    prompt = 'Prüfe den Build.\nAntworte mit "fertig".\n'
+    source = tmp_path / "prompt.txt"
+    source.write_bytes(prompt.encode("utf-16") if valid_file else b"\xffnot-valid")
+    rpc.reply(f"cron.{command}", {"id": "job-one"})
+    target = ("assistant", "--every", "15") if command == "create" else ("job-one",)
+
+    code, _out, _err = run_cli("cron", command, *target, "--file", str(source))
+
+    assert code == (0 if valid_file else 1)
+    if valid_file:
+        assert rpc.params(f"cron.{command}")["prompt"] == prompt
+    else:
+        assert rpc.calls == []
 
 
 @pytest.mark.parametrize(

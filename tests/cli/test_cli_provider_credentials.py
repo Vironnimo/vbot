@@ -454,11 +454,12 @@ def test_custom_provider_save_sends_the_definition_and_the_key_once(
     assert "secret-sentinel" not in out + err
 
 
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-8-sig", "utf-16"])
 def test_custom_provider_save_replaces_the_wire_block_from_a_file(
-    rpc: FakeRpc, run_cli: RunCli, tmp_path: Path
+    rpc: FakeRpc, run_cli: RunCli, tmp_path: Path, encoding: str
 ) -> None:
     wire_file = tmp_path / "wire.json"
-    wire_file.write_text('{"defaults": {"reasoning": {"supported": false}}}', encoding="utf-8")
+    wire_file.write_text('{"defaults": {"reasoning": {"supported": false}}}', encoding=encoding)
     rpc.reply("provider.custom_list", {"providers": [_STORED_LOCAL_AI]})
     rpc.reply("provider.custom_save", {"provider": {"id": "local-ai", "usable": True}})
 

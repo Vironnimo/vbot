@@ -221,6 +221,14 @@ class AgentMutations:
             changes.pop("id", None)
             agent_path = self._owner._require_agent_path(agent_id)
             agent = self._owner._load_verified_agent(agent_path)
+            if "subagent_allow" in changes:
+                if "tools" in changes:
+                    raise AgentError("subagent_allow cannot be combined with tools")
+                # Patch only this setting, using the current Agent while the store's
+                # mutation lock is held; a CLI read/replace would lose sibling changes.
+                subagent = dict(agent.tools.get("subagent", {}))
+                subagent["allowed_agents"] = changes.pop("subagent_allow")
+                changes["tools"] = {**agent.tools, "subagent": subagent}
             if agent.builtin is not None:
                 editable = _BUILTIN_EDITABLE_FIELDS[agent.builtin]
                 fixed_fields = sorted(set(changes) - editable)

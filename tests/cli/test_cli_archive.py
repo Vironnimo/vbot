@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import shlex
+from dataclasses import replace
 from typing import Any
 
 import pytest
 
 from cli import main
+from cli.parser import parse_args
+from cli.server_management import ServerInstance
 from tests.cli.cli_test_support import FakeRpc, RunCli
 
 AGENT_ENTRY = {
@@ -57,6 +61,96 @@ GROUP_ENTRY = {
 CURSOR = {"archived_at": "2026-09-29T08:00:00.000000Z", "entry_id": "arc_h2q9c4m7r1sd"}
 
 
+@pytest.mark.parametrize(
+    ("command", "method", "result", "prefix", "ending", "action"),
+    [
+        (
+            ("agent", "delete", "coder"),
+            "agent.delete",
+            {"archive_entry_id": AGENT_ENTRY["entry_id"], "agent_id": "coder"},
+            "restore with: ",
+            "\n",
+            "restore",
+        ),
+        (
+            ("project", "remove", "vbot"),
+            "project.rm",
+            {"archive_entry_id": AGENT_ENTRY["entry_id"], "project_id": "vbot"},
+            "restore with: ",
+            "\n",
+            "restore",
+        ),
+        (
+            ("session", "delete", "coder", "session-one"),
+            "session.delete",
+            {"archive_entry_id": AGENT_ENTRY["entry_id"]},
+            "restore with: ",
+            "\n",
+            "restore",
+        ),
+        (
+            ("archive", "list", "--project", "vbot"),
+            "archive.list",
+            {"entries": [AGENT_ENTRY], "next_cursor": CURSOR},
+            "next page: ",
+            "\n",
+            "list",
+        ),
+        (
+            ("archive", "purge", AGENT_ENTRY["entry_id"], "--yes"),
+            "archive.purge",
+            {"pending": [{"entry_id": AGENT_ENTRY["entry_id"], "reason": "stopped"}]},
+            "or run '",
+            "' to continue",
+            "purge",
+        ),
+        (
+            ("agent", "delete", "coder", "--permanent", "--yes"),
+            "agent.delete",
+            {"archive_entry_id": AGENT_ENTRY["entry_id"], "purge_pending": True},
+            "or run '",
+            "' to continue",
+            "purge",
+        ),
+    ],
+)
+def test_archive_followups_keep_the_resolved_server_and_credentials(
+    rpc: FakeRpc,
+    instance: ServerInstance,
+    capsys: pytest.CaptureFixture[str],
+    command: tuple[str, ...],
+    method: str,
+    result: dict[str, Any],
+    prefix: str,
+    ending: str,
+    action: str,
+) -> None:
+    target = replace(
+        instance,
+        host="archive.example",
+        port=443,
+        url="https://archive.example",
+        data_dir=instance.data_dir / "saved sign-in",
+    )
+    rpc.reply(method, result)
+
+    main.run(list(command), resolve=lambda **_target: target)
+    out, err = capsys.readouterr()
+    rendered = (out + err).split(prefix, 1)[1].split(ending, 1)[0]
+    followup = parse_args(shlex.split(rendered)[1:])
+
+    assert (followup.area, followup.command) == ("archive", action)
+    assert followup.url == target.url
+    assert str(followup.data_dir) == str(target.data_dir)
+    if action == "list":
+        assert (followup.project, followup.cursor) == ("vbot", CURSOR)
+    elif action == "purge":
+        assert followup.entry_ids == [AGENT_ENTRY["entry_id"]]
+        assert followup.yes is True
+    else:
+        assert followup.entry_id == AGENT_ENTRY["entry_id"]
+
+
 def test_archive_list_prints_each_entry_and_the_next_page(rpc: FakeRpc, run_cli: RunCli) -> None:
     rpc.reply(
         "archive.list",
@@ -71,7 +165,7 @@ def test_archive_list_prints_each_entry_and_the_next_page(rpc: FakeRpc, run_cli:
 
     assert code == 0
     assert rpc.calls == [("archive.list", {"project_id": "vbot", "limit": 50})]
-    assert out.splitlines() == [
+    assert out.splitlines()[:-1] == [
         "archive entries (automatic deletion after 30 days):",
         '- id=arc_7k2m9q4xw1ab kind=agent subject=coder label="Coder" sessions=12 '
         "archived_at=2026-09-30T14:02:11.120000Z purge_at=2026-10-30T14:02:11.120000Z "
@@ -83,9 +177,9 @@ def test_archive_list_prints_each_entry_and_the_next_page(rpc: FakeRpc, run_cli:
         'owner=swarm label="Docs swarm" sessions=6 state=purging '
         "archived_at=2026-09-29T08:00:00.000000Z purge_at=- restorable=no "
         "reason=kind_not_restorable",
-        "next page: vbot archive list --project vbot --cursor "
-        '\'{"archived_at":"2026-09-29T08:00:00.000000Z","entry_id":"arc_h2q9c4m7r1sd"}\'',
     ]
+    followup = parse_args(shlex.split(out.splitlines()[-1].removeprefix("next page: "))[1:])
+    assert (followup.project, followup.cursor) == ("vbot", CURSOR)
 
 
 @pytest.mark.parametrize(
@@ -362,7 +456,7 @@ def test_archive_restore_warnings_need_attention(rpc: FakeRpc, run_cli: RunCli) 
             [
                 "archive_restore_conflict: cannot restore archive entry arc_7k2m9q4xw1ab: "
                 "an Agent with id coder exists; restore it under a new id: "
-                "vbot archive restore arc_7k2m9q4xw1ab --as <new-agent-id>"
+                "vbot archive restore arc_7k2m9q4xw1ab --as "
             ],
             ["Next: vbot archive list"],
             id="conflict",
@@ -383,7 +477,7 @@ def test_archive_restore_warnings_need_attention(rpc: FakeRpc, run_cli: RunCli) 
             [
                 "archive_not_restorable: cannot restore archive entry arc_7k2m9q4xw1ab:",
                 "- scope_missing: Agent coder does not exist; restore it first "
-                "(vbot archive restore arc_p0c1x8n3w5yt)",
+                "(vbot archive restore arc_p0c1x8n3w5yt ",
             ],
             [
                 "Resolve the blockers above, then restore the entry again.",
@@ -407,7 +501,7 @@ def test_archive_restore_warnings_need_attention(rpc: FakeRpc, run_cli: RunCli) 
             ],
             [
                 "This entry can never be restored (older_format). If it is no longer needed, "
-                "'vbot archive purge arc_7k2m9q4xw1ab --yes' deletes it permanently.",
+                "'vbot archive purge arc_7k2m9q4xw1ab --yes ",
                 "Next: vbot archive show arc_7k2m9q4xw1ab",
             ],
             id="never-restorable",
@@ -425,7 +519,7 @@ def test_archive_restore_warnings_need_attention(rpc: FakeRpc, run_cli: RunCli) 
             [
                 "An interrupted restore of this entry cannot finish. Resolve the problem the "
                 "message names, or move the folder it names out of the data directory, then "
-                "restart the server ('vbot server restart'): its next start finishes or undoes "
+                "restart that server on its own computer: its next start finishes or undoes "
                 "the restore.",
                 "Next: vbot archive show arc_7k2m9q4xw1ab",
             ],
@@ -438,7 +532,7 @@ def test_archive_restore_warnings_need_attention(rpc: FakeRpc, run_cli: RunCli) 
             [
                 "This entry is being deleted permanently and will not become restorable. "
                 "vBot finishes the deletion in the background; "
-                "'vbot archive purge arc_7k2m9q4xw1ab --yes' finishes it now.",
+                "'vbot archive purge arc_7k2m9q4xw1ab --yes ",
                 "Next: vbot archive show arc_7k2m9q4xw1ab",
             ],
             id="purging",
@@ -468,7 +562,11 @@ def test_a_refused_restore_names_the_corrected_call(
     exit_code, out, err = run_cli("archive", "restore", "arc_7k2m9q4xw1ab")
 
     assert exit_code == 1
-    assert out.splitlines() == shown
+    assert len(out.splitlines()) == len(shown)
+    assert all(
+        actual.startswith(expected)
+        for actual, expected in zip(out.splitlines(), shown, strict=True)
+    )
     lines = err.splitlines()
     for line in guidance:
         assert any(item.startswith(line) for item in lines), (line, err)
@@ -537,7 +635,7 @@ def test_archive_purge_deletes_the_selected_entries(
         assert (
             "kept archive entry arc_legacy01, which may hold the user's own folders: purge --all "
             "never deletes such entries; to delete it as well, run "
-            "'vbot archive purge arc_legacy01 --yes'"
+            "'vbot archive purge arc_legacy01 --yes "
         ) in err
 
 
@@ -558,7 +656,7 @@ def test_a_pending_purge_fails_and_names_the_call_that_continues_it(
     ]
     assert (
         "deletion of arc_7k2m9q4xw1ab is pending (PermissionError); vBot retries it "
-        "automatically, or run 'vbot archive purge arc_7k2m9q4xw1ab --yes' to continue it now"
+        "automatically, or run 'vbot archive purge arc_7k2m9q4xw1ab --yes "
     ) in err
 
 
@@ -578,7 +676,7 @@ def test_a_pending_purge_fails_and_names_the_call_that_continues_it(
             1,
             "- id=arc_7k2m9q4xw1ab skipped reason=busy state=restoring",
             "arc_7k2m9q4xw1ab was not deleted: another operation, such as a restore, holds it "
-            "(restoring); 'vbot archive show arc_7k2m9q4xw1ab' shows its state",
+            "(restoring); 'vbot archive show arc_7k2m9q4xw1ab ",
             id="busy",
         ),
     ],
@@ -620,7 +718,7 @@ def test_a_purge_names_entries_another_operation_took_first(
             1,
             "but it was not deleted permanently",
             "arc_7k2m9q4xw1ab was not deleted: another operation, such as a restore, holds it; "
-            "'vbot archive show arc_7k2m9q4xw1ab' shows its state",
+            "'vbot archive show arc_7k2m9q4xw1ab ",
             id="busy",
         ),
         pytest.param(
@@ -628,7 +726,7 @@ def test_a_purge_names_entries_another_operation_took_first(
             1,
             "but it was not deleted permanently",
             "arc_7k2m9q4xw1ab was not deleted (usage_import_failed) and stays in the archive "
-            "unchanged; run 'vbot archive purge arc_7k2m9q4xw1ab --yes' to try again",
+            "unchanged; run 'vbot archive purge arc_7k2m9q4xw1ab --yes ",
             id="unchanged",
         ),
     ],
@@ -754,7 +852,7 @@ def test_a_permanent_deletion_left_pending_fails_and_names_the_purge_that_finish
     assert out.splitlines()[0] == shown
     assert (
         "deletion of arc_7k2m9q4xw1ab is pending (stopped); vBot retries it automatically, or "
-        "run 'vbot archive purge arc_7k2m9q4xw1ab --yes' to continue it now"
+        "run 'vbot archive purge arc_7k2m9q4xw1ab --yes "
     ) in err
 
 

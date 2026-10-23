@@ -11,6 +11,7 @@ from cli._input import (
     _optional_content_from_args,
     _prompt_content_from_args,
     _read_stdin_utf8,
+    _read_text_file,
 )
 from cli.bootstrap_management import (
     bootstrap_create,
@@ -435,7 +436,7 @@ def dispatch_bootstrap_command(
                 message="provide <agent> or use --current-session",
                 instance=instance,
             )
-        fields: dict[str, Any] = {"prompt": args.prompt, "mode": args.mode}
+        fields: dict[str, Any] = {"prompt": _automation_prompt(args), "mode": args.mode}
         if args.agent is not None:
             fields["agent_id"] = args.agent
         if args.name is not None:
@@ -448,7 +449,7 @@ def dispatch_bootstrap_command(
         for argument, field in (
             (args.agent, "agent_id"),
             (args.name, "name"),
-            (args.prompt, "prompt"),
+            (_automation_prompt(args), "prompt"),
             (args.mode, "mode"),
             (args.session, "session_id"),
         ):
@@ -469,7 +470,7 @@ def dispatch_bootstrap_command(
 def _cron_create_fields_from_args(args: argparse.Namespace) -> dict[str, Any]:
     fields: dict[str, Any] = {
         "agent_id": args.agent,
-        "prompt": args.prompt,
+        "prompt": _automation_prompt(args),
     }
     if args.name is not None:
         fields["name"] = args.name
@@ -502,8 +503,9 @@ def _cron_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
         changes["agent_id"] = args.agent
     if args.name is not None:
         changes["name"] = args.name
-    if args.prompt is not None:
-        changes["prompt"] = args.prompt
+    prompt = _automation_prompt(args)
+    if prompt is not None:
+        changes["prompt"] = prompt
     if args.cron is not None:
         changes["schedule_type"] = "cron"
         changes["cron_expression"] = args.cron
@@ -529,6 +531,14 @@ def _cron_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
     if args.status is not None:
         changes["status"] = args.status
     return changes
+
+
+def _automation_prompt(args: argparse.Namespace) -> str | None:
+    """Resolve the explicit local prompt file before sending any automation mutation."""
+    if args.prompt_file is not None:
+        return _read_text_file(args.prompt_file)
+    prompt: str | None = args.prompt
+    return prompt
 
 
 def _add_cron_delivery_and_watch(args: argparse.Namespace, fields: dict[str, Any]) -> str | None:

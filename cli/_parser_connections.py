@@ -289,7 +289,10 @@ def _add_provider_parsers(subparsers: argparse._SubParsersAction[argparse.Argume
     wire_source.add_argument(
         "--wire-file",
         metavar="<path>",
-        help="JSON file with the wire block that replaces the stored one",
+        help=(
+            "JSON file with the wire block that replaces the stored one. "
+            "Use UTF-8 (with or without BOM) or UTF-16 with BOM."
+        ),
     )
     wire_source.add_argument(
         "--clear-wire",

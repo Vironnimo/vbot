@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -11,6 +12,26 @@ from cli import main as cli_main
 from tests.cli.cli_test_support import FakeRpc, RunCli, make_instance
 
 CREATE = ("bootstrap", "create", "--name", "Verify update", "--prompt", "Check", "--mode", "once")
+
+
+@pytest.mark.parametrize("command", ["create", "update"])
+@pytest.mark.parametrize("valid_file", [True, False])
+def test_bootstrap_prompt_file_is_decoded_before_the_request(
+    rpc: FakeRpc, run_cli: RunCli, tmp_path: Path, command: str, valid_file: bool
+) -> None:
+    prompt = 'Prüfe nach dem Start.\nAntworte mit "fertig".\n'
+    source = tmp_path / "prompt.txt"
+    source.write_bytes(prompt.encode("utf-8-sig") if valid_file else b"\xffnot-valid")
+    rpc.reply(f"bootstrap.{command}", {"id": "job-one"})
+    target = ("assistant", "--mode", "once") if command == "create" else ("job-one",)
+
+    code, _out, _err = run_cli("bootstrap", command, *target, "--file", str(source))
+
+    assert code == (0 if valid_file else 1)
+    if valid_file:
+        assert rpc.params(f"bootstrap.{command}")["prompt"] == prompt
+    else:
+        assert rpc.calls == []
 
 
 def test_create_needs_an_agent_or_the_current_session(rpc: FakeRpc, run_cli: RunCli) -> None:

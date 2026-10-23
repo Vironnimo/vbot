@@ -126,6 +126,13 @@ def test_area_aliases_parse_identically(alias, canonical):
         ],
         ["provider", "set-key", "openai", "sentinel", "--stdin"],
         ["config", "set", "debug.enabled", "true", "--stdin"],
+        ["chat", "message", "--file", "prompt.txt"],
+        ["chat", "-", "--file", "prompt.txt"],
+        ["cron", "create", "a", "--prompt", "message", "--file", "prompt.txt", "--every", "30"],
+        ["cron", "update", "j", "--prompt", "message", "--file", "prompt.txt"],
+        ["bootstrap", "create", "a", "--prompt", "message", "--file", "prompt.txt",
+         "--mode", "once"],
+        ["bootstrap", "update", "j", "--prompt", "message", "--file", "prompt.txt"],
         ["cron", "update", "job", "--session", "s", "--clear-session"],
         ["uninstall", "--app-only", "--data-only"],
         ["update", "--discard", "--stash"],
@@ -139,7 +146,7 @@ def test_area_aliases_parse_identically(alias, canonical):
         ["--data-dir", "first", "home", "--data-dir", "second"],
         ["--port", "8421", "desktop", "--port", "8420"],
         ["--port", "8421", "--port", "8420", "agent", "list"],
-        ["--port", "8421", "extensions", "demo", "export", "--port", "8420"],
+        ["--port", "8421", "extensions", "demo", "--port", "8420", "export"],
     ],
 )  # fmt: skip
 def test_conflicting_or_misplaced_arguments_fail_before_dispatch(tokens):
@@ -158,6 +165,8 @@ def test_conflicting_or_misplaced_arguments_fail_before_dispatch(tokens):
         ["--host=remote", "--data-dir=data", "config", "get", "debug.enabled", "--port=8999"],
         ["--port", "8999", "config", "get", "debug.enabled", "--host", "remote",
          "--port", "8999", "--data-dir", "data"],
+        ["--port", "8999", "config", "--output", "plain", "get", "debug.enabled",
+         "--host", "remote", "--data-dir", "data"],
     ],
 )  # fmt: skip
 def test_target_options_before_the_area_and_after_the_action_are_kept(tokens):
@@ -175,6 +184,9 @@ def test_target_options_before_the_area_and_after_the_action_are_kept(tokens):
         ["help", "skill", "file"],
         ["--port", "8421", "agent"],
         ["--port", "8421", "help", "skill", "file"],
+        ["provider", "--output", "plain"],
+        ["provider", "--output=plain", "custom"],
+        ["--port", "8421", "provider", "--output", "plain", "custom"],
     ],
 )
 def test_bare_groups_show_help_without_dispatch(tokens, capsys):
@@ -364,13 +376,13 @@ def test_root_output_option_keeps_aliases_and_dynamic_extension_arguments(prefix
 
 
 @pytest.mark.parametrize("prefix", [[], ["--port", "9123", "--host", "192.0.2.8"]])
-def test_extension_run_separates_target_options_from_operation_options(prefix):
+@pytest.mark.parametrize("command", [["run", "demo"], ["demo"]])
+def test_extension_run_separates_target_options_from_operation_options(prefix, command):
     args = parse_args(
         [
             *prefix,
             "extensions",
-            "run",
-            "demo",
+            *command,
             "--host",
             "192.0.2.8",
             "--port",
@@ -380,9 +392,27 @@ def test_extension_run_separates_target_options_from_operation_options(prefix):
             "export",
             "--host",
             "operation-target",
+            "--port",
+            "payload-port",
+            "--url",
+            "https://payload.example",
+            "--data-dir",
+            "payload-directory",
             "--output",
             "json",
         ]
     )
     assert (args.host, args.port, args.output) == ("192.0.2.8", 9123, "plain")
-    assert args.rest == ["export", "--host", "operation-target", "--output", "json"]
+    assert args.rest == [
+        "export",
+        "--host",
+        "operation-target",
+        "--port",
+        "payload-port",
+        "--url",
+        "https://payload.example",
+        "--data-dir",
+        "payload-directory",
+        "--output",
+        "json",
+    ]

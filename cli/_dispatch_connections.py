@@ -5,11 +5,11 @@ from __future__ import annotations
 import argparse
 import json
 from collections.abc import Callable, Sequence
-from pathlib import Path
 from typing import Any
 
 from cli._input import (
     _read_stdin_utf8,
+    _read_text_file,
 )
 from cli.channel_management import channel_set_app_token, channel_whatsapp
 from cli.extensions_management import extensions_operation
@@ -225,7 +225,7 @@ def dispatch_provider_command(
         wire = None
         if args.wire_file is not None:
             try:
-                wire = json.loads(Path(args.wire_file).read_text(encoding="utf-8"))
+                wire = json.loads(_read_text_file(args.wire_file))
             except (OSError, UnicodeError, ValueError) as exc:
                 return CommandResult(
                     ok=False, message=f"cannot read wire file: {exc}", instance=instance

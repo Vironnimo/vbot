@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from cli import agent_secret_management as secrets
-from cli._input import _read_secret, _read_stdin_utf8
+from cli._input import _read_secret, _read_stdin_utf8, _read_text_file
 from cli.agent_management import PermissionEdit, agent_reorder
 from cli.archive_management import archive_list, archive_purge, archive_restore, archive_show
 from cli.chat_management import ChatRequest, chat
@@ -182,7 +182,10 @@ def _agent_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
     if args.excluded_skills is not None:
         changes["excluded_skills"] = list(args.excluded_skills)
     if args.subagent_allow is not None:
-        changes["tools"] = {"subagent": {"allowed_agents": list(args.subagent_allow)}}
+        if args.command == "create":
+            changes["tools"] = {"subagent": {"allowed_agents": list(args.subagent_allow)}}
+        else:
+            changes["subagent_allow"] = list(args.subagent_allow)
     if getattr(args, "clear_compaction_policy", False):
         changes["compaction_policy"] = None
     elif args.compaction_policy is not None:
@@ -366,9 +369,14 @@ def dispatch_session_command(
     """Dispatch one parsed session command against the server RPC client."""
 
     if args.command == "list":
-        if args.limit != 100 or args.cursor is not None or args.all:
+        if args.limit != 40 or args.cursor is not None or args.all or args.json:
             return session_list(
-                instance, args.agent, limit=args.limit, cursor=args.cursor, all_pages=args.all
+                instance,
+                args.agent,
+                limit=args.limit,
+                cursor=args.cursor,
+                all_pages=args.all,
+                json_output=args.json,
             )
         return list_sessions_fn(instance, args.agent)
     if args.command == "create":
@@ -418,7 +426,10 @@ def dispatch_archive_command(args: argparse.Namespace, instance: ServerInstance)
 
 def dispatch_chat_command(args: argparse.Namespace, instance: ServerInstance) -> CommandResult:
     """Send one message to an Agent Session and follow the Run it starts."""
-    prompt = _read_stdin_utf8() if args.prompt in {None, "-"} else args.prompt
+    if args.prompt_file is not None:
+        prompt = _read_text_file(args.prompt_file)
+    else:
+        prompt = _read_stdin_utf8() if args.prompt in {None, "-"} else args.prompt
     if not prompt.strip():
         return CommandResult(
             ok=False,

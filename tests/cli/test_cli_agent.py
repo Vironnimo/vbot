@@ -255,7 +255,7 @@ def test_agent_create_confirms_the_saved_agent(
             {
                 "model": "",
                 "fallback_models": [],
-                "tools": {"subagent": {"allowed_agents": ["reviewer", "librarian"]}},
+                "subagent_allow": ["reviewer", "librarian"],
                 "compaction_policy": {"enabled": False},
                 "librarian_enabled": False,
             },
@@ -456,7 +456,11 @@ def test_agent_delete_archives_or_deletes_the_agent(
 
     assert code == 0
     assert rpc.calls == [("agent.delete", params)]
-    assert out.splitlines() == shown
+    assert len(out.splitlines()) == len(shown)
+    assert all(
+        actual.startswith(expected)
+        for actual, expected in zip(out.splitlines(), shown, strict=True)
+    )
 
 
 def test_agent_rename_renames_the_agent(rpc: FakeRpc, run_cli: RunCli) -> None:

@@ -16,9 +16,9 @@ import re
 import sys
 from collections.abc import Sequence
 from difflib import get_close_matches
-from pathlib import Path
 from typing import Any
 
+from cli._input import _read_text_file
 from cli.formatting import string_or_default as _string_or_default
 from cli.rpc_client import rpc_call as _rpc_call
 from cli.server_management import CommandResult, ServerInstance
@@ -691,10 +691,10 @@ def _read_document(key: str, source: str, *, stdin_used: bool) -> str:
             raise ValueError(f"--stdin already reads standard input; name a file for {flag}")
         return _read_stdin()
     try:
-        return Path(source).read_text(encoding="utf-8-sig")
+        return _read_text_file(source)
     except (OSError, ValueError) as error:
         reason = error.strerror if isinstance(error, OSError) and error.strerror else "unreadable"
         raise ValueError(
             f"The file named for {flag} cannot be read ({reason}); "
-            "name a UTF-8 file, or - to read standard input"
+            "name a UTF-8 file or a UTF-16 file with BOM, or - to read standard input"
         ) from None

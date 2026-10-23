@@ -50,11 +50,10 @@ def test_dynamic_arguments_reach_the_operation_while_target_options_select_the_s
 
     code = cli_main.run(
         [
-            "extensions", "mcp", "invoke", "blender",
+            "extensions", "mcp", "--port", "8422", "invoke", "blender",
             "--agent", "alice@project",
             "--operation", "tools/call",
             "--arguments", '{"name":"a b"}',
-            "--port", "8422",
         ],
         resolve=resolve,
     )  # fmt: skip
@@ -81,15 +80,16 @@ def test_dynamic_arguments_reach_the_operation_while_target_options_select_the_s
     assert json.loads(capsys.readouterr().out) == {"state": "completed"}
 
 
-def test_explicit_run_keeps_target_named_operation_fields_opaque(
-    rpc: FakeRpc, run_cli: RunCli
+@pytest.mark.parametrize("command", [("run", "demo"), ("demo",)])
+def test_operation_keeps_target_named_fields_opaque(
+    rpc: FakeRpc, run_cli: RunCli, command: tuple[str, ...]
 ) -> None:
     rpc.reply(
         "extensions.operation", {"operations": [_operation("export", {"port": {"type": "string"}})]}
     )
     rpc.reply("extensions.operation", {"state": "completed"})
 
-    code, _out, _err = run_cli("extensions", "run", "demo", "export", "--port", "payload-port")
+    code, _out, _err = run_cli("extensions", *command, "export", "--port", "payload-port")
 
     assert code == 0
     assert rpc.calls[-1] == (
@@ -190,7 +190,7 @@ def test_secret_operation_reads_utf8_json_from_stdin_without_echo(
     assert "ä-secret" not in out + err
 
 
-@pytest.mark.parametrize("source", ["file", "stdin"])
+@pytest.mark.parametrize("source", ["utf-8", "utf-8-sig", "utf-16-le", "utf-16-be", "stdin"])
 def test_document_argument_is_read_from_a_file_or_standard_input(
     rpc: FakeRpc,
     run_cli: RunCli,
@@ -203,9 +203,10 @@ def test_document_argument_is_read_from_a_file_or_standard_input(
     load = _operation("import", {"source": document, "apply": {"type": "boolean"}})
     rpc.reply("extensions.operation", {"operations": [load]})
     rpc.reply("extensions.operation", {"servers": []})
-    if source == "file":
+    if source != "stdin":
         path = tmp_path / "setup.json"
-        path.write_text(text, encoding="utf-8-sig")
+        bom = {"utf-16-le": b"\xff\xfe", "utf-16-be": b"\xfe\xff"}.get(source, b"")
+        path.write_bytes(bom + text.encode(source))
         tokens: tuple[str, ...] = (str(path),)
     else:
         monkeypatch.setattr(sys, "stdin", io.StringIO(text))

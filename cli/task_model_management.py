@@ -103,6 +103,8 @@ def task_model_set(
     elif option_pairs:
         options = {}
         field_types = _option_field_types(instance, task_type, target)
+        if isinstance(field_types, CommandResult):
+            return field_types
         for pair in option_pairs:
             name, raw_value = pair
             if name in options:
@@ -129,6 +131,8 @@ def task_model_set_option(
     """Set one option on the current binding without replacing sibling options."""
 
     field_types = _option_field_types(instance, task_type, None)
+    if isinstance(field_types, CommandResult):
+        return field_types
     return _patch_task_model_options(
         instance,
         task_type,
@@ -160,20 +164,28 @@ _BOOLEAN_WORDS = {
 
 def _option_field_types(
     instance: ServerInstance, task_type: str, target: str | None
-) -> dict[str, str]:
+) -> dict[str, str] | CommandResult:
     """Return each option's declared field type for *target* (default: the bound one).
 
-    An unavailable schema yields no types; values then keep their JSON reading.
+    A failed read stops the mutation instead of guessing the requested value's type.
     """
 
     params = {"task_type": task_type}
     if target is not None:
         params["target"] = target
     payload = _rpc_call(instance, "task_model.options", params)
-    schema = payload.data.get("schema") if payload.ok else None
+    if not payload.ok:
+        return payload.to_command_result()
+    schema = payload.data.get("schema")
     fields = schema.get("fields") if isinstance(schema, Mapping) else None
     if not isinstance(fields, list):
-        return {}
+        return CommandResult(
+            ok=False,
+            message=(
+                "The server response did not include Task Model option types. Nothing was changed."
+            ),
+            instance=instance,
+        )
     return {
         field["name"]: field["type"]
         for field in fields

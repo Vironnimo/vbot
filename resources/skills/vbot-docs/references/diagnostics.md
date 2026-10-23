@@ -7,7 +7,7 @@ vbot log list
 vbot log read <daily-log-name> [--limit <count>] [--level error]
 ```
 
-- `list` shows daily log files newest-first. `read` takes the name exactly as listed (`<date>.log`) and prints the newest 100 parsed entries by default, in chronological order. `--level` filters first; `--limit 0` prints all matches. The summary states how many matches are shown. This is a snapshot, not a live tail; the CLI still fetches the complete daily file from the server.
+- `list` shows daily log files newest-first. `read` takes the name exactly as listed (`<date>.log`) and prints the newest 100 parsed entries by default, in chronological order. `--level` filters first; `--limit 0` prints all matches. The summary states how many matches are shown; a `+` means older pages were not needed to fill the limit. This is a snapshot, not a live tail.
 
 ## Debug traces: raw Provider traffic
 

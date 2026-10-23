@@ -5,8 +5,8 @@ Schedule an Agent Run at a time, repeatedly, at every occurrence of a calendar e
 ```bash
 vbot cron list
 vbot cron show <job-id>
-vbot cron create <agent> --prompt <text> [--name <name>] (--cron "<five fields>" | --every <minutes> | --at <iso-datetime> | --event <event-id> [--event-time "<event time>"] | --webhook) [--repeat <count>] [--session <session-id>] [--deliver app|chat|none [--channel <channel-id> --chat <chat-id> [--thread <thread-id>]]] [--watch <command-or-url>]
-vbot cron update <job-id> [--agent <agent>] [--name <name>] [--prompt <text>] [--cron "<five fields>" | --every <minutes> | --at <iso-datetime> | --event <event-id> | --webhook] [--event-time "<event time>"] [--repeat <count>] [--session <session-id> | --clear-session] [--status active|paused] [--deliver app|chat|none [--channel <channel-id> --chat <chat-id> [--thread <thread-id>]]] [--watch <command-or-url> | --clear-watch]
+vbot cron create <agent> (--prompt <text> | --file <path>) [--name <name>] (--cron "<five fields>" | --every <minutes> | --at <iso-datetime> | --event <event-id> [--event-time "<event time>"] | --webhook) [--repeat <count>] [--session <session-id>] [--deliver app|chat|none [--channel <channel-id> --chat <chat-id> [--thread <thread-id>]]] [--watch <command-or-url>]
+vbot cron update <job-id> [--agent <agent>] [--name <name>] [--prompt <text> | --file <path>] [--cron "<five fields>" | --every <minutes> | --at <iso-datetime> | --event <event-id> | --webhook] [--event-time "<event time>"] [--repeat <count>] [--session <session-id> | --clear-session] [--status active|paused] [--deliver app|chat|none [--channel <channel-id> --chat <chat-id> [--thread <thread-id>]]] [--watch <command-or-url> | --clear-watch]
 vbot cron enable <job-id>
 vbot cron disable <job-id>
 vbot cron delete <job-id>
@@ -31,10 +31,12 @@ On create, omitting `--session` creates a fresh Session per fire. On update, omi
 
 `--watch` makes a `--cron` or `--every` job check something before each Run, without a Model, and start the Run only when the output changed since the last check: an `http://` or `https://` address is read as a page (its main text), anything else runs as a command in the host shell (PowerShell on Windows, bash elsewhere) in the Agent's Workspace or the Project's directory. The first check records the output without a Run; the Run receives what changed. A failing check counts like a failed Run. `--clear-watch` removes the watch.
 
-Write self-contained prompts stating the work, relevant constraints and expected report. A Project-targeted job can block Project removal; retarget or delete it first.
+Write self-contained prompts stating the work, relevant constraints and expected report. Pass a long or multiline prompt with `--file <path>` instead of `--prompt`; the file is read on the CLI's computer. A Project-targeted job can block Project removal; retarget or delete it first.
+
+For these examples, replace `<agent>` with the requested Agent's id or address, and `<job-id>` with the created job's id. `--deliver app` makes the reports reach the user in vBot.
 
 ```bash
-vbot cron create assistant --name "Morning news" --prompt "Check the news and report relevant changes" --cron "0 9 * * *"
-vbot cron create assistant --prompt "Check the build and report a changed result" --every 15 --repeat 4
+vbot cron create <agent> --name "Morning news" --prompt "Check the news and report relevant changes" --cron "0 9 * * *" --deliver app
+vbot cron create <agent> --prompt "Check the build and report a changed result; answer exactly [SILENT] when nothing changed" --every 15 --repeat 4 --deliver app
 vbot cron update <job-id> --status paused
 ```

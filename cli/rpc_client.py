@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from cli._progress import operation_progress
 from cli._server_target import RpcFailure
+from cli.formatting import inline_text
 from cli.server_management import CommandResult, ServerInstance
 
 if TYPE_CHECKING:
@@ -243,8 +244,9 @@ def _server_sent_events(lines: Iterable[str]) -> Iterator[dict[str, Any]]:
                     event = json.loads("\n".join(data))
                 except ValueError as exc:
                     raise RunEventStreamError("Run event stream sent malformed JSON") from exc
-                if isinstance(event, dict):
-                    yield event
+                if not isinstance(event, dict):
+                    raise RunEventStreamError("Run event stream sent a non-object event")
+                yield event
             name, data = "", []
             continue
         if line.startswith(":"):
@@ -264,7 +266,10 @@ def _rpc_error_message(error: object, *, fallback: str) -> str:
         message = error.get("message")
         code = error.get("code")
         if isinstance(code, str) and isinstance(message, str):
-            return f"{code}: {message}"
+            # Keep multi-line server guidance readable without letting payload
+            # text forge CLI markers or send control sequences to the terminal.
+            detail = "\n  ".join(inline_text(line) for line in message.split("\n"))
+            return f"{inline_text(code)}: {detail}"
         if isinstance(message, str):
-            return message
+            return "\n  ".join(inline_text(line) for line in message.split("\n"))
     return fallback

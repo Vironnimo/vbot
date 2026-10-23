@@ -3,8 +3,29 @@
 from __future__ import annotations
 
 import argparse
+import codecs
 import sys
 from pathlib import Path
+
+
+def _read_text_file(path: str) -> str:
+    """Read shell-authored content without leaking a BOM into the saved text."""
+
+    raw = Path(path).read_bytes()
+    if raw.startswith((codecs.BOM_UTF32_LE, codecs.BOM_UTF32_BE)):
+        raise ValueError("UTF-32 content is unsupported; save the file as UTF-8 or UTF-16 with BOM")
+    encoding = (
+        "utf-16" if raw.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)) else "utf-8-sig"
+    )
+    try:
+        text = raw.decode(encoding)
+    except UnicodeDecodeError:
+        label = "UTF-16" if encoding == "utf-16" else "UTF-8"
+        raise ValueError(
+            f"Cannot decode the content file as {label}; save it as UTF-8 or UTF-16 with BOM"
+        ) from None
+    # Match text-mode universal newlines on every supported platform.
+    return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
 def _prompt_content_from_args(args: argparse.Namespace) -> str:
@@ -14,7 +35,7 @@ def _prompt_content_from_args(args: argparse.Namespace) -> str:
     content_file = args.content_file
     if not isinstance(content_file, str):
         raise ValueError("missing prompt content file")
-    return Path(content_file).read_text(encoding="utf-8")
+    return _read_text_file(content_file)
 
 
 def _optional_content_from_args(args: argparse.Namespace) -> str | None:
@@ -23,7 +44,7 @@ def _optional_content_from_args(args: argparse.Namespace) -> str | None:
         return content
     content_file = getattr(args, "content_file", None)
     if isinstance(content_file, str):
-        return Path(content_file).read_text(encoding="utf-8")
+        return _read_text_file(content_file)
     return None
 
 

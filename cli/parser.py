@@ -17,9 +17,6 @@ from cli._parser_agents import (
     _add_session_parsers,
     _add_tui_parser,
 )
-from cli._parser_common import (
-    _add_target_arguments,
-)
 from cli._parser_connections import (
     _add_channel_parsers,
     _add_model_parsers,
@@ -224,24 +221,18 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         tokens = [*tokens[1:], "--help"]
     if tokens and tokens[0] in AREA_ALIASES:
         tokens[0] = AREA_ALIASES[tokens[0]]
+    _normalize_extension_operation(tokens)
     if tokens and tokens[0] in {"--server", "--restart", "--start", "--stop"}:
         parser.error(
             "Use an area followed by an action, for example: vbot server restart. "
             f"Put target options before the area or after the action (e.g. --port {DEFAULT_PORT}). "
             "Server lifecycle commands run on the machine that owns the server."
         )
-    if _is_command_group(parser, tokens):
+    selected, command_end = _select_command(parser, tokens)
+    if command_end == len(tokens) and any(
+        isinstance(action, argparse._SubParsersAction) for action in selected._actions
+    ):
         tokens.append("--help")
-    selected = parser
-    command_end = 0
-    for token in tokens:
-        commands = next(
-            (a for a in selected._actions if isinstance(a, argparse._SubParsersAction)), None
-        )
-        if commands is None or token not in commands.choices:
-            break
-        selected = commands.choices[token]
-        command_end += 1
     # Let the selected command own validation and defaults. Inserting before its
     # positionals also keeps Extension operation payloads after their own boundary.
     if tokens[command_end : command_end + 1] in (["--help"], ["-h"]):
@@ -251,8 +242,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser._error_help_path = selected.prog
         if isinstance(selected, _CliParser):
             parser._selected_parser = selected
-    operation_args = _extension_operation_args(tokens, parser)
-    args = operation_args if operation_args is not None else parser.parse_args(tokens)
+    args = parser.parse_args(tokens)
     if getattr(args, "area", None) == "extensions":
         action = getattr(args, "command", None)
         if action == "set":
@@ -287,8 +277,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             parser.error(
                 f"--{clear.replace('_', '-')} cannot be combined with --{value.replace('_', '-')}"
             )
-    if getattr(args, "area", None) == "chat" and args.prompt is None and _stdin_is_terminal():
-        parser.error("chat needs a message: pass it as <prompt> or pipe it on stdin")
+    if (
+        getattr(args, "area", None) == "chat"
+        and args.prompt is None
+        and args.prompt_file is None
+        and _stdin_is_terminal()
+    ):
+        parser.error("chat needs a message: pass <prompt>, use --file, or pipe it on stdin")
     if getattr(args, "area", None) == "archive" and args.command == "purge":
         _check_archive_purge_selection(parser, args)
     return args
@@ -389,26 +384,35 @@ def _stdin_is_terminal() -> bool:
     return stdin is None or stdin.isatty()
 
 
-def _is_command_group(parser: argparse.ArgumentParser, tokens: list[str]) -> bool:
-    """A bare group is a discovery request, never an implicit mutation."""
-    for token in tokens:
+def _select_command(
+    parser: argparse.ArgumentParser, tokens: list[str]
+) -> tuple[argparse.ArgumentParser, int]:
+    """Locate the command through the shared presentation options of its groups."""
+    index = 0
+    while index < len(tokens):
         commands = next(
             (a for a in parser._actions if isinstance(a, argparse._SubParsersAction)), None
         )
-        if commands is None or token not in commands.choices:
-            return False
-        parser = commands.choices[token]
-    return any(isinstance(a, argparse._SubParsersAction) for a in parser._actions)
+        if commands is None:
+            break
+        token = tokens[index]
+        if token in commands.choices:
+            parser = commands.choices[token]
+            index += 1
+        elif token == "--output" and index + 1 < len(tokens):
+            index += 2
+        elif token.startswith("--output="):
+            index += 1
+        else:
+            break
+    return parser, index
 
 
-def _extension_operation_args(
-    tokens: list[str],
-    parser: argparse.ArgumentParser,
-) -> argparse.Namespace | None:
-    """Keep name-first Extension calls, including opaque operation arguments, compatible."""
+def _normalize_extension_operation(tokens: list[str]) -> None:
+    """Route name-first calls through the same opaque argument boundary as ``run``."""
     if not tokens or tokens[0] != "extensions":
-        return None
-    if len(tokens) > 1 and tokens[1] in {
+        return
+    actions = {
         "list",
         "reload",
         "enable",
@@ -417,48 +421,28 @@ def _extension_operation_args(
         "set",
         "operations",
         "run",
-    }:
-        return None
-    target_parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False, exit_on_error=False)
-    _add_target_arguments(target_parser)
-    try:
-        target, remaining = target_parser.parse_known_args(tokens[1:])
-    except argparse.ArgumentError as error:
-        parser.error(f"extensions: {error}")
-    if (
-        not remaining
-        or remaining[0].startswith("-")
-        or remaining[0]
-        in {
-            "list",
-            "reload",
-            "enable",
-            "disable",
-            "show",
-            "set",
-            "operations",
-            "run",
-        }
-    ):
-        return None
-    if len(remaining) == 1 or remaining[1] in {"set", "--help", "-h"}:
-        action = "set" if len(remaining) > 1 and remaining[1] == "set" else "show"
-        arguments = remaining[2:] if action == "set" else remaining[1:]
-        selection = [
-            token
-            for name, value in getattr(target, "_target_arguments", {}).items()
-            for token in (f"--{name.replace('_', '-')}", str(value))
-        ]
-        return parser.parse_args(["extensions", action, remaining[0], *arguments, *selection])
-    return argparse.Namespace(
-        area="extensions",
-        selector=remaining[0],
-        rest=remaining[1:],
-        stdin=False,
-        host=target.host,
-        port=target.port,
-        url=target.url,
-        data_dir=target.data_dir,
-        _target_arguments=getattr(target, "_target_arguments", {}),
-        _command_path="extensions run",
-    )
+    }
+    positionals: list[int] = []
+    index = 1
+    while index < len(tokens):
+        token = tokens[index]
+        option, separator, _value = token.partition("=")
+        if option in {"--host", "--port", "--url", "--data-dir", "--output"}:
+            index += 1 if separator else 2
+            continue
+        if token.startswith("-"):
+            break
+        positionals.append(index)
+        if len(positionals) == 2:
+            break
+        index += 1
+    if not positionals or tokens[positionals[0]] in actions:
+        return
+    action = "show"
+    if len(positionals) == 2:
+        operation_index = positionals[1]
+        operation = tokens[operation_index]
+        action = operation if operation in {"set", "operations"} else "run"
+        if action != "run":
+            del tokens[operation_index]
+    tokens.insert(1, action)

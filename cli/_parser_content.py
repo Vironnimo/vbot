@@ -13,6 +13,7 @@ from cli._parser_common import (
     SKILL_HELP,
     TOOL_HELP,
     _add_command_parser,
+    _add_text_file_argument,
     _json_array_argument,
 )
 
@@ -35,8 +36,9 @@ def _add_extensions_parsers(
         help=AREA_HELP["extensions"],
         description=(
             "Inspect and manage Extensions. Use an action followed by the Extension name. "
-            "Discover managed operations with extensions operations <name>, then use "
-            "extensions run <name> <operation> --help. Name-first commands remain compatible."
+            "Discover managed operations with vbot extensions operations <name>, then use "
+            "vbot extensions run <name> <operation> --help. Put vBot target and output options "
+            "before the operation; all following arguments belong to it."
         ),
     )
     commands = extensions_parser.add_subparsers(dest="command", required=True)
@@ -101,9 +103,7 @@ def _add_prompt_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
     )
     content_group = update_parser.add_mutually_exclusive_group(required=True)
     content_group.add_argument("--content", help="New block content as inline text")
-    content_group.add_argument(
-        "--file", dest="content_file", metavar="<path>", help="Read block content from a file"
-    )
+    _add_text_file_argument(content_group, content="block content")
     _add_prompt_scope_argument(update_parser)
 
     reset_parser = _add_command_parser(
@@ -123,9 +123,7 @@ def _add_prompt_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
     create_parser.add_argument("slug", metavar="<slug>", help="Slug for the new user:<slug> block")
     create_content = create_parser.add_mutually_exclusive_group()
     create_content.add_argument("--content", help="Initial block content as inline text")
-    create_content.add_argument(
-        "--file", dest="content_file", metavar="<path>", help="Read initial content from a file"
-    )
+    _add_text_file_argument(create_content, content="initial content")
     create_parser.add_argument(
         "--position", type=int, metavar="<index>", help="0-based layout insertion position"
     )
@@ -333,9 +331,7 @@ def _add_skill_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         command_parser.add_argument("name", metavar="<skill-name>", help="Skill directory name")
         content_group = command_parser.add_mutually_exclusive_group(required=True)
         content_group.add_argument("--content", help="Complete SKILL.md content as inline text")
-        content_group.add_argument(
-            "--file", dest="content_file", metavar="<path>", help="Read SKILL.md from a file"
-        )
+        _add_text_file_argument(content_group, content="SKILL.md")
         command_parser.add_argument("--source", help="Optional provenance label")
         _add_skill_scope_argument(command_parser)
 
@@ -359,9 +355,7 @@ def _add_skill_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentP
     write_parser.add_argument("path", metavar="<relative-path>", help="Path inside the Skill")
     write_content = write_parser.add_mutually_exclusive_group(required=True)
     write_content.add_argument("--content", help="File content as inline text")
-    write_content.add_argument(
-        "--file", dest="content_file", metavar="<path>", help="Read content from a file"
-    )
+    _add_text_file_argument(write_content, content="content")
     _add_skill_scope_argument(write_parser)
 
     remove_file_parser = _add_command_parser(
@@ -582,6 +576,4 @@ def _add_memory_agent_argument(
 def _add_memory_content_arguments(parser: argparse.ArgumentParser) -> None:
     content_group = parser.add_mutually_exclusive_group(required=True)
     content_group.add_argument("--content", help="Entry text as inline content")
-    content_group.add_argument(
-        "--file", dest="content_file", metavar="<path>", help="Read entry text from a file"
-    )
+    _add_text_file_argument(content_group, content="entry text")

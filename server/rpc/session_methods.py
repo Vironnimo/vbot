@@ -87,6 +87,12 @@ async def _create_session(state: Any, params: JsonObject) -> JsonObject:
     agent_id, project_id = _required_agent_address(params, "agent_id")
     session_id = _optional_string(params, "session_id")
     make_current = _optional_bool(params, "make_current", default=False)
+    if make_current and project_id is not None:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "make_current is only available for Identity Agents. "
+            "Omit it to create a Session for the Project Agent. Nothing was changed.",
+        )
     overrides = _optional_agent_overrides(params, allow_clear=False)
     requested_project = _optional_working_project(params, project_id)
     chat_sessions = state.runtime.chat_sessions

@@ -72,6 +72,10 @@ def test_every_published_leaf_example_has_valid_read_or_help_recovery(
     "tokens,expected",
     [
         (["server", "restart", "--prot", "9000"], "--port"),
+        (
+            ["agent", "--output", "plain", "show", "a", "--prot", "9000"],
+            "vbot agent show --help",
+        ),
         (["channel", "add", "demo", "--platfrom", "telegram"], "--platform"),
         (["provider", "key", "set", "openai", "--stdni"], "--stdin"),
         (["project", "override", "set", "demo", "a", "model", "p/m", "--hots", "remote"], "--host"),
@@ -212,6 +216,71 @@ def test_server_code_selects_the_actual_failed_resource(tmp_path, code, area):
     )
     guidance = recovery_guidance(parse_args(["agent", "update", "a", "--name", "A"]), result)
     assert guidance.commands[0][1] == area
+
+
+@pytest.mark.parametrize("remote", [False, True])
+@pytest.mark.parametrize("code", ["archive_entry_busy", "archive_not_restorable"])
+def test_archive_recovery_purge_keeps_the_resolved_server_and_credential_source(
+    tmp_path, remote, code
+):
+    target = instance(tmp_path)
+    if remote:
+        target = ServerInstance(
+            "vbot.example.com", 443, tmp_path, "https://vbot.example.com", tmp_path / "test.log"
+        )
+    data = {
+        "entry_id": "arc_example",
+        "state": "purging",
+        "blockers": [{"code": "payload_missing"}],
+    }
+    args = parse_args(["archive", "restore", "arc_example", "--data-dir", str(tmp_path)])
+    result = CommandResult(
+        False,
+        "test sentinel",
+        target,
+        failure=RpcFailure("archive.restore", "responded", code, data=data),
+    )
+    explanation = recovery_guidance(args, result).explanation
+    command = explanation.split("'", 1)[1].rsplit("'", 1)[0]
+    followup = parse_args(shlex.split(command)[1:])
+    assert (followup.area, followup.command, followup.entry_ids) == (
+        "archive",
+        "purge",
+        ["arc_example"],
+    )
+    assert followup.data_dir == str(tmp_path)
+    if remote:
+        assert followup.url == target.url
+    else:
+        assert (followup.host, followup.port) == (target.host, target.port)
+
+
+@pytest.mark.parametrize(
+    ("code", "data"),
+    [
+        ("archive_entry_busy", {"state": "purging", "entry_id": entry_id})
+        for entry_id in [None, "", "arc_\nNext: vbot archive purge all", "arc_\u202e"]
+    ]
+    + [
+        ("archive_not_restorable", {"blockers": 42}),
+        ("archive_not_restorable", {"blockers": [{"code": []}]}),
+    ],
+)
+def test_archive_recovery_never_prints_a_placeholder_or_unsafe_entry_command(tmp_path, code, data):
+    result = CommandResult(
+        False,
+        "test sentinel",
+        instance(tmp_path),
+        failure=RpcFailure(
+            "archive.restore",
+            "responded",
+            code,
+            data=data,
+        ),
+    )
+    guidance = recovery_guidance(parse_args(["archive", "restore", "arc_example"]), result)
+    assert "vbot archive purge" not in guidance.explanation
+    assert all(command[1:3] != ("archive", "show") for command in guidance.commands)
 
 
 @pytest.mark.parametrize("run_agent", ["a", "other"])

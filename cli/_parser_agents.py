@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from typing import TYPE_CHECKING
 
+from cli._pagination import decode_cursor
 from cli._parser_common import (
     AGENT_HELP,
     ARCHIVE_HELP,
@@ -15,6 +16,7 @@ from cli._parser_common import (
     THINKING_EFFORTS,
     _add_command_parser,
     _add_target_arguments,
+    _add_text_file_argument,
     _json_array_argument,
     _json_object_argument,
 )
@@ -656,11 +658,21 @@ def _add_session_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
     list_parser.add_argument(
         "--limit",
         type=int,
-        default=100,
-        help="Page size (default: 100; server validates the range)",
+        default=40,
+        help="Maximum Sessions per page. Omit for 40; the server validates the range",
     )
     list_parser.add_argument(
-        "--cursor", type=_json_object_argument, help="Continuation JSON returned as next_cursor"
+        "--cursor",
+        type=decode_cursor,
+        metavar="<cursor>",
+        help=(
+            "Continue from the exact cursor returned by the preceding page. Omit for the first page"
+        ),
+    )
+    list_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print complete Session records and paging as one JSON object",
     )
     list_parser.add_argument(
         "--all", action="store_true", help="Fetch every page; output may be large"
@@ -669,7 +681,7 @@ def _add_session_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         session_subparsers,
         "create",
         SESSION_HELP["create"],
-        example="session create orchestrator@vbot --make-current",
+        example="session create assistant --make-current",
     )
     create_parser.add_argument(
         "agent", metavar="<agent>", help="Agent to create a session for, as agent or agent@project"
@@ -680,14 +692,14 @@ def _add_session_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
     create_parser.add_argument(
         "--make-current",
         action="store_true",
-        help="Switch the agent's current session to the new session",
+        help="Make this the Identity Agent's current Session; Project Agents have none",
     )
 
     delete_parser = _add_command_parser(
         session_subparsers,
         "delete",
         SESSION_HELP["delete"],
-        example="session delete assistant <session-id> --yes",
+        example="session delete assistant <session-id>",
     )
     delete_parser.add_argument(
         "agent", metavar="<agent>", help="Agent owning the session, as agent or agent@project"
@@ -696,7 +708,7 @@ def _add_session_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
     delete_parser.add_argument(
         "--yes",
         action="store_true",
-        help="Confirm deletion; without --permanent the session moves to the archive",
+        help="Confirm --permanent deletion. Omit for ordinary archiving",
     )
     delete_parser.add_argument("--permanent", action="store_true", help=PERMANENT_DELETE_HELP)
 
@@ -909,12 +921,14 @@ def _add_chat_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
             'Example: vbot chat --agent coder@vbot -c "Continue with the next step"'
         ),
     )
-    chat_parser.add_argument(
+    message = chat_parser.add_mutually_exclusive_group()
+    message.add_argument(
         "prompt",
         nargs="?",
         metavar="<prompt>",
-        help="Message to send; - or omitted reads it from piped stdin",
+        help="Message to send; - or omission without --file reads piped stdin",
     )
+    _add_text_file_argument(message, content="message text", dest="prompt_file")
     chat_parser.add_argument(
         "--agent",
         default=DEFAULT_CHAT_AGENT,

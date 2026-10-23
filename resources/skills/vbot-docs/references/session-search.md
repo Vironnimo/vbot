@@ -4,7 +4,7 @@ This covers what `session_search` cannot give you: a list of Sessions, the compl
 
 ## Find the Session
 
-`vbot session list <agent-id> --all` lists an Agent's Sessions with ids, titles and last activity; use `<agent-id>@<project-id>` for a Project Agent.
+`vbot session list <agent-id>` lists one page of an Agent's Sessions with ids, title previews and last activity; use `<agent-id>@<project-id>` for a Project Agent. Follow its `Next:` command when the Session you need is not on that page.
 
 ## Read it with the script
 
