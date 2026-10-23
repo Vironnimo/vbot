@@ -50,7 +50,7 @@ export default Object.freeze({
   'permissions.base.writeWithinRead':
     'Not available while reading stays in the work area: an Agent can change only files it can read.',
   'permissions.base.workAreaHelp':
-    'The work area is the folder a Session works in plus its scratch area.',
+    'The work area is the folder a Session works in plus its scratch area. An Agent can always read and change its own Workspace.',
   'permissions.allowTitle': 'Allow rules',
   'permissions.allowDescription':
     'Extra folders, commands and sites the Agent may use beyond the settings above.',

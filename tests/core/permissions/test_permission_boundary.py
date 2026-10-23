@@ -146,7 +146,7 @@ _WORK_AREA_RULES = {
         pytest.param("{outside}", "start_dir", "not_permitted", id="start-outside"),
         pytest.param("{scratch}/s.txt", "write", None, id="scratch-writable"),
         pytest.param("{workspace}/MEMORY.md", "read", None, id="workspace-readable"),
-        pytest.param("{workspace}/MEMORY.md", "write", "protected_location", id="workspace"),
+        pytest.param("{workspace}/MEMORY.md", "write", None, id="workspace-writable"),
         pytest.param("{skills}/x/SKILL.md", "read", None, id="skills-readable"),
         pytest.param("{skills}/x/SKILL.md", "write", "protected_location", id="skills"),
         pytest.param("{data}/settings.json", "read", "protected_location", id="data-dir"),
@@ -255,7 +255,7 @@ def test_scratch_base_keeps_the_working_directory_read_only(area: Area) -> None:
     refusal = boundary.check_path("a.txt", "write")
     assert refusal is not None and refusal.reason == "not_permitted" and refusal.base == "scratch"
     assert boundary.check_path(area.path("{scratch}/out.txt"), "write") is None
-    assert boundary.allowed_summary("write") == (area.scratch.as_posix(),)
+    assert boundary.allowed_summary("write") == (area.scratch.as_posix(), area.workspace.as_posix())
 
 
 def test_confined_reading_confines_writing_too(area: Area) -> None:
@@ -267,13 +267,35 @@ def test_confined_reading_confines_writing_too(area: Area) -> None:
     assert refusal.base == "work_area"
 
 
-def test_a_workspace_working_directory_is_writable_except_agent_json(area: Area) -> None:
-    boundary = area.boundary({"write": "work_area"}, workdir=area.workspace)
+def test_the_workspace_is_writable_wherever_the_session_works(area: Area) -> None:
+    rules = {"read": "work_area", "write": "scratch", "deny": ["Edit({workspace}/SOUL.md)"]}
+    own = area.boundary(rules, workdir=area.workspace)
+    in_project = area.boundary(rules)
+    ceiling = PermissionCeiling.from_ceiling_dict(in_project.to_ceiling_dict(source="parent"))
+    # A Sub-Agent with its own Workspace, under a parent that works elsewhere.
+    other = area.data / "agents" / "a2" / "workspace"
+    other.mkdir(parents=True)
+    child = PermissionBoundary.build(
+        None,
+        area.context(workdir=other, workspace=other, agent_config=other.parent / "agent.json"),
+        ceilings=[ceiling],
+    )
 
-    assert boundary.check_path("MEMORY.md", "write") is None
-    assert boundary.check_path("drafts", "write", subtree=True) is None
-    refusal = boundary.check_path("../agent.json", "write")
-    assert refusal is not None and refusal.location == "agent_config"
+    for boundary, workspace in (
+        (own, area.workspace),
+        (in_project, area.workspace),
+        (child, other),
+    ):
+        assert boundary.check_path(str(workspace / "MEMORY.md"), "write") is None
+        assert boundary.check_path(str(workspace / "drafts"), "write", subtree=True) is None
+        assert workspace.as_posix() in (boundary.allowed_summary("write") or ())
+        refusal = boundary.check_path(str(workspace.parent / "agent.json"), "write")
+        assert refusal is not None and refusal.location == "agent_config"
+    # Deny rules still refuse there; the parent's Workspace is not the Sub-Agent's.
+    refusal = in_project.check_path(area.path("{workspace}/SOUL.md"), "write")
+    assert refusal is not None and refusal.reason == "deny_rule"
+    refusal = child.check_path(area.path("{workspace}/MEMORY.md"), "write")
+    assert refusal is not None and refusal.location == "data_dir"
 
 
 def test_the_files_rules_come_from_stay_readable_but_unwritable(area: Area) -> None:

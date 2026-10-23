@@ -18,7 +18,8 @@ Not owned here: storing `permission_rules` on Agents, Settings defaults, Project
 6. An Agent can change only files it can read. A stored rule set with `write: anywhere` beside `read: work_area` is refused; when per-part resolution combines them from different levels, writing narrows to `work_area` (`write_within_read`). A `Read` deny also refuses changes and an `Edit` allow also permits reading, so no Tool result can leak a file's content to an Agent that may change but not read it.
 7. Full access overrides a restrictive shared default: the Full access preset stores the explicit full set. A set that restricts nothing is full access and has no protected locations, so such Agents keep managing vBot. No own rules ("use the default") is a separate choice.
 8. A restricted Agent cannot loosen its own rules: its `agent.json` is protected for reading and writing, and the repository files a Team member's rules are translated from, plus every location where a definition of its name would replace its own (`projects/resolution.md` -> Permission Rules), are protected for writing.
-9. A restricted Agent reads only its own Session's temporary files in the data directory (command and terminal logs, screenshots, speech, Sub-Agent activity): they live in per-Session folders, and the boundary grants only the Run's own (`session_artifact_dirs`, `storage.md`).
+9. An Agent always reads and changes its Workspace, also under ceilings; deny rules apply (user decision 2026-10-23).
+10. A restricted Agent reads only its own Session's temporary files in the data directory (command and terminal logs, screenshots, speech, Sub-Agent activity): they live in per-Session folders, and the boundary grants only the Run's own (`session_artifact_dirs`, `storage.md`).
 
 Honest limits, stated wherever "restricted" is shown: programs a command starts act with the server user's full rights and are not inspected inside; terminal input is checked only at an integrated shell prompt (`tools/terminal.md` -> Permission Rules); the local browser's redirect hops and the subresources of a page are not checked against web rules; MCP servers and Extensions are outside the checks; hardlinks to outside files are not detected; git can show files from its history, and git work across a folder or repository (`git pull`, `git restore .`, `git add .`) can read and change denied files and permission settings files below it (`permissions/commands.md` -> Paths); under only its own rules an Agent's `session_search` also finds its Sessions from before the rules; an older vBot ignores the rules after a downgrade.
 
@@ -27,7 +28,7 @@ Honest limits, stated wherever "restricted" is shown: programs a command starts 
 Shared term: GLOSSARY -> Permission Rules.
 
 ### Work Area
-The folders a restricted Agent may write by default: its working directory and its Scratch Area. Not the Workspace, which lies in the data directory and is writable only when it is the working directory.
+The folders a restricted Agent may write by default: its working directory and its Scratch Area. Not the Workspace, granted outside the layers.
 
 ### Permission Boundary
 The effective, placeholder-free rules of one Run: the Agent's own resolved rules expanded for this Run, plus inherited Permission Ceilings, plus the protected locations; every check asks it (Interfaces -> Boundary).
@@ -71,9 +72,9 @@ Rule language, presets, resolution, descriptions and editor data: `permissions/r
 For a path, in this order (normalization, unsafe forms and links in detail: `permissions/paths.md`):
 1. Normalize the path; refuse unsafe forms (network, device, alternate-stream and drive-relative paths) unless an allow rule without wildcards in every layer names them.
 2. Resolve links and junctions; the lexical and the resolved form must both pass every later step.
-3. Protected locations: the Agent's `agent.json` (always); the locations a Team member's rules come from (`rule_files`) and install and interpreter dirs (writes); the data directory, except the Workspace, the Scratch Area and `readable_dirs` (the Run's own artifact folders and Skill folders) for reading, and the Scratch Area or a Workspace that is the working directory for writing.
+3. Protected locations: the Agent's `agent.json` (always); the locations a Team member's rules come from (`rule_files`) and install and interpreter dirs (writes); the data directory, except the Workspace and the Scratch Area, and for reading also `readable_dirs` (the Run's own artifact folders and Skill folders).
 4. A deny rule of any layer refuses: `Read` deny covers reads and writes, `Edit` deny writes.
-5. Every layer must permit, by its base or an allow rule: an `Edit` allow covers reads too. The Workspace and `readable_dirs` count as readable in every layer.
+5. Every layer must permit, by its base or an allow rule: an `Edit` allow covers reads too. Every layer permits the Workspace, and reading `readable_dirs`.
 
 Hosts and commands: a deny rule of any layer refuses; under `listed` every such layer needs an allow rule. Host patterns: `permissions/rule-language.md` -> Bases, kinds and placeholders.
 

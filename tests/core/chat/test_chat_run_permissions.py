@@ -109,10 +109,12 @@ async def test_a_restricted_run_checks_tool_accesses_against_its_expanded_bounda
     workspace = tmp_path / "workspace"
     scratch = tmp_path / "scratch" / "s1"
     assert boundary.restricted
-    # {workdir} is the Session's working directory; the Scratch Area is writable.
+    # {workdir} is the Session's working directory; the Scratch Area and the
+    # Workspace are writable.
     assert boundary.check_path(workspace / "notes.md", "read") is None
     assert boundary.check_path(scratch / "s1" / "draft.md", "write") is None
-    refused = boundary.check_path(workspace / "notes.md", "write")
+    assert boundary.check_path(workspace / "notes.md", "write") is None
+    refused = boundary.check_path(tmp_path / "elsewhere.md", "write")
     assert refused is not None and refused.reason == "not_permitted"
     denied = boundary.check_path(workspace / "secrets" / "key", "read")
     assert denied is not None and denied.rule == f"Read({workspace.as_posix()}/secrets/**)"
@@ -263,7 +265,7 @@ async def test_an_inherited_ceiling_bounds_an_agent_without_rules(
 
     for context in seen:
         assert [layer.source for layer in context.permissions.layers] == [inherited_from]
-        refused = context.permissions.check_path(tmp_path / "workspace" / "notes.md", "write")
+        refused = context.permissions.check_path(tmp_path / "elsewhere.md", "write")
         assert refused is not None and refused.source == inherited_from
     assert len(seen) == 2
     # The System Prompt says where the inherited rules come from.
@@ -320,7 +322,7 @@ async def test_a_rule_edit_reaches_the_next_tool_round_of_an_active_run(tmp_path
 
     first, second = seen
     assert first.permissions is PermissionBoundary.UNRESTRICTED
-    refused = second.permissions.check_path(tmp_path / "workspace" / "notes.md", "write")
+    refused = second.permissions.check_path(tmp_path / "elsewhere.md", "write")
     assert refused is not None and refused.reason == "not_permitted"
 
 

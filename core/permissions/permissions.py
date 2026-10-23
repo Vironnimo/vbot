@@ -129,10 +129,12 @@ class BoundaryContext:
 
     ``workdir`` is the Session's working directory; ``project_root``,
     ``scratch_root`` and ``workspace`` give ``{project}``, ``{scratch}`` and
-    ``{workspace}`` (a rule using a missing one is dropped). ``data_dir`` is
-    protected except for the Workspace, the Scratch Area and ``readable_dirs``
-    (vBot-owned folders this Session may read, such as its Skill directories and
-    artifact folders); ``agent_config`` (the Agent's ``agent.json``) is never
+    ``{workspace}`` (a rule using a missing one is dropped). The Workspace (an
+    Identity Agent's own) is readable and writable under every layer, wherever
+    the Session works; only deny rules and the protected locations below refuse
+    there. ``data_dir`` is protected except for the Workspace, the Scratch Area
+    and ``readable_dirs`` (vBot-owned folders this Session may read, such as its
+    Skill directories and artifact folders); ``agent_config`` (the Agent's ``agent.json``) is never
     readable or writable, ``install_dirs`` (installation and interpreter) never
     writable. ``rule_files`` are the repository locations a Team member's rules come
     from (its profile, the settings files its translation reads and every location
@@ -178,7 +180,6 @@ class PermissionBoundary:
         "_data_dirs",
         "_workspace",
         "_scratch",
-        "_workdir_area",
         "_readable",
         "_agent_config",
         "_rule_files",
@@ -205,7 +206,6 @@ class PermissionBoundary:
         self._data_dirs = _Area.of(os.fspath(context.data_dir), windows=windows)
         self._workspace = _Area.optional(context.workspace, windows=windows)
         self._scratch = _Area.optional(context.scratch_root, windows=windows)
-        self._workdir_area = _Area.of(self._workdir, windows=windows)
         self._readable = tuple(
             _Area.of(os.fspath(folder), windows=windows) for folder in context.readable_dirs
         )
@@ -627,8 +627,8 @@ class PermissionBoundary:
     def allowed_summary(self, access: PermissionAccess) -> tuple[str, ...] | None:
         """The folders, commands or hosts ``access`` may reach; ``None`` for no limit.
 
-        Lists what a restricted layer allows and every other layer permits too;
-        for reading, also the Workspace, which every layer lets the Agent read.
+        Lists what a restricted layer allows and every other layer permits too,
+        and the Workspace, which every layer lets the Agent read and change.
         A folder to work in (``start_dir``) is named without the wildcard part
         of its rule. Skill folders and the Session's own vBot files stay
         readable but are not listed.
@@ -655,7 +655,7 @@ class PermissionBoundary:
                 ):
                     items.append(shown)
         workspace = self._context.workspace if self._context is not None else None
-        if path_access != "write" and workspace is not None:
+        if workspace is not None:
             text = lexical_text(os.fspath(workspace), windows=self._windows)
             if text not in items:
                 items.append(text)
@@ -692,9 +692,9 @@ class PermissionBoundary:
         return path_key(text, windows=self._windows)
 
     def _granted(self, key: str, access: PathAccess) -> bool:
-        if access == "write":
-            return False
-        return any(area.contains(key) for area in (*self._readable, self._workspace) if area)
+        if _contains(self._workspace, key):
+            return True
+        return access != "write" and any(area.contains(key) for area in self._readable)
 
     def _names_exactly(self, key: str, access: PathAccess) -> bool:
         # Every layer refuses unsafe forms by itself, so each must name the path.
@@ -715,9 +715,7 @@ class PermissionBoundary:
     def _data_dir_allowed(self, key: str, access: PathAccess) -> bool:
         """Whether ``key`` lies in a part of the data directory ``access`` may reach."""
         if access == "write":
-            return _contains(self._scratch, key) or (
-                _contains(self._workspace, key) and self._workdir_area.contains(key)
-            )
+            return _contains(self._scratch, key) or _contains(self._workspace, key)
         return (
             _contains(self._scratch, key)
             or _contains(self._workspace, key)

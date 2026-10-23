@@ -52,7 +52,6 @@ class _Voice:
 
     inherited: dict[str, str]
     rule_file: str
-    scratch_only: str
     outside: dict[str, str]
 
 
@@ -64,7 +63,6 @@ _AGENT: Final = _Voice(
         "extension": "set by the Extension that runs you",
     },
     rule_file="what is written there decides your permission rules",
-    scratch_only="you can change files only in your scratch folder",
     outside={
         "read": "it is outside the folders you can read",
         "write": "it is outside the folders you can change",
@@ -78,7 +76,6 @@ _WATCH: Final = _Voice(
         ("parent", "cron", "extension"), "inherited from the Session that scheduled this job"
     ),
     rule_file="what is written there decides the Agent's permission rules",
-    scratch_only="these rules allow changes only in a scratch folder",
     outside={
         "read": "it is outside the folders these rules allow reading",
         "write": "it is outside the folders these rules allow changing",
@@ -202,12 +199,7 @@ class PermissionRefusal:
             return f"it is {article} {form} that no allow rule names"
         if self.reason == "unanalyzable":
             return (self.detail or "it could not be analyzed").rstrip(".")
-        if self.access in _LISTED:
-            text = _LISTED[self.access]
-        elif self.access == "write" and self.base == "scratch":
-            text = voice.scratch_only
-        else:
-            text = voice.outside[self.access]
+        text = _LISTED.get(self.access) or voice.outside[self.access]
         return f"{text} ({inherited})" if inherited else text
 
 
