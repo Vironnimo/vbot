@@ -182,6 +182,29 @@ def _direct_normalization_candidates(
             )
         )
     if "array" in declared_types and value is not None and not isinstance(value, list):
+        item_schema = schema.get("items")
+        # XML-shaped lists of text have one `item` field. Never unwrap business
+        # objects or arrays whose items could themselves be objects.
+        if (
+            isinstance(value, dict)
+            and set(value) == {"item"}
+            and isinstance(item_schema, dict)
+            and _declared_json_types(_resolve_schema_reference(item_schema, root_schema))
+            == ("string",)
+            and "prefixItems" not in schema
+        ):
+            items = value["item"]
+            if isinstance(items, str) or (
+                isinstance(items, list) and all(isinstance(item, str) for item in items)
+            ):
+                candidates.append(
+                    _normalize_array_value(
+                        [items] if isinstance(items, str) else items,
+                        schema,
+                        root_schema=root_schema,
+                        root_validator=root_validator,
+                    )
+                )
         candidates.append(
             _normalize_array_value(
                 value,

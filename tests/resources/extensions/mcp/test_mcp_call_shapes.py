@@ -74,6 +74,8 @@ async def test_call_dialects_reach_the_exact_remote_tool(context_service, host, 
         {"action": "describe", "target": "inspect"},
         {"action": "describe", "targets": "inspect"},
         {"action": "describe", "targets": '["inspect"]'},
+        {"action": "describe", "targets": {"item": "inspect"}},
+        {"action": "describe", "targets": {"item": ["inspect", TARGET]}},
         {"tools": ["inspect"]},
         # Two spellings of one tool describe it once.
         {"action": "describe", "targets": ["inspect", TARGET]},

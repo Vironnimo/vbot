@@ -20,6 +20,7 @@ from ._shell_hint_common import HINT_TOOL_NAMES as HINT_TOOL_NAMES
 from ._shell_hint_pipeline import (
     _hint_first_stage,
     _hint_hidden_failure,
+    _hint_reported_error,
     _hint_skipped_after_pipeline,
     _hint_waiting_for_background,
 )
@@ -115,6 +116,8 @@ def annotate_failure(
     successful command with expandable variables in double-quoted Python source
     is told how to preserve literal text. A command that sleeps to read a
     background command's log is told that the result arrives as a message.
+    Reported cmdlet errors and Blender Python tracebacks can explain a zero
+    exit when the command itself invoked the reporting program.
     Otherwise exit code 0 or None stays unannotated.
     """
     command = command or ""
@@ -142,6 +145,7 @@ def annotate_failure(
     for late in (
         lambda: _hint_skipped_after_pipeline(command, exit_code, failed_programs),
         lambda: _hint_first_stage(command, exit_code, output, lines, failed_programs),
+        lambda: _hint_reported_error(command, exit_code, output),
         lambda: _hint_python_interpolation(command, exit_code),
         lambda: _hint_waiting_for_background(command),
     ):

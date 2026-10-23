@@ -14,6 +14,13 @@ Coverage: `test_model_names.py`, `test_tools_execution.py`, `test_chat_loop_tool
 
 ## Shared argument repair
 
+For an array of strings, an object with exactly one `item` field holding a
+string or a list of strings is the same list representation. Shared schema
+repair unwraps it; objects with other fields, object-valued items and arrays
+of objects keep their payload semantics. Four consecutive MCP `describe`
+calls in the October 21-23 audit used this wrapper. Dispatch coverage:
+`test_contracts.py` and `extensions/mcp/test_mcp_call_shapes.py`.
+
 `ToolContract.normalize_arguments` (`contracts.py`, implemented in `_argument_repair.py`) normalizes copied schema-guided value encodings: numeric counts without rounding, boolean aliases, JSON containers, and scalar arrays. Accepted text and arbitrary object keys remain unchanged. Generic repair does not rename fields, rewrite enums, unwrap business objects, or omit explicit empty/null values. Conflicting duplicate encoded JSON keys and multiple valid conversion meanings fail rather than selecting a value by branch order. Shared normalization always leaves meaningful operation validation in place. Verify equivalent calls and plausible different calls against independently specified receiving arguments and effects, not an expectation derived from the same repair code.
 
 One call shape is read before the owner's `argument_normalizer`, for every Tool with `coerce_arguments`: a call sent as one name/value pair is the parameter it names (`ToolContract.read_name_value_pair`, called by `_checked_arguments`), so `{"name": "command", "value": "ls"}` reaches the owner as `{"command": "ls"}` and the owner's repairs apply to the value. It applies only when neither `name` nor `value` is a parameter of the Tool (advertised or unadvertised), `name` is exactly a parameter the Model request offered, and every other field is another parameter or repeats this one with the same value; anything else stays as sent and is refused for its unknown fields. Silent, as a representation repair. Evidence, the 2026-10-12 Swarm run: one `powershell` command arrived as such a pair and ran in the regular field right after; no other call in the Session database had the shape. Coverage: `test_contracts.py::test_a_call_sent_as_one_name_value_pair_runs_as_that_parameter`.

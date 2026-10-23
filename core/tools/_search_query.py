@@ -863,7 +863,13 @@ def _list_glob_shaped_pattern(
             "ones included."
         )
         return
-    if query.globs or not glob_shaped(pattern):
+    if not glob_shaped(pattern):
+        return
+    if query.globs and not (
+        query.mode == "files_with_matches"
+        and set(query.globs) == {pattern}
+        and not any(argument in _NARROWING_FLAGS for argument in query.rg_args)
+    ):
         return
     query.patterns = []
     query.mode = "list_files"
