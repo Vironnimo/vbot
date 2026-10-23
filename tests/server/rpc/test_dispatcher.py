@@ -85,8 +85,14 @@ async def test_routine_rpc_error_is_logged_at_debug_only(
         pytest.param(
             {"method": "example.unknown"},
             RPC_ERROR_METHOD_NOT_FOUND,
-            "example.unknown",
+            "<unknown>",
             id="unknown-method",
+        ),
+        pytest.param(
+            {"method": "private method text\n" + "x" * 32_768},
+            RPC_ERROR_METHOD_NOT_FOUND,
+            "<unknown>",
+            id="unknown-method-never-enters-log",
         ),
     ],
 )

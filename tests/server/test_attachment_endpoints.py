@@ -8,8 +8,10 @@ from pathlib import Path
 from typing import Any, override
 
 import pytest
+import starlette.formparsers as formparsers
 from fastapi import HTTPException, Request  # type: ignore[import-not-found]
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
+from starlette.requests import ClientDisconnect
 
 from core.attachments import AttachmentRecord, AttachmentStore
 from server._request_bodies import (
@@ -135,6 +137,77 @@ async def test_upload_stops_consuming_chunked_body_after_file_limit() -> None:
 
     assert exc_info.value.status_code == 413
     assert closing_boundary_consumed is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ending", ["disconnect", "cancel", "incomplete", "malformed", "complete"])
+async def test_upload_parser_releases_every_unclaimed_spool(
+    monkeypatch: pytest.MonkeyPatch, ending: str
+) -> None:
+    opened: list[Any] = []
+    original = formparsers.SpooledTemporaryFile
+
+    def track_spool(*args: Any, **kwargs: Any) -> Any:
+        file = original(*args, **kwargs)
+        opened.append(file)
+        return file
+
+    monkeypatch.setattr(formparsers, "SpooledTemporaryFile", track_spool)
+    initial = (
+        b'--vbot\r\nContent-Disposition: form-data; name="file"; filename="note.txt"\r\n\r\nhello'
+    )
+    first = True
+
+    async def receive() -> dict[str, Any]:
+        nonlocal first
+        if first:
+            first = False
+            return {"type": "http.request", "body": initial, "more_body": True}
+        if ending == "disconnect":
+            return {"type": "http.disconnect"}
+        if ending == "cancel":
+            raise asyncio.CancelledError
+        tail = {
+            "incomplete": b"",
+            "malformed": b"\r\n--vbot\r\ninvalid header\r\n\r\n",
+            "complete": b"\r\n--vbot--\r\n",
+        }[ending]
+        return {"type": "http.request", "body": tail, "more_body": False}
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/upload",
+            "headers": [(b"content-type", b"multipart/form-data; boundary=vbot")],
+        },
+        receive,
+    )
+    try:
+        if ending == "complete":
+            file = await _parse_upload_file_with_limit(
+                request, max_size_bytes=1024, upload_kind="Attachment"
+            )
+            assert not file.file.closed
+            assert await file.read() == b"hello"
+            await file.close()
+        else:
+            error = {
+                "disconnect": ClientDisconnect,
+                "cancel": asyncio.CancelledError,
+                "incomplete": HTTPException,
+                "malformed": HTTPException,
+            }[ending]
+            with pytest.raises(error) as caught:
+                await _parse_upload_file_with_limit(
+                    request, max_size_bytes=1024, upload_kind="Attachment"
+                )
+            if isinstance(caught.value, HTTPException):
+                assert caught.value.status_code == (400 if ending == "malformed" else 422)
+        assert len(opened) == 1 and opened[0].closed
+    finally:
+        for spool in opened:
+            spool.close()
 
 
 @pytest.mark.parametrize(
