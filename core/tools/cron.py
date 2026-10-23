@@ -214,8 +214,9 @@ CRON_TOOL_PARAMETERS: JsonObject = {
             "type": "string",
             "enum": [WATCH_RUNS_ON_CHANGE, WATCH_RUNS_ALWAYS],
             "description": (
-                "When a job with watch runs: on_change only when the output changed, always "
-                "at every due time. Omit to keep the current mode, or on create for on_change."
+                "When a job with watch runs: on_change only when the output changed; always "
+                "at every due time, and each run still learns whether the output changed since "
+                "the last check. Omit to keep the current mode, or on create for on_change."
             ),
         },
     },
