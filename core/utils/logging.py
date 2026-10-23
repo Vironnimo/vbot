@@ -628,7 +628,6 @@ class _PipelineState:
     owner: LogManager | None
     level: int
     propagate: bool
-    timing_level: int
 
 
 class LogManager:
@@ -680,7 +679,6 @@ class LogManager:
                 the ``VBOT_LOG_STDIO`` environment variable (on unless ``0``).
         """
         self._level: int = self._resolve_level(level)
-        self._timing_enabled = False
         self._data_dir = Path(data_dir).expanduser() if data_dir is not None else None
         self._current_date_provider = current_date_provider or date.today
         self._enable_console = (
@@ -727,25 +725,10 @@ class LogManager:
         logger_name = self._normalize_logger_name(name)
         if logger_name not in self._loggers:
             logger = logging.getLogger(logger_name)
-            logger.setLevel(
-                logging.DEBUG
-                if self._timing_enabled and logger_name == "vbot.debug.timing"
-                else self._level
-            )
+            logger.setLevel(self._level)
             logger.propagate = True
             self._loggers[logger_name] = logger
         return self._loggers[logger_name]
-
-    def set_timing_enabled(self, enabled: bool) -> None:
-        """Let Debug Mode write content-free timing at DEBUG to the daily file.
-
-        Other DEBUG records and the console retain the configured threshold.
-        This uses the ordinary file retention and Session-id pseudonymization.
-        """
-        self._timing_enabled = enabled
-        logging.getLogger("vbot.debug.timing").setLevel(
-            logging.DEBUG if enabled else logging.NOTSET
-        )
 
     def close(self) -> None:
         """Detach and close this manager's handlers; safe to call repeatedly.
@@ -790,12 +773,8 @@ class LogManager:
                     replaced_owner = owner
                     logger.removeHandler(handler)
         replaced = _PipelineState(
-            owner=replaced_owner,
-            level=namespace.level,
-            propagate=namespace.propagate,
-            timing_level=logging.getLogger("vbot.debug.timing").level,
+            owner=replaced_owner, level=namespace.level, propagate=namespace.propagate
         )
-        self.set_timing_enabled(self._timing_enabled)
         namespace.setLevel(self._level)
         namespace.propagate = False
         for handler in self._handlers:
@@ -810,7 +789,6 @@ class LogManager:
             state = state.owner._replaced
         namespace.setLevel(state.level)
         namespace.propagate = state.propagate
-        logging.getLogger("vbot.debug.timing").setLevel(state.timing_level)
         if state.owner is not None:
             for handler in state.owner._handlers:
                 namespace.addHandler(handler)
@@ -830,13 +808,7 @@ class LogManager:
                 self._data_dir / "logs",
                 current_date_provider=self._current_date_provider,
             )
-            file_handler.setLevel(min(self._level, logging.DEBUG))
-            file_handler.addFilter(
-                lambda record: (
-                    record.levelno >= self._level
-                    or (self._timing_enabled and record.name == "vbot.debug.timing")
-                )
-            )
+            file_handler.setLevel(self._level)
             file_handler.setFormatter(self._formatter)
             handlers.append(file_handler)
 

@@ -97,7 +97,6 @@ async def apply_settings_change(
         runtime.speech.preload_configured(changed_speech)
     debug_enabled = _debug_enabled(current)
     if _debug_enabled(previous) != debug_enabled:
-        runtime._open_log_manager().set_timing_enabled(debug_enabled)
         # Provider traffic capture is a privacy-relevant mode an operator must see.
         _LOGGER.info("Debug Mode %s", "enabled" if debug_enabled else "disabled")
 

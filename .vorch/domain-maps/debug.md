@@ -40,7 +40,7 @@ Applied before disk, **structured only** - on request and response header and qu
 
 ## Tool Call timing
 
-`core/debug/timing.py` owns content-free timing records on `vbot.debug.timing` in the ordinary daily log. Debug Mode enables these DEBUG records even at the default INFO file threshold, at startup and on a live toggle; other DEBUG messages and console thresholds stay unchanged. `LOG_LEVEL=DEBUG` also enables them. Their retention is the log pipeline's 90 days / 500 MB, independent of raw trace-count rotation (`logging/pipeline.md`).
+`core/debug/timing.py` owns content-free timing records on `vbot.debug.timing` in the ordinary daily log. They are ordinary DEBUG records, written only when the log level is DEBUG (`LOG_LEVEL=DEBUG`); Debug Mode does not enable them, because the per-chunk transport records alone add thousands of lines per day. Their retention is the log pipeline's 90 days / 500 MB, independent of raw trace-count rotation (`logging/pipeline.md`).
 
 Each Chat request attempt has its own `request` id, including retries within one Iteration. Records carry UTC `at`, monotonic `mono_ns` and `pid`; compare monotonic clocks only inside one process. The measurement-only request ContextVar follows stream reader Tasks, never decides execution, and never enters Provider bodies or Session history. Tool batches use their original context and join through `run`, `iteration`, and `call`; provisional identities join through `slot` and `call_identified`. Argument-sequence expansion records its generated Call ids and count.
 

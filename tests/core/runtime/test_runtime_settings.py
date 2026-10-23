@@ -9,7 +9,6 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from core.debug import timing
 from core.runtime import Runtime, SettingsChangeEffects
 from core.sessions import ArchiveEntryFilter
 from core.utils.config import Config
@@ -20,27 +19,6 @@ from tests.core.runtime.runtime_test_support import (
     write_settings,
     write_skill,
 )
-
-
-def test_debug_mode_enables_timing_at_startup_and_changes_live(config: Config) -> None:
-    write_settings(config.data_dir, {"debug": {"enabled": True}})
-    runtime = Runtime(config)
-    runtime.start()
-    try:
-        timing.mark("startup_probe")
-        previous = runtime.storage.load_settings()
-        runtime.storage.update_settings_sections({"debug": {"enabled": False}})
-        asyncio.run(runtime.apply_settings_change(previous, runtime.storage.load_settings()))
-        timing.mark("disabled_probe")
-        previous = runtime.storage.load_settings()
-        runtime.storage.update_settings_sections({"debug": {"enabled": True}})
-        asyncio.run(runtime.apply_settings_change(previous, runtime.storage.load_settings()))
-        timing.mark("reenabled_probe")
-    finally:
-        runtime.stop()
-    text = "".join(p.read_text(encoding="utf-8") for p in (config.data_dir / "logs").glob("*.log"))
-    assert "startup_probe" in text and "reenabled_probe" in text
-    assert "disabled_probe" not in text
 
 
 def test_extension_change_also_applies_recall_and_skill_changes(

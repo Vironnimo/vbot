@@ -221,9 +221,6 @@ def bootstrap(runtime: Runtime) -> None:
                     "Retired databases stay registered until the next start: %s", exc
                 )
         settings = runtime._storage.load_settings()
-        runtime._open_log_manager().set_timing_enabled(
-            bool(settings.get("debug", {}).get("enabled", False))
-        )
         timezone_name = effective_timezone_name(settings)
         attachment_max_size_bytes = _positive_size_setting(
             runtime.logger,

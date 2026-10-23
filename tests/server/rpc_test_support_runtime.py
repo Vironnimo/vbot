@@ -904,9 +904,6 @@ class StubRuntime:
     def reload_timezone(self, settings: Mapping[str, Any] | None = None) -> None:
         pass
 
-    def _open_log_manager(self) -> Any:
-        return SimpleNamespace(set_timing_enabled=lambda _enabled: None)
-
     def reload_skills(self) -> None:
         self.skills = ReloadableStubRuntimeSkills(self)
 

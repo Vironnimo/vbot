@@ -6,8 +6,6 @@ The writing pipeline in `core/utils/logging.py` and the process logging around i
 
 Constructing a `LogManager` activates it; `close()` deactivates it. Managers nest: the newest open manager owns the outputs, and closing it hands them back to the manager it replaced. The Runtime opens its manager at startup and closes it at shutdown, so an unstarted Runtime leaves logging alone. The `logs` directory and daily file are created with the first record.
 
-`set_timing_enabled` follows Debug Mode at startup and on Settings reload. It admits `vbot.debug.timing` at DEBUG only to the daily file; other file records and the console retain their configured threshold. Nested managers restore the preceding timing logger level as well as the namespace and handlers (`debug.md` -> Tool Call timing).
-
 ## Retention
 
 Every directory the pipeline writes daily files to (`<data_dir>/logs/`, and `<install root>/logs/` of the Windows application) keeps them for `LOG_RETENTION_DAYS` (90) and at most `LOG_RETENTION_MAX_BYTES` (500 MB) in total; both are module constants in `core/utils/logging.py`, not Settings. Opening a day's file - a process's first record there and the first record of each new day - hands a sweep of that directory to the single `vbot-log-retention` thread, at most once per directory and day in the process. The sweep deletes daily files older than 90 days, then, oldest first, while all daily files together exceed 500 MB; files dated today or later are never deleted. Only regular files named exactly `YYYY-MM-DD.log` with a valid date count and are deleted; everything else in the directory (`server-startup.log`, `<id>-startup.log`, `server-crash.log` and its `.1` generation, the extensionless daily files of older versions) stays untouched.

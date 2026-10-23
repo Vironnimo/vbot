@@ -139,34 +139,6 @@ def test_log_manager_writes_other_loggers_warnings_once_under_their_own_name(
     ]
 
 
-def test_debug_mode_timing_reaches_info_files_without_enabling_other_debug_logs(
-    tmp_path: Path,
-) -> None:
-    logger = logging.getLogger("vbot.debug.timing")
-    before = logger.level
-    manager = LogManager(level="INFO", data_dir=tmp_path, enable_console=False)
-    try:
-        manager.set_timing_enabled(True)
-        logger.debug("timing-on")
-        logging.getLogger("vbot.unrelated").debug("unrelated-detail")
-        inner = LogManager(level="INFO", data_dir=tmp_path / "inner", enable_console=False)
-        try:
-            logger.debug("inner-off")
-        finally:
-            inner.close()
-        logger.debug("outer-restored")
-        manager.set_timing_enabled(False)
-        logger.debug("timing-off")
-    finally:
-        manager.close()
-    assert logger.level == before
-    assert manager.log_file_path is not None
-    assert _messages(manager.log_file_path) == [
-        "[DEBUG] vbot.debug.timing - timing-on",
-        "[DEBUG] vbot.debug.timing - outer-restored",
-    ]
-
-
 def test_log_manager_writes_channel_session_ids_with_pseudonymous_platform_part(
     tmp_path: Path,
 ) -> None:
