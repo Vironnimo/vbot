@@ -133,8 +133,9 @@ def test_finish_is_idempotent_and_restarts_retention_clock(tmp_path: Path) -> No
 
 
 @pytest.mark.parametrize("removed", [False, True], ids=["kept", "removed"])
+@pytest.mark.parametrize("during_sweep", [False, True], ids=["before-sweep", "during-sweep"])
 def test_reopen_protects_a_finished_file_until_its_new_lease_finishes(
-    tmp_path: Path, removed: bool
+    tmp_path: Path, removed: bool, during_sweep: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     manager = TemporaryFileManager(tmp_path, retention={"subagents": timedelta(seconds=1)})
     first = manager.create("subagents", ".md")
@@ -145,9 +146,27 @@ def test_reopen_protects_a_finished_file_until_its_new_lease_finishes(
     else:
         _age(first.path, seconds=60)
 
-    lease = manager.reopen(first.path)
-    _age(lease.path, seconds=60)
-    manager.sweep()
+    leases = []
+
+    def reopen() -> None:
+        leases.append(manager.reopen(first.path))
+        _age(first.path, seconds=60)
+
+    if during_sweep:
+        original_scandir = os.scandir
+
+        def reopen_before_listing(path: Any = ".") -> Any:
+            if path == first.path.parent and not leases:
+                reopen()
+            return original_scandir(path)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(os, "scandir", reopen_before_listing)
+            manager.sweep()
+    else:
+        reopen()
+        manager.sweep()
+    lease = leases[0]
 
     assert lease.path == first.path
     assert lease.path.read_text(encoding="utf-8") == ("" if removed else "first period")
