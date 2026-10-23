@@ -377,24 +377,33 @@ def test_healthy_fts_null_result_does_not_fall_back_to_canonical_scan(
         sessions.close()
 
 
-def test_fts_candidate_filters_apply_before_the_result_limit(tmp_path: Path) -> None:
+@pytest.mark.parametrize("roles", [("user",), ("error",), ("user", "error")])
+def test_fts_candidate_filters_apply_before_the_result_limit(
+    tmp_path: Path, roles: tuple[str, ...]
+) -> None:
     sessions = ChatSessionManager(tmp_path)
     excluded = sessions.create("agent", session_id="excluded")
     included = sessions.create("agent", session_id="included")
     excluded.append(ChatMessage.assistant(model="model", content="needle needle needle"))
     included_message = ChatMessage.user("needle")
-    included.append(included_message)
+    included_error = ChatMessage.error("provider", "needle")
+    included.append_many([included_message, included_error])
     try:
         rows = sessions.search_messages(
             "needle",
             project_id=None,
             agent_id="agent",
-            roles=("user",),
+            roles=roles,
             excluded_session_ids=("excluded",),
-            limit=1,
+            limit=len(roles),
         ).hits
-        actual = [(row.address.session_id, row.message_id) for row in rows]
-        assert actual == [("included", included_message.id)]
+        actual = {(row.address.session_id, row.message_id) for row in rows}
+        expected = {
+            ("included", message.id)
+            for message in (included_message, included_error)
+            if message.role in roles
+        }
+        assert actual == expected
     finally:
         sessions.close()
 

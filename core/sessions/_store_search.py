@@ -20,7 +20,7 @@ from typing import Any
 from core.sessions import _store_fts, _store_lineage, _store_values
 from core.sessions._search_request import SessionSearchRequest
 from core.sessions._types import SessionSearchHit, SessionSearchOrder, SessionSearchResult
-from core.sessions.schema import FTS_TABLE, FTS_TRIGRAM_TABLE
+from core.sessions.schema import FTS_TABLE, FTS_TRIGRAM_ROLES, FTS_TRIGRAM_TABLE
 
 # ruff: noqa: E501
 
@@ -133,7 +133,8 @@ def search(
             tool_inclusive = request.tool_inclusive
             # SQLite builds without the trigram tokenizer have no trigram index.
             trigram = (
-                not tool_inclusive
+                request.roles is not None
+                and set(request.roles).issubset(FTS_TRIGRAM_ROLES)
                 and request.trigram_supported
                 and _store_fts._fts_table_exists(connection, FTS_TRIGRAM_TABLE)
             )
