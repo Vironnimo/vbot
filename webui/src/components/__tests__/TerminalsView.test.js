@@ -5,6 +5,7 @@ import {
   flushSync,
   listTerminalsMock,
   startTerminalMock,
+  createTerminalGroupMock,
   terminalInputMock,
   terminalResizeMock,
   killTerminalMock,
@@ -33,6 +34,10 @@ import {
   fixtureState,
   setupTerminalsViewSuite,
 } from './TerminalsView.support.js';
+
+// After the support module, so the view and the handle share one Svelte.
+const { createStandaloneNavigation } =
+  await import('../../lib/navigation.svelte.js');
 
 const twoTerminals = () => [
   terminal({ terminal_id: 'term-1', title: 'First terminal' }),
@@ -268,7 +273,9 @@ describe('TerminalsView views and starting', () => {
       ],
     });
     startTerminalMock.mockResolvedValue({ terminal: terminal() });
-    view.mount();
+    const navigation = createStandaloneNavigation();
+    const navigate = vi.spyOn(navigation, 'navigate');
+    view.mount({ navigation });
     await waitFor(() =>
       document.querySelector('.terminals-view__detail > .empty-state'),
     );
@@ -301,6 +308,25 @@ describe('TerminalsView views and starting', () => {
     flushSync();
     expect(document.querySelector('.terminal-launcher')).toBeNull();
     expect(document.querySelector('#terminal-group-form')).toBeTruthy();
+
+    // The created group is shown at once, as a new step.
+    createTerminalGroupMock.mockResolvedValue({
+      group: userGroup('grp-new', 'Builds'),
+    });
+    setField('#terminal-group-form input', 'Builds');
+    flushSync();
+    document
+      .querySelector('#terminal-group-form')
+      .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await waitFor(() =>
+      document
+        .querySelector('.terminals-view__pill[aria-pressed="true"]')
+        ?.textContent.includes('Builds'),
+    );
+    flushSync();
+    expect(createTerminalGroupMock).toHaveBeenCalledWith('Builds');
+    expect(navigation.place).toEqual(['grp-new']);
+    expect(navigate).toHaveBeenLastCalledWith(['grp-new']);
   });
 
   it('disables starting when the server is unavailable', () => {

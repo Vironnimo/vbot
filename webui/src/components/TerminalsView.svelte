@@ -190,10 +190,13 @@
 
   // Place -> shown view. Before the first load the target waits in the
   // selection, which the load keeps while that view exists; a view that no
-  // longer exists leaves the shown one in place and corrects the entry.
+  // longer exists leaves the shown one in place and corrects the entry. Later
+  // list changes do not re-apply the place: a just created view would lose its
+  // selection before the effect below makes it the place.
+  const groupsLoaded = $derived(viewState.groups.length > 0);
   $effect(() => {
     const groupId = navigation.place[0] ?? '';
-    const loaded = viewState.groups.length > 0;
+    const loaded = groupsLoaded;
     untrack(() => {
       if (!loaded) {
         viewState.selectedGroupId = groupId;

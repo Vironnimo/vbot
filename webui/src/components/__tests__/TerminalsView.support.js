@@ -436,6 +436,7 @@ function setupTerminalsViewSuite() {
 export {
   listTerminalsMock,
   startTerminalMock,
+  createTerminalGroupMock,
   terminalInputMock,
   terminalResizeMock,
   killTerminalMock,
