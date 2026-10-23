@@ -378,72 +378,84 @@ describe('composerMemory across browser tabs', () => {
     },
   );
 
-  it("moves a renamed Agent's composer memory in every tab", async () => {
-    localStorage.setItem(HISTORY, JSON.stringify({ gamma: ['former gamma'] }));
-    const tabA = await openTab();
-    const tabB = await openTab();
-    const remoteAttachment = {
-      attachment_id: 'remote',
-      filename: 'remote.pdf',
-      media_type: 'application/pdf',
-    };
-    const localAttachment = {
-      ...remoteAttachment,
-      attachment_id: 'local',
-      filename: 'local.pdf',
-    };
-    // The rename also reaches stored attachments whose event has not arrived.
-    localStorage.setItem(
-      ATTACHMENTS,
-      JSON.stringify({ 'alpha::s1': [remoteAttachment] }),
-    );
-    tabA.setDraft('alpha::s1', 'draft in tab A');
-    tabA.pushHistory('alpha', 'sent as alpha');
-    tabA.flushComposerMemory();
-    tabB.setDraft('alpha::~draft-0', 'unsaved draft in tab B');
-    tabB.setDraft('beta::s1', 'other Agent');
-    tabB.setPendingAttachments('alpha::~draft-0', [localAttachment]);
+  it.each(['persisted', 'pending'])(
+    "moves a renamed Agent's composer memory with %s sends in every tab",
+    async (sends) => {
+      localStorage.setItem(
+        HISTORY,
+        JSON.stringify({ gamma: ['former gamma'] }),
+      );
+      const tabA = await openTab();
+      const tabB = await openTab();
+      const remoteAttachment = {
+        attachment_id: 'remote',
+        filename: 'remote.pdf',
+        media_type: 'application/pdf',
+      };
+      const localAttachment = {
+        ...remoteAttachment,
+        attachment_id: 'local',
+        filename: 'local.pdf',
+      };
+      // The rename also reaches stored attachments whose event has not arrived.
+      localStorage.setItem(
+        ATTACHMENTS,
+        JSON.stringify({ 'alpha::s1': [remoteAttachment] }),
+      );
+      tabA.setDraft('alpha::s1', 'draft in tab A');
+      tabA.pushHistory('alpha', 'sent as alpha');
+      tabA.pushHistory('gamma', 'sent as gamma');
+      if (sends === 'persisted') tabA.flushComposerMemory();
+      tabB.setDraft('alpha::~draft-0', 'unsaved draft in tab B');
+      tabB.setDraft('beta::s1', 'other Agent');
+      tabB.setPendingAttachments('alpha::~draft-0', [localAttachment]);
 
-    // Every open tab hears of the rename and applies it.
-    for (const tab of [tabA, tabB]) {
-      tab.renameComposerAgent('alpha', 'gamma');
-      tab.flushComposerMemory();
-      expect(tab.getPendingAttachments('gamma::s1')).toEqual([
+      // Every open tab hears of the rename and applies it.
+      for (const tab of [tabA, tabB]) {
+        tab.renameComposerAgent('alpha', 'gamma');
+        tab.flushComposerMemory();
+        expect(tab.getPendingAttachments('gamma::s1')).toEqual([
+          remoteAttachment,
+        ]);
+        expect(tab.getPendingAttachments('alpha::s1')).toEqual([]);
+      }
+
+      expect(storedDrafts()).toEqual({
+        'gamma::s1': 'draft in tab A',
+        'gamma::~draft-0': 'unsaved draft in tab B',
+        'beta::s1': 'other Agent',
+      });
+      expect(JSON.parse(localStorage.getItem(HISTORY))).toEqual({
+        gamma: ['sent as alpha', 'sent as gamma', 'former gamma'],
+      });
+      expect(tabB.getDraft('gamma::~draft-0')).toBe('unsaved draft in tab B');
+      expect(tabA.getHistory('gamma')).toEqual([
+        'sent as alpha',
+        'sent as gamma',
+        'former gamma',
+      ]);
+      expect(tabA.getHistory('alpha')).toEqual([]);
+      expect(JSON.parse(localStorage.getItem(ATTACHMENTS))).toEqual({
+        'gamma::s1': [remoteAttachment],
+        'gamma::~draft-0': [localAttachment],
+      });
+
+      // An empty rename must finish too, before the old id is reused later.
+      tabA.renameComposerAgent('empty', 'renamed');
+      tabA.flushComposerMemory();
+      tabB.setPendingAttachments('empty::reused', [remoteAttachment]);
+      tabB.flushComposerMemory();
+      tabA.setPendingAttachments('beta::unrelated', [localAttachment]);
+      tabA.flushComposerMemory();
+      expect(tabA.getPendingAttachments('empty::reused')).toEqual([
         remoteAttachment,
       ]);
-      expect(tab.getPendingAttachments('alpha::s1')).toEqual([]);
-    }
-
-    expect(storedDrafts()).toEqual({
-      'gamma::s1': 'draft in tab A',
-      'gamma::~draft-0': 'unsaved draft in tab B',
-      'beta::s1': 'other Agent',
-    });
-    expect(JSON.parse(localStorage.getItem(HISTORY))).toEqual({
-      gamma: ['sent as alpha', 'former gamma'],
-    });
-    expect(tabB.getDraft('gamma::~draft-0')).toBe('unsaved draft in tab B');
-    expect(tabA.getHistory('gamma')).toEqual(['sent as alpha', 'former gamma']);
-    expect(JSON.parse(localStorage.getItem(ATTACHMENTS))).toEqual({
-      'gamma::s1': [remoteAttachment],
-      'gamma::~draft-0': [localAttachment],
-    });
-
-    // An empty rename must finish too, before the old id is reused later.
-    tabA.renameComposerAgent('empty', 'renamed');
-    tabA.flushComposerMemory();
-    tabB.setPendingAttachments('empty::reused', [remoteAttachment]);
-    tabB.flushComposerMemory();
-    tabA.setPendingAttachments('beta::unrelated', [localAttachment]);
-    tabA.flushComposerMemory();
-    expect(tabA.getPendingAttachments('empty::reused')).toEqual([
-      remoteAttachment,
-    ]);
-    expect(tabA.getPendingAttachments('renamed::reused')).toEqual([]);
-    expect(
-      JSON.parse(localStorage.getItem(ATTACHMENTS))['empty::reused'],
-    ).toEqual([remoteAttachment]);
-  });
+      expect(tabA.getPendingAttachments('renamed::reused')).toEqual([]);
+      expect(
+        JSON.parse(localStorage.getItem(ATTACHMENTS))['empty::reused'],
+      ).toEqual([remoteAttachment]);
+    },
+  );
 
   it('keeps the merged store bounded to the newest sessions', async () => {
     const seeded = Object.fromEntries(

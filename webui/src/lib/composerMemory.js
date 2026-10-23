@@ -47,12 +47,9 @@ const attachmentListeners = new Set();
 // Only additions and explicit removals belong to this tab. An unchanged file
 // in a dirty Session must not return after another tab removed or sent it.
 let pendingAttachmentChanges = [];
-// Messages this tab sent since its last persist, merged per push so every
-// tab's sends survive in the shared per-agent history.
-let pendingHistoryPushes = [];
-// Agent renames this tab applied since its last persist, replayed onto the
-// stored history before the pushes (`{ from, to }`, oldest first).
-let pendingHistoryRenames = [];
+// Sends and Agent renames since the last persist, replayed in their original
+// order so a rename also moves sends that have not reached storage yet.
+let pendingHistoryChanges = [];
 let persistTimer = null;
 
 adoptOtherTabWrites();
@@ -127,12 +124,11 @@ function persistNow() {
     }
     notifyPendingAttachments();
   }
-  if (pendingHistoryPushes.length > 0 || pendingHistoryRenames.length > 0) {
+  if (pendingHistoryChanges.length > 0) {
     const stored = readStore(HISTORY_STORAGE_KEY) ?? histories;
     histories = withPendingHistory(stored);
     if (writeStore(HISTORY_STORAGE_KEY, histories)) {
-      pendingHistoryPushes = [];
-      pendingHistoryRenames = [];
+      pendingHistoryChanges = [];
     }
   }
 }
@@ -165,11 +161,13 @@ function withLocalChanges(base, local, dirty) {
 
 function withPendingHistory(base) {
   let merged = { ...base };
-  for (const { from, to } of pendingHistoryRenames) {
-    merged = withRenamedHistory(merged, from, to);
-  }
-  for (const { agentKey, entry } of pendingHistoryPushes) {
-    merged[agentKey] = withHistoryEntry(merged[agentKey], entry);
+  for (const change of pendingHistoryChanges) {
+    if (change.from) {
+      merged = withRenamedHistory(merged, change.from, change.to);
+    } else {
+      const { agentKey, entry } = change;
+      merged[agentKey] = withHistoryEntry(merged[agentKey], entry);
+    }
   }
   return merged;
 }
@@ -311,13 +309,14 @@ export function getPendingAttachments(sessionKey) {
 
 // Mounted composers keep upload progress locally, but completed attachments
 // follow this shared store, including removals and sends in another tab.
+// A rename also names the moved Agent so they can move their running uploads.
 export function subscribePendingAttachments(listener) {
   attachmentListeners.add(listener);
   return () => attachmentListeners.delete(listener);
 }
 
-function notifyPendingAttachments() {
-  for (const listener of attachmentListeners) listener();
+function notifyPendingAttachments(change) {
+  for (const listener of attachmentListeners) listener(change);
 }
 
 export function setPendingAttachments(sessionKey, values) {
@@ -413,7 +412,7 @@ export function pushHistory(agentKey, text) {
     return;
   }
   histories[agentKey] = withHistoryEntry(existing, entry);
-  pendingHistoryPushes.push({ agentKey, entry });
+  pendingHistoryChanges.push({ agentKey, entry });
   schedulePersist();
 }
 
@@ -447,9 +446,9 @@ export function renameComposerAgent(oldAgentId, newAgentId) {
     fromAgent: oldAgentId,
     toAgent: newAgentId,
   });
-  notifyPendingAttachments();
+  notifyPendingAttachments({ fromAgent: oldAgentId, toAgent: newAgentId });
   histories = withRenamedHistory(histories, oldAgentId, newAgentId);
-  pendingHistoryRenames.push({ from: oldAgentId, to: newAgentId });
+  pendingHistoryChanges.push({ from: oldAgentId, to: newAgentId });
   schedulePersist();
 }
 
@@ -494,8 +493,7 @@ export function resetComposerMemory() {
   attachments = {};
   dirtyDrafts.clear();
   pendingAttachmentChanges = [];
-  pendingHistoryPushes = [];
-  pendingHistoryRenames = [];
+  pendingHistoryChanges = [];
   if (persistTimer !== null) {
     clearTimeout(persistTimer);
     persistTimer = null;

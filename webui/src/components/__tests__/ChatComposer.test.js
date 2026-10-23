@@ -6,6 +6,7 @@ import { setApplicationTimeZone } from '../../lib/dateTimePrefs.svelte.js';
 import {
   flushComposerMemory,
   getPendingAttachments,
+  renameComposerAgent,
   setPendingAttachments,
 } from '../../lib/composerMemory.js';
 import {
@@ -676,6 +677,57 @@ describe('ChatComposer', () => {
         composer.mount({ draftKey: 'agent::created', historyKey: 'agent' });
         expect(composerInput().value).toBe('follow-up');
         expect(attachments()).toHaveLength(1);
+      },
+    );
+
+    it.each([false, true])(
+      'keeps uploading attachments through an Agent rename (hidden: %s)',
+      async (hidden) => {
+        const upload = deferred();
+        const file = uploaded('renamed-upload', 'brief.pdf', 'application/pdf');
+        uploadAttachment.mockReturnValue(upload.promise);
+        const onSendMessage = vi.fn().mockResolvedValue(true);
+        const props = reactiveProps({
+          draftKey: 'alpha::session',
+          historyKey: 'alpha',
+          onSendMessage,
+        });
+        composer.mount(props);
+        await selectFilesFromPicker(
+          new File(['pdf'], 'brief.pdf', { type: 'application/pdf' }),
+        );
+        if (hidden) {
+          props.draftKey = 'other::session';
+          flushSync();
+        }
+
+        renameComposerAgent('alpha', 'gamma');
+        if (!hidden) {
+          props.draftKey = 'gamma::session';
+          props.historyKey = 'gamma';
+        }
+        flushSync();
+        upload.resolve(file);
+        await settle();
+        props.draftKey = 'gamma::session';
+        props.historyKey = 'gamma';
+        flushSync();
+
+        expect(attachments()).toHaveLength(1);
+        expect(getPendingAttachments('alpha::session')).toEqual([]);
+        expect(getPendingAttachments('gamma::session')).toMatchObject([
+          { attachment_id: file.attachment_id },
+        ]);
+        submitComposer();
+        await settle();
+        expect(onSendMessage).toHaveBeenCalledWith([
+          {
+            type: 'file',
+            attachment_id: file.attachment_id,
+            filename: file.filename,
+            media_type: file.media_type,
+          },
+        ]);
       },
     );
 
