@@ -242,20 +242,43 @@ async def test_a_session_waits_for_its_commands_and_results_and_ends_one_span(
     assert all(work is None for _address, _state, work in world.changes[:-1])
 
 
-async def test_a_run_inside_the_settle_period_continues_the_span(world: _World) -> None:
+@pytest.mark.parametrize("during_recheck", [False, True])
+async def test_a_run_inside_the_settle_period_continues_the_span(
+    world: _World, monkeypatch: pytest.MonkeyPatch, during_recheck: bool
+) -> None:
+    if during_recheck:
+        world.subagents.link(CHILD, PARENT, "user")
+        await world.start(CHILD)
     first = await world.start(PARENT)
     world.clock.seconds = 10
     await world.finish(first)
     # Idle, but not yet confirmed: nothing is published.
     assert world.states(PARENT) == ["working"]
 
-    world.clock.seconds = 11
+    release = asyncio.Event()
+    if during_recheck:
+        entered = asyncio.Event()
+        parent_link = world.subagents.parent_link
+
+        async def blocked_link(address: SessionAddress) -> SubAgentLink | None:
+            if address == CHILD:
+                entered.set()
+                await release.wait()
+            return await parent_link(address)
+
+        monkeypatch.setattr(world.subagents, "parent_link", blocked_link)
+        await world.clock.settle()
+        await entered.wait()
+
+    world.clock.seconds += 1
     # A Run excluded from Agent activity is work all the same.
     second = await world.start(PARENT, contributes=False)
+    release.set()
     await world.clock.settle()
     assert world.activity.state(PARENT) == SessionActivityState(
         "working", START, contributes_to_agent_activity=False
     )
+    assert all(work is None for address, _state, work in world.changes if address == PARENT)
     world.clock.seconds = 20
     await world.finish(second)
     await world.clock.settle()
