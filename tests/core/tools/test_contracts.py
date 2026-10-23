@@ -761,7 +761,22 @@ async def test_a_call_sent_as_one_name_value_pair_runs_as_that_parameter(
 
 
 @pytest.mark.asyncio
-async def test_dispatch_wraps_one_array_item_and_uses_active_input_contract() -> None:
+@pytest.mark.parametrize(
+    ("value", "expected", "item_type"),
+    [
+        ("one", ["one"], "string"),
+        ({"item": "one"}, ["one"], "string"),
+        ({"item": ["one", "two"]}, ["one", "two"], "string"),
+        ({"item": '["one", "two"]'}, ['["one", "two"]'], "string"),
+        ({"item": "one", "other": "two"}, None, "string"),
+        ({"item": {"name": "one"}}, None, "string"),
+        ({"item": ["one", {"name": "two"}]}, None, "string"),
+        ({"item": "one"}, [{"item": "one"}], "object"),
+    ],
+)
+async def test_dispatch_wraps_one_array_item_and_uses_active_input_contract(
+    value: object, expected: list[Any] | None, item_type: str
+) -> None:
     received: JsonObject | None = None
 
     def handler(_context: ToolContext, arguments: JsonObject) -> JsonObject:
@@ -785,16 +800,20 @@ async def test_dispatch_wraps_one_array_item_and_uses_active_input_contract() ->
         name="sample",
         input_schema={
             "type": "object",
-            "properties": {"items": {"type": "array", "items": {"type": "string"}}},
+            "properties": {"items": {"type": "array", "items": {"type": item_type}}},
             "required": ["items"],
             "additionalProperties": False,
         },
     )
     context = replace(make_context("sample"), input_contract=active_contract)
 
-    await registry.dispatch(context, {"items": "one"}, ["sample"])
-
-    assert received == {"items": ["one"]}
+    if expected is None:
+        with pytest.raises(ToolContractError):
+            await registry.dispatch(context, {"items": value}, ["sample"])
+        assert received is None
+    else:
+        await registry.dispatch(context, {"items": value}, ["sample"])
+        assert received == {"items": expected}
 
 
 @pytest.mark.parametrize(
