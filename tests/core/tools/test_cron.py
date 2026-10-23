@@ -850,6 +850,11 @@ async def test_watch_runs_always_starts_every_run_and_stays_with_its_watch(
     assert "watch_runs" not in on_change
 
     # Without a watch, there is nothing for watch_runs to change.
+    envelope, _refused = await tool.call_async(
+        {"action": "update", "id": job_id, "watch": "none", "watch_runs": "always"}
+    )
+    assert envelope["ok"] is False
+    assert tool.only_job().watch is not None
     await tool.call_async({"action": "update", "id": job_id, "watch": "none"})
     envelope, refused = await tool.call_async(
         {"action": "update", "id": job_id, "watch_runs": "always"}

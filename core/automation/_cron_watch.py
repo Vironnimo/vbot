@@ -280,7 +280,8 @@ def write_baseline(directory: Path, job_id: str, baseline: WatchBaseline) -> Non
     path = baseline_path(directory, job_id)
     payload = {
         "job_id": job_id,
-        "watch": baseline.watch.to_dict(),
+        # The check alone: ``always`` decides when a Run starts, not what was seen.
+        "watch": {baseline.watch.kind: baseline.watch.target},
         "hash": output_digest(baseline.output),
         "comparison_hash": baseline.digest,
         "output": baseline.output,

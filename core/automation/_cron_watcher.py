@@ -32,6 +32,7 @@ from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool, cancel_and_wait
 
 if TYPE_CHECKING:
+    from core.automation import _cron_schedule as _schedule
     from core.automation.cron import CronService
 
 # Normalizing, hashing and diffing up to 200,000 characters of output per check.
@@ -77,17 +78,28 @@ class CronWatcher:
     def state_dir(self) -> Path:
         return self._owner._cron_dir / WATCH_STATE_DIR_NAME
 
-    async def fire(self, job: CronJob) -> None:
+    async def fire(self, job: CronJob, owed: _schedule.OwedFire | None = None) -> None:
         """Check a watching job at a due time; start its Run when the output changed.
 
-        A watch with ``always`` starts the Run after every successful check.
+        A watch with ``always`` starts the Run after every successful check, and
+        such a Run is told when it starts late for ``owed``: the due time, not
+        the change, is why it runs.
         """
         async with self._lock(job.id):
             change = await self._check(job.id, first=False)
             latest = self._owner._jobs.get(job.id)
-            if change is None or latest is None:
+            watch = latest.watch if latest is not None else None
+            if latest is None or watch is None or change is None:
                 return
-            outcome = await self._owner._execution._trigger_job_run(latest, change=change)
+            if not change.watch.same_check(watch):
+                return
+            # The mode at the start of the Run decides, also when an edit switched it meanwhile.
+            change = replace(change, watch=watch)
+            if not change.changed and not watch.always:
+                return
+            outcome = await self._owner._execution._trigger_job_run(
+                latest, owed=owed if watch.always else None, change=change
+            )
             # Edits wait for the baseline commit as they waited for the Run.
             self._owner._executing_jobs.add(job.id)
             try:

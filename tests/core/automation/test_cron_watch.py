@@ -174,6 +174,7 @@ async def test_an_always_watch_starts_every_run_with_the_output_and_any_change(
     assert switched.watch is not None and not switched.watch.always
     assert switched.last_checked_at is not None
     assert _baseline(service, job_id)["output"] == "v2"
+    assert _baseline(service, job_id)["watch"] == {"command": "Get-Content status.txt"}
 
 
 @pytest.mark.asyncio
@@ -277,14 +278,17 @@ async def test_the_baseline_is_replaced_when_unreadable_and_removed_with_its_wat
 
 
 @pytest.mark.asyncio
-async def test_a_missed_due_time_checks_once_and_its_change_gets_no_late_notice(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clock: _Clock
+@pytest.mark.parametrize("always", [False, True], ids=["on-change", "always"])
+async def test_a_missed_due_time_checks_once_and_only_an_always_run_hears_it_is_late(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clock: _Clock, always: bool
 ) -> None:
     service, trigger_service = make_service(tmp_path, tz="Europe/Berlin")
     checks = FakeChecks(["v1", "v2"])
-    job_id = await _watching_job(service, checks)
+    watch = CronWatch.parse("command", "Get-Content status.txt", always=always)
+    job_id = await _watching_job(service, checks, watch=watch)
     clock.now += timedelta(hours=1)
     await service._watcher.fire(service.get_job(job_id))
+    trigger_service.trigger_run.reset_mock()
     # vBot was off for five due times.
     clock.now += timedelta(hours=5, minutes=30)
     waits: list[datetime] = []
@@ -303,7 +307,9 @@ async def test_a_missed_due_time_checks_once_and_its_change_gets_no_late_notice(
     assert len(checks.calls) == 2
     trigger_service.trigger_run.assert_awaited_once()
     note = trigger_service.trigger_run.await_args.kwargs["context_note"]
-    assert "changed since" in note and "late" not in note
+    # A change, not the due time, starts an on-change Run.
+    assert "changed since" in note
+    assert ("is starting late" in note) == always
     assert waits == [datetime(2026, 10, 5, 11, 0, tzinfo=UTC)]
 
 

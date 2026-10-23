@@ -70,10 +70,11 @@ class CronExecution:
         """Start the job's Run and record its outcome.
 
         ``owed`` is the due time a late Run is told about; ``change`` is the
-        watched output change that started the Run, which replaces any late
-        notice. With ``webhook`` the Run takes the requests waiting for the job
-        once it holds a Run slot and starts only when some wait; they are
-        forgotten once it is admitted and wait for the next attempt otherwise.
+        watched output that started the Run (the watcher passes ``owed`` only
+        for a watch with ``always``, whose Run the due time starts). With
+        ``webhook`` the Run takes the requests waiting for the job once it holds
+        a Run slot and starts only when some wait; they are forgotten once it is
+        admitted and wait for the next attempt otherwise.
         """
         admitted = False
         batch: WebhookBatch | None = None
@@ -110,11 +111,7 @@ class CronExecution:
                     return CronRunOutcome(succeeded=False, admitted=admitted)
                 # Capacity and claim persistence can delay even an on-time fire.
                 # Keep its due-time evidence until all pre-admission waits settle.
-                late = (
-                    _context.late_fire(owed, self._owner._timezone)
-                    if owed is not None and change is None
-                    else None
-                )
+                late = _context.late_fire(owed, self._owner._timezone) if owed is not None else None
                 if webhook:
                     batch = await self._owner._webhooks.take(job.id)
                     latest = self._owner._jobs.get(job.id)

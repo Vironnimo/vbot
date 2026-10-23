@@ -215,7 +215,7 @@ CRON_TOOL_PARAMETERS: JsonObject = {
             "enum": [WATCH_RUNS_ON_CHANGE, WATCH_RUNS_ALWAYS],
             "description": (
                 "When a job with watch runs: on_change only when the output changed, always "
-                "at every due time. Omit on create for on_change."
+                "at every due time. Omit to keep the current mode, or on create for on_change."
             ),
         },
     },
@@ -535,6 +535,9 @@ async def _handle_update(
             updates["delivery"] = delivery.stored()
     if "watch" in arguments:
         updates["watch"] = _watch(arguments, cron_service.get_job(job_id).watch)
+        # As on create: a mode for a job that stops watching is refused, not dropped.
+        if updates["watch"] is None and WATCH_RUNS_FIELD in arguments:
+            raise CronCallRefusedError(_watch_runs_without_watch(arguments))
     elif WATCH_RUNS_FIELD in arguments:
         watching = cron_service.get_job(job_id).watch
         if watching is None:
