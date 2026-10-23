@@ -1257,6 +1257,31 @@ def test_a_program_that_failed_behind_a_select_first_stage_is_explained(
         # The error text is a program's output: the command calls no such name.
         ("python check.py", _NOT_RECOGNIZED.format(name="grep"), None),
         ("python check.py --skip 'grep'", _NOT_RECOGNIZED.format(name="grep"), None),
+        (
+            "Get-Content './missing.txt'; 'after'",
+            "Get-Content: Cannot find path 'C:\\work\\missing.txt' because it does not exist.\n"
+            "after",
+            (),
+        ),
+        (
+            "'before'\nSelect-String -Path missing.txt -Pattern needle\n'after'",
+            "Select-String: \nLine |\n   2 | Select-String -Path missing.txt -Pattern needle\n"
+            "     | ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n"
+            "     | Cannot find path 'C:\\work\\missing.txt' because it does not exist.\nafter",
+            (),
+        ),
+        # An error read from a log is data, even when it names the reading cmdlet.
+        (
+            "Get-Content 'errors.log'",
+            "Get-Content: Cannot find path 'C:\\work\\missing.txt' because it does not exist.",
+            None,
+        ),
+        (
+            "Get-Content 'errors.log'",
+            "Get-Content: \nLine |\n   1 | Get-Content missing.txt\n"
+            "     | ~~~~~~~~~~~~~~~~~~~~~~~\n     | Cannot find path 'missing.txt'.",
+            None,
+        ),
     ],
 )
 def test_a_statement_powershell_could_not_run_behind_exit_code_0_is_named(
@@ -1275,6 +1300,75 @@ def test_a_statement_powershell_could_not_run_behind_exit_code_0_is_named(
     # Only PowerShell runs commands this way.
     monkeypatch.setattr(shell_hint_common, "_POWERSHELL", False)
     assert annotate_failure(command, 0, output) is None
+
+
+@pytest.mark.parametrize("powershell", [True, False])
+@pytest.mark.parametrize(
+    ("command", "exit_code", "output", "hinted"),
+    [
+        (
+            "blender --background --python scene.py",
+            0,
+            "Traceback (most recent call last):\nTypeError: invalid mesh\n",
+            True,
+        ),
+        (
+            "blender --background --python-expr 'raise ValueError()'",
+            0,
+            "Traceback (most recent call last):\nValueError: invalid mesh\n",
+            True,
+        ),
+        (
+            "blender --background --python scene.py",
+            1,
+            "Traceback (most recent call last):\nTypeError: invalid mesh\n",
+            False,
+        ),
+        ("blender --background --python scene.py", 0, "Rendered scene\n", False),
+        (
+            "Get-Content 'blender.log'",
+            0,
+            "Traceback (most recent call last):\nTypeError: invalid mesh\n",
+            False,
+        ),
+        (
+            "Write-Output 'blender --python scene.py'",
+            0,
+            "Traceback (most recent call last):\nTypeError: invalid mesh\n",
+            False,
+        ),
+    ],
+)
+def test_blender_python_errors_explain_zero_exits(
+    monkeypatch: pytest.MonkeyPatch,
+    powershell: bool,
+    command: str,
+    exit_code: int,
+    output: str,
+    hinted: bool,
+) -> None:
+    monkeypatch.setattr(shell_hint_common, "_POWERSHELL", powershell)
+    assert (annotate_failure(command, exit_code, output) is not None) is hinted
+
+
+@pytest.mark.parametrize(
+    ("command", "hinted"),
+    [
+        ('$b = "C:/Program Files/Blender/blender.exe"\n& $b --python scene.py', True),
+        ('& "C:/Program Files/Blender/blender.exe" --python scene.py', True),
+        ('$b = "C:/Blender/blender.exe"; $b = "reader.exe"; & $b --python scene.py', False),
+        ('$b = "C:/Blender/blender.exe"; Write-Output "$b --python scene.py"', False),
+        ("blender --help | another --python scene.py", False),
+    ],
+)
+def test_blender_hint_resolves_only_a_called_literal_program(
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
+    hinted: bool,
+) -> None:
+    monkeypatch.setattr(shell_hint_common, "_POWERSHELL", True)
+    output = "Traceback (most recent call last):\nTypeError: invalid mesh\n"
+    assert (annotate_failure(command, 0, output) is not None) is hinted
 
 
 @pytest.mark.parametrize(

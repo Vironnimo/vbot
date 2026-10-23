@@ -299,6 +299,17 @@ cancellation. Durable regressions live in `test_powershell.py` and `test_shell.p
 
 ## Failure hints (`shell_hints.py`)
 
+- At exit code 0, a PowerShell cmdlet error gets a hint when the command calls
+  that cmdlet and the error's displayed source line or missing literal path
+  belongs to this command. A matching header in a read log alone is insufficient.
+  A Blender `--python`/`--python-expr` invocation with a traceback and exception
+  line gets the `--python-exit-code 1` hint. Program recognition excludes quoted
+  source and comments; a single earlier literal assignment can identify a
+  PowerShell call operator's executable. Neither hint changes execution or exit
+  codes, and both advise checking partial effects before retrying. Replaying
+  the audit's 1,004 shell calls adds exactly eight hints (two cmdlet errors,
+  six Blender exceptions); existing hints stay unchanged.
+
 - A missing PowerShell cmdlet can get a spelling suggestion from the same script: exactly one other command at a statement or pipeline start with the same verb and a name one edit away. Strings and comments are excluded, and ambiguous candidates keep the generic hint. This only suggests a correction; execution is never changed.
 - When an early `\"` exposes a `<` inside the formerly quoted argument before another quote or statement boundary, PowerShell's reserved-operator ParserError gets the quote-escape hint. A separate statement using real `<` input redirection keeps the input-redirection hint. Swarm replay 2026-10-14: these two cases change two of 546 shell results; the other hints stay identical.
 - A successful direct Python/py `-c` call whose ordinary double-quoted source contains unescaped unscoped variables gets a conditional interpolation hint. It reports the quoting rule, never whether a branch ran or interpolation was intended. Scoped variables, whole-variable source arguments, literal strings and here-strings, subexpressions and uncertain argument boundaries are excluded; the command and payload stay unchanged. At most three variable names are shown, each bounded to 40 characters.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from collections.abc import Callable, Sequence
 
 from core.permissions import PermissionBoundary
@@ -11,6 +12,7 @@ from . import _shell_hint_common as _common
 from ._shell_hint_code import (
     _COMMAND_WORD,
     _FIRST_STAGE,
+    _PIPELINE_PROGRAM,
     _POWERSHELL_NOT_RECOGNIZED,
     _RUN_START,
     _calls,
@@ -57,6 +59,113 @@ _ERROR_LINE = re.compile(
     r"|FAIL(?:ED)?\b|npm ERR!|not ok\b|[\u2717\u2718\u2716\u274c])",
     re.M,
 )
+_CMDLET_ERROR = re.compile(r"^([A-Za-z]+-[A-Za-z]+):[ \t]*(?:\r?$|\S[^\n]*)", re.M)
+_PYTHON_TRACEBACK = re.compile(r"^Traceback \(most recent call last\):\r?$", re.M)
+_PYTHON_EXCEPTION = re.compile(r"^\w*(?:Error|Exception):[^\n]+", re.M)
+_BLENDER_PYTHON = re.compile(r"(?<!\S)--python(?:-expr)?(?=\s|$)")
+_LITERAL_ASSIGNMENT = re.compile(r"\$(\w+)[ \t]*=[ \t]*(['\"])([^'\"`$\r\n]+)\2[ \t]*$")
+_VARIABLE_WRITE = re.compile(r"\$(\w+)\b[ \t]*(?:[-+*/]?=|(?:\+\+|--)(?!\w))")
+_ERROR_SOURCE = re.compile(r"\s*\nLine \|\r?\n[ \t]*(\d+) \|[ \t]*(.+)\r?\n[ \t]*\|[ \t]*~+")
+_MISSING_PATH = re.compile(r"Cannot find path ['\"]([^'\"]+)['\"] because it does not exist\.")
+
+
+def _invocations(command: str) -> list[tuple[str, str]]:
+    """Read command names and unquoted arguments, excluding printed source.
+
+    Resolve only an earlier, single literal assignment used with PowerShell's
+    call operator, as in `$b = '.../blender.exe'; & $b --python scene.py`.
+    Uncertain names and blocks are left out rather than executed or guessed.
+    """
+    flat = _powershell_code(command).flat
+    writes = Counter(match[1].casefold() for match in _VARIABLE_WRITE.finditer(flat))
+    variables: dict[str, str] = {}
+    found: list[tuple[str, str]] = []
+    for left, right in _top_level_statements(flat):
+        assignment = _LITERAL_ASSIGNMENT.fullmatch(command[left:right].strip())
+        if assignment and flat[left:right].lstrip().startswith("$"):
+            name = assignment[1].casefold()
+            if writes[name] == 1:
+                variables[name] = assignment[3]
+            continue
+        pipes = _top_level_split(flat, left, right, _PIPE)
+        for start, end in zip([left, *(at + 1 for at in pipes)], [*pipes, right], strict=True):
+            if not flat[start:end].strip():
+                continue
+            first = _PIPELINE_PROGRAM.match(command, start, end)
+            if first is None:
+                continue
+            word = first[1]
+            if word.startswith("$"):
+                if not _common._POWERSHELL or not flat[start:right].lstrip().startswith("&"):
+                    continue
+                word = variables.get(word[1:].casefold(), "")
+            elif word.startswith(("'", '"')):
+                if _common._POWERSHELL and not flat[start:right].lstrip().startswith("&"):
+                    continue
+                word = word[1:-1]
+            name = re.split(r"[/\\]", word)[-1].casefold().removesuffix(".exe")
+            if name:
+                found.append((name, flat[first.end() : end]))
+    return found
+
+
+def _own_cmdlet_error(command: str, output: str, error: re.Match[str]) -> bool:
+    """Require the error's source line or missing path to belong to this command.
+
+    Reading a log can print the same cmdlet's error. A header alone does not
+    establish that the cmdlet failed during this invocation.
+    """
+    source = _ERROR_SOURCE.match(output, error.end())
+    if source:
+        lines = command.splitlines()
+        line = int(source[1])
+        text = source[2].rstrip("\r").removesuffix("…").rstrip()
+        return 0 < line <= len(lines) and bool(text) and lines[line - 1].strip().startswith(text)
+    missing = _MISSING_PATH.search(error[0])
+    if missing:
+        path = missing[1].replace("\\", "/").casefold()
+        # Both a literal full path and a relative suffix can name the missing
+        # input. Other strings in a log-reader's command name different files.
+        for literal in re.finditer(r"(['\"])([^'\"`$\r\n]+)\1", command):
+            value = literal[2].replace("\\", "/").removeprefix("./").casefold()
+            if value and (path == value or path.endswith("/" + value)):
+                return True
+    return False
+
+
+def _hint_reported_error(command: str, exit_code: int | None, output: str) -> str | None:
+    """Explain a reported execution error that did not set a failing exit code."""
+    if exit_code != 0:
+        return None
+    window = _scan_window(output)
+    cmdlets = list(_CMDLET_ERROR.finditer(window)) if _common._POWERSHELL else []
+    traceback = _PYTHON_TRACEBACK.search(window)
+    if not cmdlets and traceback is None:
+        return None
+    invocations = _invocations(command)
+    for error in cmdlets:
+        name = error[1]
+        if any(called == name.casefold() for called, _ in invocations) and _own_cmdlet_error(
+            command, window, error
+        ):
+            return (
+                f"PowerShell reported an error from {name}, although the command exited with "
+                "code 0. Later statements can still run after a cmdlet error. Check what "
+                "completed before retrying; use -ErrorAction Stop on a cmdlet when later "
+                "statements depend on it."
+            )
+    if (
+        traceback is not None
+        and _PYTHON_EXCEPTION.search(window, traceback.end())
+        and any(name == "blender" and _BLENDER_PYTHON.search(args) for name, args in invocations)
+    ):
+        return (
+            "The output contains a Python traceback despite exit code 0. Blender defaults to "
+            "zero even when a command-line Python script raises an exception. Check what "
+            "completed before retrying; put --python-exit-code 1 before --python or "
+            "--python-expr to report Python exceptions through the exit code."
+        )
+    return None
 
 
 def _stage_text(command: str, code: str, start: int, end: int) -> str:
