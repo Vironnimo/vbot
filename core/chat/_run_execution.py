@@ -295,9 +295,10 @@ class RunExecution:
             start_line_extras,
         )
 
-        # The first Run of a Session runs its context commands while it persists its input.
-        context_commands = await self._start_context_commands(context)
+        context_commands: asyncio.Task[ChatMessage] | None = None
         try:
+            # The first Run of a Session runs its context commands while it persists its input.
+            context_commands = await self._start_context_commands(context)
             session.begin_defer_notes()
             # Commits with the first write that persists the Skill note (or in its place).
             record_seen_skills: SeenSkillsUpdate | None = None
@@ -473,6 +474,8 @@ class RunExecution:
                             await context.session_snapshot.flush_deferred_notes(session)
                     finally:
                         await session.flush_deferred_notes_async()
+            # A Stop during speech-to-text ends the Run here; the commands end with it.
+            run.raise_if_cancelled()
             if context_commands is not None:
                 pending, context_commands = context_commands, None
                 await self._persist_context_commands(context, pending)

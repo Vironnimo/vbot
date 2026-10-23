@@ -163,6 +163,17 @@ def test_validate_project_data_accepts_only_identity_cwd_and_tool_whitelist() ->
             id="empty-context-command",
         ),
         pytest.param(
+            {"context_commands": ["git status\ngit log -3"]},
+            [
+                (
+                    "error",
+                    "$.context_commands",
+                    "commands must be single lines; join steps with ; or && instead",
+                )
+            ],
+            id="multi-line-context-command",
+        ),
+        pytest.param(
             {"folder_instructions": "off"},
             [("error", "$.folder_instructions", "must be true or false")],
             id="switch-not-a-bool",

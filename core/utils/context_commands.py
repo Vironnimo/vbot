@@ -36,6 +36,8 @@ def context_commands_problem(value: Any) -> str | None:
     commands = [item.strip() for item in value]
     if any(not command for command in commands):
         return "must not contain an empty command"
+    if any("\n" in command or "\r" in command for command in commands):
+        return "commands must be single lines; join steps with ; or && instead"
     if any(len(command) > MAX_CONTEXT_COMMAND_CHARS for command in commands):
         return f"commands must have at most {MAX_CONTEXT_COMMAND_CHARS} characters"
     if len(dict.fromkeys(commands)) > MAX_CONTEXT_COMMANDS:

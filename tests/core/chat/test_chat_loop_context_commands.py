@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 import pytest
 
@@ -13,6 +14,7 @@ from core.chat import ChatMessage
 from core.chat._context_commands import CONTEXT_COMMANDS_META_KEY, CONTEXT_OUTPUT_MAX_CHARS
 from core.permissions import PermissionBoundary
 from core.projects import ProjectStore
+from core.runs import RunCancelledError
 from core.tools import ToolRegistry
 from tests.core.chat.chat_loop_support import (
     StubAdapter,
@@ -112,16 +114,16 @@ async def test_the_first_run_of_a_session_gets_one_note_with_every_output(tmp_pa
         for message in runtime.adapter.requests[0]["messages"]
     )
 
-    # Outputs are quoted data with equal shares; a failure says why the command did not run.
+    # Outputs are quoted data sharing the room equally; a failure says why the command did not run.
     assert "for your new Sessions in your Workspace" in note.content
     assert "<b>" not in note.content
     status, log, missing = _record(note)
     assert status == {"command": "git status --short", "exit_code": 0, "output": "M core/app.py"}
-    share = CONTEXT_OUTPUT_MAX_CHARS // 3
+    share = CONTEXT_OUTPUT_MAX_CHARS // 2
     assert (log["exit_code"], log["cut"]) == (1, True)
     assert share // 2 < len(log["output"]) <= share
     assert log["output"].endswith("</b>")
-    assert f"end after {share} characters" in note.content
+    assert f"at most {share} characters" in note.content
     assert missing == {
         "command": "Get-Content missing.txt",
         "error": "The command could not start: no shell",
@@ -152,3 +154,56 @@ async def test_a_session_in_a_project_runs_only_the_projects_commands(tmp_path: 
     [note] = _context_notes(session.load_active())
     assert isinstance(note.content, str)
     assert "for new Sessions in this Project" in note.content
+
+
+@pytest.mark.asyncio
+async def test_a_stop_before_the_note_ends_the_commands_and_leaves_them_to_the_next_run(
+    tmp_path: Path,
+) -> None:
+    started = asyncio.Event()
+    ended: list[str] = []
+
+    class _Waiting(_Runner):
+        @override
+        async def run_context_command(
+            self, command: str, *, workdir: Path, boundary: PermissionBoundary
+        ) -> tuple[int, str]:
+            if self.calls:
+                return await super().run_context_command(
+                    command, workdir=workdir, boundary=boundary
+                )
+            self.calls.append((command, workdir))
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                ended.append(command)
+            raise AssertionError("unreachable")
+
+    runner = _Waiting({"git status": (0, "clean")})
+    runtime = _runtime(tmp_path, runner, agent_commands=["git status"])
+    session = runtime.chat_sessions.create("coder", session_id="source")
+    loop = build_chat_loop(runtime)
+
+    run = await loop.start_run("coder", "Work", session_id=session.id)
+    await started.wait()
+    # The Run persists its input while the commands run; the Stop comes after it.
+    for _ in range(500):
+        if any(message.role == "user" for message in session.load_active()):
+            break
+        await asyncio.sleep(0.01)
+    run.request_cancel(reason="user")
+    with pytest.raises(RunCancelledError):
+        await run.wait()
+    assert ended == ["git status"]
+    stopped = session.load_active()
+    assert [message.content for message in stopped if message.role == "user"] == ["Work"]
+    assert _context_notes(stopped) == []
+
+    run = await loop.start_run("coder", "Work again", session_id=session.id)
+    await run.wait()
+    messages = session.load_active()
+    [note] = _context_notes(messages)
+    before = messages[messages.index(note) - 1]
+    assert (before.role, before.content) == ("user", "Work again")
+    assert _record(note) == [{"command": "git status", "exit_code": 0, "output": "clean"}]
