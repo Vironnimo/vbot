@@ -413,10 +413,18 @@ def refresh_unit(
     if path is None:
         return False
     content = unit_content(install)
-    if path.read_text(encoding="utf-8") == content:
+    previous = path.read_text(encoding="utf-8")
+    if previous == content:
         return False
     atomic_write_text(path, content)
-    _systemctl(run, "daemon-reload")
+    result = _systemctl(run, "daemon-reload")
+    if result.returncode != 0:
+        atomic_write_text(path, previous)
+        _systemctl(run, "daemon-reload")
+        raise ApplicationError(
+            "Could not reload application Autostart; the previous unit file was restored: "
+            f"{result.stderr or result.stdout or f'exit code {result.returncode}'}"
+        )
     return True
 
 

@@ -382,14 +382,21 @@ def test_packaged_uninstall_reuses_guided_scope_and_confirmation(
     assert called == ([] if expected is None else [expected])
 
 
-def test_access_mode_change_is_recorded_for_the_next_server_start(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("refresh_fails", [False, True], ids=["refreshed", "reload-failed"])
+def test_access_mode_change_is_recorded_for_the_next_server_start(
+    tmp_path, monkeypatch, capsys, refresh_fails
+):
     install = _install(tmp_path)
     install.save()
     monkeypatch.setattr(command, "discover", lambda: install)
     refreshed: list[str | None] = []
-    monkeypatch.setattr(
-        autostart, "refresh_unit", lambda changed: refreshed.append(changed.server_host)
-    )
+
+    def refresh(changed):
+        refreshed.append(changed.server_host)
+        if refresh_fails:
+            raise ApplicationError("reload failure sentinel")
+
+    monkeypatch.setattr(autostart, "refresh_unit", refresh)
 
     assert run(["application", "access", "show", "--output", "plain"]) == 0
     shown = json.loads(capsys.readouterr().out)
@@ -397,8 +404,8 @@ def test_access_mode_change_is_recorded_for_the_next_server_start(tmp_path, monk
         *("application", "access", "set", "lan", "--allow-network", "100.64.0.0/10"),
         *("--allow-host", "vbot.home.arpa"),
     ]
-    assert run([*set_lan, "--output", "plain"]) == 0
-    changed = json.loads(capsys.readouterr().out)
+    assert run([*set_lan, "--output", "plain"]) == (1 if refresh_fails else 0)
+    output = capsys.readouterr()
 
     assert (shown["mode"], shown["host"]) == ("local", "127.0.0.1")
     loaded = load_installation(install.root)
@@ -407,11 +414,15 @@ def test_access_mode_change_is_recorded_for_the_next_server_start(tmp_path, monk
     assert loaded.access == access_config(
         "lan", allow_networks=["100.64.0.0/10"], allow_hosts=["vbot.home.arpa"]
     )
-    assert changed["allow_hosts"] == ["vbot.home.arpa"]
-    assert changed["applies"] == "on the next server start"
     assert refreshed == ["0.0.0.0"]
     log = resolve_daily_log_path(install.root).read_text(encoding="utf-8")
     assert "Server access mode changed (from=local to=lan host=0.0.0.0)" in log
+    if refresh_fails:
+        assert "reload failure sentinel" in output.err
+        return
+    changed = json.loads(output.out)
+    assert changed["allow_hosts"] == ["vbot.home.arpa"]
+    assert changed["applies"] == "on the next server start"
 
 
 @pytest.mark.parametrize(

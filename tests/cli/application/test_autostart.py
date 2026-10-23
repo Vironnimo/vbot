@@ -134,6 +134,9 @@ def test_linux_autostart_owns_one_systemd_user_unit_that_runs_the_bootstrap_serv
     # A changed bind address (vbot application access set) rewrites the unit once.
     commands.clear()
     moved = replace(install, server_host="0.0.0.0")
+    with pytest.raises(ApplicationError):
+        refresh_unit(moved, lambda _command: CommandRun(1, "", "reload failed"), unit_dir=units)
+    assert (units / UNIT_NAME).read_text(encoding="utf-8") == unit
     assert refresh_unit(moved, runner, unit_dir=units) is True
     assert refresh_unit(moved, runner, unit_dir=units) is False
     assert '"--host" "0.0.0.0"' in (units / UNIT_NAME).read_text(encoding="utf-8")
