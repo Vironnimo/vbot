@@ -160,7 +160,13 @@ def _add_doctor_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
         doctor_command_parser = doctor_subparsers.add_parser(
             command,
             help=DOCTOR_HELP[command],
-            description=DOCTOR_HELP[command],
+            description=(
+                DOCTOR_HELP[command] + ". Read-only; no server needed. "
+                "Reports file paths, errors, warnings and repair recommendations. "
+                "Runtime, Provider connectivity and database integrity are not checked. "
+                "Exit 0: no errors (warnings can remain); 1: errors or incomplete checks; "
+                "2: invalid arguments."
+            ),
         )
         doctor_command_parser.add_argument(
             "--data-dir",
@@ -169,3 +175,35 @@ def _add_doctor_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
                 "Target vBot data directory; defaults to VBOT_DATA_DIR, worktree marker, or ~/.vbot"
             ),
         )
+        doctor_command_parser.add_argument(
+            "--json",
+            action="store_true",
+            dest="json_output",
+            help="Print one JSON report with diagnostic codes and recommendations; omit for text",
+        )
+        doctor_command_parser.add_argument(
+            "--limit",
+            type=_doctor_limit,
+            default=20,
+            help="Findings per page (1-100); omit for up to 20 within the text size budget",
+        )
+        doctor_command_parser.add_argument(
+            "--offset",
+            type=_doctor_offset,
+            default=0,
+            help="Skip this many findings (errors first); omit to start at the first finding",
+        )
+
+
+def _doctor_limit(value: str) -> int:
+    number = int(value)
+    if not 1 <= number <= 100:
+        raise argparse.ArgumentTypeError("must be an integer from 1 to 100")
+    return number
+
+
+def _doctor_offset(value: str) -> int:
+    number = int(value)
+    if number < 0:
+        raise argparse.ArgumentTypeError("must be a non-negative integer")
+    return number

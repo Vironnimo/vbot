@@ -7,14 +7,16 @@ and small reusable shape checks.
 
 from __future__ import annotations
 
+import fnmatch
 import json
+import stat
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
 from core.utils.atomic import read_replaced_text
-from core.utils.file_status import exists_strict
+from core.utils.file_status import exists_strict, is_link_status, stat_or_none
 
 DiagnosticSeverity = Literal["error", "warning"]
 JsonObject = dict[str, Any]
@@ -32,6 +34,7 @@ class JsonDiagnostic:
     severity: DiagnosticSeverity
     path: str
     message: str
+    code: str = "invalid_value"
 
 
 @dataclass(frozen=True)
@@ -125,6 +128,7 @@ def warn_unknown_keys(
                 severity="warning",
                 path=child_path(parent_path, key),
                 message=f"unknown {label}: {key}",
+                code="unknown_field",
             )
         )
 
@@ -245,8 +249,63 @@ def add_error(diagnostics: list[JsonDiagnostic], path: str, message: str) -> Non
     diagnostics.append(error_diagnostic(path, message))
 
 
-def error_diagnostic(path: str, message: str) -> JsonDiagnostic:
-    return JsonDiagnostic(severity="error", path=path, message=message)
+def error_diagnostic(path: str, message: str, *, code: str = "invalid_value") -> JsonDiagnostic:
+    return JsonDiagnostic(severity="error", path=path, message=message, code=code)
+
+
+def discover_json_documents(
+    root: Path, pattern: str
+) -> tuple[tuple[Path, ...], tuple[JsonValidationReport, ...]]:
+    """Discover a diagnostic bundle without hiding inaccessible or non-file entries.
+
+    Unlike ``Path.glob``, listing failures become reports and healthy siblings
+    still get checked. Links are reported, never followed outside the bundle.
+    Patterns are owner-declared relative paths, including recursive ``**``.
+    """
+    found: set[Path] = set()
+    failures: dict[Path, JsonValidationReport] = {}
+
+    def fail(path: Path, message: str, code: str = "discovery_failed") -> None:
+        failures[path] = JsonValidationReport(
+            path, True, (error_diagnostic("$", message, code=code),)
+        )
+
+    def visit(path: Path, parts: tuple[str, ...], *, wildcard: bool = False) -> None:
+        try:
+            status = stat_or_none(path, follow_symlinks=False)
+            if status is None:
+                return
+            if is_link_status(status):
+                fail(path, "Linked configuration path was not checked", "linked_path")
+                return
+            if not parts:
+                if stat.S_ISREG(status.st_mode):
+                    found.add(path)
+                else:
+                    fail(path, "Expected a regular JSON file", "wrong_file_type")
+                return
+            if not stat.S_ISDIR(status.st_mode):
+                if wildcard:
+                    return
+                fail(path, "Expected a directory containing configuration files", "wrong_file_type")
+                return
+            segment, *remaining = parts
+            if segment == "**":
+                if remaining:
+                    visit(path, tuple(remaining))
+                for child in sorted(path.iterdir()):
+                    visit(child, parts, wildcard=True)
+            elif any(char in segment for char in "*?["):
+                for child in sorted(path.iterdir()):
+                    if fnmatch.fnmatchcase(child.name, segment):
+                        visit(child, tuple(remaining), wildcard=True)
+            else:
+                visit(path / segment, tuple(remaining))
+        except OSError:
+            fail(path, "Cannot inspect this configuration path; the check is incomplete")
+
+    visit(root, tuple(pattern.split("/")))
+    return tuple(sorted(found)), tuple(failures.values())
 
 
 def _load_and_validate_json_file(
@@ -264,19 +323,21 @@ def _load_and_validate_json_file(
     if not present:
         diagnostics: tuple[JsonDiagnostic, ...] = ()
         if not missing_ok:
-            diagnostics = (error_diagnostic("$", "File does not exist"),)
+            diagnostics = (error_diagnostic("$", "File does not exist", code="missing_file"),)
         return _ValidatedDocument(
             report=JsonValidationReport(file_path=file_path, exists=False, diagnostics=diagnostics)
         )
 
     try:
         data = json.loads(read_replaced_text(file_path))
-    except UnicodeError as exc:
+    except UnicodeError:
         return _ValidatedDocument(
             report=JsonValidationReport(
                 file_path=file_path,
                 exists=True,
-                diagnostics=(error_diagnostic("$", f"File is not valid UTF-8: {exc}"),),
+                diagnostics=(
+                    error_diagnostic("$", "File is not valid UTF-8", code="invalid_encoding"),
+                ),
             )
         )
     except json.JSONDecodeError as exc:
@@ -288,6 +349,7 @@ def _load_and_validate_json_file(
                     error_diagnostic(
                         "$",
                         f"Invalid JSON: {exc.msg} at line {exc.lineno} column {exc.colno}",
+                        code="invalid_json",
                     ),
                 ),
             )
@@ -297,7 +359,9 @@ def _load_and_validate_json_file(
             report=JsonValidationReport(
                 file_path=file_path,
                 exists=True,
-                diagnostics=(error_diagnostic("$", "JSON exceeds decoder limits"),),
+                diagnostics=(
+                    error_diagnostic("$", "JSON exceeds decoder limits", code="invalid_json"),
+                ),
             )
         )
     except OSError as exc:
@@ -318,7 +382,9 @@ def _unreadable_document(file_path: Path, error: OSError) -> _ValidatedDocument:
         report=JsonValidationReport(
             file_path=file_path,
             exists=True,
-            diagnostics=(error_diagnostic("$", f"Cannot read file: {error}"),),
+            diagnostics=(
+                error_diagnostic("$", f"Cannot read file: {error}", code="unreadable_file"),
+            ),
         ),
         read_error=error,
     )

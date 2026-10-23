@@ -10,10 +10,10 @@ import uuid
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from core.config_validation import JsonDiagnostic, JsonValidationReport
+from core.config_validation import JsonDiagnostic, JsonValidationReport, discover_json_documents
 from core.extensions._loading import _discover_extension_paths
 from core.utils.config import VBOT_ROOT
-from core.utils.file_status import is_file_strict
+from core.utils.file_status import exists_strict, is_dir_strict
 
 
 def validate_extension_documents(
@@ -31,10 +31,34 @@ def validate_extension_documents(
     seen: set[str] = set()
     roots = [data_dir / "extensions", *directories, VBOT_ROOT / "resources" / "extensions"]
     for root in roots:
-        for candidate in _discover_extension_paths(root) or ():
+        try:
+            if not is_dir_strict(root):
+                if root in directories or exists_strict(root):
+                    reports.append(
+                        _failure(
+                            root, "Configured Extension directory is missing or is not a directory"
+                        )
+                    )
+                continue
+            # Runtime discovery logs unavailable roots and returns None. Doctor
+            # must also put that failure in its report and exit status.
+            list(root.iterdir())
+        except OSError:
+            reports.append(_failure(root, "Cannot inspect Extension directory"))
+            continue
+        candidates = _discover_extension_paths(root)
+        if candidates is None:
+            reports.append(_failure(root, "Cannot inspect Extension directory"))
+            continue
+        for candidate in candidates:
             if candidate.name in seen:
                 continue
             seen.add(candidate.name)
+            if candidate.error:
+                reports.append(
+                    _failure(candidate.entry_path, "Cannot inspect Extension entry point")
+                )
+                continue
             manifest = candidate.root_path / "extension.json"
             if candidate.root_path == candidate.entry_path:
                 continue
@@ -42,8 +66,10 @@ def validate_extension_documents(
                 raw = json.loads(manifest.read_text(encoding="utf-8"))
             except FileNotFoundError:
                 continue
-            except (OSError, ValueError) as error:
-                reports.append(_failure(manifest, str(error)))
+            except OSError, ValueError, RecursionError:
+                reports.append(
+                    _failure(manifest, "Cannot read Extension manifest as a JSON object")
+                )
                 continue
             declarations = raw.get("config_documents", {}) if isinstance(raw, dict) else None
             try:
@@ -53,11 +79,8 @@ def validate_extension_documents(
                 continue
             state = data_dir / "extension-data" / candidate.name
             for pattern, entry in validators.items():
-                try:
-                    paths = [path for path in sorted(state.glob(pattern)) if is_file_strict(path)]
-                except OSError as error:
-                    reports.append(_failure(state, str(error)))
-                    continue
+                paths, failures = discover_json_documents(state, pattern)
+                reports.extend(failures)
                 if not paths:
                     continue
                 namespace = "_vbot_config_" + uuid.uuid4().hex
@@ -81,10 +104,14 @@ def validate_extension_documents(
                                 )
                             reports.append(report)
                         except Exception as error:
-                            reports.append(_failure(path, f"Extension validator failed: {error}"))
+                            reports.append(
+                                _failure(
+                                    path, f"Extension validator failed ({type(error).__name__})"
+                                )
+                            )
                 except Exception as error:
                     reports.extend(
-                        _failure(path, f"Cannot load Extension validator: {error}")
+                        _failure(path, f"Cannot load Extension validator ({type(error).__name__})")
                         for path in paths
                     )
                 finally:
@@ -122,4 +149,6 @@ def _declarations(value: Any) -> dict[str, str]:
 
 
 def _failure(path: Path, message: str) -> JsonValidationReport:
-    return JsonValidationReport(path, True, (JsonDiagnostic("error", "$", message),))
+    return JsonValidationReport(
+        path, True, (JsonDiagnostic("error", "$", message, code="extension_validation_failed"),)
+    )

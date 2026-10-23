@@ -122,6 +122,9 @@ _OWN_RUN_BUSY_EXPLANATION = (
 
 def recovery_guidance(args: argparse.Namespace, result: CommandResult | None) -> RecoveryGuidance:
     """Choose valid read/help commands from known context, without inferring rollback."""
+    if args.area == "doctor" and result is not None:
+        # Doctor already reports a remedy for each finding and never mutates.
+        return RecoveryGuidance("", ())
     failure = result.failure if result else None
     code = failure.code if failure else None
     explanation = _CODE_GUIDANCE.get(

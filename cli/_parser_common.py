@@ -452,7 +452,7 @@ PERFORMANCE_HELP = {
 
 DOCTOR_HELP = {
     "settings": "Validate the target data-dir settings.json",
-    "config": "Validate all user-editable JSON config files in the target data-dir",
+    "config": "Validate registered JSON documents and ignored credential files in the data-dir",
 }
 
 
