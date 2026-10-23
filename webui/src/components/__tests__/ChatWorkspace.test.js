@@ -300,15 +300,15 @@ describe('ChatWorkspace', () => {
     setInputValue(leftInput, 'Left draft sentinel');
     setInputValue(rightInput, 'Right draft sentinel');
     flushSync();
-    action(0, 'Close area');
-    expect(pane(0).hidden).toBe(true);
-    expect(pane(1).querySelector('.msg-input')).toBe(rightInput);
+    action(1, 'Close area');
+    expect(pane(1).hidden).toBe(true);
+    expect(pane(0).querySelector('.msg-input')).toBe(leftInput);
     // Focus moves to the remaining area.
     await waitForCondition(
-      () => document.activeElement === button(pane(1), 'Split view'),
+      () => document.activeElement === button(pane(0), 'Split view'),
     );
-    action(1, 'Split view');
-    expect(pane(0).querySelector('.msg-input')).toBe(leftInput);
+    action(0, 'Split view');
+    expect(pane(1).querySelector('.msg-input')).toBe(rightInput);
     expect(leftInput.value).toBe('Left draft sentinel');
     expect(rightInput.value).toBe('Right draft sentinel');
     expect(testChatStateRefs).toHaveLength(2);
@@ -354,28 +354,97 @@ describe('ChatWorkspace', () => {
     );
   });
 
-  it('keeps one composer for a duplicated Session and transfers its draft on close', async () => {
-    rpcMock.mockImplementation(createChatRpcMock());
-    harness.mount({ target: document.body }, ChatWorkspace);
-    await waitForCondition(() => pane(0)?.querySelector('.msg-input'));
+  it('keeps one composer for a duplicated Session and transfers its draft to the second area', async () => {
+    await start(false);
     const firstInput = pane(0).querySelector('.msg-input');
     setInputValue(firstInput, 'Shared Session draft');
     flushSync();
     action(0, 'Split view');
-    await waitForCondition(() => testChatStateRefs.length === 2);
+    await waitForCondition(() => pane(1)?.querySelector('.msg-markdown a'));
     expect(pane(1).querySelector('.msg-input')).toBeNull();
+    // Closing the first area continues the Session there, with its composer.
     action(0, 'Close area');
+    expect(pane(1).hidden).toBe(true);
+    expect(pane(0).querySelector('.msg-input')).toBe(firstInput);
+    expect(firstInput.value).toBe('Shared Session draft');
+    // A preview in the first area hands the composer to the second.
+    action(0, 'Split view');
+    mockPreviewOpening();
+    pane(1).querySelector('.msg-markdown a').click();
+    await waitForCondition(() => pane(0).querySelector('iframe'));
     await waitForCondition(() => pane(1).querySelector('.msg-input'));
-    const secondInput = pane(1).querySelector('.msg-input');
-    expect(secondInput.value).toBe('Shared Session draft');
-    setInputValue(secondInput, 'Continued in the right');
-    flushSync();
-    action(1, 'Split view');
-    await waitForCondition(() => pane(0).querySelector('.msg-input'));
-    expect(pane(0).querySelector('.msg-input').value).toBe(
-      'Continued in the right',
+    expect(pane(1).querySelector('.msg-input').value).toBe(
+      'Shared Session draft',
     );
-    expect(pane(1).querySelector('.msg-input')).toBeNull();
+  });
+
+  it("continues the second area in the first when the first closes, as Chat's place", async () => {
+    const agents = [
+      createAgent(),
+      createAgent({
+        id: 'beta',
+        name: 'Beta',
+        current_session_id: 'session-beta',
+      }),
+    ];
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        agents,
+        sessionMessages: {
+          'session-beta': [message('beta-answer', 'Beta sentinel')],
+        },
+      }),
+    );
+    const props = reactiveProps({
+      sharedSelectedAgentId: 'alpha',
+      onSessionNavigation: vi.fn(() => true),
+    });
+    harness.mount(
+      {
+        target: document.body,
+        props: {
+          sharedAgents: agents,
+          get sharedSelectedAgentId() {
+            return props.sharedSelectedAgentId;
+          },
+          onAgentSelected: (agentId) => (props.sharedSelectedAgentId = agentId),
+          onSessionNavigation: props.onSessionNavigation,
+        },
+      },
+      ChatWorkspace,
+    );
+    const agentTab = (index, name) =>
+      [...pane(index).querySelectorAll('button.agent-pill')].find(
+        (pill) => pill.textContent.trim() === name,
+      );
+    await waitForCondition(() => pane(0)?.textContent.includes('Hello'));
+    action(0, 'Split view');
+    await waitForCondition(() => agentTab(1, 'Beta')?.disabled === false);
+    agentTab(1, 'Beta').click();
+    await waitForCondition(() => pane(1).textContent.includes('Beta sentinel'));
+    const navigation = props.onSessionNavigation;
+    navigation.mockClear();
+
+    // The first area takes over the second's Agent and Session and corrects
+    // the current entry.
+    action(0, 'Close area');
+    await waitForCondition(() => pane(0).textContent.includes('Beta sentinel'));
+    expect(pane(1).hidden).toBe(true);
+    expect(agentTab(0, 'Beta').getAttribute('aria-pressed')).toBe('true');
+    expect(props.sharedSelectedAgentId).toBe('beta');
+    expect(navigation).toHaveBeenCalledWith(
+      { agentId: 'beta', sessionId: 'session-beta', subAgent: false },
+      { replace: true },
+    );
+
+    // A choice in the area left shown is a history step again.
+    navigation.mockClear();
+    agentTab(0, 'Alpha').click();
+    await waitForCondition(() => pane(0).textContent.includes('Hello'));
+    expect(navigation).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: 'alpha', sessionId: 'session-1' }),
+      { replace: false },
+    );
   });
 
   it("keeps each area's draft of the same Agent apart and across navigation", async () => {

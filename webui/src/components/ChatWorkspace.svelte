@@ -54,6 +54,13 @@
   let secondProjectAgent = $state(null);
   let secondNavigation = $state(null);
   let navigationSequence = 0;
+  // The first area is Chat's place in App navigation. It applies App's
+  // restores and, when it closes beside a second Chat, that area's place,
+  // so the area left shown is again the first; the second area's place is
+  // `{agentId, sessionId, subAgent}` as it would report it in the first.
+  let firstNavigation = $state.raw(null);
+  let secondPlace = null;
+  let closeSequence = 0;
   // A Session deleted in one Chat area is forwarded to the other so it also
   // releases its retained pointer to that Session.
   let siblingDeletions = $state([null, null]);
@@ -287,10 +294,34 @@
     closeMenu();
     split = false;
     dragging = false;
-    singlePane = 1 - index;
+    if (index === 0 && kinds[1] === 'chat' && secondPlace) {
+      continueSecondInFirst();
+    } else {
+      singlePane = 1 - index;
+    }
     focusedPane = singlePane;
     focusArea(singlePane);
     // Owners stay mounted: closing the area must not discard a composer or Run.
+  }
+
+  // The first area takes over the second area's Session and selection like a
+  // restore, so its report corrects the current entry instead of adding one.
+  function continueSecondInFirst() {
+    const { agentId, sessionId, subAgent } = secondPlace;
+    closeSequence += 1;
+    firstNavigation = {
+      ...(sessionId
+        ? { agentId, sessionId, subAgent: subAgent === true }
+        : { agentId, draft: true }),
+      selection: {
+        agentId: secondAgent,
+        projectId: secondProject,
+        projectAgentId: secondProjectAgent ?? '',
+      },
+      requestId: `close-${closeSequence}`,
+    };
+    kinds[0] = 'chat';
+    singlePane = 0;
   }
 
   function focusArea(index) {
@@ -456,6 +487,7 @@
     if (!navigation || navigation === lastNavigation) return;
     lastNavigation = navigation;
     untrack(() => {
+      firstNavigation = navigation;
       singlePane = 0;
       kinds[0] = 'chat';
       focusedPane = 0;
@@ -674,6 +706,7 @@
           {#if index === 0}
             <ChatView
               {...chatProps}
+              pendingSessionNavigation={firstNavigation}
               workspaceActions={chatActions}
               active={active &&
                 kinds[index] === 'chat' &&
@@ -722,7 +755,7 @@
               onProjectAgentSelected={(value) => (secondProjectAgent = value)}
               pendingSessionNavigation={secondNavigation}
               navigateToSubAgent={navigateSecond}
-              onSessionNavigation={() => {}}
+              onSessionNavigation={(session) => (secondPlace = session)}
               onNavigationIndicator={() => {}}
               onDisplayedSession={(session) => (sessions[index] = session)}
             />
