@@ -861,7 +861,8 @@ async def test_watch_runs_always_starts_every_run_and_stays_with_its_watch(
     )
     assert envelope["ok"] is False
     assert "watch_runs needs watch, the command or http(s) URL to check" in refused
-    assert '"watch":"<command or URL to check>"' in refused
+    # The corrected call keeps the mode the Agent asked for.
+    assert '"watch":"<command or URL to check>","watch_runs":"always"' in refused
     assert tool.only_job().watch is None
 
 

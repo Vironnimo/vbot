@@ -35,6 +35,7 @@ _CALL_ORDER = (
     "session",
     "deliver",
     "watch",
+    "watch_runs",
 )
 
 
