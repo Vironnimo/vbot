@@ -36,6 +36,7 @@ from tests.core.projects.resolver_test_support import (
 from tests.core.projects.resolver_test_support import (
     template_dir as template_dir,
 )
+from tests.directory_links import link_directory
 
 
 def write(root: Path, path: str, content: str) -> Path:
@@ -838,19 +839,23 @@ def test_temporary_profiles_keep_owner_tool_limits_and_materialize_skill_rules(
         assert overridden.tool_access.fixed
 
 
-def test_a_skill_folder_linked_to_another_supplies_its_skills_once(repo):
-    write(repo, ".agents/skills/review/SKILL.md", "---\nname: review\ndescription: R.\n---\nR.")
+@pytest.mark.parametrize("external_target", [False, True], ids=["real-source", "links-only"])
+def test_a_skill_folder_linked_to_another_supplies_its_skills_once(repo, external_target):
+    folder = repo.parent / "shared-skills" if external_target else repo / ".agents/skills"
+    write(folder, "review/SKILL.md", "---\nname: review\ndescription: R.\n---\nR.")
     (repo / ".claude").mkdir()
-    try:
-        (repo / ".claude" / "skills").symlink_to(repo / ".agents" / "skills", True)
-    except OSError, NotImplementedError:
-        pytest.skip("symlink creation not permitted on this host")
+    link_directory(repo / ".claude/skills", folder)
+    if external_target:
+        (repo / ".agents").mkdir()
+        link_directory(repo / ".agents/skills", folder)
     detected = {item.definition.id for item in detect_sources(repo)}
-    assert "shared.skills" in detected
-    assert "claude.skills" not in detected
+    assert detected == {"claude.skills" if external_target else "shared.skills"}
     # Projects that already list the linked Source load the folder once.
     sources = [SourceSelection("claude.skills"), SourceSelection("shared.skills")]
-    assert skill_roots(repo, sources) == [repo / ".agents/skills"]
+    assert skill_roots(repo, sources) == [
+        repo / (".claude/skills" if external_target else ".agents/skills")
+    ]
+    assert skill_roots(repo, list(reversed(sources))) == [repo / ".agents/skills"]
 
 
 def test_skill_folder_sources_load_in_source_order_wherever_they_live(repo, tmp_path):

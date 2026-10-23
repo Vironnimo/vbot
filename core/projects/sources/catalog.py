@@ -252,6 +252,7 @@ def _links_to_other(root: Path, relative: str, folders: list[str]) -> bool:
 
     Repositories often link one tool's Skill folder to the shared one
     (``.claude/skills`` -> ``.agents/skills``); the real folder supplies them once.
+    When all Sources of that folder are links, the first one supplies them.
     """
     path = root / relative
     try:
@@ -260,7 +261,14 @@ def _links_to_other(root: Path, relative: str, folders: list[str]) -> bool:
         target = path.resolve()
     except OSError:
         return False
-    return any(other != relative and (root / other).resolve() == target for other in folders)
+    position = folders.index(relative)
+    for index, other in enumerate(folders):
+        other_path = root / other
+        if other == relative or other_path.resolve() != target:
+            continue
+        if index < position or not is_link_status(other_path.lstat()):
+            return True
+    return False
 
 
 def normalize_sources(value: Any) -> list[SourceSelection]:
