@@ -99,6 +99,6 @@ Read these only when your task matches - not by default.
 - Store modules, tables, indexes, named migrations, write budgets, snapshot facts, bootstrap, `vbot-docs` script -> `sessions/storage.md`
 - Run admission, settlement or restart recovery, Tool call storage, Stream drafts, change statistics or completion activity -> `sessions/runs.md`
 - History appends and reads, cursors, Chat History snapshot, Compaction commit, reply targets, deferred Notes, Skill cache, write lock -> `sessions/history-api.md`
-- Session creation and lookup, lists, summaries, batched reads, metadata keys, prompt-state APIs or Recall visibility -> `sessions/lists-and-metadata.md`
+- Session creation and lookup, lists, summaries, batched reads, metadata keys, prompt-state APIs, Recall visibility or Ephemeral Sessions -> `sessions/lists-and-metadata.md`
 - Working Project binding, rename retargeting, Sub-Agent links, archive scope membership, restore provenance or paired Agent/Project changes -> `sessions/ownership.md`
 - Session or group title generation, the title parser or title callbacks -> `sessions/titles.md`

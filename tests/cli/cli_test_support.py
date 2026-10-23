@@ -41,6 +41,8 @@ class FakeRpc:
 
     Each method answers with its queued replies in order; the last reply repeats. A call to a
     method without a reply fails the test, so every RPC a command sends is accounted for.
+    An attachment upload is recorded and answered as the method ``upload``, its params
+    the uploaded ``filename`` and ``data``.
     """
 
     def __init__(self) -> None:
@@ -78,19 +80,26 @@ class FakeRpc:
         self,
         url: str,
         *,
-        json: dict[str, Any],
         timeout: Any,
         trust_env: bool,
         verify: Any,
         auth: httpx.Auth,
+        json: dict[str, Any] | None = None,
+        files: dict[str, tuple[str, bytes]] | None = None,
     ) -> httpx.Response:
         assert trust_env is False, "CLI RPC must ignore ambient proxy settings"
-        method = json["method"]
-        self.calls.append((method, json["params"]))
+        if files is not None:
+            assert url.endswith("/api/upload"), url
+            filename, data = files["file"]
+            method, params = "upload", {"filename": filename, "data": data}
+        else:
+            assert json is not None
+            method, params = json["method"], json["params"]
+        self.calls.append((method, params))
         self.timeouts.append(timeout)
         replies = self._replies.get(method)
         if not replies:
-            raise AssertionError(f"unexpected RPC {method} {json['params']}")
+            raise AssertionError(f"unexpected RPC {method} {params}")
         return replies.pop(0) if len(replies) > 1 else replies[0]
 
     @property

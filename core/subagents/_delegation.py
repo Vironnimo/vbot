@@ -24,6 +24,7 @@ from core.sessions import (
     AGENT_DEFAULT_PROJECT,
     SESSION_AUTO_TITLE_INITIALIZED_KEY,
     SESSION_AUTO_TITLE_KEY,
+    SESSION_EPHEMERAL_META_KEY,
     SessionAddress,
     TemporarySessionBinding,
 )
@@ -177,7 +178,8 @@ def _open_subagent_session(
     :func:`_child_working_project`. A restricted Parent's Permission Boundary is
     stored with the overrides as the Session's ceiling: no Run of the Sub-Agent,
     also after a later ``send``, gets more access than the Parent had. Each
-    ``send`` joins the Parent's boundary at that time into it.
+    ``send`` joins the Parent's boundary at that time into it. A Sub-Agent of
+    an Ephemeral Session is ephemeral too.
     """
     sessions = runtime.chat_sessions
     stored = dict(overrides)
@@ -196,6 +198,9 @@ def _open_subagent_session(
     )
     metadata[SESSION_AUTO_TITLE_KEY] = title
     metadata[SESSION_AUTO_TITLE_INITIALIZED_KEY] = True
+    # Delegated work of an Ephemeral Session expires with it.
+    if sessions.metadata_value(_caller(context), SESSION_EPHEMERAL_META_KEY) is True:
+        metadata[SESSION_EPHEMERAL_META_KEY] = True
     return sessions.create(
         agent_id,
         project_id=project_id,

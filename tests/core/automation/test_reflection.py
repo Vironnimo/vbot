@@ -410,16 +410,17 @@ async def test_run_ends_that_do_not_count_write_nothing(
 
 
 @pytest.mark.asyncio
-async def test_subagent_sessions_are_excluded() -> None:
+@pytest.mark.parametrize("metadata", [{"is_subagent_session": True}, {"ephemeral": True}])
+async def test_subagent_and_ephemeral_sessions_are_excluded(metadata: dict[str, Any]) -> None:
     service, sessions, loop = _make_service(memory_turn_interval=1)
-    sessions.metadata["s1"] = {"is_subagent_session": True}
+    sessions.metadata["s1"] = dict(metadata)
 
     service.notify_run_end(
         cast("Any", _FakeRun()), _identity_agent(), internal=False, outcome="success"
     )
     await _drain(service)
 
-    assert sessions.metadata["s1"] == {"is_subagent_session": True}
+    assert sessions.metadata["s1"] == metadata
     assert loop.started == []
 
 

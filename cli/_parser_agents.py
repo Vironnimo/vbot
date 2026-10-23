@@ -935,7 +935,8 @@ def _add_chat_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
             "Session; the server creates it only for a message it accepts. "
             "--model, --thinking-effort, --temperature and --top-p are saved on the "
             "Session and apply to its later messages too. The answer goes to stdout; "
-            "Tool calls and retries are reported on stderr. "
+            "Tool calls and retries are reported on stderr. Without a message in an "
+            "interactive terminal, it opens vbot tui for the Agent instead. "
             'Example: vbot chat --agent coder@vbot -c "Continue with the next step"'
         ),
     )
@@ -944,7 +945,10 @@ def _add_chat_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
         "prompt",
         nargs="?",
         metavar="<prompt>",
-        help="Message to send; - or omission without --file reads piped stdin",
+        help=(
+            "Message to send. With - or when omitted, the message is read from piped stdin; "
+            "omitted in an interactive terminal, vbot tui opens instead"
+        ),
     )
     _add_text_file_argument(message, content="message text", dest="prompt_file")
     chat_parser.add_argument(
@@ -967,6 +971,7 @@ def _add_chat_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
     session_choice.add_argument(
         "--session", metavar="<session-id>", help="Continue this Session of the Agent"
     )
+    session_choice.add_argument("--resume", dest="session", help=argparse.SUPPRESS)
     session_choice.add_argument(
         "--project",
         dest="working_project",
@@ -980,6 +985,31 @@ def _add_chat_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
         "--workspace",
         action="store_true",
         help="Start the new Session in the Agent's Workspace instead of its default Project",
+    )
+    chat_parser.add_argument(
+        "--ephemeral",
+        action="store_true",
+        help=(
+            "Start a throwaway Session: it never becomes the Agent's current Session, "
+            "is not listed, searched or reviewed for learning, gets no generated title, "
+            "and is deleted permanently 24 hours after its last message. Continue it "
+            "with --session until then. Omit for a normal Session."
+        ),
+    )
+    for alias in ("--temporary", "--temp"):
+        chat_parser.add_argument(
+            alias, dest="ephemeral", action="store_true", help=argparse.SUPPRESS
+        )
+    chat_parser.add_argument(
+        "--attach",
+        dest="attachments",
+        action="append",
+        default=[],
+        metavar="<path>",
+        help=(
+            "Local file to send with the message, such as an image, a PDF or a text "
+            "file; repeat it for several files. Omit to send only text."
+        ),
     )
     chat_parser.add_argument(
         "--model",

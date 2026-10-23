@@ -181,6 +181,13 @@ async def test_submission_parses_content_blocks_and_forwards_the_input_origin(
             {"new_session": {"agent_overrides": {"model": None}}},
             "params.new_session.agent_overrides values must not be null",
         ),
+        ("chat.stream", {"new_session": {"ephemeral": "yes"}}, "params.new_session.ephemeral"),
+        # A command creates its Session through its own path, which would keep it.
+        (
+            "chat.stream",
+            {"new_session": {"ephemeral": True}, "content": "/status"},
+            "Ephemeral Session",
+        ),
         # Widget values: a short list of {widget_id, state} for an existing Session.
         *[
             ("chat.send", {"session_id": "s1", "widget_states": value}, "params.widget_states")
@@ -520,10 +527,22 @@ async def test_send_to_a_missing_session_is_a_domain_error(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("method", ["chat.send", "chat.stream"])
-@pytest.mark.parametrize("requested_id", [None, "client-first-send"])
+@pytest.mark.parametrize(
+    ("method", "requested_id", "ephemeral"),
+    [
+        ("chat.send", None, False),
+        ("chat.send", "client-first-send", False),
+        ("chat.stream", None, False),
+        ("chat.stream", "client-first-send", False),
+        ("chat.stream", None, True),
+    ],
+)
 async def test_new_session_is_created_with_its_first_message_and_overrides(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, method: str, requested_id: str | None
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+    requested_id: str | None,
+    ephemeral: bool,
 ) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     adapter = StubAdapter(
@@ -543,12 +562,14 @@ async def test_new_session_is_created_with_its_first_message_and_overrides(
             **({"session_id": requested_id} if requested_id else {}),
             "agent_overrides": {"model": "openai/gpt-4.1-mini"},
             "working_project_id": "vbot",
+            **({"ephemeral": True} if ephemeral else {}),
         },
         content="Hi",
         reply_surface="tui",
     )
 
     result = response["result"]
+    assert result["ephemeral"] is ephemeral
     session_id = result["session_id"]
     if requested_id:
         assert session_id == requested_id
@@ -568,10 +589,15 @@ async def test_new_session_is_created_with_its_first_message_and_overrides(
     assert state.runtime.agent_resolver.session_overrides(address).model == "openai/gpt-4.1-mini"
     # The Session works in the chosen Project for its whole life.
     assert sessions.metadata_value(address, "working_project_id") == "vbot"
-    # The Identity Agent's new Session becomes current; other windows list it
-    # (later changes come from the Run itself).
-    assert state.runtime.agents.get("coder").current_session_id == session_id
-    assert [change["kind"] for change in resource_changes(state)][:2] == ["sessions", "agents"]
+    # The Identity Agent's new Session becomes current, unless it is ephemeral:
+    # the user keeps the conversation they had. Other windows list it (later
+    # changes come from the Run itself).
+    current = state.runtime.agents.get("coder").current_session_id
+    assert (current == session_id) is not ephemeral
+    assert sessions.metadata_value(address, "ephemeral") is (True if ephemeral else None)
+    kinds = [change["kind"] for change in resource_changes(state)]
+    assert kinds[0] == "sessions"
+    assert (kinds[1] == "agents") is not ephemeral
     if requested_id:
         # A retry after a lost response must never submit the first message twice.
         retry = await call(

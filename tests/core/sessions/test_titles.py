@@ -581,16 +581,23 @@ async def test_existing_session_is_marked_without_backfill_or_model_request(
 
 
 @pytest.mark.asyncio
-async def test_manual_name_skips_model_but_preserves_local_title_underneath(manager) -> None:
+@pytest.mark.parametrize("session_kind", ["manual-name", "ephemeral"])
+async def test_manual_name_or_ephemeral_session_skips_model_but_keeps_local_title(
+    manager, session_kind: str
+) -> None:
     runtime = StubRuntime(manager, enabled=True, adapters=[])
     _append_first_user(runtime, "Investigate login failure")
-    runtime.chat_sessions.set_title(_address("coder", "session-one"), "Manual name")
+    address = _address("coder", "session-one")
+    if session_kind == "manual-name":
+        runtime.chat_sessions.set_title(address, "Manual name")
+    else:
+        runtime.chat_sessions.set_metadata(address, {"ephemeral": True})
     service = SessionTitleService(cast(Any, runtime))
 
     await _title_first_message(service)
 
     metadata = _metadata(runtime)
-    assert metadata["title"] == "Manual name"
+    assert metadata.get("title") == ("Manual name" if session_kind == "manual-name" else None)
     assert metadata["auto_title"] == "Investigate login failure"
     assert runtime.adapter_calls == []
 

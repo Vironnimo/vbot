@@ -21,10 +21,12 @@ from core.projects import AgentOverrides, format_agent_address
 from core.runs import Run
 from core.sessions import (
     AGENT_DEFAULT_PROJECT,
+    SESSION_EPHEMERAL_META_KEY,
     SESSION_ID_PATTERN,
     SessionAddress,
     WorkingProjectChoice,
 )
+from core.sessions.errors import SessionNotFoundError
 from core.utils.logging import get_logger
 from server.events import RESOURCE_KIND_AGENTS
 from server.rpc._chat_reads import _CHAT_RPC_WORKERS
@@ -159,11 +161,12 @@ async def _execute_chat_command(
 
 @dataclass(frozen=True)
 class _NewSessionTarget:
-    """A chat submission's new Session: its Agent overrides and working Project."""
+    """A chat submission's new Session: its Agent overrides, working Project and kind."""
 
     agent_overrides: AgentOverrides
     working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT
     session_id: str | None = None
+    ephemeral: bool = False
 
 
 async def _execute_new_session_chat_command(
@@ -176,6 +179,13 @@ async def _execute_new_session_chat_command(
     reply_surface: ReplySurface,
 ) -> Run | JsonObject:
     """Run a command sent for a new Session; the command decides whether it creates one."""
+    if target.ephemeral:
+        # A command creates its Session through its own path, which keeps it.
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "A Built-in Command cannot start an Ephemeral Session; send it without "
+            "params.new_session.ephemeral",
+        )
     on_change = _command_change_publisher(state)
     dispatcher: CommandDispatcher = state.command_dispatcher
     try:
@@ -256,12 +266,16 @@ async def _mark_current_session(state: Any, address: SessionAddress) -> None:
 
     Skipped when the session is already current: re-marking the same session on
     every message would emit a redundant ``resource_changed(kind="agents")``
-    signal that tears down the chat view in every connected window.
+    signal that tears down the chat view in every connected window. An
+    Ephemeral Session never becomes current: the user returns to the
+    conversation they had before.
     """
     runtime = state.runtime
     agents = runtime.agents
     # Agent reads verify, and updates validate, the pointer against Sessions.
     chat_sessions = runtime.chat_sessions
+    if await session_is_ephemeral(state, address):
+        return
     try:
         agent = await chat_sessions.run_async(agents.get, address.agent_id)
     except Exception as exc:
@@ -293,6 +307,28 @@ async def _mark_current_session(state: Any, address: SessionAddress) -> None:
         )
 
 
+async def session_is_ephemeral(state: Any, address: SessionAddress) -> bool:
+    """Whether the live Session at *address* is an Ephemeral Session.
+
+    Best effort, for presentation and the current-Session pointer: a Session
+    that is gone or cannot be read counts as not ephemeral.
+    """
+    chat_sessions = state.runtime.chat_sessions
+    try:
+        value = await chat_sessions.metadata_value_async(address, SESSION_EPHEMERAL_META_KEY)
+    except SessionNotFoundError:
+        return False
+    except Exception as exc:
+        _LOGGER.warning(
+            "Could not read whether a Session is ephemeral (agent=%s session=%s): %s",
+            address.agent_id,
+            address.session_id,
+            exc,
+        )
+        return False
+    return value is True
+
+
 def _chat_target(
     params: JsonObject, agent_id: str, project_id: str | None
 ) -> SessionAddress | _NewSessionTarget:
@@ -302,7 +338,8 @@ def _chat_target(
     is an object asking for a new Session that the submission creates; its
     optional ``session_id`` supplies a new, unused address. Its
     ``agent_overrides`` and ``working_project_id`` (validated like
-    ``session.create``'s) are what the new Session starts with.
+    ``session.create``'s) are what the new Session starts with, and
+    ``ephemeral: true`` makes it an Ephemeral Session.
     """
     session_id = _optional_string(params, "session_id")
     new_session = params.get("new_session")
@@ -317,7 +354,9 @@ def _chat_target(
     if not isinstance(new_session, dict):
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.new_session must be an object")
     _reject_unsupported(
-        new_session, {"session_id", "agent_overrides", "working_project_id"}, "params.new_session"
+        new_session,
+        {"session_id", "agent_overrides", "working_project_id", "ephemeral"},
+        "params.new_session",
     )
     requested_id = new_session.get("session_id")
     if "session_id" in new_session and (
@@ -331,8 +370,14 @@ def _chat_target(
     overrides = _optional_agent_overrides(
         new_session, allow_clear=False, label="params.new_session"
     )
+    ephemeral = new_session.get("ephemeral", False)
+    if not isinstance(ephemeral, bool):
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST, "params.new_session.ephemeral must be true or false"
+        )
     return _NewSessionTarget(
         AgentOverrides(**overrides) if overrides else AgentOverrides(),
         _optional_working_project(new_session, project_id, label="params.new_session"),
         requested_id,
+        ephemeral,
     )

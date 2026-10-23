@@ -25,6 +25,7 @@ from core.providers.accounts import ConnectionRef
 from core.providers.errors import ProviderError
 from core.sessions._types import (
     SESSION_AUTO_TITLE_INITIALIZED_KEY,
+    SESSION_EPHEMERAL_META_KEY,
     SESSION_TITLE_KEY,
     SUBAGENT_SESSION_META_KEY,
     OwnedSessionSummary,
@@ -224,7 +225,8 @@ class SessionTitleService:
             expected_first_user_sequence=first_user_sequence,
         )
 
-        if has_manual_title:
+        # An Ephemeral Session is never listed, so a generated title would only cost.
+        if has_manual_title or metadata.get(SESSION_EPHEMERAL_META_KEY) is True:
             return None
 
         settings = self._runtime.storage.load_session_title_settings()

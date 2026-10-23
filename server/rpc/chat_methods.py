@@ -29,6 +29,7 @@ from server.rpc._chat_input import (
     _expand_content_file_mentions,
     _mark_current_session,
     _NewSessionTarget,
+    session_is_ephemeral,
 )
 from server.rpc._chat_queue import (
     _chat_queue_list,
@@ -244,7 +245,8 @@ async def _start_chat_in_new_session(
 
     Chat core validates the target before it creates the Session, so a
     rejected message leaves no Session. The new Session becomes an Identity
-    Agent's current one, like a message to an existing Session does.
+    Agent's current one, like a message to an existing Session does, unless it
+    is an Ephemeral Session.
     """
     # A file snapshot stamps the Session that read the file, so the id comes first.
     session_id = target.session_id or (new_session_id() if file_mentions else None)
@@ -265,6 +267,7 @@ async def _start_chat_in_new_session(
             session_id=session_id,
             agent_overrides=target.agent_overrides,
             working_project_id=target.working_project_id,
+            ephemeral=target.ephemeral,
             actor="rpc",
             input_origin=input_origin,
             reply_surface=reply_surface,
@@ -289,11 +292,12 @@ async def _send_chat(state: Any, params: JsonObject) -> JsonObject:
         assistant_message = await submission.wait()
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    return await _run_response(
+    response = await _run_response(
         submission,
         final_message=assistant_message,
         file_delivery=state.file_delivery,
     )
+    return await _with_session_kind(state, submission, response)
 
 
 async def _stream_chat(state: Any, params: JsonObject) -> JsonObject:
@@ -305,11 +309,19 @@ async def _stream_chat(state: Any, params: JsonObject) -> JsonObject:
         _bridge_run_to_event_bus(state, submission)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    return await _run_response(
+    response = await _run_response(
         submission,
         sse_url=f"/api/runs/{submission.id}/events",
         file_delivery=state.file_delivery,
     )
+    return await _with_session_kind(state, submission, response)
+
+
+async def _with_session_kind(state: Any, run: Run, response: JsonObject) -> JsonObject:
+    """Add ``ephemeral``: whether the Run's Session is an Ephemeral Session."""
+    address = SessionAddress(run.project_id, run.agent_id, run.session_id)
+    response["ephemeral"] = await session_is_ephemeral(state, address)
+    return response
 
 
 async def _edit_chat(state: Any, params: JsonObject) -> JsonObject:

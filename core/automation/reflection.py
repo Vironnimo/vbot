@@ -43,7 +43,7 @@ from core.agents import is_builtin_agent
 from core.chat.content_blocks import ContentBlock, TextBlock
 from core.prompts.briefs import ReflectionScope, reflection_brief
 from core.runs import RunKind
-from core.sessions import SUBAGENT_SESSION_META_KEY, SessionAddress
+from core.sessions import SESSION_EPHEMERAL_META_KEY, SUBAGENT_SESSION_META_KEY, SessionAddress
 from core.tools.availability import MEMORY_TOOL_NAME, SKILL_MANAGE_TOOL_NAME, resolve_tool_access
 from core.tools.model_names import model_tool_name
 from core.tools.on_demand import LOAD_TOOLS_TOOL_NAME
@@ -372,7 +372,8 @@ class ReflectionService:
         state: dict[str, Any] = {"skip": False}
 
         def update(metadata: dict[str, Any]) -> None:
-            if metadata.get(SUBAGENT_SESSION_META_KEY):
+            # An Ephemeral Session is a throwaway conversation: nothing to learn from.
+            if metadata.get(SUBAGENT_SESSION_META_KEY) or metadata.get(SESSION_EPHEMERAL_META_KEY):
                 state["skip"] = True
                 return
             raw_counters = metadata.get(REFLECTION_COUNTERS_META_KEY)

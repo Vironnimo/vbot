@@ -153,6 +153,9 @@ _LIST_VISIBILITY_LIBRARIAN = 1 << 10
 # A Session with a Live Run: never recalled, listed only in the scope of a
 # built-in Agent of a Live call.
 _LIST_VISIBILITY_LIVE = 1 << 11
+# An Ephemeral Session: never listed or recalled. ``schema.py`` repeats the value
+# in the partial index that finds the expired ones.
+_LIST_VISIBILITY_EPHEMERAL = 1 << 12
 
 # Metadata facade keys stored in dedicated columns.
 _TITLE_KEYS = ("title", "auto_title")
@@ -160,6 +163,7 @@ _CHANNEL_KEYS = ("source_channel_id", "platform", "platform_conv_id")
 _AUTO_TITLE_INITIALIZED_KEY = "auto_title_initialized"
 _SUBAGENT_FLAG_KEY = "is_subagent_session"
 _SUBAGENT_PARENT_KEY = "subagent_parent"
+_EPHEMERAL_KEY = "ephemeral"
 _COMPACTION_POLICY_KEY = "compaction_policy"
 _AGENT_OVERRIDES_KEY = "agent_overrides"
 # Facade keys derived from relations or fixed at creation; a write may repeat
@@ -211,6 +215,8 @@ def _session_list_visibility_mask(metadata: JsonObject) -> int:
         mask |= _LIST_VISIBILITY_SUBAGENT_SESSION
     if isinstance(metadata.get(_SUBAGENT_PARENT_KEY), dict):
         mask |= _LIST_VISIBILITY_SUBAGENT_PARENT
+    if metadata.get(_EPHEMERAL_KEY) is True:
+        mask |= _LIST_VISIBILITY_EPHEMERAL
 
     run_kinds = metadata.get(_RUN_KINDS_KEY)
     valid_run_kinds = (
@@ -318,6 +324,9 @@ def _session_metadata_storage(metadata: JsonObject, derived: JsonObject) -> _Met
     subagent = residual.get(_SUBAGENT_FLAG_KEY)
     if subagent is not None and not isinstance(subagent, bool):
         raise ChatSessionError("Session metadata is_subagent_session must be a boolean")
+    ephemeral = residual.get(_EPHEMERAL_KEY)
+    if ephemeral is not None and not isinstance(ephemeral, bool):
+        raise ChatSessionError("Session metadata ephemeral must be a boolean")
     parent = _subagent_parent_columns(residual.get(_SUBAGENT_PARENT_KEY))
     policy = residual.get(_COMPACTION_POLICY_KEY)
     if policy is not None and not isinstance(policy, dict):
@@ -439,6 +448,7 @@ def _session_list_visibility_sql(
         f"AND ((s.list_visibility_mask & {_LIST_VISIBILITY_REFLECTION}) = 0 OR (? = 1 OR ? = 1))"
     )
     visible = (
+        f"(s.list_visibility_mask & {_LIST_VISIBILITY_EPHEMERAL}) = 0 AND "
         f"((s.list_visibility_mask & {_LIST_VISIBILITY_LIBRARIAN}) = 0 OR "
         f"(s.project_id = '' AND s.agent_id = '{LIBRARIAN_AGENT_ID}')) AND "
         f"((s.list_visibility_mask & {_LIST_VISIBILITY_LIVE}) = 0 OR (s.project_id = '' AND "
@@ -463,23 +473,27 @@ def _session_list_visibility_sql(
 
 
 _RECALL_SUBAGENT_MASK = _LIST_VISIBILITY_SUBAGENT_SESSION | _LIST_VISIBILITY_SUBAGENT_RUN_KIND
+_RECALL_HIDDEN_MASK = (
+    _LIST_VISIBILITY_REFLECTION
+    | _LIST_VISIBILITY_LIBRARIAN
+    | _LIST_VISIBILITY_LIVE
+    | _LIST_VISIBILITY_EPHEMERAL
+)
 
 
 def _recall_visibility_case(alias: str) -> str:
     """The one definition of ``SessionRecallVisibility`` over ``list_visibility_mask``.
 
-    Reflection, Librarian and Live kinds hide a Session even when it also carries User
-    or Sub-Agent markers. Sub-Agent markers (flag or Run kind) make it a delegated Session.
+    Ephemeral Sessions and Reflection, Librarian and Live kinds hide a Session even
+    when it also carries User or Sub-Agent markers. Sub-Agent markers (flag or Run
+    kind) make it a delegated Session.
     Otherwise Sessions without valid Run kinds and Sessions with a User-facing
     Run kind are conversations; the rest (system-only) stay hidden.
     """
     mask = f"{alias}.list_visibility_mask"
     return (
         "CASE"
-        f" WHEN ({mask} & "
-        f"{_LIST_VISIBILITY_REFLECTION | _LIST_VISIBILITY_LIBRARIAN | _LIST_VISIBILITY_LIVE})"
-        " != 0"
-        " THEN 'hidden'"
+        f" WHEN ({mask} & {_RECALL_HIDDEN_MASK}) != 0 THEN 'hidden'"
         f" WHEN ({mask} & {_RECALL_SUBAGENT_MASK}) != 0 THEN 'subagent'"
         f" WHEN ({mask} & {_LIST_VISIBILITY_VALID_RUN_KINDS}) = 0"
         f" OR ({mask} & {_LIST_VISIBILITY_USER_FACING}) != 0 THEN 'conversation'"

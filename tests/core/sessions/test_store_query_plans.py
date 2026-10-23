@@ -349,6 +349,16 @@ def test_subagent_link_reads_probe_their_partial_indexes(history, project_id) ->
     assert "sessions_by_subagent_id" in session_plan, session_plan
 
 
+def test_ephemeral_expiry_reads_its_partial_index(history) -> None:
+    _address, _anchor, connection = history
+    recorder, statements = _recording(connection)
+    assert _store_queries.expired_ephemeral_addresses(recorder, utc_now_timestamp(), 100) == []
+    _assert_indexed(connection, statements)
+    assert any(
+        "sessions_ephemeral_by_activity" in detail for detail in _plans(connection, statements)
+    )
+
+
 def test_session_point_reads_probe_the_live_address_index(history) -> None:
     address, _anchor, connection = history
     missing = SessionAddress("project", "agent", "missing")

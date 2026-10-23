@@ -419,6 +419,16 @@ class ChatSessionManager:
             exclude_owner_managed=exclude_owner_managed,
         )
 
+    def expired_ephemeral_addresses(
+        self, before: str, *, limit: int
+    ) -> builtins.list[SessionAddress]:
+        """Live Ephemeral Sessions whose last activity is older than *before*.
+
+        *before* is a canonical UTC timestamp; at most *limit* addresses, least
+        recently active first.
+        """
+        return self._store.expired_ephemeral_addresses(before, limit)
+
     def referenced_attachment_ids(self) -> frozenset[str]:
         """Blob references retained by every live, archived and superseded history entry."""
         return self._store.referenced_attachment_ids()

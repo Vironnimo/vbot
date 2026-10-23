@@ -161,6 +161,9 @@ def reply_run(rpc: FakeRpc, session_id: str) -> None:
             ("--project", "vbot"), None, {"working_project_id": "vbot"}, id="in-a-project"
         ),
         pytest.param(("--workspace",), None, {"working_project_id": None}, id="in-the-workspace"),
+        pytest.param(("--ephemeral",), None, {"ephemeral": True}, id="ephemeral"),
+        # The words of other chat CLIs reach the same Ephemeral Session.
+        pytest.param(("--temporary",), None, {"ephemeral": True}, id="temporary-alias"),
     ],
 )
 def test_chat_starts_a_session_and_prints_the_answer(
@@ -190,7 +193,11 @@ def test_chat_starts_a_session_and_prints_the_answer(
     ]
     # Events the chat.stream reply already carried are not requested again.
     assert run_stream.queries == [{"after_sequence": 2}]
-    assert f"completed in Session s-new (Agent main, Model {MODEL})" in err
+    kind = "Ephemeral Session" if "ephemeral" in project else "Session"
+    assert f"completed in {kind} s-new (Agent main, Model {MODEL})" in err
+    assert ("deleted permanently 24 hours after its last message" in err) is (
+        "ephemeral" in project
+    )
     assert "Continue: vbot chat --session s-new " in err
     assert err.rstrip().endswith("<message>")
     assert ("Session overrides:" in err) is bool(overrides)
@@ -237,6 +244,162 @@ def test_chat_continue_uses_the_latest_session_and_saves_only_given_overrides(
         expected_overrides if saved else []
     )
     assert rpc.params("chat.stream")["session_id"] == "s-latest"
+
+
+@pytest.mark.parametrize(
+    ("server_says", "note"),
+    [
+        pytest.param(True, False, id="ephemeral-session"),
+        pytest.param(False, True, id="normal-session"),
+    ],
+)
+def test_chat_ephemeral_names_a_new_session_and_a_continued_one_keeps_its_kind(
+    rpc: FakeRpc, run_stream: FakeRunStream, run_cli: RunCli, server_says: bool, note: bool
+) -> None:
+    rpc.reply(
+        "chat.stream",
+        {
+            "run_id": RUN_ID,
+            "session_id": "s-given",
+            "status": "running",
+            "events": STARTED,
+            "sse_url": SSE_URL,
+            "ephemeral": server_says,
+        },
+    )
+    run_stream.connection(answer(3, "Continued."), completed(4))
+
+    code, _out, err = run_cli("chat", "--session", "s-given", "--ephemeral", "Go on")
+
+    assert code == 0
+    assert "new_session" not in rpc.params("chat.stream")
+    assert ("completed in Ephemeral Session s-given" in err) is server_says
+    assert ("Note: Session s-given is not ephemeral" in err) is note
+
+
+def test_chat_ephemeral_with_continue_is_a_usage_error(rpc: FakeRpc, run_cli: RunCli) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        run_cli("chat", "-c", "--ephemeral", "Go on")
+
+    assert exit_info.value.code == 2
+    assert rpc.calls == []
+
+
+@pytest.mark.parametrize("prompt", [("Compare these",), ()], ids=["with-text", "files-only"])
+def test_chat_sends_attached_files_as_content_blocks(
+    rpc: FakeRpc,
+    run_stream: FakeRunStream,
+    run_cli: RunCli,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    prompt: tuple[str, ...],
+) -> None:
+    # A terminal stdin supplies no text: the files alone are the message.
+    monkeypatch.setattr(sys, "stdin", SimpleNamespace(isatty=lambda: True))
+    image, notes = tmp_path / "screen.png", tmp_path / "Notizen.md"
+    image.write_bytes(b"\x89PNG\r\n\x1a\nimage")
+    notes.write_text("# Ärger", encoding="utf-8")
+    for attachment_id, name, media_type in (
+        ("att_image", "screen.png", "image/png"),
+        ("att_notes", "Notizen.md", "text/markdown"),
+    ):
+        rpc.respond(
+            "upload",
+            {
+                "attachment_id": attachment_id,
+                "filename": name,
+                "media_type": media_type,
+                "size_bytes": 10,
+            },
+        )
+    reply_run(rpc, "s-new")
+    run_stream.connection(answer(3, "Both differ."), completed(4))
+
+    code, out, _err = run_cli(
+        "chat", "--attach", str(image), "--attach", str(notes), "--json", *prompt
+    )
+
+    assert code == 0, _err
+    uploads = [params for method, params in rpc.calls if method == "upload"]
+    assert uploads == [
+        {"filename": "screen.png", "data": image.read_bytes()},
+        {"filename": "Notizen.md", "data": notes.read_bytes()},
+    ]
+    text = [{"type": "text", "text": "Compare these"}] if prompt else []
+    assert rpc.params("chat.stream")["content"] == [
+        *text,
+        {
+            "type": "media",
+            "attachment_id": "att_image",
+            "filename": "screen.png",
+            "media_type": "image/png",
+        },
+        {
+            "type": "file",
+            "attachment_id": "att_notes",
+            "filename": "Notizen.md",
+            "media_type": "text/markdown",
+        },
+    ]
+    assert [item["attachment_id"] for item in json.loads(out)["attachments"]] == [
+        "att_image",
+        "att_notes",
+    ]
+
+
+@pytest.mark.parametrize("refusal", ["missing-file", "server-refuses"])
+def test_chat_sends_nothing_when_an_attachment_cannot_be_uploaded(
+    rpc: FakeRpc, run_cli: RunCli, tmp_path: Path, refusal: str
+) -> None:
+    archive = tmp_path / "setup.exe"
+    if refusal == "server-refuses":
+        archive.write_bytes(b"MZ")
+        rpc.respond("upload", {"detail": "File type is not allowed"}, status=415)
+
+    code, _out, err = run_cli("chat", "--attach", str(archive), "Install this")
+
+    assert code == 1
+    assert "chat.stream" not in rpc.methods
+    assert "No message was sent." in err
+    assert ("does not exist" in err) is (refusal == "missing-file")
+    assert ("File type is not allowed" in err) is (refusal == "server-refuses")
+
+
+@pytest.mark.parametrize(
+    ("flags", "session"),
+    [
+        pytest.param((), None, id="new-conversation"),
+        pytest.param(("--session", "s-given"), "s-given", id="session"),
+        pytest.param(("-c",), "s-latest", id="continue"),
+    ],
+)
+def test_chat_without_a_message_in_an_interactive_terminal_opens_the_tui(
+    rpc: FakeRpc,
+    run_cli: RunCli,
+    monkeypatch: pytest.MonkeyPatch,
+    flags: tuple[str, ...],
+    session: str | None,
+) -> None:
+    from cli import _dispatch_tui
+
+    monkeypatch.setattr(sys, "stdin", SimpleNamespace(isatty=lambda: True))
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True, raising=False)
+    opened: list[Any] = []
+
+    def open_tui(args: Any, _instance: Any) -> int:
+        opened.append(args)
+        return 0
+
+    monkeypatch.setattr(_dispatch_tui, "dispatch_tui_command", open_tui)
+    rpc.reply("session.list", {"sessions": [{"id": "s-latest"}]})
+
+    code, _out, _err = run_cli("chat", "--agent", "coder", *flags)
+
+    assert code == 0
+    assert [(args.agent, args.session, args.project) for args in opened] == [
+        ("coder", session, None)
+    ]
+    assert "chat.stream" not in rpc.methods
 
 
 def test_chat_continue_without_a_conversation_starts_a_new_session(
@@ -420,6 +583,8 @@ def test_chat_json_reports_the_run_as_one_object(
     assert json.loads(out) == {
         "agent_id": "main",
         "session_id": "s-new",
+        "ephemeral": False,
+        "attachments": [],
         "run_id": RUN_ID,
         "status": "completed",
         "model": MODEL,
