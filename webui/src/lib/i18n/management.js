@@ -976,6 +976,7 @@ export default Object.freeze({
   'systemPrompt.blockTitle.tool:project': 'Registered Projects',
   'systemPrompt.blockTitle.tool:subagent': 'Sub-Agent delegation',
   'systemPrompt.blockTitle.tool:bash': 'Shell credentials',
+  'systemPrompt.blockTitle.tool:secrets': 'Agent Secrets',
   'systemPrompt.blockTitle.tool:live': 'Live voice call',
   'systemPrompt.blockTitle.extension:mcp_guidance': 'MCP connections',
   'systemPrompt.subtitle':
