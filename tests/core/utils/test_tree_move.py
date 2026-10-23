@@ -191,6 +191,22 @@ def _link_directory(link: Path, target: Path) -> None:
         link.symlink_to(target, target_is_directory=True)
 
 
+def _deny_listing(folder: Path) -> None:
+    """Deny the owner the listing of ``folder``, as an Agent can do in its own folders."""
+    if sys.platform != "win32":
+        folder.chmod(0)
+        return
+    import ctypes
+
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    empty = ctypes.create_string_buffer(8)
+    assert advapi32.InitializeAcl(empty, len(empty), 2)
+    # DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION: no entry grants anything.
+    assert not advapi32.SetNamedSecurityInfoW(str(folder), 1, 0x80000004, None, None, empty, None)
+    with pytest.raises(PermissionError):
+        os.listdir(folder)
+
+
 @pytest.mark.parametrize("stop", [None, lambda: None], ids=["at-once", "stoppable"])
 def test_remove_tree_deletes_only_inside_its_root_and_never_follows_links(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stop: Callable[[], None] | None
@@ -202,6 +218,9 @@ def test_remove_tree_deletes_only_inside_its_root_and_never_follows_links(
     _link_directory(tree / "linked", outside)
     read_only = tree / "sub" / "nested.txt"
     read_only.chmod(stat.S_IREAD)
+    (tree / "denied" / "inner").mkdir(parents=True)
+    (tree / "denied" / "inner" / "probe.txt").write_text("probe", encoding="utf-8")
+    _deny_listing(tree / "denied")
     _link_directory(within / "link", outside)
     # Each link refuses its first removal, as a read-only link does on Windows; clearing
     # that attribute must never reach the read-only directory the link points at.

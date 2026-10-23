@@ -116,7 +116,8 @@ def remove_tree(path: Path, *, within: Path, stop: Callable[[], None] | None = N
     The containment check resolves the parent directories but not ``path`` itself,
     so a ``path`` that is a symbolic link or junction is removed as a link entry and
     whatever it points at stays untouched; links inside a tree are never followed
-    either. Read-only attributes, such as those of ``.git`` objects, are cleared. A
+    either. Read-only attributes, such as those of ``.git`` objects, are cleared, and
+    a folder that denies its own owner the listing gets the owner's access back. A
     missing ``path`` counts as removed. A ``path`` outside ``within``, or ``within``
     itself, raises ``ValueError`` before anything is deleted.
 
@@ -150,8 +151,11 @@ def _remove_tree_stoppable(path: Path, stop: Callable[[], None]) -> None:
 
     Links and junctions inside it are removed as entries, never followed.
     """
-    with os.scandir(path) as entries:
-        children = [Path(entry.path) for entry in entries]
+    try:
+        children = _list_directory(path)
+    except PermissionError:
+        _restore_owner_access(path)
+        children = _list_directory(path)
     for child in children:
         stop()
         status = os.lstat(child)
@@ -163,6 +167,11 @@ def _remove_tree_stoppable(path: Path, stop: Callable[[], None]) -> None:
     _retry_writable(os.rmdir, path)
 
 
+def _list_directory(path: Path) -> list[Path]:
+    with os.scandir(path) as entries:
+        return [Path(entry.path) for entry in entries]
+
+
 def _retry_writable(action: Callable[[Path], object], path: Path) -> None:
     try:
         action(path)
@@ -172,13 +181,65 @@ def _retry_writable(action: Callable[[Path], object], path: Path) -> None:
 
 
 def _remove_tree(path: Path) -> None:
-    """Delete a tree, clearing read-only attributes such as those of ``.git`` objects."""
-    shutil.rmtree(path, onexc=_clear_read_only_and_retry)
+    """Delete a tree, repairing the entries that refuse their removal or listing.
+
+    Read-only attributes, such as those of ``.git`` objects, are cleared. A folder
+    that cannot be opened or listed gets its owner's access back once and is then
+    removed with its contents; ``rmtree`` itself would skip them and fail on it.
+    """
+    repaired: set[str] = set()
+
+    def repair(action: Callable[..., object], entry: str, error: BaseException) -> None:
+        if action in (os.unlink, os.rmdir):
+            _make_writable(entry)
+            action(entry)
+        elif action in (os.open, os.scandir) and entry not in repaired:
+            repaired.add(entry)
+            _restore_owner_access(entry)
+            shutil.rmtree(entry, onexc=repair)
+        else:
+            raise error
+
+    shutil.rmtree(path, onexc=repair)
 
 
-def _clear_read_only_and_retry(action: Callable[[str], object], path: str, _error: object) -> None:
-    _make_writable(path)
-    action(path)
+def _restore_owner_access(path: Path | str) -> None:
+    """Give the owner back the access to a folder it has denied itself.
+
+    An Agent can do that in its own folders (``icacls /deny`` on Windows,
+    ``chmod 000`` elsewhere), and the folder can then never be listed for its
+    removal. The owner may always change the access, so this succeeds wherever
+    the folder belongs to vBot's own account. A link is left alone.
+    """
+    status = os.lstat(path)
+    if is_link_status(status):
+        return
+    if sys.platform != "win32":
+        os.chmod(path, status.st_mode | stat.S_IRWXU)
+        return
+    import ctypes
+    from ctypes import wintypes
+
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    # An empty, inheriting access list: the folder keeps only what its parent passes on.
+    empty = ctypes.create_string_buffer(8)
+    if not advapi32.InitializeAcl(empty, len(empty), 2):  # ACL_REVISION
+        raise ctypes.WinError(ctypes.get_last_error())
+    set_security = advapi32.SetNamedSecurityInfoW
+    set_security.argtypes = [
+        wintypes.LPWSTR,
+        ctypes.c_int,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+    ]
+    set_security.restype = wintypes.DWORD
+    # SE_FILE_OBJECT; DACL_SECURITY_INFORMATION | UNPROTECTED_DACL_SECURITY_INFORMATION
+    error = set_security(os.fspath(path), 1, 0x20000004, None, None, empty, None)
+    if error:
+        raise ctypes.WinError(error)
 
 
 def _make_writable(path: Path | str) -> None:

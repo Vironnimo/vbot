@@ -106,7 +106,8 @@ directory has a short name. Retirement renames the area to
 a private trash entry while holding the lock, then deletes it outside the lock.
 Sweeps retry leftover trash. Shared `core/utils/tree_move.py::remove_tree` removes
 symlinks and Windows junctions as links and clears read-only attributes without
-following targets. Errors leave cleanup for a later sweep and log no filenames
+following targets; a folder an Agent denied its own account (`icacls /deny`,
+`chmod 000`) gets the owner's access back and is removed with its contents. Errors leave cleanup for a later sweep and log no filenames
 from inside an area. One INFO record counts removed areas per sweep; per-area
 details are DEBUG and cleanup failures WARN.
 
