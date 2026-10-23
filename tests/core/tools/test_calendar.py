@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from core.calendar import CalendarService
+from core.calendar import CalendarService, occurrence_id
 from core.tools._calendar_arguments import STAND_INS
 from core.tools.calendar import CALENDAR_TOOL_NAME, CALENDAR_TOOL_PARAMETERS
 from tests.core.tools.scheduling_tool_support import CalendarTool, calendar_tool, clock_at
@@ -417,6 +417,81 @@ class TestUpdate:
 
         assert tool.only_event().rrule is None
         assert "rrule" not in text and "next" not in text
+
+    @pytest.mark.parametrize(
+        ("start", "rrule", "keys", "changes", "actions"),
+        [
+            pytest.param(
+                "2030-01-07",
+                "FREQ=WEEKLY;BYDAY=MO,TU",
+                ("2030-01-14", "2030-01-15"),
+                {"start": "2030-01-08"},
+                ("delete", "delete"),
+                id="removed-occurrences",
+            ),
+            pytest.param(
+                "2030-01-07T09:00",
+                "FREQ=DAILY;UNTIL=20300109T090000",
+                ("2030-01-08T09:00:00", "2030-01-09T09:00:00"),
+                {"start": "2030-01-08T09:00"},
+                ("update", "update"),
+                id="changed-occurrences-at-until",
+            ),
+            pytest.param(
+                "2030-01-07",
+                "FREQ=WEEKLY;BYDAY=MO,TU",
+                ("2030-01-14", "2030-01-15"),
+                {"start": "2030-01-08"},
+                ("delete", "update"),
+                id="removed-and-changed-occurrences",
+            ),
+            pytest.param(
+                "2030-01-08T09:00",
+                "FREQ=WEEKLY;BYDAY=MO,TU",
+                ("2030-01-14T09:00:00", "2030-01-15T09:00:00"),
+                {"start": "2030-01-07T09:00"},
+                ("update", "delete"),
+                id="backward-move-collides-with-earlier-kept-key",
+            ),
+            pytest.param(
+                "2030-01-07T09:00",
+                "FREQ=DAILY;BYHOUR=9,17",
+                ("2030-01-08T09:00:00", "2030-01-08T17:00:00"),
+                {"start": "2030-01-07", "rrule": "FREQ=DAILY"},
+                ("delete", "update"),
+                id="timed-to-all-day-merges-two-times",
+            ),
+        ],
+    )
+    def test_series_change_refuses_colliding_exceptions(
+        self,
+        tool: CalendarTool,
+        tmp_path: Path,
+        start: str,
+        rrule: str,
+        keys: tuple[str, str],
+        changes: dict[str, str],
+        actions: tuple[str, str],
+    ) -> None:
+        event = tool.service.create_event(title="Series", start=start, rrule=rrule)
+        for key, action in zip(keys, actions, strict=True):
+            item_id = occurrence_id(event.id, key)
+            if action == "delete":
+                asyncio.run(tool.service.delete_occurrence(item_id))
+            else:
+                asyncio.run(tool.service.update_occurrence(item_id, title=key))
+        stored = tmp_path / "calendar" / "events.json"
+        before = stored.read_bytes()
+        notifications: list[None] = []
+        tool.service.add_changed_callback(lambda: notifications.append(None))
+
+        message = tool.refused(
+            {"action": "update", "id": event.id, "title": "Must not change", **changes}
+        )
+
+        assert all(key in message for key in keys)
+        assert stored.read_bytes() == before
+        assert notifications == []
 
     @pytest.mark.parametrize("action", ["update", "delete"])
     def test_an_occurrence_id_changes_or_deletes_only_that_occurrence(

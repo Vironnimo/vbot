@@ -271,7 +271,8 @@ class CalendarService(CalendarProjection):
         event's removed and changed occurrences move with a moved start where
         the new rule produces them there, else stay where it still produces
         them; the others lose their changes. A change between timed and
-        all-day carries them over by their local date.
+        all-day carries them over by their local date. Colliding exceptions
+        refuse the entire update.
         """
         await self.load()
         self._event(event_id)
@@ -692,8 +693,8 @@ def _carry_occurrence_changes(candidate: CalendarEvent, event: CalendarEvent) ->
 
     An occurrence follows the start's move when the new rule produces the
     moved key, else keeps its own key when the new rule still produces that,
-    and is dropped otherwise. Where two meet on one key, a moved one wins over
-    one that stays, else the earlier one. A change between timed and all-day
+    and is dropped otherwise. Where two meet on one key, refuse the update
+    before storing any changes. A change between timed and all-day
     maps each key by its local date: to that date, or to that date at the new
     start time; a changed occurrence's own start goes the same way and takes
     the series' new length.
@@ -714,15 +715,22 @@ def _carry_occurrence_changes(candidate: CalendarEvent, event: CalendarEvent) ->
     kept = {key: occurrence_key(own_slot(key), all_day=all_day) for key in keys}
     produced = occurrence_keys(candidate, [*moved.values(), *kept.values()])
     targets: dict[str, str] = {}
-    taken: set[str] = set()
+    sources: dict[str, str] = {}
     for key in keys:
-        if moved[key] in produced and moved[key] not in taken:
-            targets[key] = moved[key]
-            taken.add(moved[key])
-    for key in keys:
-        if moved[key] not in produced and kept[key] in produced and kept[key] not in taken:
-            targets[key] = kept[key]
-            taken.add(kept[key])
+        if moved[key] in produced:
+            target = moved[key]
+        elif kept[key] in produced:
+            target = kept[key]
+        else:
+            continue
+        if target in sources:
+            raise CalendarValidationError(
+                f"Nothing was changed. Exceptions for {sources[target]} and {key} "
+                f"would both apply to {target}. "
+                "Choose a start or rrule that keeps these occurrences distinct."
+            )
+        targets[key] = target
+        sources[target] = key
     candidate.exdates = sorted(targets[key] for key in event.exdates if key in targets)
     length = local_time(candidate.end) - new_start
     overrides: dict[str, dict[str, Any]] = {}

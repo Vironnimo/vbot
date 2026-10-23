@@ -272,6 +272,22 @@ class TestUpdateEvent:
                 },
                 id="all-day-to-timed-moved",
             ),
+            pytest.param(
+                ("2030-01-07T09:00", "FREQ=DAILY"),
+                {},
+                {"start": "2030-01-14T09:00"},
+                ["2030-01-21T09:00:00"],
+                {"2030-01-28T09:00:00": {}},
+                id="moved-target-overlaps-another-original-key",
+            ),
+            pytest.param(
+                ("2030-01-07T09:00", "FREQ=DAILY;UNTIL=20300121T090000"),
+                {},
+                {"start": "2030-01-08T09:00"},
+                ["2030-01-15T09:00:00"],
+                {"2030-01-21T09:00:00": {}},
+                id="last-exception-stays-within-until",
+            ),
         ],
     )
     def test_series_change_carries_its_removed_and_changed_occurrences(
@@ -284,7 +300,9 @@ class TestUpdateEvent:
         overrides: dict[str, dict[str, str]],
     ) -> None:
         event = service.create_event(title="Weekly", start=created[0], rrule=created[1])
-        second, third = [item.id for item in _window(service, "2030-01-14", "2030-01-21")]
+        second, third = [
+            occurrence_id(event.id, day + event.start[10:]) for day in ("2030-01-14", "2030-01-21")
+        ]
         asyncio.run(service.delete_occurrence(second))
         asyncio.run(service.update_occurrence(third, title="Kept", **change))
 
