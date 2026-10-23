@@ -109,15 +109,15 @@ vbot doctor settings [--data-dir <path>]
 vbot doctor config [--data-dir <path>]
 ```
 
-Local validation of the data directory's files; no server needed. Run `doctor config` after any manual edit of a JSON file in the data directory.
+Local validation of the data directory's files; no server needed. Run `doctor config` after any manual edit of a JSON file in the data directory. Doctor proposes repairs but changes nothing. Treat an unknown-field cleanup as a proposal: remove it only when it is obsolete, because another vBot version can still need it.
 
 - `settings` checks `settings.json` only.
 - `config` checks every JSON document vBot keeps in the data directory: `settings.json`, Agent configs and the Agent order, Project files, Channel configs, Cron and Bootstrap jobs, Calendar events, the Skill policy, Terminal groups and launch history, System Prompt layouts, the Secret Store, MCP connections, and attachment and speech metadata, and it warns about plaintext credential files vBot ignores. It does not check the databases; `vbot data-store status` reports their health (`data-store.md`).
 
 Reading the `doctor config` report:
 
-- The header shows `doctor config: ok` or `doctor config: failed`, the `data_dir`, `files_checked`, and `errors:` and `warnings:` counts when there are any. A final line summarizes the result.
-- Each document then gets one line, `<path>: valid`; a missing `settings.json` shows as `missing (defaults will be used)`. A directory with five or more valid documents, typically attachment metadata, shows as one line `<dir>/: N documents valid`.
-- A document with problems is always listed by name, `<path>:`, followed by one line per problem: `- error <json-path>: <message>` or `- warning <json-path>: <message>`.
-- Errors fail the command; warnings do not. An unknown field is a warning: vBot ignores it but keeps it when it rewrites the file.
+- The header shows `ok`, `warning` or `failed`, the checked `data_dir`, and counts of checked files, valid files, errors and warnings. Healthy files are counted; findings name the file, JSON path, problem and recommendation, with errors first.
+- Long reports show a page and a `Next:` command for the same data directory. Follow it for the remaining findings; each page's verdict and counts cover the entire check. Use `--json` to process the findings in code, with exact diagnostic text, codes, recommendations and `next_offset`; `--limit` and `--offset` also page that report.
+- A missing `settings.json` in an existing data directory uses defaults. A missing data directory, inaccessible path, linked configuration path or failed validator fails the check instead of being treated as healthy.
+- Errors exit 1; warnings exit 0. An unknown field is a warning: vBot ignores it but keeps it when it rewrites the file. This check does not prove runtime readiness or Provider connectivity.
 - A `format_version` error saying the version is required means the file is not in the current data format, for example because vBot 0.4.4 or earlier wrote it; this vBot cannot use such a file. A version newer than this vBot reads means a newer vBot wrote the file. Do not edit `format_version`; report either case to the user.

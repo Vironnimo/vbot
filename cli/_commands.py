@@ -119,8 +119,8 @@ def run(
     set_config_fn: Callable[[ServerInstance, str, Any], CommandResult] | None = None,
     unset_config_fn: Callable[[ServerInstance, str], CommandResult] | None = None,
     patch_config_fn: Callable[[ServerInstance, list[dict[str, Any]]], CommandResult] | None = None,
-    doctor_settings_fn: Callable[[str | Path | None], CommandResult] | None = None,
-    doctor_config_fn: Callable[[str | Path | None], CommandResult] | None = None,
+    doctor_settings_fn: Callable[..., CommandResult] | None = None,
+    doctor_config_fn: Callable[..., CommandResult] | None = None,
     launch_desktop_fn: Callable[[Sequence[str]], None] | None = None,
 ) -> int:
     """Run the CLI and return an automation-safe process exit code."""

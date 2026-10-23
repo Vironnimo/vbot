@@ -35,6 +35,8 @@ What each `API_VERSION` (`extensions.md` -> Loading and identity invariants) add
 
 API 15 directory Extensions declare `config_documents` in `extension.json`: a mapping from owner-state-relative glob patterns to `module:function` file validators. Core `doctor config` discovers these in normal first-wins root order, even when disabled, then loads only the named module under an isolated package path; it never runs the Extension's `__init__`, `register` or startup. The callable receives the absolute Path and returns `JsonValidationReport`. Patterns cannot escape the owner's state directory; validator module paths cannot start with `__init__`. Declaration/import/validation failures become diagnostics; an in-scope known document without its owner's validator also reports an error. Implementation: `core/extensions/config_validation.py`; evidence: `tests/core/settings/test_validation.py`.
 
+Doctor reports configured roots that are missing or not directories, unavailable roots/entry points and incomplete document discovery as errors. It uses the shared diagnostic walker (`json-documents.md` -> Snapshots and doctor); validator exceptions expose their type, never their values, and other documents continue. Extension validation is trusted code and is required to be read-only.
+
 ## Settings schemas and live values
 
 `api.register_settings(fields)` declares at most one schema. `settings_schema.py` parses field keys, labels/descriptions, required/default metadata, and the supported `text`, `number`, `toggle`, and `secret` types. Invalid declarations fail registration with a field-specific error.

@@ -371,6 +371,7 @@ class SecretStore:
     the document first while it holds the inter-process write lock.
     ``protections`` are the key protections this process can open; the first
     one protects a new store.
+    Offline diagnostics disable ``repair_permissions`` to leave file permissions alone.
     """
 
     def __init__(
@@ -378,6 +379,7 @@ class SecretStore:
         data_dir: str | Path,
         *,
         protections: Sequence[KeyProtection] | None = None,
+        repair_permissions: bool = True,
     ) -> None:
         self.data_dir = Path(data_dir).expanduser()
         self.path = self.data_dir / SECRET_STORE_FILE_NAME
@@ -389,6 +391,7 @@ class SecretStore:
         self._lock = RLock()
         self._view: _View | None = None
         self._private_stamp: tuple[int, int, int] | None = None
+        self._repair_permissions = repair_permissions
         self._keys: dict[tuple[str, str, str, str], bytes] = {}
         self._conditions = LoggedConditions()
         # The inter-process write lock, re-entered by a write inside ``reset``.
@@ -637,7 +640,7 @@ class SecretStore:
         try:
             with self.path.open("rb") as handle:
                 stamp = _stamp(os.fstat(handle.fileno()))
-                if stamp != self._private_stamp:
+                if self._repair_permissions and stamp != self._private_stamp:
                     # Also protect documents written before owner-only writes.
                     restrict_to_owner(self.path)
                     self._private_stamp = stamp
@@ -852,7 +855,7 @@ def validate_secret_store_file(path: str | Path) -> JsonValidationReport:
     report, _data = read_json_file(store_path, validate_secret_store_data, missing_ok=False)
     if not report.ok or not report.exists:
         return report
-    status = SecretStore(store_path.parent).status()
+    status = SecretStore(store_path.parent, repair_permissions=False).status()
     diagnostics = list(report.diagnostics)
     if status.state == "unavailable":
         add_error(

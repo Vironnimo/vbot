@@ -34,6 +34,8 @@ Installs that do not update through the application updater (a checkout, a dev d
 
 ## Doctor and status reports
 
+Doctor uses `SecretStore(..., repair_permissions=False)` for both store validation and plaintext comparisons, so inspecting credentials never repairs file permissions. A credential discovery failure is an error (`discovery_failed`) at the unavailable path, rather than a passing warning; ignored plaintext credentials themselves remain warnings.
+
 `doctor` and the status also report plaintext copies left in `quarantine/json-documents/` and, while `secrets.json` is missing, every Secret Store found in quarantine (newest first), with how to move it back. Quarantined stores come from `reset` (`quarantine/secret-store/`) and from an older vBot's set restore, which moved `secrets.json` to `quarantine/json-documents/` when its snapshot held none (`quarantined_secret_stores`).
 
 ## Gotchas

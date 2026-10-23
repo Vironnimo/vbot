@@ -13,6 +13,7 @@ from core.config_validation import (
     JsonDiagnostic,
     JsonObject,
     JsonValidationReport,
+    discover_json_documents,
     load_validated_json_file,
     validate_json_file,
 )
@@ -116,6 +117,10 @@ SETTINGS_FORMAT = JsonDocumentFormat(
 
 def validate_settings_file(settings_path: str | Path) -> JsonValidationReport:
     """Validate a raw ``settings.json`` file without mutating it."""
+    path = Path(settings_path)
+    _paths, failures = discover_json_documents(path.parent, path.name)
+    if failures:
+        return failures[0]
     return validate_json_file(settings_path, validate_settings_document, missing_ok=True)
 
 
@@ -335,7 +340,27 @@ def validate_data_dir_config(data_dir: str | Path) -> tuple[JsonValidationReport
             continue
         validate = validators[kind]
         # A literal pattern matches only an existing file.
-        reports.extend(validate(path) for path in sorted(root.glob(pattern)) if path.is_file())
+        paths, failures = discover_json_documents(root, pattern)
+        reports.extend(failures)
+        for path in paths:
+            try:
+                reports.append(validate(path))
+            except Exception as error:
+                # One owner failing must not suppress every later document. Do
+                # not echo exception values: a validator can include credentials.
+                reports.append(
+                    JsonValidationReport(
+                        path,
+                        True,
+                        (
+                            _error_diagnostic(
+                                "$",
+                                f"Document validator failed ({type(error).__name__})",
+                                code="validator_failed",
+                            ),
+                        ),
+                    )
+                )
     try:
         settings, _diagnostics = load_runtime_settings_json(root / "settings.json")
     except SettingsValidationError:
@@ -348,7 +373,9 @@ def validate_data_dir_config(data_dir: str | Path) -> tuple[JsonValidationReport
     reported = {report.file_path for report in reports}
     for pattern in DURABLE_DOCUMENTS.values():
         if pattern.startswith("extension-data/"):
-            for path in sorted(root.glob(pattern)):
+            paths, failures = discover_json_documents(root, pattern)
+            reports.extend(failures)
+            for path in paths:
                 if path not in reported:
                     reports.append(
                         JsonValidationReport(
@@ -358,11 +385,27 @@ def validate_data_dir_config(data_dir: str | Path) -> tuple[JsonValidationReport
                                 _error_diagnostic(
                                     "$",
                                     "The Extension declares no validator for this document",
+                                    code="missing_validator",
                                 ),
                             ),
                         )
                     )
-    return tuple(reports)
+    # Several patterns can encounter the same unavailable parent directory.
+    merged: dict[Path, JsonValidationReport] = {}
+    for report in reports:
+        previous = merged.get(report.file_path)
+        diagnostics = tuple(
+            dict.fromkeys(
+                (
+                    *(previous.diagnostics if previous else ()),
+                    *report.diagnostics,
+                )
+            )
+        )
+        merged[report.file_path] = JsonValidationReport(
+            report.file_path, report.exists, diagnostics
+        )
+    return tuple(merged.values())
 
 
 def validate_settings_data(data: Any) -> list[JsonDiagnostic]:

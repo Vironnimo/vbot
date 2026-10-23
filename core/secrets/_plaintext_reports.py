@@ -96,14 +96,21 @@ def credential_file_reports(data_dir: str | Path) -> list[JsonValidationReport]:
     except OSError as exc:
         return [
             JsonValidationReport(
-                root,
+                Path(exc.filename) if isinstance(exc.filename, str) else root,
                 True,
-                (JsonDiagnostic("warning", "$", f"cannot check for plaintext credentials: {exc}"),),
+                (
+                    JsonDiagnostic(
+                        "error",
+                        "$",
+                        f"cannot check for plaintext credentials: {exc}",
+                        code="discovery_failed",
+                    ),
+                ),
             )
         ]
     reports: list[JsonValidationReport] = []
     if found:
-        store = SecretStore(root)
+        store = SecretStore(root, repair_permissions=False)
         try:
             pending = _pending_sources(store.import_record() or {})
         except SecretStoreError:

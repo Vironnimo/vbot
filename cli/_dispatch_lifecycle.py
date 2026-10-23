@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from pathlib import Path
 
 from cli._output import (
     FAILURE_EXIT_CODE,
@@ -46,15 +45,19 @@ class ServerCommandContext:
 def dispatch_doctor_command(
     args: argparse.Namespace,
     *,
-    doctor_settings_fn: Callable[[str | Path | None], CommandResult],
-    doctor_config_fn: Callable[[str | Path | None], CommandResult],
+    doctor_settings_fn: Callable[..., CommandResult],
+    doctor_config_fn: Callable[..., CommandResult],
 ) -> CommandResult:
     """Dispatch one parsed local doctor command."""
 
     if args.command == "settings":
-        return doctor_settings_fn(args.data_dir)
+        return doctor_settings_fn(
+            args.data_dir, json_output=args.json_output, limit=args.limit, offset=args.offset
+        )
     if args.command == "config":
-        return doctor_config_fn(args.data_dir)
+        return doctor_config_fn(
+            args.data_dir, json_output=args.json_output, limit=args.limit, offset=args.offset
+        )
     raise ValueError(f"Unsupported doctor command: {args.command}")
 
 

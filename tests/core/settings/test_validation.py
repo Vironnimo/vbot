@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 
@@ -171,6 +171,89 @@ def test_validate_data_dir_config_covers_every_json_document(tmp_path: Path) -> 
     ] == []
 
 
+@pytest.mark.parametrize(
+    "target",
+    ["agents/broken/agent.json", "agents", "extension-data/mcp", "extensions", "external", "oauth"],
+)
+def test_doctor_discovery_reports_unreadable_paths_and_keeps_healthy_documents(
+    tmp_path: Path, deny_access: Callable[[Path], None], target: str
+) -> None:
+    settings = tmp_path / "settings.json"
+    settings.write_text(
+        json.dumps({"format_version": 1, "extension_directories": [str(tmp_path / "external")]})
+    )
+    blocked = tmp_path / target
+    if target.endswith(".json"):
+        blocked.parent.mkdir(parents=True)
+        blocked.write_text("{}")
+    else:
+        blocked.mkdir(parents=True)
+    (tmp_path / "external").mkdir(exist_ok=True)
+    deny_access(blocked)
+
+    reports = validate_data_dir_config(tmp_path)
+
+    assert next(report for report in reports if report.file_path == settings).ok
+    failures = [report for report in reports if not report.ok]
+    assert failures
+    assert any(
+        report.file_path == blocked or blocked in report.file_path.parents for report in failures
+    )
+    assert all(
+        item.code in {"discovery_failed", "extension_validation_failed"}
+        for report in failures
+        for item in report.diagnostics
+    )
+
+
+@pytest.mark.parametrize("target", ["cron/jobs.json", "agents/broken/agent.json", "settings.json"])
+def test_doctor_reports_a_directory_in_place_of_a_document(tmp_path: Path, target: str) -> None:
+    path = tmp_path / target
+    path.mkdir(parents=True)
+    report = next(item for item in validate_data_dir_config(tmp_path) if item.file_path == path)
+    assert not report.ok
+    assert report.diagnostics[0].code == "wrong_file_type"
+
+
+def test_doctor_reports_links_without_reading_the_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "settings.json"
+    path.write_text("not JSON")
+    inode = path.stat().st_ino
+    monkeypatch.setattr(
+        "core.config_validation.is_link_status", lambda status: status.st_ino == inode
+    )
+    report = validate_settings_file(path)
+    assert not report.ok
+    assert report.diagnostics[0].code == "linked_path"
+
+
+def test_doctor_isolates_owner_validator_failure_without_leaking_values(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    broken = tmp_path / "agents" / "broken" / "agent.json"
+    broken.parent.mkdir(parents=True)
+    broken.write_text("{}")
+    healthy = tmp_path / "prompts" / "layout.json"
+    healthy.parent.mkdir()
+    healthy.write_text('{"format_version":1,"entries":[]}')
+
+    def fail(path: Path) -> None:
+        raise RuntimeError("secret-validator-value")
+
+    monkeypatch.setattr("core.agents.validate_agent_file", fail)
+
+    reports = validate_data_dir_config(tmp_path)
+
+    assert (
+        next(item for item in reports if item.file_path == broken).diagnostics[0].code
+        == "validator_failed"
+    )
+    assert next(item for item in reports if item.file_path == healthy).ok
+    assert "secret-validator-value" not in repr(reports)
+
+
 # ``[]`` is unhashable; ``None`` is the missing value.
 @pytest.mark.parametrize("media_type", [[], None])
 def test_validate_data_dir_config_reports_invalid_attachment_media_type(
@@ -196,6 +279,7 @@ def test_validate_data_dir_config_reports_invalid_attachment_media_type(
 
 def test_validate_data_dir_config_reports_an_unopenable_store_and_plaintext_credentials(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     key_file = tmp_path / "keys" / "store.key"
     store = SecretStore(tmp_path, protections=(KeyFileProtection(path=key_file),))
@@ -205,6 +289,9 @@ def test_validate_data_dir_config_reports_an_unopenable_store_and_plaintext_cred
     token = tmp_path / "oauth" / "github-copilot-oauth.json"
     token.parent.mkdir()
     token.write_text('{"format_version": 1, "access_token": "oauth-value"}', encoding="utf-8")
+
+    permission_changes: list[Path] = []
+    monkeypatch.setattr("core.secrets.store.restrict_to_owner", permission_changes.append)
 
     reports = {
         report.file_path.relative_to(tmp_path).as_posix(): report
@@ -221,6 +308,7 @@ def test_validate_data_dir_config_reports_an_unopenable_store_and_plaintext_cred
         assert "vbot data-store secrets convert --yes" in reports[plaintext].diagnostics[0].message
     assert "sk-env-value" not in repr(reports)
     assert "oauth-value" not in repr(reports)
+    assert permission_changes == []
 
 
 def test_validate_data_dir_config_refuses_documents_before_generation_1(tmp_path: Path) -> None:
@@ -830,7 +918,14 @@ def test_runtime_settings_leave_out_unknown_fields_and_the_version(tmp_path: Pat
 
 
 @pytest.mark.parametrize(
-    "validator", ["validate:check", "__init__:check", "__INIT__:check", "__init__.validate:check"]
+    "validator",
+    [
+        "validate:check",
+        "__init__:check",
+        "__INIT__:check",
+        "__init__.validate:check",
+        "failed:check",
+    ],
 )
 def test_extension_documents_validate_without_running_the_extension(
     tmp_path: Path, validator: str
@@ -843,7 +938,7 @@ def test_extension_documents_validate_without_running_the_extension(
         "raise AssertionError('registration ran')"
     )
     (extension / "extension.json").write_text(
-        json.dumps({"config_documents": {"state.json": validator}})
+        json.dumps({"config_documents": {"state.json": validator, "nested/**/*.json": validator}})
     )
     (extension / "validate.py").write_text(
         "from core.config_validation import validate_json_file, JsonDiagnostic\n"
@@ -851,12 +946,25 @@ def test_extension_documents_validate_without_running_the_extension(
         "    return validate_json_file(path, lambda value: "
         "[JsonDiagnostic('error', '$.sentinel', 'invalid')], missing_ok=False)\n"
     )
+    (extension / "failed.py").write_text(
+        "def check(path):\n    raise RuntimeError('secret-validator-value')\n"
+    )
     document = tmp_path / "extension-data" / "example" / "state.json"
     document.parent.mkdir(parents=True)
     document.write_text('{"format_version":1}')
+    nested = document.parent / "nested" / "deep" / "state.json"
+    nested.parent.mkdir(parents=True)
+    nested.write_text('{"format_version":1}')
     reports = validate_data_dir_config(tmp_path)
     assert not marker.exists()
-    expected_path = document if validator == "validate:check" else extension / "extension.json"
+    expected_path = (
+        document
+        if validator in {"validate:check", "failed:check"}
+        else extension / "extension.json"
+    )
     [report] = [item for item in reports if item.file_path == expected_path]
     assert not report.ok
     assert report.diagnostics[0].path == ("$.sentinel" if validator == "validate:check" else "$")
+    assert "secret-validator-value" not in repr(reports)
+    if validator in {"validate:check", "failed:check"}:
+        assert any(item.file_path == nested and not item.ok for item in reports)
