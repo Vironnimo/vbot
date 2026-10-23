@@ -343,6 +343,11 @@ def test_cron_show_prints_exactly_the_complete_saved_job(
             {"delivery": {"kind": "none"}, "watch": None},
             id="no-delivery-no-watch",
         ),
+        pytest.param(
+            ("--watch", "git log -1", "--watch-runs", "always"),
+            {"watch": {"command": "git log -1", "always": True}},
+            id="watch-runs-always",
+        ),
     ],
 )
 def test_cron_update_sends_only_the_given_changes(
@@ -355,6 +360,51 @@ def test_cron_update_sends_only_the_given_changes(
     assert code == 0
     assert rpc.calls == [("cron.update", {"id": "job-1", **changes})]
     assert "job-1" in out
+
+
+@pytest.mark.parametrize(
+    ("stored", "options", "watch"),
+    [
+        pytest.param(
+            {"command": "git log -1"},
+            ("--watch-runs", "always"),
+            {"command": "git log -1", "always": True},
+            id="mode-only",
+        ),
+        pytest.param(
+            {"command": "git log -1", "always": True},
+            ("--watch", "git status"),
+            {"command": "git status", "always": True},
+            id="target-keeps-mode",
+        ),
+    ],
+)
+def test_cron_update_keeps_what_the_watch_options_leave_out(
+    rpc: FakeRpc,
+    run_cli: RunCli,
+    stored: dict[str, Any],
+    options: tuple[str, ...],
+    watch: dict[str, Any],
+) -> None:
+    rpc.reply("cron.list", {"jobs": [{"id": "job-1", "watch": stored}]})
+    rpc.reply("cron.update", {"ok": True})
+
+    code, _out, _err = run_cli("cron", "update", "job-1", *options)
+
+    assert code == 0
+    assert rpc.calls[-1] == ("cron.update", {"id": "job-1", "watch": watch})
+
+
+def test_watch_runs_needs_a_watch(rpc: FakeRpc, run_cli: RunCli) -> None:
+    rpc.reply("cron.list", {"jobs": [{"id": "job-1", "watch": None}]})
+
+    created, created_out, _err = run_cli(*CREATE, "--every", "15", "--watch-runs", "always")
+    updated, updated_out, _err = run_cli("cron", "update", "job-1", "--watch-runs", "always")
+
+    assert (created, updated) == (1, 1)
+    assert "--watch-runs needs --watch <command-or-url>" in created_out
+    assert "cron job job-1 has none" in updated_out
+    assert [method for method, _params in rpc.calls] == ["cron.list"]
 
 
 def test_cron_update_without_changes_names_every_option(rpc: FakeRpc, run_cli: RunCli) -> None:

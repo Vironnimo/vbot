@@ -118,6 +118,15 @@ export function watchKindOptions() {
   ];
 }
 
+// When a watching job starts a Run: only on a change, the default, or at
+// every due time.
+export function watchRunsOptions() {
+  return [
+    { value: 'on_change', label: t('cron.watchRuns.onChange') },
+    { value: 'always', label: t('cron.watchRuns.always') },
+  ];
+}
+
 export function intervalUnitOptions() {
   return [
     { value: 'minutes', label: t('cron.form.intervalUnit.minutes') },
@@ -610,6 +619,16 @@ export function scheduleRowDetails(
         label: t('cron.card.watch'),
         value: job.watch?.target ?? '',
         mono: true,
+      },
+      {
+        label: t('cron.form.watchRuns'),
+        value: job.watch
+          ? t(
+              job.watch.always
+                ? 'cron.watchRuns.always'
+                : 'cron.watchRuns.onChange',
+            )
+          : '',
       },
       {
         label: t('cron.detail.lastCheck'),

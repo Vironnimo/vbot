@@ -69,6 +69,9 @@ NEW_SESSION = "new"
 """The ``session`` that starts each run in a new Session."""
 NO_WATCH = "none"
 """The ``watch`` that stops watching on update; on create it is the default."""
+WATCH_RUNS_FIELD = "watch_runs"
+WATCH_RUNS_ON_CHANGE = "on_change"
+WATCH_RUNS_ALWAYS = "always"
 DELIVER_PLATFORM_FIELD = "deliver_platform"
 """The platform a ``deliver`` value named; "here" holds only in a chat on it."""
 WEBHOOK_SECRET_FIELD = "webhook_secret_name"
@@ -96,6 +99,7 @@ _CHANGE_FIELDS = (
     "session",
     "deliver",
     "watch",
+    WATCH_RUNS_FIELD,
     ENABLED_FIELD,
 )
 _LATE_START = (
@@ -306,9 +310,9 @@ def normalize_cron_arguments(contract: ToolContract, arguments: Any) -> Any:
     normalized = normalize_call_arguments(
         contract,
         value,
-        enum_fields=("action",),
+        enum_fields=("action", WATCH_RUNS_FIELD),
         field_aliases=_FIELD_ALIASES,
-        field_normalizers={"action": _action_word},
+        field_normalizers={"action": _action_word, WATCH_RUNS_FIELD: _watch_runs_word},
         empty_as_omitted=("id", "target", "name", "prompt", "schedule", TIMEZONE_FIELD),
     )
     if not isinstance(normalized, dict):
@@ -452,6 +456,18 @@ def _merge(outer: dict[str, Any], inner: Mapping[str, Any]) -> None:
                 f"{REFUSAL_PREFIX}it gives two different values for {key}; provide one."
             )
         outer[key] = item
+
+
+_WATCH_RUNS_SYNONYMS = {
+    **dict.fromkeys(("always", "every", "everytime", "everyrun", "each", "eachrun"), "always"),
+    **dict.fromkeys(("onchange", "change", "changed", "changes", "onlyonchange"), "on_change"),
+}
+
+
+def _watch_runs_word(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    return _WATCH_RUNS_SYNONYMS.get(spelling(value), value)
 
 
 def _action_word(value: Any) -> Any:
@@ -636,9 +652,10 @@ def _read_watch(arguments: dict[str, Any], problems: _Problems) -> None:
                 continue
             problems.add(
                 f'"{key}" is not available: a job runs no script of its own and always runs its '
-                "prompt. watch checks a command or URL before each run, and the run starts only "
-                "when the output changed.",
+                "prompt. watch checks a command or URL before each run and gives the run its "
+                'output; with watch_runs "always" every run starts with it.',
                 watch=WATCH_STAND_IN,
+                watch_runs=WATCH_RUNS_ALWAYS,
             )
 
 

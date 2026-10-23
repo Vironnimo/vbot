@@ -345,7 +345,8 @@ export const CRON_DELIVERY_APP = 'app';
 export const CRON_DELIVERY_CHAT = 'chat';
 
 // What a repeating job checks before each Run: nothing, a command or a URL.
-// The Run starts only when the check's output changed.
+// The Run starts only when the check's output changed, or at every due time
+// with the output when the watch is `always`.
 export const CRON_WATCH_NONE = 'none';
 export const CRON_WATCH_COMMAND = 'command';
 export const CRON_WATCH_URL = 'url';
@@ -463,6 +464,7 @@ function watchFormFields(watch) {
   return {
     watch_kind: watch?.kind ?? CRON_WATCH_NONE,
     watch_target: watch?.target ?? '',
+    watch_always: watch?.always === true,
   };
 }
 
@@ -476,8 +478,8 @@ export function canWatch(scheduleType) {
 }
 
 // The `watch` param of `cron.create` and `cron.update` the form describes:
-// `{command}` or `{url}`, or null for none and for a schedule that cannot
-// watch.
+// `{command}` or `{url}` with `always` when every due time starts a Run, or
+// null for none and for a schedule that cannot watch.
 function cronWatchPayload(formValues) {
   const kind = formValues?.watch_kind;
   if (
@@ -486,7 +488,11 @@ function cronWatchPayload(formValues) {
   ) {
     return null;
   }
-  return { [kind]: requiredText(formValues?.watch_target) };
+  const watch = { [kind]: requiredText(formValues?.watch_target) };
+  if (formValues?.watch_always === true) {
+    watch.always = true;
+  }
+  return watch;
 }
 
 export function applyAgentListResponse(state, result) {
@@ -751,17 +757,19 @@ function normalizeWebhook(webhook, systemTimezone) {
   };
 }
 
-// `{command}` or `{url}` as `{kind, target}`; anything else is no watch.
-// A normalized watch stays as it is, since listed jobs are normalized again.
+// `{command}` or `{url}` as `{kind, target, always}`; anything else is no
+// watch. A normalized watch stays as it is, since listed jobs are normalized
+// again.
 function normalizeWatch(watch) {
+  const always = watch?.always === true;
   if (WATCH_KINDS.includes(watch?.kind)) {
     const target = optionalText(watch.target);
-    return target === null ? null : { kind: watch.kind, target };
+    return target === null ? null : { kind: watch.kind, target, always };
   }
   for (const kind of WATCH_KINDS) {
     const target = optionalText(watch?.[kind]);
     if (target !== null) {
-      return { kind, target };
+      return { kind, target, always };
     }
   }
   return null;

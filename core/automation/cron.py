@@ -848,7 +848,7 @@ class CronService:
         await settle_before_cancelling(self._save_edit(undo))
         if job.schedule_type == "webhook" and candidate.schedule_type != "webhook":
             await settle_before_cancelling(self._webhooks.discard(job_id))
-        if "watch" in changed_fields:
+        if "watch" in changed_fields and _new_check(job.watch, candidate.watch):
             await self._renew_watch(candidate)
 
     async def _prepare_webhook(self, job_id: str) -> None:
@@ -988,7 +988,7 @@ class CronService:
                 candidate.remaining_runs = 1
         if candidate.schedule_type == "webhook" and job.schedule_type != "webhook":
             self._webhooks.check_available()
-        watch_changed = "watch" in fields and candidate.watch != job.watch
+        watch_changed = "watch" in fields and _new_check(job.watch, candidate.watch)
         if watch_changed:
             # Checks of an earlier watch say nothing about this one.
             candidate.last_checked_at = None
@@ -1377,3 +1377,8 @@ def _log_retarget(job_id: str, agent_id: str, new_agent_id: str) -> None:
     _LOGGER.debug(
         "Cron job retargeted (job=%s agent=%s new_agent=%s)", job_id, agent_id, new_agent_id
     )
+
+
+def _new_check(before: CronWatch | None, after: CronWatch | None) -> bool:
+    """Whether an edit gives the job another check; changing only ``always`` keeps it."""
+    return after is not None if before is None else not before.same_check(after)

@@ -53,6 +53,7 @@ def test_schema_advertises_only_the_canonical_fields() -> None:
         "session",
         "deliver",
         "watch",
+        "watch_runs",
     ]
     assert properties["deliver"]["enum"] == ["here", "app", "none"]
     assert properties["action"]["enum"] == [
@@ -811,6 +812,52 @@ async def test_a_watch_is_checked_at_once_and_none_stops_it(tmp_path: Path) -> N
         ("url", "https://status.example/"),
         ("command", "Get-Content status.txt", "agent-one", ""),
     ]
+
+
+@pytest.mark.asyncio
+async def test_watch_runs_always_starts_every_run_and_stays_with_its_watch(
+    tmp_path: Path,
+) -> None:
+    tool = cron_tool(tmp_path)
+    tool.checks.answers.extend(["Status: up", "v1"])
+    tool.service.start()
+    try:
+        envelope, created = await tool.call_async(
+            {
+                "action": "create",
+                "prompt": PROMPT,
+                "schedule": "every 1h",
+                "watch": "https://status.example/",
+                "watch_runs": "every time",
+            }
+        )
+        job_id = envelope["data"]["id"]
+        # A new watch target keeps the mode; watch_runs alone changes it.
+        await tool.call_async({"action": "update", "id": job_id, "watch": "Get-Content v.txt"})
+        always = tool.only_job().watch
+        _envelope, on_change = await tool.call_async(
+            {"action": "update", "id": job_id, "watch_runs": "on_change"}
+        )
+    finally:
+        await tool.service.aclose()
+
+    assert "watch_runs: always" in created
+    assert "each run gets the current output" in created
+    assert always is not None and always.always
+    watch = tool.only_job().watch
+    assert watch is not None and (watch.target, watch.always) == ("Get-Content v.txt", False)
+    assert "first check" not in on_change
+    assert "watch_runs" not in on_change
+
+    # Without a watch, there is nothing for watch_runs to change.
+    await tool.call_async({"action": "update", "id": job_id, "watch": "none"})
+    envelope, refused = await tool.call_async(
+        {"action": "update", "id": job_id, "watch_runs": "always"}
+    )
+    assert envelope["ok"] is False
+    assert "watch_runs needs watch, the command or http(s) URL to check" in refused
+    assert '"watch":"<command or URL to check>"' in refused
+    assert tool.only_job().watch is None
 
 
 @pytest.mark.parametrize(

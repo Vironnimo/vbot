@@ -1,17 +1,19 @@
 <script>
   // The Change check section of a repeating job's form: nothing, or a command
   // or URL checked before each Run, which then starts only when the output
-  // changed. One-time and event schedules cannot watch, so the view shows
-  // this section only for cron and interval schedules.
+  // changed, or at every due time with the output. One-time and event
+  // schedules cannot watch, so the view shows this section only for cron and
+  // interval schedules.
   import { t } from '$lib/i18n.js';
   import { CRON_WATCH_COMMAND, CRON_WATCH_URL } from '$lib/cronView.js';
-  import { watchKindOptions } from './presentation.js';
+  import { watchKindOptions, watchRunsOptions } from './presentation.js';
   import TextField from '../ui/TextField.svelte';
   import Dropdown from '../Dropdown.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
 
   let { editor } = $props();
   const watchKinds = watchKindOptions();
+  const watchRuns = watchRunsOptions();
 
   let values = $derived(editor.formValues);
   let isCommand = $derived(values.watch_kind === CRON_WATCH_COMMAND);
@@ -77,6 +79,26 @@
                 : t('cron.form.watchUrlPlaceholder')}
               disabled={editor.isCreating && editor.submittingForm}
               onInput={(next) => editor.updateFormField('watch_target', next)}
+            />
+          </div>
+        </div>
+        <div class="s-row">
+          <div class="s-row-info">
+            <label class="s-row-label" for="cron-job-watch-runs">
+              {t('cron.form.watchRuns')}
+            </label>
+          </div>
+          <div class="s-row-control">
+            <Dropdown
+              id="cron-job-watch-runs"
+              value={values.watch_always ? 'always' : 'on_change'}
+              options={watchRuns}
+              ariaLabel={t('cron.form.watchRuns')}
+              disabled={editor.isCreating && editor.submittingForm}
+              triggerClass="cron-dropdown"
+              listClass="cron-dropdown-list"
+              onValueChange={(next) =>
+                editor.updateFormField('watch_always', next === 'always')}
             />
           </div>
         </div>

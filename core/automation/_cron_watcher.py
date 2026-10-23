@@ -44,12 +44,15 @@ _LOGGER = get_logger("automation.cron")
 
 
 class CronWatcher:
-    """Check watching jobs and start their Run only when the output changed.
+    """Check watching jobs and start their Run when the output changed.
 
     At a due time the check runs first, in one of ``MAX_CONCURRENT_CRON_RUNS``
     check slots and without a Model. The first check records the baseline and
     an unchanged output starts nothing; both record only ``last_checked_at``.
-    A changed output starts the Run with the change as data. The baseline moves
+    A changed output starts the Run with the change as data. A watch with
+    ``always`` starts the Run after every successful due-time check, also with
+    an unchanged output or the one that just became the baseline; only a change
+    moves the baseline. The baseline moves
     to the new output once that Run succeeded, so a change whose Run failed or
     could not start is found again at the next check.
 
@@ -75,7 +78,10 @@ class CronWatcher:
         return self._owner._cron_dir / WATCH_STATE_DIR_NAME
 
     async def fire(self, job: CronJob) -> None:
-        """Check a watching job at a due time and start its Run when the output changed."""
+        """Check a watching job at a due time; start its Run when the output changed.
+
+        A watch with ``always`` starts the Run after every successful check.
+        """
         async with self._lock(job.id):
             change = await self._check(job.id, first=False)
             latest = self._owner._jobs.get(job.id)
@@ -85,7 +91,7 @@ class CronWatcher:
             # Edits wait for the baseline commit as they waited for the Run.
             self._owner._executing_jobs.add(job.id)
             try:
-                if outcome.succeeded:
+                if outcome.succeeded and change.changed:
                     await self._commit(job.id, change)
             finally:
                 self._owner._executing_jobs.discard(job.id)
@@ -212,11 +218,33 @@ class CronWatcher:
                         len(comparison.output),
                     )
                 await self._record_success(job_id, watch, checked_at)
-                return None
+                if first or not watch.always:
+                    return None
+                return WatchChange(
+                    watch,
+                    since=None,
+                    output=comparison.output,
+                    digest=comparison.digest,
+                    diff="",
+                    diff_cut=False,
+                    checked_at=checked_at,
+                    changed=False,
+                )
             await self._record_success(job_id, watch, checked_at)
             if comparison.digest == baseline.digest:
                 _LOGGER.debug("Cron watch output unchanged (job=%s)", job_id)
-                return None
+                if not watch.always:
+                    return None
+                return WatchChange(
+                    watch,
+                    since=baseline.checked_at,
+                    output=comparison.output,
+                    digest=comparison.digest,
+                    diff="",
+                    diff_cut=False,
+                    checked_at=checked_at,
+                    changed=False,
+                )
             _LOGGER.info("Cron watch output changed (job=%s)", job_id)
             return WatchChange(
                 watch,
@@ -261,14 +289,14 @@ class CronWatcher:
         job = self._owner._jobs.get(job_id)
         return (
             job is not None
-            and job.watch == watch
+            and watch.same_check(job.watch)
             and job.status == "active"
             and job_id not in self._owner._pending_restarts
         )
 
     async def _record_success(self, job_id: str, watch: CronWatch, checked_at: str) -> None:
         job = self._owner._jobs.get(job_id)
-        if job is None or job.watch != watch:
+        if job is None or not watch.same_check(job.watch):
             return
         job.last_checked_at = checked_at
         if job.last_check_error is not None:
@@ -282,7 +310,7 @@ class CronWatcher:
         self, job_id: str, watch: CronWatch, message: str, *, checked_at: str, counts: bool
     ) -> None:
         job = self._owner._jobs.get(job_id)
-        if job is None or job.watch != watch:
+        if job is None or not watch.same_check(job.watch):
             return
         baseline = self._owner._execution._failure_baseline(job_id)
         job.last_checked_at = checked_at
@@ -302,7 +330,7 @@ class CronWatcher:
     async def _commit(self, job_id: str, change: WatchChange) -> None:
         """Make the changed output the baseline once its Run succeeded."""
         job = self._owner._jobs.get(job_id)
-        if job is None or job.watch != change.watch:
+        if job is None or not change.watch.same_check(job.watch):
             return
         try:
             await self._owner._writer.call_async(

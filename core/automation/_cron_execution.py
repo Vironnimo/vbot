@@ -137,7 +137,11 @@ class CronExecution:
                         if late is not None
                         else ""
                     ),
-                    " watched_output_changed=true" if change is not None else "",
+                    (
+                        f" watched_output_changed={str(change.changed).lower()}"
+                        if change is not None
+                        else ""
+                    ),
                     (
                         f" webhook_requests={len(batch.requests)} webhook_dropped={batch.dropped}"
                         if batch is not None

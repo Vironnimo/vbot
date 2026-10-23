@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
+from dataclasses import replace
 from datetime import UTC, datetime
 from functools import cache
 from typing import TYPE_CHECKING, Any
@@ -40,6 +41,9 @@ from core.tools._cron_arguments import (
     REFUSAL_PREFIX,
     SELF_TARGET,
     UNADVERTISED_PARAMETERS,
+    WATCH_RUNS_ALWAYS,
+    WATCH_RUNS_FIELD,
+    WATCH_RUNS_ON_CHANGE,
     WATCH_STAND_IN,
     WEBHOOK_SECRET_FIELD,
     CronCallRefusedError,
@@ -92,6 +96,7 @@ _UPDATE_FIELDS = (
     "session",
     "deliver",
     "watch",
+    WATCH_RUNS_FIELD,
     ENABLED_FIELD,
 )
 _SCHEDULE_FORMS = (
@@ -200,9 +205,17 @@ CRON_TOOL_PARAMETERS: JsonObject = {
             "type": "string",
             "minLength": 1,
             "description": (
-                "Command or http(s) URL to check before each run; the job runs only when the "
-                "output changed, and the run gets the diff. A command's non-zero exit counts as "
-                "a failed run. Omit to run every time; on update, none stops watching."
+                "Command or http(s) URL to check before each run; the run gets its output and "
+                "the diff. A command's non-zero exit counts as a failed run. Omit to run every "
+                "time without a check; on update, none stops watching."
+            ),
+        },
+        WATCH_RUNS_FIELD: {
+            "type": "string",
+            "enum": [WATCH_RUNS_ON_CHANGE, WATCH_RUNS_ALWAYS],
+            "description": (
+                "When a job with watch runs: on_change only when the output changed, always "
+                "at every due time. Omit on create for on_change."
             ),
         },
     },
@@ -411,6 +424,8 @@ async def _handle_create(
     )
     delivery, delivery_note = _delivery(context, arguments, agent_id, project_id)
     watch = _watch(arguments)
+    if watch is None and WATCH_RUNS_FIELD in arguments:
+        raise CronCallRefusedError(_watch_runs_without_watch(arguments))
     # A restricted Session's job never runs with more access than it has.
     ceiling = context.permissions.to_ceiling_dict(source="cron")
     await _check_watch(cron_service, watch, agent_id, project_id, ceiling)
@@ -472,7 +487,8 @@ async def _handle_update(
         raise CronCallRefusedError(
             refusal(
                 "update needs a field to change: name, prompt, schedule, event_id, repeat, "
-                "target, session, deliver or watch. To pause or resume the job, use disable or "
+                "target, session, deliver, watch or watch_runs. To pause or resume the job, use "
+                "disable or "
                 "enable.",
                 arguments,
                 schedule=_SCHEDULE_STAND_IN,
@@ -518,7 +534,14 @@ async def _handle_update(
             delivery, _note = _delivery(context, arguments, agent_id, project_id)
             updates["delivery"] = delivery.stored()
     if "watch" in arguments:
-        updates["watch"] = _watch(arguments)
+        updates["watch"] = _watch(arguments, cron_service.get_job(job_id).watch)
+    elif WATCH_RUNS_FIELD in arguments:
+        watching = cron_service.get_job(job_id).watch
+        if watching is None:
+            raise CronCallRefusedError(_watch_runs_without_watch(arguments))
+        updates["watch"] = replace(
+            watching, always=arguments[WATCH_RUNS_FIELD] == WATCH_RUNS_ALWAYS
+        )
     if ENABLED_FIELD in arguments:
         updates["status"] = "active" if arguments[ENABLED_FIELD] else "paused"
     current = cron_service.get_job(job_id)
@@ -717,14 +740,19 @@ def _delivery(
     )
 
 
-def _watch(arguments: JsonObject) -> CronWatch | None:
-    """What a call has the job check before each run: an http(s) URL, else a command."""
+def _watch(arguments: JsonObject, stored: CronWatch | None = None) -> CronWatch | None:
+    """What a call has the job check before each run: an http(s) URL, else a command.
+
+    Without ``watch_runs``, an update keeps when the *stored* watch runs.
+    """
     text = arguments.get("watch", NO_WATCH)
     if text == NO_WATCH:
         return None
     kind = "url" if _URL.fullmatch(text) else "command"
+    runs = arguments.get(WATCH_RUNS_FIELD)
+    always = runs == WATCH_RUNS_ALWAYS if runs is not None else bool(stored and stored.always)
     try:
-        return CronWatch.parse(kind, text)
+        return CronWatch.parse(kind, text, always=always)
     except CronJobValidationError as error:
         problem = (
             f'watch "{text}" is not a valid http or https URL.'
@@ -733,6 +761,15 @@ def _watch(arguments: JsonObject) -> CronWatch | None:
             "most 4000. Save the check as a script file and watch the command that runs it."
         )
         raise CronCallRefusedError(refusal(problem, arguments, watch=WATCH_STAND_IN)) from error
+
+
+def _watch_runs_without_watch(arguments: JsonObject) -> str:
+    return refusal(
+        "watch_runs needs watch, the command or http(s) URL to check before each run. "
+        "Without watch, the job runs at every due time.",
+        arguments,
+        watch=WATCH_STAND_IN,
+    )
 
 
 async def _check_watch(
@@ -774,7 +811,7 @@ async def _with_first_check(
         job = cron_service.get_job(data["id"])
     except CronJobNotFoundError:
         return result
-    if job.watch is None or job.watch == before:
+    if job.watch is None or job.watch.same_check(before):
         return result
     notes = [data["note"]] if data.get("note") else []
     if not finished:
@@ -784,6 +821,8 @@ async def _with_first_check(
             "The first check failed (last_check_error). Fix watch with update, or the job stops "
             f"after {MAX_CONSECUTIVE_CRON_FAILURES} failed checks in a row."
         )
+    elif job.last_checked_at is not None and job.watch.always:
+        notes.append("The first check worked; each run gets the current output.")
     elif job.last_checked_at is not None:
         notes.append("The first check recorded the current output; runs start when it changes.")
     return _job_success(cron_service, job, notes)
@@ -990,6 +1029,8 @@ def _job_fields(cron_service: CronService, job: CronJob, zone: ZoneInfo) -> Json
         data["repeat"] = job.remaining_runs
     if job.watch is not None:
         data["watch"] = job.watch.target
+        if job.watch.always:
+            data[WATCH_RUNS_FIELD] = WATCH_RUNS_ALWAYS
     if webhook is not None and webhook.last_received_at:
         data["last_request"] = _local_time(webhook.last_received_at, zone)
     if webhook is not None and webhook.waiting:

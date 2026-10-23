@@ -342,12 +342,15 @@ def _optional_delivery(params: JsonObject) -> CronDelivery | None:
 
 
 def _optional_watch(params: JsonObject) -> CronWatch | None:
-    """``params.watch`` as a job keeps it: ``{"command": ...}`` or ``{"url": ...}``; null: none."""
+    """``params.watch`` as a job keeps it: ``{"command": ...}`` or ``{"url": ...}``; null: none.
+
+    ``"always": true`` starts a Run at every due time instead of only on a change.
+    """
     value = params.get("watch")
     if value is None:
         return None
     if isinstance(value, dict):
-        _reject_unsupported(value, {"command", "url"}, "params.watch")
+        _reject_unsupported(value, {"command", "url", "always"}, "params.watch")
     try:
         return CronWatch.from_dict(value)
     except CronJobValidationError as error:
