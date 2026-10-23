@@ -80,18 +80,36 @@ def test_prompt_show_prints_only_the_requested_block_in_the_exact_scope(
     assert json.loads(out) == {"scope": "agent:assistant", **expected}
 
 
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-8-sig", "utf-16", "utf-16-be"])
 def test_prompt_update_sends_the_file_content_to_the_default_scope(
-    rpc: FakeRpc, run_cli: RunCli, tmp_path: Path
+    rpc: FakeRpc, run_cli: RunCli, tmp_path: Path, encoding: str
 ) -> None:
     content_file = tmp_path / "tools.txt"
-    content_file.write_text("# Custom tools", encoding="utf-8")
-    rpc.reply("prompt.update", {"id": "core:tools", "text": "# Custom tools", "is_modified": True})
+    content = "# Z\u00fcrich\n\u6771\u4eac\n"
+    raw = content.replace("\n", "\r\n").encode(encoding)
+    content_file.write_bytes((b"\xfe\xff" if encoding == "utf-16-be" else b"") + raw)
+    rpc.reply("prompt.update", {"id": "core:tools", "text": content, "is_modified": True})
 
     code, out, _err = run_cli("prompt", "update", "core:tools", "--file", str(content_file))
 
     assert code == 0
-    assert rpc.calls == [("prompt.update", {"id": "core:tools", "content": "# Custom tools"})]
+    assert rpc.calls == [("prompt.update", {"id": "core:tools", "content": content})]
     assert "core:tools" in out
+
+
+@pytest.mark.parametrize("raw", [b"\xffsecret", b"\xff\xfe\x00", "secret".encode("utf-32")])
+def test_prompt_update_refuses_undecodable_content_before_rpc(
+    rpc: FakeRpc, run_cli: RunCli, tmp_path: Path, raw: bytes
+) -> None:
+    content_file = tmp_path / "invalid.txt"
+    content_file.write_bytes(raw)
+
+    code, out, err = run_cli("prompt", "update", "core:tools", "--file", str(content_file))
+
+    assert code == 1
+    assert rpc.calls == []
+    assert "UTF-8" in out + err and "UTF-16" in out + err
+    assert "secret" not in out + err
 
 
 def test_prompt_reset_restores_the_block(rpc: FakeRpc, run_cli: RunCli) -> None:

@@ -58,6 +58,10 @@ def with_command_output[**P](function: Callable[P, int]) -> Callable[P, int]:
                 try:
                     code = function(*args, **kwargs)
                 except (OSError, ValueError, ConfigError) as error:
+                    if parsed.area == "session" and parsed.command == "list" and parsed.json:
+                        import json
+
+                        print(json.dumps({"ok": False, "error": {"message": str(error)}}))
                     sys.stdout.flush()
                     print(
                         status_line("error", f"{type(error).__name__}: {error}", stream=sys.stderr),

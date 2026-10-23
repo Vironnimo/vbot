@@ -12,7 +12,7 @@ Commands read `vbot <area> <action> [target] [options]`: ids are positional, eve
 ## Do the task
 
 1. Read the reference for the task from the table below. Done when you know its commands and which flags replace a whole value.
-2. Inspect the target with its `list` or `show` command and reuse the exact ids it prints. Before you replace a Skill, a prompt block or an automation prompt, read its complete content; list output shortens it.
+2. When you need a target's id or current values, inspect it with its `list` or `show` command and reuse the exact ids it prints. Before you replace a Skill, a prompt block or an automation prompt, read its complete content; list output shortens it.
 3. Change only what the request names. Omitted update flags leave a field unchanged; list and policy flags, such as `--allow`, `--tool-allow` or `--sources`, replace the whole value, so repeat every entry to keep. The references name the commands that clear omitted options.
 4. Read the result before you report. `[OK]` means the command finished, `[WARN]` names pending work or a limit, `[ERROR]` a failure. A saved setting is not yet working behavior: an Agent without an effective Model cannot run, an enabled Channel can fail to connect, an accepted update or restart has not finished. Report what the output shows.
 
@@ -45,6 +45,6 @@ When no row fits, or the reference you read lacks the answer, search the `refere
 
 ## Inputs, credentials and failures
 
-- Pass multiline content with `--file` and JSON arrays or objects as one argument; when the shell breaks the quoting, pipe the value to the command's stdin option. Edit vBot's files by hand only when no command can make the change, then run `vbot doctor config`.
+- Pass multiline text with `--file` from a file on the CLI's computer, encoded as UTF-8 (with or without a BOM) or UTF-16 with a BOM. Pass JSON arrays or objects as one argument; when the shell breaks the quoting, pipe the value to the command's stdin option. Edit vBot's files by hand only when no command can make the change, then run `vbot doctor config`.
 - Pass a credential only on the stdin of the command made for it; vBot keeps it in its encrypted Secret Store and ignores `.env` files. Never put a credential in an argument, a file or a reply. When the user has not given you the value, give them `vbot data-store secrets set <NAME>` or the area's stdin command to run in their terminal; never ask for the value or offer to take it in the chat, because the chat history keeps it. A value you use yourself in a task, such as a password or an API key for a script, is an Agent Secret instead (`references/agent-secrets.md`).
 - On `[ERROR]`, the output explains the failure and prints `Next:` commands to inspect or recover; vBot never runs them itself. Inspect the target before you repeat a change, because earlier steps of a failed command can already be saved.

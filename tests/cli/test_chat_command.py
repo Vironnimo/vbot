@@ -281,6 +281,30 @@ def test_chat_reads_the_message_from_piped_stdin(
     }
 
 
+@pytest.mark.parametrize("valid_file", [True, False])
+def test_chat_prompt_file_is_decoded_before_sending(
+    rpc: FakeRpc,
+    run_stream: FakeRunStream,
+    run_cli: RunCli,
+    tmp_path: Path,
+    valid_file: bool,
+) -> None:
+    prompt = 'Prüfe den Build.\nAntworte mit "fertig".\n'
+    source = tmp_path / "prompt.txt"
+    source.write_bytes(prompt.encode("utf-16") if valid_file else b"\xffnot-valid")
+    reply_run(rpc, "s-given")
+    run_stream.connection(answer(3, "Fertig."), completed(4))
+
+    code, _out, _err = run_cli("chat", "--file", str(source), "--session", "s-given")
+
+    assert code == (0 if valid_file else 1)
+    if valid_file:
+        assert rpc.params("chat.stream")["content"] == prompt
+    else:
+        assert rpc.calls == []
+        assert run_stream.queries == []
+
+
 def test_chat_without_a_message_on_a_terminal_is_a_usage_error(
     rpc: FakeRpc, run_cli: RunCli, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -18,6 +18,7 @@ from cli._parser_common import (
     STATISTICS_HELP,
     STATISTICS_SECTIONS,
     _add_command_parser,
+    _add_text_file_argument,
     server_url_argument,
 )
 from cli.device_pairing import PAIR_WAIT_SECONDS
@@ -65,9 +66,9 @@ def _add_cron_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
         "--name",
         help="Optional human-readable job name; defaults to the first useful prompt line",
     )
-    create_parser.add_argument(
-        "--prompt", required=True, help="Prompt text injected when the job fires"
-    )
+    create_prompt = create_parser.add_mutually_exclusive_group(required=True)
+    create_prompt.add_argument("--prompt", help="Prompt text injected when the job fires")
+    _add_text_file_argument(create_prompt, content="prompt text", dest="prompt_file")
     create_schedule_group = create_parser.add_mutually_exclusive_group(required=True)
     _add_cron_schedule_arguments(create_schedule_group)
     _add_cron_event_time_argument(create_parser)
@@ -92,7 +93,9 @@ def _add_cron_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
         "--agent", metavar="<agent>", help="Agent that runs the job, as agent or agent@project"
     )
     update_parser.add_argument("--name", help="Replace the human-readable job name")
-    update_parser.add_argument("--prompt", help="Prompt text injected when the job fires")
+    update_prompt = update_parser.add_mutually_exclusive_group()
+    update_prompt.add_argument("--prompt", help="Prompt text injected when the job fires")
+    _add_text_file_argument(update_prompt, content="prompt text", dest="prompt_file")
     update_schedule_group = update_parser.add_mutually_exclusive_group()
     _add_cron_schedule_arguments(update_schedule_group)
     _add_cron_event_time_argument(update_parser)
@@ -353,7 +356,9 @@ def _add_bootstrap_parsers(
         help="Use the current vBot Run Agent and Session; available only inside its Bash command",
     )
     create.add_argument("--name", help="Optional human-readable job name")
-    create.add_argument("--prompt", required=True, help="Prompt injected after startup")
+    create_prompt = create.add_mutually_exclusive_group(required=True)
+    create_prompt.add_argument("--prompt", help="Prompt injected after startup")
+    _add_text_file_argument(create_prompt, content="prompt text", dest="prompt_file")
     create.add_argument("--mode", required=True, choices=BOOTSTRAP_MODES)
     create.add_argument(
         "--session",
@@ -369,7 +374,9 @@ def _add_bootstrap_parsers(
     update.add_argument("id", metavar="<job-id>")
     update.add_argument("--agent", metavar="<agent>")
     update.add_argument("--name")
-    update.add_argument("--prompt")
+    update_prompt = update.add_mutually_exclusive_group()
+    update_prompt.add_argument("--prompt", help="Replace the prompt injected after startup")
+    _add_text_file_argument(update_prompt, content="prompt text", dest="prompt_file")
     update.add_argument("--mode", choices=BOOTSTRAP_MODES)
     session_group = update.add_mutually_exclusive_group()
     session_group.add_argument("--session", metavar="<session-id>")

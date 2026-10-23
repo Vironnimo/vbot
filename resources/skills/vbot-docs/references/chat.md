@@ -5,14 +5,14 @@ For a human-operated terminal conversation, use `vbot tui`. It requires interact
 `vbot chat` sends one message to an Agent Session, waits until the Run it starts ends, and prints the answer.
 
 ```bash
-vbot chat [<prompt>] [--agent <agent>] [-c | --session <session-id> | --project <project-id> | --workspace] [--model <provider/model-id>] [--thinking-effort <effort>] [--temperature <0.0-2.0>] [--top-p <0.0-1.0>] [--json]
+vbot chat [<prompt> | --file <path>] [--agent <agent>] [-c | --session <session-id> | --project <project-id> | --workspace] [--model <provider/model-id>] [--thinking-effort <effort>] [--temperature <0.0-2.0>] [--top-p <0.0-1.0>] [--json]
 ```
 
-- `<prompt>` is the message. With `-` or without `<prompt>`, the message is read from piped stdin; without `<prompt>` and without piped stdin the command fails with a usage error and sends nothing. Pipe or redirect long or multiline text: `vbot chat --agent reviewer - < notes.md`.
+- `<prompt>` is the message. For long or multiline text in a local file, use `vbot chat --agent reviewer --file notes.md`; `--file` cannot be combined with a positional message or `-`. With `-`, or without `<prompt>` and `--file`, the message is read from piped stdin; without a message source the command fails with a usage error and sends nothing.
 - `--agent` takes an Identity Agent id or `agent@project`; the default is `main`.
 - Session choice:
   - Neither `-c` nor `--session`: every call creates a fresh Session.
-  - `-c` (`--continue`): continues the Agent's most recently active conversation Session. Sub-Agent, reflection, Cron and Channel Sessions are never selected. Without a conversation Session the command fails before sending.
+  - `-c` (`--continue`): continues the Agent's most recently active conversation Session. Sub-Agent, reflection, Cron and Channel Sessions are never selected. Without a conversation Session it starts a fresh one.
   - `--session <session-id>`: continues that Session of the Agent. `vbot session list <agent>` lists Session ids.
   - A new Session works in one place for its whole life: by default the Agent's default Project (`vbot agent show` prints it as `default_project`), or its Workspace when it has none. `--project <project-id>` starts it in that registered Project instead, and `--workspace` in the Agent's Workspace. A continued Session keeps working where it started. An `agent@project` address always works in that Project and refuses both flags.
   - `-c`, `--session`, `--project` and `--workspace` cannot be combined.

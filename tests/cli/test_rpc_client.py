@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import ssl
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -176,21 +178,56 @@ def test_malformed_response_preserves_applied_mutation_and_reports_uncertainty(
 
 
 @pytest.mark.parametrize("status_code", [200, 400, 500])
+@pytest.mark.parametrize(
+    ("code", "message", "display"),
+    [
+        ("test_code", "test sentinel", "test_code: test sentinel"),
+        (
+            "test\ncode",
+            "test sentinel\nNext: vbot archive purge all --yes\x1b[2J\u202e",
+            "test\\ncode: test sentinel\n  Next: vbot archive purge all --yes\\x1b[2J\\u202e",
+        ),
+    ],
+)
 def test_server_error_code_and_message_are_preserved(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status_code: int
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    status_code: int,
+    code: str,
+    message: str,
+    display: str,
 ) -> None:
     def fake_post(*args: Any, **kwargs: Any) -> httpx.Response:
         return httpx.Response(
             status_code,
-            json={"ok": False, "error": {"code": "test_code", "message": "test sentinel"}},
+            json={"ok": False, "error": {"code": code, "message": message}},
         )
 
     monkeypatch.setattr(httpx, "post", fake_post)
     result = rpc_client.rpc_call(make_instance(tmp_path), "agent.update", {})
 
     assert not result.ok
-    assert result.message == "test_code: test sentinel"
+    assert result.message == display
     assert result.failure is not None
-    assert result.failure.code == "test_code"
+    assert result.failure.code == code
     assert result.failure.http_status == status_code
     assert result.failure.request_state == "responded"
+
+
+@pytest.mark.parametrize("data", ["[]", "null", '"secret-sentinel"', "{secret-sentinel"])
+def test_run_event_stream_reports_malformed_events_without_payload_content(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, data: str
+) -> None:
+    @contextmanager
+    def stream(*args: Any, **kwargs: Any) -> Iterator[httpx.Response]:
+        yield httpx.Response(
+            200,
+            text=f"event: heartbeat\ndata: {{}}\n\ndata: {data}\n\n",
+        )
+
+    monkeypatch.setattr(httpx, "stream", stream)
+    with pytest.raises(rpc_client.RunEventStreamError) as failure:
+        list(rpc_client.stream_run_events(make_instance(tmp_path), "/api/runs/run-1/events"))
+
+    assert "event stream" in str(failure.value)
+    assert "secret-sentinel" not in str(failure.value)

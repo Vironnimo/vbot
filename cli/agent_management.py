@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from difflib import get_close_matches
 from typing import Any
 
+from cli._recovery import format_command, target_options
 from cli.archive_management import (
     permanent_delete_refusal,
     sessions_text,
@@ -249,7 +250,7 @@ def agent_delete(
         return CommandResult(
             ok=False,
             message=permanent_delete_refusal(
-                f"agent {agent_id}", ("vbot", "agent", "delete", agent_id, "--permanent")
+                instance, f"agent {agent_id}", ("vbot", "agent", "delete", agent_id, "--permanent")
             ),
             instance=instance,
         )
@@ -268,12 +269,15 @@ def agent_delete(
     if data.get("purged") is True:
         lines = [f"deleted agent {deleted_id} permanently ({sessions})"]
     elif permanent:
-        clause, attention, ok = unfinished_permanent_delete(data, entry_id)
+        clause, attention, ok = unfinished_permanent_delete(instance, data, entry_id)
         lines = [f"archived agent {deleted_id} as archive entry {entry_id} ({sessions}), {clause}"]
     else:
+        command = format_command(
+            ("vbot", "archive", "restore", entry_id, *target_options(instance))
+        )
         lines = [
             f"archived agent {deleted_id} as archive entry {entry_id} ({sessions}); "
-            f"restore with: vbot archive restore {entry_id}"
+            f"restore with: {command}"
         ]
     workspace = data.get("external_workspace")
     if isinstance(workspace, str) and workspace:

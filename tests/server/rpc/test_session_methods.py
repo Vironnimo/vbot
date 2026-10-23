@@ -65,6 +65,11 @@ def _assert_store_untouched(sessions: FakeSessions) -> None:
     ("method", "params", "named"),
     [
         ("session.create", {"agent_id": "builder@bad project"}, "bad project"),
+        (
+            "session.create",
+            {"agent_id": "builder@vbot", "make_current": True},
+            "make_current",
+        ),
         ("session.get", {"agent_id": "builder", "session_id": "s1", "limit": 1}, "limit"),
         ("session.fork", {"agent_id": "builder", "session_id": "s1", "bogus": 1}, "bogus"),
         ("session.delete", {"agent_id": "builder", "session_id": "s1", "bogus": 1}, "bogus"),
@@ -198,7 +203,9 @@ async def test_session_create_resolves_the_address_and_publishes_a_scoped_change
 ) -> None:
     state, resolver, sessions = stub_session_state()
 
-    result = await rpc_result(state, "session.create", agent_id=agent_id, make_current=True)
+    result = await rpc_result(
+        state, "session.create", agent_id=agent_id, make_current=project_id is None
+    )
 
     assert result == {
         "agent_id": "builder",

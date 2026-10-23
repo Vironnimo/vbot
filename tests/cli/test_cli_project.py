@@ -469,7 +469,7 @@ def test_project_remove_archives_the_project_and_reports_side_effects(
     assert rpc.calls == [("project.rm", params)]
     lines = out.splitlines()
     for line in shown:
-        assert line in lines
+        assert any(actual.startswith(line) for actual in lines)
 
 
 @pytest.mark.parametrize(

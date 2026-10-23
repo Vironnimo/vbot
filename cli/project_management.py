@@ -19,6 +19,7 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from cli._recovery import format_command, target_options
 from cli.archive_management import (
     permanent_delete_refusal,
     sessions_text,
@@ -203,7 +204,9 @@ def project_remove(
             command += ("--copy-rooted-agent-files",)
         return CommandResult(
             ok=False,
-            message=permanent_delete_refusal(f"project {project_id}", (*command, "--permanent")),
+            message=permanent_delete_refusal(
+                instance, f"project {project_id}", (*command, "--permanent")
+            ),
             instance=instance,
         )
     params: dict[str, object] = {"project_id": project_id}
@@ -222,15 +225,18 @@ def project_remove(
     if payload.data.get("purged") is True:
         lines = [f"removed project {removed_id} permanently ({sessions}); the repo is untouched"]
     elif permanent:
-        clause, attention, ok = unfinished_permanent_delete(payload.data, entry_id)
+        clause, attention, ok = unfinished_permanent_delete(instance, payload.data, entry_id)
         lines = [
             f"removed project {removed_id} (archived as archive entry {entry_id}, {sessions}), "
             f"{clause}"
         ]
     else:
+        restore = format_command(
+            ("vbot", "archive", "restore", entry_id, *target_options(instance))
+        )
         lines = [
             f"removed project {removed_id} (archived as archive entry {entry_id}, {sessions}); "
-            f"restore with: vbot archive restore {entry_id}"
+            f"restore with: {restore}"
         ]
     if "affected_agent_ids" in payload.data:
         lines.append(

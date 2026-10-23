@@ -260,3 +260,27 @@ def test_task_model_option_commands_patch_one_option_and_print_the_saved_binding
         ("task_model.patch_options", {"task_type": "text_to_speech", **patch}),
     ]
     assert out.rstrip().endswith(f"options={json.dumps(saved_options, sort_keys=True)}")
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ("set", "text_to_speech", TTS_TARGET, "--option", "style", "2"),
+        ("set-option", "text_to_speech", "style", "2"),
+    ],
+)
+@pytest.mark.parametrize("failure", ["rpc-error", "missing-schema"])
+def test_task_model_option_changes_require_the_declared_types(
+    rpc: FakeRpc, run_cli: RunCli, argv: tuple[str, ...], failure: str
+) -> None:
+    if failure == "rpc-error":
+        rpc.fail("task_model.options", "schema_unavailable", "Option types are unavailable")
+    else:
+        rpc.reply("task_model.options", {})
+
+    code, out, _err = run_cli("task-model", *argv)
+
+    assert code == 1
+    assert rpc.methods == ["task_model.options"]
+    if failure == "rpc-error":
+        assert "schema_unavailable" in out

@@ -24,10 +24,11 @@ EARLY_TIMESTAMP = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 LATE_TIMESTAMP = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
 
 
-@pytest.mark.parametrize("repair", [False, True])
+@pytest.mark.parametrize("change", ["fields", "repair", "delegation"])
 def test_concurrent_updates_and_current_session_repairs_do_not_lose_state(
-    store: AgentStore, monkeypatch: pytest.MonkeyPatch, repair: bool
+    store: AgentStore, monkeypatch: pytest.MonkeyPatch, change: str
 ) -> None:
+    repair = change == "repair"
     agent = create_with_session(store, "coder", "Original")
     if repair:
         store._session_manager().delete(SessionAddress(None, "coder", agent.current_session_id))
@@ -52,16 +53,21 @@ def test_concurrent_updates_and_current_session_repairs_do_not_lose_state(
 
     def second():
         second_started.set()
+        if change == "delegation":
+            return store.update("coder", subagent_allow=["reviewer"])
         return store.get("coder") if repair else store.update("coder", model="other/model")
 
     monkeypatch.setattr(store, "_write_agent", write)
     monkeypatch.setattr(agents_module, "_validated_agent_data", read)
     with ThreadPoolExecutor(max_workers=2) as executor:
-        first = (
-            executor.submit(store.get, "coder")
-            if repair
-            else executor.submit(store.update, "coder", name="Changed")
-        )
+        if change == "delegation":
+            first = executor.submit(
+                store.update, "coder", tools={"bash": {"allowed_env": ["CURRENT_TOKEN"]}}
+            )
+        elif repair:
+            first = executor.submit(store.get, "coder")
+        else:
+            first = executor.submit(store.update, "coder", name="Changed")
         try:
             assert first_write.wait(5)
             following = executor.submit(second)
@@ -77,6 +83,13 @@ def test_concurrent_updates_and_current_session_repairs_do_not_lose_state(
         assert store._session_manager().list_summaries("coder") == []
         assert persisted(store, "coder")["current_session_id"] == ""
         assert store.get("coder").name == "Original"
+    elif change == "delegation":
+        expected = {
+            "bash": {"allowed_env": ["CURRENT_TOKEN"]},
+            "subagent": {"allowed_agents": ["reviewer"]},
+        }
+        assert store.get("coder").tools == expected
+        assert persisted(store, "coder")["tools"] == expected
     else:
         updated = store.get("coder")
         assert (updated.name, updated.model) == ("Changed", "other/model")

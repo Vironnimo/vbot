@@ -234,6 +234,11 @@ class StubAgents:
 
     def update(self, agent_id: str, **changes: Any) -> StubAgent:
         agent = self._get_raw(agent_id)
+        if "subagent_allow" in changes:
+            tools = agent.tools or {}
+            subagent = dict(tools.get("subagent", {}))
+            subagent["allowed_agents"] = changes.pop("subagent_allow")
+            changes["tools"] = {**tools, "subagent": subagent}
         if "name" in changes and not changes["name"]:
             changes["name"] = agent_id
         if "description" in changes:

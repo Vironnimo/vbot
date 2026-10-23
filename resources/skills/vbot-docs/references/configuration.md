@@ -23,14 +23,10 @@ vbot config raw                                   # diagnostic-only internal set
 Switch `web_search` to SearXNG in one atomic live change:
 
 ```bash
-vbot config patch \
-  --set web_search.provider searxng \
-  --set web_search.searxng.base_url https://searxng.example/
-vbot config get web_search.provider --details
-vbot config get web_search.searxng.base_url --details
+vbot config patch --set web_search.provider searxng --set web_search.searxng.base_url https://searxng.example/
 ```
 
-Both paths are read by the `web_search` Tool for each call, so this change needs no server restart.
+The result shows both saved values and their lifecycle. Both paths are read by the `web_search` Tool for each call, so this change needs no server restart.
 
 Other examples:
 

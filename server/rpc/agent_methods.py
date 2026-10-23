@@ -187,9 +187,10 @@ def _update_agent_record(state: Any, params: JsonObject) -> tuple[JsonObject, li
             **changes,
         )
         agent = update_result.agent
+        changed_field_names = {"tools" if field == "subagent_allow" else field for field in changes}
         changed_fields = sorted(
             field
-            for field in changes
+            for field in changed_field_names
             if getattr(previous_agent, field, None) != getattr(agent, field, None)
         )
         if update_result.copied_files or update_result.backed_up_files:
@@ -408,6 +409,14 @@ def _agent_changes(params: JsonObject, *, blocked: set[str], for_create: bool) -
         public_fields.add("workspace")
         public_fields.add("root_project_id")
         public_fields.add("copy_workspace_identity_files")
+        public_fields.add("subagent_allow")
+
+    if "subagent_allow" in params and "tools" in params:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "subagent_allow changes only the delegation allow-list; "
+            "send it without tools, which replaces all Tool settings. Nothing was changed.",
+        )
 
     rejected_fields = sorted(set(params) - public_fields - blocked)
     if rejected_fields:
@@ -442,6 +451,8 @@ def _ensure_agent_model_connections(state: Any, changes: JsonObject) -> None:
 
 
 def _validate_agent_field(key: str, value: Any) -> Any:
+    if key == "subagent_allow":
+        return _validate_string_list(key, value)
     if key in ("name", "description"):
         if value is not None and not isinstance(value, str):
             raise RpcError(

@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from cli._server_target import CommandResult, ServerInstance, is_loopback_target, is_url_target
+from cli.formatting import inline_text
 
 
 @dataclass(frozen=True)
@@ -166,13 +167,15 @@ def recovery_guidance(args: argparse.Namespace, result: CommandResult | None) ->
         inspection = ["archive", "list"]
     if code in {"archive_entry_busy", "archive_not_restorable"} and failure is not None:
         data = failure.data or {}
+        target = tuple(_target_options(args, result, "archive"))
         explanation = (
-            _archive_busy_guidance(data)
+            _archive_busy_guidance(data, target)
             if code == "archive_entry_busy"
-            else _not_restorable_guidance(data)
+            else _not_restorable_guidance(data, target)
         )
-        if isinstance(data.get("entry_id"), str):
-            inspection = ["archive", "show", data["entry_id"]]
+        entry_id = data.get("entry_id")
+        if isinstance(entry_id, str) and entry_id and inline_text(entry_id) == entry_id:
+            inspection = ["archive", "show", entry_id]
 
     sign_in: tuple[str, ...] | None = None
     if code in {"auth_required", "access_denied", "devices_unavailable"} and result is not None:
@@ -205,26 +208,26 @@ def recovery_guidance(args: argparse.Namespace, result: CommandResult | None) ->
     commands.append(("vbot", *args._command_path.split(), "--help"))
     # Values originate only from resource/target fields, never mutation payloads or credentials.
     safe_commands = tuple(
-        command
-        for command in commands
-        if all(not any(ord(char) < 32 for char in token) for token in command)
+        command for command in commands if all(inline_text(token) == token for token in command)
     )
     return RecoveryGuidance(explanation, safe_commands)
 
 
-def _archive_busy_guidance(data: Mapping[str, Any]) -> str:
+def _archive_busy_guidance(data: Mapping[str, Any], target: tuple[str, ...]) -> str:
     """What to do about an archive entry another operation holds, by what holds it."""
     if isinstance(data.get("problem"), str):
         return (
             "An interrupted restore of this entry cannot finish. Resolve the problem the "
             "message names, or move the folder it names out of the data directory, then "
-            "restart the server ('vbot server restart'): its next start finishes or undoes "
+            "restart that server on its own computer: its next start finishes or undoes "
             "the restore."
         )
     if data.get("state") == "purging":
+        command = _purge_command(data, target)
         return (
             "This entry is being deleted permanently and will not become restorable. vBot "
-            f"finishes the deletion in the background; '{_purge_command(data)}' finishes it now."
+            "finishes the deletion in the background"
+            + (f"; '{command}' finishes it now." if command else ".")
         )
     return _CODE_GUIDANCE["archive_entry_busy"]
 
@@ -233,25 +236,32 @@ def _archive_busy_guidance(data: Mapping[str, Any]) -> str:
 _FINAL_BLOCKERS = ("kind_not_restorable", "older_format", "payload_missing")
 
 
-def _not_restorable_guidance(data: Mapping[str, Any]) -> str:
+def _not_restorable_guidance(data: Mapping[str, Any], target: tuple[str, ...]) -> str:
     """Resolve the blockers; offer deleting the entry only when none can be resolved."""
-    codes = {
-        blocker.get("code") for blocker in data.get("blockers") or () if isinstance(blocker, dict)
-    }
+    blockers = data.get("blockers")
+    codes = (
+        {
+            blocker["code"]
+            for blocker in blockers
+            if isinstance(blocker, dict) and isinstance(blocker.get("code"), str)
+        }
+        if isinstance(blockers, list)
+        else set()
+    )
     final = [code for code in _FINAL_BLOCKERS if code in codes]
     if not final:
         return _CODE_GUIDANCE["archive_not_restorable"]
-    return (
-        f"This entry can never be restored ({', '.join(final)}). If it is no longer needed, "
-        f"'{_purge_command(data)}' deletes it permanently."
+    command = _purge_command(data, target)
+    return f"This entry can never be restored ({', '.join(final)})." + (
+        f" If it is no longer needed, '{command}' deletes it permanently." if command else ""
     )
 
 
-def _purge_command(data: Mapping[str, Any]) -> str:
+def _purge_command(data: Mapping[str, Any], target: tuple[str, ...]) -> str | None:
     entry_id = data.get("entry_id")
-    if not isinstance(entry_id, str):
-        return "vbot archive purge <entry-id> --yes"
-    return format_command(("vbot", "archive", "purge", entry_id, "--yes"))
+    if not isinstance(entry_id, str) or not entry_id or inline_text(entry_id) != entry_id:
+        return None
+    return format_command(("vbot", "archive", "purge", entry_id, "--yes", *target))
 
 
 def _inspection(args: argparse.Namespace) -> list[str] | None:

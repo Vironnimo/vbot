@@ -605,6 +605,20 @@ def _json_array_argument(raw: str) -> list[object]:
     return value
 
 
+def _add_text_file_argument(
+    parser: argparse.ArgumentParser | argparse._MutuallyExclusiveGroup,
+    *,
+    content: str,
+    dest: str = "content_file",
+) -> None:
+    parser.add_argument(
+        "--file",
+        dest=dest,
+        metavar="<path>",
+        help=f"Read {content} from UTF-8 (with or without BOM) or UTF-16 with BOM.",
+    )
+
+
 def _add_command_parser(
     subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
     command: str,

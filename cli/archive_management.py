@@ -11,7 +11,7 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from cli._recovery import format_command
+from cli._recovery import format_command, target_options
 from cli.formatting import record_fields
 from cli.formatting import string_or_default as _string_or_default
 from cli.rpc_client import RpcPayload
@@ -88,6 +88,7 @@ def archive_list(
             *(("--limit", str(limit)) if limit != DEFAULT_LIST_LIMIT else ()),
             "--cursor",
             json.dumps(cursor, ensure_ascii=False, separators=(",", ":")),
+            *target_options(instance),
         )
         lines.append(f"next page: {format_command(command)}")
     attention = (
@@ -107,7 +108,7 @@ def archive_show(instance: ServerInstance, entry_id: str) -> CommandResult:
     payload = _rpc_call(instance, "archive.show", {"entry_id": entry_id})
     if not payload.ok:
         return payload.to_command_result()
-    return CommandResult(ok=True, message=_format_detail(payload.data), instance=instance)
+    return CommandResult(ok=True, message=_format_detail(payload.data, instance), instance=instance)
 
 
 def archive_restore(
@@ -169,7 +170,13 @@ def archive_purge(
     if not confirm:
         if all_matching:
             listing = format_command(
-                ("vbot", "archive", "list", *_filter_options(kind, agent_id, project_id))
+                (
+                    "vbot",
+                    "archive",
+                    "list",
+                    *_filter_options(kind, agent_id, project_id),
+                    *target_options(instance),
+                )
             )
             what = f"every {'matching ' if len(selection) > 1 else ''}archive entry"
             check = f"; '{listing}' shows them"
@@ -180,7 +187,9 @@ def archive_purge(
                 else f"{len(entry_ids)} archive entries"
             )
             check = ""
-        command = format_command(("vbot", "archive", "purge", *selection, "--yes"))
+        command = format_command(
+            ("vbot", "archive", "purge", *selection, "--yes", *target_options(instance))
+        )
         return CommandResult(
             ok=False,
             message=(
@@ -251,23 +260,29 @@ def archive_purge(
     if pending:
         pending_ids = [str(entry.get("entry_id")) for entry in pending]
         if len(pending) == 1:
-            attention.append(pending_purge_attention(pending_ids[0], str(pending[0].get("reason"))))
+            attention.append(
+                pending_purge_attention(instance, pending_ids[0], str(pending[0].get("reason")))
+            )
         else:
             retry = selection if all_matching else tuple(pending_ids)
-            command = format_command(("vbot", "archive", "purge", *retry, "--yes"))
+            command = format_command(
+                ("vbot", "archive", "purge", *retry, "--yes", *target_options(instance))
+            )
             attention.append(
                 f"deletion of {len(pending)} archive entries is pending; vBot retries them "
                 f"automatically, or run '{command}' to continue them now"
             )
     attention.extend(
         skipped_purge_attention(
-            str(entry.get("entry_id")), str(entry.get("reason")), entry.get("state")
+            instance, str(entry.get("entry_id")), str(entry.get("reason")), entry.get("state")
         )
         for entry in skipped
     )
     if kept:
         kept_ids = [str(entry.get("entry_id")) for entry in kept]
-        command = format_command(("vbot", "archive", "purge", *kept_ids, "--yes"))
+        command = format_command(
+            ("vbot", "archive", "purge", *kept_ids, "--yes", *target_options(instance))
+        )
         what = (
             f"archive entry {kept_ids[0]}, which may hold"
             if len(kept_ids) == 1
@@ -295,31 +310,42 @@ def sessions_text(count: object) -> str:
     return f"{count} session" if count == 1 else f"{count} sessions"
 
 
-def pending_purge_attention(entry_id: str, reason: str | None = None) -> str:
+def pending_purge_attention(
+    instance: ServerInstance, entry_id: str, reason: str | None = None
+) -> str:
     """The attention line for an entry whose permanent deletion began and did not finish."""
     detail = f" ({reason})" if reason else ""
+    command = format_command(
+        ("vbot", "archive", "purge", entry_id, "--yes", *target_options(instance))
+    )
     return (
         f"deletion of {entry_id} is pending{detail}; vBot retries it automatically, "
-        f"or run 'vbot archive purge {entry_id} --yes' to continue it now"
+        f"or run '{command}' to continue it now"
     )
 
 
-def skipped_purge_attention(entry_id: str, reason: str, state: object = None) -> str:
+def skipped_purge_attention(
+    instance: ServerInstance, entry_id: str, reason: str, state: object = None
+) -> str:
     """The attention line for an entry a purge left unchanged; nothing retries it."""
     if reason == "busy":
         held = f" ({state})" if isinstance(state, str) and state else ""
+        command = format_command(("vbot", "archive", "show", entry_id, *target_options(instance)))
         return (
             f"{entry_id} was not deleted: another operation, such as a restore, holds "
-            f"it{held}; 'vbot archive show {entry_id}' shows its state"
+            f"it{held}; '{command}' shows its state"
         )
+    command = format_command(
+        ("vbot", "archive", "purge", entry_id, "--yes", *target_options(instance))
+    )
     return (
         f"{entry_id} was not deleted ({reason}) and stays in the archive unchanged; run "
-        f"'vbot archive purge {entry_id} --yes' to try again"
+        f"'{command}' to try again"
     )
 
 
 def unfinished_permanent_delete(
-    data: Mapping[str, Any], entry_id: str
+    instance: ServerInstance, data: Mapping[str, Any], entry_id: str
 ) -> tuple[str, tuple[str, ...], bool]:
     """How a permanent delete ends whose purge did not delete the entry.
 
@@ -331,7 +357,7 @@ def unfinished_permanent_delete(
         detail = reason if isinstance(reason, str) else None
         return (
             "but deleting it permanently did not finish",
-            (pending_purge_attention(entry_id, detail),),
+            (pending_purge_attention(instance, entry_id, detail),),
             False,
         )
     if reason == "gone":
@@ -346,16 +372,17 @@ def unfinished_permanent_delete(
         )
     return (
         "but it was not deleted permanently",
-        (skipped_purge_attention(entry_id, str(reason)),),
+        (skipped_purge_attention(instance, entry_id, str(reason)),),
         False,
     )
 
 
-def permanent_delete_refusal(what: str, command: Sequence[str]) -> str:
+def permanent_delete_refusal(instance: ServerInstance, what: str, command: Sequence[str]) -> str:
     """Refuse a permanent deletion without ``--yes``, naming the confirmed command."""
     return (
         f"refusing to delete {what} permanently without confirmation; re-run with --yes: "
-        f"{format_command((*command, '--yes'))} (without --permanent it moves to the archive)"
+        f"{format_command((*command, '--yes', *target_options(instance)))} "
+        "(without --permanent it moves to the archive)"
     )
 
 
@@ -429,7 +456,7 @@ def _format_entry_row(entry: object) -> str:
     return record_fields(fields)
 
 
-def _format_detail(data: Mapping[str, Any]) -> str:
+def _format_detail(data: Mapping[str, Any], instance: ServerInstance) -> str:
     entry = _mapping(data.get("entry"))
     entry_id = entry.get("entry_id")
     kind = entry.get("kind")
@@ -482,7 +509,7 @@ def _format_detail(data: Mapping[str, Any]) -> str:
         )
         lines.append(f"- {tree.get('role')}: {tree.get('path')}{source}{user_folder}")
     lines.extend(_detail_lines(data.get("details")))
-    lines.extend(_restore_lines(data.get("restore"), kind))
+    lines.extend(_restore_lines(data.get("restore"), kind, instance))
     return "\n".join(lines)
 
 
@@ -513,27 +540,30 @@ def _detail_lines(details: object) -> list[str]:
     return lines
 
 
-def _restore_lines(restore: object, kind: object) -> list[str]:
+def _restore_lines(restore: object, kind: object, instance: ServerInstance) -> list[str]:
     if not isinstance(restore, dict):
         return []
     blockers = [blocker for blocker in restore.get("blockers") or () if isinstance(blocker, dict)]
     warnings = [warning for warning in restore.get("warnings") or () if isinstance(warning, dict)]
     lines = [f"restore: {'possible' if restore.get('possible') is True else 'blocked'}"]
-    lines.extend(_blocker_line(blocker, kind) for blocker in blockers)
+    lines.extend(_blocker_line(blocker, kind, instance) for blocker in blockers)
     lines.extend(
         f"- warning {warning.get('code')}: {warning.get('message')}" for warning in warnings
     )
     return lines
 
 
-def _blocker_line(blocker: Mapping[str, Any], kind: object) -> str:
+def _blocker_line(blocker: Mapping[str, Any], kind: object, instance: ServerInstance) -> str:
     code = blocker.get("code")
     hint = ""
     if code in _CONFLICT_CODES:
         placeholder = _NEW_ID_PLACEHOLDERS.get(str(kind), "<new-id>")
         hint = f"; restore it under a new id with --as {placeholder}"
     elif code == "scope_missing" and isinstance(blocker.get("entry_id"), str):
-        hint = f" (vbot archive restore {blocker['entry_id']})"
+        command = format_command(
+            ("vbot", "archive", "restore", blocker["entry_id"], *target_options(instance))
+        )
+        hint = f" ({command})"
     return f"- {code}: {blocker.get('message')}{hint}"
 
 
@@ -548,16 +578,27 @@ def _restore_failure(payload: RpcPayload, entry_id: str) -> CommandResult:
             if isinstance(conflict, dict)
         )
         placeholder = _NEW_ID_PLACEHOLDERS.get(str(data.get("kind")), "<new-id>")
+        command = format_command(
+            (
+                "vbot",
+                "archive",
+                "restore",
+                entry_id,
+                "--as",
+                placeholder,
+                *target_options(payload.instance),
+            )
+        )
         message = (
             f"{code}: cannot restore archive entry {entry_id}: {reasons}; restore it under "
-            f"a new id: vbot archive restore {entry_id} --as {placeholder}"
+            f"a new id: {command}"
         )
     elif code == "archive_not_restorable" and isinstance(data.get("blockers"), list):
         message = "\n".join(
             [
                 f"{code}: cannot restore archive entry {entry_id}:",
                 *(
-                    _blocker_line(blocker, None)
+                    _blocker_line(blocker, None, payload.instance)
                     for blocker in data["blockers"]
                     if isinstance(blocker, dict)
                 ),
