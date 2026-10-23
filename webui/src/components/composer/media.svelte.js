@@ -545,12 +545,6 @@ export function createComposerMedia(context) {
     set attachmentToastMessage(value) {
       attachmentToastMessage = value;
     },
-    get transcriptionProgress() {
-      return transcriptionProgress;
-    },
-    set transcriptionProgress(value) {
-      transcriptionProgress = value;
-    },
     get voiceStatus() {
       return voiceStatus;
     },

@@ -614,22 +614,11 @@
       onHover={picker.moveActiveIndex}
     />
   {/if}
-  {#if media.voiceBusy}
-    <div
-      class="composer-voice-status"
-      role="status"
-      aria-live="polite"
-      aria-atomic="true"
-    >
-      <span class="voice-spinner" aria-hidden="true"></span>
-      <span>{media.voiceStatus}</span>
-      {#if media.transcriptionProgress.elapsed_seconds > 0}
-        <span aria-hidden="true"
-          >{media.transcriptionProgress.elapsed_seconds}s</span
-        >
-      {/if}
-    </div>
-  {/if}
+  <!-- Speech progress shows in the placeholder and on the microphone; this
+       region only announces it. -->
+  <div class="composer-voice-status" role="status" aria-atomic="true">
+    {media.voiceBusy ? media.voiceStatus : ''}
+  </div>
   <div
     class="input-wrap"
     role="group"
@@ -658,7 +647,9 @@
         onpaste={media.handlePaste}
         onclick={handleSelection}
         onkeyup={handleSelection}
-        placeholder={t('chat.composerPlaceholder')}
+        placeholder={media.voiceBusy
+          ? media.voiceStatus
+          : t('chat.composerPlaceholder')}
         rows="1"></textarea>
     </div>
     <ContextUsageRing

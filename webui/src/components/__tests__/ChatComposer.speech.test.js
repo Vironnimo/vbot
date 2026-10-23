@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest';
+import { t } from '../../lib/i18n.js';
 
 import {
   buttonLabelled,
@@ -104,7 +105,7 @@ describe('ChatComposer speech input', () => {
     await settle();
     expect(composerInput().value).toBe('Typed introduction\nhello world');
     await vi.waitFor(() =>
-      expect(document.querySelector('.composer-voice-status')).toBeNull(),
+      expect(composerInput().placeholder).toBe(t('chat.composerPlaceholder')),
     );
     expect(buttonLabelled('chat.sendMessage').disabled).toBe(false);
     submitComposer();
@@ -166,16 +167,23 @@ describe('ChatComposer speech input', () => {
         expect(
           microphone.parentElement.classList.contains('tooltip-anchor'),
         ).toBe(true);
+        expect(composerInput().placeholder).toBe(
+          t(`chat.voice.progress.${phase}`),
+        );
         expect(
-          document.querySelector('.composer-voice-status[role="status"]'),
-        ).toBeTruthy();
+          document.querySelector('.composer-voice-status[role="status"]')
+            .textContent,
+        ).toContain(t(`chat.voice.progress.${phase}`));
       }
 
       if (fails) transcription.fail(new Error('test-owned failure'));
       else transcription.complete({ text: 'test-owned transcript' });
       await vi.waitFor(() => expect(startButton()).not.toBeNull());
       expect(startButton().disabled).toBe(false);
-      expect(document.querySelector('.composer-voice-status')).toBeNull();
+      expect(composerInput().placeholder).toBe(t('chat.composerPlaceholder'));
+      expect(
+        document.querySelector('.composer-voice-status').textContent.trim(),
+      ).toBe('');
       expect(composerInput().value).toBe(fails ? '' : 'test-owned transcript');
       expect(recorder.cancel).toHaveBeenCalledTimes(fails ? 1 : 0);
     },

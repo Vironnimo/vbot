@@ -146,9 +146,10 @@ A finished review row with an `outcome` adds one quiet line (user requirement: b
 - Chat microphone uploads opt into the speech endpoint's NDJSON progress stream.
   `api.js` delivers phase snapshots before the terminal transcript and rejects an
   interrupted stream or missing heartbeats without automatically resubmitting
-  audio. `ChatComposer` shows the server phase and elapsed time beside a spinner
-  above the composer; its microphone tooltip uses a wrapper so it remains
-  accessible while the button is disabled. Completion and errors clear busy
+  audio. `ChatComposer` adds no row for it (user decision 2026-10-23): the
+  microphone button spins, the server phase replaces the input placeholder and
+  the microphone tooltip, and a visually hidden status region announces it; the
+  tooltip uses a wrapper so it remains accessible while the button is disabled. Completion and errors clear busy
   state; teardown invalidates late progress/results. Coverage: composer/API tests.
 - Composer focus follows deliberate navigation only (New Session, mobile included; user-driven selections after destination history settles, desktop only; mobile stays in reading mode with `preventScroll`). Async completion keeps a one-use focus intent in `layout.svelte.js`: newer navigation, later pointer/keyboard input or focus, and loss of active/input ownership retire it, including an away-and-back visit to the same Session. Sends and confirmed deletions capture before their RPC as well as any later History load; the matching deletion event preserves the initiating intent without granting other areas focus. Passive changes (reconnects, invalidations, mount restoration) never steal focus.
 

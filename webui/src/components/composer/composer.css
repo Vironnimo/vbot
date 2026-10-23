@@ -98,33 +98,14 @@
 }
 
 .input-area .composer-voice-status {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 12px;
-  color: var(--text-med);
-  font-size: var(--fs-label-sm);
-}
-
-.input-area .voice-spinner {
-  width: 12px;
-  height: 12px;
-  border: 2px solid currentColor;
-  border-right-color: transparent;
-  border-radius: 50%;
-  animation: voice-spin 1s linear infinite;
-}
-
-@keyframes voice-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .input-area .voice-spinner {
-    animation: none;
-  }
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  border: 0;
 }
 
 .input-area .composer-toast {
