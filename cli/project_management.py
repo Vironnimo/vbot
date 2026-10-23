@@ -50,6 +50,7 @@ PROJECT_SET_FLAGS = (
     "--sources",
     "--model-mappings",
     "--auto-load",
+    "--context-commands",
     "--auto-instructions",
     "--folder-instructions",
     "--allowed-tools",
@@ -348,6 +349,9 @@ def _project_config_lines(project: object) -> list[str]:
         f"  auto_load: {_format_string_list(project.get('auto_load'))}",
         f"  folder_instructions: {_switch_text(project.get('folder_instructions'))}",
     ]
+    if project.get("context_commands"):
+        commands = json.dumps(project["context_commands"], ensure_ascii=False)
+        lines.append(f"  context_commands: {commands}")
     status = project.get("instruction_status")
     missing = status.get("missing") if isinstance(status, dict) else None
     if missing:

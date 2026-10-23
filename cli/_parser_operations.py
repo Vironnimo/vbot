@@ -81,6 +81,12 @@ def _add_cron_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
     _add_cron_session_argument(create_parser)
     _add_cron_delivery_arguments(create_parser, update=False)
     create_parser.add_argument("--watch", metavar="<command-or-url>", help=_CRON_WATCH_HELP)
+    create_parser.add_argument(
+        "--watch-runs",
+        choices=_CRON_WATCH_RUNS,
+        help="When a job with --watch runs: on_change only when the output changed, always at "
+        "every due time with the output and the change. Omit for on_change",
+    )
 
     update_parser = _add_command_parser(
         cron_subparsers,
@@ -126,6 +132,12 @@ def _add_cron_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
         "--clear-watch",
         action="store_true",
         help="Remove the watch, so every due time starts a Run",
+    )
+    update_parser.add_argument(
+        "--watch-runs",
+        choices=_CRON_WATCH_RUNS,
+        help="When the watched job runs: on_change only when the output changed, always at "
+        "every due time with the output and the change. Omit to keep the current mode",
     )
 
     for command in ("delete", "enable", "disable"):
@@ -189,10 +201,12 @@ def _add_cron_schedule_arguments(group: argparse._MutuallyExclusiveGroup) -> Non
 
 _CRON_WATCH_HELP = (
     "Before each Run, run this command or read this page, and start the Run only when its "
-    "output changed since the last check; the Run gets the change. An http:// or https:// "
+    "output changed since the last check (see --watch-runs); the Run gets the change. An "
+    "http:// or https:// "
     "address is read as a page; anything else runs in the host shell (PowerShell on Windows, "
     "bash elsewhere). Only for --cron and --every jobs. Omit for none"
 )
+_CRON_WATCH_RUNS = ("on_change", "always")
 
 
 def _add_cron_delivery_arguments(parser: argparse.ArgumentParser, *, update: bool) -> None:

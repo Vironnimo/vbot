@@ -64,6 +64,7 @@ describe('ProjectsView list and selection', () => {
       'Agent defaults',
       'Team',
       'Instructions',
+      'Commands at Session start',
       'Tools',
       'Skills',
     ]);

@@ -679,11 +679,14 @@ export default Object.freeze({
   'cron.webhook.droppedMany': '{count} dropped unseen',
   'cron.sections.watch': 'Change check',
   'cron.sections.watchSubtitle':
-    'Check a command or a web page before each Run. The Run starts only when the output changed since the last check, and it gets the changes. A failed check counts as a failed Run.',
+    'Check a command or a web page before each Run. The Run gets the output and the changes since the last check; it starts only when the output changed, or at every due time. A failed check counts as a failed Run.',
   'cron.watchKind.none': 'Nothing, run every time',
   'cron.watchKind.command': 'A command',
   'cron.watchKind.url': 'A web page',
-  'cron.form.watch': 'Run only when this changes',
+  'cron.form.watch': 'Check before each Run',
+  'cron.form.watchRuns': 'Start a Run',
+  'cron.watchRuns.onChange': 'Only when the output changed',
+  'cron.watchRuns.always': 'At every due time',
   'cron.form.watchCommand': 'Command',
   'cron.form.watchCommandPlaceholder': 'git log -1 --oneline',
   'cron.form.watchCommandHelp':

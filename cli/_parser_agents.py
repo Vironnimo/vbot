@@ -300,6 +300,16 @@ def _add_agent_change_arguments(
             action="store_true",
             help="Clear the Agent Policy override and inherit the global policy",
         )
+        parser.add_argument(
+            "--context-commands",
+            nargs="*",
+            metavar="<command>",
+            help=(
+                "Replace the commands that run in the Workspace when one of the agent's "
+                "Sessions starts there; their output reaches the agent with its first "
+                "message. Quote each command; without values it clears the list"
+            ),
+        )
     if include_location:
         parser.add_argument(
             "--workspace",
@@ -507,6 +517,14 @@ def _add_project_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         nargs="*",
         metavar="<file>",
         help="Replace the list of additional files loaded after the main instruction file; "
+        "without values it clears the list",
+    )
+    set_parser.add_argument(
+        "--context-commands",
+        nargs="*",
+        metavar="<command>",
+        help="Replace the commands that run in the Project folder when a Session starts in "
+        "it; their output reaches the Agent with its first message. Quote each command; "
         "without values it clears the list",
     )
     _add_project_instruction_arguments(set_parser, default=None)

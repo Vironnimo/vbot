@@ -109,6 +109,7 @@ def build_chat_loop(runtime: Any, **kwargs: Any) -> ChatLoop:
         deliver_background_completions=deliver_background_completions,
         usage_recorder=getattr(runtime, "usage_recorder", None),
         scratch_areas=getattr(runtime, "scratch_areas", None),
+        get_context_command_runner=lambda: getattr(runtime, "context_command_runner", None),
         subagent_reply_to_user=getattr(runtime, "subagent_reply_to_user", None),
         subagent_tool_usable=getattr(runtime, "subagent_tool_usable", None),
     )
@@ -179,6 +180,7 @@ class StubAgent:
     permission_rules: PermissionRules | None = None
     permission_ceiling: PermissionCeiling | None = None
     rule_files: tuple[Path, ...] = ()
+    context_commands: tuple[str, ...] = ()
 
     @property
     def tool_access(self) -> ToolAccess:

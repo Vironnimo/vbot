@@ -489,6 +489,10 @@ export default Object.freeze({
   'agents.form.memoryPromptMode': 'Memory',
   'agents.form.memoryModeHelp':
     'Which memory files are pinned into the System Prompt. Off also removes the memory Tool; while Memory is on, turning the memory Tool off in Tool access keeps these notes visible but makes Memory read-only.',
+  'agents.form.contextCommands': 'Commands at Session start',
+  'agents.form.contextCommandsHelp':
+    "One command per line. When a new Session of this Agent starts in its Workspace, they run there in the Agents' shell, and the Agent gets their output with its first message. A Session in a Project runs that Project's commands instead.",
+  'agents.form.contextCommandsPlaceholder': 'git status --short',
   'agents.form.fallbackModelsHelp':
     'Tried in order when the primary model fails or is unavailable. The first entry has the highest priority.',
   'agents.form.fallbackModelInherit': 'Inherit global default',
@@ -791,6 +795,10 @@ export default Object.freeze({
   'projects.instructions.foldersHelp':
     'An agent working in a subfolder receives its AGENTS.md, CLAUDE.md or GEMINI.md.',
   'projects.instructions.additional': 'Additional files',
+  'projects.contextCommands.title': 'Commands at Session start',
+  'projects.contextCommands.help':
+    "One command per line. When a new Session starts in this Project, they run in the Project folder in the Agents' shell, and the Agent gets their output with its first message. At most 10 commands, 60 seconds each.",
+  'projects.contextCommands.placeholder': 'git status --short',
   'projects.instructions.missing': 'Not found',
   'projects.detail.sectionTeam': 'Team',
   'projects.detail.teamInfo':

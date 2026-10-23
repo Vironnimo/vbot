@@ -226,7 +226,7 @@ class CronScheduler:
                     continue
 
             if current.watch is not None:
-                await self._owner._watcher.fire(current)
+                await self._owner._watcher.fire(current, owed)
             else:
                 await self._owner._execution._trigger_job_run(current, owed=owed)
             if job.id in self._owner._pending_restarts:

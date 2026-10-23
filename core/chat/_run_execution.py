@@ -7,8 +7,17 @@ import time
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from core.chat._context_commands import (
+    CONTEXT_COMMAND_RUN_KINDS,
+    CONTEXT_COMMANDS_META_KEY,
+    ContextCommands,
+    configured_commands,
+    run_context_commands,
+    starts_session,
+)
 from core.chat._message_history import (
     _add_context_note,
     _append_input_origin_note,
@@ -33,6 +42,7 @@ from core.chat._scratch_context import (
 )
 from core.chat._skill_activation import _activate_triggered_skills
 from core.chat._step_outcomes import OUTPUT_INTEGRITY_RECOVERY_NOTE
+from core.chat._tool_context import _agent_workspace
 from core.chat._workers import _CHAT_TRANSFORM_WORKERS
 from core.chat.content_blocks import masked_content
 from core.chat.errors import (
@@ -285,7 +295,10 @@ class RunExecution:
             start_line_extras,
         )
 
+        context_commands: asyncio.Task[ChatMessage] | None = None
         try:
+            # The first Run of a Session runs its context commands while it persists its input.
+            context_commands = await self._start_context_commands(context)
             session.begin_defer_notes()
             # Commits with the first write that persists the Skill note (or in its place).
             record_seen_skills: SeenSkillsUpdate | None = None
@@ -461,6 +474,11 @@ class RunExecution:
                             await context.session_snapshot.flush_deferred_notes(session)
                     finally:
                         await session.flush_deferred_notes_async()
+            # A Stop during speech-to-text ends the Run here; the commands end with it.
+            run.raise_if_cancelled()
+            if context_commands is not None:
+                pending, context_commands = context_commands, None
+                await self._persist_context_commands(context, pending)
             run.raise_if_cancelled()
             request_build_started: float | None = time.perf_counter()
             try:
@@ -522,6 +540,10 @@ class RunExecution:
                     _LOGGER.warning("Failed to persist error for run %s", run.id, exc_info=True)
             raise
         finally:
+            if context_commands is not None:
+                # Ends the commands still running; their processes end with them.
+                context_commands.cancel()
+                await asyncio.gather(context_commands, return_exceptions=True)
             self._register_run_end(context)
             await settle_before_cancelling(self._finish_run(context))
 
@@ -625,6 +647,94 @@ class RunExecution:
                     )
 
             run.add_completion_observer(notify_reflection)
+
+    async def _start_context_commands(
+        self, context: _RunExecutionContext
+    ) -> asyncio.Task[ChatMessage] | None:
+        """Start the context commands of a Session's first Run; ``None`` when it has none."""
+        get_runner = self._dependencies.get_context_command_runner
+        runner = get_runner() if get_runner is not None else None
+        run, request = context.run, context.request
+        if (
+            runner is None
+            or run.run_kind not in CONTEXT_COMMAND_RUN_KINDS
+            or request.temporary_binding is not None
+            or request.temporary_parent_binding is not None
+            or run.execution_owner is not None
+            or request.edit_message_id is not None
+            or request.input_already_persisted
+            or not starts_session(context.session_snapshot.active_messages)
+        ):
+            return None
+        try:
+            sessions = self._dependencies.sessions
+            ran = await sessions.metadata_value_async(
+                context.session.address, CONTEXT_COMMANDS_META_KEY
+            )
+            planned = (
+                None
+                if ran is not None
+                else await _CHAT_TRANSFORM_WORKERS.run(self._configured_context_commands, context)
+            )
+        except Exception as error:
+            # The commands only add context; the Agent's requested work goes on.
+            _LOGGER.warning(
+                "Skipped context commands (agent=%s session=%s error=%s)",
+                run.agent_id,
+                run.session_id,
+                type(error).__name__,
+            )
+            return None
+        if planned is None:
+            return None
+        return asyncio.create_task(
+            run_context_commands(
+                runner, planned, context.permissions, self._dependencies.secret_masker
+            ),
+            name=f"context-commands-{run.id}",
+        )
+
+    def _configured_context_commands(self, context: _RunExecutionContext) -> ContextCommands | None:
+        """The commands of the Run's Working Project or Identity Agent. Blocking."""
+        working_project_id = context.run.working_project_id
+        return configured_commands(
+            project=(
+                self._dependencies.projects.get(working_project_id)
+                if working_project_id is not None
+                else None
+            ),
+            project_cwd=context.project_cwd,
+            agent=context.agent,
+            workspace=_agent_workspace(context.agent, Path(self._dependencies.storage.data_dir)),
+        )
+
+    async def _persist_context_commands(
+        self, context: _RunExecutionContext, pending: asyncio.Task[ChatMessage]
+    ) -> None:
+        """Persist the outputs of the context commands as one note after the input."""
+        session = context.session
+        sessions = self._dependencies.sessions
+        try:
+            note = await pending
+            async with sessions.write_lock(session.address):
+                await context.session_snapshot.refresh(session)
+                await context.session_snapshot.append(session, [note])
+                await sessions.run_async(
+                    sessions.mutate_metadata,
+                    session.address,
+                    lambda metadata: metadata.update(
+                        {CONTEXT_COMMANDS_META_KEY: {"note_id": note.id}}
+                    ),
+                )
+        except RunInterruptedError:
+            raise
+        except Exception as error:
+            _LOGGER.warning(
+                "Context command note not saved (agent=%s session=%s error=%s)",
+                context.run.agent_id,
+                context.run.session_id,
+                type(error).__name__,
+            )
 
     async def _announce_scratch(self, context: _RunExecutionContext) -> bool:
         """Tell a file-capable Run about its folder before its first Model request."""

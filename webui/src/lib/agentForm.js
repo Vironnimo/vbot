@@ -10,7 +10,7 @@ import {
   normalizePermissionRules,
   permissionRulesComplete,
 } from './permissionRules.js';
-import { asText, isPlainObject } from './values.js';
+import { asText, distinctLines, isPlainObject } from './values.js';
 
 export const AGENT_FORM_MODE_CREATE = 'create';
 export const AGENT_FORM_MODE_EDIT = 'edit';
@@ -62,6 +62,7 @@ const EDITABLE_AGENT_FIELDS = Object.freeze([
   'tool_access',
   'allowed_skills',
   'excluded_skills',
+  'context_commands',
   'tools',
   'custom_system_prompt_enabled',
   'compaction_policy',
@@ -99,6 +100,8 @@ export function createAgentFormValues(agent = {}) {
       DEFAULT_AGENT_ALLOWED_SKILLS,
     ),
     excluded_skills: normalizeArrayList(agent.excluded_skills, []),
+    // Edited as text, one command per line.
+    context_commands: normalizeArrayList(agent.context_commands, []).join('\n'),
     tools: normalizeAgentTools(agent.tools),
     custom_system_prompt_enabled: Boolean(agent.custom_system_prompt_enabled),
     compaction_policy: isPlainObject(raw.compaction_policy)
@@ -298,6 +301,7 @@ function normalizeValues(values = {}) {
     tool_access: normalizeToolAccess(values.tool_access),
     allowed_skills: normalizeArrayList(values.allowed_skills),
     excluded_skills: normalizeArrayList(values.excluded_skills, []),
+    context_commands: distinctLines(values.context_commands),
     tools: normalizeAgentTools(values.tools),
     custom_system_prompt_enabled: Boolean(values.custom_system_prompt_enabled),
     compaction_policy: isPlainObject(values.compaction_policy)
@@ -391,6 +395,8 @@ function buildAgentPayload(normalized, sampling, options = {}) {
   if (options.includeWorkspace) {
     payload.workspace = normalized.workspace;
     payload.root_project_id = normalized.root_project_id;
+    // agent.create takes no commands; an Agent gets them once it exists.
+    payload.context_commands = normalized.context_commands;
   }
 
   if (options.includeTools || Object.keys(normalized.tools).length > 0) {

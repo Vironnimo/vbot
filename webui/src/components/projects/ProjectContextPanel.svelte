@@ -7,6 +7,7 @@
   import PathField from '../ui/PathField.svelte';
   import { tooltip } from '$lib/tooltip.js';
   import Toggle from '../ui/Toggle.svelte';
+  import TextArea from '../ui/TextArea.svelte';
   let { projectsState = $bindable(), projectsController } = $props();
 
   // Additional files are picked inside the Project folder, relative to it.
@@ -179,6 +180,32 @@
           </Button>
         </div>
       </div>
+    </div>
+  </section>
+
+  <section class="s-section" aria-labelledby="project-section-context-commands">
+    <header class="s-section__head">
+      <h3 class="s-section__title" id="project-section-context-commands">
+        {t('projects.contextCommands.title')}
+      </h3>
+    </header>
+    <p class="s-section__desc" id="project-context-commands-help">
+      {t('projects.contextCommands.help')}
+    </p>
+    <div class="s-section__body">
+      <TextArea
+        id="project-context-commands"
+        code
+        autoGrow
+        rows={2}
+        value={projectsState.editForm.context_commands}
+        placeholder={t('projects.contextCommands.placeholder')}
+        ariaLabel={t('projects.contextCommands.title')}
+        aria-describedby="project-context-commands-help"
+        disabled={projectsState.editSaving}
+        onInput={(next) =>
+          projectsController.updateEditField('context_commands', next)}
+      />
     </div>
   </section>
 </div>

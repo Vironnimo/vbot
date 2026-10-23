@@ -91,6 +91,7 @@ from core.tools.portal_registry import PortalRegistry
 from core.tools.scratch_areas import ScratchAreas
 from core.tools.terminal_manager import TerminalManager
 from core.tools.tools import ToolPromptBlockRegistry, ToolRegistry
+from core.tools.watch_checks import WatchCheckRunner
 from core.tools.web_fetch import PageBrowser
 from core.usage import UsageRecorder
 from core.utils.version import BuildIdentity
@@ -147,6 +148,8 @@ class RuntimeServiceGraph:
         self._terminal_manager: TerminalManager | None = None
         self._command_manager: CommandManager | None = None
         self._command_checker: CommandChecker | None = None
+        # Runs Cron watch checks and context commands; created after the Chat Loop.
+        self._watch_checks: WatchCheckRunner | None = None
         self._portals: PortalRegistry | None = None
         self._scratch_areas: ScratchAreas | None = None
         self._skills: SkillRegistry | None = None

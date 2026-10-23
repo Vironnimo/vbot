@@ -123,6 +123,61 @@ async def test_a_watching_job_runs_only_when_its_check_output_changed(
 
 
 @pytest.mark.asyncio
+async def test_an_always_watch_starts_every_run_with_the_output_and_any_change(
+    tmp_path: Path, clock: _Clock
+) -> None:
+    service, trigger_service = make_service(tmp_path, tz="Europe/Berlin")
+    checks = FakeChecks(["v1", "v1", "v2", "v2"])
+    watch = CronWatch.parse("command", "Get-Content status.txt", always=True)
+    job_id = await _watching_job(service, checks, watch=watch)
+    scripted_runs(
+        trigger_service,
+        (RunStatus.COMPLETED, ""),
+        (RunStatus.COMPLETED, ""),
+        (RunStatus.FAILED, ""),
+        (RunStatus.COMPLETED, ""),
+    )
+    stored = service.get_job(job_id).watch
+    assert stored is not None
+    assert stored.to_dict() == {
+        "command": "Get-Content status.txt",
+        "always": True,
+    }
+
+    async def fire() -> tuple[str, Any]:
+        clock.now += timedelta(hours=1)
+        await service._watcher.fire(service.get_job(job_id))
+        note = trigger_service.trigger_run.await_args.kwargs["context_note"].split("\n\n")[0]
+        return note.splitlines()[0], json.loads(note.splitlines()[-1])
+
+    # Without a baseline, and with unchanged output, the Run still starts with the output.
+    opening, record = await fire()
+    assert "there is no earlier output to compare it with" in opening
+    assert record == {"command": "Get-Content status.txt", "current": "v1"}
+    opening, record = await fire()
+    assert "its output is unchanged since the check at 2026-10-05T07:00:00+02:00" in opening
+    assert "diff" not in record
+
+    # A change brings its diff; the baseline moves only once a Run with it succeeded.
+    opening, record = await fire()
+    assert "its output changed since the check at 2026-10-05T07:00:00+02:00" in opening
+    assert record["diff"] == "@@ -1 +1 @@\n-v1\n+v2"
+    assert _baseline(service, job_id)["output"] == "v1"
+    opening, record = await fire()
+    assert "diff" in record
+    assert _baseline(service, job_id)["output"] == "v2"
+    assert trigger_service.trigger_run.await_count == 4
+
+    # Switching back to runs on a change keeps the check, its baseline and its last check.
+    await service.update_job(job_id, watch=CronWatch.parse("command", "Get-Content status.txt"))
+    switched = service.get_job(job_id)
+    assert switched.watch is not None and not switched.watch.always
+    assert switched.last_checked_at is not None
+    assert _baseline(service, job_id)["output"] == "v2"
+    assert _baseline(service, job_id)["watch"] == {"command": "Get-Content status.txt"}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("delivery", ["chat", "app"])
 async def test_failed_checks_count_toward_the_streak_and_alert_without_touching_run_outcomes(
     tmp_path: Path, delivery: str
@@ -223,14 +278,17 @@ async def test_the_baseline_is_replaced_when_unreadable_and_removed_with_its_wat
 
 
 @pytest.mark.asyncio
-async def test_a_missed_due_time_checks_once_and_its_change_gets_no_late_notice(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clock: _Clock
+@pytest.mark.parametrize("always", [False, True], ids=["on-change", "always"])
+async def test_a_missed_due_time_checks_once_and_only_an_always_run_hears_it_is_late(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clock: _Clock, always: bool
 ) -> None:
     service, trigger_service = make_service(tmp_path, tz="Europe/Berlin")
     checks = FakeChecks(["v1", "v2"])
-    job_id = await _watching_job(service, checks)
+    watch = CronWatch.parse("command", "Get-Content status.txt", always=always)
+    job_id = await _watching_job(service, checks, watch=watch)
     clock.now += timedelta(hours=1)
     await service._watcher.fire(service.get_job(job_id))
+    trigger_service.trigger_run.reset_mock()
     # vBot was off for five due times.
     clock.now += timedelta(hours=5, minutes=30)
     waits: list[datetime] = []
@@ -249,7 +307,9 @@ async def test_a_missed_due_time_checks_once_and_its_change_gets_no_late_notice(
     assert len(checks.calls) == 2
     trigger_service.trigger_run.assert_awaited_once()
     note = trigger_service.trigger_run.await_args.kwargs["context_note"]
-    assert "changed since" in note and "late" not in note
+    # A change, not the due time, starts an on-change Run.
+    assert "changed since" in note
+    assert ("is starting late" in note) == always
     assert waits == [datetime(2026, 10, 5, 11, 0, tzinfo=UTC)]
 
 

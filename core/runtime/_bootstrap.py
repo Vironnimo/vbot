@@ -715,6 +715,7 @@ def bootstrap(runtime: Runtime) -> None:
             usage_recorder=runtime._usage_recorder,
             deliver_background_completions=deliver_background_completions,
             get_command_manager=lambda: runtime._command_manager,
+            get_context_command_runner=lambda: runtime._watch_checks,
             subagent_reply_to_user=lambda address, message_id: (
                 runtime._subagent_coordinator.subagent_reply_to_user(address, message_id)
                 if runtime._subagent_coordinator is not None
@@ -831,16 +832,15 @@ def bootstrap(runtime: Runtime) -> None:
         )
         runtime._goal_service.set_run_relay(runtime._channel_service.relay_completion_run)
         runtime._cron_service.set_chat_delivery(runtime._channel_service)
-        runtime._cron_service.set_watch_checks(
-            WatchCheckRunner(
-                agents=runtime._agents,
-                projects=runtime._projects,
-                data_root=runtime._storage.data_dir,
-                command_checker=runtime._command_checker,
-                ceiling_boundary=partial(_watch_boundary, runtime, Path(runtime._storage.data_dir)),
-                credential_names=runtime.environment_credential_names,
-            )
+        runtime._watch_checks = WatchCheckRunner(
+            agents=runtime._agents,
+            projects=runtime._projects,
+            data_root=runtime._storage.data_dir,
+            command_checker=runtime._command_checker,
+            ceiling_boundary=partial(_watch_boundary, runtime, Path(runtime._storage.data_dir)),
+            credential_names=runtime.environment_credential_names,
         )
+        runtime._cron_service.set_watch_checks(runtime._watch_checks)
         runtime._cron_service.set_webhook_secrets(runtime._storage.secrets)
         runtime._channel_service._notify_tool_registration_changed_hook = (
             runtime._reload_channel_tool_if_started

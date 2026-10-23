@@ -534,6 +534,11 @@ async def test_cron_list_projects_each_job_with_its_next_fire_time() -> None:
             {"watch": CronWatch("command", "git status --short")},
             id="watch",
         ),
+        pytest.param(
+            {"watch": {"url": "https://status.example/", "always": True}},
+            {"watch": CronWatch("url", "https://status.example/", always=True)},
+            id="watch-always",
+        ),
         pytest.param({"watch": None}, {"watch": None}, id="no-watch"),
     ],
 )
@@ -650,6 +655,7 @@ async def test_a_jobs_unread_alert_is_returned_until_acknowledged() -> None:
         ("cron.create", {**_CRON_PARAMS, "watch": "https://status.example/"}),
         ("cron.update", {"id": "job-1", "watch": {"command": "ls", "url": "https://a.example"}}),
         ("cron.update", {"id": "job-1", "watch": {"url": "ftp://files.example/status"}}),
+        ("cron.update", {"id": "job-1", "watch": {"command": "ls", "always": "yes"}}),
         ("cron.list", {"extra": True}),
         ("bootstrap.list", {"extra": True}),
         ("cron.update", {"prompt": "missing id"}),

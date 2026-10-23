@@ -567,12 +567,23 @@ def _add_cron_delivery_and_watch(args: argparse.Namespace, fields: dict[str, Any
                 "Nothing was changed."
             )
         fields["delivery"] = {"kind": kind}
+    watch_runs = getattr(args, "watch_runs", None)
     if args.watch is not None:
         target = args.watch.strip()
         is_url = target.casefold().startswith(("http://", "https://"))
         fields["watch"] = {"url" if is_url else "command": target}
     elif getattr(args, "clear_watch", False):
+        if watch_runs is not None:
+            return "--watch-runs needs a watch; --clear-watch removes it. Nothing was changed."
         fields["watch"] = None
+    elif watch_runs is not None and args.command == "create":
+        return (
+            "--watch-runs needs --watch <command-or-url>, the check before each Run. Without "
+            "--watch, the job runs at every due time. Nothing was changed."
+        )
+    if watch_runs is not None:
+        # On update without --watch, cron_update completes it with the stored target.
+        fields.setdefault("watch", {})["always"] = watch_runs == "always"
     return None
 
 

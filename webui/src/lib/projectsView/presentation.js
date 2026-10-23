@@ -1,4 +1,4 @@
-import { asText, isPlainObject } from '../values.js';
+import { asText, distinctLines, isPlainObject } from '../values.js';
 import { normalizeCompactionPolicy } from '../compactionPolicy.js';
 import { normalizePermissionRules } from '../permissionRules.js';
 import {
@@ -39,6 +39,8 @@ export function createProjectEditForm(project = null) {
     auto_instructions: project?.auto_instructions !== false,
     auto_load: [...(project?.auto_load ?? [])],
     folder_instructions: project?.folder_instructions !== false,
+    // Edited as text, one command per line.
+    context_commands: normalizeStringList(project?.context_commands).join('\n'),
     allowed_tools: [...(project?.allowed_tools ?? [])],
     skills_bundled_enabled: [...(project?.skills_bundled_enabled ?? [])],
     skills_global_enabled: [...(project?.skills_global_enabled ?? [])],
@@ -270,6 +272,12 @@ export function buildManageProjectPayload(formValues, project) {
   const currentAutoLoad = normalizeAutoLoad(project?.auto_load);
   if (!sameStringList(nextAutoLoad, currentAutoLoad)) {
     changes.auto_load = nextAutoLoad;
+  }
+
+  const nextCommands = distinctLines(formValues?.context_commands);
+  const currentCommands = normalizeStringList(project?.context_commands);
+  if (!sameStringList(nextCommands, currentCommands)) {
+    changes.context_commands = nextCommands;
   }
 
   // The instruction switches are on unless the Project stores them off.
@@ -584,6 +592,7 @@ export function normalizeProject(project) {
     auto_instructions: project?.auto_instructions !== false,
     auto_load: normalizeAutoLoad(project?.auto_load),
     folder_instructions: project?.folder_instructions !== false,
+    context_commands: normalizeStringList(project?.context_commands),
     // Which file is the main instruction file and which additional files are
     // missing, as the server found them.
     instruction_status: {

@@ -176,7 +176,8 @@ CRON_JOBS_FORMAT_VERSION = 1
 _EVENT_PROGRESS_FIELDS = frozenset(("due_at", "occurrence_ids"))
 _DELIVERY_FIELDS = frozenset(("kind", "channel_id", "platform_target", "thread_id"))
 _LAST_RESULT_FIELDS = frozenset(("text", "at", "run_id"))
-_WATCH_FIELDS = frozenset(("command", "url"))
+_WATCH_KINDS = ("command", "url")
+_WATCH_FIELDS = frozenset((*_WATCH_KINDS, "always"))
 CRON_JOB_SHAPE = json_object(
     _CRON_JOB_FIELDS,
     {
@@ -907,16 +908,25 @@ class CronWatch:
 
     ``command`` runs in the host shell (PowerShell on Windows, bash elsewhere)
     in the job's working directory; ``url`` is an http(s) address read with GET.
-    The Run starts only when the check's output changed (``_cron_watch``).
+    The Run starts only when the check's output changed, or at every due time
+    with the output when ``always`` is set (``_cron_watch``; written only when set).
     """
 
     kind: WatchKind
     target: str
+    always: bool = False
+
+    def same_check(self, other: CronWatch | None) -> bool:
+        """Whether ``other`` runs this check; ``always`` only decides when a Run starts.
+
+        Changing only ``always`` keeps the baseline and needs no first check.
+        """
+        return other is not None and (other.kind, other.target) == (self.kind, self.target)
 
     @classmethod
-    def parse(cls, kind: str, target: object) -> CronWatch:
+    def parse(cls, kind: str, target: object, *, always: bool = False) -> CronWatch:
         """Validate one watch; surrounding whitespace is dropped."""
-        if kind not in _WATCH_FIELDS:
+        if kind not in _WATCH_KINDS:
             raise CronJobValidationError("watch must name a command or a url")
         if not isinstance(target, str) or not target.strip():
             raise CronJobValidationError(f"watch.{kind} must be a non-empty string")
@@ -926,7 +936,7 @@ class CronWatch:
                 raise CronJobValidationError(
                     f"watch.command must be at most {WATCH_COMMAND_MAX_CHARS} characters"
                 )
-            return cls(kind="command", target=text)
+            return cls(kind="command", target=text, always=always)
         try:
             parts = urlsplit(text)
         except ValueError:
@@ -942,19 +952,25 @@ class CronWatch:
                 f"watch.url must be an absolute http or https URL of at most "
                 f"{WATCH_URL_MAX_CHARS} characters"
             )
-        return cls(kind="url", target=text)
+        return cls(kind="url", target=text, always=always)
 
-    def to_dict(self) -> dict[str, str]:
-        return {self.kind: self.target}
+    def to_dict(self) -> dict[str, Any]:
+        data: dict[str, Any] = {self.kind: self.target}
+        if self.always:
+            data["always"] = True
+        return data
 
     @classmethod
     def from_dict(cls, value: Any) -> CronWatch:
         if not isinstance(value, dict):
             raise CronJobValidationError("watch must be an object or null")
-        kinds = [name for name in sorted(_WATCH_FIELDS) if value.get(name) is not None]
+        kinds = [name for name in _WATCH_KINDS if value.get(name) is not None]
         if len(kinds) != 1:
             raise CronJobValidationError("watch must name exactly one of command or url")
-        return cls.parse(kinds[0], value[kinds[0]])
+        always = value.get("always", False)
+        if not isinstance(always, bool):
+            raise CronJobValidationError("watch.always must be true or false")
+        return cls.parse(kinds[0], value[kinds[0]], always=always)
 
 
 def _derive_cron_job_name(prompt: object) -> str:

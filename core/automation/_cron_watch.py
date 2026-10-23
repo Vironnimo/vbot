@@ -108,16 +108,22 @@ class WatchBaseline:
 
 @dataclass(frozen=True, slots=True)
 class WatchChange:
-    """A check output that differs from the baseline: the Run it starts gets it as data."""
+    """The check output a Run starts with as data.
+
+    A watch with ``always`` starts a Run at every due time, also with an output
+    equal to the baseline (``changed`` false) or without an earlier one
+    (``since`` None, the output just became the baseline).
+    """
 
     watch: CronWatch
-    # When the baseline's output was checked: the output changed since then.
-    since: str
+    # When the baseline's output was checked: what changed is relative to it.
+    since: str | None
     output: str
     digest: str
     diff: str
     diff_cut: bool
     checked_at: str
+    changed: bool = True
 
     def baseline(self) -> WatchBaseline:
         """The baseline once the Run for this change succeeded."""
@@ -177,23 +183,48 @@ def compare(
 
 
 def change_note(change: WatchChange, timezone: ZoneInfo) -> str:
-    """The part of a Run's context note that says which change started it, with the data."""
-    since = _local(_parse_utc_timestamp(change.since, field_name="since"), timezone)
+    """The part of a Run's context note that says what the check found, with the data."""
+    since = (
+        None
+        if change.since is None
+        else _local(_parse_utc_timestamp(change.since, field_name="since"), timezone)
+    )
     current, output_cut = _cut(change.output, CHANGE_OUTPUT_MAX_CHARS)
-    if change.watch.kind == "command":
-        opening = (
-            "This run started because the output of the job's check command changed since "
-            f"the check at {since}."
-        )
-        holds = "the command, the changes as a unified diff and the current output"
+    command = change.watch.kind == "command"
+    if not change.watch.always:
+        if command:
+            opening = (
+                "This run started because the output of the job's check command changed since "
+                f"the check at {since}."
+            )
+        else:
+            opening = (
+                "This run started because the page at the job's watched URL changed since "
+                f"the check at {since}."
+            )
     else:
-        opening = (
-            "This run started because the page at the job's watched URL changed since "
-            f"the check at {since}."
+        checked = "the job's check command" if command else "the page at the job's watched URL"
+        found = "output" if command else "text"
+        if since is None:
+            status = f"there is no earlier {found} to compare it with"
+        elif change.changed:
+            status = f"its {found} changed since the check at {since}"
+        else:
+            status = f"its {found} is unchanged since the check at {since}"
+        opening = f"Before this run, vBot checked {checked}; {status}."
+    record: dict[str, str] = {change.watch.kind: change.watch.target}
+    if change.changed:
+        record["diff"] = change.diff
+        holds = (
+            "the command, the changes as a unified diff and the current output"
+            if command
+            else "the URL, the changes as a unified diff and the page's current text"
         )
-        holds = "the URL, the changes as a unified diff and the page's current text"
+    else:
+        holds = "the command and its current output" if command else "the URL and the page's text"
+    record["current"] = current
     cuts = []
-    if change.diff_cut:
+    if change.changed and change.diff_cut:
         cuts.append(f"The diff is cut after {CHANGE_DIFF_MAX_CHARS} characters.")
     if output_cut:
         cuts.append(f"The current output is cut after {CHANGE_OUTPUT_MAX_CHARS} characters.")
@@ -206,7 +237,7 @@ def change_note(change: WatchChange, timezone: ZoneInfo) -> str:
             ]
         )
         + "\n"
-        + _record({change.watch.kind: change.watch.target, "diff": change.diff, "current": current})
+        + _record(record)
     )
 
 
@@ -241,7 +272,7 @@ def read_baseline(directory: Path, job_id: str, watch: CronWatch) -> WatchBaseli
             error,
         )
         return None
-    return baseline if baseline.watch == watch else None
+    return baseline if baseline.watch.same_check(watch) else None
 
 
 def write_baseline(directory: Path, job_id: str, baseline: WatchBaseline) -> None:
@@ -249,7 +280,8 @@ def write_baseline(directory: Path, job_id: str, baseline: WatchBaseline) -> Non
     path = baseline_path(directory, job_id)
     payload = {
         "job_id": job_id,
-        "watch": baseline.watch.to_dict(),
+        # The check alone: ``always`` decides when a Run starts, not what was seen.
+        "watch": {baseline.watch.kind: baseline.watch.target},
         "hash": output_digest(baseline.output),
         "comparison_hash": baseline.digest,
         "output": baseline.output,

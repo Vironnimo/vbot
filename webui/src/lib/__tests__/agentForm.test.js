@@ -30,6 +30,7 @@ describe('createAgentFormValues', () => {
       tool_access: { mode: 'all' },
       allowed_skills: ['*'],
       excluded_skills: [],
+      context_commands: '',
       tools: {},
       compaction_policy: null,
       custom_system_prompt_enabled: false,
@@ -289,6 +290,10 @@ describe('normalizeAgentForm', () => {
 
     expect(edit({})).toEqual({ id: 'coder' });
     expect(edit(change)).toEqual({ id: 'coder', ...change });
+    // Context commands are edited one per line and saved as a list.
+    expect(
+      edit({ context_commands: ' git status \n\ngit log -3\ngit status' }),
+    ).toEqual({ id: 'coder', context_commands: ['git status', 'git log -3'] });
     // Sampling text compares as the number it saves; clearing sends null.
     expect(edit({ top_p: '0,90' })).toEqual({ id: 'coder' });
     expect(edit({ top_p: '0.5', temperature: '' })).toEqual({

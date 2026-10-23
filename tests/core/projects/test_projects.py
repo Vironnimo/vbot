@@ -71,6 +71,7 @@ def test_build_project_keeps_every_explicit_field_through_a_round_trip(tmp_path:
         "auto_instructions": False,
         "folder_instructions": False,
         "auto_load": ["AGENTS.md"],
+        "context_commands": ["git status --short", "npm outdated"],
         "allowed_tools": ["read", "grep"],
         "skills_bundled_enabled": ["frontend-design"],
         "skills_global_enabled": ["pdf", "deploy"],

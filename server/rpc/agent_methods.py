@@ -34,6 +34,7 @@ from core.tools.availability import (
     normalize_tool_access,
 )
 from core.tools.tool_loading import normalize_tool_loading
+from core.utils.context_commands import normalize_context_commands
 from core.utils.logging import get_logger
 from server.events import (
     RESOURCE_KIND_AGENTS,
@@ -410,6 +411,7 @@ def _agent_changes(params: JsonObject, *, blocked: set[str], for_create: bool) -
         public_fields.add("root_project_id")
         public_fields.add("copy_workspace_identity_files")
         public_fields.add("subagent_allow")
+        public_fields.add("context_commands")
 
     if "subagent_allow" in params and "tools" in params:
         raise RpcError(
@@ -535,6 +537,11 @@ def _validate_agent_field(key: str, value: Any) -> Any:
                 "set allowed_skills to [] to allow no Skills",
             )
         return names
+    if key == "context_commands":
+        try:
+            return normalize_context_commands(value)
+        except ValueError as error:
+            raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{key} {error}") from error
     if key == "tools":
         if not isinstance(value, dict):
             raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.tools must be an object")

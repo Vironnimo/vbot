@@ -156,6 +156,7 @@ export function createProjectsController({
         auto_instructions: state.editForm.auto_instructions,
         auto_load: state.editForm.auto_load,
         folder_instructions: state.editForm.folder_instructions,
+        context_commands: state.editForm.context_commands,
         allowed_tools: state.editForm.allowed_tools,
         skills_bundled_enabled: state.editForm.skills_bundled_enabled,
         skills_global_enabled: state.editForm.skills_global_enabled,

@@ -237,6 +237,7 @@ def _agent_response(state: Any, agent: Any, persisted: Any = None) -> JsonObject
         "tool_access": agent.tool_access.to_dict(),
         "allowed_skills": list(agent.allowed_skills),
         "excluded_skills": list(getattr(agent, "excluded_skills", ()) or ()),
+        "context_commands": list(getattr(agent, "context_commands", ()) or ()),
         "tools": dict(getattr(agent, "tools", {})),
         "custom_system_prompt_enabled": bool(agent.custom_system_prompt_enabled),
         "librarian_enabled": getattr(agent, "librarian_enabled", True) is not False,

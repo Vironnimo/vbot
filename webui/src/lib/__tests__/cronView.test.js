@@ -111,6 +111,7 @@ describe('cron form payloads and history projection', () => {
     expect(listed.watch).toEqual({
       kind: 'url',
       target: 'https://example.com/releases',
+      always: false,
     });
     expect(listed.last_checked_at_display).toContain('18:00');
     expect(listed.last_changed_at_display).toContain('17:00');
@@ -127,6 +128,16 @@ describe('cron form payloads and history projection', () => {
     expect(buildUpdateCronPayload(form).watch).toEqual({
       command: 'git log -1 --oneline',
     });
+    // A watch that starts a Run at every due time says so.
+    form.watch_always = true;
+    expect(buildUpdateCronPayload(form).watch).toEqual({
+      command: 'git log -1 --oneline',
+      always: true,
+    });
+    expect(
+      createCronFormValues({ ...job, watch: { ...job.watch, always: true } })
+        .watch_always,
+    ).toBe(true);
     form.watch_kind = 'none';
     expect(buildUpdateCronPayload(form).watch).toBeNull();
 

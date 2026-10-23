@@ -28,6 +28,7 @@ CRON_UPDATE_FLAGS = (
     "--deliver",
     "--watch",
     "--clear-watch",
+    "--watch-runs",
 )
 _PROMPT_PREVIEW_LIMIT = 60
 # Who can send requests to a webhook job's URL, by the reach the server reports.
@@ -95,13 +96,42 @@ def cron_update(
             message=f"no cron fields provided; use one of: {', '.join(CRON_UPDATE_FLAGS)}",
             instance=instance,
         )
-    payload = _rpc_call(instance, "cron.update", {"id": job_id, **dict(changes)})
+    changes = dict(changes)
+    watch = changes.get("watch")
+    if isinstance(watch, dict) and ("always" not in watch or len(watch) == 1):
+        # The RPC replaces the whole watch: keep what this call does not name.
+        stored, refusal = _stored_watch(instance, job_id)
+        if refusal is not None:
+            return refusal
+        if len(watch) == 1 and "always" in watch:
+            if stored is None:
+                return CommandResult(
+                    ok=False,
+                    message=f"--watch-runs needs a watch, and cron job {job_id} has none; add "
+                    "--watch <command-or-url>. Nothing was changed.",
+                    instance=instance,
+                )
+            changes["watch"] = {**stored, "always": watch["always"]}
+        elif stored is not None and stored.get("always") is True:
+            changes["watch"] = {**watch, "always": True}
+    payload = _rpc_call(instance, "cron.update", {"id": job_id, **changes})
     if not payload.ok:
         return payload.to_command_result()
     message = _format_job_operation("updated", payload.data, fallback_id=job_id)
     if changes.get("schedule_type") == "webhook":
         message += "\n" + _new_webhook_secret(instance, {"id": job_id, **payload.data})
     return CommandResult(ok=True, message=message, instance=instance)
+
+
+def _stored_watch(
+    instance: ServerInstance, job_id: str
+) -> tuple[dict[str, Any] | None, CommandResult | None]:
+    """The job's stored watch, or the result that refuses the update."""
+    shown = cron_show(instance, job_id)
+    if not shown.ok:
+        return None, shown
+    watch = json.loads(shown.message).get("watch")
+    return (watch if isinstance(watch, dict) else None), None
 
 
 def cron_delete(instance: ServerInstance, job_id: str) -> CommandResult:
@@ -299,9 +329,10 @@ def _format_alert(alert: object) -> list[str]:
 def _format_watch(watch: object) -> str:
     if not isinstance(watch, dict):
         return "-"
+    runs = ",always" if watch.get("always") is True else ""
     if isinstance(watch.get("url"), str):
-        return f"url[{watch['url']}]"
-    return f"command[{_prompt_preview(watch.get('command'))}]"
+        return f"url[{watch['url']}]{runs}"
+    return f"command[{_prompt_preview(watch.get('command'))}]{runs}"
 
 
 def _prompt_preview(value: object) -> str:

@@ -31,7 +31,7 @@ Other specialized notes keep their existing request forms: `[skill-context]` bec
 
 ## Decision rules
 
-- Background event the next Run should know durably -> persisted note. Existing examples: `channel_send` outbound context, internal automation triggers, the first or recreated Scratch folder announcement (`tools/scratch.md`; Chat preserves it across Compaction), and the Session Goal notes (`automation/goals.md`; Chat preserves the goal-set note across Compaction while the goal is open).
+- Background event the next Run should know durably -> persisted note. Existing examples: `channel_send` outbound context, internal automation triggers, the first or recreated Scratch folder announcement (`tools/scratch.md`; Chat preserves it across Compaction), the context-command outputs of a Session's first Run (`chat/context-commands.md`; a snapshot Compaction may summarize), and the Session Goal notes (`automation/goals.md`; Chat preserves the goal-set note across Compaction while the goal is open).
 - User input steered into an active Run -> persisted note immediately before that User message, through the existing note channel (`chat/run-execution.md` -> User steering). Input that starts a successor Run receives no steering note.
 - Standing guidance that follows configuration or the current catalog -> System Prompt block (allowlist-gated).
 - Input-quality caveat tied to how a message was produced -> hidden request-time reminder declared as an explicit input field; never hand-built text.

@@ -181,6 +181,8 @@ def _agent_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
         changes["allowed_skills"] = list(args.allowed_skills)
     if args.excluded_skills is not None:
         changes["excluded_skills"] = list(args.excluded_skills)
+    if getattr(args, "context_commands", None) is not None:
+        changes["context_commands"] = list(args.context_commands)
     if args.subagent_allow is not None:
         if args.command == "create":
             changes["tools"] = {"subagent": {"allowed_agents": list(args.subagent_allow)}}
@@ -299,6 +301,8 @@ def _project_set_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
         changes["model_mappings"] = args.model_mappings
     if args.auto_load is not None:
         changes["auto_load"] = list(args.auto_load)
+    if args.context_commands is not None:
+        changes["context_commands"] = list(args.context_commands)
     _apply_project_instruction_switches(args, changes)
     _apply_project_capability_fields(args, changes)
     return changes

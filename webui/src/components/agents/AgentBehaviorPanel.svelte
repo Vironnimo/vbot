@@ -421,6 +421,32 @@
         </div>
 
         {#if formMode === AGENT_FORM_MODE_EDIT}
+          <div class="s-row s-row--stacked">
+            <div class="s-row-info">
+              <label class="s-row-label" for="agent-context-commands">
+                {t('agents.form.contextCommands')}
+              </label>
+              <div class="s-row-desc" id="agent-context-commands-help">
+                {t('agents.form.contextCommandsHelp')}
+              </div>
+            </div>
+            <div class="s-row-control">
+              <TextArea
+                id="agent-context-commands"
+                code
+                autoGrow
+                rows={2}
+                value={formValues.context_commands}
+                placeholder={t('agents.form.contextCommandsPlaceholder')}
+                ariaLabel={t('agents.form.contextCommands')}
+                aria-describedby="agent-context-commands-help"
+                onInput={(next) => {
+                  formValues.context_commands = next;
+                }}
+              />
+            </div>
+          </div>
+
           <button
             type="button"
             class="s-row s-row--compact s-disclosure-row agents-view__memory-disclosure-toggle"

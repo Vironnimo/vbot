@@ -264,6 +264,18 @@ describe('Projects controller editing', () => {
       { auto_load: ['README.md', 'AGENTS.md'] },
     ],
     [
+      'context commands from their lines',
+      { context_commands: ['git status'] },
+      { context_commands: 'git status\n  npm outdated  \n' },
+      { context_commands: ['git status', 'npm outdated'] },
+    ],
+    [
+      'nothing for unchanged context commands',
+      { context_commands: ['git status'] },
+      { context_commands: 'git status\n' },
+      null,
+    ],
+    [
       'a changed Source selection',
       {},
       { sources: [{ id: 'claude.agents', enabled: true }] },
