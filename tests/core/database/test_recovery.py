@@ -42,7 +42,7 @@ from core.database import (
     unregister_database,
 )
 from core.database import recovery as recovery_module
-from core.database.marker import OperationLock, acquire_operation_lock
+from core.database.marker import OperationLock, acquire_operation_lock, begin_maintenance
 from core.database.recovery import (
     QUARANTINE_ROOT_NAME,
     auto_restore_if_needed,
@@ -287,6 +287,8 @@ def test_a_failed_restore_keeps_the_original_the_guard_and_its_pending_evidence(
     data_dir: Path, monkeypatch: pytest.MonkeyPatch, read_only_snapshot: bool
 ) -> None:
     snapshot = snapshot_with_notes(data_dir, "saved")
+    another_snapshot = create_data_snapshot(data_dir, reason="another snapshot")
+    assert another_snapshot is not None
     database = open_database(notes_spec(data_dir))
     add_note(database, "newer original")
     database.close()
@@ -316,6 +318,19 @@ def test_a_failed_restore_keeps_the_original_the_guard_and_its_pending_evidence(
     guard = read_maintenance(data_dir)
     assert guard is not None
     assert guard.operation == "restore"
+    # A subset, broader selection or another snapshot cannot clear this
+    # interrupted restore, including a request that only plans the change.
+    for other_snapshot, options in (
+        (another_snapshot, {}),
+        (snapshot, {"names": (), "documents": True}),
+        (snapshot, {"documents": True}),
+        (snapshot, {"retire_unlisted": True}),
+    ):
+        for check_only in (True, False):
+            with pytest.raises(DatabaseFormatError):
+                restore_data_snapshot(data_dir, other_snapshot, check_only=check_only, **options)
+            assert read_maintenance(data_dir) == guard
+            assert path.read_bytes() == original
     with pytest.raises(DatabaseFormatError, match="maintenance is incomplete"):
         open_database(notes_spec(data_dir))
     # The re-probe never mistakes the untouched original for the restored copy.
@@ -334,6 +349,16 @@ def test_a_failed_restore_keeps_the_original_the_guard_and_its_pending_evidence(
     assert completed is not None
     assert completed["incident_id"] == pending["incident_id"]
     assert completed["possible_loss_interval"]["end"] == later_failure
+
+
+def test_an_unscoped_snapshot_restore_requires_operator_recovery(data_dir: Path) -> None:
+    snapshot = snapshot_with_notes(data_dir, "saved")
+    guard = begin_maintenance(data_dir, "restore")
+    for check_only in (True, False):
+        with pytest.raises(DatabaseFormatError):
+            restore_data_snapshot(data_dir, snapshot, check_only=check_only)
+        assert read_maintenance(data_dir) == guard
+        assert read_incident(data_dir, "notes") is None
 
 
 def test_incident_publication_failure_does_not_report_recovery(
