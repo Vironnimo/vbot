@@ -13,6 +13,7 @@ from typing import Any
 from core.permissions import PermissionBoundary
 from core.projects import ProjectNotFoundError
 from core.secrets.agent_secrets import AgentSecrets
+from core.subagents import SubAgentTree
 from core.tools.background_tasks import BACKGROUND_TASKS_TOOL_NAME
 from core.tools.command_manager import CommandManager
 from core.tools.scratch_areas import ScratchAreas
@@ -70,6 +71,7 @@ class Shell:
         analyzer: FakeAnalyzer | None = None,
         permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED,
         credential_names: Container[str] = frozenset(),
+        subagents: SubAgentTree | None = None,
     ) -> None:
         self.commands = commands
         self.registry = ToolRegistry()
@@ -85,6 +87,7 @@ class Shell:
             scratch_areas=scratch_areas,
             secrets=secrets,
             command_checker=self.checker,
+            subagents=subagents,
         )
         self.cancel_callbacks: list[Callable[[], Any]] = []
         self.background_callbacks: list[Callable[[], bool]] = []

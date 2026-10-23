@@ -24,6 +24,7 @@ from ._shell_hint_pipeline import (
     _hint_waiting_for_background,
 )
 from ._shell_hint_pipeline import ended_jobs_hint as ended_jobs_hint
+from ._shell_hint_pipeline import sleeps as sleeps
 from ._shell_hint_programs import (
     _hint_already_exists,
     _hint_command_not_found,
@@ -178,4 +179,4 @@ def _failure_hint(
     return _EXIT_CODE_HINTS.get(exit_code)
 
 
-__all__ = ["HINT_TOOL_NAMES", "annotate_failure", "ended_jobs_hint"]
+__all__ = ["HINT_TOOL_NAMES", "annotate_failure", "ended_jobs_hint", "sleeps"]

@@ -867,6 +867,10 @@ def bootstrap(runtime: Runtime) -> None:
             reference_lock=runtime._automation_references.lock,
             cron_service=runtime._cron_service,
         )
+        runtime._subagent_coordinator = SubAgentCoordinator(
+            runtime, runtime._trigger_service, secrets=runtime._agent_secrets
+        )
+        runtime._subagent_coordinator.install(runtime._chat_run_manager)
         register_shell_tool(
             runtime._tools,
             runtime._command_manager,
@@ -878,11 +882,8 @@ def bootstrap(runtime: Runtime) -> None:
             scratch_areas=runtime._scratch_areas,
             secrets=runtime._agent_secrets,
             command_checker=runtime._command_checker,
+            subagents=runtime._subagent_coordinator,
         )
-        runtime._subagent_coordinator = SubAgentCoordinator(
-            runtime, runtime._trigger_service, secrets=runtime._agent_secrets
-        )
-        runtime._subagent_coordinator.install(runtime._chat_run_manager)
         runtime._session_activity = SessionActivity(
             runs=runtime._chat_run_manager,
             commands=runtime._command_manager,

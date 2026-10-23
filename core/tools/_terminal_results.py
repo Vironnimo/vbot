@@ -135,7 +135,8 @@ def _unread_screen_result(
 _DELIVERIES_TEXT = (
     "While it runs, its screen arrives as a new message each time it goes idle showing something "
     "new, and so does its exit, so do not poll with status. Continue with other work your task "
-    "still needs, or end your turn to wait for it."
+    "still needs. When no such work is left, end your turn: reply with a short status and no "
+    "tool call. Your next turn starts when its next screen arrives."
 )
 
 
@@ -160,8 +161,9 @@ def _reply_pending_text(terminal_id: str) -> str:
     """What to do when an interactive program still works as input's wait ended."""
     return (
         "It is still working: its screen arrives as a new message once it goes idle. Continue "
-        "with other work your task still needs, or end your turn to wait for it; to wait "
-        f"within this turn, call terminal {_call('wait', terminal_id)}."
+        "with other work your task still needs. When no such work is left, end your turn: "
+        "reply with a short status and no tool call, and your next turn starts when its screen "
+        f"arrives; to wait within this turn, call terminal {_call('wait', terminal_id)}."
     )
 
 

@@ -18,6 +18,7 @@ from core.providers.tool_schema import render_tool_definitions
 from core.sessions import SessionAddress
 from core.storage.temp_files import TemporaryFileManager
 from core.subagents import SubAgentState, SubAgentStopOutcome
+from core.tools import _terminal_results
 from core.tools import _terminal_scopes as terminal_scopes
 from core.tools import terminal as terminal_module
 from core.tools import terminal_manager as manager_module
@@ -140,11 +141,7 @@ def test_definition_follows_flat_action_conventions_within_its_budget(tmp_path: 
         assert rendered.get("strict") is (False if profile == "explicit_non_strict" else None)
 
 
-_DELIVERIES = (
-    "While it runs, its screen arrives as a new message each time it goes idle showing something "
-    "new, and so does its exit, so do not poll with status. Continue with other work your task "
-    "still needs, or end your turn to wait for it."
-)
+_DELIVERIES = _terminal_results._DELIVERIES_TEXT
 
 
 @pytest.mark.parametrize("shell_offered", [True, False])

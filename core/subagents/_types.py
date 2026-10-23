@@ -41,6 +41,15 @@ class SubAgentState:
     activity_file: str | None
     reply_target: str = "parent"
 
+    @property
+    def answer_pending(self) -> bool:
+        """The caller's direct Sub-Agent works, and its answer will reach the caller."""
+        return (
+            self.parent_id is None
+            and self.status in ("working", "queued")
+            and self.reply_target == "parent"
+        )
+
 
 class SubAgentTree(Protocol):
     """The Sub-Agents below a caller, what they run, and how to stop one.

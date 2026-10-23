@@ -22,6 +22,6 @@ Run cancellation stops only the current Run and the shell commands still inside 
 
 ## Tree projections and events
 
-- `subagents(caller)` returns frozen `SubAgentState` rows: `id`, `title`, `agent_id`, Session, `parent_id` (`None` for a direct child), `status` `working` | `queued` | `idle`, `last_tool`, `activity_file`, and independent `reply_target`. `running_work(subagent)` lists commands, terminals and working children as `kind id (label)`.
+- `subagents(caller)` returns frozen `SubAgentState` rows: `id`, `title`, `agent_id`, Session, `parent_id` (`None` for a direct child), `status` `working` | `queued` | `idle`, `last_tool`, `activity_file`, and independent `reply_target`; `answer_pending` says that a direct child works and its answer will reach the caller. `running_work(subagent)` lists commands, terminals and working children as `kind id (label)`.
 - `subagent.tree {agent_id, session_id}` (served by `subagents`) returns the Session's Sub-Agents at every depth breadth first with `id`, `title`, qualified `agent_id`, `session_id`, `parent_id` (null for a direct Sub-Agent) and `status` `working|queued|idle`, for the Session information panel.
 - `subagent_session_started` (on `run` and `send`) carries `id`, bare `agent_id`, `session_id`, `project_id` when set, `status` `running`/`queued`, `delivery: "automatic"`, `activity_file`, and `run_id` for `run`; `subagent_status_changed` carries status `cancelled`.

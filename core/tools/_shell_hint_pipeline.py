@@ -303,18 +303,25 @@ _SLEEP = re.compile(r"(?<![\w-])(?:Start-Sleep|sleep)(?![\w-])", re.I)
 _COMMAND_LOG = re.compile(r"[/\\]commands[/\\]tmp_[0-9a-z]{12}\.log", re.I)
 
 
+def sleeps(command: str) -> bool:
+    """Whether *command* sleeps, with Start-Sleep or sleep."""
+    return _SLEEP.search(command) is not None
+
+
 def _hint_waiting_for_background(command: str) -> str | None:
     """Answer a command that sleeps to read a background command's log.
 
     Agents waited in loops of ``Start-Sleep 90; Get-Content <log> -Tail 3``
     for a background command whose result arrives as a message anyway.
     """
-    if not _SLEEP.search(command) or not _COMMAND_LOG.search(command):
+    if not sleeps(command) or not _COMMAND_LOG.search(command):
         return None
     return (
         "This command waited, then read a background command's log file. That command's "
         "result arrives as a new message when it exits. Instead of sleeping in a command, "
-        "continue with other work your task still needs, or end your turn to wait for it."
+        "continue with other work your task still needs. When no such work is left, end your "
+        "turn: reply with a short status and no tool call. Your next turn starts when the "
+        "result arrives."
     )
 
 

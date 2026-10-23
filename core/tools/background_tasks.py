@@ -311,10 +311,9 @@ class BackgroundTasksTool:
                 "You have no Sub-Agents, and no background commands ran in this Session or its "
                 "Sub-Agents in the last 30 minutes."
             ]
-        elif any(
-            item.parent_id is None and item.status in _WORKING and item.reply_target == "parent"
-            for item in tree.subagents
-        ) or any(report.owner == caller and not report.ended for report in reports):
+        elif any(item.answer_pending for item in tree.subagents) or any(
+            report.owner == caller and not report.ended for report in reports
+        ):
             data["notes"] = [
                 "vBot sends you the answers addressed to you and the result of each of "
                 "your running commands as a new message; calling list again does not make them "
@@ -350,7 +349,9 @@ class BackgroundTasksTool:
             delivery = (
                 f"You have checked it {checks} times while it runs; checking does not bring its "
                 "result sooner. The result arrives as a new message when it exits. Continue with "
-                "other work your task still needs, or end your turn to wait for it."
+                "other work your task still needs. When no such work is left, end your turn: "
+                "reply with a short status and no tool call. Your next turn starts when the "
+                "result arrives."
             )
         elif subagent is None:
             delivery = (

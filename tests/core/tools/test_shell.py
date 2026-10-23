@@ -33,6 +33,7 @@ from core.secrets import KeyFileProtection, SecretStore
 from core.secrets.agent_secrets import AgentSecrets
 from core.sessions import SessionAddress
 from core.storage.temp_files import TemporaryFileManager
+from core.subagents import SubAgentState
 from core.tools import _command_output as command_output_module
 from core.tools import _shell_definition as shell_definition
 from core.tools import _shell_hint_common as shell_hint_common
@@ -906,6 +907,72 @@ async def test_powershell_jobs_that_ended_with_the_command_are_named(
     result = data(await shell.returned(call))
     assert ("run_in_background" in result.get("hint", "")) is hinted
     assert "failed_programs" not in result
+
+
+class _Tree:
+    """The caller's Sub-Agents, as ``SubAgentTree.subagents`` returns them."""
+
+    def __init__(self, *subagents: SubAgentState) -> None:
+        self.items = list(subagents)
+
+    async def subagents(self, caller: SessionAddress) -> list[SubAgentState]:
+        return self.items
+
+    async def running_work(self, subagent: SubAgentState) -> list[str]:
+        return []
+
+
+def _subagent(reply_target: str = "parent") -> SubAgentState:
+    return SubAgentState(
+        id="sub_chat",
+        title="Chat bug hunt",
+        agent_id="agent-a",
+        session=SessionAddress("project-a", "agent-a", "session-sub"),
+        parent_id=None,
+        status="working",
+        last_tool="bash",
+        activity_file=None,
+        reply_target=reply_target,
+    )
+
+
+@pytest.mark.parametrize(
+    ("command", "seconds", "running", "named"),
+    [
+        # An Agent slept 45-270 seconds per call for 17 minutes while its Sub-Agents worked.
+        ("Start-Sleep -Seconds 90; Get-ChildItem report.md", 90, "subagent", "sub_chat"),
+        ("sleep 60 && ls", 60, "command", "command cmd_"),
+        # A short pause for a page to settle waits for nothing of the caller's.
+        ("Start-Sleep 2; playwright-cli snapshot", 2, "subagent", None),
+        ("npm test", 90, "subagent", None),
+        ("Start-Sleep 90", 90, None, None),
+        # Its answers go to the user, not to the caller.
+        ("Start-Sleep 90", 90, "user_subagent", None),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_command_that_sleeps_while_own_work_runs_is_told_how_to_wait(
+    tmp_path: Path, command: str, seconds: float, running: str | None, named: str | None
+) -> None:
+    tree = _Tree()
+    if running == "subagent":
+        tree.items.append(_subagent())
+    elif running == "user_subagent":
+        tree.items.append(_subagent("user"))
+    async with started_shell(tmp_path, subagents=tree) as shell:
+        if running == "command":
+            data(await shell.call({"command": "build", "run_in_background": True}))
+            await shell.started()
+        call = shell.call({"command": command, "timeout": 300})
+        process = await shell.started(2 if running == "command" else 1)
+        await shell.commands.advance(seconds, step=1)
+        process.exit(0)
+
+        hint = data(await shell.returned(call)).get("hint")
+        if named is None:
+            assert hint is None
+        else:
+            assert hint is not None and named in hint and "no tool call" in hint
 
 
 @pytest.mark.asyncio

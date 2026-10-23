@@ -10,7 +10,7 @@ from collections.abc import Callable, Container, Coroutine
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from core.permissions import CommandChecker, PermissionBoundary, PermissionDenied
 from core.projects import ProjectStore
@@ -70,6 +70,7 @@ from core.tools.shell_environment import (
     RunIdentity,
     command_environment,
 )
+from core.tools.shell_hints import sleeps
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -93,6 +94,9 @@ from ._shell_definition import (
     format_shell_env_usage as format_shell_env_usage,
 )
 
+if TYPE_CHECKING:
+    from core.subagents import SubAgentTree
+
 _LOGGER = get_logger("tools.shell")
 
 CredentialResolver = Callable[[str], str]
@@ -104,6 +108,12 @@ CredentialNames = Callable[[], Container[str]]
 _CONSOLE_READS_WAIT = sys.platform == "win32"
 # The language of the host shell, for command analysis under Permission Rules.
 HOST_SHELL_KIND: Literal["powershell", "bash"] = "powershell" if sys.platform == "win32" else "bash"
+# A command that sleeps and runs this long while work that wakes the caller
+# still runs is waiting for that work (Session, 2026-10-23: an Agent slept
+# 45-270 seconds per call for 17 minutes while its Sub-Agents worked).
+_WAITED_SECONDS = 20.0
+# The waiting hint names at most this many of the caller's running tasks.
+_WAITED_SHOWN = 5
 
 
 @dataclass(frozen=True)
@@ -211,8 +221,10 @@ class ShellTool:
         scratch_areas: ScratchAreas | None = None,
         secrets: AgentSecrets | None = None,
         command_checker: CommandChecker | None = None,
+        subagents: SubAgentTree | None = None,
     ) -> None:
         self._commands = command_manager
+        self._subagents = subagents
         self._checker = command_checker
         self._resolve_credential = credential_resolver or (lambda _name: "")
         self._credential_names: CredentialNames = credential_names or frozenset
@@ -524,7 +536,8 @@ class ShellTool:
         idle = waiting.done() and not waiting.cancelled() and waiting.result() == "idle"
         report = self._commands.report(command_id)
         if report.ended and not report.still_running:
-            return _result(call, report, names, context.permissions)
+            waited = await self._waited_hint(context, report)
+            return _result(call, report, names, context.permissions, waited=waited)
         # Listed from now on, so the user and the Agent can see and stop it; a
         # command that ended is delivered by this result, not later.
         handed_off = True
@@ -533,6 +546,40 @@ class ShellTool:
             reason = "moved"
         return await self._background_result(
             call, command_id, names, context.permissions, reason=reason, idle=idle
+        )
+
+    async def _waited_hint(self, context: ToolContext, report: CommandReport) -> str | None:
+        """Tell a command that slept while the caller's own work runs how to wait instead.
+
+        That work is its direct Sub-Agents whose answers reach it and its
+        background commands that will deliver a result.
+        """
+        if report.elapsed_seconds < _WAITED_SECONDS or not sleeps(report.command):
+            return None
+        caller = SessionAddress(context.project_id, context.agent_id, context.session_id)
+        running = [
+            f"command {command_id}" for command_id in self._commands.pending_wake_ids(caller)
+        ]
+        if self._subagents is not None:
+            try:
+                tree = await self._subagents.subagents(caller)
+            except Exception:
+                _LOGGER.warning("Reading the Sub-Agents of %s failed", caller, exc_info=True)
+                tree = []
+            running[:0] = [
+                f"Sub-Agent {item.id} ({item.title})" for item in tree if item.answer_pending
+            ]
+        if not running:
+            return None
+        named = ", ".join(running[:_WAITED_SHOWN])
+        if len(running) > _WAITED_SHOWN:
+            named += f" and {len(running) - _WAITED_SHOWN} more"
+        return (
+            f"This command took {duration(report.elapsed_seconds)} and slept while work that "
+            f"reports to you still runs: {named}. Each result arrives as a new message by "
+            "itself; sleeping or checking files and logs does not bring it sooner. Continue with "
+            "other work your task still needs. When no such work is left, end your turn: reply "
+            "with a short status and no tool call. Your next turn starts when a result arrives."
         )
 
     async def _stop(self, command_id: str, reason: StopReason) -> None:
@@ -576,9 +623,12 @@ def _result(
     reason: str = "",
     idle: bool = False,
     recovery_failed: bool = False,
+    waited: str | None = None,
 ) -> JsonObject:
     """The Tool result of one call; *reason* says why a running command was
-    returned, *idle* that its processes were idle when the wait passed."""
+    returned, *idle* that its processes were idle when the wait passed, and
+    *waited* is the hint for an ended command that slept while the caller's
+    own work runs, shown when no other hint is."""
     if report.ended:
         not_run = not_run_problem(report)
         if not_run is not None:
@@ -589,6 +639,8 @@ def _result(
                 retryable=retryable,
             )
         data = ended_result(report, names, permissions=permissions)
+        if waited is not None and "hint" not in data:
+            data["hint"] = waited
     else:
         data = {"status": "running", "command_id": report.command_id}
         output = running_output_text(report)
@@ -636,7 +688,8 @@ def _running_next(
             "that result. If it runs until stopped, such as a server, check that it is ready "
             "before you use it, for example with a request to its port, and stop it "
             f"{stop} once it is no longer needed. Otherwise continue with other work your task "
-            "still needs, or end your turn to wait for it."
+            "still needs. When no such work is left, end your turn: reply with a short status "
+            "and no tool call. Your next turn starts when the result arrives."
         )
     # "or it runs until stopped" keeps an Agent from waiting for a server's exit.
     stopping = (
@@ -663,7 +716,8 @@ def _running_next(
     tail = (
         "Its result arrives as a new message when it exits; do not start it again, and do not "
         f"sleep or poll for that result. {stopping} Otherwise continue with other work your "
-        "task still needs, or end your turn to wait for it."
+        "task still needs. When no such work is left, end your turn: reply with a short status "
+        "and no tool call. Your next turn starts when the result arrives."
     )
     if reason == "moved":
         return (
@@ -729,6 +783,7 @@ def register_shell_tool(
     scratch_areas: ScratchAreas | None = None,
     secrets: AgentSecrets | None = None,
     command_checker: CommandChecker | None = None,
+    subagents: SubAgentTree | None = None,
 ) -> ShellTool:
     """Register the shell Tool with a vBot Tool registry.
 
@@ -736,6 +791,7 @@ def register_shell_tool(
     *command_checker* checks a restricted Session's commands before launch;
     without it such a Session cannot run commands. *credential_names* are the
     names a restricted Session's commands do not inherit (``shell_environment``).
+    *subagents* lets a command that slept name the caller's working Sub-Agents.
     """
     tool = ShellTool(
         command_manager,
@@ -746,6 +802,7 @@ def register_shell_tool(
         scratch_areas=scratch_areas,
         secrets=secrets,
         command_checker=command_checker,
+        subagents=subagents,
     )
     registry.register(
         SHELL_TOOL_NAME,

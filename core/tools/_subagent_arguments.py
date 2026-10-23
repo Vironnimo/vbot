@@ -190,7 +190,8 @@ def _read_background_tasks_action(arguments: dict[str, Any]) -> dict[str, Any]:
         raise ToolContractError(
             f'Nothing was run. Unknown action "{action}". Use one of: run, send. '
             "Sub-Agent answers arrive as new messages. Continue with other work your task "
-            "still needs, or end your turn to wait for them."
+            "still needs. When no such work is left, end your turn: reply with a short status "
+            "and no tool call. Your next turn starts when an answer arrives."
         )
     if spelling(action) not in _BACKGROUND_TASKS_ACTIONS:
         return arguments

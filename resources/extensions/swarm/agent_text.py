@@ -28,8 +28,8 @@ INBOX_DESCRIPTION = (
     "Receive your pending Board messages now, oldest first; returned messages count as "
     "received. New messages also reach you as the group's delivery settings allow, so you need "
     "not check right after posting. This Tool never waits for new messages: continue with "
-    "other work your task still needs, or end your turn to wait for them; new messages can "
-    "start your next turn."
+    "other work your task still needs. When no such work is left, end your turn: reply with a "
+    "short status and no tool call. New messages can start your next turn."
 )
 
 INBOX_PARAMETERS: dict[str, Any] = {
@@ -192,7 +192,8 @@ ERRORS = {
     "exact_message_arguments": "To read one message_id, omit discussion_id, cursor, "
     "and limit. No change was applied.",
     "main_membership_required": "Everyone remains in the main discussion. Continue with "
-    "other work your task still needs, or end your turn to wait for others.",
+    "other work your task still needs. When no such work is left, end your turn: reply with a "
+    "short status and no tool call.",
     "swarm_closed": "This Swarm is stopped or currently unavailable for changes. Its "
     "Board remains readable. The user can Resume the Swarm when it is "
     "ready.",
@@ -269,7 +270,7 @@ DELIVERY_SKIPPED = {
 DELIVERY_SKIPPED_READ = "{call} for {discussion}"
 
 # How to wait for others, wherever a result shows that nothing is left to receive.
-WAIT_FOR_OTHERS = "To wait for others, end your turn"
+WAIT_FOR_OTHERS = "To wait for others, end your turn: reply with a short status and no tool call"
 
 # swarm_state results.
 STATE_PENDING = {

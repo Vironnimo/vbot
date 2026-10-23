@@ -709,9 +709,15 @@ class CommandManager:
         process listens on a TCP port is a service and never counts (checked
         every ``SERVICE_POLL_SECONDS``), unlike in ``has_pending_delivery``.
         """
-        return sum(
-            1 for record in self._records.values() if record.owner == owner and record.awaits_wake
-        )
+        return len(self.pending_wake_ids(owner))
+
+    def pending_wake_ids(self, owner: CommandOwner) -> list[str]:
+        """The ids of the commands ``pending_wakes`` counts, oldest first."""
+        return [
+            command_id
+            for command_id, record in self._records.items()
+            if record.owner == owner and record.awaits_wake
+        ]
 
     def has_unfinished_background(self, *, besides: CommandOwner | None = None) -> bool:
         """Whether a background command of a Session other than *besides* is still unfinished.
