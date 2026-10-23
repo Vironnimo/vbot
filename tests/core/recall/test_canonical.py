@@ -7,7 +7,7 @@ import pytest
 
 from core.chat import ChatMessage
 from core.recall import CanonicalSessionRecallBackend, RecallSearchRequest
-from core.recall.recall import RecallOrder
+from core.recall.recall import RecallMatchMode, RecallOrder
 from core.sessions import ChatSession, ChatSessionManager, _store_values
 
 
@@ -57,12 +57,27 @@ async def test_scan_budget_checks_eligible_messages_globally_in_request_order(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("prefix", "term", "query", "match_mode"),
+    [
+        ("", "needle", "NEEDLE", "all_terms"),
+        ("Straße: ", "needle", "NEEDLE", "all_terms"),
+        ("", "Straße", "STRASSE", "all_terms"),
+        ("Straße: ", "alpha\n\t beta", "alpha beta", "phrase"),
+    ],
+    ids=["ascii", "expanded-prefix", "expanded-match", "normalized-phrase"],
+)
 async def test_scan_pages_are_exact_without_loading_histories(
-    sessions: ChatSessionManager, monkeypatch: pytest.MonkeyPatch
+    sessions: ChatSessionManager,
+    monkeypatch: pytest.MonkeyPatch,
+    prefix: str,
+    term: str,
+    query: str,
+    match_mode: RecallMatchMode,
 ) -> None:
     session = sessions.create("agent", session_id="history")
     matches = [
-        ChatMessage.user(f"needle {day}", timestamp=datetime(2026, 1, day, tzinfo=UTC))
+        ChatMessage.user(f"{prefix}{term} {day}", timestamp=datetime(2026, 1, day, tzinfo=UTC))
         for day in (1, 2, 3)
     ]
     session.append_many(
@@ -78,11 +93,11 @@ async def test_scan_pages_are_exact_without_loading_histories(
         agent_id="agent",
         project_id=None,
         session_id=None,
-        query="NEEDLE",
+        query=query,
         since=None,
         until=None,
         roles=("user",),
-        match_mode="all_terms",
+        match_mode=match_mode,
         order="newest",
         offset=0,
         limit=2,
@@ -95,5 +110,7 @@ async def test_scan_pages_are_exact_without_loading_histories(
     assert [hit.message_id for hit in first.hits] == [matches[2].id, matches[1].id]
     assert [hit.message_id for hit in second.hits] == [matches[0].id]
     assert (first.has_more, second.has_more) == (True, False)
-    assert (first.hits[0].match_start, first.hits[0].match_end) == (0, 6)
+    hit = first.hits[0]
+    assert (hit.match_start, hit.match_end) == (len(prefix), len(prefix) + len(term))
+    assert hit.text[hit.match_start : hit.match_end] == term
     assert not first.degraded
