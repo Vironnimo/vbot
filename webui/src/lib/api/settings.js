@@ -641,6 +641,7 @@ export async function connectProvider(
   return (options.rpc ?? rpc)(
     'provider.connect',
     buildProviderConnectPayload(providerId, connectionId, account),
+    options,
   );
 }
 
@@ -653,6 +654,7 @@ export async function disconnectProvider(
   return (options.rpc ?? rpc)(
     'provider.disconnect',
     buildProviderDisconnectPayload(providerId, connectionId, account),
+    options,
   );
 }
 

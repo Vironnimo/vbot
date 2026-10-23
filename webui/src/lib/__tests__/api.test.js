@@ -187,6 +187,24 @@ describe('RPC wrappers', () => {
   const wakePhrases = ['Okay Nabu', 'Hey Jarvis'];
 
   it.each([
+    [
+      'provider.connect with a named account',
+      (o) => api.connectProvider('github', 'github:copilot', 'work', o),
+      {
+        provider_id: 'github',
+        connection_id: 'github:copilot',
+        account: 'work',
+      },
+    ],
+    [
+      'provider.disconnect with the default account',
+      (o) => api.disconnectProvider('github', 'github:copilot', undefined, o),
+      {
+        provider_id: 'github',
+        connection_id: 'github:copilot',
+        account: 'default',
+      },
+    ],
     ['data_store.status', (o) => api.getDataStoreStatus(o), {}],
     ['recall.status', (o) => api.getRecallIndexStatus(o), {}],
     ['activity.list', (o) => api.listBackgroundActivity(o), {}],
