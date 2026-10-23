@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from functools import wraps
 from typing import Any
 
-from core.debug import timing
 from core.tools._tool_context import (
     ToolContext,
     ToolHandler,
@@ -37,14 +36,6 @@ def _invoke_sync_tool_handler(
     context: ToolContext,
     arguments: JsonObject,
 ) -> Any:
-    timing.mark(
-        "handler_started",
-        run=context.run_id,
-        iteration=context.iteration_number,
-        call=context.tool_call_id,
-        index=context.tool_call_index,
-        tool=context.tool_name,
-    )
     return handler(context, arguments)
 
 
@@ -58,23 +49,9 @@ def offload_tool_handler(handler: ToolHandler) -> ToolHandler:
 
     @wraps(handler)
     async def offloaded(context: ToolContext, arguments: JsonObject) -> JsonObject:
-        result = await run_tool_worker(_invoke_worker_handler, handler, context, arguments)
+        result = await run_tool_worker(handler, context, arguments)
         if inspect.isawaitable(result):
             return await result
         return result
 
     return offloaded
-
-
-def _invoke_worker_handler(
-    handler: ToolHandler, context: ToolContext, arguments: JsonObject
-) -> JsonObject | Awaitable[JsonObject]:
-    timing.mark(
-        "worker_handler_started",
-        run=context.run_id,
-        iteration=context.iteration_number,
-        call=context.tool_call_id,
-        index=context.tool_call_index,
-        tool=context.tool_name,
-    )
-    return handler(context, arguments)

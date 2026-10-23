@@ -1,4 +1,4 @@
-"""Debug public API; timing observers do not load HTTP capture or its workers."""
+"""Debug Mode public API: Provider wire trace storage, recording and redaction."""
 
 from importlib import import_module
 from typing import TYPE_CHECKING, Any

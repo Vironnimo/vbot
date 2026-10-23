@@ -27,7 +27,6 @@ import httpx
 
 from core.debug.redaction import redact_headers, redact_url
 from core.debug.store import DebugTraceStore
-from core.debug.timing import WireTiming, enabled
 from core.utils.logging import get_logger
 
 _logger = get_logger("debug")
@@ -130,7 +129,6 @@ class _TraceCapture:
         self._context = context
         self._start = time.monotonic()
         self._trace_id = uuid4().hex
-        self.wire_timing = WireTiming(trace=self._trace_id) if enabled() else None
         self._request = {
             "method": method,
             "url": url,
@@ -155,8 +153,6 @@ class _TraceCapture:
 
     def feed_body(self, chunk: bytes) -> None:
         """Accumulate one raw response body chunk as it is read, up to the body limit."""
-        if self.wire_timing is not None:
-            self.wire_timing.received(len(chunk))
         kept = self._body_bytes
         self._body_bytes += len(chunk)
         if self._body_limit is None:

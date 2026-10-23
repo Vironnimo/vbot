@@ -10,7 +10,6 @@ from contextlib import nullcontext
 from functools import partial
 from typing import TYPE_CHECKING, ClassVar
 
-from core.debug import timing
 from core.tools._tool_context import (
     ToolCall,
     ToolCancelCallback,
@@ -89,14 +88,6 @@ class ToolExecutor:
         needs_slot = self._registry.requires_execution_slot(tool_call.name)
         global_slot = self._get_global_semaphore() if needs_slot else nullcontext()
         async with per_run_semaphore, global_slot:
-            timing.mark(
-                "dispatch_started",
-                run=config.run_id,
-                iteration=config.iteration_number,
-                call=tool_call.id,
-                index=index,
-                tool=tool_call.name,
-            )
             # Per-call cancel hooks close over tool_call.id so concurrent sibling
             # tool calls in one execution group each register/inspect their own id.
             cancel_registration_hook, cancel_check_hook = _build_per_call_cancel_hooks(
@@ -223,16 +214,6 @@ class ToolBatch:
         waits = [self._barrier] if self._barrier is not None else []
         if not parallel:
             waits.extend(self._group)
-        timing.mark(
-            "call_scheduled",
-            run=self._config.run_id,
-            iteration=self._config.iteration_number,
-            call=tool_call.id,
-            index=index,
-            tool=tool_call.name,
-            barrier_waits=len(waits),
-            execution_slot=self._executor._registry.requires_execution_slot(tool_call.name),
-        )
         task = asyncio.create_task(
             self._run(tool_call, index, waits),
             name=f"tool:{tool_call.name}:{tool_call.id}",
@@ -285,13 +266,6 @@ class ToolBatch:
             if any(task.cancelled() or task.exception() is not None for task in waits):
                 # An earlier call was aborted; the batch is being torn down.
                 raise asyncio.CancelledError
-        timing.mark(
-            "barriers_passed",
-            run=self._config.run_id,
-            iteration=self._config.iteration_number,
-            call=tool_call.id,
-            index=index,
-        )
         return await self._executor._execute_one(
             tool_call, index, self._config, self._per_run_semaphore
         )
