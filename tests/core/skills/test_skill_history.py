@@ -20,6 +20,7 @@ from core.skills.authoring import (
     SkillRevertConflictError,
     SkillWriter,
 )
+from tests.directory_links import link_directory
 
 AGENT = SkillWriter(actor="agent", session_id="s-1", run_id="r-1", run_kind="user")
 REFLECTION = SkillWriter(actor="reflection", session_id="s-2", run_id="r-2", run_kind="reflection")
@@ -392,10 +393,21 @@ def test_publish_moves_a_skill_into_another_home_with_its_provenance(
             remove_tree(displaced)
 
     external_change = None
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    outside_file = outside / "private.md"
+    outside_file.write_text("outside content", encoding="utf-8")
+    link_directory(source / "demo" / "assets", outside)
     published = service.publish(source, target, "demo", writer=AGENT)
 
     assert (published.operation, published.path) == ("publish", target / "demo" / "SKILL.md")
     assert (target / "demo" / "references" / "notes.md").read_text(encoding="utf-8") == "notes"
+    assert (target / "demo" / "assets").resolve() == outside.resolve()
+    assert [change.path for change in published.changes] == [
+        "SKILL.md",
+        "references/notes.md",
+    ]
+    assert outside_file.read_text(encoding="utf-8") == "outside content"
     # The target's history starts with a create by the publisher; the package
     # keeps the origin it had in the source home.
     [revision] = service.history(target, "demo")
