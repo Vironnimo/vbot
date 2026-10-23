@@ -229,7 +229,11 @@ class CronNotifications:
             await self._update(job_id, replace(item, error="Notification storage is unavailable"))
             return
         job = self._owner._jobs.get(job_id)
-        drops = 0 if job is None else job.dropped_notifications
+        if job is None:
+            # Deleting the job while its claim saves discards this notification
+            # before any transport send has started.
+            return
+        drops = job.dropped_notifications
         text = self._owner._secret_masker().mask(item.text)
         if drops:
             text = f"{dropped_messages_line(drops)}\n\n{text}"

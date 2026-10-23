@@ -398,7 +398,7 @@ def _add_statistics_parsers(
             statistics_subparsers,
             section,
             STATISTICS_HELP[section],
-            example=f"statistics {section} --since 2026-06-01",
+            example=f"statistics {section} --since 2026-06-01T00:00:00Z",
         )
         _add_statistics_window_arguments(section_parser)
 
@@ -407,12 +407,18 @@ def _add_statistics_window_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--since",
         metavar="<iso-datetime>",
-        help="Count activity at or after this ISO 8601 time, rounded down to a full hour",
+        help=(
+            "Count activity at or after this ISO 8601 time with an explicit offset, "
+            "rounded down to a full hour"
+        ),
     )
     parser.add_argument(
         "--until",
         metavar="<iso-datetime>",
-        help="Count activity before this ISO 8601 time, rounded up to a full hour",
+        help=(
+            "Count activity before this ISO 8601 time with an explicit offset, "
+            "rounded up to a full hour"
+        ),
     )
 
 

@@ -23,6 +23,7 @@ try:
     from fastapi.staticfiles import StaticFiles  # type: ignore[import-not-found]
     from pydantic import TypeAdapter
     from pydantic_core import PydanticSerializationError
+    from python_multipart.exceptions import MultipartParseError
     from starlette.datastructures import (  # type: ignore[import-not-found]
         UploadFile as StarletteUploadFile,
     )
@@ -47,6 +48,7 @@ except ModuleNotFoundError as exc:  # pragma: no cover - exercised when server e
     WebSocketDisconnect = Exception  # type: ignore[misc,assignment]
     MultiPartException = Exception  # type: ignore[misc,assignment]
     MultiPartParser = object  # type: ignore[misc,assignment]
+    MultipartParseError = Exception  # type: ignore[misc,assignment]
     TypeAdapter = None  # type: ignore[assignment,misc]
     PydanticSerializationError = Exception  # type: ignore[misc,assignment]
 else:
@@ -73,6 +75,7 @@ __all__ = [
     "StarletteUploadFile",
     "MultiPartException",
     "MultiPartParser",
+    "MultipartParseError",
     "WebSocketDisconnect",
     "TypeAdapter",
     "PydanticSerializationError",

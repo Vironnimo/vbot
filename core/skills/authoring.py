@@ -84,6 +84,7 @@ from core.utils.file_status import exists_strict, is_file_strict
 from core.utils.ids import is_reserved_name, reserved_name_message
 from core.utils.logging import get_logger
 from core.utils.paths import model_path
+from core.utils.tree_move import copy_tree
 
 _LOGGER = get_logger("skills.authoring")
 
@@ -364,7 +365,7 @@ class SkillAuthoringService:
             # A sibling staging directory publishes on one filesystem in one rename.
             staging = Path(tempfile.mkdtemp(prefix=".skill-publish-", dir=destination.parent))
             try:
-                shutil.copytree(source_dir, staging / "package", symlinks=True)
+                copy_tree(source_dir, staging / "package")
                 publication = _publication_fingerprint(staging / "package")
                 (staging / "package").rename(destination)
             finally:

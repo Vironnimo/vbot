@@ -50,6 +50,7 @@ from core.database.marker import (
     maintenance_locked,
     operation_lock,
     read_maintenance,
+    require_maintenance_scope,
     require_no_maintenance,
 )
 from core.utils.atomic import atomic_write_bytes
@@ -152,7 +153,6 @@ def _restore_config_backup_locked(
     backup = _read_restorable(data_dir, backup_id)
     operation = _restore_operation(backup_id)
     explicit = paths is not None
-    interrupted, replaced = _pending_restore(data_dir, operation, complete=not explicit)
     selected = (
         sorted(backup.files)
         if paths is None
@@ -160,6 +160,8 @@ def _restore_config_backup_locked(
     )
     if explicit and not selected:
         raise ValueError("name at least one file to restore")
+    scope = {"files": selected, "all": not explicit}
+    interrupted, replaced = _pending_restore(data_dir, operation, scope, complete=not explicit)
     current = _current_hashes(data_dir)
     root = config_backup_root(data_dir)
     restored: dict[str, tuple[bytes, ConfigFile]] = {}
@@ -205,6 +207,7 @@ def _restore_config_backup_locked(
         operation,
         resume=True,
         replaces=None if replaced is None else _restore_operation(replaced),
+        scope=scope,
     ):
         for path, (content, item) in restored.items():
             atomic_write_bytes(
@@ -254,7 +257,9 @@ def _read_restorable(data_dir: Path, backup_id: str) -> ConfigBackup:
         ) from exc
 
 
-def _pending_restore(data_dir: Path, operation: str, *, complete: bool) -> tuple[bool, str | None]:
+def _pending_restore(
+    data_dir: Path, operation: str, scope: Mapping[str, object], *, complete: bool
+) -> tuple[bool, str | None]:
     """Whether a restore of this backup is incomplete, and which unfinished one it replaces.
 
     Only a restore of every file (``complete``) replaces the unfinished restore of
@@ -265,6 +270,14 @@ def _pending_restore(data_dir: Path, operation: str, *, complete: bool) -> tuple
     if guard is None:
         return False, None
     if guard.operation == operation:
+        if guard.scope is None:
+            raise DatabaseFormatError(
+                f"the interrupted restore of configuration backup "
+                f"{operation.removeprefix(f'{CONFIG_RESTORE_OPERATION} ')} has no recorded "
+                "file selection. Nothing was changed. Replace it by restoring every file "
+                "of another backup (--all)"
+            )
+        require_maintenance_scope(data_dir, operation, scope)
         return True, None
     pending = guard.operation.removeprefix(f"{CONFIG_RESTORE_OPERATION} ")
     if pending == guard.operation:

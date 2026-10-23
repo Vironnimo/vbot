@@ -379,6 +379,36 @@ def test_settings_written_by_a_newer_vbot_are_not_used_or_overwritten(tmp_path: 
             {"defaults": {"agent": {"permission_rules": "invalid"}}},
             id="invalid-json-with-permission-rules",
         ),
+        *[
+            pytest.param(
+                content.encode(encoding),
+                {"defaults": {"agent": {"permission_rules": "invalid"}}},
+                id=f"permission-rules-{case}",
+            )
+            for case, content, encoding in [
+                (
+                    "escaped-key-invalid-version",
+                    r'{"format_version": 2, "defaults": {"agent": '
+                    r'{"permiss\u0069on_rules": {"read": "work_area"}}}}',
+                    "utf-8",
+                ),
+                (
+                    "escaped-key-invalid-json",
+                    r'{"defaults": {"agent": {"\u0070ermission_rules": {"read": "work_area"}}}',
+                    "utf-8",
+                ),
+                (
+                    "escaped-key-utf16",
+                    r'{"defaults": {"agent": {"permission\u005frules": {"read": "work_area"}}}}',
+                    "utf-16-be",
+                ),
+                (
+                    "key-utf32",
+                    '{"defaults": {"agent": {"permission_rules": {"read": "work_area"}}}}',
+                    "utf-32-le",
+                ),
+            ]
+        ],
         pytest.param(b'{"appearance":{"language":"\xff"}}', {}, id="non-utf8"),
         pytest.param(
             '{"format_version": 1, "server_port": 8500, "compaction": {"enabled": "yes"}}',

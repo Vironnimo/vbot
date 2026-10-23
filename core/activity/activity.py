@@ -317,6 +317,11 @@ class SessionActivity:
             while entry.dirty and not self._closed:
                 entry.dirty = False
                 computed = await self._compute(address)
+                if entry.dirty:
+                    # Reading child links yields to source changes. Never publish
+                    # their stale snapshot, especially a completed idle recheck
+                    # after a new Run has already continued the work span.
+                    continue
                 changed = self._apply(address, entry, computed)
                 if changed or entry.tell_parent:
                     entry.tell_parent = False

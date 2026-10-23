@@ -135,6 +135,8 @@ class _TraceCapture:
             "headers": headers,
         }
         self._request_body = request_body
+        self._request_body_chunks: list[bytes] = []
+        self._request_body_bytes = 0
         self._request_encoding = httpx.Headers(headers).get("content-encoding")
         self._response: dict[str, Any] | None = None
         self._error: dict[str, str] | None = None
@@ -159,6 +161,15 @@ class _TraceCapture:
             self._body_chunks.append(chunk)
         elif kept < self._body_limit:
             self._body_chunks.append(chunk[: self._body_limit - kept])
+
+    def feed_request_body(self, chunk: bytes) -> None:
+        """Capture a streamed upload as sent, retaining at most the body limit."""
+        kept = self._request_body_bytes
+        self._request_body_bytes += len(chunk)
+        if self._body_limit is None:
+            self._request_body_chunks.append(chunk)
+        elif kept < self._body_limit:
+            self._request_body_chunks.append(chunk[: self._body_limit - kept])
 
     def record_error(self, error: BaseException) -> None:
         """Record a transport-level failure (connect/timeout/etc.)."""
@@ -186,6 +197,8 @@ class _TraceCapture:
                 body_chunks=tuple(self._body_chunks),
                 body_bytes=self._body_bytes,
                 content_encoding=self._content_encoding,
+                request_body_chunks=tuple(self._request_body_chunks),
+                request_body_bytes=self._request_body_bytes,
             )
             if not self._store.save_trace_in_background(self._trace_id, build_trace):
                 _logger.warning("Debug trace dropped: earlier traces are still being written")
@@ -206,6 +219,8 @@ class _TraceCapture:
         body_chunks: tuple[bytes, ...],
         body_bytes: int,
         content_encoding: str | None,
+        request_body_chunks: tuple[bytes, ...],
+        request_body_bytes: int,
     ) -> dict[str, Any]:
         received = b"".join(body_chunks)
         body_text = (
@@ -236,7 +251,10 @@ class _TraceCapture:
             "context": self._context_dict(),
             "provider_id": self._context.provider_id if self._context else "",
             "model_id": self._context.model_id if self._context else "",
-            "request": {**self._request, "body": self._request_body_text()},
+            "request": {
+                **self._request,
+                "body": self._request_body_text(request_body_chunks, request_body_bytes),
+            },
             "response": trace_response,
         }
 
@@ -245,8 +263,12 @@ class _TraceCapture:
 
         return trace
 
-    def _request_body_text(self) -> str | None:
+    def _request_body_text(self, chunks: tuple[bytes, ...], total_bytes: int) -> str | None:
         body = self._request_body
+        if body is None:
+            body = b"".join(chunks)
+            if len(body) < total_bytes:
+                return (_decode_body(body) or "") + _omitted_note(total_bytes - len(body))
         if body:
             # A compressed request body reads as the payload the Adapter built.
             body = _decode_request_content(body, self._request_encoding)

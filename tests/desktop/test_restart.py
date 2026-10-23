@@ -86,6 +86,21 @@ def test_the_successor_takes_the_request_once_and_drops_invalid_parts(tmp_path: 
         nonce="b" * 32, placement=WindowPlacement("minimized", 900, 700)
     )
 
+    path.write_text(
+        json.dumps(
+            {
+                "created_at": 1000.0,
+                "nonce": "c" * 32,
+                "server": {"host": "pi.lan", "port": 9000},
+                "window": {"state": [], "width": 900, "height": 700},
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert restart.take_restart_request(tmp_path, now=1000.0) == RestartRequest(
+        nonce="c" * 32, server=("pi.lan", 9000)
+    )
+
 
 @pytest.mark.parametrize(
     "document",

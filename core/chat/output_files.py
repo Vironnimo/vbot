@@ -10,6 +10,7 @@ there (``_previewable``).
 from __future__ import annotations
 
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -216,6 +217,10 @@ def _resolve_regular_file(
         if permissions.check_path(path, "read") is not None:
             return None
         resolved = path.resolve()
+        if sys.platform == "win32" and path.name.endswith(".") and not resolved.name.endswith("."):
+            # Win32 strips trailing dots, so this is a path alias, not an exact
+            # filename. Let marker parsing preserve the dot as prose instead.
+            return None
         return resolved if resolved.is_file() else None
     except OSError, RuntimeError, ValueError:
         return None

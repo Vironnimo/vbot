@@ -289,9 +289,26 @@ def text_matches_search_request(text: str, request: RecallSearchRequest) -> bool
 def first_match_span(text: str, query: str, match_mode: str) -> tuple[int | None, int | None]:
     """Locate a useful raw-source span without normalizing the returned text."""
 
-    haystack = text.casefold()
+    # Search uses collapsed whitespace and Unicode case folding. Both can
+    # change lengths (for example, sharp s becomes two characters), so keep
+    # each normalized character's source position for the returned span.
+    normalized: list[str] = []
+    source_positions: list[int] = []
+    previous_space = False
+    for position, character in enumerate(text):
+        if character.isspace():
+            if previous_space:
+                continue
+            folded = " "
+            previous_space = True
+        else:
+            folded = character.casefold()
+            previous_space = False
+        normalized.append(folded)
+        source_positions.extend([position] * len(folded))
+    haystack = "".join(normalized)
     needles = (
-        [query.casefold()]
+        [compact_text(query).casefold()]
         if match_mode == "phrase"
         else [term for term in query_terms(query) if term]
     )
@@ -300,7 +317,7 @@ def first_match_span(text: str, query: str, match_mode: str) -> tuple[int | None
     if not matches:
         return None, None
     index, length = min(matches, key=lambda item: item[0])
-    return index, index + length
+    return source_positions[index], source_positions[index + length - 1] + 1
 
 
 def query_terms(query: str) -> list[str]:

@@ -73,6 +73,8 @@ async def test_continuations_recover_all_unicode_text_with_one_fetch(tmp_path, m
         parts.append(data["content"])
         if "more" not in data:
             break
+        if len(data["content"]) < pages.DEFAULT_MAX_CHARS:
+            assert data.get("note")
         assert data["more"].startswith(f"{total - end} more characters. Continue with ")
         assert f'search the page with {{"ref": "{data["ref"]}", "find": "..."}}' in data["more"]
         follow_up = continuation(data)

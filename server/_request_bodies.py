@@ -9,6 +9,7 @@ from typing import Any, cast, override
 from server._http_dependencies import (
     HTTPException,
     MultiPartException,
+    MultipartParseError,
     MultiPartParser,
     Request,
     StarletteUploadFile,
@@ -61,6 +62,12 @@ class _SizeLimitedMultiPartParser(MultiPartParser):  # type: ignore[misc]
                 )
             self._current_file_size_bytes = next_size_bytes
         super().on_part_data(data, start, end)
+
+    def close_unclaimed_files(self, claimed: UploadFile | None) -> None:
+        """Close spools even when cancellation or an incomplete part bypasses FormData."""
+        for file in self._files_to_close_on_error:
+            if claimed is None or file is not claimed.file:
+                file.close()
 
 
 def _require_json_media_type(request: Request) -> None:
@@ -160,18 +167,24 @@ async def _parse_upload_file_with_limit(
         max_file_size_bytes=max_size_bytes,
         upload_kind=upload_kind,
     )
+    claimed: UploadFile | None = None
     try:
-        form = await parser.parse()
-    except _UploadTooLargeMultipartError as exc:
-        raise HTTPException(status_code=413, detail=exc.message) from exc
-    except MultiPartException as exc:
-        raise HTTPException(status_code=400, detail=exc.message) from exc
+        try:
+            form = await parser.parse()
+        except _UploadTooLargeMultipartError as exc:
+            raise HTTPException(status_code=413, detail=exc.message) from exc
+        except MultiPartException as exc:
+            raise HTTPException(status_code=400, detail=exc.message) from exc
+        except MultipartParseError as exc:
+            raise HTTPException(status_code=400, detail="Malformed multipart body") from exc
 
-    file = form.get("file")
-    if not isinstance(file, StarletteUploadFile):
-        await form.close()
-        raise HTTPException(status_code=422, detail="multipart file field 'file' is required")
-    return cast(UploadFile, file)
+        file = form.get("file")
+        if not isinstance(file, StarletteUploadFile):
+            raise HTTPException(status_code=422, detail="multipart file field 'file' is required")
+        claimed = cast(UploadFile, file)
+        return claimed
+    finally:
+        parser.close_unclaimed_files(claimed)
 
 
 def _request_content_length(request: Request) -> int | None:

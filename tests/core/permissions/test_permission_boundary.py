@@ -486,6 +486,11 @@ def test_host_decisions(area: Area, host: str, reason: str | None, by_program: b
         pytest.param("https://example.com/page", None, id="ordinary-url"),
         pytest.param("ftp://example.com/file", "unanalyzable", id="other-scheme"),
         pytest.param("http://example.com:99999/", "unanalyzable", id="invalid-port"),
+        pytest.param("http://[::1", "unanalyzable", id="unclosed-ipv6"),
+        pytest.param("http://[not-ip]/", "unanalyzable", id="invalid-ipv6"),
+        pytest.param(
+            "http://example.com\uff1a80/", "unanalyzable", id="unicode-authority-delimiter"
+        ),
     ],
 )
 def test_url_decisions(area: Area, url: str, reason: str | None) -> None:

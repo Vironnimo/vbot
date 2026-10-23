@@ -155,15 +155,21 @@ class _DebugCaptureTransport(httpx.AsyncBaseTransport):
 
     @override
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        try:
+            request_body = request.content
+        except httpx.RequestNotRead:
+            request_body = None
         capture = self._recorder.begin_capture(
             method=request.method,
             url=str(request.url),
             headers=dict(request.headers),
-            body=request.content,
+            body=request_body,
         )
+        if request_body is None and isinstance(request.stream, httpx.AsyncByteStream):
+            request.stream = _CaptureRequestByteStream(request.stream, capture)
         try:
             response = await self._inner.handle_async_request(request)
-        except Exception as exc:
+        except BaseException as exc:
             capture.record_error(exc)
             capture.finalize()
             raise
@@ -177,6 +183,24 @@ class _DebugCaptureTransport(httpx.AsyncBaseTransport):
             # defensively so a trace is never left unpersisted.
             capture.finalize()
         return response
+
+    @override
+    async def aclose(self) -> None:
+        await self._inner.aclose()
+
+
+class _CaptureRequestByteStream(httpx.AsyncByteStream):
+    """Tee an upload as the transport consumes it, without reading ahead."""
+
+    def __init__(self, inner: httpx.AsyncByteStream, capture: Any) -> None:
+        self._inner = inner
+        self._capture = capture
+
+    @override
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        async for chunk in self._inner:
+            self._capture.feed_request_body(chunk)
+            yield chunk
 
     @override
     async def aclose(self) -> None:

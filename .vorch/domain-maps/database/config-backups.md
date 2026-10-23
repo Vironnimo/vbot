@@ -28,6 +28,8 @@ A restore is offline (the CLI stops and restarts the server) and holds the opera
 
 It never removes a file: files created after the backup stay, and a file whose folder no longer exists (a deleted or renamed Agent, Project or Channel), that is damaged, or that is a link or lies below a linked folder (symbolic link or junction) is refused when named and skipped by a full restore; a full restore (no `paths`) also skips a differing `secrets.json` (`DOCUMENTS_KEPT_BY_RESTORES`), which is restored only when named; the link rule mirrors capture, which reads only regular files reached through real directories, so a restore never writes where its before-restore backup could not look (`tests/core/database/test_config_backups.py`).
 
+The guard records the normalized selected file set and whether the request restored all files or named files. A retry of the same backup requires that same selection, in both check-only planning and mutation; a smaller selection cannot clear an unfinished restore. A guard without that scope evidence cannot resume, but a full restore of another backup can still replace it as above.
+
 ## Logging
 
 A configuration backup logs one INFO line (backup, files, changed, reason) and a WARNING naming damaged documents; a configuration restore one INFO line with the before-restore backup; a reservation that cannot be read or is malformed logs one WARNING per condition, and one that cannot be released a WARNING with its expiry (`vbot.database`, policy in `logging.md`).

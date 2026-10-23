@@ -169,7 +169,9 @@ class CronWebhooks:
         except SecretStoreError as error:
             raise CronStorageError(f"The webhook secret could not be read: {error}") from error
         if secret is not None:
-            self._secrets[job_id] = secret
+            # A rotation may publish its new secret while this worker read is
+            # returning. A stale read must not reactivate the replaced secret.
+            secret = self._secrets.setdefault(job_id, secret)
         return secret
 
     async def discard(self, job_id: str, *, keep_secret: bool = False) -> None:
@@ -248,7 +250,7 @@ class CronWebhooks:
                 taken=self._taken_seqs(job_id),
             )
             try:
-                await settle_before_cancelling(self._write(updated))
+                await settle_before_cancelling(self._commit_received(updated))
             except CronStorageError as error:
                 _LOGGER.error(
                     "Cron webhook request not stored; the sender was told to retry (job=%s): %s",
@@ -256,7 +258,6 @@ class CronWebhooks:
                     error,
                 )
                 return "unavailable"
-            self._states[job_id] = updated
         _LOGGER.debug(
             "Cron webhook request accepted (job=%s bytes=%d waiting=%d dropped=%d)",
             job_id,
@@ -264,9 +265,14 @@ class CronWebhooks:
             len(updated.waiting(taken=self._taken_seqs(job_id))),
             updated.dropped,
         )
-        self.wake(job_id).set()
-        self._owner._notify_changed()
         return "accepted"
+
+    async def _commit_received(self, state: WebhookState) -> None:
+        """Persist and publish an admitted request before honoring caller cancellation."""
+        await self._write(state)
+        self._states[state.job_id] = state
+        self.wake(state.job_id).set()
+        self._owner._notify_changed()
 
     async def take(self, job_id: str) -> WebhookBatch | None:
         """Take the waiting requests for a Run about to start; None when none wait."""

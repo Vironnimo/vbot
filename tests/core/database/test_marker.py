@@ -215,14 +215,26 @@ def test_the_maintenance_guard_blocks_opening_and_snapshots_until_finished(
     open_database(notes_spec(data_dir)).close()
 
 
-def test_only_the_same_operation_resumes_an_interrupted_guard(data_dir: Path) -> None:
-    first = begin_maintenance(data_dir, "restore")
+@pytest.mark.parametrize("scope", [None, {"files": ["settings.json"]}])
+def test_only_the_same_operation_resumes_an_interrupted_guard(
+    data_dir: Path, scope: dict[str, Any] | None
+) -> None:
+    first = begin_maintenance(data_dir, "restore", scope=scope)
 
     with pytest.raises(DatabaseFormatError):
         begin_maintenance(data_dir, "convert", resume=True)
-    resumed = begin_maintenance(data_dir, "restore", resume=True)
+    with pytest.raises(DatabaseFormatError):
+        begin_maintenance(data_dir, "restore", resume=True, scope={"files": ["secrets.json"]})
+    assert read_maintenance(data_dir) == first
+    path = data_dir / MAINTENANCE_GUARD_FILE_NAME
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["future_field"] = {"retained": True}
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    resumed = begin_maintenance(data_dir, "restore", resume=True, scope=scope)
 
     assert resumed.operation_id != first.operation_id
+    assert resumed.scope == scope
+    assert json.loads(path.read_text(encoding="utf-8"))["future_field"] == {"retained": True}
     with pytest.raises(DatabaseFormatError, match="another operation"):
         finish_maintenance(data_dir, first)
     finish_maintenance(data_dir, resumed)

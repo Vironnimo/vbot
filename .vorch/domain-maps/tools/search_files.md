@@ -349,8 +349,10 @@ query's rg arguments, so later `args` override them (`--no-hidden`,
 `--no-glob-case-insensitive`, `--no-crlf`). `--crlf` lets `^` and `$` match at CRLF
 line ends, which `read` shows as plain lines and its `pattern` filter matches
 (review 2026-10-22: `needle$` found only the LF copy of a file). A line feed in a
-multi-line pattern matches only LF, except in the automatic `-U` retry below, which
-widens it to `\r?\n`; an explicit `-U` or `-P` pattern keeps it as written.
+multi-line regex is widened to `\r?\n` while `--crlf` applies, both with explicit
+`-U` (PCRE2 included) and in the automatic `-U` retry below. An explicit
+`--no-crlf` keeps the pattern's line feeds as written; `-P` alone does not enable
+multiline matching.
 `--glob=!.git` always comes last, preceded by
 `--glob=!__pycache__` unless the call asks for the caches (`skips_caches`). This
 gives the following selection:

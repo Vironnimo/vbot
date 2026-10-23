@@ -96,6 +96,7 @@ from core.database.marker import (
     operation_lock,
     read_marker,
     register_database_locked,
+    require_maintenance_scope,
     require_no_maintenance,
     unregister_databases_locked,
     valid_database_id,
@@ -682,6 +683,13 @@ def _restore_data_snapshot_locked(
     selected = tuple(sorted(manifest.members) if names is None else sorted(set(names)))
     if not selected and not documents:
         raise ValueError("no snapshot member selected")
+    scope = {
+        "snapshot_id": manifest.snapshot_id,
+        "databases": list(selected),
+        "documents": documents,
+        "retire_unlisted": retire_unlisted,
+    }
+    require_maintenance_scope(data_dir, RESTORE_OPERATION, scope)
     known_specs = {spec.name: spec for spec in specs}
     registered: list[str] = []
     for name in selected:
@@ -717,7 +725,7 @@ def _restore_data_snapshot_locked(
             manifest.snapshot_id, selected, document_plan, retired, tuple(registered)
         )
     document_result: DocumentRestore | None = None
-    with maintenance_locked(data_dir, RESTORE_OPERATION, resume=True):
+    with maintenance_locked(data_dir, RESTORE_OPERATION, resume=True, scope=scope):
         detected_at = utc_now_timestamp()
         for name in selected:
             if not _restore_member_locked(

@@ -148,13 +148,12 @@ class TemporaryFileManager:
             raise ValueError(f"Not a temporary file of this manager: {path}")
         with self._lock:
             self._active.add(path)
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.touch(exist_ok=True)
-        except OSError:
-            with self._lock:
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.touch(exist_ok=True)
+            except OSError:
                 self._active.discard(path)
-            raise
+                raise
         return TemporaryFileLease(path=path, _manager=self)
 
     def start(self) -> None:
@@ -287,13 +286,19 @@ class TemporaryFileManager:
                 ):
                     continue
                 candidate = Path(entry.path)
-                current = candidate.stat(follow_symlinks=False)
-                if (
-                    not is_link_status(current)
-                    and stat.S_ISREG(current.st_mode)
-                    and current.st_mtime < expires_before
-                ):
-                    candidate.unlink()
+                # A finished file can be reopened after the sweep's initial
+                # lease snapshot. Serialize its final check and removal with
+                # reopening, which may recreate a file the sweep removed.
+                with self._lock:
+                    if candidate in self._active:
+                        continue
+                    current = candidate.stat(follow_symlinks=False)
+                    if (
+                        not is_link_status(current)
+                        and stat.S_ISREG(current.st_mode)
+                        and current.st_mtime < expires_before
+                    ):
+                        candidate.unlink()
             except OSError as error:
                 _LOGGER.warning(
                     "Temporary-file cleanup failed path=%s: %s",

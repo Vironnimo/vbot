@@ -925,7 +925,7 @@ def make_web_fetch_handler(
         if (
             result["ok"]
             and "more" in result["data"]
-            and request.view.get("max_chars", 0) > len(result["data"]["content"])
+            and request.view.get("max_chars", DEFAULT_MAX_CHARS) > len(result["data"]["content"])
         ):
             notes.append(_SIZE_NOTE)
         return _with_notes(result, notes)

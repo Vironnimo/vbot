@@ -31,7 +31,7 @@ from core.database import (
 )
 from core.database import _config_restore as config_restore_module
 from core.database import config_backups as config_backups_module
-from core.database.marker import acquire_operation_lock
+from core.database.marker import acquire_operation_lock, begin_maintenance
 from tests.core.database.database_test_support import write_document
 from tests.directory_links import link_directory
 
@@ -344,6 +344,7 @@ def test_a_backup_repairs_a_stored_copy_altered_to_the_same_size(
 
 
 @pytest.mark.parametrize("ending", ["repeated", "replaced"])
+@pytest.mark.parametrize("explicit", [False, True], ids=["all-files", "named-files"])
 @pytest.mark.parametrize(
     ("wrote_every_file", "state_backed_up"),
     [(False, False), (True, False), (False, True)],
@@ -355,6 +356,7 @@ def test_an_interrupted_restore_holds_the_maintenance_guard_until_repeated_or_re
     wrote_every_file: bool,
     state_backed_up: bool,
     ending: str,
+    explicit: bool,
 ) -> None:
     # Only the newest-backups rule holds the restored backup: the before-restore
     # backup would push it out, and the restore could never be repeated.
@@ -369,6 +371,7 @@ def test_an_interrupted_restore_holds_the_maintenance_guard_until_repeated_or_re
         _write(data_dir, "settings.json", _settings("UTC"))
         _write(data_dir, NOTE, "KEY=two\n")
     real_write = config_restore_module.atomic_write_bytes
+    paths = ["settings.json", NOTE] if explicit else None
 
     def fail_on_settings(target: Path, *args: object, **kwargs: object) -> None:
         if target.name == "settings.json" and not wrote_every_file:
@@ -381,24 +384,35 @@ def test_an_interrupted_restore_holds_the_maintenance_guard_until_repeated_or_re
     with monkeypatch.context() as patched:
         patched.setattr(config_restore_module, "atomic_write_bytes", fail_on_settings)
         with pytest.raises(OSError, match="injected"):
-            restore_config_backup(data_dir, backup_id, now=NOW + timedelta(minutes=10))
+            restore_config_backup(data_dir, backup_id, paths=paths, now=NOW + timedelta(minutes=10))
     # The backup that holds the replaced state, the undo point of the restore.
     undo_point = list_config_backups(data_dir)[0]
     if state_backed_up:
         assert undo_point.backup_id == other_id
     else:
         assert undo_point.reason == f"before restore {backup_id}"
-    assert read_maintenance(data_dir) is not None
+    guard = read_maintenance(data_dir)
+    assert guard is not None
+    # Even the same backup cannot finish a different, smaller selection: NOTE
+    # already matches, while settings may still hold the half-restored state.
+    for check_only in (True, False):
+        with pytest.raises(DatabaseFormatError):
+            restore_config_backup(data_dir, backup_id, paths=[NOTE], check_only=check_only)
+        assert read_maintenance(data_dir) == guard
     with pytest.raises(DatabaseFormatError, match="maintenance"):
         capture_config_backup(data_dir, reason="test")
     # Restoring named files of another backup would keep the half-restored state.
     with pytest.raises(DatabaseFormatError, match=f"backup {backup_id} did not finish"):
         restore_config_backup(data_dir, other_id, paths=["settings.json"], check_only=True)
-    assert restore_config_backup(data_dir, backup_id, check_only=True).interrupted
+    # File order does not change the selected set or prevent a legitimate retry.
+    retry_paths = list(reversed(paths)) if paths is not None else None
+    assert restore_config_backup(
+        data_dir, backup_id, paths=retry_paths, check_only=True
+    ).interrupted
     assert restore_config_backup(data_dir, other_id, check_only=True).replaced == backup_id
 
     if ending == "repeated":
-        repeated = restore_config_backup(data_dir, backup_id)
+        repeated = restore_config_backup(data_dir, backup_id, paths=retry_paths)
 
         assert read_maintenance(data_dir) is None
         assert repeated.restored == (() if wrote_every_file else ("settings.json",))
@@ -426,6 +440,23 @@ def test_an_interrupted_restore_holds_the_maintenance_guard_until_repeated_or_re
     assert {path: before.files[path].sha256 for path in half_restored} == {
         path: hashlib.sha256(text.encode()).hexdigest() for path, text in half_restored.items()
     }
+
+
+def test_an_unscoped_config_restore_requires_a_complete_replacement(data_dir: Path) -> None:
+    _write(data_dir, "settings.json", _settings("Europe/Berlin"))
+    backup_id = _backup(data_dir)
+    _write(data_dir, "settings.json", _settings("UTC"))
+    other_id = _backup(data_dir, now=NOW + timedelta(minutes=1))
+    guard = begin_maintenance(data_dir, f"config restore {backup_id}")
+
+    for check_only in (True, False):
+        with pytest.raises(DatabaseFormatError):
+            restore_config_backup(data_dir, backup_id, check_only=check_only)
+        assert read_maintenance(data_dir) == guard
+        assert _read(data_dir, "settings.json") == _settings("UTC")
+    replaced = restore_config_backup(data_dir, other_id)
+    assert replaced.replaced == backup_id
+    assert read_maintenance(data_dir) is None
 
 
 def test_a_backup_does_not_wait_long_for_another_data_store_operation(

@@ -172,7 +172,20 @@ export function createComposerMedia(context) {
     setAttachmentsForDraftKey(key, update(current));
   };
 
-  const unsubscribeAttachments = subscribePendingAttachments(() => {
+  const unsubscribeAttachments = subscribePendingAttachments((change) => {
+    if (change?.fromAgent) {
+      const prefix = `${change.fromAgent}::`;
+      pendingAttachmentsByScope = Object.fromEntries(
+        Object.entries(pendingAttachmentsByScope).map(
+          ([scope, attachments]) => [
+            scope.startsWith(prefix)
+              ? `${change.toAgent}::${scope.slice(prefix.length)}`
+              : scope,
+            attachments,
+          ],
+        ),
+      );
+    }
     for (const scope of Object.keys(pendingAttachmentsByScope)) {
       if (scope !== EPHEMERAL_ATTACHMENT_SCOPE)
         hydratePendingAttachments(scope);

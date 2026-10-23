@@ -98,6 +98,9 @@ class MaintenanceOperation:
     pid: int
     #: The guard file cannot be parsed; ``operation`` is then ``"unknown"``.
     damaged: bool = False
+    #: The exact request an interrupted restore can safely resume.
+    scope: Mapping[str, Any] | None = None
+    unknown_fields: Mapping[str, Any] = field(default_factory=dict, compare=False, repr=False)
 
 
 def marker_path(data_dir: Path) -> Path:
@@ -365,6 +368,7 @@ def read_maintenance(data_dir: Path) -> MaintenanceOperation | None:
         or not isinstance(payload.get("operation"), str)
         or not isinstance(payload.get("started_at"), str)
         or not isinstance(payload.get("pid"), int)
+        or ("scope" in payload and not isinstance(payload["scope"], dict))
     ):
         return MaintenanceOperation("", "unknown", "", 0, damaged=True)
     return MaintenanceOperation(
@@ -372,6 +376,10 @@ def read_maintenance(data_dir: Path) -> MaintenanceOperation | None:
         str(payload["operation"]),
         str(payload["started_at"]),
         int(payload["pid"]),
+        scope=payload.get("scope"),
+        unknown_fields={
+            key: value for key, value in payload.items() if key not in _MAINTENANCE_KEYS | {"scope"}
+        },
     )
 
 
@@ -404,7 +412,11 @@ def _damaged_guard_error(data_dir: Path) -> DatabaseFormatError:
 
 
 def begin_maintenance(
-    data_dir: Path, operation: str, *, resume: bool = False
+    data_dir: Path,
+    operation: str,
+    *,
+    resume: bool = False,
+    scope: Mapping[str, Any] | None = None,
 ) -> MaintenanceOperation:
     """Publish the guard before an offline operation changes any database file.
 
@@ -415,11 +427,51 @@ def begin_maintenance(
     if not operation or not operation.strip():
         raise ValueError("maintenance operation must be named")
     with operation_lock(data_dir):
-        return _begin_maintenance_locked(data_dir, operation, resume=resume)
+        return _begin_maintenance_locked(data_dir, operation, resume=resume, scope=scope)
+
+
+def require_maintenance_scope(data_dir: Path, operation: str, scope: Mapping[str, Any]) -> None:
+    """Validate a restore's retry scope without replacing or clearing its guard.
+
+    Restore planning calls this too, so a check-only request cannot approve a
+    selection that the later mutation must refuse. The caller holds the
+    operation lock continuously across validation and mutation.
+    """
+    current = read_maintenance(data_dir)
+    if current is None:
+        return
+    if current.operation != operation:
+        require_no_maintenance(data_dir)
+    _require_same_scope(data_dir, current, scope)
+
+
+def _require_same_scope(
+    data_dir: Path, current: MaintenanceOperation, scope: Mapping[str, Any] | None
+) -> None:
+    if current.scope == scope:
+        return
+    if current.scope is None:
+        raise DatabaseFormatError(
+            f"data maintenance is incomplete ({current.operation}), but its guard does not "
+            f"record the restore selection: {maintenance_guard_path(data_dir)}. "
+            "Nothing was changed. Keep the server stopped and inspect the interrupted "
+            "restore before removing that guard by hand, then perform a complete restore "
+            "from a verified backup or snapshot"
+        )
+    raise DatabaseFormatError(
+        f"data maintenance is incomplete ({current.operation}) with another restore "
+        "selection. Nothing was changed. Repeat the recorded restore selection: "
+        f"{json.dumps(current.scope, sort_keys=True)}; guard: {maintenance_guard_path(data_dir)}"
+    )
 
 
 def _begin_maintenance_locked(
-    data_dir: Path, operation: str, *, resume: bool, replaces: str | None = None
+    data_dir: Path,
+    operation: str,
+    *,
+    resume: bool,
+    replaces: str | None = None,
+    scope: Mapping[str, Any] | None = None,
 ) -> MaintenanceOperation:
     current = read_maintenance(data_dir)
     if current is not None and not (
@@ -432,13 +484,25 @@ def _begin_maintenance_locked(
             f"data maintenance is already incomplete ({current.operation}): "
             f"{maintenance_guard_path(data_dir)}"
         )
-    record = MaintenanceOperation(uuid.uuid4().hex, operation, utc_now_timestamp(), os.getpid())
+    if current is not None and current.operation == operation and resume:
+        _require_same_scope(data_dir, current, scope)
+    record = MaintenanceOperation(
+        uuid.uuid4().hex,
+        operation,
+        utc_now_timestamp(),
+        os.getpid(),
+        scope=scope,
+        unknown_fields={} if current is None else current.unknown_fields,
+    )
     payload = {
+        **record.unknown_fields,
         "operation_id": record.operation_id,
         "operation": record.operation,
         "started_at": record.started_at,
         "pid": record.pid,
     }
+    if scope is not None:
+        payload["scope"] = dict(scope)
     path = maintenance_guard_path(data_dir)
     try:
         atomic_write_text(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
@@ -486,7 +550,12 @@ def maintenance(
 
 @contextlib.contextmanager
 def maintenance_locked(
-    data_dir: Path, operation: str, *, resume: bool = False, replaces: str | None = None
+    data_dir: Path,
+    operation: str,
+    *,
+    resume: bool = False,
+    replaces: str | None = None,
+    scope: Mapping[str, Any] | None = None,
 ) -> Iterator[MaintenanceOperation]:
     """Hold the durable guard while the caller continuously holds the operation lock.
 
@@ -495,7 +564,9 @@ def maintenance_locked(
     """
     if not operation or not operation.strip():
         raise ValueError("maintenance operation must be named")
-    record = _begin_maintenance_locked(data_dir, operation, resume=resume, replaces=replaces)
+    record = _begin_maintenance_locked(
+        data_dir, operation, resume=resume, replaces=replaces, scope=scope
+    )
     yield record
     _finish_maintenance_locked(data_dir, record)
 

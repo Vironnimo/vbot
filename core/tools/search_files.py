@@ -683,7 +683,11 @@ def _search(execution: SearchExecution, query: SearchQuery, roots: list[Path]) -
         _restart_past_the_end(query, total)
         return _Outcome(entry_page(found.entries, query), found, total, total)
 
-    patterns = query.patterns
+    patterns = (
+        crlf_line_breaks(query.patterns, query)
+        if query.multiline and not query.literal
+        else query.patterns
+    )
     repair_note = None
     try:
         results = [execution.count_scan(query, patterns, scope) for scope in scopes]

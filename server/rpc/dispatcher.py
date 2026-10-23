@@ -33,7 +33,7 @@ async def dispatch_rpc(
 ) -> JsonObject:
     """Dispatch one JSON-RPC-like vBot server request."""
 
-    method_name = _request_method_for_log(request)
+    method_name = _request_method_for_log(request, handlers)
     try:
         method, params = parse_rpc_request(request)
         result = await dispatch_method(state, method, params, handlers)
@@ -55,11 +55,11 @@ async def dispatch_rpc(
     return {"ok": True, "result": result}
 
 
-def _request_method_for_log(request: Any) -> str:
+def _request_method_for_log(request: Any, handlers: Mapping[str, RpcMethodHandler]) -> str:
     if isinstance(request, dict):
         method = request.get("method")
         if isinstance(method, str) and method:
-            return method
+            return method if method in handlers else "<unknown>"
     return "<invalid>"
 
 

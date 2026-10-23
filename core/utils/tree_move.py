@@ -59,7 +59,7 @@ def _move_across_volumes(source: Path, destination: Path) -> None:
     # A same-directory rename is the one step guaranteed to stay on the source's volume.
     retired = source.with_name(f".{source.name}.moved-{uuid.uuid4().hex}")
     try:
-        _copy_tree(source, destination)
+        copy_tree(source, destination)
         _replace(source, retired)
     except BaseException:
         # ``source`` is intact, so the destination is only a duplicate, whole or partial.
@@ -68,12 +68,13 @@ def _move_across_volumes(source: Path, destination: Path) -> None:
     _discard_tree(retired, "original")
 
 
-def _copy_tree(source: Path, destination: Path) -> None:
-    """Copy the tree ``source`` as a rename moves it: every link stays a link to its target.
+def copy_tree(source: Path, destination: Path) -> None:
+    """Copy ``source`` to a new ``destination``, keeping every link as a link to its target.
 
     ``shutil.copytree`` keeps symbolic links but copies what a Windows junction
     points at, duplicating a tree from outside ``source``. Junctions are left out
     of the copy and recreated with their targets afterwards instead.
+    A failed copy can leave a partial destination; its owner must clean it up.
     """
     if sys.platform != "win32":
         shutil.copytree(source, destination, symlinks=True)

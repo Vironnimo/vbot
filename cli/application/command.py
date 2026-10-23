@@ -436,15 +436,21 @@ def _access_command(args: argparse.Namespace, install: Installation) -> int:
             raise ApplicationError("Wait for the pending update before changing the access mode")
         changed = dataclasses.replace(install, server_host=host, server_access=selected)
         changed.save()
-        from cli.application.autostart import refresh_unit
-
-        refresh_unit(changed)
         logging.getLogger("vbot.application.integration").info(
             "Server access mode changed (from=%s to=%s host=%s)",
             current.mode,
             selected.mode,
             host,
         )
+        from cli.application.autostart import refresh_unit
+
+        try:
+            refresh_unit(changed)
+        except (ApplicationError, OSError) as exc:
+            raise ApplicationError(
+                "The access settings were saved, but Autostart could not be refreshed. "
+                f"Retry the same access command after resolving this failure: {exc}"
+            ) from exc
     summary = _access_summary(host, selected)
     summary["applies"] = "on the next server start"
     _print(
