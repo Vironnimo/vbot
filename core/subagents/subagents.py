@@ -405,11 +405,6 @@ class SubAgentCoordinator:
     # run
 
     async def _run(self, context: ToolContext, arguments: JsonObject) -> JsonObject:
-        if not has_text(arguments, "content"):
-            message = SUBAGENT_MISSING_TASK_MESSAGE
-            if context.can_call(BACKGROUND_TASKS_TOOL_NAME):
-                message += SUBAGENT_MISSING_TASK_LIST_TEXT
-            return tool_failure("invalid_arguments", message)
         runtime, caller = self._runtime, _caller(context)
         sessions = runtime.chat_sessions
         notes: list[str] = []
@@ -438,6 +433,11 @@ class SubAgentCoordinator:
                 SUBAGENT_STAND_IN_SESSION_NOTE_TEMPLATE.format(session_id=quoted(session_id))
             )
 
+        if not has_text(arguments, "content"):
+            message = SUBAGENT_MISSING_TASK_MESSAGE
+            if context.can_call(BACKGROUND_TASKS_TOOL_NAME):
+                message += SUBAGENT_MISSING_TASK_LIST_TEXT
+            return tool_failure("invalid_arguments", message)
         description = optional_text(arguments, "description")
         if description is None:
             return tool_failure("invalid_arguments", SUBAGENT_MISSING_DESCRIPTION_MESSAGE)

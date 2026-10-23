@@ -810,6 +810,18 @@ async def test_other_spellings_of_send_reach_the_same_subagent(
         key: value.format(id=data["id"], session_id=data["session_id"])
         for key, value in arguments.items()
     }
+    incomplete = {
+        "action": "run",
+        **{key: value for key, value in call.items() if key != "content"},
+    }
+    assert await harness.call(incomplete) == await harness.call(
+        {"action": "send", "id": data["id"]}
+    )
+    if "id" in incomplete:
+        unknown = {**incomplete, "id": "sub_unknown123"}
+        assert await harness.call(unknown) == await harness.call(
+            {"action": "send", "id": unknown["id"]}
+        )
 
     result = await harness.call(call)
     await harness.settle()
