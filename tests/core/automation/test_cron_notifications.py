@@ -153,6 +153,44 @@ async def test_failure_alerts_retry_after_stop_and_a_failed_claim_never_sends(
 
 
 @pytest.mark.asyncio
+async def test_deleting_a_job_while_its_notification_claim_saves_prevents_the_send(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, trigger = make_service(tmp_path)
+    chats = FakeChats()
+    service.set_chat_delivery(chats)
+    job = await service.create_job(
+        agent_id="agent-one",
+        prompt="Check",
+        schedule_type="interval",
+        interval_seconds=60,
+        delivery=_CHAT,
+    )
+    scripted_runs(trigger, (RunStatus.COMPLETED, "The result."))
+    assert (await service._execution._trigger_job_run(job)).succeeded
+    claimed, finish_claim = asyncio.Event(), asyncio.Event()
+    save = service._save_jobs_async
+
+    async def save_claim() -> None:
+        await save()
+        if not claimed.is_set():
+            claimed.set()
+            await finish_claim.wait()
+
+    monkeypatch.setattr(service, "_save_jobs_async", save_claim)
+    delivery = asyncio.create_task(service._notifications.flush())
+    await claimed.wait()
+    try:
+        await service.delete_job(job.id)
+    finally:
+        finish_claim.set()
+    await delivery
+    assert service.list_jobs() == []
+    assert chats.sent == [] and chats.notes == []
+    await service.aclose()
+
+
+@pytest.mark.asyncio
 async def test_slow_delivery_never_holds_a_cron_run_slot(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
