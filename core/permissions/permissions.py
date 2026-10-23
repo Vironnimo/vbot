@@ -571,13 +571,14 @@ class PermissionBoundary:
         """
         if not self._layers:
             return None
-        parts = urlsplit(url.strip())
-        scheme = parts.scheme.lower()
         try:
+            parts = urlsplit(url.strip())
             port = parts.port
         except ValueError:
-            port = -1
-        if scheme not in _DEFAULT_PORTS or not parts.hostname or port == -1:
+            parts = None
+            port = None
+        scheme = parts.scheme.lower() if parts is not None else ""
+        if parts is None or scheme not in _DEFAULT_PORTS or not parts.hostname:
             return self.refusal(
                 "web",
                 url.strip(),
