@@ -1,9 +1,9 @@
 """``vbot chat``: send one message to an Agent Session and follow its Run to the end.
 
 The command talks to the server only through RPC (``session.*``, ``chat.stream``,
-``chat.cancel``) and the Run's SSE stream. A message for a new Session is sent
-with ``new_session``, so the server creates the Session only for a message it
-accepts. It writes the answer to stdout itself,
+``chat.cancel``), the attachment upload the WebUI uses, and the Run's SSE stream.
+A message for a new Session is sent with ``new_session``, so the server creates
+the Session only for a message it accepts. It writes the answer to stdout itself,
 because streamed text cannot wait for the end of the Run; the outcome line and
 recovery guidance stay with the shared CLI output owner.
 """
@@ -12,17 +12,19 @@ from __future__ import annotations
 
 import json
 import queue
+import re
 import sys
 import threading
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, TextIO
 
 from cli._parser_agents import DEFAULT_CHAT_AGENT
 from cli._progress import Status, status_line
 from cli._recovery import format_command, target_options
-from cli.formatting import output_mode
-from cli.rpc_client import RunEventStreamError, stream_run_events
+from cli.formatting import inline_text, output_mode
+from cli.rpc_client import RunEventStreamError, stream_run_events, upload_attachment
 from cli.rpc_client import rpc_call as _rpc_call
 from cli.server_management import CommandResult, ServerInstance
 from core.runs import (
@@ -38,6 +40,7 @@ from core.runs import (
     TOOL_CALL_RESULT_EVENT,
     TOOL_CALL_STARTED_EVENT,
 )
+from core.sessions import EPHEMERAL_SESSION_LIFETIME
 
 JsonObject = dict[str, Any]
 
@@ -55,6 +58,10 @@ _PROGRESS_CHARACTERS = 200
 _POLL_SECONDS = 0.2
 # Reconnects in a row that deliver no new event before the stream counts as lost.
 _RECONNECT_LIMIT = 3
+# Attachments of these types are media blocks (the Model sees or hears them);
+# every other file is a file block, as in the WebUI composer.
+_MEDIA_TYPE = re.compile(r"^(image|audio|video)/", re.IGNORECASE)
+_EPHEMERAL_HOURS = int(EPHEMERAL_SESSION_LIFETIME.total_seconds() // 3600)
 
 
 @dataclass(frozen=True)
@@ -62,7 +69,9 @@ class ChatRequest:
     """One ``vbot chat`` invocation after argument parsing and stdin reading.
 
     A new Session works in ``working_project_id``, or with ``workspace`` in the
-    Agent's Workspace; with neither, in the Agent's default Project.
+    Agent's Workspace; with neither, in the Agent's default Project. With
+    ``ephemeral`` it is an Ephemeral Session. ``attachments`` are local file
+    paths sent with ``prompt``, which may then be empty.
     """
 
     agent: str
@@ -72,6 +81,8 @@ class ChatRequest:
     overrides: JsonObject = field(default_factory=dict)
     working_project_id: str | None = None
     workspace: bool = False
+    ephemeral: bool = False
+    attachments: tuple[str, ...] = ()
     json_output: bool = False
 
 
@@ -80,16 +91,24 @@ def chat(instance: ServerInstance, request: ChatRequest) -> CommandResult:
 
     The answer (or JSON report) is written to stdout here; the returned result
     carries the outcome sentence for stderr and any RPC failure evidence.
+    Attachments are uploaded first, so a file that cannot be sent changes nothing.
     """
+    attachments = _upload_attachments(instance, request.attachments)
+    if isinstance(attachments, CommandResult):
+        return attachments
     selected = _select_session(instance, request)
     if isinstance(selected, CommandResult):
         return selected
     session_id, stored_overrides = selected
 
-    params: JsonObject = {"agent_id": request.agent, "content": request.prompt}
-    if session_id is None:
-        # The new Session starts with the overrides and its working Project, and
-        # exists only once accepted.
+    params: JsonObject = {
+        "agent_id": request.agent,
+        "content": _message_content(request.prompt, attachments),
+    }
+    new = session_id is None
+    if new:
+        # The new Session starts with the overrides, its working Project and its
+        # kind, and exists only once accepted.
         new_session: JsonObject = (
             {"agent_overrides": dict(request.overrides)} if request.overrides else {}
         )
@@ -97,6 +116,8 @@ def chat(instance: ServerInstance, request: ChatRequest) -> CommandResult:
             new_session["working_project_id"] = None
         elif request.working_project_id is not None:
             new_session["working_project_id"] = request.working_project_id
+        if request.ephemeral:
+            new_session["ephemeral"] = True
         params["new_session"] = new_session
     else:
         params["session_id"] = session_id
@@ -104,12 +125,24 @@ def chat(instance: ServerInstance, request: ChatRequest) -> CommandResult:
     if not payload.ok:
         return payload.to_command_result()
     data = payload.data
-    if session_id is None:
+    if new:
         # A command can run without creating the Session; then none is named.
         session_id = _text(data.get("session_id"))
         if session_id is not None and request.overrides:
             stored_overrides = dict(request.overrides)
-    report = _Report(request.agent, session_id, stored_overrides)
+    ephemeral = data.get("ephemeral")
+    if not isinstance(ephemeral, bool):
+        # Only a Run response says; a new Session is what was asked for.
+        ephemeral = request.ephemeral if new and session_id is not None else None
+    report = _Report(
+        request.agent,
+        session_id,
+        stored_overrides,
+        ephemeral=ephemeral,
+        attachments=attachments,
+        # --ephemeral names a new Session; a continued one keeps what it is.
+        ignored_ephemeral=request.ephemeral and not new and ephemeral is False,
+    )
     if data.get("queued") is True:
         return _queued(instance, request, report, data.get("item"))
     if data.get("command_handled") is True:
@@ -139,6 +172,56 @@ def chat(instance: ServerInstance, request: ChatRequest) -> CommandResult:
     return _run_outcome(instance, request, report, report.session_id, run_id, timeline, lost)
 
 
+def _upload_attachments(
+    instance: ServerInstance, paths: Sequence[str]
+) -> list[JsonObject] | CommandResult:
+    """Upload each local file; the server's records in order, or why nothing was sent."""
+    records: list[JsonObject] = []
+    for path in paths:
+        try:
+            data = Path(path).read_bytes()
+        except FileNotFoundError:
+            reason = "does not exist"
+        except IsADirectoryError:
+            reason = "is a folder, not a file"
+        except PermissionError:
+            reason = "cannot be read: permission denied"
+        except OSError as error:
+            reason = f"cannot be read: {error.strerror or type(error).__name__}"
+        else:
+            payload = upload_attachment(instance, Path(path).name, data)
+            if not payload.ok:
+                return CommandResult(
+                    ok=False, message=f"{payload.message}. No message was sent.", instance=instance
+                )
+            records.append(dict(payload.data))
+            continue
+        return CommandResult(
+            ok=False,
+            message=f"the attachment {inline_text(path)} {reason}. No message was sent.",
+            instance=instance,
+        )
+    return records
+
+
+def _message_content(prompt: str, attachments: Sequence[JsonObject]) -> str | list[JsonObject]:
+    """The ``chat.stream`` content: the text alone, or content blocks with the files."""
+    if not attachments:
+        return prompt
+    blocks: list[JsonObject] = [{"type": "text", "text": prompt}] if prompt.strip() else []
+    for record in attachments:
+        media_type = str(record["media_type"])
+        blocks.append(
+            {
+                "type": "media" if _MEDIA_TYPE.match(media_type) else "file",
+                "attachment_id": record["attachment_id"],
+                "filename": record["filename"],
+                "media_type": media_type,
+            }
+        )
+    return blocks
+
+
 def _select_session(
     instance: ServerInstance, request: ChatRequest
 ) -> tuple[str | None, JsonObject | None] | CommandResult:
@@ -152,7 +235,7 @@ def _select_session(
     if session_id is None:
         if not request.continue_latest:
             return None, None
-        latest = _latest_session(instance, request.agent)
+        latest = latest_conversation(instance, request.agent)
         if isinstance(latest, CommandResult):
             return latest
         if latest is None:
@@ -174,8 +257,11 @@ def _select_session(
     return session_id, _object_or_none(payload.data.get("agent_overrides"))
 
 
-def _latest_session(instance: ServerInstance, agent: str) -> str | None | CommandResult:
-    """The Agent's most recently active conversation, skipping automated Sessions."""
+def latest_conversation(instance: ServerInstance, agent: str) -> str | None | CommandResult:
+    """The Agent's most recently active conversation, skipping automated and Ephemeral Sessions.
+
+    ``None`` when it has none; a failed lookup as its result.
+    """
     payload = _rpc_call(
         instance,
         "session.list",
@@ -215,11 +301,17 @@ class _Report:
     # ``None`` when a command ran without creating the new Session.
     session_id: str | None
     agent_overrides: JsonObject | None
+    # ``None`` when the server did not say (a queued message or a command).
+    ephemeral: bool | None = None
+    attachments: list[JsonObject] = field(default_factory=list)
+    ignored_ephemeral: bool = False
 
     def json_object(self, **fields: Any) -> JsonObject:
         report: JsonObject = {
             "agent_id": self.agent,
             "session_id": self.session_id,
+            "ephemeral": self.ephemeral,
+            "attachments": self.attachments,
             "run_id": None,
             "status": None,
             "model": None,
@@ -309,7 +401,8 @@ def _run_outcome(
         print(timeline.message, flush=True)
 
     model = timeline.model or "unknown"
-    where = f"in Session {session_id} (Agent {request.agent}, Model {model})"
+    kind = "Ephemeral Session" if report.ephemeral else "Session"
+    where = f"in {kind} {session_id} (Agent {request.agent}, Model {model})"
     if lost is not None:
         status_command = _chat_command(instance, request.agent, session_id, "/status")
         return CommandResult(
@@ -322,6 +415,16 @@ def _run_outcome(
         )
     if status == "completed":
         lines = [f"completed {where}"]
+        if report.ignored_ephemeral:
+            lines.append(
+                f"Note: Session {session_id} is not ephemeral; --ephemeral applies only "
+                "to a new Session"
+            )
+        if report.ephemeral:
+            lines.append(
+                "It is not listed and never becomes the current Session; it is deleted "
+                f"permanently {_EPHEMERAL_HOURS} hours after its last message"
+            )
         if report.agent_overrides:
             saved = ", ".join(f"{key}={value}" for key, value in report.agent_overrides.items())
             lines.append(f"Session overrides: {saved} (kept for later messages in this Session)")

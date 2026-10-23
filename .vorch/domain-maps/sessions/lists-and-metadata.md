@@ -35,4 +35,13 @@ Task-gated detail for `sessions.md`: Session creation and lookup APIs, Session l
 
 ## Recall visibility
 
-Recall visibility (`SessionRecallVisibility`) is classified in SQL from the visibility mask column, so callers never classify metadata in Python: reflection and `librarian` Run kinds make a Session `hidden`; otherwise a Sub-Agent flag or Run kind makes it `subagent`; otherwise a Session without recognized Run kinds or with a user-facing Run kind (`user`, `channel`, `cron`, `calendar`) is `conversation`; anything else (system-only, memory, Skill) is `hidden`. `recall_visibilities(include_subagents=...)` names the admitted values. Message search (`search_messages`) applies it to the eligible Sessions before any candidate is checked.
+Recall visibility (`SessionRecallVisibility`) is classified in SQL from the visibility mask column, so callers never classify metadata in Python: reflection, `librarian` and `live` Run kinds and the Ephemeral flag make a Session `hidden`; otherwise a Sub-Agent flag or Run kind makes it `subagent`; otherwise a Session without recognized Run kinds or with a user-facing Run kind (`user`, `channel`, `cron`, `calendar`) is `conversation`; anything else (system-only, memory, Skill) is `hidden`. `recall_visibilities(include_subagents=...)` names the admitted values. Message search (`search_messages`) applies it to the eligible Sessions before any candidate is checked.
+
+## Ephemeral Sessions
+
+An Ephemeral Session (GLOSSARY -> Ephemeral Session) carries the metadata key `ephemeral: true` (`SESSION_EPHEMERAL_META_KEY`, a bool, validated on write), set in the creating write: `core/chat` `start_run_in_new_session(ephemeral=True)`, reached through `chat.send`/`chat.stream` `new_session.ephemeral` (`server/chat-rpcs.md`). The key sets `_LIST_VISIBILITY_EPHEMERAL` (4096) in `list_visibility_mask`; `schema.py` repeats the value in the partial index `sessions_ephemeral_by_activity` on `last_activity_at`, so both change together.
+
+- Lists exclude it in every scope and under every filter, so `-c` and the WebUI never show it; only an explicitly required selected Session row still appears. Recall classifies it `hidden`.
+- Owners outside this domain honor the key: `chat.send`/`chat.stream` never make it the Agent's current Session, Session titles keep the local title but run no title Model (`sessions/titles.md`), the reflection cadence skips it (`automation/reflection.md`), and a Sub-Agent Session of an Ephemeral parent is ephemeral too (`subagents.md`).
+- A fork drops the key (`SESSION_FORK_ALWAYS_STRIP_META_KEYS`), so forking keeps the conversation as a normal Session. An archive restore keeps it.
+- Expiry: `expired_ephemeral_addresses(before, limit=...)` lists live Ephemeral Sessions last active before a timestamp, least recently active first, through the partial index. `EPHEMERAL_SESSION_LIFETIME` (24 hours) is defined here; the archive retention sweep deletes them (`archive.md`).

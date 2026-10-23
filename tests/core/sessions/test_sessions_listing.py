@@ -373,6 +373,12 @@ def test_session_list_filters_execution_categories_in_sql(manager) -> None:
         "unknown-kind": {"run_kinds": ["future_kind"]},
         "librarian-user": {"run_kinds": ["user", "librarian"]},
         "live-user": {"run_kinds": ["user", "live"]},
+        "ephemeral": {"ephemeral": True, "run_kinds": ["user"]},
+        "ephemeral-subagent": {
+            "ephemeral": True,
+            "is_subagent_session": True,
+            "run_kinds": ["subagent"],
+        },
     }
     for index, (session_id, metadata) in enumerate(metadata_by_session.items()):
         address = _address("coder", session_id)
@@ -438,10 +444,13 @@ def test_session_list_filters_execution_categories_in_sql(manager) -> None:
         "reported-cron",
         "unknown-kind",
     }
-    # Sessions with a Librarian or Live Run are never listed in another Agent's scope.
+    # Sessions with a Librarian or Live Run are never listed in another Agent's
+    # scope, and Ephemeral Sessions in none.
     assert listed(SessionListFilters(True, True, True, True)) == set(metadata_by_session) - {
         "librarian-user",
         "live-user",
+        "ephemeral",
+        "ephemeral-subagent",
     }
     # The Librarian's own Sessions are listed like any conversation.
     librarian_sessions = manager.list_summaries_page(
@@ -491,6 +500,8 @@ RECALL_VISIBILITY_CASES = {
         "hidden",
     ),
     "not-subagent-system": ({"is_subagent_session": False, "run_kinds": ["system"]}, "hidden"),
+    "ephemeral": ({"ephemeral": True, "run_kinds": ["user"]}, "hidden"),
+    "ephemeral-subagent": ({"ephemeral": True, "is_subagent_session": True}, "hidden"),
 }
 
 

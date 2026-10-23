@@ -319,7 +319,8 @@ def test_move_and_fork_read_metadata_inside_their_writer_transaction(
 
 
 def test_fork_inherits_history_but_not_activity_or_a_stream_draft(manager) -> None:
-    source = manager.create("coder", session_id="source")
+    # A fork keeps an Ephemeral Session's conversation as a normal Session.
+    source = manager.create("coder", session_id="source", metadata={"ephemeral": True})
     source.append_many(
         [ChatMessage.user("hello"), ChatMessage.assistant(model="test", content="hi")]
     )
@@ -348,6 +349,7 @@ def test_fork_inherits_history_but_not_activity_or_a_stream_draft(manager) -> No
         "project_id": None,
         "forked_at": metadata[FORK_SOURCE_META_KEY]["forked_at"],
     }
+    assert "ephemeral" not in metadata
     # A fork into another Agent's scope starts its own prompt-cache lineage.
     assert manager.prompt_cache_affinity_id(forked.address) != manager.prompt_cache_affinity_id(
         source_address

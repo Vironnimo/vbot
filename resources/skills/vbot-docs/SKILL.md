@@ -23,7 +23,7 @@ For a question about a past conversation, use `session_search` first; read `refe
 | Create an Agent for a purpose, rename an Agent, Agent settings, Tool and Skill permissions, delegation | `references/agents.md` |
 | Write or revise an Agent's SOUL.md: its role, how it works, its voice, its boundaries | `references/soul.md` |
 | Projects and their Agents, Sessions (create, fork, rename, delete), archived Agents, Projects and Sessions | `references/projects-sessions.md` |
-| Send a message to an Agent and read its answer, continue one of its Sessions, set a Session's Model, thinking effort or temperature, or help the user open the terminal TUI | `references/chat.md` |
+| Send a message to an Agent and read its answer, with files or in a throwaway Session, continue one of its Sessions, set a Session's Model, thinking effort or temperature, or help the user open the terminal TUI | `references/chat.md` |
 | Past conversations beyond `session_search`: listing Sessions, full transcripts, exact Tool Results | `references/session-search.md` |
 | Provider keys/OAuth/limits, Models, voices, specialized Task Models, and image, video or music generation settings such as quality, image count or video length | `references/providers.md` |
 | Settings, System Prompt blocks, Extension settings and enabling or disabling an Extension | `references/configuration.md` |

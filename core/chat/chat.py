@@ -53,6 +53,7 @@ from core.runs import (
 )
 from core.sessions import (
     AGENT_DEFAULT_PROJECT,
+    SESSION_EPHEMERAL_META_KEY,
     ChatSession,
     SessionAddress,
     TemporarySessionBinding,
@@ -78,13 +79,23 @@ class _NewSession:
     names who asked for it (see ``ChatSessionManager.create``), and
     ``working_project_id`` is the working Project a Session of an Identity
     Agent starts in (a Project id, ``None`` for the Workspace, or the Agent's
-    default Project).
+    default Project), and ``ephemeral`` makes it an Ephemeral Session.
     """
 
     session_id: str | None = None
     agent_overrides: AgentOverrides = field(default_factory=AgentOverrides)
     actor: str | None = None
     working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT
+    ephemeral: bool = False
+
+    def metadata(self, agent: Any, permission_ceiling: PermissionCeiling | None) -> JsonObject:
+        """The metadata the Session is created with."""
+        metadata = (
+            self.agent_overrides.with_ceiling(permission_ceiling).capture(agent).session_metadata()
+        )
+        if self.ephemeral:
+            metadata[SESSION_EPHEMERAL_META_KEY] = True
+        return metadata
 
 
 class ChatLoop:
@@ -289,6 +300,7 @@ class ChatLoop:
         session_id: str | None = None,
         agent_overrides: AgentOverrides | None = None,
         working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT,
+        ephemeral: bool = False,
         actor: str | None = None,
         internal: bool = False,
         input_origin: InputOrigin | None = None,
@@ -319,8 +331,9 @@ class ChatLoop:
         at INFO. A Session of an Identity Agent works in ``working_project_id``
         for its whole life: a Project id (it must exist), ``None`` for the
         Agent's Workspace, or by default the Agent's default Project; a Project
-        Agent's Session works in its address Project and takes no other. The
-        server-facing :meth:`start_run` contract still requires an explicitly
+        Agent's Session works in its address Project and takes no other.
+        ``ephemeral`` creates an Ephemeral Session (``SESSION_EPHEMERAL_META_KEY``).
+        The server-facing :meth:`start_run` contract still requires an explicitly
         existing Session. ``context_note`` is as in :meth:`start_run`.
         """
         return await self._start_run(
@@ -333,6 +346,7 @@ class ChatLoop:
                 agent_overrides=agent_overrides or AgentOverrides(),
                 actor=actor,
                 working_project_id=working_project_id,
+                ephemeral=ephemeral,
             ),
             internal=internal,
             input_origin=input_origin,
@@ -606,9 +620,7 @@ class ChatLoop:
                 session_id=new_session.session_id,
                 project_id=project_id,
                 actor=new_session.actor,
-                metadata=new_session.agent_overrides.with_ceiling(permission_ceiling)
-                .capture(agent)
-                .session_metadata(),
+                metadata=new_session.metadata(agent, permission_ceiling),
                 working_project_id=_stored_working_project(project_id, working_project_id),
             )
         elif session is None:

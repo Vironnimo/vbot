@@ -156,6 +156,12 @@ CREATE INDEX sessions_by_working_project
   ON sessions (working_project_id)
   WHERE working_project_id IS NOT NULL;
 
+-- Live Ephemeral Sessions by last activity (their expiry). 4096 is
+-- ``_store_values._LIST_VISIBILITY_EPHEMERAL``.
+CREATE INDEX sessions_ephemeral_by_activity
+  ON sessions (last_activity_at)
+  WHERE state = 'live' AND (list_visibility_mask & 4096) != 0;
+
 -- Working Project associations frozen by archive, independent of inherited
 -- history timestamps. Keep the archive id after purge: its former users must
 -- not become users of a replacement Project that reused the same public id.

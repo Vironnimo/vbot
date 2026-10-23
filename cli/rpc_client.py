@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
 RPC_PATH = "/api/rpc"
 RPC_TIMEOUT_SECONDS = 10.0
+ATTACHMENT_UPLOAD_PATH = "/api/upload"
 
 # Methods that legitimately run far longer than the default cap. Model refreshes
 # fan out across Provider endpoints, while data snapshots copy and verify
@@ -190,6 +191,58 @@ def _transport_failure(
             f"request_state: {request_state}\n{recovery}"
         ),
     )
+
+
+def upload_attachment(instance: ServerInstance, filename: str, data: bytes) -> RpcPayload:
+    """Store one file as a server attachment, the way the WebUI composer uploads it.
+
+    Success data is the server's record: ``attachment_id``, ``filename``,
+    ``media_type`` and ``size_bytes``. A failure message names the file and the
+    reason, such as a file that is too large or of a type vBot does not accept.
+    An upload changes nothing the user sees until a message names it.
+    """
+    import httpx
+
+    from cli.server_client import http_options
+
+    name = inline_text(filename)
+    try:
+        response = httpx.post(
+            f"{instance.url}{ATTACHMENT_UPLOAD_PATH}",
+            files={"file": (filename, data)},
+            # The body can be large; the server answers once it stored the file.
+            timeout=httpx.Timeout(RPC_TIMEOUT_SECONDS, write=None, read=None),
+            **http_options(instance),
+        )
+    except httpx.RequestError as exc:
+        return RpcPayload(
+            ok=False,
+            instance=instance,
+            message=f"could not upload {name} to {instance.url}: {exc.__class__.__name__}",
+        )
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+    if response.status_code != httpx.codes.OK:
+        detail = payload.get("detail") if isinstance(payload, dict) else None
+        if not isinstance(detail, str) or not detail:
+            detail = f"HTTP {response.status_code}"
+        return RpcPayload(
+            ok=False,
+            instance=instance,
+            message=f"the server refused the attachment {name}: {inline_text(detail)}",
+        )
+    fields = ("attachment_id", "filename", "media_type")
+    if not isinstance(payload, dict) or not all(
+        isinstance(payload.get(field), str) and payload.get(field) for field in fields
+    ):
+        return RpcPayload(
+            ok=False,
+            instance=instance,
+            message=f"the server returned no attachment record for {name}",
+        )
+    return RpcPayload(ok=True, instance=instance, data=payload)
 
 
 class RunEventStreamError(Exception):

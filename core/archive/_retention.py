@@ -8,13 +8,15 @@ vBot made, or ``recovered`` entries (a payload found without its entry, whose
 age nothing records); only a purge that names them deletes those.
 
 The retention sweep deletes due entries in the background, on the ``archive``
-worker and never on the Event Loop. The first sweep runs a minute after start,
-later ones every hour, and one runs at once when the period changes or a manual
-purge left an entry pending. A sweep first continues entries a stopped or failed
-purge left ``purging``, then purges due entries oldest first, one entry per
-worker call so manual purges never wait behind a whole sweep. A stop request
-ends the sweep before the next Session or file it would delete; the entry stays
-``purging`` and the next sweep continues it.
+worker and never on the Event Loop. Each sweep first deletes the Ephemeral
+Sessions that expired (``ArchiveService.expire_ephemeral_sessions``). The first
+sweep runs a minute after start, later ones every hour, and one runs at once
+when the period changes or a manual purge left an entry pending. It then
+continues entries a stopped or failed purge left ``purging``, then purges due
+entries oldest first, one entry per worker call so manual purges never wait
+behind a whole sweep. A stop request ends the sweep before the next Session or
+file it would delete; the entry stays ``purging`` and the next sweep continues
+it.
 
 When the period cannot be read reliably (``ArchiveRetentionUnknownError``), a
 sweep still continues ``purging`` entries but deletes nothing for retention: a
@@ -25,7 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from datetime import timedelta
 from typing import TYPE_CHECKING
@@ -114,7 +116,8 @@ class RetentionSweeper:
     """The background task that purges due and interrupted archive entries.
 
     ``stopping`` is shared with the archive service, whose manual purges end
-    at the same stop request; ``notify`` reports changed entries.
+    at the same stop request; ``notify`` reports changed entries and
+    ``expire_ephemeral`` deletes the expired Ephemeral Sessions.
     """
 
     def __init__(
@@ -122,10 +125,12 @@ class RetentionSweeper:
         services: ArchiveServices,
         stopping: threading.Event,
         notify: Callable[[], None],
+        expire_ephemeral: Callable[[], Awaitable[int]],
     ) -> None:
         self._services = services
         self._stopping = stopping
         self._notify = notify
+        self._expire_ephemeral = expire_ephemeral
         self._task: asyncio.Task[None] | None = None
         self._wake: asyncio.Event | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -189,6 +194,9 @@ class RetentionSweeper:
     async def _sweep(self) -> None:
         services = self._services
         _LOGGER.debug("Archive retention sweep started")
+        expired = await self._expire_ephemeral()
+        if expired:
+            _LOGGER.info("Deleted %d expired Ephemeral Sessions", expired)
         purging = await _purge.PURGE_WORKERS.run(_purging_ids, services)
         for entry_id in purging:
             if self._stopping.is_set():

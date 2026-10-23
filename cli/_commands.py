@@ -222,6 +222,11 @@ def run(
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
+    if args.area == "chat" and args.open_tui:
+        from cli._dispatch_tui import open_tui_for_chat
+
+        return open_tui_for_chat(args, instance)
+
     if args.area == "chat":
         from cli._dispatch_agents import dispatch_chat_command
 

@@ -201,6 +201,20 @@ def list_addresses(
     return [_store_values._address(row) for row in rows]
 
 
+def expired_ephemeral_addresses(
+    connection: sqlite3.Connection, before: str, limit: int
+) -> list[SessionAddress]:
+    """Live Ephemeral Sessions last active before *before*, least recently active first."""
+    rows = connection.execute(
+        "SELECT s.project_id, s.agent_id, s.session_id FROM sessions AS s "
+        "WHERE s.state = 'live' "
+        f"AND (s.list_visibility_mask & {_store_values._LIST_VISIBILITY_EPHEMERAL}) != 0 "
+        "AND s.last_activity_at < ? ORDER BY s.last_activity_at LIMIT ?",
+        (before, limit),
+    ).fetchall()
+    return [_store_values._address(row) for row in rows]
+
+
 def list_agent_ids(
     connection: sqlite3.Connection, project_id: str | None, *, exclude_owner_managed: bool
 ) -> list[str]:

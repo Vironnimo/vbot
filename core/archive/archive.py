@@ -13,7 +13,8 @@ deletes another entry's payload. Callers hold the automation reference lock
 (``AutomationReferences.lock``) across an archive or restore, so the reference
 checks here and the change they admit are one step; the Run admission guards are
 taken here. Once started, the retention sweep deletes entries whose retention
-period has ended (``_retention.py``).
+period has ended (``_retention.py``) and Ephemeral Sessions that have been idle
+for ``EPHEMERAL_SESSION_LIFETIME``.
 """
 
 from __future__ import annotations
@@ -45,6 +46,7 @@ from core.archive._types import (
     SessionArchiveOutcome,
 )
 from core.archive.errors import ArchiveSubjectInUseError
+from core.runs import RunAdmissionBlockedError
 from core.sessions import (
     ARCHIVE_KIND_AGENT,
     ARCHIVE_KIND_FILES,
@@ -52,6 +54,7 @@ from core.sessions import (
     ARCHIVE_KIND_SESSION,
     ARCHIVE_STATE_ARCHIVED,
     ARCHIVE_STATE_PURGING,
+    EPHEMERAL_SESSION_LIFETIME,
     ArchiveEntry,
     ArchiveEntryCursor,
     ArchiveEntryFilter,
@@ -59,8 +62,10 @@ from core.sessions import (
     ArchiveScope,
     SessionAddress,
 )
+from core.sessions.errors import SessionNotFoundError
 from core.tools.terminal_manager import TerminalOwner
 from core.utils.logging import get_logger
+from core.utils.timestamps import format_canonical_timestamp
 
 if TYPE_CHECKING:
     from core.agents import AgentStore
@@ -77,6 +82,11 @@ _LOGGER = get_logger("archive")
 
 # Purges walk all entries of a filter in pages of this size.
 _PURGE_PAGE = 200
+# One sweep deletes at most this many expired Ephemeral Sessions; the next
+# sweep continues.
+_EPHEMERAL_PAGE = 100
+# Actor and purge reason of an expired Ephemeral Session in the owner log lines.
+_EPHEMERAL_ACTOR = "ephemeral"
 
 
 def _utc_now() -> datetime:
@@ -151,7 +161,9 @@ class ArchiveService:
         self._services = services
         # Set by stop(): purges end before their next Session or tree.
         self._stopping = threading.Event()
-        self._retention = RetentionSweeper(services, self._stopping, self._notify)
+        self._retention = RetentionSweeper(
+            services, self._stopping, self._notify, self.expire_ephemeral_sessions
+        )
 
     # -- Retention ---------------------------------------------------------------
 
@@ -174,6 +186,57 @@ class ArchiveService:
     def retention_changed(self) -> None:
         """Sweep at once because the retention period changed; any thread."""
         self._retention.wake()
+
+    async def expire_ephemeral_sessions(self) -> int:
+        """Delete the Ephemeral Sessions idle for ``EPHEMERAL_SESSION_LIFETIME``; how many.
+
+        Each goes the way of a permanent Session delete: archived with its
+        review forks, then purged. One with an active or queued Run, or one a
+        live automation pins, stays for a later sweep. The retention sweep calls
+        this; it takes the automation reference lock itself.
+        """
+        services = self._services
+        sessions = services.sessions
+        before = format_canonical_timestamp(services.clock() - EPHEMERAL_SESSION_LIFETIME)
+        addresses = await sessions.run_async(
+            sessions.expired_ephemeral_addresses, before, limit=_EPHEMERAL_PAGE
+        )
+        deleted = 0
+        for address in addresses:
+            if self._stopping.is_set():
+                break
+            try:
+                async with services.automation.lock:
+                    outcome = await self.archive_session(address, actor=_EPHEMERAL_ACTOR)
+            except (
+                ArchiveSubjectInUseError,
+                RunAdmissionBlockedError,
+                SessionNotFoundError,
+            ) as exc:
+                _LOGGER.debug(
+                    "Expired Ephemeral Session stays for a later sweep (agent=%s session=%s "
+                    "project=%s): %s",
+                    address.agent_id,
+                    address.session_id,
+                    address.project_id or "-",
+                    exc,
+                )
+                continue
+            except Exception:
+                _LOGGER.warning(
+                    "Could not delete an expired Ephemeral Session (agent=%s session=%s "
+                    "project=%s); a later sweep retries it",
+                    address.agent_id,
+                    address.session_id,
+                    address.project_id or "-",
+                    exc_info=True,
+                )
+                continue
+            # An entry left archived or pending is continued like any other: the
+            # retention sweep resumes a pending purge.
+            await self.purge([outcome.entry_id], reason=_EPHEMERAL_ACTOR, actor=_EPHEMERAL_ACTOR)
+            deleted += 1
+        return deleted
 
     def add_changed_callback(self, callback: Callable[[], None]) -> Callable[[], None]:
         """Call ``callback`` after any archive entry changed; returns its removal."""

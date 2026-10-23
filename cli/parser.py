@@ -277,13 +277,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             parser.error(
                 f"--{clear.replace('_', '-')} cannot be combined with --{value.replace('_', '-')}"
             )
-    if (
-        getattr(args, "area", None) == "chat"
-        and args.prompt is None
-        and args.prompt_file is None
-        and _stdin_is_terminal()
-    ):
-        parser.error("chat needs a message: pass <prompt>, use --file, or pipe it on stdin")
+    if getattr(args, "area", None) == "chat":
+        _check_chat_arguments(parser, args)
     if getattr(args, "area", None) == "archive" and args.command == "purge":
         _check_archive_purge_selection(parser, args)
     return args
@@ -376,6 +371,38 @@ def _check_archive_purge_selection(
             f"{', '.join(filters[::2])} only apply with --all; to delete the named entries, "
             f"run '{by_ids}'"
         )
+
+
+def _check_chat_arguments(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """Refuse contradicting chat options; decide whether a message-less call opens the TUI.
+
+    Without any message source on an interactive terminal, ``vbot chat`` opens
+    the TUI (``args.open_tui``) when its options mean something there: the
+    Agent, ``-c``, ``--session`` or ``--project``. Attachments alone are a message.
+    """
+    if args.ephemeral and args.continue_latest:
+        parser.error(
+            "--ephemeral starts a new Session, -c continues one; use one of them. "
+            "Continue an Ephemeral Session with --session"
+        )
+    args.open_tui = False
+    if args.prompt is not None or args.prompt_file is not None or args.attachments:
+        return
+    if not _stdin_is_terminal():
+        return
+    tui_options = not (
+        args.json
+        or args.workspace
+        or args.ephemeral
+        or args.model is not None
+        or args.thinking_effort is not None
+        or args.temperature is not None
+        or args.top_p is not None
+    )
+    if tui_options and sys.stdout is not None and sys.stdout.isatty():
+        args.open_tui = True
+        return
+    parser.error("chat needs a message: pass <prompt>, use --file, or pipe it on stdin")
 
 
 def _stdin_is_terminal() -> bool:

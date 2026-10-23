@@ -23,6 +23,9 @@ The restorable unit a delete creates: deleting an Identity Agent, Project or Ses
 ## Session
 A persisted conversation belonging to exactly one Agent, holding its Message history (`sessions.md`). Distinct from its Agent, Workspace files and an active execution (Run). Not the coding agent's own session or a login session.
 
+## Ephemeral Session
+A throwaway Session the user asked for when starting it (`vbot chat --ephemeral`): it is never the Agent's current Session, never listed, recalled or reviewed for learning, and deleted permanently a fixed time after its last activity (`sessions/lists-and-metadata.md` -> Ephemeral Sessions). Not a temporary Session of an Extension-managed Agent, and not a Scratch Area.
+
 ## Sub-Agent
 A Session that another Session started through the `subagent` Tool to work on a task and report back, together with the Agent working in it; the starting Session is its Parent Session (`subagents.md`). Not the coding agent's own subagents.
 

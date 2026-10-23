@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import timedelta
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Final, Literal
 
@@ -120,6 +121,11 @@ SUBAGENT_PARENT_META_KEY = "subagent_parent"
 SUBAGENT_TAKEN_OVER_AT_META_KEY = "subagent_taken_over_at"
 SUBAGENT_REPLY_TARGET_META_KEY = "subagent_reply_target"
 SESSION_RUN_KINDS_META_KEY = "run_kinds"
+# Marks an Ephemeral Session: set when it is created, never current, listed or
+# recalled, and deleted permanently after EPHEMERAL_SESSION_LIFETIME without
+# activity (owner of the expiry: ``core/archive``).
+SESSION_EPHEMERAL_META_KEY = "ephemeral"
+EPHEMERAL_SESSION_LIFETIME = timedelta(hours=24)
 # The Session's working Project: its address Project, or for a Session of an
 # Identity Agent the Project chosen when it was created (absent: the Workspace).
 # Sessions manage it; a metadata write may repeat it but never change it.
@@ -158,6 +164,7 @@ SESSION_FORK_ALWAYS_STRIP_META_KEYS = frozenset(
         "scratch_announced",
         SESSION_RUN_KINDS_META_KEY,
         SESSION_GOAL_META_KEY,
+        SESSION_EPHEMERAL_META_KEY,
     }
 )
 # Prompt pin slots rendered from the Session's Agent: its Skill catalog, SOUL

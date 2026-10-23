@@ -4,6 +4,7 @@ Agent Secrets."""
 from __future__ import annotations
 
 import argparse
+import sys
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -432,9 +433,12 @@ def dispatch_chat_command(args: argparse.Namespace, instance: ServerInstance) ->
     """Send one message to an Agent Session and follow the Run it starts."""
     if args.prompt_file is not None:
         prompt = _read_text_file(args.prompt_file)
+    elif args.prompt is None and args.attachments and (sys.stdin is None or sys.stdin.isatty()):
+        # Attachments alone are the message; a terminal has no text to read.
+        prompt = ""
     else:
         prompt = _read_stdin_utf8() if args.prompt in {None, "-"} else args.prompt
-    if not prompt.strip():
+    if not prompt.strip() and not args.attachments:
         return CommandResult(
             ok=False,
             message="chat needs a non-empty message as <prompt> or on stdin",
@@ -459,6 +463,8 @@ def dispatch_chat_command(args: argparse.Namespace, instance: ServerInstance) ->
             overrides=overrides,
             working_project_id=args.working_project,
             workspace=args.workspace,
+            ephemeral=args.ephemeral,
+            attachments=tuple(args.attachments),
             json_output=args.json,
         ),
     )

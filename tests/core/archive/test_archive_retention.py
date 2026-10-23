@@ -418,3 +418,38 @@ async def test_a_failing_purge_warns_once_until_it_succeeds(
         ("WARNING", "Usage import before a purge failed"),
         ("INFO", "Usage import before a purge no longer fails"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_a_sweep_deletes_idle_ephemeral_sessions_and_keeps_fresh_busy_and_normal_ones(
+    world: ArchiveWorld, timer: _Timer, caplog: pytest.LogCaptureFixture
+) -> None:
+    agent_with_session(world, "coder")
+    idle_hours = {"idle": 25, "fresh": 23, "busy": 30, "normal": 30}
+    addresses = {}
+    for session_id, hours in idle_hours.items():
+        metadata = {} if session_id == "normal" else {"ephemeral": True}
+        addresses[session_id] = world.sessions.create(
+            "coder", session_id=session_id, metadata=metadata
+        ).address
+        with sqlite3.connect(world.data_dir / "sessions.db") as connection:
+            connection.execute(
+                "UPDATE sessions SET last_activity_at = ? WHERE agent_id = 'coder' "
+                "AND session_id = ?",
+                (format_canonical_timestamp(_NOW - timedelta(hours=hours)), session_id),
+            )
+    caplog.set_level(logging.INFO, logger="vbot.archive")
+
+    # Without a retention period too: the lifetime is the Session's own.
+    async with world.runs.session_admission_guard(addresses["busy"]):
+        await _sweep_once(_service(world, _Setting(None)), timer)
+
+    assert {
+        session_id for session_id, address in addresses.items() if world.sessions.exists(address)
+    } == {"fresh", "busy", "normal"}
+    # Deleted permanently: no row and no archive entry is left.
+    assert ("idle", "live") not in world.session_rows("coder")
+    assert not world.sessions.archive_ledger.page(ArchiveEntryFilter()).entries
+    assert world.recall_removals == [(None, "coder", "idle")]
+    assert "Deleted 1 expired Ephemeral Sessions" in caplog.messages
+    assert not [record for record in caplog.records if record.levelno >= logging.WARNING]

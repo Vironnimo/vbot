@@ -81,9 +81,12 @@ async def _background_command(
     return command_id
 
 
+@pytest.mark.parametrize("parent_ephemeral", [False, True], ids=["normal", "ephemeral"])
 async def test_run_starts_a_linked_subagent_in_the_background(
-    harness: SubAgentHarness, monkeypatch: pytest.MonkeyPatch
+    harness: SubAgentHarness, monkeypatch: pytest.MonkeyPatch, parent_ephemeral: bool
 ) -> None:
+    if parent_ephemeral:
+        harness.sessions.set_metadata(harness.parent, {"ephemeral": True})
     snapshots: list[dict[str, Any]] = []
     create = harness.sessions.create
 
@@ -113,6 +116,8 @@ async def test_run_starts_a_linked_subagent_in_the_background(
     assert created["auto_title"] == "Do review"
     assert created["auto_title_initialized"] is True
     assert created[SUBAGENT_PARENT_META_KEY] == link
+    # A Sub-Agent of an Ephemeral Session goes with it.
+    assert created.get("ephemeral", False) is parent_ephemeral
     [turn] = harness.loop.turns
     assert (turn.content, turn.parent_agent_input) == ("review", True)
     await harness.until(lambda: turn.run is not None)

@@ -787,6 +787,11 @@ class SessionStore:
             )
         )
 
+    def expired_ephemeral_addresses(self, before: str, limit: int) -> list[SessionAddress]:
+        return self._read(
+            lambda connection: _store_queries.expired_ephemeral_addresses(connection, before, limit)
+        )
+
     def list_agent_ids(
         self, project_id: str | None, *, exclude_owner_managed: bool = False
     ) -> list[str]:
