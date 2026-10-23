@@ -7,7 +7,7 @@ import asyncio
 import gzip
 import json
 import zlib
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from typing import Any, override
 
@@ -521,6 +521,73 @@ def _sse(content: str, headers: dict[str, str] | None = None) -> httpx.Response:
     return httpx.Response(
         200, content=content, headers={"Content-Type": "text/event-stream", **(headers or {})}
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body_limit", [None, 32])
+@pytest.mark.parametrize("multipart", [False, True], ids=["streamed", "multipart"])
+@pytest.mark.parametrize("cancelled", [False, True], ids=["completed", "cancelled"])
+async def test_debug_capture_preserves_streamed_uploads_without_reading_ahead(
+    debug_store: DebugTraceStore,
+    monkeypatch: pytest.MonkeyPatch,
+    body_limit: int | None,
+    multipart: bool,
+    cancelled: bool,
+) -> None:
+    entered_transport = False
+    sent_body = b""
+
+    class UploadTransport(httpx.AsyncBaseTransport):
+        @override
+        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+            nonlocal entered_transport, sent_body
+            entered_transport = True
+            sent_body = await request.aread()
+            if cancelled:
+                raise asyncio.CancelledError
+            return httpx.Response(200, stream=httpx.ByteStream(b"ok"))
+
+    async def chunks() -> AsyncIterator[bytes]:
+        assert entered_transport
+        yield b"first upload chunk\n"
+        yield b"second upload chunk\n"
+        yield b"final upload chunk\n"
+
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **kwargs: UploadTransport())
+    recorder = ProviderDebugRecorder(debug_store, body_limit=body_limit)
+    async with build_async_client(base_url=_DEBUG_URL, debug_recorder=recorder) as client:
+        request = (
+            client.post(
+                _DEBUG_URL,
+                data={"model": "test-model"},
+                files={"image": ("image.png", b"test-image-bytes", "image/png")},
+            )
+            if multipart
+            else client.post(_DEBUG_URL, content=chunks())
+        )
+        if cancelled:
+            with pytest.raises(asyncio.CancelledError):
+                await request
+        else:
+            response = await request
+            assert response.content == b"ok"
+        if multipart:
+            assert b"test-model" in sent_body and b"test-image-bytes" in sent_body
+        else:
+            assert sent_body == (b"first upload chunk\nsecond upload chunk\nfinal upload chunk\n")
+    [trace] = _traces(debug_store)
+    expected_body = sent_body.decode()
+    if body_limit is not None:
+        expected_body = (
+            sent_body[:body_limit].decode()
+            + f"\n[{len(sent_body) - body_limit} more bytes not recorded]"
+        )
+    assert trace["request"]["body"] == expected_body
+    if cancelled:
+        assert trace["response"] is None
+        assert trace["error"]["type"] == "CancelledError"
+    else:
+        assert trace["response"]["body"] == "ok"
 
 
 @respx.mock
