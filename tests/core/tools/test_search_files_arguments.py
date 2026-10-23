@@ -111,6 +111,8 @@ async def test_content_only_fields_without_a_pattern_explain_the_fix(
         {"args": ["*.py"]},
         {"pattern": "*.py", "target": "files"},
         {"pattern": "*.py", "output": "files"},
+        {"pattern": "*.py", "glob": "*.py", "output": "files"},
+        {"pattern": "*.py", "args": ["-g", "*.py", "-l"]},
         {"pattern": "app*.py"},
     ],
 )
@@ -444,11 +446,27 @@ async def test_a_glob_naming_a_directory_matches_the_files_below_it(
 
 
 @pytest.mark.asyncio
-async def test_a_glob_shaped_literal_search_stays_a_content_search(project: Path) -> None:
-    (project / "notes.txt").write_text("match *.py files\n")
-    result = await dispatch(project, {"pattern": "*.py", "args": ["-F"]})
-    assert result["data"]["content"] == "notes.txt\n1:match *.py files"
-    assert "note" not in result["data"]
+@pytest.mark.parametrize(
+    ("extra", "options", "expected"),
+    [
+        ({}, ["-F"], "notes.txt\n1:match *.py files"),
+        ({"glob": "*.py", "output": "files"}, ["-F"], "src/app.py"),
+        ({"glob": "*.py", "output": "files"}, ["-v"], "src/other.py"),
+    ],
+)
+async def test_a_glob_shaped_explicit_content_search_keeps_its_matching_rules(
+    project: Path, extra: dict, options: list[str], expected: str
+) -> None:
+    if extra:
+        (project / "src/app.py").write_text("match *.py files\n")
+        (project / "src/empty.py").write_text("")
+        (project / "src/other.py").write_text("other content\n")
+    else:
+        (project / "notes.txt").write_text("match *.py files\n")
+    result = await dispatch(project, {"pattern": "*.py", "args": options, **extra})
+    assert result["data"]["content"] == expected
+    if "-F" in options:
+        assert "note" not in result["data"]
 
 
 @pytest.mark.asyncio

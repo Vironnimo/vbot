@@ -136,7 +136,12 @@ Modes:
   conflicting option is set. This applies only to content or files output with a
   single, non-literal pattern. Glob-shaped means: no whitespace or `()|^$+\`,
   plus a leading `*`, `**` or `/*.`. A pattern that matches every name (`*`,
-  `**/*`, ...) lists all files.
+  `**/*`, ...) lists all files. For file-list output, an identical existing
+  `glob` is a duplicate filename filter and is kept as that listing's filter.
+  Different filters and explicit content matching (`-F`, `-v`, `-w`, `-x`,
+  context or counts) retain their existing meaning. Four duplicated filters
+  in the October 21-23 Tool-call audit searched contents instead of listing
+  files; current dispatch coverage is in `test_search_files_arguments.py`.
 - With file-list output (`output: "files"`, `-l`), a single non-literal regex
   that matches every line (`.`, `.*`, `^(.*)$`, `^`, ...) lists every file
   instead, with a `note`, unless `-v`, `-x` or `-w` narrows it: ripgrep would
@@ -719,6 +724,7 @@ blank placeholders, so no sentence has to warn about them.
 
 | Text | Reason |
 |---|---|
+| `pattern "..." is a file name glob, so matching files were listed.` | Names the interpretation as a filename filter. Also applies when file-list output repeats the same glob in both pattern and glob; four audit calls in October 2026 otherwise returned accidental content matches or misleading empty results. Explicit content flags retain their meaning. |
 | `Search file contents with a regular expression, or find files and directories by name.` | Names every job of the single Tool so Agents pick it for name and content discovery (F1). "find ... by name" matches how Agents phrase the task: with "list files and directories", 6 of 12 directory-name trials went to the shell first, with "find ... by name" 2 of 12 (first-use probe, 2026-10). |
 | `Use this instead of grep, rg, find, or ls in the shell.` | Agents otherwise fall back to the shell for search (F1). Names only Unix commands Models know from training; shell-specific cmdlet names stay out. |
 | pattern: `Regular expression (ripgrep syntax) for file contents. Omit to list files.` | Pins the regex flavor and the listing default (F2, F3). "for file contents" keeps name regexes such as `\.py$` out of `pattern`; a content search that finds nothing lists the files whose names match (first-use probe, 2026-10; agent-eval 2026-10-10). |
