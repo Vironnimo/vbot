@@ -14,7 +14,8 @@ from typing import Any
 import pytest
 
 from core.automation import _cron_timing as cron_timing
-from core.automation._cron_webhook_events import WEBHOOK_STATE_DIR_NAME, state_path
+from core.automation import _cron_webhooks as cron_webhooks
+from core.automation._cron_webhook_events import WEBHOOK_STATE_DIR_NAME, WebhookState, state_path
 from core.automation.cron import (
     CronJobValidationError,
     CronService,
@@ -149,6 +150,40 @@ async def test_a_request_with_the_secret_starts_a_run_with_its_payload_as_escape
     final = service.webhook_status(finished)
     assert final is not None
     assert (final.waiting, final.last_received_at) == (0, "2026-10-20T12:00:00+00:00")
+
+
+@pytest.mark.asyncio
+async def test_cancelling_a_request_during_its_save_keeps_it_waiting_for_a_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, _trigger = make_service(tmp_path)
+    service.set_webhook_secrets(secret_store(tmp_path))
+    job_id, secret = await _webhook_job(service)
+    saving, finish_save, changed = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    service.add_changed_callback(changed.set)
+    original_write = service._webhooks._write
+
+    async def blocked_write(state: WebhookState) -> None:
+        saving.set()
+        await finish_save.wait()
+        await original_write(state)
+
+    monkeypatch.setattr(service._webhooks, "_write", blocked_write)
+    request = asyncio.create_task(service.receive_webhook(job_id, _bearer(secret), b"first"))
+    await saving.wait()
+    request.cancel()
+    finish_save.set()
+    with pytest.raises(asyncio.CancelledError):
+        await request
+
+    waiting = service.webhook_status(service.get_job(job_id))
+    assert waiting is not None and waiting.waiting == 1
+    assert changed.is_set() and service._webhooks.wake(job_id).is_set()
+    assert [row["body"] for row in _state(service, job_id)["requests"]] == ["first"]
+
+    assert await service.receive_webhook(job_id, _bearer(secret), b"second") == "accepted"
+    assert [row["body"] for row in _state(service, job_id)["requests"]] == ["first", "second"]
+    await service.aclose()
 
 
 @pytest.mark.asyncio
@@ -346,7 +381,9 @@ async def test_bodies_reach_the_run_rendered_and_cut(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_secret_lives_in_the_secret_store_and_follows_the_job(tmp_path: Path) -> None:
+async def test_the_secret_lives_in_the_secret_store_and_follows_the_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     store = secret_store(tmp_path)
     service, _trigger = make_service(tmp_path)
 
@@ -363,7 +400,28 @@ async def test_the_secret_lives_in_the_secret_store_and_follows_the_job(tmp_path
     jobs_text = (service._cron_dir / "jobs.json").read_text(encoding="utf-8")
     assert secret not in jobs_text and '"schedule_type": "webhook"' in jobs_text
 
-    rotated = await service.rotate_webhook_secret(job_id, actor="rpc")
+    # A cache-miss read that started before rotation must not restore the old secret.
+    service.set_webhook_secrets(store)
+    read_started, finish_read = asyncio.Event(), asyncio.Event()
+    worker_run = cron_webhooks._WEBHOOK_WORKERS.run
+
+    async def delayed_read(function: Any, *args: Any, **kwargs: Any) -> Any:
+        result = await worker_run(function, *args, **kwargs)
+        if function == store.entry:
+            read_started.set()
+            await finish_read.wait()
+        return result
+
+    with monkeypatch.context() as delayed:
+        delayed.setattr(cron_webhooks._WEBHOOK_WORKERS, "run", delayed_read)
+        reading = asyncio.create_task(service.webhook_secret(job_id))
+        await read_started.wait()
+        try:
+            rotated = await service.rotate_webhook_secret(job_id, actor="rpc")
+        finally:
+            finish_read.set()
+        assert await reading == rotated
+    assert await service.webhook_secret(job_id) == rotated
     assert rotated != secret
     assert await service.receive_webhook(job_id, _bearer(secret), b"x") == "refused"
     assert await service.receive_webhook(job_id, _bearer(rotated), b"x") == "accepted"
