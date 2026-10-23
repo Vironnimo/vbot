@@ -817,7 +817,13 @@ async def test_unbalanced_regex_characters_match_literally_with_a_note(
         (r"Alpha\nBeta", {"path": "windows"}, "windows\n1:Alpha\n2:Beta", True),
         ("Alpha\nBeta", {"path": "windows"}, "windows\n1:Alpha\n2:Beta", True),
         (r"Gamma\x0A+Delta", {"path": "windows"}, "windows\n7:Gamma\n8:\n9:Delta", True),
+        *[
+            (pattern, {"path": "windows", "args": flags}, "windows\n1:Alpha\n2:Beta", False)
+            for pattern in (r"Alpha\nBeta", "Alpha\nBeta")
+            for flags in (["-U"], ["-U", "-P"])
+        ],
         (r"Alpha\nBeta", {"path": "windows", "args": ["--no-crlf"]}, "", True),
+        (r"Alpha\nBeta", {"path": "windows", "args": ["-U", "--no-crlf"]}, "", True),
     ],
 )
 async def test_rejected_regex_line_breaks_run_multiline_without_overriding_explicit_modes(
