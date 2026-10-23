@@ -35,14 +35,16 @@ def test_resolves_absolute_relative_and_repeated_markers_anywhere_in_a_line(
 
 
 @pytest.mark.parametrize("wrapper", ["", "*", "***", "__", "`"])
+@pytest.mark.parametrize("punctuation", [",", ".", "..."])
 def test_markdown_wrapper_pair_belongs_to_the_marker_but_punctuation_does_not(
     tmp_path: Path,
     wrapper: str,
+    punctuation: str,
 ) -> None:
     image = tmp_path / "image.png"
     image.write_bytes(b"image")
     marker = f"{wrapper}file:{image}{wrapper}"
-    line = f"Look at {marker}, then continue."
+    line = f"Look at {marker}{punctuation} Then continue."
 
     assert resolve_assistant_file_references(line, cwd=tmp_path, permissions=FULL_ACCESS) == [
         _reference(line, 0, marker, image)
