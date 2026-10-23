@@ -297,14 +297,34 @@ def _reported_skill_epochs(effective: list[ChatMessage]) -> list[list[str]]:
 
 
 @pytest.mark.asyncio
-async def test_compaction_reports_only_the_immediately_completed_skill_epoch() -> None:
+@pytest.mark.parametrize("carrier", ["note", "tool"])
+async def test_compaction_reports_only_the_immediately_completed_skill_epoch(carrier: str) -> None:
     service = CompactionService(RetainContextStrategy())
     settings = CompactionSettings(strategy="retain-context")
     history: list[ChatMessage] = [user("u1", "First task")]
+    digests: dict[str, str] = {}
 
     for step, skill in enumerate(["alpha", "beta", None], start=1):
         if skill is not None:
-            history.append(_skill_note(skill))
+            if carrier == "note":
+                history.append(_skill_note(skill))
+            else:
+                history.extend(
+                    tool_step(
+                        skill,
+                        json.dumps(
+                            {
+                                "ok": True,
+                                "data": {
+                                    "name": skill,
+                                    "status": "loaded",
+                                    "content": f"{skill} instructions",
+                                },
+                            }
+                        ),
+                        name="skill",
+                    )
+                )
         history.append(assistant(f"a{step}", f"Result {step}"))
         history.append(await compact(history, service=service, settings=settings))
         effective = effective_compaction_messages(history)
@@ -312,6 +332,13 @@ async def test_compaction_reports_only_the_immediately_completed_skill_epoch() -
         assert _reported_skill_epochs(effective) == ([] if skill is None else [[skill]])
         assert all(" instructions</skill_content>" not in str(item.content) for item in effective)
         assert COMPACTION_SKILL_NOTE_PREFIX not in json.dumps(_embed_notes_into_request(effective))
+        for item in effective:
+            if item.role == "tool":
+                assert isinstance(item.content, str)
+                assert json.loads(item.content)["outcome"]["compacted"] is True
+                # A later checkpoint retains the same digest and original size,
+                # rather than digesting the previous digest again.
+                assert digests.setdefault(item.id, item.content) == item.content
 
 
 @pytest.mark.asyncio

@@ -623,7 +623,7 @@ class CompactionService:
         active_skill_names = tuple(current_skill_activation_contents(messages))
         activation_result_names = tuple(
             (message.id, activation[0])
-            for message in messages
+            for message in effective
             if (activation := skill_tool_activation(message)) is not None
         )
         return _PreparedCompaction(
