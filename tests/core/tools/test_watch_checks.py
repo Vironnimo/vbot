@@ -232,6 +232,42 @@ async def test_a_watched_url_fails_with_what_went_wrong(
 
 
 @pytest.mark.asyncio
+async def test_a_context_command_returns_its_output_with_any_exit_code_within_the_session_rules(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+
+    def script(shell: _Shell) -> None:
+        shell.write("M core/app.py\n")
+        shell.exit(1)
+
+    launches = _Launches(script)
+    analyzer = FakeAnalyzer(plan("Remove-Item", subtree_writes=[tmp_path / "elsewhere"]))
+    runner = _runner(tmp_path, launches, command_checker=fake_checker(analyzer))
+    open_boundary = PermissionBoundary.build(
+        None, BoundaryContext(workdir=project, home=project, data_dir=tmp_path / "data")
+    )
+
+    # A non-zero exit is the command's answer, not a failure.
+    assert await runner.run_context_command(
+        "git status --short", workdir=project, boundary=open_boundary
+    ) == (1, "M core/app.py\n")
+    assert launches.calls[0][1] == project
+
+    # A restricted Session's command is checked as its shell Tool checks it.
+    with pytest.raises(WatchCheckError, match="The command was not run"):
+        await runner.run_context_command(
+            "Remove-Item -Recurse ../elsewhere", workdir=project, boundary=restricted(project)
+        )
+    with pytest.raises(WatchCheckError, match="does not exist"):
+        await runner.run_context_command(
+            "git status", workdir=tmp_path / "missing", boundary=open_boundary
+        )
+    assert len(launches.calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_a_job_with_a_permission_ceiling_runs_only_checks_its_rules_allow(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _host_shell: list[CommandEnvironment]
 ) -> None:

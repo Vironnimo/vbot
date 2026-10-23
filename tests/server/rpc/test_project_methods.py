@@ -104,9 +104,11 @@ async def test_add_creates_the_project_with_seeded_defaults_and_a_scan_preview(
         auto_instructions=False,
         folder_instructions=False,
         auto_load=["NOTES.md"],
+        context_commands=[" git status --short ", "git status --short"],
     )
     project = changed["project"]
     assert (project["auto_instructions"], project["folder_instructions"]) == (False, False)
+    assert project["context_commands"] == ["git status --short"]
     # The main file is still reported while off; an additional file that does
     # not exist is listed as missing.
     assert project["instruction_status"] == {"main_file": "CLAUDE.md", "missing": ["NOTES.md"]}

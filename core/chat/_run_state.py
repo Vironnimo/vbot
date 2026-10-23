@@ -81,6 +81,7 @@ from core.tools.file_state import FileRead
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    from core.chat._context_commands import ContextCommandRunner
     from core.chat._request_builder import RequestBuilder
     from core.extensions import ExtensionRegistry
     from core.models.models import ModelRegistry
@@ -204,6 +205,9 @@ class ChatLoopDependencies:
     scratch_areas: ScratchAreas | None = None
     # Agent Secrets: masking of results, input and requests.
     secrets: AgentSecrets | None = None
+    # Runs the context commands a new Session starts with; created after the Chat Loop.
+    # ``None`` (or a runner of ``None``) runs none.
+    get_context_command_runner: Callable[[], ContextCommandRunner | None] | None = None
 
     @property
     def secret_masker(self) -> SecretMasker:

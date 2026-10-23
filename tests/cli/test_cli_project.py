@@ -269,6 +269,14 @@ def test_project_show_renders_the_team_and_the_default_knobs(
             {"auto_instructions": False, "folder_instructions": False},
             id="instruction-switches",
         ),
+        pytest.param(
+            ("--context-commands", "git status --short", "npm outdated"),
+            {"context_commands": ["git status --short", "npm outdated"]},
+            id="context-commands",
+        ),
+        pytest.param(
+            ("--context-commands",), {"context_commands": []}, id="context-commands-cleared"
+        ),
     ],
 )  # fmt: skip
 def test_project_set_sends_the_requested_changes(
@@ -298,6 +306,7 @@ def test_project_set_without_changes_lists_every_option(rpc: FakeRpc, run_cli: R
         "--sources",
         "--model-mappings",
         "--auto-load",
+        "--context-commands",
         "--auto-instructions",
         "--folder-instructions",
         "--allowed-tools",

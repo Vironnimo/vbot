@@ -50,6 +50,7 @@ AGENT_UPDATE_FLAGS = (
     "--tool-deny",
     "--allowed-skills",
     "--excluded-skills",
+    "--context-commands",
     "--subagent-allow",
     "--permissions",
     "--allow-rule",
@@ -441,6 +442,8 @@ def _format_agent_detail(agent: Mapping[str, Any]) -> str:
     policy_lines: list[str] = []
     if "excluded_skills" in agent:
         policy_lines.append(f"excluded_skills: {_format_string_list(agent.get('excluded_skills'))}")
+    if agent.get("context_commands"):
+        policy_lines.append(f"context_commands: {_json_text(agent.get('context_commands'))}")
     if "tools" in agent:
         policy_lines.append(
             f"subagent_allowed_agents: {_subagent_allowed_agents(agent.get('tools'))}"

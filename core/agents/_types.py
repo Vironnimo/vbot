@@ -147,6 +147,9 @@ class Agent:
     # Skill names removed from what ``allowed_skills`` grants. Never hides the Agent's
     # own private Skills or the active Project's Skills.
     excluded_skills: list[str] = field(default_factory=list)
+    # Shell lines a new Session in the Agent's Workspace runs before its first Model
+    # request (``core.utils.context_commands``); written only when set.
+    context_commands: list[str] = field(default_factory=list)
     # Nucleus sampling; ``None`` leaves it to the Provider (written only when set).
     top_p: float | None = None
     root_project_id: str | None = None

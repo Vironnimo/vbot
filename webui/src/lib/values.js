@@ -25,3 +25,13 @@ export function asOptionalText(value) {
   const normalized = String(value).trim();
   return normalized.length > 0 ? normalized : null;
 }
+
+// The non-empty lines of a one-entry-per-line text, trimmed and each once, in
+// order: how list settings such as context commands are edited as text.
+export function distinctLines(value) {
+  const lines = asText(value)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  return [...new Set(lines)];
+}

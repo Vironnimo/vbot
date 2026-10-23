@@ -1,7 +1,9 @@
-"""Cron watch checks: a command in the host shell or a GET of a URL, without a Model.
+"""Commands and URL checks vBot runs without a Model: Cron watch checks and context commands.
 
-Cron runs one before each Run of a watching job and compares its output with
-the previous one (``core.automation.cron.WatchChecks``). Every failure raises
+Cron runs a check before each Run of a watching job and compares its output with
+the previous one (``core.automation.cron.WatchChecks``). Chat runs the context
+commands of a Project or an Identity Agent when a Session starts
+(``run_context_command``, ``chat/context-commands.md``). Every failure raises
 ``WatchCheckError`` with a message that says what failed, without a final period.
 
 Command. The shell Tool's host shell: PowerShell 7 with the shell Tool's
@@ -32,7 +34,8 @@ the URL is fetched through the public-HTTP guard (``fetch_public``: public
 addresses only, every redirect hop revalidated and checked with ``check_url``)
 instead of the open GET above. A refused check fails with the refusal as its
 error. ``permission_refusal`` gives the same verdict to the ``cron`` Tool before
-it saves a watch.
+it saves a watch. A context command runs under its Session's boundary the same
+way when that boundary is restricted.
 """
 
 from __future__ import annotations
@@ -104,7 +107,7 @@ class _Projects(Protocol):
 
 
 class WatchCheckRunner:
-    """Run Cron watch checks for the Agents and Projects of this vBot instance."""
+    """Run Cron watch checks and context commands for this vBot instance."""
 
     def __init__(
         self,
@@ -172,10 +175,46 @@ class WatchCheckRunner:
             refused = await self._command_refusal(command, workdir, boundary, withheld)
             if refused is not None:
                 raise WatchCheckError(_refused(refused))
+        code, text = await self._run(command, workdir, withheld, noun="check command")
+        if code != 0:
+            raise WatchCheckError(_exit_problem(code, text, "check command"))
+        return text
+
+    async def run_context_command(
+        self, command: str, *, workdir: Path, boundary: PermissionBoundary
+    ) -> tuple[int, str]:
+        """Run a Session's context ``command`` in ``workdir``; its exit code and output.
+
+        A non-zero exit still returns what the command printed. A restricted
+        ``boundary`` checks the command first and runs it confined, as the shell
+        Tool runs it for that Session.
+        """
+        withheld: Container[str] | None = None
+        if boundary.restricted:
+            withheld = self._credential_names()
+            refused = await self._command_refusal(command, workdir, boundary, withheld)
+            if refused is not None:
+                raise WatchCheckError(
+                    refused.message(outcome="The command was not run").rstrip(".")
+                )
+        if not await _WORKERS.run(workdir.is_dir):
+            raise WatchCheckError(
+                f"The command did not run: its working directory {workdir} does not exist"
+            )
+        return await self._run(command, workdir, withheld, noun="command")
+
+    async def _run(
+        self, command: str, workdir: Path, withheld: Container[str] | None, *, noun: str
+    ) -> tuple[int, str]:
+        """Run ``command`` in the host shell; its exit code and output.
+
+        ``noun`` names the command in failures: a shell that cannot run it, a
+        PowerShell that did not run it, and a timeout.
+        """
         try:
             start = await _WORKERS.run(_shell_start, command, workdir, withheld)
         except HostShellMissingError as error:
-            raise WatchCheckError(f"The check command did not run: {error}") from error
+            raise WatchCheckError(f"The {noun} did not run: {error}") from error
         try:
             process = await self._launch(
                 start.argv,
@@ -185,7 +224,7 @@ class WatchCheckRunner:
                 request_pipe=start.request is not None,
             )
         except OSError as error:
-            raise WatchCheckError(f"The check command could not start: {error}") from error
+            raise WatchCheckError(f"The {noun} could not start: {error}") from error
         output = _CappedOutput(COMMAND_OUTPUT_MAX_BYTES)
         reader = asyncio.create_task(_read_into(process, output))
         try:
@@ -196,7 +235,7 @@ class WatchCheckRunner:
                     code = await process.wait()
             except TimeoutError:
                 raise WatchCheckError(
-                    f"The check command timed out after {COMMAND_TIMEOUT_SECONDS} seconds"
+                    f"The {noun} timed out after {COMMAND_TIMEOUT_SECONDS} seconds"
                 ) from None
             await asyncio.wait({reader}, timeout=_DRAIN_SECONDS)
         finally:
@@ -204,10 +243,9 @@ class WatchCheckRunner:
             await settle_before_cancelling(_WORKERS.run(_release, process))
             reader.cancel()
             await asyncio.gather(reader, return_exceptions=True)
-        text = output.text()
-        if code != 0:
-            raise WatchCheckError(_exit_problem(code, start, workdir, text))
-        return text
+        if (problem := _not_run_problem(code, start, workdir, noun)) is not None:
+            raise WatchCheckError(problem)
+        return code, output.text()
 
     async def fetch_url(self, url: str, *, ceiling: PermissionCeiling | None = None) -> str:
         """GET ``url``; its main text for an HTML page, else the decoded body."""
@@ -384,16 +422,21 @@ def _release(process: PipeCommandProcess) -> None:
         process.close()
 
 
-def _exit_problem(code: int, start: HostShellStart, workdir: Path, output: str) -> str:
+def _not_run_problem(code: int, start: HostShellStart, workdir: Path, noun: str) -> str | None:
+    """Why PowerShell did not run the command behind exit ``code``, or ``None``."""
     reason = start.request.not_run_codes.get(code) if start.request is not None else None
     if reason == "workdir_unavailable":
-        return f"The check command did not run: PowerShell could not enter {workdir}"
+        return f"The {noun} did not run: PowerShell could not enter {workdir}"
     if reason == "language_mode_unavailable":
-        return "The check command did not run: PowerShell runs in a restricted language mode"
+        return f"The {noun} did not run: PowerShell runs in a restricted language mode"
     if reason is not None:
-        return "The check command did not run: PowerShell could not read it"
+        return f"The {noun} did not run: PowerShell could not read it"
+    return None
+
+
+def _exit_problem(code: int, output: str, noun: str) -> str:
     tail = _last_line(output)
-    return f"The check command exited with code {code}" + (f": {tail}" if tail else "")
+    return f"The {noun} exited with code {code}" + (f": {tail}" if tail else "")
 
 
 def _last_line(output: str) -> str:

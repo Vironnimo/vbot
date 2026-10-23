@@ -20,6 +20,7 @@ from core.agents._config import (
     _validate_agent_id,
     _validate_allowed_items,
     _validate_bool_field,
+    _validate_context_commands,
     _validate_excluded_skills,
     _validate_fallback_models,
     _validate_memory_prompt_mode,
@@ -303,6 +304,10 @@ class AgentMutations:
                 )
             if "excluded_skills" in changes:
                 changes["excluded_skills"] = _validate_excluded_skills(changes["excluded_skills"])
+            if "context_commands" in changes:
+                changes["context_commands"] = _validate_context_commands(
+                    changes["context_commands"]
+                )
             if "tools" in changes:
                 changes["tools"] = normalize_agent_tools(changes["tools"])
             for bool_field in ("custom_system_prompt_enabled", "librarian_enabled"):

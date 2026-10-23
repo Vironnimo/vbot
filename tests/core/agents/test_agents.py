@@ -485,6 +485,19 @@ def test_tool_loading_persists_as_given_and_clears(store: AgentStore) -> None:
         assert "tool_loading" not in persisted(store, "coder")
 
 
+def test_context_commands_persist_normalized_and_clear(store: AgentStore) -> None:
+    store.create("coder", "Coder")
+
+    updated = store.update("coder", context_commands=[" git status ", "git log -3", "git status"])
+
+    assert updated.context_commands == ["git status", "git log -3"]
+    assert persisted(store, "coder")["context_commands"] == ["git status", "git log -3"]
+    with pytest.raises(AgentError, match="at most 10 commands"):
+        store.update("coder", context_commands=[f"echo {index}" for index in range(11)])
+    assert store.update("coder", context_commands=[]).context_commands == []
+    assert "context_commands" not in persisted(store, "coder")
+
+
 def test_permission_rules_persist_normalized_and_clear(store: AgentStore) -> None:
     store.create(
         "coder", "Coder", permission_rules={"read": "work_area", "deny": ["read({workdir}/x)"]}

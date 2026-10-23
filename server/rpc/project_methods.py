@@ -65,6 +65,7 @@ from core.settings import (
 )
 from core.tools.availability import normalize_tool_access
 from core.tools.tool_loading import normalize_tool_loading
+from core.utils.context_commands import normalize_context_commands
 from core.utils.ids import is_reserved_name, reserved_name_message
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
@@ -132,6 +133,7 @@ _SET_MUTABLE_FIELDS = frozenset(
         "auto_load",
         "auto_instructions",
         "folder_instructions",
+        "context_commands",
         "allowed_tools",
         "skills_bundled_enabled",
         "skills_global_enabled",
@@ -836,6 +838,11 @@ def _set_changes(params: JsonObject) -> JsonObject:
     for switch in ("auto_instructions", "folder_instructions"):
         if switch in params:
             changes[switch] = _optional_bool(params, switch, default=True)
+    if "context_commands" in params:
+        try:
+            changes["context_commands"] = normalize_context_commands(params["context_commands"])
+        except ValueError as error:
+            raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.context_commands {error}") from error
     # The Tool/Skill Whitelist fields are lists of non-empty strings; an explicit
     # empty list is a real value (e.g. every tool off), so presence in params — not
     # truthiness — decides whether the field changes.
@@ -999,6 +1006,7 @@ def _project_response(project: Project) -> JsonObject:
         "auto_load": list(project.auto_load),
         "folder_instructions": project.folder_instructions,
         "instruction_status": _instruction_status(project),
+        "context_commands": list(project.context_commands),
         "allowed_tools": list(project.allowed_tools),
         "skills_bundled_enabled": list(project.skills_bundled_enabled),
         "skills_global_enabled": list(project.skills_global_enabled),

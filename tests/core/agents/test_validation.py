@@ -129,6 +129,10 @@ def test_validate_agent_data_accepts_a_document_that_names_only_its_id(
             ),
         ),
         (
+            {"context_commands": "git status"},
+            ("$.context_commands", "must be a list of command strings"),
+        ),
+        (
             {"permission_rules": {"deny": ["Read({nope}/x)"]}},
             (
                 "$.permission_rules",
@@ -153,6 +157,7 @@ def test_validate_agent_data_accepts_a_document_that_names_only_its_id(
         "fallback-length",
         "excluded-skill-entry",
         "excluded-skills-wildcard",
+        "context-commands",
         "permission-rule",
     ],
 )

@@ -1,12 +1,12 @@
 # Chat
 
-Canonical provider-agnostic conversation representation and Agentic Loop execution in `core/chat/`.
+Provider-agnostic conversation representation and Agentic Loop execution in `core/chat/`.
 
 ## Overview
 
 Chat owns canonical messages, provider-request shaping, Skill/Tool turn orchestration, and the loop that advances one admitted Run through Model and Tool steps. Run lifecycle, cancellation state, and Queue coordination live in `core/runs/`; Session persistence lives in `core/sessions/`; Compaction policy, checkpoint construction, and Compaction-run coordination live in `core/compaction/`; Provider wire translation lives in `core/providers/`. Chat uses those public APIs and must not absorb their storage or lifecycle internals.
 
-A Session is the persisted conversation container; a Run is one active execution inside it. Chat is the execution seam between them: it loads canonical Session history, resolves the Agent/Model/Tools, builds provider-ready context, persists canonical results, and emits provider-agnostic Run events.
+Chat is the execution seam between Sessions and Runs: it loads canonical Session history, resolves the Agent/Model/Tools, builds provider-ready context, persists canonical results, and emits provider-agnostic Run events.
 
 ## Data Model
 
@@ -58,17 +58,18 @@ A Session is the persisted conversation container; a Run is one active execution
 
 ## Agent-facing text
 
-This domain owns the Compaction checkpoint guidance, the steering reminder and interruption texts of Run execution, the reply-surface reminders and the Command texts; permission texts: `permissions/agent-facing-text.md`. Before you change, add or delete a sentence of them, read `chat/agent-facing-text.md`: it records why each sentence exists or names the supplement that does. Update its row for every sentence you change and add one for every sentence you add.
+This domain owns the context-command note, the Compaction checkpoint guidance, the steering reminder and interruption texts of Run execution, the reply-surface reminders and the Command texts; permission texts: `permissions/agent-facing-text.md`. Before you change, add or delete a sentence of them, read `chat/agent-facing-text.md`: it records why each sentence exists or names the supplement that does. Update its row for every sentence you change and add one for every sentence you add.
 
 ## References
 
 Read these only when your task matches - not by default.
 
-- Choosing how a producer informs the Model (persisted notes, System Reminders, announcements, prompt blocks, Tool Results) or adding a kernel-to-Model channel -> `model-communication.md`
+- Choosing how a producer informs the Model (notes, System Reminders, announcements, prompt blocks, Tool Results) or adding a kernel-to-Model channel -> `model-communication.md`
 - Changing the shared semantic conversation projection, complete-Run paging or timeline snapshots/patches -> `chat/timeline.md`
 - Exact completed-Run lookup for voice announcements (`chat.run_result`) -> `model_tasks/live-operator.md`
 - Changing canonical message fields, request history, notes, Skill activation/catalog stability, the prompt-epoch Tool list or Tool-change announcements, reasoning replay, Assistant output-file references, Content Blocks, file mentions, attachment routing, or Tool-cycle repair -> `chat/request-building.md`
 - Changing Run admission/execution, `ChatLoop` entry points, Queue steering, streaming recovery, cancellation, interruption notices, Stream drafts, Tool progression, Run event payloads, Reasoning/content normalization, temporary or owned Runs, Model/Connection resolution, sampling, fallback, or Compaction boundaries -> `chat/run-execution.md`
-- Changing `start_external_run` or `ExternalRun` (recording a Live call's conversation) -> `chat/external-run.md`
+- Changing `start_external_run` or `ExternalRun` (a Live call's conversation) -> `chat/external-run.md`
+- Changing the commands a new Session starts with, or their note -> `chat/context-commands.md`
 - Changing token normalization, estimation, persistence, whole-Session aggregation, Usage events, output speed, or the server-owned token projection -> `chat/usage.md`
 - Changing Built-in or Extension Command recognition, scheduling, effects, neutral outcomes, surface availability, or projection -> `chat/commands.md`

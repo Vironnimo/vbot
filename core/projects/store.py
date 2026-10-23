@@ -388,6 +388,7 @@ class ProjectStore:
                 "auto_load",
                 "auto_instructions",
                 "folder_instructions",
+                "context_commands",
                 "allowed_tools",
                 "skills_bundled_enabled",
                 "skills_global_enabled",
@@ -415,6 +416,7 @@ class ProjectStore:
                 auto_load=changes.get("auto_load", list(project.auto_load)),
                 auto_instructions=changes.get("auto_instructions", project.auto_instructions),
                 folder_instructions=changes.get("folder_instructions", project.folder_instructions),
+                context_commands=changes.get("context_commands", list(project.context_commands)),
                 allowed_tools=changes.get("allowed_tools", list(project.allowed_tools)),
                 skills_bundled_enabled=changes.get(
                     "skills_bundled_enabled", list(project.skills_bundled_enabled)
@@ -505,6 +507,7 @@ class ProjectStore:
             auto_load=list(project.auto_load),
             auto_instructions=project.auto_instructions,
             folder_instructions=project.folder_instructions,
+            context_commands=list(project.context_commands),
             allowed_tools=list(project.allowed_tools),
             skills_bundled_enabled=list(project.skills_bundled_enabled),
             skills_global_enabled=list(project.skills_global_enabled),

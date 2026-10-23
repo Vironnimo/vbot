@@ -72,6 +72,7 @@ from core.settings.validation import (
     validate_thinking_effort_diagnostic,
     validate_top_p_diagnostic,
 )
+from core.utils.context_commands import context_commands_problem, normalize_context_commands
 from core.utils.timestamps import utc_now_timestamp
 
 DEFAULT_DEFAULT_AGENT = ""
@@ -144,6 +145,7 @@ _PROJECT_CONFIG_FIELDS = frozenset(
         "allowed_tools",
         "auto_instructions",
         "auto_load",
+        "context_commands",
         "created_at",
         "cwd",
         "default_agent",
@@ -297,6 +299,8 @@ def validate_project_data(data: Any) -> list[JsonDiagnostic]:
     except ProjectError as error:
         add_error(diagnostics, "$.model_mappings", str(error))
     _validate_auto_load_list(diagnostics, "$.auto_load", data.get("auto_load"))
+    if (problem := context_commands_problem(data.get("context_commands"))) is not None:
+        add_error(diagnostics, "$.context_commands", problem)
     for switch in ("auto_instructions", "folder_instructions"):
         if switch in data and not isinstance(data[switch], bool):
             add_error(diagnostics, f"$.{switch}", "must be true or false")
@@ -483,6 +487,9 @@ class Project:
     auto_load: list[str]
     # Agents working in a subfolder receive its folder instructions while true.
     folder_instructions: bool
+    # Shell lines every new Session working in this Project runs before its first
+    # Model request (``core.utils.context_commands``); written only when set.
+    context_commands: list[str]
     # The Project Tool Whitelist — the hard ceiling for this project's config
     # agents (GLOSSARY → Project Tool Whitelist). ``build_project`` defaults it to
     # the base list; an explicit empty list is a real value (every tool off).
@@ -556,6 +563,8 @@ class Project:
         }
         if self.default_top_p is not None:
             data["default_top_p"] = self.default_top_p
+        if self.context_commands:
+            data["context_commands"] = list(self.context_commands)
         # The switches are written only when off, like ``default_top_p`` above.
         for switch, enabled in (
             ("auto_instructions", self.auto_instructions),
@@ -581,6 +590,7 @@ def build_project(
     auto_load: list[str] | None = None,
     auto_instructions: bool = True,
     folder_instructions: bool = True,
+    context_commands: list[str] | None = None,
     allowed_tools: list[str] | None = None,
     skills_bundled_enabled: list[str] | None = None,
     skills_global_enabled: list[str] | None = None,
@@ -607,6 +617,10 @@ def build_project(
     validated_default_thinking_effort = _validate_default_thinking_effort(default_thinking_effort)
     validated_default_top_p = _validate_default_top_p(default_top_p)
     validated_auto_load = _validate_auto_load(auto_load)
+    try:
+        validated_context_commands = normalize_context_commands(context_commands)
+    except ValueError as error:
+        raise ProjectError(f"context_commands {error}") from error
     try:
         validated_sources = normalize_sources(
             sources
@@ -641,6 +655,7 @@ def build_project(
         auto_instructions=_validate_switch("auto_instructions", auto_instructions),
         auto_load=validated_auto_load,
         folder_instructions=_validate_switch("folder_instructions", folder_instructions),
+        context_commands=validated_context_commands,
         allowed_tools=validated_allowed_tools,
         skills_bundled_enabled=validated_skills_bundled,
         skills_global_enabled=validated_skills_global,
@@ -676,6 +691,7 @@ def project_from_dict(data: dict[str, Any]) -> Project:
         auto_instructions=data.get("auto_instructions", True),
         auto_load=list(cast("list[str]", data.get("auto_load") or [])),
         folder_instructions=data.get("folder_instructions", True),
+        context_commands=normalize_context_commands(data.get("context_commands")),
         allowed_tools=_allowed_tools_from_data(data.get("allowed_tools")),
         skills_bundled_enabled=list(cast("list[str]", data.get("skills_bundled_enabled") or [])),
         skills_global_enabled=list(cast("list[str]", data.get("skills_global_enabled") or [])),

@@ -408,6 +408,12 @@ async def test_agent_list_reports_the_effective_context_window(
             id="all-skills-except",
         ),
         pytest.param(
+            {"context_commands": [" git status ", "git status"]},
+            "context_commands",
+            ["git status"],
+            id="context-commands",
+        ),
+        pytest.param(
             {"tool_loading": {"on_demand": False, "always_loaded": ["read"]}},
             "tool_loading",
             {"on_demand": False, "always_loaded": ["read"]},
@@ -484,6 +490,7 @@ async def test_workspace_is_set_by_update_only(tmp_path: Path) -> None:
         ("agent.create", {"id": "writer", "excluded_skills": "pdf"}, "excluded_skills"),
         ("agent.update", {"id": "coder", "excluded_skills": ["pdf", ""]}, "excluded_skills"),
         ("agent.update", {"id": "coder", "excluded_skills": ["*"]}, "allowed_skills to []"),
+        ("agent.update", {"id": "coder", "context_commands": ["git status", ""]}, "empty command"),
         ("agent.update", {"id": "coder", "tools": "worker"}, "tools"),
         ("agent.update", {"id": "coder", "subagent_allow": "worker"}, "subagent_allow"),
         (

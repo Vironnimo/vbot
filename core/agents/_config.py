@@ -96,6 +96,7 @@ from core.tools.availability import (
 )
 from core.tools.live import LIVE_TOOL_NAMES
 from core.tools.tool_loading import TOOL_LOADING_FIELDS, normalize_tool_loading
+from core.utils.context_commands import context_commands_problem, normalize_context_commands
 from core.utils.ids import is_reserved_name, reserved_name_message
 from core.utils.timestamps import utc_now_timestamp
 
@@ -142,6 +143,7 @@ _AGENT_CONFIG_FIELDS = frozenset(
         "allowed_skills",
         "builtin",
         "compaction_policy",
+        "context_commands",
         "created_at",
         "delegation_bindings",
         "current_session_id",
@@ -361,6 +363,8 @@ def validate_agent_data(data: Any) -> list[JsonDiagnostic]:
             "$.excluded_skills",
             _EXCLUDED_SKILLS_WILDCARD_ERROR.removeprefix("excluded_skills "),
         )
+    if (problem := context_commands_problem(data.get("context_commands"))) is not None:
+        add_error(diagnostics, "$.context_commands", problem)
     if data.get("tools") is not None:
         _validate_agent_tools_diagnostics(diagnostics, data["tools"])
     if data.get("custom_system_prompt_enabled") is not None and not isinstance(
@@ -633,6 +637,14 @@ def _validate_excluded_skills(items: Any) -> list[str]:
     return list(dict.fromkeys(items))
 
 
+def _validate_context_commands(items: Any) -> list[str]:
+    """Return the stored context commands stripped and once each, in order."""
+    try:
+        return normalize_context_commands(items)
+    except ValueError as error:
+        raise AgentError(f"context_commands {error}") from error
+
+
 def _validate_fallback_models(field: str, items: Any) -> list[str]:
     if not isinstance(items, list) or any(not isinstance(item, str) for item in items):
         raise AgentError(f"{field} must be a list of strings")
@@ -770,6 +782,7 @@ def _agent_from_dict(
         tool_access=_validate_tool_access(data.get("tool_access")),
         allowed_skills=_validate_allowed_items("allowed_skills", data.get("allowed_skills")),
         excluded_skills=_validate_excluded_skills(data.get("excluded_skills")),
+        context_commands=_validate_context_commands(data.get("context_commands")),
         tools=normalize_agent_tools(data.get("tools")),
         delegation_bindings=dict(data.get("delegation_bindings", {})),
         custom_system_prompt_enabled=bool(
@@ -809,6 +822,7 @@ def _with_builtin_capabilities(agent: Agent) -> Agent:
         custom_system_prompt_enabled=False,
         librarian_enabled=False,
         root_project_id=None,
+        context_commands=[],
         tools={},
         tool_loading=None,
         permission_rules=None,
@@ -836,6 +850,8 @@ def _agent_document(agent: Agent, *, workspace: str) -> JsonObject:
         persisted.pop("delegation_bindings")
     if not persisted["excluded_skills"]:
         persisted.pop("excluded_skills")
+    if not persisted["context_commands"]:
+        persisted.pop("context_commands")
     if persisted["top_p"] is None:
         persisted.pop("top_p")
     if persisted["tool_loading"] is None:
