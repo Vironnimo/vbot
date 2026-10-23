@@ -64,9 +64,10 @@ TARGET_CHOICES_TEMPLATE = "Additional Agents:\n\n{subagent_list}\n\n{choice_rule
 TARGET_DESCRIPTION_MAX_CHARACTERS = 200
 NO_ADDITIONAL_SUBAGENTS_TEXT = "No additional Agents are available."
 EXECUTION_GUIDANCE = (
-    "While Sub-Agents run, continue with other work your task still needs. When no such work "
-    "is left, end your turn: reply with a short status and no tool call. Each Sub-Agent's answer "
-    "starts your next turn, so do not sleep, poll or read their logs to wait."
+    "While Sub-Agents run, continue with other work your task still needs, not the work you "
+    "gave a Sub-Agent. When no such work is left, end your turn: reply with a short status and "
+    "no tool call. Each Sub-Agent's answer starts your next turn, so do not sleep, poll or read "
+    "their logs to wait."
 )
 # Names the target list when vBot tells the Model that it changed mid-Session.
 SUBAGENT_CATALOG_TITLE = "The Agent ids under Sub-Agents"
