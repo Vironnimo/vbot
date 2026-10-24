@@ -14,6 +14,14 @@ python scripts/linux/smoke.py --package build/linux/linux-x86_64/server
 
 The WebUI must be built first (`npm ci --prefix webui && npm run build --prefix webui`).
 
+CI builds and smokes both architectures without the release private key. A fresh
+signing job downloads the tested archives, installs the signing dependency and
+runs `scripts/sign_packages.py` with Python isolation enabled. The signer never
+unpacks or executes a payload and refuses a private key that does not match the
+public identity already published in `scripts/install.sh`. Publishers select
+only the resulting `vbot-linux` artifact; intermediate `unsigned-linux-*`
+artifacts never reach a release.
+
 ## Files
 
 - `python.lock.json` pins the python-build-standalone CPython of each platform by URL and
