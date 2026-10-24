@@ -42,7 +42,7 @@ Ordinary messages also checkpoint their client-minted `input_id` and exact reque
 
 Receipt reconciliation uses the returned canonical Agent address after a rename or move. An acceptance with `session_available: false` clears the pending attempt without opening, reading or recreating that Session; an already-open retired Session becomes unavailable, while a new conversation stays a fresh draft.
 
-Interactive sends identify `reply_surface=tui`; Command catalogs use the same surface. Its Model reminder describes terminal Markdown/code and file links without embedded media. A delivered Steer changes the subsequent reply surface; merely opening a terminal does not. Settings lists connected TUI accessors as Terminal. Closing the app releases local connections and leaves server Runs running.
+Interactive sends identify `reply_surface=tui`; Command catalogs use the same surface. Its Model reminder describes terminal Markdown/code and file links without embedded media. A delivered Steer changes the subsequent reply surface; merely opening a terminal does not. Settings lists connected TUI accessors as Terminal. Closing the app releases local connections and leaves server Runs running. After detach, delayed rendering and read callbacks neither access removed screens nor acknowledge completions.
 
 ## Agent-facing discovery
 

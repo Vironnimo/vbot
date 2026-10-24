@@ -915,6 +915,17 @@ async def test_catch_up_drains_all_pages_before_completion_is_acknowledged(
             )
         ]
 
+    # A timer, after-refresh callback or queued receipt can arrive after detach.
+    server.calls.clear()
+    view.completion_read = None
+    view.completion_read_pending = "latest"
+    app.render_dirty = True
+    app._render_if_dirty()
+    app.navigation.completion_if_visible()
+    await app.navigation.mark_completion_read(view, "latest")
+    assert not server.calls
+    assert view.completion_read_pending is None
+
 
 @pytest.mark.asyncio
 async def test_lost_first_response_recovers_exact_session_without_resending(

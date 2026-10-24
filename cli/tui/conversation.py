@@ -526,6 +526,7 @@ class ConversationController:
             view is None
             or not view.available
             or not view.session
+            or not self.app.screen_stack
             or isinstance(self.app.screen, ModalScreen)
             or not self.app.app_focus
             or timeline is None
@@ -562,7 +563,11 @@ class ConversationController:
     async def mark_completion_read(self, view: Conversation, run_id: str) -> None:
         key = view.key
         try:
-            if self.app.conversation is not view or isinstance(self.app.screen, ModalScreen):
+            if (
+                self.app.conversation is not view
+                or not self.app.screen_stack
+                or isinstance(self.app.screen, ModalScreen)
+            ):
                 return
             await self.app.client.rpc("session.mark_read", {**view.params(), "run_id": run_id})
             if view.key == key:

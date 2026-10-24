@@ -249,6 +249,8 @@ class ConversationApp(App[int]):
         self._header()
 
     def _render_if_dirty(self) -> None:
+        if not self.screen_stack:
+            return
         self.navigation.completion_if_visible()
         view = self.conversation
         if view is not None and (
