@@ -8,6 +8,7 @@ import {
   modelFilterFooterLabel,
   modelSelectionValue,
   modelShortName,
+  modelSupportsFastMode,
   parseModelSelectionValue,
   selectModelValue,
 } from '../modelSelection.js';
@@ -50,6 +51,23 @@ function account(id, usable = true) {
 }
 
 const defaultAccount = () => t('settings.providers.accounts.defaultLabel');
+
+it.each([
+  ['openai/gpt-6.1-sol', false],
+  ['openai/gpt-6.1-sol::subscription', true],
+  ['openai/gpt-6.1-sol::subscription:work', true],
+  ['openai/gpt-6.1-sol::api-key', false],
+  ['openai/missing::subscription', false],
+])('offers Fast only on the selected route %s', (selection, expected) => {
+  expect(
+    modelSupportsFastMode(selection, [
+      {
+        id: 'openai/gpt-6.1-sol',
+        wire_profiles: { subscription: { fast_mode: true }, 'api-key': {} },
+      },
+    ]),
+  ).toBe(expected);
+});
 
 function valuesAndLabels(options) {
   return options.slice(1).map(({ value, label }) => [value, label]);

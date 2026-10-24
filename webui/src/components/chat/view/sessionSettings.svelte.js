@@ -4,6 +4,7 @@ import { SvelteMap } from 'svelte/reactivity';
 import { effortForReasoning, reasoningForModelValue } from '$lib/agentForm.js';
 import { parseAgentAddress } from '$lib/agentAddress.js';
 import { t } from '$lib/i18n.js';
+import { modelSupportsFastMode } from '$lib/modelSelection.js';
 import { takeSessionInvalidations } from '$lib/sessionInvalidation.js';
 import { renameAgentInKey, renameAgentInKeys } from '$lib/chatState.js';
 import { updateAgent, setOverride } from '$lib/api.js';
@@ -117,10 +118,10 @@ export function createSessionSettings(context) {
       return false;
     }
   }
-  // draft key -> { workingProjectId?, model, thinking_effort }. An absent
+  // draft key -> { workingProjectId?, model, thinking_effort, fast_mode }. An absent
   // `workingProjectId` is the Agent's default Project; `null` the Workspace.
   let drafts = $state({});
-  // Session key -> { workingProjectId, projectKnown, overrides, goal } as last
+  // Session key -> { workingProjectId, projectKnown, overrides, goal, fastMode } as last
   // read or written.
   let rows = $state({});
   // The Model catalog (`{ models, connections }`), null until it answers.
@@ -219,6 +220,7 @@ export function createSessionSettings(context) {
         },
         model: draft.model || defaults.model,
         thinkingEffort: draft.thinking_effort ?? defaults.thinkingEffort,
+        fastMode: draft.fast_mode === true,
       };
     }
     const row = rows[shown.key];
@@ -241,6 +243,7 @@ export function createSessionSettings(context) {
       },
       model: override('model'),
       thinkingEffort: override('thinking_effort'),
+      fastMode: changes.fast_mode ?? row?.fastMode ?? false,
       goal: row?.goal ?? null,
     };
   });
@@ -387,6 +390,7 @@ export function createSessionSettings(context) {
             ? session.agent_overrides
             : {},
           goal: isRecord(session.goal) ? session.goal : null,
+          fastMode: session.fast_mode === true,
         },
       };
     } catch {
@@ -402,22 +406,32 @@ export function createSessionSettings(context) {
   async function writeOverrides(shown, changes) {
     const key = shown.key;
     const writes = writesFor(key);
+    const { fast_mode: fastMode, ...overrides } = changes;
     const request = Object.fromEntries(
-      Object.entries(changes).map(([field, value]) => [field, value || null]),
+      Object.entries(overrides).map(([field, value]) => [field, value || null]),
     );
     writes.revision += 1;
     writes.active += 1;
     try {
-      const result = await context.chatController.setSessionAgentOverrides(
-        shown.agentAddress,
-        shown.sessionId,
-        request,
-        { remember: true },
-      );
+      const result = Object.keys(request).length
+        ? await context.chatController.setSessionAgentOverrides(
+            shown.agentAddress,
+            shown.sessionId,
+            request,
+            { remember: true },
+          )
+        : null;
+      if (fastMode !== undefined) {
+        await context.chatController.setSessionFastMode(
+          shown.agentAddress,
+          shown.sessionId,
+          fastMode,
+        );
+      }
       const row = rows[writes.key];
       const saved = isRecord(result?.agent_overrides)
         ? result.agent_overrides
-        : {};
+        : (row?.overrides ?? {});
       rows = {
         ...rows,
         [writes.key]: {
@@ -425,9 +439,11 @@ export function createSessionSettings(context) {
           projectKnown: row?.projectKnown === true,
           overrides: saved,
           goal: row?.goal ?? null,
+          fastMode: fastMode ?? row?.fastMode ?? false,
         },
       };
-      await context.refreshAgentDefaults(shown.agentAddress);
+      if (Object.keys(request).length)
+        await context.refreshAgentDefaults(shown.agentAddress);
       return true;
     } catch (error) {
       context.onError(
@@ -452,7 +468,9 @@ export function createSessionSettings(context) {
     }
     if (shown.kind === 'draft') {
       updateDraft(shown.key, changes);
-      remember(shown, changes);
+      const defaults = { ...changes };
+      delete defaults.fast_mode;
+      if (Object.keys(defaults).length) remember(shown, defaults);
       return;
     }
     remember(shown, changes);
@@ -545,6 +563,9 @@ export function createSessionSettings(context) {
     // choices in the same write.
     selectModel(value) {
       const changes = { model: value };
+      if (view?.fastMode && !modelSupportsFastMode(value, catalog?.models)) {
+        changes.fast_mode = false;
+      }
       const effort = view?.thinkingEffort ?? '';
       const nextEffort = effortForReasoning(
         effort,
@@ -554,6 +575,10 @@ export function createSessionSettings(context) {
         changes.thinking_effort = nextEffort;
       }
       selectOverrides(changes);
+    },
+    selectFastMode(enabled) {
+      if (!modelSupportsFastMode(view?.model, catalog?.models)) return;
+      selectOverrides({ fast_mode: enabled });
     },
     selectThinkingEffort(value) {
       selectOverrides({ thinking_effort: value });
@@ -576,6 +601,7 @@ export function createSessionSettings(context) {
       const effort = settings.thinking_effort ?? defaults.thinkingEffort;
       return {
         ...draft,
+        fastMode: settings.fast_mode === true,
         ...(!parseAgentAddress(draft.agentAddress).projectId
           ? {
               workingProjectId:
@@ -609,6 +635,7 @@ export function createSessionSettings(context) {
               ? draft.workingProjectId
               : agentDefaults(draft.agentAddress).rootProjectId),
           projectKnown: true,
+          fastMode: draft.fastMode === true,
           overrides: Object.fromEntries(
             [
               ['model', draft.agentOverrides?.model],
@@ -627,7 +654,9 @@ export function createSessionSettings(context) {
             value ===
             (field === 'workingProjectId'
               ? draft.workingProjectId
-              : draft.agentOverrides?.[field] || ''),
+              : field === 'fast_mode'
+                ? draft.fastMode
+                : draft.agentOverrides?.[field] || ''),
         )
       ) {
         const next = { ...drafts };

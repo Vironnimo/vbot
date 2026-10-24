@@ -619,7 +619,7 @@ class CommandDispatcher:
             session_id=context.session_id,
             project_id=context.project_id,
             actor="command",
-            metadata=context.agent_overrides.session_metadata() or None,
+            metadata={**context.agent_overrides.session_metadata(), "fast_mode": context.fast_mode},
             working_project_id=working_project_id if context.project_id is None else None,
         )
         address = SessionAddress(context.project_id, context.agent_id, session.id)

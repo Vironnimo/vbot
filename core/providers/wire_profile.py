@@ -324,6 +324,7 @@ class RequestRules:
     tool_call_ids: ToolCallIdProfile = "none"
     list_announced_tools: bool = False
     on_demand_tools: bool = True
+    fast_mode: bool = False
     prompt_cache: PromptCacheStyle = "none"
     options: Mapping[str, JsonValue] = field(default_factory=lambda: _EMPTY)
 

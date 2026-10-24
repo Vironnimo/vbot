@@ -43,6 +43,10 @@ class AdapterHookDefaults:
         del model_id
         return None
 
+    def fast_mode_kwargs(self, model_id: str, *, enabled: bool) -> dict[str, Any]:
+        del model_id, enabled
+        return {}
+
     def request_context_kwargs(self, **context: Any) -> dict[str, Any]:
         del context
         return {}

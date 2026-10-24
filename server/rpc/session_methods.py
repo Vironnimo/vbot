@@ -197,6 +197,33 @@ async def _set_session_agent_overrides(state: Any, params: JsonObject) -> JsonOb
     }
 
 
+@_guard_agent_lifecycle
+async def _set_session_fast_mode(state: Any, params: JsonObject) -> JsonObject:
+    """Persist the speed preference for this Session's next Chat request."""
+    _reject_unsupported(params, {"agent_id", "session_id", "enabled"}, "session.set_fast_mode")
+    address = _required_session_address(params)
+    enabled = params.get("enabled")
+    if not isinstance(enabled, bool):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.enabled must be true or false")
+    sessions = state.runtime.chat_sessions
+    try:
+        previous, updated = await sessions.run_async(
+            sessions.mutate_metadata_with_previous,
+            address,
+            lambda metadata: metadata.update({"fast_mode": enabled}),
+        )
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    if previous.get("fast_mode", False) != updated["fast_mode"]:
+        _LOGGER.info(
+            "Session speed preference updated (agent=%s session=%s)",
+            format_agent_address(address.agent_id, address.project_id),
+            address.session_id,
+        )
+        publish_session_changed(state, address)
+    return {"fast_mode": enabled}
+
+
 async def _delete_session(state: Any, params: JsonObject) -> JsonObject:
     """Archive one session and report where the viewing accessor should land.
 
@@ -968,5 +995,6 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "session.rename": _rename_session,
         "session.set_compaction_policy": _set_session_compaction_policy,
         "session.set_agent_overrides": _set_session_agent_overrides,
+        "session.set_fast_mode": _set_session_fast_mode,
         "session.link_channel": _link_session_to_channel,
     }

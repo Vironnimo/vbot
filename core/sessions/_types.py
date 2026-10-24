@@ -166,6 +166,7 @@ SESSION_FORK_ALWAYS_STRIP_META_KEYS = frozenset(
         "scratch_announced",
         SESSION_RUN_KINDS_META_KEY,
         SESSION_GOAL_META_KEY,
+        "fast_mode",
         SESSION_EPHEMERAL_META_KEY,
     }
 )

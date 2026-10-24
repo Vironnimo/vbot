@@ -1,6 +1,6 @@
 {
   "format_version": 1,
-  "_comment": "OpenAI first-party wire. The api-key Connection defaults new Models to public Responses; legacy GPT-3/GPT-4 and chat-audio families keep Chat Completions. These are inferred defaults, not per-Model verification. The subscription Connection is ChatGPT Codex Responses for every Model. Chat Completions accepts reasoning_effort 'none', wants explicit non-strict Tool schemas and carries images, wav/mp3 audio and PDF documents. Public Responses carries images and PDF documents and treats unknown reasoning support as supported. Codex rejects every optional parameter (so no output limit is budgeted), carries images only and never receives the 'none' effort. OpenAI Models call only Tools the request lists (GPT-6.1 Sol through Codex kept calling other Tools for a loaded one, 2026-10-19; the Responses tool search guide documents the same), so no route serves On-demand Tools.",
+  "_comment": "OpenAI first-party wire. The api-key Connection defaults new Models to public Responses; legacy GPT-3/GPT-4 and chat-audio families keep Chat Completions. These are inferred defaults, not per-Model verification. The subscription Connection is ChatGPT Codex Responses for every Model. Chat Completions accepts reasoning_effort 'none', wants explicit non-strict Tool schemas and carries images, wav/mp3 audio and PDF documents. Public Responses carries images and PDF documents and treats unknown reasoning support as supported. Codex carries images only and rejects sampling and output-limit parameters; supported families allow service_tier for Fast. It never receives the 'none' effort. OpenAI Models call only Tools the request lists (GPT-6.1 Sol through Codex kept calling other Tools for a loaded one, 2026-10-19; the Responses tool search guide documents the same), so no route serves On-demand Tools.",
   "defaults": {"request": {"on_demand_tools": false}},
   "protocols": {
     "chat_completions": {
@@ -36,6 +36,11 @@
     }
   },
   "family_defaults": [
+    {
+      "when": {"connections": ["subscription"], "prefix": ["gpt-6", "gpt-5.6-"]},
+      "set": {"request": {"allowed_parameters": ["service_tier"], "fast_mode": true}},
+      "note": "Codex Fast requests priority processing. The official Speed guide and live GPT-6.1 Sol catalog advertise it. SSE comparisons on 2026-10-24 measured 117-119 output tokens/s with Standard and 227-241 with priority, although both responses report service_tier default. Other supported family members inherit the documented capability."
+    },
     {
       "when": {"connections": ["api-key"]},
       "set": {

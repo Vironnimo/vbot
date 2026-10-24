@@ -14,6 +14,11 @@ export default Object.freeze({
   'audio.loadFailed':
     'Audio could not be loaded. Press Play to retry, or download the file.',
   'chat.title': 'Chat',
+  'chat.sessionSettings.fastMode': 'Fast mode',
+  'chat.sessionSettings.fastOn': 'Fast mode on',
+  'chat.sessionSettings.fastOff': 'Fast mode off',
+  'chat.sessionSettings.fastHint':
+    'Faster responses for this chat, starting with the next model request. Uses 2.5× the included subscription allowance or 2× purchased credits. New chats start with Standard.',
   'chat.noAgentSelected': 'Choose an agent to start chatting.',
   'chat.noAgents': 'No agents are available yet.',
   'chat.newSession': 'New session',

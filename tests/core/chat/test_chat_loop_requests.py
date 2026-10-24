@@ -742,7 +742,7 @@ async def test_background_completion_joins_next_request_in_same_run(tmp_path: Pa
                 SESSION,
                 notice_id="bash:completed",
                 origin_run_id=context.run_id,
-                body="### Bash process — completed\nBuild finished successfully.",
+                body="### Bash process â€” completed\nBuild finished successfully.",
             )
         )
         deliveries.append(
@@ -750,7 +750,7 @@ async def test_background_completion_joins_next_request_in_same_run(tmp_path: Pa
                 SESSION,
                 notice_id="d1",
                 origin_run_id=context.run_id,
-                body="### Message from Sub-Agent sub_a — Worker",
+                body="### Message from Sub-Agent sub_a â€” Worker",
                 subagent_message=message,
             )
         )
@@ -865,3 +865,32 @@ async def test_same_scope_fork_reuses_cache_affinity_but_not_session_context(
     ]
     assert (source_context["session_id"], fork_context["session_id"]) == ("session-one", fork.id)
     assert source_context["prompt_cache_affinity_id"] == fork_context["prompt_cache_affinity_id"]
+
+
+@pytest.mark.asyncio
+async def test_fast_mode_is_read_again_at_each_model_step(tmp_path: Path) -> None:
+    class SpeedAdapter(_WhileAnsweringAdapter):
+        @override
+        def fast_mode_kwargs(self, model_id: str, *, enabled: bool) -> JsonObject:
+            return {"test_fast_mode": enabled}
+
+    async def toggle() -> None:
+        await runtime.chat_sessions.run_async(
+            runtime.chat_sessions.mutate_metadata,
+            SESSION,
+            lambda metadata: metadata.update(fast_mode=True),
+        )
+
+    adapter = SpeedAdapter(
+        [
+            {
+                "content": "",
+                "tool_calls": [{"id": "call_weather", "name": "get_weather", "arguments": {}}],
+            },
+            {"content": "Done", "tool_calls": None},
+        ],
+        toggle,
+    )
+    runtime = _runtime(tmp_path, [], adapter=adapter)
+    await build_chat_loop(runtime).send("coder", "Check the weather", session_id="session-one")
+    assert [request["kwargs"]["test_fast_mode"] for request in adapter.requests] == [False, True]

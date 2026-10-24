@@ -203,6 +203,7 @@ export {
   renameSession,
   setSessionCompactionPolicy,
   setSessionAgentOverrides,
+  setSessionFastMode,
   deleteSession,
   listQueue,
   cancelRun,

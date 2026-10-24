@@ -814,6 +814,7 @@ def _build_request(values: Mapping[str, Any]) -> RequestRules:
             "tool_call_ids",
             "list_announced_tools",
             "on_demand_tools",
+            "fast_mode",
             "prompt_cache",
         )
         if key in values

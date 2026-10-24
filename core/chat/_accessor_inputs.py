@@ -91,6 +91,7 @@ class AccessorInputs:
         agent_overrides: AgentOverrides | None = None,
         working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT,
         ephemeral: bool = False,
+        fast_mode: bool = False,
         input_origin: InputOrigin | None = None,
         reply_surface: ReplySurface | None = None,
         project_id: str | None = None,
@@ -111,6 +112,7 @@ class AccessorInputs:
                     agent_overrides=agent_overrides,
                     working_project_id=working_project_id,
                     ephemeral=ephemeral,
+                    fast_mode=fast_mode,
                     input_origin=input_origin,
                     reply_surface=reply_surface,
                     project_id=project_id,
@@ -130,6 +132,7 @@ class AccessorInputs:
         agent_overrides: AgentOverrides | None,
         working_project_id: WorkingProjectChoice,
         ephemeral: bool,
+        fast_mode: bool,
         input_origin: InputOrigin | None,
         reply_surface: ReplySurface | None,
         project_id: str | None,
@@ -150,6 +153,7 @@ class AccessorInputs:
                 agent_overrides=agent_overrides or AgentOverrides(),
                 working_project_id=working_project_id,
                 ephemeral=ephemeral,
+                fast_mode=fast_mode,
                 actor="rpc",
             )
             if new_session

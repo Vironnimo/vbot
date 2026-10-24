@@ -100,11 +100,22 @@ async def _list_models(state: Any, params: JsonObject) -> JsonObject:
                     local_context_windows=local_context_windows,
                 )
                 response["wire_profiles"] = {
-                    connection.id: _wire_status_response(
-                        *runtime.wire_status(provider_id, connection.id, model.model_id)
-                    )
+                    connection.id: {
+                        **_wire_status_response(
+                            *runtime.wire_status(provider_id, connection.id, model.model_id)
+                        ),
+                        **(
+                            {"fast_mode": True}
+                            if runtime.wire_profile(
+                                provider_id, connection.id, model.model_id
+                            ).request.fast_mode
+                            else {}
+                        ),
+                    }
                     for connection in allowed_connections
                 }
+                if response["wire_profiles"][allowed_connections[0].id].get("fast_mode"):
+                    response["fast_mode"] = True
                 reachable = _model_reachability(runtime, provider_id, allowed_connections)
                 if reachable is not None:
                     response["reachable"] = reachable

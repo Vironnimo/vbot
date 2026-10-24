@@ -922,6 +922,7 @@ _CHANGED_TOOLS = [{**CODEX_TOOLS[0], "description": "Look up other data"}]
     ("next_run", "request_change", "history", "old_socket_closes"),
     [
         pytest.param({}, {"tools": _CHANGED_TOOLS}, {}, False, id="tools-changed"),
+        pytest.param({}, {"service_tier": "priority"}, {}, True, id="fast-mode-changed"),
         pytest.param({}, {"model_id": "gpt-5.6-sol"}, {}, False, id="model-changed"),
         pytest.param(
             {"token_getter": jwt_with_account() + "x"}, {}, {}, True, id="credentials-changed"
@@ -969,6 +970,12 @@ async def test_a_changed_request_never_continues_an_earlier_runs_response(
     assert "previous_response_id" not in payload
     assert _input_kinds(payload) == _FULL_CONTEXT_INPUT_KINDS
     assert first.closed is old_socket_closes
+    if request_change.get("service_tier") == "priority":
+        assert payload["service_tier"] == "priority"
+        assert [
+            kwargs["additional_headers"].get("x-codex-routing-hint")
+            for _url, kwargs in connector.calls
+        ] == [None, f"model={MODEL_ID};tier=priority"]
     await transports.aclose()
 
 
