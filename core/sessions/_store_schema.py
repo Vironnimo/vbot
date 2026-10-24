@@ -85,6 +85,8 @@ def session_database_spec(
                 breaks_older=True,
                 apply=_adopt_review_forks,
             ),
+            # Older runtimes cannot recover accepted ordinary Accessor inputs.
+            Migration("sessions.0007_accessor_inputs", breaks_older=True),
         ),
         after_open=_store_fts._ensure_fts_schema,
         snapshot_facts=_SNAPSHOT_FACTS,

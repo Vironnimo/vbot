@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Any, cast
+import hashlib
+import json
+from typing import Any
 
-from core.chat import ChatLoop, ChatMessage, CommandDispatcher, ReplySurface
+from core.chat import AccessorChatSubmission, ChatLoop, ChatMessage, CommandDispatcher, ReplySurface
 from core.chat.content_blocks import ContentBlock
 from core.chat.messages import WidgetState
 from core.chat.widget_states import widget_state_note
-from core.runs import ActiveRunError, QueuedRunItem, Run, RunCancelledError
+from core.projects import format_agent_address
+from core.runs import Run
 from core.sessions import (
     SessionAddress,
     new_session_id,
@@ -22,6 +25,7 @@ from core.tools.command_manager import (
     CommandStopError,
 )
 from core.tools.show_widget import SHOW_WIDGET_TOOL_NAME, WIDGET_PAYLOAD_TITLE
+from core.utils.ids import new_id
 from server.rpc._chat_input import (
     _chat_target,
     _execute_chat_command,
@@ -88,7 +92,7 @@ async def _submit_chat(
     params: JsonObject,
     *,
     method: str,
-) -> Run | JsonObject:
+) -> AccessorChatSubmission | Run | JsonObject:
     """Submit one accessor chat request and return its immediate disposition.
 
     Commands and queued work already have complete RPC payloads, while a Run
@@ -111,6 +115,7 @@ async def _submit_chat(
             "file_mentions",
             "reply_surface",
             "widget_states",
+            "input_id",
         },
         method,
     )
@@ -131,6 +136,16 @@ async def _submit_chat(
             RPC_ERROR_INVALID_REQUEST,
             "params.widget_states can accompany only a message to an existing Session",
         )
+    chat_loop: ChatLoop = state.chat_loop
+    input_id = _accessor_input_id(params)
+    request_hash = _accessor_request_hash(params)
+    if prepared_command is None:
+        try:
+            previous = await chat_loop.lookup_accessor_input(input_id, request_hash=request_hash)
+        except Exception as exc:
+            raise _map_expected_error(exc) from exc
+        if previous is not None:
+            return previous
     if isinstance(target, _NewSessionTarget):
         if prepared_command is not None:
             return await _execute_new_session_chat_command(
@@ -150,6 +165,8 @@ async def _submit_chat(
             input_origin=input_origin,
             file_mentions=file_mentions,
             reply_surface=reply_surface,
+            input_id=input_id,
+            request_hash=request_hash,
         )
     address = target
     if prepared_command is not None:
@@ -167,46 +184,37 @@ async def _submit_chat(
         run_options["context_note"] = note
     content = await _expand_content_file_mentions(state, address, content, file_mentions)
 
-    # A user message makes this session the agent's current one: after a server
-    # restart the accessor re-opens the session the user last wrote to, not the
-    # one they last viewed. Identity agents only — a project (config) agent has
-    # no anchor-level current pointer. Runs triggered by automation, channels,
-    # or sub-agents never pass through here, so they cannot move the pointer.
     if project_id is None:
         await _mark_current_session(state, address)
-
-    chat_loop: ChatLoop = state.chat_loop
     try:
-        run = await chat_loop.start_run(
+        submission = await chat_loop.submit_accessor_input(
             agent_id,
             content,
+            input_id=input_id,
+            request_hash=request_hash,
             session_id=address.session_id,
             reply_surface=reply_surface,
             project_id=project_id,
             **run_options,
         )
-    except ActiveRunError:
-        try:
-            queued_item = await chat_loop.queue_run(
-                agent_id,
-                content,
-                session_id=address.session_id,
-                reply_surface=reply_surface,
-                project_id=project_id,
-                **run_options,
-            )
-            started_run = _run_started_during_enqueue(queued_item)
-        except Exception as exc:
-            raise _map_expected_error(exc) from exc
-        if started_run is None:
-            _bridge_queued_item_to_event_bus(state, queued_item)
-            _publish_queue_changed(state, address)
-            return _queued_response(queued_item, address.session_id)
-        run = started_run
     except Exception as exc:
         raise _map_expected_error(exc) from exc
+    return submission
 
-    return run
+
+def _accessor_input_id(params: JsonObject) -> str:
+    if "input_id" not in params:
+        return new_id("inp")
+    value = _required_string(params, "input_id")
+    if len(value) > 128 or any(character.isspace() or ord(character) < 33 for character in value):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.input_id must be a bounded opaque id")
+    return value
+
+
+def _accessor_request_hash(params: JsonObject) -> str:
+    original = {key: value for key, value in params.items() if key != "input_id"}
+    serialized = json.dumps(original, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("ascii")).hexdigest()
 
 
 async def _widget_state_note(
@@ -240,7 +248,9 @@ async def _start_chat_in_new_session(
     input_origin: ChatInputOrigin | None,
     file_mentions: list[str],
     reply_surface: ReplySurface,
-) -> Run:
+    input_id: str,
+    request_hash: str,
+) -> AccessorChatSubmission:
     """Create the Session of a new conversation with its first Run, or nothing.
 
     Chat core validates the target before it creates the Session, so a
@@ -261,60 +271,100 @@ async def _start_chat_in_new_session(
         )
     chat_loop: ChatLoop = state.chat_loop
     try:
-        run = await chat_loop.start_run_in_new_session(
+        submission = await chat_loop.submit_accessor_input(
             agent_id,
             content,
+            input_id=input_id,
+            request_hash=request_hash,
+            new_session=True,
             session_id=session_id,
             agent_overrides=target.agent_overrides,
             working_project_id=target.working_project_id,
             ephemeral=target.ephemeral,
-            actor="rpc",
             input_origin=input_origin,
             reply_surface=reply_surface,
             project_id=project_id,
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    address = SessionAddress(project_id, agent_id, run.session_id)
+    address = submission.record.address
     publish_session_changed(state, address)
     if project_id is None:
         await _mark_current_session(state, address)
-    return cast(Run, run)
+    return submission
 
 
 async def _send_chat(state: Any, params: JsonObject) -> JsonObject:
     submission = await _submit_chat(state, params, method="chat.send")
     if isinstance(submission, dict):
         return submission
+    if not isinstance(submission, Run):
+        disposition = _accessor_disposition(state, submission)
+        if disposition is not None:
+            return disposition
+    run = submission if isinstance(submission, Run) else submission.run
+    assert run is not None
 
     try:
-        _bridge_run_to_event_bus(state, submission)
-        assistant_message = await submission.wait()
+        _bridge_run_to_event_bus(state, run)
+        assistant_message = await run.wait()
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     response = await _run_response(
-        submission,
+        run,
         final_message=assistant_message,
         file_delivery=state.file_delivery,
     )
-    return await _with_session_kind(state, submission, response)
+    if not isinstance(submission, Run):
+        response["input_id"] = submission.record.input_id
+    return await _with_session_kind(state, run, response)
 
 
 async def _stream_chat(state: Any, params: JsonObject) -> JsonObject:
     submission = await _submit_chat(state, params, method="chat.stream")
     if isinstance(submission, dict):
         return submission
+    if not isinstance(submission, Run):
+        disposition = _accessor_disposition(state, submission)
+        if disposition is not None:
+            return disposition
+    run = submission if isinstance(submission, Run) else submission.run
+    assert run is not None
 
     try:
-        _bridge_run_to_event_bus(state, submission)
+        _bridge_run_to_event_bus(state, run)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     response = await _run_response(
-        submission,
-        sse_url=f"/api/runs/{submission.id}/events",
+        run,
+        sse_url=f"/api/runs/{run.id}/events",
         file_delivery=state.file_delivery,
     )
-    return await _with_session_kind(state, submission, response)
+    if not isinstance(submission, Run):
+        response["input_id"] = submission.record.input_id
+    return await _with_session_kind(state, run, response)
+
+
+def _accessor_disposition(state: Any, submission: AccessorChatSubmission) -> JsonObject | None:
+    record = submission.record
+    if submission.run is not None:
+        return None
+    if submission.queued_item is not None:
+        item = submission.queued_item
+        _bridge_queued_item_to_event_bus(state, item)
+        _publish_queue_changed(state, record.address)
+        return {**_queued_response(item, record.address.session_id), "input_id": record.input_id}
+    response: JsonObject = {
+        "accepted": True,
+        "input_id": record.input_id,
+        "session_id": record.address.session_id,
+        "input_state": record.state,
+        "agent_id": format_agent_address(record.address.agent_id, record.address.project_id),
+        "session_available": record.live,
+    }
+    if record.run_id is not None:
+        response["run_id"] = record.run_id
+    return response
 
 
 async def _with_session_kind(state: Any, run: Run, response: JsonObject) -> JsonObject:
@@ -354,15 +404,6 @@ async def _edit_chat(state: Any, params: JsonObject) -> JsonObject:
         sse_url=f"/api/runs/{run.id}/events",
         file_delivery=state.file_delivery,
     )
-
-
-def _run_started_during_enqueue(item: QueuedRunItem) -> Run | None:
-    """Return the Run when enqueue won a busy-to-idle race, else None."""
-    if not item.future.done():
-        return None
-    if item.future.cancelled():
-        raise RunCancelledError(f"queued run cancelled: {item.item_id}")
-    return item.future.result()
 
 
 async def _cancel_chat(state: Any, params: JsonObject) -> JsonObject:

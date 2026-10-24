@@ -94,6 +94,8 @@ class SessionRunAdmission:
     expected_generation_id: str | None = None
     # The working Project a Session this admission creates starts in.
     working_project_id: str | None = None
+    # An ordinary Accessor input claimed atomically with this Run's admission.
+    accessor_input_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -208,6 +210,29 @@ class SessionAddress:
     project_id: str | None
     agent_id: str
     session_id: str
+
+
+@dataclass(frozen=True)
+class AccessorInputRecord:
+    """An accepted ordinary Accessor input and its durable execution disposition.
+
+    ``payload`` is opaque Chat-owned execution context; the immutable original
+    request hash detects conflicting retries even after a queued input is edited.
+    Receipts follow their Session generation through moves and are not inherited.
+    """
+
+    input_id: str
+    address: SessionAddress
+    generation_id: str
+    request_hash: str
+    payload: JsonObject
+    queue_id: str
+    state: str
+    run_id: str | None
+    created_at: str
+    live: bool
+    run_status: str | None = None
+    attachment_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

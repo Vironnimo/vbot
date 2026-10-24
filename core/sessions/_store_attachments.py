@@ -98,7 +98,10 @@ def backfill(connection: sqlite3.Connection) -> None:
 def referenced(connection: sqlite3.Connection) -> frozenset[str]:
     return frozenset(
         str(row[0])
-        for row in connection.execute("SELECT DISTINCT attachment_id FROM session_attachment_refs")
+        for row in connection.execute(
+            "SELECT attachment_id FROM session_attachment_refs "
+            "UNION SELECT attachment_id FROM session_accessor_input_attachments"
+        )
     )
 
 
@@ -110,7 +113,26 @@ def snapshot_references(connection: sqlite3.Connection) -> frozenset[str]:
         ).fetchone()
         is not None
     ):
-        return referenced(connection)
+        indexed_ids = {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT DISTINCT attachment_id FROM session_attachment_refs"
+            )
+        }
+        if (
+            connection.execute(
+                "SELECT 1 FROM sqlite_schema WHERE type = 'table' "
+                "AND name = 'session_accessor_input_attachments'"
+            ).fetchone()
+            is not None
+        ):
+            indexed_ids.update(
+                str(row[0])
+                for row in connection.execute(
+                    "SELECT DISTINCT attachment_id FROM session_accessor_input_attachments"
+                )
+            )
+        return frozenset(indexed_ids)
     ids: set[str] = set()
     for _entry_key, value in _stored_values(connection):
         ids.update(attachment_ids(value))
@@ -123,7 +145,9 @@ def unreferenced(connection: sqlite3.Connection) -> tuple[str, ...]:
         for row in connection.execute(
             "SELECT attachment_id FROM session_attachment_ids AS known WHERE NOT EXISTS "
             "(SELECT 1 FROM session_attachment_refs AS live "
-            "WHERE live.attachment_id = known.attachment_id) ORDER BY attachment_id"
+            "WHERE live.attachment_id = known.attachment_id) AND NOT EXISTS "
+            "(SELECT 1 FROM session_accessor_input_attachments AS queued "
+            "WHERE queued.attachment_id = known.attachment_id) ORDER BY attachment_id"
         )
     )
 
@@ -132,6 +156,8 @@ def forget(connection: sqlite3.Connection, ids: Sequence[str] | Iterable[str]) -
     connection.executemany(
         "DELETE FROM session_attachment_ids WHERE attachment_id = ? AND NOT EXISTS "
         "(SELECT 1 FROM session_attachment_refs "
+        "WHERE attachment_id = session_attachment_ids.attachment_id) AND NOT EXISTS "
+        "(SELECT 1 FROM session_accessor_input_attachments "
         "WHERE attachment_id = session_attachment_ids.attachment_id)",
         ((attachment_id,) for attachment_id in ids),
     )

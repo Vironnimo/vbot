@@ -9,7 +9,13 @@ from dataclasses import replace
 from datetime import datetime
 
 from core.chat.errors import ChatSessionError
-from core.sessions import _store_codec, _store_fts, _store_mutations, _store_values
+from core.sessions import (
+    _store_accessor_inputs,
+    _store_codec,
+    _store_fts,
+    _store_mutations,
+    _store_values,
+)
 from core.sessions._io import _encode_chat_history_cursor
 from core.sessions._metadata import _RUN_KIND_VALUES, _completion_activity_from_state
 from core.sessions._types import (
@@ -65,6 +71,10 @@ def _validate_admission(admission: SessionRunAdmission) -> None:
         raise ChatSessionError("invalid Run start")
     if admission.run_kind not in _RUN_KIND_VALUES:
         raise ChatSessionError(f"unknown run kind: {admission.run_kind}")
+    if admission.accessor_input_id is not None and (
+        admission.owner is not None or admission.input_id is not None
+    ):
+        raise ChatSessionError("An ordinary Accessor input cannot claim Extension-owned execution")
     if admission.work_id is not None and (
         not isinstance(admission.work_id, str) or not admission.work_id
     ):
@@ -117,6 +127,10 @@ def admit_run(
         )
         if owner is not None and (recorded != owner or existing["input_id"] != admission.input_id):
             raise ChatSessionError(_OWNER_MISMATCH_ERROR)
+        if admission.accessor_input_id is not None:
+            _store_accessor_inputs.claim(
+                connection, address, admission.accessor_input_id, int(existing["run_key"])
+            )
         return
     if owner is not None:
         # The owner's participant binding must still name the generation the
@@ -145,6 +159,8 @@ def admit_run(
         ),
     )
     run_key = int(cursor.lastrowid or 0)
+    if admission.accessor_input_id is not None:
+        _store_accessor_inputs.claim(connection, address, admission.accessor_input_id, run_key)
     if owner is not None:
         try:
             connection.execute(
@@ -180,6 +196,8 @@ def finish_run(
     if run is None or run["status"] != "running" or run["inherited"]:
         raise ChatSessionError("Only an admitted running Run can be completed")
     run_key = int(run["run_key"])
+    if _store_accessor_inputs.materialize_unwritten_input(connection, address, completion.run_id):
+        state = _store_values._require_live(connection, address)
     summary = ChatMessage.run_summary(
         run_id=completion.run_id,
         work_id=completion.work_id,
@@ -236,6 +254,26 @@ def finish_run(
         ),
     )
     connection.execute("DELETE FROM run_stream_drafts WHERE run_key = ?", (run_key,))
+    # Admission precedes the User carrier, so started inputs keep their blob
+    # roots until terminal settlement (including restart recovery).
+    connection.execute(
+        "DELETE FROM session_accessor_input_attachments WHERE input_key IN "
+        "(SELECT input_key FROM session_accessor_inputs WHERE run_key = ?)",
+        (run_key,),
+    )
+    connection.execute(
+        "DELETE FROM session_accessor_input_carriers WHERE input_key IN "
+        "(SELECT input_key FROM session_accessor_inputs WHERE run_key = ?)",
+        (run_key,),
+    )
+    # Completed receipt projections need identity and outcome, not a second
+    # durable copy of input already retained in canonical History.
+    connection.execute(
+        "UPDATE session_accessor_input_payloads SET payload_json = '{}' WHERE input_key IN "
+        "(SELECT i.input_key FROM session_accessor_inputs AS i WHERE i.run_key = ? "
+        "AND EXISTS (SELECT 1 FROM entries AS e WHERE e.run_key = i.run_key AND e.role = 'user'))",
+        (run_key,),
+    )
     latest = (
         (run_key, completion.status, completed_at)
         if completion.contributes_to_activity
@@ -443,6 +481,7 @@ def recover_interrupted_runs(connection: sqlite3.Connection) -> tuple[RecoveredR
         completed = datetime.fromisoformat(now)
         address = _store_values._address(row)
         run_id = str(row["run_id"])
+        _store_accessor_inputs.materialize_unwritten_input(connection, address, run_id)
         _materialize_stream_draft(connection, address, int(row["run_key"]), run_id, completed)
         finish_run(
             connection,

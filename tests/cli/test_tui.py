@@ -7,6 +7,7 @@ import copy
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, override
+from unittest.mock import ANY
 
 import httpx
 import pytest
@@ -244,6 +245,7 @@ async def test_terminal_send_stream_navigation_and_detach() -> None:
             "session_id": "session-one",
             "reply_surface": "tui",
             "content": "A multiline\nmessage",
+            "input_id": ANY,
         }
     ]
     assert not any(method in {"chat.cancel", "chat.stop_all"} for method, _ in server.calls)

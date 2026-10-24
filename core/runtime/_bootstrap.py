@@ -620,6 +620,7 @@ def bootstrap(runtime: Runtime) -> None:
         runtime._chat_sessions.recover_interrupted_runs()
         runtime._chat_run_manager = ChatRunManager(
             persistence=runtime._chat_sessions,
+            input_withdrawer=runtime._chat_sessions.remove_accessor_input_async,
             admission_validator=runtime._validate_temporary_admission,
         )
         runtime.chat_runs = runtime._chat_run_manager
@@ -967,6 +968,17 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._start_config_backups()
             runtime._start_librarian()
         runtime.logger.debug("Runtime started (%s)", runtime._startup_summary.describe())
+        if runtime.safe_startup_mode is None and runtime._operational_producers == "enabled":
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                pass
+            else:
+                # No task has run since synchronous bootstrap began. Install
+                # accepted inputs before Cron/Channel tasks receive their first turn.
+                runtime._chat_loop.prepare_accessor_inputs(
+                    runtime._chat_sessions.queued_accessor_inputs()
+                )
     except Exception as error:
         _log_startup_failure(runtime)
         startup_error = error

@@ -68,6 +68,7 @@ class SessionRunPersistence:
             input_id=run.execution_input_id,
             expected_generation_id=run.expected_session_generation_id,
             working_project_id=None if run.project_id is not None else run.working_project_id,
+            accessor_input_id=run.accessor_input_id,
         )
         await self._store.run_async(self._store.execution.admit_run, address, admission)
 

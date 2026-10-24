@@ -64,6 +64,7 @@ if TYPE_CHECKING:
         SUBAGENT_SESSION_META_KEY,
         SUBAGENT_TAKEN_OVER_AT_META_KEY,
         TOOL_CHANGE_NOTE_PREFIX,
+        AccessorInputRecord,
         DeliveryReceipt,
         OwnedRunRecord,
         OwnedSessionSummary,
@@ -131,6 +132,7 @@ if TYPE_CHECKING:
 
 
 _EXPORT_MODULES = {
+    "AccessorInputRecord": "core.sessions._types",
     "session_database_spec": "core.sessions._store_schema",
     "AGENT_DEFAULT_PROJECT": "core.sessions._types",
     "ARCHIVE_ENTRIES_DIR": "core.sessions._archive_types",
@@ -258,6 +260,7 @@ def __getattr__(name: str) -> Any:
 
 
 __all__ = [
+    "AccessorInputRecord",
     "session_database_spec",
     "ARCHIVE_ENTRIES_DIR",
     "ARCHIVE_KIND_AGENT",

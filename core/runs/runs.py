@@ -7,7 +7,7 @@ import logging
 import time
 import uuid
 from collections import deque
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Protocol
@@ -33,6 +33,7 @@ from core.runs.run import (
 )
 from core.utils.ids import new_id
 from core.utils.timestamps import format_canonical_timestamp
+from core.utils.workers import settle_before_cancelling
 
 if TYPE_CHECKING:
     from core.sessions import SessionAddress
@@ -113,6 +114,7 @@ class ChatRunManager:
         self,
         *,
         persistence: RunPersistence | None = None,
+        input_withdrawer: Callable[[SessionAddress, str], Awaitable[bool]] | None = None,
         completed_run_retention_limit: int = DEFAULT_COMPLETED_RUN_RETENTION_LIMIT,
         run_event_retention_limit: int = DEFAULT_RUN_EVENT_RETENTION_LIMIT,
         waiting_work_limit: int = DEFAULT_WAITING_WORK_LIMIT,
@@ -139,6 +141,7 @@ class ChatRunManager:
         self._waiting_work_limit = waiting_work_limit
         self._closed = False
         self._persistence = persistence
+        self._input_withdrawer = input_withdrawer
         self._admission_validator = admission_validator
 
     def reserve_waiting_work(
@@ -329,11 +332,15 @@ class ChatRunManager:
         internal: bool = False,
         waiting_work_admission: WaitingWorkAdmission | None = None,
         admission: RunAdmission = DEFAULT_RUN_ADMISSION,
+        item_id: str | None = None,
+        created_at: str | None = None,
+        steering: bool = False,
+        persist_input: Callable[[], Awaitable[None]] | None = None,
     ) -> QueuedRunItem:
         """Start immediately when idle or append one item to the session queue."""
         future: asyncio.Future[Run] = asyncio.get_running_loop().create_future()
         item = QueuedRunItem(
-            item_id=new_id("que"),
+            item_id=item_id or new_id("que"),
             display_content=display_content,
             executor=executor,
             internal=internal,
@@ -341,13 +348,16 @@ class ChatRunManager:
             editable=editable,
             steerable=steerable,
             admission=admission,
+            steering=steering,
         )
+        if created_at is not None:
+            item.created_at = created_at
 
         def remove_abandoned_item(completed_future: asyncio.Future[Run]) -> None:
             # Awaiting a bare Future propagates task cancellation into that Future.
             # The Future has one owner, so cancellation means the accepted work was
             # abandoned and must not remain queued to execute without a consumer.
-            if completed_future.cancelled():
+            if completed_future.cancelled() and item.admission.accessor_input_id is None:
                 self.remove_queued(
                     address.agent_id,
                     address.session_id,
@@ -368,6 +378,8 @@ class ChatRunManager:
                 raise
             active_run = self._active_by_session.get(address)
             if active_run is None or active_run.status != RunStatus.RUNNING:
+                if persist_input is not None:
+                    await persist_input()
                 self._consume_waiting_work_admission(waiting_work_admission)
                 run = self._start_run_locked(
                     address=address,
@@ -390,6 +402,8 @@ class ChatRunManager:
                 raise WaitingWorkLimitError("global waiting work limit reached")
 
             item.waiting_scope = waiting_scope
+            if persist_input is not None:
+                await persist_input()
             queue = self._queues.setdefault(address, deque())
             queue.append(item)
             _LOGGER.debug(
@@ -430,6 +444,70 @@ class ChatRunManager:
     def all_queued(self) -> list[tuple[SessionAddress, QueuedRunItem]]:
         """Return a fresh snapshot of queued items across every session."""
         return [(address, item) for address, queue in self._queues.items() for item in queue]
+
+    def restore_queued_inputs(self, inputs: Sequence[tuple[SessionAddress, QueuedRunItem]]) -> None:
+        """Install durable input projections atomically on the owning Event Loop.
+
+        Bootstrap calls this without yielding before automatic producers can run.
+        Accepted work retains its place even if the current waiting limit shrank.
+        """
+        if self._closed:
+            raise RunAdmissionBlockedError("run manager is shutting down")
+        for address, item in inputs:
+            active = self._active_by_session.get(address)
+            if active is None or active.status != RunStatus.RUNNING:
+                run = self._start_run_locked(
+                    address=address,
+                    executor=item.executor,
+                    queue_item_id=item.item_id,
+                    admission=item.admission,
+                )
+                item.future.set_result(run)
+            else:
+                self._queues.setdefault(address, deque()).append(item)
+
+    @asynccontextmanager
+    async def queued_input_mutation(self) -> AsyncIterator[None]:
+        """Serialize durable Queue changes with admission and drain.
+
+        Chat persists its captured payload while holding this short boundary;
+        no Model or Tool work may run inside it.
+        """
+        async with self._lock:
+            yield
+
+    async def clear_queued_async(
+        self, agent_id: str, session_id: str, *, project_id: str | None
+    ) -> int:
+        """Durably withdraw accepted input before clearing its RAM projection."""
+        address = _session_address(project_id, agent_id, session_id)
+        return await self.clear_queued_many((address,))
+
+    async def clear_queued_many(self, addresses: Sequence[SessionAddress]) -> int:
+        """Withdraw several Queues before a tree's cancellation cleanup can run."""
+        async with self._lock:
+
+            async def clear() -> int:
+                withdrawn = 0
+                for address in addresses:
+                    for item in list(self._queues.get(address, ())):
+                        if item.admission.accessor_input_id is not None:
+                            if self._input_withdrawer is None:
+                                raise RuntimeError("durable input withdrawal is unavailable")
+                            await self._input_withdrawer(address, item.admission.accessor_input_id)
+                        if item.steering_in_flight:
+                            item.withdrawn = True
+                            withdrawn += 1
+                        elif self.remove_queued(
+                            address.agent_id,
+                            address.session_id,
+                            item.item_id,
+                            project_id=address.project_id,
+                        ):
+                            withdrawn += 1
+                return withdrawn
+
+            return await settle_before_cancelling(clear())
 
     def remove_queued(
         self, agent_id: str, session_id: str, item_id: str, *, project_id: str | None
@@ -540,7 +618,7 @@ class ChatRunManager:
             item
             for item in self.list_queued(run.agent_id, run.session_id, project_id=run.project_id)
             if item.steering
-            and not item.future.cancelled()
+            and (not item.future.cancelled() or item.admission.accessor_input_id is not None)
             and item.admission.working_project_id == run.working_project_id
         ]
 
@@ -551,7 +629,7 @@ class ChatRunManager:
         delivered = False
         for item in self.pending_steering(run):
             # Another selected item can be removed while the previous append awaits I/O.
-            if item.future.done():
+            if item.future.done() and item.admission.accessor_input_id is None:
                 continue
             run.raise_if_cancelled()
             item.steering_in_flight = True
@@ -868,6 +946,8 @@ class ChatRunManager:
                     )
                 elif self._persistence is not None:
                     payload["history_persisted"] = False
+                    if run.accessor_input_id is not None and self._input_withdrawer is not None:
+                        await self._input_withdrawer(address, run.accessor_input_id)
             except Exception as exc:
                 # No terminal acknowledgement may claim a durable completion
                 # when its transaction failed. The running row is recoverable.
@@ -935,7 +1015,7 @@ class ChatRunManager:
                 # The cancellation callback normally removes an abandoned item
                 # immediately. This guard closes the same-tick race where the
                 # active Run drains before that callback gets its event-loop turn.
-                if item.future.done():
+                if item.future.done() and item.admission.accessor_input_id is None:
                     continue
                 if not queue:
                     self._queues.pop(address, None)
@@ -949,7 +1029,13 @@ class ChatRunManager:
                         admission=item.admission,
                     )
                 except RunAdmissionBlockedError as error:
-                    item.future.set_exception(error)
+                    if (
+                        item.admission.accessor_input_id is not None
+                        and self._input_withdrawer is not None
+                    ):
+                        await self._input_withdrawer(address, item.admission.accessor_input_id)
+                    if not item.future.done():
+                        item.future.set_exception(error)
                     continue
                 except Exception as error:
                     # One broken item must not strand the rest of the Queue. Its
@@ -961,9 +1047,16 @@ class ChatRunManager:
                         item.item_id,
                         exc_info=True,
                     )
-                    item.future.set_exception(error)
+                    if (
+                        item.admission.accessor_input_id is not None
+                        and self._input_withdrawer is not None
+                    ):
+                        await self._input_withdrawer(address, item.admission.accessor_input_id)
+                    if not item.future.done():
+                        item.future.set_exception(error)
                     continue
-                item.future.set_result(run)
+                if not item.future.done():
+                    item.future.set_result(run)
                 return
 
             self._queues.pop(address, None)
@@ -990,6 +1083,7 @@ class ChatRunManager:
             work_id=admission.work_id,
             execution_owner=admission.owner,
             execution_input_id=admission.input_id,
+            accessor_input_id=admission.accessor_input_id,
             source_session_id=admission.source_session_id,
             expected_session_generation_id=admission.expected_session_generation_id,
             completion_activity=admission.completion_activity,

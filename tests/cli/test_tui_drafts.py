@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 from pathlib import Path
+from typing import override
 
 import pytest
 from textual.widgets import TextArea
@@ -12,6 +13,7 @@ from textual.widgets import TextArea
 from cli.tui.app import ConversationApp
 from cli.tui.drafts import DraftStore, draft_record, restore_draft, saved_input_record
 from cli.tui.state import Conversation, JsonObject
+from cli.tui.transport import ClientError
 from core.config_validation import JsonConfigValidationError
 from tests.cli.test_tui import Server
 
@@ -27,7 +29,12 @@ def test_draft_storage_preserves_addresses_pending_input_and_unknown_fields(tmp_
         attachments=[{"attachment_id": "att-one", "filename": "file.txt"}],
         mentions=["folder/file.py"],
         overrides={"model": "provider/model"},
-        uncertain_submission={"text": "Earlier text", "attachments": [], "mentions": []},
+        uncertain_submission={
+            "text": "Earlier text",
+            "attachments": [],
+            "mentions": [],
+            "request": {"input_id": "inp_earlier", "content": "Earlier text"},
+        },
     )
     record = draft_record(view)
     assert record is not None
@@ -47,6 +54,100 @@ def test_draft_storage_preserves_addresses_pending_input_and_unknown_fields(tmp_
     assert written["future"] == {"enabled": True}
     assert written["drafts"][view.draft_id]["future_draft"] == "keep"
     assert DraftStore("http://localhost:8421", directory=tmp_path).load() == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("recovery", ["retry", "restore", "edited", "retired"])
+async def test_restored_submission_retains_its_identity_until_the_input_changes(
+    tmp_path: Path, recovery: str
+) -> None:
+    class ReceiptServer(Server):
+        admitted = False
+
+        @override
+        async def rpc(self, method: str, params: JsonObject | None = None) -> JsonObject:
+            params = params or {}
+            if method == "chat.stream":
+                self.calls.append((method, copy.deepcopy(params)))
+                if self.fail_send:
+                    raise ClientError("Lost response", state="unknown")
+                self.admitted = True
+                return {
+                    "accepted": True,
+                    "input_id": params["input_id"],
+                    "session_id": params["new_session"]["session_id"],
+                    "input_state": "removed",
+                    "session_available": recovery != "retired",
+                    "agent_id": "renamed",
+                }
+            if (
+                method == "chat.timeline"
+                and not self.admitted
+                and params.get("session_id") != "session-one"
+            ):
+                raise ClientError("Not found", code="session_not_found")
+            return await super().rpc(method, params)
+
+    server = ReceiptServer()
+    server.fail_send = True
+    store = DraftStore(server.url, directory=tmp_path)
+    app = ConversationApp(server, agent_id="main", project_id="one", draft_store=store)
+    async with app.run_test(size=(100, 35)) as pilot:
+        await pilot.pause()
+        app.query_one("#composer", TextArea).load_text("Original message")
+        await app.action_send().wait()
+        await app.submissions.persist()
+        original = next(params for method, params in server.calls if method == "chat.stream")
+        assert original["input_id"]
+        await pilot.press("ctrl+q")
+
+    reopened_store = DraftStore(server.url, directory=tmp_path)
+    next_server = ReceiptServer()
+    reopened = ConversationApp(
+        next_server,
+        agent_id="main",
+        project_id="one",
+        draft_store=reopened_store,
+        restored_drafts=reopened_store.load(),
+    )
+    async with reopened.run_test(size=(100, 35)) as pilot:
+        await pilot.pause()
+        assert not any(method == "chat.stream" for method, _ in next_server.calls)
+        assert reopened.conversation is not None and reopened.conversation.uncertain
+        earlier_queue_reads = sum(method == "chat.queue_list" for method, _ in next_server.calls)
+        worker = reopened.action_send()
+        await pilot.pause()
+        # Restore keeps the prepared identity, but sends nothing until Enter.
+        await pilot.press(*(["down"] * (4 if recovery in {"retry", "retired"} else 3)), "enter")
+        await worker.wait()
+        if recovery not in {"retry", "retired"}:
+            assert not any(method == "chat.stream" for method, _ in next_server.calls)
+            if recovery == "edited":
+                reopened.query_one("#composer", TextArea).load_text("Edited message")
+                await pilot.pause()
+            await reopened.action_send().wait()
+        sent = [params for method, params in next_server.calls if method == "chat.stream"]
+        assert len(sent) == 1
+        if recovery == "edited":
+            assert sent[0]["input_id"] != original["input_id"]
+            assert sent[0]["new_session"]["session_id"] != original["new_session"]["session_id"]
+            assert sent[0]["content"] == "Edited message"
+        else:
+            assert sent[0] == original
+        assert not reopened.conversation.uncertain
+        assert reopened.conversation.retry_submission is None
+        if recovery == "retired":
+            assert reopened.conversation.session is None
+            assert reopened.conversation.pending_session_id is None
+            assert reopened.conversation.agent == "main"
+            assert (
+                sum(method == "chat.queue_list" for method, _ in next_server.calls)
+                == earlier_queue_reads
+            )
+        else:
+            assert reopened.conversation.session == sent[0]["new_session"]["session_id"]
+            assert reopened.conversation.agent == "renamed"
+            assert any(method == "chat.queue_list" for method, _ in next_server.calls)
 
 
 @pytest.mark.parametrize("action", ["edit", "clear", "same_pending"])

@@ -6,6 +6,7 @@ from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from core.chat._accessor_inputs import AccessorChatSubmission
     from core.chat._effort_epoch import EffortState
     from core.chat._external_run import ExternalRun
     from core.chat._message_history import (
@@ -80,6 +81,7 @@ if TYPE_CHECKING:
 
 
 _EXPORT_MODULES = {
+    "AccessorChatSubmission": "core.chat._accessor_inputs",
     "output_measurements": "core.chat._output_speed",
     "EffortState": "core.chat._effort_epoch",
     "note_request_messages": "core.chat.wire_shaping",
@@ -136,6 +138,7 @@ _EXPORT_MODULES = {
 }
 
 __all__ = [
+    "AccessorChatSubmission",
     "output_measurements",
     "EffortState",
     "note_request_messages",

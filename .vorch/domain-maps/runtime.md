@@ -19,7 +19,7 @@ Construction order other domains rely on: the canonical `UsageRecorder` follows 
 - Invalid Settings, Agents, Projects and unreadable Tool/Extension/Skill roots degrade individually and never abort startup; data-dir creation failure and a failing `sqlite_fts` construction (the Recall fallback below which no registration remains) are fatal.
 - Canonical Sessions open before `UsageRecorder` and every request producer (DI Contracts).
 - Interrupted work settles before its owners start: a pending Agent rename (Constraints) and then interrupted archive operations, which the archive finishes or undoes in every startup mode (`archive.md` -> Recovery), complete before the Channel and Cron starts.
-- Services are wired before they start: Cron and Channels start only after the CommandDispatcher and the recoveries above, and Bootstrap Runs only once the server lifespan is ready (`activate_bootstrap`).
+- Cron/Channels start after CommandDispatcher and recovery; accepted Accessor inputs install before their tasks run. Bootstrap activates at server readiness (`activate_bootstrap`).
 - Extension Tools are applied **last**, after built-in and Sub-Agent Tools; SystemPromptManager follows them.
 - The token estimation encoding starts loading only after startup: started earlier, it slowed startup by contending for the GIL.
 

@@ -25,6 +25,7 @@ async def _resolution_state(tmp_path: Path) -> Any:
     _write_agent(repo, "stranded.md", model="ghost/model-x")
     await rpc_result(state, "project.add", cwd=str(repo), display_name="vBot")
     runtime.chat_sessions = runtime.sessions
+    runtime.chat_run_manager = state.chat_runs
     state.chat_loop = build_chat_loop(runtime)
     state.command_dispatcher = CommandDispatcher(
         state.chat_runs,

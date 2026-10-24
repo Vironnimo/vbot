@@ -26,6 +26,10 @@ class SessionPageCursorError(ChatSessionError):
     """Raised when a bounded Session read references an invalid page anchor."""
 
 
+class AccessorInputConflictError(ChatSessionError):
+    """A stable Accessor input id was reused for a different original request."""
+
+
 class SessionStoreCorruptError(DatabaseCorruptError):
     """Raised when stored Session rows cannot be trusted."""
 

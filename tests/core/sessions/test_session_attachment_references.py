@@ -10,6 +10,7 @@ import pytest
 from core.chat import ChatMessage
 from core.chat.content_blocks import FileBlock
 from core.chat.messages import ToolCall
+from core.runs import Run
 from core.sessions import ChatSessionManager
 from core.sessions._store_attachments import snapshot_references
 
@@ -67,3 +68,55 @@ def test_old_history_backfill_and_old_snapshot_reads_preserve_attachment_handles
         assert reopened.unreferenced_attachment_ids() == (attachment_id,)
     finally:
         reopened.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transition", ["removed", "started", "steered"])
+async def test_accepted_input_attachments_remain_reachable_until_disposition_settles(
+    manager, transition: str
+) -> None:
+    session = manager.create("coder")
+    await manager.accept_accessor_input_async(
+        session.address,
+        "input",
+        request_hash="original",
+        payload={"content": "queued", "future": True},
+        queue_id="queue",
+        attachment_ids=("att_before",),
+    )
+    assert manager.referenced_attachment_ids() == {"att_before"}
+    assert manager.unreferenced_attachment_ids() == ()
+    edited = await manager.update_accessor_input_async(
+        session.address,
+        "input",
+        payload_patch={"content": "edited"},
+        attachment_ids=("att_after",),
+    )
+    assert edited.attachment_ids == ("att_after",)
+    assert edited.payload["future"] is True
+    with sqlite3.connect(manager._store.path) as connection:
+        assert snapshot_references(connection) == {"att_after"}
+    if transition == "removed":
+        assert await manager.remove_accessor_input_async(session.address, "input")
+        assert (await manager.lookup_accessor_input_async("input")).payload == {}
+    elif transition == "started":
+        run = Run(
+            run_id="started",
+            agent_id=session.address.agent_id,
+            session_id=session.id,
+            accessor_input_id="input",
+        )
+        await manager.start_run(run)
+        # Run admission precedes its User carrier. This root must survive that gap.
+        assert manager.referenced_attachment_ids() == {"att_after"}
+        manager.recover_interrupted_runs()
+    else:
+        writer = session.start_run("steered")
+        await writer.append_many_async(
+            [ChatMessage.user([FileBlock("file", "att_after", "file.txt", "text/plain")])],
+            accessor_input_ids=("input",),
+        )
+    assert (await manager.lookup_accessor_input_async("input")).attachment_ids == ()
+    expected = {"att_after"} if transition == "steered" else set()
+    assert manager.referenced_attachment_ids() == expected
+    assert set(manager.unreferenced_attachment_ids()) == {"att_before", "att_after"} - expected

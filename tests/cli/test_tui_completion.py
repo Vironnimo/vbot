@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, override
+from unittest.mock import ANY
 
 import pytest
 from textual.widgets import Static, TextArea
@@ -251,6 +252,7 @@ async def test_enter_sends_and_shift_enter_keeps_a_new_line() -> None:
                 "session_id": "session-one",
                 "reply_surface": "tui",
                 "content": "first\nsecond",
+                "input_id": ANY,
             }
         ]
 

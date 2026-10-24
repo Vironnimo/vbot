@@ -424,6 +424,7 @@ describe('ChatView Session settings', () => {
           agent_overrides: { model: R1, thinking_effort_default: true },
         },
         content: 'First message',
+        input_id: expect.any(String),
       });
     });
   });

@@ -41,6 +41,7 @@ from core.runs import (
     TOOL_CALL_STARTED_EVENT,
 )
 from core.sessions import EPHEMERAL_SESSION_LIFETIME
+from core.utils.ids import new_id
 
 JsonObject = dict[str, Any]
 
@@ -121,7 +122,18 @@ def chat(instance: ServerInstance, request: ChatRequest) -> CommandResult:
         params["new_session"] = new_session
     else:
         params["session_id"] = session_id
+    if not request.prompt.lstrip().startswith("/"):
+        params["input_id"] = new_id("inp")
     payload = _rpc_call(instance, "chat.stream", params)
+    if (
+        not payload.ok
+        and params.get("input_id")
+        and payload.failure is not None
+        and payload.failure.request_state == "unknown"
+    ):
+        # Only this prepared ordinary message has a durable deduplication key.
+        # Commands and other RPC mutations retain their existing recovery.
+        payload = _rpc_call(instance, "chat.stream", params)
     if not payload.ok:
         return payload.to_command_result()
     data = payload.data
@@ -142,11 +154,14 @@ def chat(instance: ServerInstance, request: ChatRequest) -> CommandResult:
         attachments=attachments,
         # --ephemeral names a new Session; a continued one keeps what it is.
         ignored_ephemeral=request.ephemeral and not new and ephemeral is False,
+        input_id=_text(data.get("input_id")) or _text(params.get("input_id")),
     )
     if data.get("queued") is True:
         return _queued(instance, request, report, data.get("item"))
     if data.get("command_handled") is True:
         return _command_handled(instance, request, report, data)
+    if data.get("accepted") is True:
+        return _accepted_receipt(instance, request, report, data)
 
     run_id = data.get("run_id")
     sse_path = data.get("sse_url")
@@ -305,6 +320,7 @@ class _Report:
     ephemeral: bool | None = None
     attachments: list[JsonObject] = field(default_factory=list)
     ignored_ephemeral: bool = False
+    input_id: str | None = None
 
     def json_object(self, **fields: Any) -> JsonObject:
         report: JsonObject = {
@@ -323,6 +339,7 @@ class _Report:
             "agent_overrides": self.agent_overrides,
             "queue_item": None,
             "command": None,
+            "input_id": self.input_id,
         }
         report.update(fields)
         return report
@@ -330,6 +347,77 @@ class _Report:
 
 def _print_json(report: JsonObject) -> None:
     print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True), flush=True)
+
+
+def _accepted_receipt(
+    instance: ServerInstance, request: ChatRequest, report: _Report, data: Mapping[str, Any]
+) -> CommandResult:
+    """Reconcile a durable acceptance whose live Run response is no longer retained."""
+    if report.session_id is None:
+        return CommandResult(
+            ok=False,
+            message=(
+                "The accepted message receipt names no Session; "
+                "inspect this server before sending again."
+            ),
+            instance=instance,
+        )
+    report.agent = _text(data.get("agent_id")) or request.agent
+    params = {"agent_id": report.agent, "session_id": report.session_id}
+    available = data.get("session_available") is not False
+    reads = (
+        {
+            "history": _rpc_call(
+                instance, "chat.timeline", {**params, "limit": 20, "child_limit": 60}
+            ),
+            "queue": _rpc_call(instance, "chat.queue_list", params),
+        }
+        if available
+        else {}
+    )
+    run_id = _text(data.get("run_id"))
+    if run_id and available:
+        reads["result"] = _rpc_call(instance, "chat.run_result", {**params, "run_id": run_id})
+    result = reads.get("result")
+    message = _text(result.data.get("content")) if result and result.ok else None
+    truncated = bool(result and result.ok and result.data.get("truncated"))
+    if request.json_output:
+        _print_json(
+            report.json_object(
+                status="accepted",
+                run_id=run_id,
+                input_state=data.get("input_state"),
+                session_available=available,
+                message=message or "",
+                truncated=truncated,
+                reconciliation={
+                    name: dict(payload.data) for name, payload in reads.items() if payload.ok
+                },
+            )
+        )
+    elif message:
+        print(message, flush=True)
+    lines = [
+        f"Message {report.input_id} was already accepted in Session {report.session_id}; "
+        "the earlier submission was not repeated."
+    ]
+    if state := _text(data.get("input_state")):
+        lines.append(f"Recorded input state: {inline_text(state)}.")
+    if not available:
+        lines.append("Its Session is no longer available.")
+    if truncated:
+        lines.append("Note: the recovered answer shows its last 6000 characters.")
+    failed = next((payload for payload in reads.values() if not payload.ok), None)
+    if failed is not None:
+        lines.append("Current history or Queue could not be read; acceptance remains confirmed.")
+    if available:
+        lines.append(f"Next: {_chat_command(instance, report.agent, report.session_id, '/status')}")
+    return CommandResult(
+        ok=failed is None,
+        message="\n".join(lines),
+        instance=instance,
+        failure=failed.failure if failed else None,
+    )
 
 
 def _queued(
