@@ -8,7 +8,7 @@ RPC-to-store contract without a database.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -133,7 +133,7 @@ class FakeSessions:
     def review_forks(self, address: Any) -> tuple[Any, ...]:
         return ()
 
-    async def archive(self, address: Any) -> Any:
+    async def archive(self, address: Any, *, facts: Mapping[str, Any] | None = None) -> Any:
         self.archived.append((address.agent_id, address.session_id, address.project_id))
         if self.archive_error is not None:
             raise self.archive_error
