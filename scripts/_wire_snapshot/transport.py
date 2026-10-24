@@ -160,8 +160,9 @@ def offline_wire(recorder: WireRecorder) -> Iterator[None]:
         base_url: str,
         timeout: httpx.Timeout | None = None,
         debug_recorder: Any = None,
+        http_transport: http_shared.ProviderHTTPTransportScope | None = None,
     ) -> httpx.AsyncClient:
-        del timeout, debug_recorder
+        del timeout, debug_recorder, http_transport
         return httpx.AsyncClient(
             base_url=base_url,
             timeout=httpx.Timeout(30.0),
