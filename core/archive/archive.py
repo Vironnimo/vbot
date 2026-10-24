@@ -232,10 +232,34 @@ class ArchiveService:
                     exc_info=True,
                 )
                 continue
-            # An entry left archived or pending is continued like any other: the
-            # retention sweep resumes a pending purge.
-            await self.purge([outcome.entry_id], reason=_EPHEMERAL_ACTOR, actor=_EPHEMERAL_ACTOR)
-            deleted += 1
+            # The retention sweep continues a pending purge like any other.
+            try:
+                purge = await self.purge(
+                    [outcome.entry_id], reason=_EPHEMERAL_ACTOR, actor=_EPHEMERAL_ACTOR
+                )
+            except Exception:
+                purge = None
+                _LOGGER.warning(
+                    "Could not purge an expired Ephemeral Session (agent=%s session=%s "
+                    "project=%s entry=%s); it stays in the archive",
+                    address.agent_id,
+                    address.session_id,
+                    address.project_id or "-",
+                    outcome.entry_id,
+                    exc_info=True,
+                )
+            if purge is not None and (purge.purged or purge.pending):
+                deleted += 1
+            elif purge is not None and purge.skipped:
+                _LOGGER.warning(
+                    "Could not purge an expired Ephemeral Session (agent=%s session=%s "
+                    "project=%s entry=%s): %s; it stays in the archive",
+                    address.agent_id,
+                    address.session_id,
+                    address.project_id or "-",
+                    outcome.entry_id,
+                    purge.skipped[0].reason,
+                )
         return deleted
 
     def add_changed_callback(self, callback: Callable[[], None]) -> Callable[[], None]:

@@ -453,3 +453,44 @@ async def test_a_sweep_deletes_idle_ephemeral_sessions_and_keeps_fresh_busy_and_
     assert world.recall_removals == [(None, "coder", "idle")]
     assert "Deleted 1 expired Ephemeral Sessions" in caplog.messages
     assert not [record for record in caplog.records if record.levelno >= logging.WARNING]
+
+
+@pytest.mark.asyncio
+async def test_an_ephemeral_session_whose_purge_is_skipped_stays_archived_and_warns(
+    world: ArchiveWorld, timer: _Timer, caplog: pytest.LogCaptureFixture
+) -> None:
+    agent_with_session(world, "coder")
+    for session_id in ("first", "second"):
+        world.sessions.create("coder", session_id=session_id, metadata={"ephemeral": True})
+    with sqlite3.connect(world.data_dir / "sessions.db") as connection:
+        connection.execute(
+            "UPDATE sessions SET last_activity_at = ? WHERE agent_id = 'coder'",
+            (format_canonical_timestamp(_NOW - timedelta(hours=30)),),
+        )
+    failures = iter([OSError("usage ledger unavailable")])
+
+    def import_usage() -> None:
+        if error := next(failures, None):
+            raise error
+
+    caplog.set_level(logging.INFO, logger="vbot.archive")
+    service = ArchiveService(
+        replace(
+            world.services,
+            import_usage=import_usage,
+            retention_days=_Setting(None),
+            clock=lambda: _NOW,
+        )
+    )
+    await _sweep_once(service, timer)
+
+    # The other Session is still deleted; the skipped one stays restorable.
+    assert ("first", "live") not in world.session_rows("coder")
+    assert ("second", "live") not in world.session_rows("coder")
+    assert len(world.sessions.archive_ledger.page(ArchiveEntryFilter()).entries) == 1
+    assert "Deleted 1 expired Ephemeral Sessions" in caplog.messages
+    assert [
+        record.getMessage().split(" (")[0]
+        for record in caplog.records
+        if record.levelno >= logging.WARNING and "Ephemeral" in record.getMessage()
+    ] == ["Could not purge an expired Ephemeral Session"]
