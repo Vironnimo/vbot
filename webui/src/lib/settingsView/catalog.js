@@ -103,7 +103,8 @@ const sections = [
     label: () => t('settings.archive.retentionTitle'),
   },
   { id: 'archive_entries', label: () => t('archive.listLabel') },
-  { id: 'debug', label: () => t('debug.settings') },
+  { id: 'debug_capture', label: () => t('debug.captureAndStorage') },
+  { id: 'debug_traces', label: () => t('debug.traceList') },
 ];
 export const panelById = new Map(
   sections.map((section) => [section.id, section]),
@@ -204,8 +205,14 @@ export function settingsPages(desktopCapabilities) {
         'server',
         'access',
         ...(desktopCapabilities?.serverSelection ? ['desktop_connection'] : []),
-        'debug',
       ],
+    },
+    {
+      id: 'debug',
+      label: () => t('debug.title'),
+      description: () => t('debug.inspectorSubtitle'),
+      sections: ['debug_capture', 'debug_traces'],
+      subPages: 'debug_traces',
     },
   ];
 }

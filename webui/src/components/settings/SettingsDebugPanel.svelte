@@ -35,12 +35,7 @@
     };
   }
 
-  let {
-    settings = null,
-    onCommit = noop,
-    onError = noop,
-    onDebugEnabledChange = noop,
-  } = $props();
+  let { settings = null, onCommit = noop, onError = noop } = $props();
 
   // Form is seeded once from the settings prop at mount (untrack avoids a
   // reactive dependency); later commits flow back through saveDisabled.
@@ -51,7 +46,12 @@
     fromSettings: getDebugSettings,
     read: () => debugSettings,
     write: (next) => (debugSettings = next),
-    toPayload: (values) => ({ debug: getDebugSettings({ debug: values }) }),
+    toPayload: (values) => ({
+      debug: {
+        enabled: values.enabled,
+        trace_limit: Number(values.trace_limit),
+      },
+    }),
   });
 
   let saveDisabled = $derived(
@@ -86,12 +86,9 @@
   });
 
   function debugSettingsMatch(left, right) {
-    const normalizedLeft = getDebugSettings({ debug: left });
-    const normalizedRight = getDebugSettings({ debug: right });
-
     return (
-      normalizedLeft.enabled === normalizedRight.enabled &&
-      normalizedLeft.trace_limit === normalizedRight.trace_limit
+      left.enabled === right.enabled &&
+      Number(left.trace_limit) === Number(right.trace_limit)
     );
   }
 
@@ -100,25 +97,21 @@
       return true;
     }
 
-    let committed = null;
-    const saved = await debugDraft.save({
-      onCommit: (next) => {
-        committed = next;
-        onCommit(next);
-      },
+    const limit = Number(debugSettings.trace_limit);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
+      onError(t('debug.limitInvalid'));
+      return false;
+    }
+
+    return debugDraft.save({
+      onCommit,
       onError,
       setSaving: (value) => (saving = value),
     });
-    if (saved && committed) {
-      onDebugEnabledChange(getDebugSettings(committed).enabled);
-    }
-    return saved;
   }
 </script>
 
-<!-- The description states what debug mode captures; the Trace limit only
-     applies while it records, so it appears with it. Its draft stays in the
-     form while the row is hidden. -->
+<!-- Retention can be configured before capture is enabled. -->
 <div class="s-group">
   <div class="s-row s-row--compact">
     <div class="s-row-info">
@@ -145,7 +138,7 @@
     </div>
   </div>
 
-  <div class="s-row s-row--compact" hidden={debugSettings.enabled !== true}>
+  <div class="s-row s-row--compact">
     <div class="s-row-info">
       <div class="s-row-label">
         {t('debug.traceLimit')}
@@ -162,27 +155,8 @@
         value={debugSettings.trace_limit}
         ariaLabel={t('debug.traceLimit')}
         onInput={(next) => {
-          const rawValue = next;
-          if (rawValue === '') {
-            debugSettings = {
-              ...debugSettings,
-              trace_limit: rawValue,
-            };
-            onError('');
-            return;
-          }
-          const numberValue = Number(rawValue);
-          if (
-            Number.isInteger(numberValue) &&
-            numberValue >= 1 &&
-            numberValue <= 500
-          ) {
-            debugSettings = {
-              ...debugSettings,
-              trace_limit: numberValue,
-            };
-            onError('');
-          }
+          debugSettings = { ...debugSettings, trace_limit: next };
+          onError('');
         }}
       />
     </div>

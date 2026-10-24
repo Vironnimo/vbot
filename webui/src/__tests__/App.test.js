@@ -50,7 +50,6 @@ describe('NAVIGATION_ITEMS', () => {
       ['calendar', 'planning'],
       ['statistics', 'system'],
       ['logs', 'system'],
-      ['debug', 'system'],
       ['settings', 'settings'],
     ]);
   });
@@ -84,10 +83,9 @@ describe('App', () => {
   }
 
   it('gives every navigation view its own icon', async () => {
-    debugStatusMock.mockResolvedValue({ enabled: true });
     mountApp();
     await waitForCondition(() =>
-      expect(sidebarNavButton('debug')).toBeTruthy(),
+      expect(sidebarNavButton('settings')).toBeTruthy(),
     );
 
     const icons = NAVIGATION_ITEMS.map(
@@ -154,7 +152,7 @@ describe('App', () => {
   });
 
   it.each([false, true])(
-    'toggles the Debug navigation from Debug Mode %s in Settings without remounting',
+    'keeps Debug in Settings when toggling Debug Mode from %s',
     async (initiallyEnabled) => {
       rpcMock.mockImplementation(
         createSettingsRpcMock({ initialDebugEnabled: initiallyEnabled }),
@@ -165,14 +163,15 @@ describe('App', () => {
       const firstMount = mountedComponent;
 
       await waitForCondition(() => {
-        expect(debugVisible()).toBe(initiallyEnabled);
+        expect(sidebarNavButton('settings')).toBeTruthy();
+        expect(debugVisible()).toBe(false);
       });
       sidebarNavButton('settings').click();
       flushSync();
       await waitForCondition(() => {
-        expect(settingsPanelButton('system')).toBeTruthy();
+        expect(settingsPanelButton('debug')).toBeTruthy();
       });
-      settingsPanelButton('system').click();
+      settingsPanelButton('debug').click();
       flushSync();
       await waitForCondition(() => {
         expect(debugEnabledToggle().getAttribute('aria-checked')).toBe(
@@ -182,17 +181,74 @@ describe('App', () => {
 
       debugEnabledToggle().click();
       flushSync();
+      document
+        .querySelector(
+          '[data-settings-section="debug_capture"] .save-status button',
+        )
+        .click();
 
       await waitForCondition(() => {
         const updates = rpcMock.mock.calls.filter(
           ([method]) => method === 'settings.update',
         );
         expect(updates.at(-1)?.[1]?.debug?.enabled).toBe(!initiallyEnabled);
-        expect(debugVisible()).toBe(!initiallyEnabled);
+        expect(debugVisible()).toBe(false);
+        expect(window.location.hash).toBe('#settings/debug');
+        expect(
+          document.querySelectorAll('#settings-debug-trace-limit'),
+        ).toHaveLength(1);
       });
       expect(mountedComponent).toBe(firstMount);
     },
   );
+
+  it('opens Debug traces under Settings and forwards trace invalidations there', async () => {
+    const backend = createSettingsRpcMock({ initialDebugEnabled: true });
+    const trace = {
+      trace_id: 'test-trace',
+      model_id: 'test-model',
+      provider_id: 'openai',
+      request: { body: '{}' },
+      response: { body: '{}' },
+    };
+    let traces = [trace];
+    rpcMock.mockImplementation((method, params) => {
+      if (method === 'debug.trace_list') return { traces };
+      if (method === 'debug.trace_get') return { trace };
+      return backend(method, params);
+    });
+    window.history.replaceState({}, '', '#settings/debug/test-trace');
+    localStorage.setItem('vbot.onboardingDismissed', '1');
+    const handlers = mountApp();
+    await waitForCondition(() => {
+      expect(document.querySelector('.detail-header h3')?.textContent).toBe(
+        'test-model',
+      );
+    });
+    expect(sidebarNavButton('debug')).toBeFalsy();
+    document.querySelector('.detail-back button').click();
+    await waitForCondition(() =>
+      expect(window.location.hash).toBe('#settings/debug'),
+    );
+    expect(
+      document.querySelector('[data-settings-section="debug_capture"]').hidden,
+    ).toBe(false);
+    document.querySelector('.debug-trace__row').click();
+    await waitForCondition(() =>
+      expect(window.location.hash).toBe('#settings/debug/test-trace'),
+    );
+
+    traces = [];
+    handlers.onEvent({
+      type: 'resource_changed',
+      sequence: 1,
+      payload: { kind: 'debug_traces' },
+    });
+    await waitForCondition(() => {
+      expect(document.querySelector('.detail-header h3')).toBeNull();
+      expect(window.location.hash).toBe('#settings/debug');
+    });
+  });
 
   it('re-fetches the Agent roster on resource_changed(agents)', async () => {
     rpcMock.mockImplementation(createAppRpcMock({ agents: ALPHA }));

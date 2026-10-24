@@ -34,12 +34,26 @@ const { default: DebugView } = await import('../DebugView.svelte');
 
 describe('DebugView', () => {
   let mountedComponent;
+  let settings;
+
+  function mountDebugView(options = {}) {
+    const props = options.props ?? {};
+    props.settings ??= settings;
+    return mount(DebugView, {
+      ...options,
+      props,
+    });
+  }
 
   beforeEach(() => {
     document.body.innerHTML = '';
     localStorage.clear();
     init('en');
     mountedComponent = null;
+    settings = {
+      debug: { enabled: true, trace_limit: 50 },
+      providers: { items: [] },
+    };
 
     debugStatusMock.mockReset();
     debugTraceListMock.mockReset();
@@ -80,7 +94,7 @@ describe('DebugView', () => {
   });
 
   it('renders the shared empty state when no traces exist', async () => {
-    mountedComponent = mount(DebugView, { target: document.body });
+    mountedComponent = mountDebugView({ target: document.body });
     flushSync();
 
     await waitForCondition(() =>
@@ -88,11 +102,53 @@ describe('DebugView', () => {
     );
 
     expect(document.querySelector('.debug-view .empty-state')).toBeTruthy();
-    expect(document.querySelector('.debug-view.view-frame')).toBeTruthy();
-    expect(document.querySelector('.debug-view .view-header')).toBeTruthy();
+    expect(
+      document.querySelector('.debug-view input[type="number"]'),
+    ).toBeNull();
     expect(
       document.querySelector('.debug-view .view-toolbar--split'),
     ).toBeTruthy();
+  });
+
+  it('loads traces only while active and enabled and can clear stored traces while disabled', async () => {
+    debugStatusMock.mockResolvedValue({
+      enabled: false,
+      trace_count: 2,
+      trace_limit: 50,
+    });
+    const props = reactiveProps({
+      settings: { ...settings, debug: { enabled: false, trace_limit: 50 } },
+      active: false,
+      debugTracesRefreshToken: 0,
+    });
+    mountedComponent = mountDebugView({ target: document.body, props });
+    flushSync();
+    expect(debugStatusMock).not.toHaveBeenCalled();
+    props.active = true;
+    await waitForCondition(() => debugStatusMock.mock.calls.length === 1);
+    expect(debugTraceListMock).not.toHaveBeenCalled();
+    expect(document.querySelector('.debug-probe-disclosure').hidden).toBe(true);
+    await waitForCondition(() => !storageButton(t('debug.clearAll')).disabled);
+    clearAllTraces();
+    await waitForCondition(() => debugTraceClearMock.mock.calls.length === 1);
+    await waitForCondition(() => debugStatusMock.mock.calls.length === 2);
+
+    props.settings = settings;
+    await waitForCondition(() => debugTraceListMock.mock.calls.length === 1);
+    props.active = false;
+    flushSync();
+    props.debugTracesRefreshToken += 1;
+    flushSync();
+    expect(debugTraceListMock).toHaveBeenCalledOnce();
+    props.active = true;
+    await waitForCondition(() => debugTraceListMock.mock.calls.length === 2);
+
+    // The saved Settings projection, not an older status read, owns the limit.
+    props.settings = { ...settings, debug: { enabled: true, trace_limit: 75 } };
+    flushSync();
+    expect(document.querySelector('.debug-utilities').textContent).toContain(
+      '/ 75',
+    );
   });
 
   it('shows one details card per trace row with the full Model, Provider and status', async () => {
@@ -106,7 +162,7 @@ describe('DebugView', () => {
       ],
     });
 
-    mountedComponent = mount(DebugView, { target: document.body });
+    mountedComponent = mountDebugView({ target: document.body });
     flushSync();
 
     await waitForText('gpt-5.2-with-extra-context-and-suffix');
@@ -131,7 +187,7 @@ describe('DebugView', () => {
     });
     debugTraceListMock.mockResolvedValue({ traces: [a, b] });
     debugTraceGetMock.mockResolvedValue({ trace: fullTraceFixture(a) });
-    mountedComponent = mount(DebugView, { target: document.body });
+    mountedComponent = mountDebugView({ target: document.body });
     await waitForText('claude');
     clickTraceRow('a');
     await switchToDetailTabWhenReady('request');
@@ -190,7 +246,7 @@ describe('DebugView', () => {
     });
     debugTraceListMock.mockResolvedValue({ traces: [request, probe] });
     debugTraceGetMock.mockResolvedValue({ trace: fullTraceFixture(request) });
-    mountedComponent = mount(DebugView, { target: document.body });
+    mountedComponent = mountDebugView({ target: document.body });
     await waitForText('gpt-5.2');
 
     clickTraceRow('model-trace');
@@ -247,7 +303,7 @@ describe('DebugView', () => {
       throw new Error(`Unexpected trace id: ${traceId}`);
     });
 
-    mountedComponent = mount(DebugView, { target: document.body });
+    mountedComponent = mountDebugView({ target: document.body });
     flushSync();
 
     await waitForText('claude-sonnet-4');
@@ -297,7 +353,7 @@ describe('DebugView', () => {
       }),
     });
 
-    mountedComponent = mount(DebugView, { target: document.body });
+    mountedComponent = mountDebugView({ target: document.body });
     flushSync();
 
     await waitForText('gpt-5.2');
@@ -376,7 +432,7 @@ describe('DebugView', () => {
       }),
     });
 
-    mountedComponent = mount(DebugView, { target: document.body });
+    mountedComponent = mountDebugView({ target: document.body });
     flushSync();
 
     await waitForText('gpt-5.2');
@@ -419,7 +475,7 @@ describe('DebugView', () => {
       trace: fullTraceFixture(traceId === 'trace-a' ? traceA : traceB),
     }));
     const navigation = createStandaloneNavigation(['trace-b']);
-    mountedComponent = mount(DebugView, {
+    mountedComponent = mountDebugView({
       target: document.body,
       props: { navigation },
     });
@@ -464,7 +520,7 @@ describe('DebugView', () => {
       }),
     });
 
-    mountedComponent = mount(DebugView, { target: document.body, props });
+    mountedComponent = mountDebugView({ target: document.body, props });
     await waitForText('claude-sonnet-4');
     clickTraceRow('trace-keep');
     await switchToDetailTabWhenReady('request');
@@ -501,7 +557,7 @@ describe('DebugView', () => {
     debugTraceListMock.mockResolvedValue({ traces: [trace] });
     debugTraceGetMock.mockResolvedValue({ trace: detail });
 
-    mountedComponent = mount(DebugView, { target: document.body });
+    mountedComponent = mountDebugView({ target: document.body });
     await waitForText(trace.model_id);
     clickTraceRow('trace-headers');
 
@@ -521,7 +577,7 @@ describe('DebugView', () => {
     debugTraceGetMock
       .mockRejectedValueOnce(new Error('test-owned-load-error'))
       .mockResolvedValueOnce({ trace });
-    mountedComponent = mount(DebugView, { target: document.body });
+    mountedComponent = mountDebugView({ target: document.body });
     await waitForText(entry.model_id);
     clickTraceRow(entry.trace_id);
     await waitForText('test-owned-load-error');
@@ -542,7 +598,7 @@ describe('DebugView', () => {
         resolveDetail = resolve;
       }),
     );
-    mountedComponent = mount(DebugView, { target: document.body });
+    mountedComponent = mountDebugView({ target: document.body });
     await waitForText(entry.model_id);
     clickTraceRow(entry.trace_id);
     flushSync();
@@ -568,7 +624,7 @@ describe('DebugView', () => {
     debugTraceClearMock.mockRejectedValueOnce(
       new Error('test-owned-clear-error'),
     );
-    mountedComponent = mount(DebugView, { target: document.body });
+    mountedComponent = mountDebugView({ target: document.body });
     await waitForText(entry.model_id);
     clickTraceRow(entry.trace_id);
     await switchToDetailTabWhenReady('request');
@@ -578,106 +634,20 @@ describe('DebugView', () => {
     expect(debugTraceListMock).toHaveBeenCalledOnce();
   });
 
-  it('preserves a newer retention draft through a slow save and validates before submission', async () => {
-    let resolveSave;
-    rpcMock.mockImplementation(async (method) => {
-      if (method === 'settings.get') return { providers: { items: [] } };
-      if (method === 'settings.update')
-        return new Promise((resolve) => {
-          resolveSave = resolve;
-        });
-      throw new Error(method);
-    });
-    mountedComponent = mount(DebugView, { target: document.body });
-    await waitForCondition(() =>
-      document.querySelector('.debug-view .empty-state'),
-    );
-    const input = document.querySelector('input[type="number"]');
-    const save = () => storageButton(t('common.save'));
-    expect(save()).toBeUndefined();
-    input.value = '0';
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    flushSync();
-    save().click();
-    await waitForCondition(() =>
-      document.querySelector('.debug-storage-content .banner--error'),
-    );
-    expect(
-      rpcMock.mock.calls.filter(([method]) => method === 'settings.update'),
-    ).toHaveLength(0);
-    input.value = '75';
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    flushSync();
-    save().click();
-    await waitForCondition(() => resolveSave);
-    input.value = '100';
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    flushSync();
-    resolveSave({ debug: { trace_limit: 75 } });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    flushSync();
-    expect(input.value).toBe('100');
-    expect(rpcMock).toHaveBeenCalledWith('settings.update', {
-      debug: { trace_limit: 75 },
-    });
-  });
-
-  it('does not overwrite saved retention with an older status refresh', async () => {
-    const props = reactiveProps({ debugTracesRefreshToken: 0 });
-    rpcMock.mockImplementation(async (method, params) => {
-      if (method === 'settings.get') return { providers: { items: [] } };
-      if (method === 'settings.update') return params;
-      throw new Error(method);
-    });
-    mountedComponent = mount(DebugView, { target: document.body, props });
-    await waitForCondition(() =>
-      document.querySelector('.debug-view .empty-state'),
-    );
-    let resolveStatus;
-    debugStatusMock.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveStatus = resolve;
-        }),
-    );
-    props.debugTracesRefreshToken += 1;
-    await waitForCondition(() => resolveStatus);
-    const input = document.querySelector('input[type="number"]');
-    input.value = '75';
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    flushSync();
-    storageButton(t('common.save')).click();
-    await waitForCondition(() =>
-      document.querySelector('.debug-utilities').textContent.includes('/ 75'),
-    );
-    resolveStatus({ enabled: true, trace_limit: 50, trace_count: 0 });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    flushSync();
-    expect(input.value).toBe('75');
-    expect(document.querySelector('.debug-utilities').textContent).toContain(
-      '/ 75',
-    );
-  });
-
   it('probes the selected Provider connection and shows its raw response and model preview', async () => {
-    rpcMock.mockImplementation(async (method) => {
-      if (method === 'settings.get') {
-        return {
-          general: { server: { listen_host: '127.0.0.1', listen_port: 8420 } },
-          providers: {
-            items: [
-              {
-                id: 'openai',
-                name: 'OpenAI',
-                models_endpoint: '/v1/models',
-                connections: [{ id: 'default', name: 'Default' }],
-              },
-            ],
+    settings = {
+      debug: { enabled: true, trace_limit: 50 },
+      providers: {
+        items: [
+          {
+            id: 'openai',
+            name: 'OpenAI',
+            models_endpoint: '/v1/models',
+            connections: [{ id: 'default', name: 'Default' }],
           },
-        };
-      }
-      throw new Error(`Unexpected RPC method: ${method}`);
-    });
+        ],
+      },
+    };
     debugModelProbeMock
       .mockResolvedValueOnce(
         probeResult('{"data":[{"id":"gpt-5.2","object":"model"}]}', {
@@ -687,7 +657,7 @@ describe('DebugView', () => {
       )
       .mockResolvedValueOnce(probeResult('plain text response'));
 
-    mountedComponent = mount(DebugView, { target: document.body });
+    mountedComponent = mountDebugView({ target: document.body });
     // Settings (and with them the probe Providers) resolve with the trace
     // list; the empty trace state marks that initial load as complete.
     await waitForCondition(() =>

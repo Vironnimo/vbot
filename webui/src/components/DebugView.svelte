@@ -1,10 +1,5 @@
 <script>
-  import { onMount, onDestroy, tick, untrack } from 'svelte';
-  import {
-    createDebouncedAutosave,
-    useAutosaveContext,
-    autosaveInput,
-  } from '../lib/autosave.js';
+  import { onDestroy, tick, untrack } from 'svelte';
   import { createStandaloneNavigation } from '../lib/navigation.svelte.js';
 
   import {
@@ -12,8 +7,6 @@
     debugTraceClear,
     debugTraceGet,
     debugTraceList,
-    getSettings,
-    updateSettings,
   } from '../lib/api.js';
   import {
     applyDebugStatus,
@@ -32,13 +25,12 @@
   import Badge from './ui/Badge.svelte';
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
-  import SaveStatus from './ui/SaveStatus.svelte';
   import EmptyState from './ui/EmptyState.svelte';
-
-  const TRACE_LIMIT_MAX = 500;
-  const TRACE_LIMIT_MIN = 1;
+  import InfoHint from './ui/InfoHint.svelte';
 
   let {
+    settings = null,
+    active = true,
     // The place is the inspected trace; an empty place shows the trace list
     // without one. Filters and the detail's tabs are not places.
     navigation = createStandaloneNavigation(),
@@ -51,103 +43,51 @@
   let tracesLoaded = $state(false);
   let status = $state({ enabled: false, traceLimit: 50, traceCount: 0 });
   let showClearConfirm = $state(false);
-  let traceLimitInput = $state(50);
-  let settingsReady = $state(false);
-  let limitError = $state('');
-  let limitSaving = $state(false);
   let listRequestToken = 0;
-  let retentionRevision = 0;
   let disposed = false;
   let clearing = $state(false);
   let loadingDetail = $state(false);
   let detailError = $state('');
   let detailRequestToken = $state(0);
-  let lastDebugTracesRefreshToken = $state(null);
+  const enabled = $derived(settings?.debug?.enabled === true);
+  const traceLimit = $derived(settings?.debug?.trace_limit ?? 50);
 
   let hasTraces = $derived(viewState.traces.length > 0);
   let hasSelection = $derived(viewState.selectedTrace !== null);
 
-  const autosave = createDebouncedAutosave({
-    getSnapshot: () => traceLimitInput,
-    hasChanges: () =>
-      settingsReady && Number(traceLimitInput) !== status.traceLimit,
-    save: saveTraceLimit,
-  });
-  const unregister = useAutosaveContext().register(autosave.participant);
-  $effect(() => {
-    if (settingsReady) autosave.scheduleRun();
-    return () => autosave.cancelPendingTimer();
-  });
   onDestroy(() => {
     disposed = true;
     listRequestToken += 1;
     detailRequestToken += 1;
-    autosave.cancelPendingTimer();
-    unregister();
   });
 
-  onMount(() => {
-    loadAll();
+  // Settings retains hidden panels. Load only while this section is shown,
+  // and reconcile again when capture changes or a trace invalidation arrives.
+  $effect(() => {
+    void debugTracesRefreshToken;
+    void enabled;
+    if (active) untrack(() => void refreshTraces());
+    return () => {
+      listRequestToken += 1;
+    };
   });
 
   $effect(() => {
-    const token = debugTracesRefreshToken;
-    if (lastDebugTracesRefreshToken === null) {
-      lastDebugTracesRefreshToken = token;
-      return;
-    }
-    if (token === lastDebugTracesRefreshToken) {
-      return;
-    }
-    lastDebugTracesRefreshToken = token;
-    void refreshTraces();
+    const providers = extractProbeProviders(settings);
+    untrack(() =>
+      applyModelProbeProviders(viewState, { providers: { items: providers } }),
+    );
   });
 
-  async function loadAll() {
-    const token = ++listRequestToken;
-    const revision = retentionRevision;
-    viewState.loading = true;
-    viewState.error = '';
-
-    try {
-      const [statusResult, traceResult, settingsResult] = await Promise.all([
-        debugStatus(),
-        debugTraceList(),
-        loadSettings(),
-      ]);
-
-      if (disposed || token !== listRequestToken) return;
-      const keepDraft = settingsReady && autosave.participant.hasPending();
-      const nextStatus = applyDebugStatus(viewState, statusResult);
-      if (revision !== retentionRevision)
-        nextStatus.traceLimit = status.traceLimit;
-      status = nextStatus;
-      if (!keepDraft) traceLimitInput = nextStatus.traceLimit;
-      settingsReady = true;
-
-      applyTraceList(viewState, traceResult);
-      applyModelProbeProviders(viewState, settingsResult);
-      tracesLoaded = true;
-    } catch (error) {
-      if (disposed || token !== listRequestToken) return;
-      viewState.error = errorMessageText(error, t('errors.generic'));
-    } finally {
-      if (token === listRequestToken) viewState.loading = false;
-    }
-  }
-
-  async function loadSettings() {
-    try {
-      const result = await getSettings();
-      return {
-        providers: {
-          items: extractProbeProviders(result),
-        },
-      };
-    } catch {
-      return { providers: { items: [] } };
-    }
-  }
+  $effect(() => {
+    if (enabled) return;
+    untrack(() => {
+      clearTracesApplied(viewState);
+      detailRequestToken += 1;
+      loadingDetail = false;
+      detailError = '';
+    });
+  });
 
   function extractProbeProviders(settingsResult) {
     const providerItems = Array.isArray(settingsResult?.providers?.items)
@@ -188,30 +128,28 @@
 
   async function refreshTraces() {
     if (clearing) return;
-    if (!settingsReady) return loadAll();
     const token = ++listRequestToken;
-    const revision = retentionRevision;
+    if (!tracesLoaded) viewState.loading = true;
+    viewState.error = '';
     try {
       const [result, statusResult] = await Promise.all([
-        debugTraceList(),
+        enabled ? debugTraceList() : Promise.resolve({ traces: [] }),
         debugStatus(),
       ]);
       if (disposed || token !== listRequestToken) return;
-      const draftWasClean = !autosave.participant.hasPending();
       applyTraceList(viewState, result);
       if (!viewState.selectedTrace) {
         detailRequestToken += 1;
         loadingDetail = false;
         detailError = '';
       }
-      const nextStatus = applyDebugStatus(viewState, statusResult);
-      if (revision !== retentionRevision)
-        nextStatus.traceLimit = status.traceLimit;
-      status = nextStatus;
-      if (draftWasClean) traceLimitInput = status.traceLimit;
+      status = applyDebugStatus(viewState, statusResult);
+      tracesLoaded = true;
     } catch (error) {
       if (disposed || token !== listRequestToken) return;
       viewState.error = errorMessageText(error, t('errors.generic'));
+    } finally {
+      if (token === listRequestToken) viewState.loading = false;
     }
   }
 
@@ -219,7 +157,7 @@
   // listed keeps what is shown and corrects the entry.
   $effect(() => {
     const traceId = navigation.place[0] ?? '';
-    if (!tracesLoaded) return;
+    if (!active || !tracesLoaded) return;
     untrack(() => {
       const shownId = viewState.selectedTrace?.trace_id ?? '';
       if (traceId === shownId) return;
@@ -236,7 +174,7 @@
   // Inspected trace -> place: a refresh or Clear all dropped it.
   $effect(() => {
     void viewState.selectedTrace?.trace_id;
-    if (!tracesLoaded) return;
+    if (!active || !tracesLoaded) return;
     untrack(showTraceInPlace);
   });
 
@@ -310,34 +248,6 @@
     }
   }
 
-  async function saveTraceLimit() {
-    const submitted = traceLimitInput;
-    const value = Number(submitted);
-    if (
-      !Number.isInteger(value) ||
-      value < TRACE_LIMIT_MIN ||
-      value > TRACE_LIMIT_MAX
-    ) {
-      limitError = t('debug.limitInvalid');
-      return false;
-    }
-    limitError = '';
-    retentionRevision += 1;
-    limitSaving = true;
-    try {
-      const result = await updateSettings({ debug: { trace_limit: value } });
-      status = { ...status, traceLimit: result?.debug?.trace_limit ?? value };
-      if (traceLimitInput === submitted) traceLimitInput = status.traceLimit;
-      return true;
-    } catch (error) {
-      limitError = errorMessageText(error, t('errors.generic'));
-      return false;
-    } finally {
-      retentionRevision += 1;
-      limitSaving = false;
-    }
-  }
-
   async function closeTrace(previousId) {
     viewState.selectedTrace = null;
     detailRequestToken += 1;
@@ -370,121 +280,78 @@
 </script>
 
 <section
-  class="debug-view view-frame"
+  class="debug-view"
   class:debug-view--inspecting={hasSelection}
-  aria-labelledby="debug-title"
+  aria-label={t('debug.traceList')}
 >
-  <header class="view-header debug-header">
-    <div class="debug-heading">
-      <h2 id="debug-title">{t('debug.title')}</h2>
-      <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users reach the capture explanation here.) -->
-      <span
-        class="capture-state"
-        class:capture-state--enabled={status.enabled}
-        tabindex="0"
-        use:tooltip={status.enabled
-          ? t('debug.captureEnabledHint')
-          : t('debug.captureDisabledHint')}
-      >
-        <span aria-hidden="true">●</span>
-        {status.enabled
-          ? t('debug.captureEnabled')
-          : t('debug.captureDisabled')}
-      </span>
-    </div>
-    <p>
-      {t('debug.inspectorSubtitle')}
-    </p>
-  </header>
-
   <div class="debug-utilities view-toolbar view-toolbar--split">
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users reach the capture explanation here.) -->
+    <span
+      class="capture-state"
+      class:capture-state--enabled={enabled}
+      tabindex="0"
+      use:tooltip={enabled
+        ? t('debug.captureEnabledHint')
+        : t('debug.captureDisabledHint')}
+    >
+      <span aria-hidden="true">●</span>
+      {enabled ? t('debug.captureEnabled') : t('debug.captureDisabled')}
+    </span>
     <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users reach the limit explanation here.) -->
     <span
       class="tooltip-anchor count-anchor"
       tabindex="0"
-      use:tooltip={t('debug.statusCountHint', { limit: status.traceLimit })}
+      use:tooltip={t('debug.statusCountHint', { limit: traceLimit })}
       ><Badge variant="neutral"
         >{t('debug.statusCount', {
           count: status.traceCount,
-          limit: status.traceLimit,
+          limit: traceLimit,
         })}</Badge
       ></span
     >
-    <span class="debug-local-note">{t('debug.fullCapture')}</span>
-    <details class="debug-storage">
-      <summary>{t('debug.captureAndStorage')}</summary>
-      <div class="debug-storage-content">
-        <p>
-          {t('debug.capturePrivacy')}
-        </p>
-        <label
-          >{t('debug.traceLimit')}
-          <input
-            type="number"
-            min="1"
-            max="500"
-            step="1"
-            use:autosaveInput
-            value={traceLimitInput}
-            oninput={(event) => {
-              traceLimitInput = event.currentTarget.value;
-              limitError = '';
-            }}
-            onkeydown={(event) => {
-              if (event.key === 'Enter')
-                void autosave.participant.runSave('manual');
-            }}
-            aria-label={t('debug.traceLimit')}
-          />
-        </label>
-        {#if limitError}<Banner variant="error">{limitError}</Banner>{/if}
-        <div class="storage-actions">
-          <Button
-            variant="tertiary"
-            disabled={!hasTraces || clearing}
-            onClick={() => (showClearConfirm = !showClearConfirm)}
-            >{t('debug.clearAll')}</Button
-          >
-          <SaveStatus
-            saving={limitSaving}
-            pending={autosave.participant.hasChanges()}
-            onClick={() => autosave.participant.runSave('manual')}
-          />
-        </div>
-        {#if showClearConfirm}
-          <p>
-            {t('debug.clearConfirm')}
-          </p>
-          <div class="storage-actions">
-            <Button
-              variant="danger"
-              disabled={clearing}
-              onClick={handleClearTraces}>{t('common.confirm')}</Button
-            ><Button
-              variant="secondary"
-              onClick={() => (showClearConfirm = false)}
-              >{t('common.cancel')}</Button
-            >
-          </div>
-        {/if}
-      </div>
-    </details>
+    <InfoHint text={t('debug.capturePrivacy')} />
+    <div class="storage-actions">
+      <Button
+        variant="tertiary"
+        disabled={(!hasTraces && status.traceCount === 0) || clearing}
+        onClick={() => (showClearConfirm = !showClearConfirm)}
+        >{t('debug.clearAll')}</Button
+      >
+    </div>
   </div>
+  {#if showClearConfirm}
+    <p>
+      {t('debug.clearConfirm')}
+    </p>
+    <div class="storage-actions">
+      <Button variant="danger" disabled={clearing} onClick={handleClearTraces}
+        >{t('common.confirm')}</Button
+      ><Button variant="secondary" onClick={() => (showClearConfirm = false)}
+        >{t('common.cancel')}</Button
+      >
+    </div>
+  {/if}
 
   {#if viewState.error}
     <Banner variant="error" aria-live="polite"
       ><span>{viewState.error}</span><Button
         variant="secondary"
-        onClick={loadAll}>{t('common.retry')}</Button
+        onClick={refreshTraces}>{t('common.retry')}</Button
       ></Banner
     >
   {/if}
 
   {#if viewState.loading}
     <Banner variant="neutral">{t('common.loading')}</Banner>
+  {:else if !enabled}
+    <EmptyState
+      density="compact"
+      title={t('debug.captureDisabled')}
+      description={t('debug.captureDisabledHint')}
+    />
   {:else if !hasTraces}
     <EmptyState
-      fill
+      density="compact"
       title={t('debug.emptyHeader')}
       description={t('debug.emptyState')}
     />
@@ -510,7 +377,7 @@
     </div>
   {/if}
 
-  <details class="debug-probe-disclosure">
+  <details class="debug-probe-disclosure" hidden={!enabled}>
     <summary>{t('debug.modelProbe')}</summary>
     <div class="debug-probe-content"><DebugModelProbe bind:viewState /></div>
   </details>
@@ -521,34 +388,9 @@
     display: flex;
     min-width: 0;
     min-height: 0;
-    flex: 1;
     flex-direction: column;
-    overflow: hidden;
-    background: var(--bg);
-  }
-  .debug-header {
-    display: block;
-    flex-shrink: 0;
-  }
-  .debug-heading {
-    display: flex;
-    align-items: center;
     gap: 16px;
-    flex-wrap: wrap;
-  }
-  h2 {
-    margin: 0;
-    font-size: var(--fs-display);
-    font-weight: 600;
-    letter-spacing: -0.02em;
-    line-height: 1.2;
-    color: var(--text-hi);
-  }
-  .debug-header p {
-    margin: 6px 0 0;
-    color: var(--text-lo);
-    font-size: var(--fs-body-md);
-    line-height: 1.5;
+    container-type: inline-size;
   }
   .capture-state {
     color: var(--text-med);
@@ -577,13 +419,6 @@
     gap: 12px;
     flex-shrink: 0;
   }
-  .debug-local-note {
-    color: var(--text-med);
-    font-size: var(--fs-label-sm);
-  }
-  .debug-storage {
-    font-size: var(--fs-body-sm);
-  }
   summary {
     cursor: pointer;
     color: var(--text-med);
@@ -592,43 +427,14 @@
     outline: 2px solid var(--accent);
     outline-offset: 4px;
   }
-  .debug-storage[open] {
-    flex-basis: 100%;
-  }
-  .debug-storage-content {
-    display: grid;
-    gap: 10px;
-    padding: 12px 0 4px;
-    color: var(--text-med);
-    max-height: 240px;
-    overflow: auto;
-    max-width: 700px;
-    line-height: 1.6;
-  }
-  .debug-storage label {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    color: var(--text-hi);
-  }
-  .debug-storage input {
-    width: 88px;
-    padding: 6px 10px;
-    border: 1px solid var(--border-2);
-    border-radius: var(--r-md);
-    background: var(--field-surface);
-    color: var(--text-hi);
-    font-variant-numeric: tabular-nums;
-  }
   .storage-actions {
     display: flex;
-    justify-content: space-between;
     gap: 8px;
   }
   .debug-view__main {
     display: flex;
     min-height: 0;
-    flex: 1;
+    height: clamp(420px, 65vh, 900px);
     overflow: hidden;
     border: 1px solid var(--border);
     border-radius: var(--r-md);
@@ -642,12 +448,8 @@
     overflow: auto;
     padding-top: 12px;
   }
-  @media (max-width: 760px) {
-    .debug-view--inspecting .debug-header,
+  @container (max-width: 640px) {
     .debug-view--inspecting .debug-utilities {
-      display: none;
-    }
-    .debug-local-note {
       display: none;
     }
     .debug-view__main:not(.debug-view__main--selected)
@@ -656,6 +458,11 @@
     }
     .debug-view__main--selected :global(.debug-view__trace-panel) {
       display: none;
+    }
+    .debug-view__main :global(.debug-view__trace-panel) {
+      width: 100%;
+      flex: 1;
+      border-right: 0;
     }
   }
 </style>

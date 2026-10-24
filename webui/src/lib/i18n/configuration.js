@@ -96,7 +96,7 @@ export default Object.freeze({
     'Restore deleted Agents, Projects and Sessions or delete them for good, and choose how long vBot keeps them.',
   'settings.pages.system': 'System',
   'settings.pages.systemDescription':
-    'Server information, connections, and diagnostics.',
+    'Server information, access, and connections.',
   'settings.archive.title': 'Archive',
   'settings.archive.retentionTitle': 'Automatic deletion',
   'settings.archive.automatic': 'Delete archived items automatically',

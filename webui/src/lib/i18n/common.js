@@ -136,7 +136,6 @@ export default Object.freeze({
   'navigation.settings': 'Settings',
   'navigation.logs': 'Logs',
   'navigation.statistics': 'Statistics',
-  'navigation.debug': 'Debug',
   'navigation.collapseSidebar': 'Collapse sidebar',
   'navigation.expandSidebar': 'Expand sidebar',
   'nav.section.agents': 'Agents',

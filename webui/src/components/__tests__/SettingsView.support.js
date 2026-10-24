@@ -437,6 +437,10 @@ export function createSettingsRpcMock(options = {}) {
   };
 
   return async (method, params = {}) => {
+    if (method === 'debug.status') {
+      return { ...currentSettings.debug, trace_count: 0 };
+    }
+    if (method === 'debug.trace_list') return { traces: [] };
     if (method === 'settings.get') {
       return deepClone(currentSettings);
     }

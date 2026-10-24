@@ -330,6 +330,7 @@ describe('SettingsView', () => {
         'Secrets',
         'Archive',
         'System',
+        'Debug',
       ]);
       const expectedSections = {
         general: [
@@ -355,7 +356,8 @@ describe('SettingsView', () => {
         integrations: ['channels', 'extensions', 'credentials'],
         secrets: ['agent_secrets'],
         archive: ['archive_retention', 'archive_entries'],
-        system: ['server', 'access', 'debug'],
+        system: ['server', 'access'],
+        debug: ['debug_capture', 'debug_traces'],
       };
       for (const [pageId, sectionIds] of Object.entries(expectedSections)) {
         const page = document.querySelector(`[data-settings-page="${pageId}"]`);
@@ -663,7 +665,7 @@ describe('SettingsView', () => {
       expect(input.value).toBe('9');
     });
 
-    it('matches explanations behind a closed help hint and opens a setting hidden while off at its switch', async () => {
+    it('matches closed help hints and opens the Debug trace limit even while capture is off', async () => {
       const navigation = createStandaloneNavigation();
       await mountSettings({}, { navigation });
 
@@ -678,14 +680,13 @@ describe('SettingsView', () => {
         },
       ]);
 
-      // Debug is off, so its trace limit row is hidden. Enter opens the first
-      // result at the switch that reveals it.
+      // Retention can be configured before capture is enabled.
       const input = await search('trace limit');
       expect(searchResultRows()[0]).toEqual({
         title: t('debug.traceLimit'),
         location: searchLocation(
-          t('settings.pages.system'),
-          t('debug.settings'),
+          t('debug.title'),
+          t('debug.captureAndStorage'),
         ),
       });
       input.dispatchEvent(
@@ -693,19 +694,17 @@ describe('SettingsView', () => {
       );
       await new Promise((resolve) => setTimeout(resolve, 0));
       flushSync();
-      expect(navigation.place).toEqual(['system', 'debug']);
+      expect(navigation.place).toEqual(['debug', 'debug_capture']);
       expect(input.value).toBe('');
-      const debugSwitch = document.querySelector(
-        `button[role="switch"][aria-label="${t('debug.enabled')}"]`,
-      );
-      expect(document.activeElement).toBe(debugSwitch);
+      const traceLimit = document.querySelector('#settings-debug-trace-limit');
+      expect(document.activeElement).toBe(traceLimit);
       expect(
-        debugSwitch.closest('.s-row').classList.contains('settings-search-hit'),
+        traceLimit.closest('.s-row').classList.contains('settings-search-hit'),
       ).toBe(true);
       expect(
         document.querySelector('#settings-debug-trace-limit').closest('.s-row')
           .hidden,
-      ).toBe(true);
+      ).toBe(false);
     });
 
     it('ranks label matches above help and content matches', async () => {
@@ -714,7 +713,9 @@ describe('SettingsView', () => {
       const titles = searchResultRows().map((row) => row.title);
       // Document order puts the Debug switch, whose help mentions traces,
       // before the Trace limit.
-      expect(titles[0]).toBe(t('debug.traceLimit'));
+      expect(titles.indexOf(t('debug.traceLimit'))).toBeLessThan(
+        titles.indexOf(t('debug.enabled')),
+      );
       expect(titles).toContain(t('debug.enabled'));
     });
 

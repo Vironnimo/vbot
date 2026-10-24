@@ -15,7 +15,7 @@
 .settings-editor[hidden] {
   display: none;
 }
-/* A shown sub-page (an Archive entry) replaces its page's heading and other
+/* A shown sub-page (an Archive entry or Debug trace) replaces its page's heading and other
    sections, so its section starts the page. */
 .settings-page--sub-page > .settings-editor {
   margin-top: 0;

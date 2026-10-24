@@ -325,6 +325,7 @@ export function createSettingsPageNavigation(context) {
   }
 
   const archiveNavigation = subPageNavigation('archive');
+  const debugNavigation = subPageNavigation('debug');
 
   // Opening a sub-page, another one, or returning from one to its page.
   function isSubPageStep(previous, target) {
@@ -544,6 +545,9 @@ export function createSettingsPageNavigation(context) {
     },
     get archiveNavigation() {
       return archiveNavigation;
+    },
+    get debugNavigation() {
+      return debugNavigation;
     },
     get appliedPlaceKey() {
       return appliedPlaceKey;
