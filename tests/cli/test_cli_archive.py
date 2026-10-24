@@ -877,6 +877,12 @@ def test_a_permanent_deletion_left_pending_fails_and_names_the_purge_that_finish
             id="filters-only",
         ),
         pytest.param(
+            ("--port", "22340"),
+            "'vbot archive list --port 22340' shows the entries and their ids, then run "
+            "'vbot archive purge <entry-id>... --yes --port 22340'",
+            id="target",
+        ),
+        pytest.param(
             ("arc_7k2m9q4xw1ab", "--kind", "agent"),
             "--kind only apply with --all",
             id="filters-without-all",

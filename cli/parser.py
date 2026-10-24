@@ -349,11 +349,17 @@ def _check_archive_purge_selection(
         if getattr(args, name) is not None
         for option in (f"--{name}", getattr(args, name))
     ]
-    listing = format_command(("vbot", "archive", "list", *filters))
+    # The suggested commands reach the server this one named.
+    target = tuple(
+        item
+        for name, value in getattr(args, "_target_arguments", {}).items()
+        for item in (f"--{name.replace('_', '-')}", str(value))
+    )
+    listing = format_command(("vbot", "archive", "list", *filters, *target))
     by_ids = (
-        format_command(("vbot", "archive", "purge", *args.entry_ids, "--yes"))
+        format_command(("vbot", "archive", "purge", *args.entry_ids, "--yes", *target))
         if args.entry_ids
-        else "vbot archive purge <entry-id>... --yes"
+        else " ".join(("vbot archive purge <entry-id>... --yes", format_command(target))).strip()
     )
     if args.all and args.entry_ids:
         parser.error(
