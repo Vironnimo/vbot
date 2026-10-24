@@ -499,12 +499,9 @@
                     class="cron-expand"
                     aria-expanded={Boolean(expandedJobs[job.id])}
                     aria-controls={`cron-runs-${job.id}`}
-                    aria-label={t(
-                      expandedJobs[job.id]
-                        ? 'cron.runs.collapse'
-                        : 'cron.runs.expand',
-                      { name: job.name },
-                    )}
+                    aria-label={expandedJobs[job.id]
+                      ? t('cron.runs.collapse', { name: job.name })
+                      : t('cron.runs.expand', { name: job.name })}
                     onclick={() =>
                       (expandedJobs[job.id] = !expandedJobs[job.id])}
                   >
@@ -549,11 +546,9 @@
                           <span
                             class="cron-item-alert"
                             role="img"
-                            aria-label={t(
-                              job.unread_alert
-                                ? 'cron.alert.unread'
-                                : 'notifications.unread',
-                            )}
+                            aria-label={job.unread_alert
+                              ? t('cron.alert.unread')
+                              : t('notifications.unread')}
                             data-testid={`cron-item-alert-${job.id}`}
                           ></span>
                         {/if}
