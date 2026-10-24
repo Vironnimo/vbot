@@ -132,7 +132,8 @@ class BoundaryContext:
     ``{workspace}`` (a rule using a missing one is dropped). The Workspace (an
     Identity Agent's own) is readable and writable under every layer, wherever
     the Session works; only deny rules and the protected locations below refuse
-    there. ``data_dir`` is protected except for the Workspace, the Scratch Area
+    there. ``data_dir`` is protected except for the Workspace (only within the
+    Agent's own folder beside ``agent_config``), the Scratch Area
     and ``readable_dirs`` (vBot-owned folders this Session may read, such as its
     Skill directories and artifact folders); ``agent_config`` (the Agent's ``agent.json``) is never
     readable or writable, ``install_dirs`` (installation and interpreter) never
@@ -179,6 +180,7 @@ class PermissionBoundary:
         "_home",
         "_data_dirs",
         "_workspace",
+        "_own_data",
         "_scratch",
         "_readable",
         "_agent_config",
@@ -210,6 +212,13 @@ class PermissionBoundary:
             _Area.of(os.fspath(folder), windows=windows) for folder in context.readable_dirs
         )
         self._agent_config = _Area.optional(context.agent_config, windows=windows)
+        # Inside the data directory the Workspace counts only within the Agent's
+        # own folder, so a Workspace that contains the data directory opens none of it.
+        self._own_data: _Area | None = None
+        if context.agent_config is not None:
+            config = split_lexical(os.fspath(context.agent_config), windows=windows)
+            own = LexicalPath(config.root, config.segments[:-1]).text
+            self._own_data = _Area.of(own, windows=windows)
         self._rule_files = _Area.union(
             (*context.rule_files, *(file for layer in layers for file in layer.rule_files)),
             windows=windows,
@@ -715,11 +724,12 @@ class PermissionBoundary:
 
     def _data_dir_allowed(self, key: str, access: PathAccess) -> bool:
         """Whether ``key`` lies in a part of the data directory ``access`` may reach."""
+        own = _contains(self._workspace, key) and _contains(self._own_data, key)
         if access == "write":
-            return _contains(self._scratch, key) or _contains(self._workspace, key)
+            return own or _contains(self._scratch, key)
         return (
-            _contains(self._scratch, key)
-            or _contains(self._workspace, key)
+            own
+            or _contains(self._scratch, key)
             or any(area.contains(key) for area in self._readable)
         )
 

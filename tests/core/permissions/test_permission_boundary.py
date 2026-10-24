@@ -296,6 +296,13 @@ def test_the_workspace_is_writable_wherever_the_session_works(area: Area) -> Non
     assert refusal is not None and refusal.reason == "deny_rule"
     refusal = child.check_path(area.path("{workspace}/MEMORY.md"), "write")
     assert refusal is not None and refusal.location == "data_dir"
+    # A Workspace around the data directory opens none of it.
+    around = area.boundary(rules, workspace=area.root)
+    assert around.check_path(str(area.outside / "notes.md"), "write") is None
+    for target in (area.data / "settings.json", other.parent / "agent.json"):
+        for access in ("read", "write"):
+            refusal = around.check_path(str(target), access)
+            assert refusal is not None and refusal.location == "data_dir"
 
 
 def test_the_files_rules_come_from_stay_readable_but_unwritable(area: Area) -> None:
