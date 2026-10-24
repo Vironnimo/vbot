@@ -22,7 +22,8 @@ from core.database import (
     create_data_snapshot,
     restore_data_snapshot,
 )
-from core.sessions import ChatSession, ChatSessionManager
+from core.sessions import ChatSession, ChatSessionManager, SessionAddress
+from core.statistics import index as index_module
 from core.statistics.index import (
     SESSION_FACT_TABLES,
     IndexView,
@@ -198,6 +199,45 @@ def test_persisted_index_serves_every_service_and_reads_only_appended_messages(
     assert reads == []
     assert _runs(report) == 2
     assert _run_input_tokens(report) == 15
+
+
+@pytest.mark.parametrize("moved", [False, True])
+def test_scoped_reads_hydrate_only_selected_sessions_and_their_previous_addresses(
+    manager: ChatSessionManager,
+    statistics: StatisticsFactory,
+    index: StatisticsIndex,
+    monkeypatch: pytest.MonkeyPatch,
+    moved: bool,
+) -> None:
+    selected = manager.create("main", session_id="selected")
+    for number in range(8):
+        manager.create("main", session_id=f"unrelated-{number}")
+    statistics(index=index).report()
+    address = selected.address
+    if moved:
+        address = SessionAddress(None, "other", selected.id)
+        asyncio.run(manager.move(selected.address, address))
+    hydrated = []
+    original = index_module._StoredSession
+
+    def record(**fields):
+        hydrated.append(fields["generation_id"])
+        return original(**fields)
+
+    monkeypatch.setattr(index_module, "_StoredSession", record)
+    scope = StatisticsScope(None, address.agent_id, address.agent_id, ({"id": selected.id},))
+
+    def inspect(view: IndexView) -> None:
+        assert len(view.sessions) == 1
+        rows = view.connection.execute(
+            "SELECT agent_id FROM stat_sessions WHERE session_id = ?", (selected.id,)
+        ).fetchall()
+        assert [tuple(row) for row in rows] == [(address.agent_id,)]
+        assert view.connection.execute("SELECT COUNT(*) FROM stat_sessions").fetchone()[0] == 9
+
+    index.read(manager, (scope,), inspect, prune=False)
+
+    assert hydrated == [selected.generation_id]
 
 
 def test_metadata_change_updates_index_without_loading_transcript(
