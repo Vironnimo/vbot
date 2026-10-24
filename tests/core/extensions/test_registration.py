@@ -15,9 +15,10 @@ import inspect
 import logging
 import sys
 import threading
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import pytest
 
@@ -520,3 +521,66 @@ async def test_cancelling_lifecycle_caller_cancels_the_active_callback(tmp_path:
     with pytest.raises(asyncio.CancelledError):
         await firing
     await active.finished.wait()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("synchronous", [False, True])
+async def test_timed_out_callback_rejects_owner_until_its_work_settles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, synchronous: bool
+) -> None:
+    root = tmp_path / "extensions"
+    body = (
+        "def startup():\n    loop.call_soon_threadsafe(entered.set)\n    release.wait()\n"
+        if synchronous
+        else "async def startup():\n"
+        "    entered.set()\n"
+        "    while not release.is_set():\n"
+        "        try:\n"
+        "            await release.wait()\n"
+        "        except asyncio.CancelledError:\n"
+        "            pass\n"
+    )
+    write_extension(
+        root,
+        "stuck_owner",
+        "import asyncio, threading\n"
+        "loop = None\n"
+        "entered = asyncio.Event()\n"
+        f"release = {'threading' if synchronous else 'asyncio'}.Event()\n"
+        "calls = []\n"
+        f"{body}"
+        "def hook(ctx, **payload):\n"
+        "    calls.append('hook')\n"
+        "def register(api):\n"
+        "    api.on_startup(startup)\n"
+        "    api.on('run_start', hook)\n",
+    )
+    registry = await ExtensionRegistry.aload(root)
+    module = sys.modules["vbot_ext.stuck_owner"]
+    module.__dict__["loop"] = asyncio.get_running_loop()
+
+    async def wait_for_callback(
+        tasks: Iterable[asyncio.Task[Any]], *, timeout: float | None = None
+    ) -> tuple[set[asyncio.Task[Any]], set[asyncio.Task[Any]]]:
+        if timeout is not None:
+            # Expire only after the handler entered; thread startup speed does
+            # not decide whether this test exercises detachment or admission.
+            await module.entered.wait()
+            timeout = 0
+        return await asyncio.wait(tasks, timeout=timeout)
+
+    monkeypatch.setattr(extension_callbacks, "_wait", wait_for_callback)
+    before = set(extension_callbacks._detached_tasks)
+    startup = asyncio.create_task(registry.fire_startup())
+    try:
+        await module.entered.wait()
+        await startup
+        await registry.dispatch_run_start(hook_context(), session_id="s", agent_id="a")
+        assert module.calls == []
+    finally:
+        module.release.set()
+        await startup
+        detached = extension_callbacks._detached_tasks - before
+        await asyncio.gather(*detached, return_exceptions=True)
+    await registry.dispatch_run_start(hook_context(), session_id="s", agent_id="a")
+    assert module.calls == ["hook"]

@@ -732,6 +732,7 @@ class CommandDispatcher:
                 registered.handler,
                 extension_context,
                 argument,
+                extension_name=registered.extension_name,
             )
             validate_extension_outcome(
                 result,

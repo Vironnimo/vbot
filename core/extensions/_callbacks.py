@@ -5,15 +5,23 @@ from __future__ import annotations
 import asyncio
 import inspect
 import time
+import weakref
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import Any
 
-from core.extensions._declarations import HookContext, HookHandler, LifecycleHandler
+from core.extensions._declarations import (
+    ExtensionUnavailableError,
+    HookContext,
+    HookHandler,
+    LifecycleHandler,
+)
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
 
 _LOGGER = get_logger("extensions")
 _EXTENSION_WORKER_LIMIT = 8
+_OWNER_WORKER_LIMIT = _EXTENSION_WORKER_LIMIT // 2
 _SLOW_EXTENSION_HANDLER_SECONDS = 1.0
 # Startup, shutdown and quiesce each get this long before their caller moves on.
 _LIFECYCLE_HANDLER_TIMEOUT_SECONDS = 30.0
@@ -22,6 +30,36 @@ _EXTENSION_WORKERS = BoundedWorkerPool(
     max_workers=_EXTENSION_WORKER_LIMIT,
 )
 _detached_tasks: set[asyncio.Task[Any]] = set()
+_wait = asyncio.wait
+
+
+@dataclass
+class _OwnerCallbacks:
+    workers: asyncio.Semaphore = field(
+        default_factory=lambda: asyncio.Semaphore(_OWNER_WORKER_LIMIT)
+    )
+    users: int = 0
+    detached: set[asyncio.Task[Any]] = field(default_factory=set)
+
+
+_owner_callbacks: weakref.WeakKeyDictionary[
+    asyncio.AbstractEventLoop, dict[str, _OwnerCallbacks]
+] = weakref.WeakKeyDictionary()
+
+
+def _owner_state(extension_name: str) -> _OwnerCallbacks:
+    owners = _owner_callbacks.setdefault(asyncio.get_running_loop(), {})
+    return owners.setdefault(extension_name, _OwnerCallbacks())
+
+
+def _forget_owner(extension_name: str, state: _OwnerCallbacks) -> None:
+    if not state.users and not state.detached:
+        _owner_callbacks[asyncio.get_running_loop()].pop(extension_name, None)
+
+
+def _check_owner_available(state: _OwnerCallbacks) -> None:
+    if any(not task.done() for task in state.detached):
+        raise ExtensionUnavailableError("An earlier Extension callback is still running")
 
 
 class ExtensionHandlerTimeoutError(TimeoutError):
@@ -34,20 +72,32 @@ class ExtensionHandlerTimeoutError(TimeoutError):
 async def invoke_extension_handler(
     handler: Callable[..., Any],
     *arguments: Any,
+    extension_name: str,
     **keyword_arguments: Any,
 ) -> Any:
     """Invoke one sync or async Extension callback without loop-blocking sync work."""
-    if inspect.iscoroutinefunction(handler):
-        result = handler(*arguments, **keyword_arguments)
-    else:
-        result = await _EXTENSION_WORKERS.run(
-            handler,
-            *arguments,
-            **keyword_arguments,
-        )
-    if inspect.isawaitable(result):
-        return await result
-    return result
+    state = _owner_state(extension_name)
+    state.users += 1
+    try:
+        _check_owner_available(state)
+        if inspect.iscoroutinefunction(handler):
+            result = handler(*arguments, **keyword_arguments)
+        else:
+            # One owner cannot occupy the whole shared pool. Keep its permit
+            # until an admitted worker really settles, including cancellation.
+            async with state.workers:
+                _check_owner_available(state)
+                result = await _EXTENSION_WORKERS.run(
+                    handler,
+                    *arguments,
+                    **keyword_arguments,
+                )
+        if inspect.isawaitable(result):
+            return await result
+        return result
+    finally:
+        state.users -= 1
+        _forget_owner(extension_name, state)
 
 
 async def invoke_lifecycle_handler(
@@ -85,9 +135,13 @@ async def invoke_isolated_handler(
     **keyword_arguments: Any,
 ) -> Any:
     """Keep callback self-cancellation separate from cancellation of its caller."""
-    task = asyncio.create_task(invoke_extension_handler(handler, *arguments, **keyword_arguments))
+    task = asyncio.create_task(
+        invoke_extension_handler(
+            handler, *arguments, extension_name=extension_name, **keyword_arguments
+        )
+    )
     try:
-        done, _ = await asyncio.wait({task}, timeout=timeout_seconds)
+        done, _ = await _wait({task}, timeout=timeout_seconds)
     except asyncio.CancelledError:
         task.cancel()
         detach_extension_task(task, extension_name=extension_name, description=description)
@@ -109,9 +163,13 @@ def detach_extension_task(
 ) -> None:
     """Keep abandoned Extension work referenced and log its failure after detachment."""
     _detached_tasks.add(task)
+    state = _owner_state(extension_name)
+    state.detached.add(task)
 
     def finished(completed: asyncio.Task[Any]) -> None:
         _detached_tasks.discard(completed)
+        state.detached.discard(completed)
+        _forget_owner(extension_name, state)
         if completed.cancelled():
             return
         try:

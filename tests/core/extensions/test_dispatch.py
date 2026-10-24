@@ -20,6 +20,7 @@ from typing import Any
 
 import pytest
 
+import core.extensions._callbacks as extension_callbacks
 from core.extensions import Deny, ExtensionRegistry, HookContext, Modify, Replace
 from tests.core.extensions.extension_test_support import (
     RecordingResponder,
@@ -115,6 +116,50 @@ async def test_observer_events_run_every_handler_in_load_order_and_isolate_failu
     await empty.dispatch_run_start(_ctx(), session_id="s", agent_id="a")
     await empty.dispatch_run_end(_ctx(), session_id="s", agent_id="a", outcome="success")
     _ctx().add_note("dropped")
+
+
+@pytest.mark.asyncio
+async def test_blocked_sync_callbacks_reserve_worker_capacity_for_other_owners() -> None:
+    loop = asyncio.get_running_loop()
+    entered = asyncio.Event()
+    release = threading.Event()
+    lock = threading.Lock()
+    active = 0
+    maximum = 0
+    limit = extension_callbacks._OWNER_WORKER_LIMIT
+
+    def blocked(_ctx: HookContext, **_payload: Any) -> None:
+        nonlocal active, maximum
+        with lock:
+            active += 1
+            maximum = max(maximum, active)
+            if active == limit:
+                loop.call_soon_threadsafe(entered.set)
+        try:
+            release.wait()
+        finally:
+            with lock:
+                active -= 1
+
+    calls: list[str] = []
+    blocked_registry = ExtensionRegistry()
+    blocked_registry.install_handler("blocked", "run_start", blocked)
+    healthy = ExtensionRegistry()
+    healthy.install_handler("healthy", "run_start", lambda *_args, **_kwargs: calls.append("ok"))
+    tasks = [
+        asyncio.create_task(
+            blocked_registry.dispatch_run_start(_ctx(), session_id="s", agent_id="a")
+        )
+        for _ in range(extension_callbacks._EXTENSION_WORKER_LIMIT)
+    ]
+    try:
+        await entered.wait()
+        await asyncio.wait_for(healthy.dispatch_run_start(_ctx(), session_id="s", agent_id="a"), 1)
+        assert calls == ["ok"]
+        assert maximum == limit
+    finally:
+        release.set()
+        await asyncio.gather(*tasks)
 
 
 @pytest.mark.asyncio
