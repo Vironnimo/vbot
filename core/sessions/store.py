@@ -281,10 +281,12 @@ class SessionStore:
             )
         )
 
-    def archive(self, address: SessionAddress) -> ArchiveEntryRef:
+    def archive(
+        self, address: SessionAddress, *, facts: Mapping[str, Any] | None = None
+    ) -> ArchiveEntryRef:
         """Archive one live Session with its review forks as its own ``session`` archive entry."""
         return self._execute_write(
-            lambda connection: _store_archive.archive_session(connection, address, None)
+            lambda connection: _store_archive.archive_session(connection, address, facts)
         )
 
     def review_forks(
@@ -506,6 +508,7 @@ class SessionStore:
         subagent_reply_target: str | None = None,
         since: SessionReadCursor | None = None,
         accessor_input_ids: Sequence[str] = (),
+        metadata_update: JsonObject | None = None,
     ) -> SessionReadBatch | None:
         """Append Messages in one transaction.
 
@@ -513,6 +516,8 @@ class SessionStore:
         id. *seen_skills* records the Skills a persisted announcement named in
         the same transaction. *subagent_reply_target* selects the destination of
         later answers in a linked Session, atomically with this input.
+        *metadata_update* merges partial metadata in the same transaction,
+        preserving other fields and applying the usual metadata validation.
         With *since*, the transaction also selects every entry after
         that cursor (this append and any concurrent writer's), so the caller
         needs no follow-up read; ``None`` then means the cursor cannot be
@@ -548,6 +553,10 @@ class SessionStore:
                 )
             if steering is not None:
                 _store_accessor_inputs.commit_steering(connection, steering)
+            if metadata_update:
+                _store_mutations.mutate_metadata(
+                    connection, address, lambda metadata: metadata.update(metadata_update)
+                )
             return self._select_since(connection, address, since)
 
         delta = self._execute_write(_fn, patience_s=TRANSCRIPT_WRITE_PATIENCE_S)

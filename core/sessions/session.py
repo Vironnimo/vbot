@@ -106,6 +106,7 @@ class ChatSession:
         subagent_reply_target: str | None = None,
         since: SessionReadCursor | None = None,
         accessor_input_ids: Sequence[str] = (),
+        metadata_update: JsonObject | None = None,
     ) -> SessionReadBatch | None:
         """Append *messages*; see ``SessionStore.append_messages`` for the options."""
         delta = self._store.append_messages(
@@ -118,6 +119,7 @@ class ChatSession:
             subagent_reply_target=subagent_reply_target,
             since=since,
             accessor_input_ids=accessor_input_ids,
+            metadata_update=metadata_update,
         )
         self._appended(messages)
         return delta
@@ -221,8 +223,14 @@ class ChatSession:
         subagent_reply_target: str | None = None,
         since: SessionReadCursor | None = None,
         accessor_input_ids: Sequence[str] = (),
+        metadata_update: JsonObject | None = None,
     ) -> SessionReadBatch | None:
-        if not messages and seen_skills is None and subagent_reply_target is None:
+        if (
+            not messages
+            and seen_skills is None
+            and subagent_reply_target is None
+            and not metadata_update
+        ):
             return None
         return await self._store.run_async(
             lambda: self.append_many(
@@ -232,6 +240,7 @@ class ChatSession:
                 subagent_reply_target=subagent_reply_target,
                 since=since,
                 accessor_input_ids=accessor_input_ids,
+                metadata_update=metadata_update,
             )
         )
 

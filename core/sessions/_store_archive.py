@@ -906,6 +906,16 @@ def unsettled(connection: sqlite3.Connection) -> tuple[ArchiveEntry, ...]:
     return _entries(connection, sorted(rows, key=lambda row: int(row["entry_key"])))
 
 
+def pending_purges(connection: sqlite3.Connection) -> tuple[ArchiveEntry, ...]:
+    """Started purges and expired Ephemeral Session entries awaiting their purge."""
+    rows = connection.execute(
+        f"SELECT {_ENTRY_COLUMNS} FROM archive_entries AS e "
+        "WHERE e.state = 'purging' OR (e.state = 'archived' AND e.kind = 'session' "
+        "AND json_extract(e.facts_json, '$.ephemeral_expiry') = 1) ORDER BY e.entry_key"
+    ).fetchall()
+    return _entries(connection, rows)
+
+
 def due(
     connection: sqlite3.Connection, before: str, after: ArchiveEntry | None, limit: int
 ) -> tuple[ArchiveEntry, ...]:

@@ -12,7 +12,8 @@ worker and never on the Event Loop. Each sweep first deletes the Ephemeral
 Sessions that expired (``ArchiveService.expire_ephemeral_sessions``). The first
 sweep runs a minute after start, later ones every hour, and one runs at once
 when the period changes or a manual purge left an entry pending. It then
-continues entries a stopped or failed purge left ``purging``, then purges due
+continues entries a stopped or failed purge left ``purging`` and expired
+Ephemeral Session entries whose purge never started, then purges due
 entries oldest first, one entry per worker call so manual purges never wait
 behind a whole sweep. A stop request ends the sweep before the next Session or
 file it would delete; the entry stays ``purging`` and the next sweep continues
@@ -36,6 +37,7 @@ from core.archive import _purge
 from core.archive.errors import ArchiveRetentionUnknownError
 from core.sessions import (
     ARCHIVE_KIND_FILES,
+    ARCHIVE_KIND_SESSION,
     ARCHIVE_ORIGIN_RECOVERED,
     ARCHIVE_STATE_ARCHIVED,
     ARCHIVE_STATE_PURGING,
@@ -85,6 +87,14 @@ def may_hold_user_folders(entry: ArchiveEntry) -> bool:
     every matching entry deletes one; only a purge that names it does.
     """
     return entry.kind == ARCHIVE_KIND_FILES or bool(entry.facts.get("user_folders"))
+
+
+def _is_ephemeral_expiry(entry: ArchiveEntry) -> bool:
+    return (
+        entry.state == ARCHIVE_STATE_ARCHIVED
+        and entry.kind == ARCHIVE_KIND_SESSION
+        and entry.facts.get("ephemeral_expiry") is True
+    )
 
 
 def purge_at(entry: ArchiveEntry, retention_days: int | None) -> str | None:
@@ -194,10 +204,12 @@ class RetentionSweeper:
     async def _sweep(self) -> None:
         services = self._services
         _LOGGER.debug("Archive retention sweep started")
+        # Snapshot retries before new expiries, so a skipped purge is tried at
+        # most once per sweep rather than immediately retried in this sweep.
+        purging = await _purge.PURGE_WORKERS.run(_pending_purge_ids, services)
         expired = await self._expire_ephemeral()
         if expired:
             _LOGGER.info("Deleted %d expired Ephemeral Sessions", expired)
-        purging = await _purge.PURGE_WORKERS.run(_purging_ids, services)
         for entry_id in purging:
             if self._stopping.is_set():
                 return
@@ -232,12 +244,8 @@ class RetentionSweeper:
             self._notify()
 
 
-def _purging_ids(services: ArchiveServices) -> tuple[str, ...]:
-    return tuple(
-        entry.entry_id
-        for entry in services.sessions.archive_ledger.unsettled()
-        if entry.state == ARCHIVE_STATE_PURGING
-    )
+def _pending_purge_ids(services: ArchiveServices) -> tuple[str, ...]:
+    return tuple(entry.entry_id for entry in services.sessions.archive_ledger.pending_purges())
 
 
 def _due_page(
@@ -257,18 +265,22 @@ def _due_page(
     due = tuple(
         entry.entry_id
         for entry in entries
-        if (ends := purge_at(entry, days)) is not None and ends <= deadline
+        if not _is_ephemeral_expiry(entry)
+        and (ends := purge_at(entry, days)) is not None
+        and ends <= deadline
     )
     return due, entries[-1] if len(entries) == _DUE_PAGE else None
 
 
 def _purge_if_due(services: ArchiveServices, entry_id: str, stopping: threading.Event) -> bool:
-    """Purge ``entry_id`` when it is still ``purging`` or due now; whether it changed."""
+    """Purge ``entry_id`` when deletion is pending or retention is due; whether it changed."""
     entry = services.sessions.archive_ledger.entry(entry_id)
     if entry is None:
         return False
     if entry.state == ARCHIVE_STATE_PURGING:
         reason = REASON_RESUMED
+    elif _is_ephemeral_expiry(entry):
+        reason = "ephemeral"
     else:
         try:
             days = services.retention_days()

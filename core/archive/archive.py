@@ -207,7 +207,9 @@ class ArchiveService:
                 break
             try:
                 async with services.automation.lock:
-                    outcome = await self.archive_session(address, actor=_EPHEMERAL_ACTOR)
+                    outcome = await self.archive_session(
+                        address, actor=_EPHEMERAL_ACTOR, ephemeral_expiry=True
+                    )
             except (
                 ArchiveSubjectInUseError,
                 RunAdmissionBlockedError,
@@ -232,7 +234,8 @@ class ArchiveService:
                     exc_info=True,
                 )
                 continue
-            # The retention sweep continues a pending purge like any other.
+            # The archive transaction records expiry before any interruptible cleanup.
+            # A later sweep retries it even if the purge never started.
             try:
                 purge = await self.purge(
                     [outcome.entry_id], reason=_EPHEMERAL_ACTOR, actor=_EPHEMERAL_ACTOR
@@ -441,7 +444,7 @@ class ArchiveService:
         return reviews
 
     async def archive_session(
-        self, address: SessionAddress, *, actor: str = "rpc"
+        self, address: SessionAddress, *, actor: str = "rpc", ephemeral_expiry: bool = False
     ) -> SessionArchiveOutcome:
         """Move one live Session with its live review forks into a new entry.
 
@@ -452,6 +455,8 @@ class ArchiveService:
         :class:`ArchiveSubjectInUseError` while a live automation runs in the
         Session or a review fork and with ``RunAdmissionBlockedError`` while one
         of them has Runs, such as a review that is still running.
+        ``ephemeral_expiry`` records the expiry intent with the archive commit,
+        so the sweep retries permanent deletion after an interrupted cleanup.
         """
         services = self._services
         sessions = services.sessions
@@ -500,7 +505,9 @@ class ArchiveService:
             scratch_roots = await services.scratch_areas.roots_for_archive(members)
             # Archiving the rows and moving the current pointer is one unit for data snapshots.
             async with services.snapshot_barrier.compound_mutation_async():
-                ref = await sessions.archive(address)
+                ref = await sessions.archive(
+                    address, facts={"ephemeral_expiry": True} if ephemeral_expiry else None
+                )
                 archived_members = await sessions.run_async(
                     sessions.archive_ledger.members, ref.entry_key, limit=None
                 )

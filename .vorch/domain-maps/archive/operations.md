@@ -4,6 +4,8 @@ Task-gated detail for `archive.md`: the order, outcomes and checks of archiving 
 
 ## Entry facts
 
+`ephemeral_expiry: true` marks a Session entry created by expiry; it commits with the archived Session states, and the sweep retries its permanent deletion regardless of ordinary retention (`archive/purge-and-retention.md`).
+
 Facts (`facts_json`, writers merge and keep unknown keys): `name` and `payload_format` (agent, project: the integer format version, `"older"` or `"newer"`; decides restorability without reading payloads), `roster_index`, `grants` (`[{agent_id, agent_created_at?, index, target_created_at?}]`, recorded before any config is written and merged on re-run; restoration requires the same holder creation stamp, and unstamped grants are skipped; bound grants also retain their original target identity, `agent/delegation.md`), `workspace` (`{path, external, moved}`) and `root_project_id` (agent), `cwd`, `working_project_provenance` (true when archive captured Working Project associations) and `unrooted_agents` (`[{agent_id, agent_created_at?, workspace_before, workspace_reset}]`, written before each unroot) (project), `reason` (owner_group: `extension` or `extension_removed`), `restore_plan` (`{target_id, strip_channel_keys, workspace?, root_project_id?, workspace_destination?}` while `restoring`/`restored`; startup recovery adds `live_path` and `problem` when an interrupted restore cannot finish), `backfill` (`{match: "timestamp"|"none", tree_mtime}`), `user_folders` (backfill: the recorded tree paths that may be folders the user owns rather than copies vBot made - every legacy `files` tree, and a legacy moved Workspace whose folder lay outside the data directory).
 
 ## Archive outcomes
