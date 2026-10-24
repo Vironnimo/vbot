@@ -512,9 +512,13 @@ class ChatSessionManager:
         """Blob references retained by every live, archived and superseded history entry."""
         return self._store.referenced_attachment_ids()
 
-    def unreferenced_attachment_ids(self) -> tuple[str, ...]:
-        """Collectable blobs, excluding snapshots; quiescent lifecycle boundaries only."""
-        return self._store.unreferenced_attachment_ids()
+    def unreferenced_attachment_ids(self, *, additional: Sequence[str] = ()) -> tuple[str, ...]:
+        """Unowned known or supplied blobs, excluding retained snapshots.
+
+        Only for quiescent lifecycle boundaries. Attachment collection supplies
+        expired uploads through *additional*, including ones never admitted.
+        """
+        return self._store.unreferenced_attachment_ids(additional=additional)
 
     def forget_collected_attachment_ids(self, ids: Sequence[str]) -> None:
         """Acknowledge only blobs collection successfully removed."""
