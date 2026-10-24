@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 import core.channels.engine as engine_module
+import core.channels.state as state_module
 from core.channels import ChecklistItem, checklist_keyboard
 from core.channels.adapter import RunButtonBinding, bound_run_callback_data
 from core.channels.state import ChannelStateStore
@@ -20,7 +21,11 @@ from core.database import DatabaseUnavailableError
 from core.extensions import InteractionButton, InteractionEvent
 from core.runs import ChatRunManager
 from core.sessions import SessionAddress
-from core.utils.timestamps import utc_now_timestamp
+from core.utils.timestamps import (
+    format_canonical_timestamp,
+    parse_canonical_timestamp,
+    utc_now_timestamp,
+)
 
 from .engine_test_support import (
     CHANNEL_REPLY_SURFACE,
@@ -234,8 +239,10 @@ async def test_a_submitted_checklist_reports_only_the_items_changed_since_sendin
 
 @pytest.mark.asyncio
 async def test_bound_tap_repoints_conversation_and_orders_followup_in_origin_session(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    now = parse_canonical_timestamp(utc_now_timestamp())
+    monkeypatch.setattr(state_module, "utc_now_timestamp", lambda: format_canonical_timestamp(now))
     storage = channel_state(tmp_path)
     trigger_mock = AsyncMock(
         side_effect=[
@@ -271,6 +278,11 @@ async def test_bound_tap_repoints_conversation_and_orders_followup_in_origin_ses
 
     assert await engine.trigger_interaction_reply(conversation, event) == "already_handled"
     assert len(trigger_mock.await_args_list) == 2
+    now += state_module.RUN_BUTTON_RETENTION
+    assert storage.prune_run_button_bindings() == 1
+    assert await engine.trigger_interaction_reply(conversation, event) == "unavailable"
+    assert len(trigger_mock.await_args_list) == 2
+    assert storage.active_session_id("tg-assistant", SESSION_ID) == "origin-session"
     await engine.stop()
 
 

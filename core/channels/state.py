@@ -51,7 +51,11 @@ from core.channels.config import (
 from core.chat.messages import GroupRole
 from core.config_validation import JsonObject
 from core.database import Database, canonical_database_path, open_database
-from core.utils.timestamps import format_canonical_timestamp, utc_now_timestamp
+from core.utils.timestamps import (
+    format_canonical_timestamp,
+    parse_canonical_timestamp,
+    utc_now_timestamp,
+)
 
 # Socket platforms may redeliver recent events after a reconnect; remembering the
 # newest receipts per Channel bounds both the dedupe window and the table.
@@ -60,6 +64,9 @@ RECEIVED_MESSAGE_WINDOW = 4096
 # A reply still owed after this long, for example while its Channel was disabled,
 # no longer fits the conversation and is dropped instead of sent.
 PENDING_REPLY_RETENTION_SECONDS = 7 * 24 * 3600
+
+RUN_BUTTON_RETENTION = timedelta(days=30)
+RUN_BUTTON_PRUNE_BATCH_SIZE = 256
 
 _CONVERSATION_KINDS = frozenset({"direct", "group"})
 
@@ -89,6 +96,8 @@ class ChannelStateStore:
         # older commit can never install its roles over a newer one.
         self._access_lock = threading.Lock()
         self._roles: dict[str, _AccessRoles] = {}
+        self._run_button_claims_lock = threading.Lock()
+        self._run_button_claims: dict[tuple[str, str], int] = {}
         with database.read() as connection:
             self._roles = _load_all_roles(connection)
 
@@ -526,9 +535,12 @@ class ChannelStateStore:
         platform_target: str,
         thread_id: str | None,
     ) -> RunButtonClaim:
-        """Consume a binding once, when its original target and thread tap a Run button."""
+        """Consume a binding once, when its original target and thread tap a Run button.
+
+        A successful claim retains it until ``finish_run_button_claim``. A
+        rejected admission restores the binding before releasing that lease.
+        """
         normalized_id = _normalize_channel_id(channel_id)
-        consumed_at = utc_now_timestamp()
 
         def claim(connection: sqlite3.Connection) -> RunButtonClaim:
             binding = _run_button_binding(connection, normalized_id, binding_id)
@@ -539,7 +551,7 @@ class ChannelStateStore:
             claimed = connection.execute(
                 "UPDATE channel_run_buttons SET consumed_at = ? "
                 "WHERE channel_id = ? AND binding_id = ? AND consumed_at IS NULL",
-                (consumed_at, normalized_id, binding_id),
+                (utc_now_timestamp(), normalized_id, binding_id),
             ).rowcount
             if claimed != 1:
                 return RunButtonClaim(status="consumed", binding=binding)
@@ -556,7 +568,56 @@ class ChannelStateStore:
                 ),
             )
 
-        return self._database.write(claim)
+        key = (normalized_id, binding_id)
+        with self._run_button_claims_lock:
+            self._run_button_claims[key] = self._run_button_claims.get(key, 0) + 1
+        try:
+            result = self._database.write(claim)
+        except BaseException:
+            self.finish_run_button_claim(normalized_id, binding_id)
+            raise
+        if result.status != "claimed":
+            self.finish_run_button_claim(normalized_id, binding_id)
+        return result
+
+    def finish_run_button_claim(self, channel_id: str, binding_id: str) -> None:
+        """Release a retention lease after admitted work or compensation settles; no I/O."""
+        key = (_normalize_channel_id(channel_id), binding_id)
+        with self._run_button_claims_lock:
+            remaining = self._run_button_claims.get(key, 0) - 1
+            if remaining > 0:
+                self._run_button_claims[key] = remaining
+            else:
+                self._run_button_claims.pop(key, None)
+
+    def prune_run_button_bindings(self) -> int:
+        """Remove a bounded batch of consumed bindings whose work is complete and expired.
+
+        Pending bindings do not expire. Owed replies retain their binding through
+        Run completion and delivery; an in-flight tap retains it through admission
+        or compensation. Missing old bindings remain unavailable to duplicate taps.
+        """
+        cutoff = format_canonical_timestamp(
+            parse_canonical_timestamp(utc_now_timestamp()) - RUN_BUTTON_RETENTION
+        )
+        with self._run_button_claims_lock:
+            active = json.dumps(sorted(self._run_button_claims))
+
+        def prune(connection: sqlite3.Connection) -> int:
+            return connection.execute(
+                "DELETE FROM channel_run_buttons WHERE (channel_id, binding_id) IN ("
+                "SELECT b.channel_id, b.binding_id FROM channel_run_buttons AS b "
+                "WHERE b.consumed_at IS NOT NULL AND b.consumed_at <= ? "
+                "AND NOT EXISTS (SELECT 1 FROM channel_pending_replies AS p "
+                "WHERE p.channel_id = b.channel_id AND p.binding_id = b.binding_id) "
+                "AND (b.channel_id, b.binding_id) NOT IN ("
+                "SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]') "
+                "FROM json_each(?)) "
+                "ORDER BY b.consumed_at, b.channel_id, b.binding_id LIMIT ?)",
+                (cutoff, active, RUN_BUTTON_PRUNE_BATCH_SIZE),
+            ).rowcount
+
+        return self._database.write(prune)
 
     def restore_run_button_binding(self, channel_id: str, binding_id: str) -> bool:
         """Make a binding retryable when no Run took it; False when it no longer exists."""
@@ -627,7 +688,8 @@ class ChannelStateStore:
                 "platform_target = excluded.platform_target, thread_id = excluded.thread_id, "
                 "reply_to_message_id = excluded.reply_to_message_id, "
                 "agent_id = excluded.agent_id, session_id = excluded.session_id, "
-                "run_id = excluded.run_id, binding_id = excluded.binding_id, "
+                "run_id = excluded.run_id, binding_id = "
+                "COALESCE(excluded.binding_id, channel_pending_replies.binding_id), "
                 "owner = excluded.owner, retry_keyboard_json = excluded.retry_keyboard_json",
                 (
                     normalized_id,

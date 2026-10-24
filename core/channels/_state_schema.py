@@ -78,6 +78,11 @@ CREATE TABLE channel_run_buttons (
   FOREIGN KEY (channel_id) REFERENCES channels (channel_id) ON DELETE CASCADE
 ) STRICT, WITHOUT ROWID;
 
+-- Reader: bounded retention of completed bindings (prune_run_button_bindings).
+CREATE INDEX channel_run_buttons_by_consumed
+  ON channel_run_buttons (consumed_at, channel_id, binding_id)
+  WHERE consumed_at IS NOT NULL;
+
 CREATE TABLE channel_received (
   channel_id TEXT NOT NULL,
   message_ref TEXT NOT NULL,
@@ -115,6 +120,11 @@ CREATE TABLE channel_pending_replies (
   PRIMARY KEY (channel_id, reply_id),
   FOREIGN KEY (channel_id) REFERENCES channels (channel_id) ON DELETE CASCADE
 ) STRICT, WITHOUT ROWID;
+
+-- Reader: retention must keep bindings still needed by queued/running replies.
+CREATE INDEX channel_pending_replies_by_binding
+  ON channel_pending_replies (channel_id, binding_id)
+  WHERE binding_id IS NOT NULL;
 
 -- Accepted background context survives even deletion of its Channel. It is removed
 -- only after canonical Session history recorded the batch with an idempotency receipt.

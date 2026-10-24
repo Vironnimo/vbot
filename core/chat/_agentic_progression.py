@@ -759,7 +759,7 @@ class AgenticProgression:
                     )
                     if terminal_outcome == TERMINAL_OUTCOME_TOOL_CALLS:
                         if finalization_violation:
-                            tool_messages = _fail_tool_calls_without_dispatch(
+                            tool_messages = await _fail_tool_calls_without_dispatch(
                                 tool_dispatch_context,
                                 assistant_message.tool_calls,
                                 code=TOOL_FINALIZATION_DISABLED_FAILURE_CODE,
@@ -772,7 +772,7 @@ class AgenticProgression:
                                 "the Run reached its limit of "
                                 f"{tool_iteration_limit} dispatched Tool iterations"
                             )
-                            tool_messages = _fail_tool_calls_without_dispatch(
+                            tool_messages = await _fail_tool_calls_without_dispatch(
                                 tool_dispatch_context,
                                 assistant_message.tool_calls,
                                 code=TOOL_ITERATION_LIMIT_FAILURE_CODE,
@@ -817,7 +817,7 @@ class AgenticProgression:
                             tool_messages, media_outputs = finished
                         failure_code, failure_message = _terminal_tool_failure(terminal_outcome)
                         tool_messages.extend(
-                            _fail_tool_calls_without_dispatch(
+                            await _fail_tool_calls_without_dispatch(
                                 tool_dispatch_context,
                                 assistant_message.tool_calls[len(started_tool_calls) :],
                                 code=failure_code,

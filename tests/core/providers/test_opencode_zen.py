@@ -553,6 +553,10 @@ async def test_every_wire_reports_zen_entitlement_errors_without_refreshing_cred
             id="rate-limit",
         ),
         pytest.param(CHAT_MODEL, 529, "overloaded", ProviderError, False, id="chat-529"),
+        pytest.param(CHAT_MODEL, 500, "server error", ProviderError, False, id="chat-500"),
+        pytest.param(
+            RESPONSES_MODEL, 500, "server error", ProviderError, False, id="responses-500"
+        ),
         pytest.param(
             MESSAGES_MODEL,
             529,
@@ -563,16 +567,22 @@ async def test_every_wire_reports_zen_entitlement_errors_without_refreshing_cred
         ),
     ],
 )
+@pytest.mark.parametrize("streaming", [False, True], ids=["send", "stream"])
 @pytest.mark.asyncio
 async def test_zen_error_policy_separates_auth_region_allowance_and_retryable_failures(
-    model_id: str, status: int, body: str, error_type: type[ProviderError], retryable: bool
+    model_id: str,
+    status: int,
+    body: str,
+    error_type: type[ProviderError],
+    retryable: bool,
+    streaming: bool,
 ) -> None:
     adapter = zen_adapter()
 
     with respx.mock, caller_owns_retries():
         respx.route(method="POST").mock(return_value=httpx.Response(status, text=body))
         with pytest.raises(ProviderError) as caught:
-            await adapter.send(HELLO, model_id=model_id)
+            await _request(adapter, model_id, streaming=streaming)
     await adapter.aclose()
 
     assert type(caught.value) is error_type

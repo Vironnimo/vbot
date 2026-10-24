@@ -95,6 +95,21 @@ class ToolDispatchContext:
     _worked_paths: list[tuple[str, tuple[Path, ...]]] = field(
         default_factory=list, init=False, repr=False, compare=False
     )
+    _invocation_keys: dict[str, int] = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
+
+    async def record_tool_started(self, call_id: str, name: str, started_at: str) -> None:
+        """Admit a canonical invocation before publishing or running its call.
+
+        Standalone dispatch helpers without a bound persisted Run still expose
+        their process-local lifecycle; production Chat and ExternalRun bind one.
+        """
+        if self.session.run_id is not None:
+            key = await self.session.start_tool_invocation_async(
+                call_id=call_id, name=name, started_at=started_at
+            )
+            self._invocation_keys[call_id] = key
 
     def register_result_persisted(
         self,
@@ -161,10 +176,10 @@ class ToolDispatchContext:
     ) -> dict[str, ToolResultFacts]:
         """Return *facts* carrying each call's kept payloads, for one atomic append."""
         return {
-            call_id: (
-                replace(fact, payloads=tuple(self._result_payloads[call_id]))
-                if self._result_payloads.get(call_id)
-                else fact
+            call_id: replace(
+                fact,
+                payloads=tuple(self._result_payloads.get(call_id, fact.payloads)),
+                invocation_key=self._invocation_keys.get(call_id, fact.invocation_key),
             )
             for call_id, fact in facts.items()
         }

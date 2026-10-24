@@ -59,6 +59,7 @@ from core.sessions import (
     SessionReadBatch,
     SessionReadCursor,
     SessionRunRecord,
+    SessionToolInvocationBatch,
 )
 from core.statistics._accounting import ACCOUNTING_SCHEMA, UsageSourceError, reconcile_usage
 from core.statistics._costs import PricingLookup, prune_pricing, refresh_retrospective_costs
@@ -69,6 +70,7 @@ from core.statistics._projection import (
     timestamp_instant,
 )
 from core.statistics._rollups import ROLLUP_SCHEMA, RollupChanges, maintain_rollups
+from core.statistics._tool_lifecycle import project_tool_invocations
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
 
@@ -86,7 +88,7 @@ _GLOBAL_SCOPE = ""
 # version. Bump it when the fact or aggregate tables or the meaning of their
 # rows change; the kernel adds a new table empty, so a new aggregate needs a
 # bump to be filled.
-_PROJECTION_VERSION = 11
+_PROJECTION_VERSION = 12
 # A busy index fails the read quickly as retryable instead of queueing it,
 # both on the SQLite writer and behind another read of this index.
 _WRITE_PATIENCE_S = 1.0
@@ -110,6 +112,7 @@ CREATE TABLE stat_sessions (
     session_id TEXT NOT NULL,
     generation_id TEXT NOT NULL,
     history_revision INTEGER NOT NULL,
+    tool_revision INTEGER NOT NULL,
     next_seq INTEGER NOT NULL,
     last_message_id TEXT,
     min_instant INTEGER,
@@ -144,17 +147,21 @@ CREATE INDEX stat_calls_unpriced
     ON stat_calls(model_key) WHERE retrospective = 1 AND priced = 0;
 CREATE TABLE stat_tools (
     session_key INTEGER NOT NULL,
-    seq INTEGER NOT NULL,
+    invocation_key INTEGER NOT NULL,
     instant INTEGER NOT NULL,
     name TEXT NOT NULL,
+    status TEXT NOT NULL,
     outcome INTEGER,
     error_code TEXT,
     duration_ms INTEGER,
     run_id TEXT,
     latency_bucket INTEGER,
-    PRIMARY KEY (session_key, seq)
+    PRIMARY KEY (session_key, invocation_key)
 ) WITHOUT ROWID;
 CREATE INDEX stat_tools_rejected ON stat_tools(instant) WHERE outcome = 0;
+CREATE INDEX stat_tools_run ON stat_tools(session_key, run_id);
+CREATE INDEX stat_tools_hour ON stat_tools(session_key, name, instant);
+CREATE INDEX stat_tools_time ON stat_tools(session_key, instant);
 CREATE TABLE stat_errors (
     session_key INTEGER NOT NULL,
     seq INTEGER NOT NULL,
@@ -234,10 +241,6 @@ _INSERT_COLUMNS = {
     "calls": (
         "stat_calls",
         CALL_COLUMNS,
-    ),
-    "tools": (
-        "stat_tools",
-        "session_key, seq, instant, name, outcome, error_code, duration_ms, run_id, latency_bucket",
     ),
     "errors": ("stat_errors", "session_key, seq, instant, day, kind"),
     "checkpoints": (
@@ -348,6 +351,7 @@ class _StoredSession:
     session_key: int
     generation_id: str
     history_revision: int
+    tool_revision: int
     next_seq: int
     last_message_id: str | None
     min_instant: int | None
@@ -734,7 +738,7 @@ def _stored_sessions(
     columns = """
         project_id, agent_id, session_id, session_key, generation_id,
         history_revision, next_seq, last_message_id, min_instant, max_instant,
-        owner_name, is_subagent
+        owner_name, is_subagent, tool_revision
     """
     query = f"SELECT {columns} FROM stat_sessions"
     parameters: tuple[str, ...] = ()
@@ -762,6 +766,7 @@ def _stored_sessions(
             min_instant=row[8],
             max_instant=row[9],
             flags=(str(row[10]), int(row[11])),
+            tool_revision=int(row[12]),
         )
         for row in connection.execute(query, parameters)
     }
@@ -789,14 +794,22 @@ def _refresh(
             ),
         )
         if batch is not None:
+            tools = _source(
+                session.tool_invocations_since,
+                row.tool_revision,
+                expected_generation_id=batch.cursor.generation_id,
+            )
             runs = _source(session.run_records, batch.cursor.generation_id)
-            _append(connection, key, entry, row, batch, runs, changes)
+            _append(connection, key, entry, row, batch, runs, tools, changes)
             return IndexedSession(row.session_key, batch.cursor.generation_id, entry.summary)
     batch = _source(session.load_since)
     if batch is None:
         raise SessionNotFoundError(f"Session {key[2]} has no readable history")
+    tools = _source(
+        session.tool_invocations_since, expected_generation_id=batch.cursor.generation_id
+    )
     runs = _source(session.run_records, batch.cursor.generation_id)
-    return _replace(connection, key, entry, batch, runs, row, changes)
+    return _replace(connection, key, entry, batch, runs, tools, row, changes)
 
 
 def _replace(
@@ -805,6 +818,7 @@ def _replace(
     entry: _Listed,
     batch: SessionReadBatch,
     runs: Sequence[SessionRunRecord],
+    tools: SessionToolInvocationBatch,
     row: _StoredSession | None,
     changes: RollupChanges,
 ) -> IndexedSession:
@@ -812,9 +826,9 @@ def _replace(
         cursor = connection.execute(
             """
             INSERT INTO stat_sessions (
-                project_id, agent_id, session_id, generation_id, history_revision,
+                project_id, agent_id, session_id, generation_id, history_revision, tool_revision,
                 next_seq, last_message_id, min_instant, max_instant, owner_name, is_subagent
-            ) VALUES (?, ?, ?, '', 0, 0, NULL, NULL, NULL, '', 0)
+            ) VALUES (?, ?, ?, '', 0, 0, 0, NULL, NULL, NULL, '', 0)
             """,
             key,
         )
@@ -826,12 +840,16 @@ def _replace(
     rows = _project_batch(session_key, batch)
     _insert_rows(connection, rows)
     _write_run_records(connection, session_key, runs, {})
+    _tool_runs, tool_min, tool_max = project_tool_invocations(
+        connection, session_key, tools, changes
+    )
     _write_session_state(
         connection,
         session_key,
         batch.cursor,
-        min_instant=rows.min_instant,
-        max_instant=rows.max_instant,
+        tool_revision=tools.revision,
+        min_instant=_bound(min, rows.min_instant, tool_min),
+        max_instant=_bound(max, rows.max_instant, tool_max),
     )
     _write_flags(connection, session_key, entry.flags)
     changes.session(session_key, batch.cursor.generation_id)
@@ -845,6 +863,7 @@ def _append(
     row: _StoredSession,
     batch: SessionReadBatch,
     runs: Sequence[SessionRunRecord],
+    tools: SessionToolInvocationBatch,
     changes: RollupChanges,
 ) -> None:
     session_key = row.session_key
@@ -871,12 +890,16 @@ def _append(
         row.next_seq,
     )
     changed_runs = _write_run_records(connection, session_key, runs, stored)
+    tool_runs, tool_min, tool_max = project_tool_invocations(
+        connection, session_key, tools, changes
+    )
     _write_session_state(
         connection,
         session_key,
         batch.cursor,
-        min_instant=_bound(min, row.min_instant, rows.min_instant),
-        max_instant=_bound(max, row.max_instant, rows.max_instant),
+        tool_revision=tools.revision,
+        min_instant=_bound(min, row.min_instant, _bound(min, rows.min_instant, tool_min)),
+        max_instant=_bound(max, row.max_instant, _bound(max, rows.max_instant, tool_max)),
     )
     if row.flags != entry.flags:
         _write_flags(connection, session_key, entry.flags)
@@ -884,7 +907,7 @@ def _append(
         return
     changes.session_runs(
         session_key,
-        {str(record[5]) for record in rows.records if record[5]} | changed_runs,
+        {str(record[5]) for record in rows.records if record[5]} | changed_runs | tool_runs,
     )
     if rows.records:
         # A validated own-audit tail cannot change an earlier contribution.
@@ -971,6 +994,7 @@ def _write_session_state(
     session_key: int,
     cursor: SessionReadCursor,
     *,
+    tool_revision: int,
     min_instant: int | None,
     max_instant: int | None,
 ) -> None:
@@ -979,6 +1003,7 @@ def _write_session_state(
         UPDATE stat_sessions SET
             generation_id = ?,
             history_revision = ?,
+            tool_revision = ?,
             next_seq = ?,
             last_message_id = ?,
             min_instant = ?,
@@ -988,6 +1013,7 @@ def _write_session_state(
         (
             cursor.generation_id,
             cursor.history_revision,
+            tool_revision,
             cursor.next_seq,
             cursor.last_message_id,
             min_instant,
@@ -1003,10 +1029,10 @@ def _delete_facts(connection: sqlite3.Connection, session_keys: Sequence[int]) -
         connection.executemany(f"DELETE FROM {table} WHERE session_key = ?", parameters)
 
 
-def _source[Result](call: Callable[..., Result], *args: Any) -> Result:
+def _source[Result](call: Callable[..., Result], *args: Any, **kwargs: Any) -> Result:
     """Run one canonical Session read, keeping its failures apart from index failures."""
     try:
-        return call(*args)
+        return call(*args, **kwargs)
     except SessionNotFoundError:
         raise
     except Exception as error:

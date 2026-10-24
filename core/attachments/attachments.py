@@ -204,10 +204,10 @@ class AttachmentStore:
         self._max_size_bytes = max_size_bytes
 
     def collect_session_orphans(self, sessions: ChatSessionManager) -> int:
-        """Collect previously admitted blobs while Runtime producers are quiescent.
+        """Collect orphaned blobs and ten-day-old unused uploads while quiescent.
 
         Before startup admission or after a successful asynchronous shutdown drain.
-        Never-admitted uploads have no lifetime here and are left untouched.
+        Every retained canonical or snapshot reference protects its blob.
         """
         from core.attachments._collection import collect_session_orphans
 

@@ -144,7 +144,7 @@ class TemporaryFileManager:
         category = path.parent
         if category.parent != self.root and _OWNER_PATTERN.fullmatch(category.name):
             category = category.parent
-        if category.parent != self.root or category.name not in self._retention:
+        if category.parent != self.root or category.name not in self._cleanup_retention():
             raise ValueError(f"Not a temporary file of this manager: {path}")
         with self._lock:
             self._active.add(path)
@@ -206,7 +206,7 @@ class TemporaryFileManager:
             # Compared like ``Path`` equality: case-insensitive on Windows.
             active = {os.path.normcase(path) for path in self._active}
 
-        for category, retention in self._retention.items():
+        for category, retention in self._cleanup_retention().items():
             category_dir = self.root / category
             try:
                 for directory in (self.root.parent, self.root, category_dir):
@@ -234,6 +234,13 @@ class TemporaryFileManager:
                 if not _OWNER_PATTERN.fullmatch(entry.name):
                     continue
                 self._sweep_owner(Path(entry.path), active, expires_before, stopping)
+
+    def _cleanup_retention(self) -> dict[str, timedelta]:
+        """Include the retired shell-log folder under its replacement's policy."""
+        policies = dict(self._retention)
+        if "commands" in policies:
+            policies.setdefault("bash", policies["commands"])
+        return policies
 
     def _sweep_owner(
         self, folder: Path, active: set[str], expires_before: float, stopping: Event | None

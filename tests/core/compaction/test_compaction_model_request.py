@@ -690,7 +690,7 @@ async def test_compaction_stalled_stream_is_bounded_and_closed(monkeypatch, hear
             finally:
                 closed.set()
 
-    def bounded(source):
+    def bounded(source, **kwargs):
         return iter_with_chunk_timeout(source, timeout_seconds=0.05, progress_timeout_seconds=0.15)
 
     # The controlled clock decides the timeout branch deterministically: a
@@ -705,6 +705,107 @@ async def test_compaction_stalled_stream_is_bounded_and_closed(monkeypatch, hear
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("local_endpoint", [False, True], ids=["remote", "local"])
+async def test_compaction_waits_through_local_prefill_without_a_stall_cutoff(
+    monkeypatch: pytest.MonkeyPatch, local_endpoint: bool
+) -> None:
+    class PrefillStream:
+        def __init__(self) -> None:
+            self.closed = False
+            self.position = 0
+
+        def __aiter__(self) -> PrefillStream:
+            return self
+
+        async def __anext__(self) -> dict[str, Any]:
+            if self.position == 0:
+                # The prefill yields no heartbeat or Model delta. The remote
+                # guard below expires at this suspension; local requests wait.
+                await asyncio.sleep(0)
+                self.position += 1
+                return {"type": "content_delta", "text": "SUMMARY"}
+            if self.position == 1:
+                self.position += 1
+                return {"type": "finish", "reason": "stop"}
+            raise StopAsyncIteration
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    source = PrefillStream()
+    adapter = SimpleNamespace(local_endpoint=local_endpoint, stream=lambda *args, **kwargs: source)
+
+    def immediate_stall(source, *, timeout_seconds=180.0, progress_timeout_seconds=900.0):
+        # Accelerate enabled stall windows without a real wait or changing the
+        # absolute Compaction deadline. Disabled windows stay disabled.
+        return iter_with_chunk_timeout(
+            source,
+            timeout_seconds=0 if timeout_seconds is not None else None,
+            progress_timeout_seconds=0 if progress_timeout_seconds is not None else None,
+        )
+
+    monkeypatch.setattr(model_request, "iter_with_chunk_timeout", immediate_stall)
+    if local_endpoint:
+        result = await _send_streaming_model_request(adapter, [], {})
+        assert result["content"] == "SUMMARY"
+    else:
+        with pytest.raises(StreamingProgressTimeoutError):
+            await _send_streaming_model_request(adapter, [], {})
+    assert source.closed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "first_delta",
+    [
+        {"type": "reasoning_delta", "text": "Working"},
+        {"type": "usage", "input_tokens": 75},
+        {"type": "heartbeat"},
+    ],
+    ids=["reasoning", "usage", "heartbeat"],
+)
+async def test_compaction_stop_cancels_buffered_local_output(
+    first_delta: dict[str, Any],
+) -> None:
+    closed = asyncio.Event()
+    emitted = 0
+    task: asyncio.Task[dict[str, Any]]
+
+    async def stream(*args: Any, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+        nonlocal emitted
+        try:
+            for position in range(1000):
+                if position == 0:
+                    asyncio.get_running_loop().call_soon(task.cancel)
+                emitted += 1
+                yield (
+                    first_delta if position == 0 else {"type": "reasoning_delta", "text": "Working"}
+                )
+            yield {"type": "content_delta", "text": "SUMMARY"}
+            yield {"type": "finish", "reason": "stop"}
+        finally:
+            closed.set()
+
+    recorder = RecordingUsageRecorder()
+    task = asyncio.create_task(
+        _send_streaming_model_request(
+            SimpleNamespace(local_endpoint=True, stream=stream),
+            [],
+            {},
+            usage_recorder=cast(Any, recorder),
+        )
+    )
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert emitted == 1
+    assert closed.is_set()
+    assert [call["status"] for call in recorder.calls] == ["cancelled"]
+    if first_delta["type"] == "usage":
+        assert recorder.calls[0]["usage"]["input_tokens"] == 75
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("local_endpoint", [False, True], ids=["remote", "local"])
 @pytest.mark.parametrize(
     "phase",
     [
@@ -719,7 +820,9 @@ async def test_compaction_stalled_stream_is_bounded_and_closed(monkeypatch, hear
         "overflow",
     ],
 )
-async def test_compaction_deadline_covers_active_output_and_recovery(monkeypatch, phase):
+async def test_compaction_deadline_covers_active_output_and_recovery(
+    monkeypatch, phase, local_endpoint
+):
     budgets: list[asyncio.Timeout] = []
     durations: list[float] = []
     attempts = 0
@@ -786,11 +889,13 @@ async def test_compaction_deadline_covers_active_output_and_recovery(monkeypatch
             timeout=controlled_timeout,
             CancelledError=asyncio.CancelledError,
             get_running_loop=asyncio.get_running_loop,
+            sleep=asyncio.sleep,
         ),
     )
     monkeypatch.setattr(model_request, "_sleep", backoff)
     recorder = RecordingUsageRecorder()
     adapter = ActiveAdapter()
+    adapter.local_endpoint = local_endpoint
     messages = [user("u1", "Request"), assistant("a1", "Answer")]
     if phase == "overflow":
         messages[1:1] = tool_step("large", "observation " * 1000)

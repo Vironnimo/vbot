@@ -30,6 +30,7 @@ from tests.core.chat.chat_loop_support import (
     build_chat_loop,
     history,
     persisted_roles,
+    session_address,
 )
 from tests.core.chat.chat_loop_tools_test_support import (
     WAIT_SECONDS,
@@ -194,43 +195,22 @@ async def test_sibling_calls_run_concurrently_and_persist_in_call_order_as_one_b
 
 
 @pytest.mark.asyncio
-async def test_starting_a_tool_writes_nothing_after_the_assistant_append(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    writes = 0
-    writes_at: dict[str, int] = {}
-
+async def test_starting_a_tool_commits_its_invocation_before_the_handler(tmp_path: Path) -> None:
     def probe(context: Any, _arguments: Any) -> Any:
-        writes_at["handler"] = writes
+        session = runtime.chat_sessions.get(session_address("coder", "session-one"))
+        [invocation] = session.tool_invocations_since().invocations
+        assert invocation.name == "probe"
+        assert (invocation.status, invocation.result_ok) == ("running", None)
+        assert not any(message.role == "tool" for message in session.load())
         return tool_success({"id": context.tool_call_id})
 
     tools = ToolRegistry()
     tools.register("probe", "Return the probe id.", {"type": "object"}, probe)
     runtime = tool_runtime(tmp_path, tools, [tool_turn(("first", "probe")), final("done")])
-    send = runtime.adapter.send
-
-    async def observing_send(messages: Any, *, model_id: str, **kwargs: Any) -> Any:
-        writes_at.setdefault("first_request", writes)
-        return await send(messages, model_id=model_id, **kwargs)
-
-    monkeypatch.setattr(runtime.adapter, "send", observing_send)
     runtime.chat_sessions.create("coder", session_id="session-one")
-    store = runtime.chat_sessions._store
-    execute_write = store._execute_write
-
-    def counting_write(*args: Any, **kwargs: Any) -> Any:
-        nonlocal writes
-        writes += 1
-        return execute_write(*args, **kwargs)
-
-    monkeypatch.setattr(store, "_execute_write", counting_write)
 
     await build_chat_loop(runtime).send("coder", "probe once", session_id="session-one")
 
-    # Only the Assistant append separates the Model response from the Tool
-    # handler: starting a Tool writes nothing.
-    assert writes_at["handler"] == writes_at["first_request"] + 1
     assert persisted_roles(history(runtime))[-3:] == ["assistant", "tool", "assistant"]
 
 
@@ -419,6 +399,13 @@ async def test_real_run_cancel_during_parallel_tools_keeps_finished_results(
         tool_success({"probe": "fast"})
     ]
     assert [m.status for m in after_cancel if m.role == "run_summary"] == ["cancelled"]
+    address = session_address("coder", cancelled_run.session_id)
+    invocations = runtime.chat_sessions.get(address).tool_invocations_since()
+    assert len(invocations.invocations) == cancelled_run.tool_call_count == 2
+    assert [(item.name, item.status, item.result_ok) for item in invocations.invocations] == [
+        ("fast_probe", "completed", True),
+        ("slow_probe", "cancelled", None),
+    ]
 
     recovered = await loop.send("coder", "Continue safely.", session_id="session-one")
 
@@ -437,6 +424,10 @@ async def test_real_run_cancel_during_parallel_tools_keeps_finished_results(
         "cancelled",
         "completed",
     ]
+    assert (
+        runtime.chat_sessions.get(address).tool_invocations_since().invocations
+        == invocations.invocations
+    )
 
 
 @pytest.mark.asyncio

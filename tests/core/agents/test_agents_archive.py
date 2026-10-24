@@ -197,9 +197,12 @@ def test_delegation_grants_are_recorded_before_removal_and_return_at_their_posit
         ("holder-stamp-missing", "holder_unproven"),
         ("invalid-holder-config", "holder_unproven"),
         ("unavailable-holder-config", "holder_unproven"),
+        ("target-proof-missing", None),
+        ("target-proof-invalid", None),
+        ("unproven-existing-entry", None),
     ],
 )
-def test_delegation_grants_restore_only_the_recorded_holder_incarnation(
+def test_delegation_grants_restore_only_the_recorded_identities(
     store: AgentStore,
     monkeypatch: pytest.MonkeyPatch,
     deny_access: Callable[[Path], None],
@@ -238,6 +241,14 @@ def test_delegation_grants_restore_only_the_recorded_holder_incarnation(
         rewrite(store, "beta", "created_at")
     elif holder_state == "invalid-holder-config":
         rewrite(store, "beta", name=123)
+    elif holder_state == "target-proof-missing":
+        recorded[0].pop("target_created_at")
+    elif holder_state == "target-proof-invalid":
+        recorded[0]["target_created_at"] = "not-a-timestamp"
+    elif holder_state == "unproven-existing-entry":
+        # An older config may already list this name without proving its target.
+        # It must not mask the archived grant's valid identity evidence.
+        rewrite(store, "beta", tools={"subagent": {"allowed_agents": ["a", "coder-restored", "b"]}})
 
     holder_config = store.data_dir / "agents" / "beta" / "agent.json"
     holder_soul = Path(store.default_workspace("beta")) / "SOUL.md"
@@ -255,7 +266,7 @@ def test_delegation_grants_restore_only_the_recorded_holder_incarnation(
             assert holder_config.read_bytes() == before
         assert not holder_soul.exists()
 
-    restored = problem is None
+    restored = problem is None and not holder_state.startswith("target-proof-")
     assert store.restore_delegation_grants("coder-restored", recorded) == (
         ("beta",) if restored else ()
     )
@@ -266,12 +277,17 @@ def test_delegation_grants_restore_only_the_recorded_holder_incarnation(
         assert persisted(store, "beta")["tools"]["subagent"]["allowed_agents"] == (
             ["a", "coder-restored", "b"] if restored else ["a", "b"]
         )
+        if restored:
+            assert (
+                persisted(store, "beta")["delegation_bindings"]["coder-restored"]
+                == recorded[0]["target_created_at"]
+            )
 
 
 def test_restore_files_rewrites_the_payload_to_the_target_and_keeps_unknown_fields(
     store: AgentStore,
 ) -> None:
-    store.create("coder", "Coder Agent")
+    store.create("coder", "Coder Agent", tools={"subagent": {"allowed_agents": ["legacy", "beta"]}})
     store.create("beta", "Beta")
     payload = _payload(store)
     with store.archive_files("coder", payload):
@@ -281,6 +297,7 @@ def test_restore_files_rewrites_the_payload_to_the_target_and_keeps_unknown_fiel
     assert inspected.agent.id == "coder"
     document = json.loads((payload / "agent.json").read_text(encoding="utf-8"))
     document["future_field"] = {"kept": True}
+    document["delegation_bindings"].pop("legacy")
     (payload / "agent.json").write_text(json.dumps(document), encoding="utf-8")
     archived = (payload / "agent.json").read_bytes()
 
@@ -312,6 +329,8 @@ def test_restore_files_rewrites_the_payload_to_the_target_and_keeps_unknown_fiel
     assert (Path(agent.workspace) / "SOUL.md").is_file()
     restored = persisted(store, "coder-2")
     assert (restored["id"], restored["future_field"]) == ("coder-2", {"kept": True})
+    assert restored["tools"]["subagent"]["allowed_agents"] == ["beta"]
+    assert agent.tools["subagent"]["allowed_agents"] == ["beta"]
     assert store.get("coder-2").name == "Coder Agent"
 
 

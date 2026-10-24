@@ -93,6 +93,7 @@ class RollupChanges:
     runs: set[tuple[int, str]] = field(default_factory=set)
     fact_sessions: set[int] = field(default_factory=set)
     appends: dict[int, int] = field(default_factory=dict)
+    tool_groups: set[tuple[int, int, str, str]] = field(default_factory=set)
     units: set[int] = field(default_factory=set)
     unit_runs: set[tuple[int, str]] = field(default_factory=set)
     usage_changed: bool = False
@@ -109,6 +110,27 @@ class RollupChanges:
         """A ledger request of ``unit_key`` and ``run_id`` was added, changed or moved away."""
         if run_id:
             self.unit_runs.add((unit_key, run_id))
+
+    def tool_call(
+        self, connection: sqlite3.Connection, session_key: int, invocation_key: int
+    ) -> None:
+        """Retain a changed Tool's old or new hourly group, before/after its upsert."""
+        if self.rebuild:
+            return
+        origin = (
+            f"CASE WHEN rr.run_id IS NOT NULL THEN {run_origin_sql('s', 'rr.run_kind')} "
+            f"ELSE {session_origin_sql('s')} END"
+        )
+        row = connection.execute(
+            f"SELECT r.instant / {MICROSECONDS_PER_HOUR}, r.session_key, {origin}, r.name "
+            "FROM stat_tools r CROSS JOIN stat_sessions s ON s.session_key = r.session_key "
+            "LEFT JOIN stat_run_records rr ON rr.session_key = r.session_key "
+            "AND rr.run_id = r.run_id "
+            "WHERE r.session_key = ? AND r.invocation_key = ?",
+            (session_key, invocation_key),
+        ).fetchone()
+        if row is not None:
+            self.tool_groups.add((int(row[0]), int(row[1]), str(row[2]), str(row[3])))
 
     def run_origins(
         self,
@@ -129,9 +151,8 @@ class RollupChanges:
             return
         for run_id in run_ids:
             if connection.execute(
-                "SELECT 1 FROM stat_records WHERE session_key = ? AND run_id = ? "
-                "AND seq < ? AND role = 'tool' LIMIT 1",
-                (session_key, run_id, first_seq),
+                "SELECT 1 FROM stat_tools WHERE session_key = ? AND run_id = ? LIMIT 1",
+                (session_key, run_id),
             ).fetchone():
                 self.fact_sessions.add(session_key)
             for (seq,) in connection.execute(
@@ -184,6 +205,7 @@ class RollupChanges:
                 self.runs,
                 self.fact_sessions,
                 self.appends,
+                self.tool_groups,
                 self.units,
                 self.unit_runs,
                 self.usage_changed,
@@ -197,6 +219,7 @@ _WORK_TABLES = {
     "rollup_runs": "session_key INTEGER, run_id TEXT",
     "rollup_fact_sessions": "session_key INTEGER",
     "rollup_appends": "session_key INTEGER, first_seq INTEGER",
+    "rollup_tool_groups": "hour INTEGER, session_key INTEGER, origin TEXT, name TEXT",
     "rollup_units": "unit_key INTEGER",
     "rollup_generations": "generation_id TEXT",
     "rollup_unit_runs": "unit_key INTEGER, run_id TEXT",
@@ -229,7 +252,7 @@ def maintain_rollups(connection: sqlite3.Connection, changes: RollupChanges) -> 
     _recompute_records(connection)
     _recompute_cache(connection)
     _recompute_usage(connection)
-    _recompute_tools(connection, append=True)
+    _recompute_tools(connection, groups=True)
     _recompute_records(connection, append=True)
     _recompute_cache(connection, append=True)
     if changes.usage_changed:
@@ -268,6 +291,7 @@ def _collect(connection: sqlite3.Connection, changes: RollupChanges) -> None:
     insert("rollup_units", ((key,) for key in changes.units))
     insert("rollup_generations", ((generation,) for generation in changes.generations))
     insert("rollup_unit_runs", changes.unit_runs)
+    insert("rollup_tool_groups", changes.tool_groups)
     # Whole Sessions recompute every current Run; changed requests recompute
     # the Run of their unit's Session (through the partial generation index,
     # see ``_usage_select``); a changed Session recomputes the ledger units at
@@ -301,6 +325,11 @@ def _collect(connection: sqlite3.Connection, changes: RollupChanges) -> None:
         connection.execute(
             f"DELETE FROM {table} WHERE session_key IN "
             "(SELECT session_key FROM temp.rollup_fact_sessions)"
+        )
+    for table in ("agg_tools", "agg_tool_latency"):
+        connection.execute(
+            f"DELETE FROM {table} WHERE (hour, session_key, origin, name) IN "
+            "(SELECT hour, session_key, origin, name FROM temp.rollup_tool_groups)"
         )
     for table in ("agg_usage", "agg_first_token"):
         connection.execute(
@@ -575,16 +604,23 @@ def _recompute_runs(connection: sqlite3.Connection) -> None:
             """
             SELECT d.session_key, d.run_id,
                 SUM(r.role = 'assistant'), COUNT(v.seq), MIN(v.instant),
-                SUM(r.role = 'user'), COUNT(t.seq), SUM(t.outcome IS 0),
-                COALESCE(SUM(t.duration_ms), 0), SUM(r.role = 'compaction_checkpoint'),
+                SUM(r.role = 'user'), SUM(r.role = 'compaction_checkpoint'),
                 SUM(r.role = 'error')
             FROM temp.rollup_runs d
             CROSS JOIN stat_records r ON r.session_key = d.session_key AND r.run_id = d.run_id
             LEFT JOIN stat_calls v ON v.session_key = r.session_key AND v.seq = r.seq
                 AND v.kind = 0 AND v.visible = 1
-            LEFT JOIN stat_tools t ON t.session_key = r.session_key AND t.seq = r.seq
             GROUP BY d.session_key, d.run_id
             """
+        )
+    }
+    tools = {
+        (row[0], row[1]): row[2:]
+        for row in connection.execute(
+            "SELECT d.session_key, d.run_id, COUNT(t.invocation_key), SUM(t.outcome IS 0), "
+            "COALESCE(SUM(t.duration_ms), 0) FROM temp.rollup_runs d "
+            "CROSS JOIN stat_tools t ON t.session_key = d.session_key AND t.run_id = d.run_id "
+            "GROUP BY d.session_key, d.run_id"
         )
     }
     ledger = _model_rows(
@@ -622,12 +658,10 @@ def _recompute_runs(connection: sqlite3.Connection) -> None:
             visible_messages,
             first_visible,
             user_messages,
-            tool_calls,
-            tool_rejected,
-            tool_ms,
             compactions,
             errors,
-        ) = steps.get(key, (0, 0, None, 0, 0, 0, 0, 0, 0))
+        ) = steps.get(key, (0, 0, None, 0, 0, 0))
+        tool_calls, tool_rejected, tool_ms = tools.get(key, (0, 0, 0))
         # Ledger requests are authoritative; saved usage covers Runs without any.
         models = ledger.get(key) or saved.get(key, [])
         model_rows.extend(_run_model_rows(key, models))
@@ -721,31 +755,30 @@ def _additive_update(table: str, keys: str, sums: str, *, maxima: str = "") -> s
     return f" ON CONFLICT ({keys}) DO UPDATE SET {', '.join(assignments)}"
 
 
-def _recompute_tools(connection: sqlite3.Connection, *, append: bool = False) -> None:
+def _recompute_tools(connection: sqlite3.Connection, *, groups: bool = False) -> None:
     origin = (
         f"CASE WHEN rr.run_id IS NOT NULL THEN {run_origin_sql('s', 'rr.run_kind')} "
         f"ELSE {session_origin_sql('s')} END"
     )
+    facts = (
+        "temp.rollup_tool_groups d CROSS JOIN stat_tools r "
+        "ON r.session_key = d.session_key AND r.name = d.name "
+        f"AND r.instant >= d.hour * {MICROSECONDS_PER_HOUR} "
+        f"AND r.instant < (d.hour + 1) * {MICROSECONDS_PER_HOUR}"
+        if groups
+        else _fact_source("stat_tools", append=False)
+    )
+    conditions = (
+        f"{origin} = d.origin AND NOT EXISTS ("
+        "SELECT 1 FROM temp.rollup_fact_sessions f WHERE f.session_key = d.session_key)"
+        if groups
+        else "1"
+    )
     source = f"""
-        FROM {_fact_source("stat_tools", append=append)}
+        FROM {facts}
         CROSS JOIN stat_sessions s ON s.session_key = d.session_key
         LEFT JOIN stat_run_records rr ON rr.session_key = r.session_key AND rr.run_id = r.run_id
     """
-    tools_update = (
-        _additive_update(
-            "agg_tools",
-            "hour, session_key, origin, name",
-            "calls, accepted, rejected, unknown, duration_calls, duration_ms",
-            maxima="max_ms",
-        )
-        if append
-        else ""
-    )
-    latency_update = (
-        _additive_update("agg_tool_latency", "hour, session_key, origin, name, bucket", "count")
-        if append
-        else ""
-    )
     connection.execute(
         f"""
         INSERT INTO agg_tools (
@@ -756,8 +789,8 @@ def _recompute_tools(connection: sqlite3.Connection, *, append: bool = False) ->
             SUM(r.outcome IS 1), SUM(r.outcome IS 0), SUM(r.outcome IS NULL),
             COUNT(r.duration_ms), COALESCE(SUM(r.duration_ms), 0), MAX(r.duration_ms)
         {source}
+        WHERE {conditions}
         GROUP BY hour, r.session_key, origin, r.name
-        {tools_update}
         """
     )
     connection.execute(
@@ -766,9 +799,8 @@ def _recompute_tools(connection: sqlite3.Connection, *, append: bool = False) ->
         SELECT {_HOUR} AS hour, r.session_key, {origin} AS origin, r.name, r.latency_bucket,
             COUNT(*)
         {source}
-        WHERE r.latency_bucket IS NOT NULL
+        WHERE r.latency_bucket IS NOT NULL AND {conditions}
         GROUP BY hour, r.session_key, origin, r.name, r.latency_bucket
-        {latency_update}
         """
     )
 

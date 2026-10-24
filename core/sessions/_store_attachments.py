@@ -139,15 +139,22 @@ def snapshot_references(connection: sqlite3.Connection) -> frozenset[str]:
     return frozenset(ids)
 
 
-def unreferenced(connection: sqlite3.Connection) -> tuple[str, ...]:
+def unreferenced(
+    connection: sqlite3.Connection, *, additional: Sequence[str] = ()
+) -> tuple[str, ...]:
+    """Known orphan ids and supplied candidates with no retained canonical owner."""
     return tuple(
         str(row[0])
         for row in connection.execute(
-            "SELECT attachment_id FROM session_attachment_ids AS known WHERE NOT EXISTS "
+            "WITH candidates(attachment_id) AS ("
+            "SELECT attachment_id FROM session_attachment_ids UNION "
+            "SELECT value FROM json_each(?)) "
+            "SELECT attachment_id FROM candidates AS known WHERE NOT EXISTS "
             "(SELECT 1 FROM session_attachment_refs AS live "
             "WHERE live.attachment_id = known.attachment_id) AND NOT EXISTS "
             "(SELECT 1 FROM session_accessor_input_attachments AS queued "
-            "WHERE queued.attachment_id = known.attachment_id) ORDER BY attachment_id"
+            "WHERE queued.attachment_id = known.attachment_id) ORDER BY attachment_id",
+            (json.dumps(additional),),
         )
     )
 

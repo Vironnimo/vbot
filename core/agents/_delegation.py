@@ -186,8 +186,37 @@ def new_creation_timestamp(store: AgentStore) -> str:
     return format_canonical_timestamp(now)
 
 
+def without_unbound_grants(agent: Agent) -> Agent:
+    """Revoke legacy explicit Identity grants whose intended target is unproven.
+
+    The missing binding is the migration marker: once the list is saved without
+    that target, an explicit re-add goes through ``bind_changes`` normally.
+    Wildcards, qualified targets and implicit self-delegation keep their scope.
+    """
+    from core.tools.availability import subagent_allowed_agents
+
+    allowed = subagent_allowed_agents(agent.tools)
+    revoked = {
+        target
+        for target in allowed
+        if target != agent.id
+        and is_valid_agent_id(target)
+        and target not in agent.delegation_bindings
+    }
+    if not revoked:
+        return agent
+    tools = {
+        **agent.tools,
+        "subagent": {
+            **agent.tools.get("subagent", {}),
+            "allowed_agents": [target for target in allowed if target not in revoked],
+        },
+    }
+    return replace(agent, tools=tools)
+
+
 def bind_changes(store: AgentStore, agent: Agent, previous: Agent | None) -> Agent:
-    """Bind newly added grants; an unchanged legacy or bound grant keeps its meaning."""
+    """Bind newly added grants; an unchanged proven grant keeps its meaning."""
     from core.tools.availability import subagent_allowed_agents
 
     allowed = subagent_allowed_agents(agent.tools)
@@ -292,7 +321,7 @@ def archived_binding(store: AgentStore, target: str, agent: Agent) -> dict[str, 
     """
     binding = agent.delegation_bindings.get(target)
     if binding is None:
-        return {}  # Legacy records retain their existing interpretation.
+        return {"target_created_at": None}
     if isinstance(binding, str):
         return {"target_created_at": binding}
     try:

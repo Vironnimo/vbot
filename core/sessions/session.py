@@ -22,6 +22,7 @@ from core.sessions._types import (
     SessionRunRecord,
     SessionRunResult,
     SessionStatusSnapshot,
+    SessionToolInvocationBatch,
     ToolResultFacts,
 )
 from core.sessions.history import (
@@ -519,6 +520,22 @@ class ChatSession:
         *expected_generation_id*, when another generation is live.
         """
         return self._store.run_records(self.address, expected_generation_id)
+
+    def tool_invocations_since(
+        self, after_revision: int = 0, *, expected_generation_id: str | None = None
+    ) -> SessionToolInvocationBatch:
+        """Read changed own Tool lifecycle facts, including starts without Results."""
+        return self._store.execution.tool_invocations_since(
+            self.address, after_revision, expected_generation_id=expected_generation_id
+        )
+
+    async def start_tool_invocation_async(self, *, call_id: str, name: str, started_at: str) -> int:
+        run_id = self._require_run_id("A Tool invocation")
+        return await self._store.run_async(
+            lambda: self._store.execution.start_tool_invocation(
+                self.address, run_id, call_id=call_id, name=name, started_at=started_at
+            )
+        )
 
     def reflection_runs(self) -> list[JsonObject]:
         return self._store.reflection_runs(self.address)

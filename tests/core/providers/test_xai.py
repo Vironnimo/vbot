@@ -15,7 +15,7 @@ from core.chat.streaming import StreamingAccumulator
 from core.models.discovery import ModelDiscoveryError, refresh_models
 from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers.accounts import Account
-from core.providers.errors import ProviderAuthError
+from core.providers.errors import ProviderAuthError, ProviderError
 from core.providers.providers import (
     AuthConfig,
     ConnectionConfig,
@@ -27,6 +27,7 @@ from core.providers.token_getter import OAuthTokenGetter, TokenGetter
 from core.providers.token_store import OAuthToken, TokenStore
 from core.providers.xai import XAIAdapter
 from core.secrets import SecretStore
+from core.utils.retry import caller_owns_retries
 from tests.core.providers.openai_test_support import codex_sse_response
 
 RESOURCES = Path(__file__).resolve().parents[3] / "resources"
@@ -142,6 +143,24 @@ async def _sent_body(
     assert route.calls.last.request.headers["authorization"] == "Bearer xai-secret"
     assert body["store"] is False
     return body
+
+
+@pytest.mark.parametrize("streaming", [False, True], ids=["send", "stream"])
+@pytest.mark.asyncio
+async def test_http_500_keeps_xais_fatal_policy(xai_adapter: XAIAdapter, streaming: bool) -> None:
+    try:
+        with respx.mock, caller_owns_retries():
+            route = respx.post(XAI_RESPONSES_URL).mock(return_value=httpx.Response(500))
+            with pytest.raises(ProviderError) as caught:
+                if streaming:
+                    _ = [chunk async for chunk in xai_adapter.stream(HELLO, model_id="grok-4.5")]
+                else:
+                    await xai_adapter.send(HELLO, model_id="grok-4.5")
+        assert caught.value.status_code == 500
+        assert caught.value.retryable is False
+        assert route.call_count == 1
+    finally:
+        await xai_adapter.aclose()
 
 
 @pytest.mark.asyncio

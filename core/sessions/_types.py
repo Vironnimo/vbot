@@ -38,8 +38,9 @@ class ToolResultFacts:
 
     ``status`` is the Tool call's terminal status (``completed``, ``failed`` or
     ``cancelled``); the other fields repeat the result envelope's outcome so
-    the store never parses Tool output. ``payloads`` are stored with the result
-    in the same transaction.
+    normal Chat writes need no Tool-output parsing. Imported or historical
+    Results without scalar facts decode a valid envelope once. ``payloads``
+    and the matching ``invocation_key`` settle with the Result transaction.
     """
 
     status: str
@@ -48,6 +49,28 @@ class ToolResultFacts:
     error_retryable: bool | None = None
     error_attempts: int | None = None
     payloads: tuple[ToolResultPayload, ...] = ()
+    invocation_key: int | None = None
+
+
+@dataclass(frozen=True)
+class SessionToolInvocation:
+    """One own Tool dispatch, including work without a stored Result."""
+
+    invocation_key: int
+    run_id: str | None
+    name: str
+    started_at: str
+    status: str
+    result_ok: bool | None
+    error_code: str | None
+    duration_ms: int | None
+    source_revision: int
+
+
+@dataclass(frozen=True)
+class SessionToolInvocationBatch:
+    revision: int
+    invocations: tuple[SessionToolInvocation, ...]
 
 
 @dataclass(frozen=True)

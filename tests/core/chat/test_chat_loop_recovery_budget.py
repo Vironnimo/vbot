@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, override
+from pathlib import Path
+from typing import Any, cast, override
 
+import httpx
 import pytest
+import respx
 
 from core.chat.streaming import StreamingProgressTimeoutError
 from core.providers.errors import (
@@ -31,6 +34,11 @@ from tests.core.chat.chat_loop_support import (
     history,
     last_run,
     session_address,
+)
+from tests.core.providers.openai_test_support import (
+    PLATFORM_RESPONSES_URL,
+    codex_sse_response,
+    platform_adapter,
 )
 
 
@@ -200,6 +208,103 @@ async def test_establishment_and_stream_retries_do_not_multiply(tmp_path):
     with pytest.raises(ProviderError):
         await build_chat_loop(runtime).send("coder", "Work", session_id="test")
     assert adapter.attempts == 9
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["recover", "exhaust", "cancel"])
+async def test_openai_http_500_uses_run_recovery_without_replaying_tools(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    recovery_waits: list[float],
+    outcome: str,
+) -> None:
+    adapter = platform_adapter(responses_transport="sse")
+    tool_calls: list[object] = []
+    tools = ToolRegistry()
+
+    def probe(_context: Any, arguments: Any) -> Any:
+        tool_calls.append(arguments)
+        return tool_success({})
+
+    tools.register(
+        "probe",
+        "Probe",
+        {"type": "object"},
+        probe,
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=StubAgent(id="coder", model="openai/gpt-5.6-terra", allowed_tools=["probe"]),
+        adapter=cast(Any, adapter),
+        tools=tools,
+    )
+    runtime.chat_sessions.create("coder", session_id="test")
+    requests: list[httpx.Request] = []
+    retrying = asyncio.Event()
+
+    async def wait_for_cancel(_delay: float) -> None:
+        retrying.set()
+        await asyncio.Event().wait()
+
+    if outcome == "cancel":
+        monkeypatch.setattr("core.chat.recovery._sleep", wait_for_cancel)
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if len(requests) == 1:
+            return codex_sse_response(
+                {
+                    "id": "response-tool",
+                    "status": "completed",
+                    "output": [
+                        {
+                            "type": "function_call",
+                            "id": "item-probe",
+                            "call_id": "call-probe",
+                            "name": "probe",
+                            "arguments": "{}",
+                        }
+                    ],
+                }
+            )
+        if outcome == "recover" and len(requests) == 3:
+            return codex_sse_response(
+                {
+                    "id": "response-answer",
+                    "status": "completed",
+                    "output": [
+                        {"type": "message", "content": [{"type": "output_text", "text": "Done"}]}
+                    ],
+                }
+            )
+        return httpx.Response(500, text="test-server-error", headers={"Retry-After": "1"})
+
+    try:
+        with respx.mock:
+            respx.post(PLATFORM_RESPONSES_URL).mock(side_effect=respond)
+            loop = build_chat_loop(runtime)
+            if outcome == "cancel":
+                run = await loop.start_run("coder", "Work", session_id="test")
+                await retrying.wait()
+                run.request_cancel(reason="user")
+                with pytest.raises(RunCancelledError):
+                    await run.wait()
+                assert len(requests) == 2
+            elif outcome == "exhaust":
+                with pytest.raises(ProviderError) as caught:
+                    await loop.send("coder", "Work", session_id="test")
+                assert caught.value.status_code == 500 and caught.value.retryable
+                assert len(requests) == 10  # One completed Tool step, then nine attempts.
+                assert len(recovery_waits) == 8
+            else:
+                result = await loop.send("coder", "Work", session_id="test")
+                assert result.content == "Done"
+                assert len(requests) == 3
+                assert len(recovery_waits) == 1 and recovery_waits[0] >= 1
+        assert len(tool_calls) == 1
+        assert len([message for message in history(runtime, "test") if message.role == "tool"]) == 1
+    finally:
+        await adapter.aclose()
 
 
 @pytest.mark.asyncio

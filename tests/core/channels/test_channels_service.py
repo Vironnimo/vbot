@@ -7,11 +7,14 @@ import json
 import logging
 import threading
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast, override
 
 import pytest
 
+import core.channels.channels as channels_module
+import core.channels.state as state_module
 from core.attachments import AttachmentStore
 from core.channels import (
     ChannelConfig,
@@ -20,10 +23,11 @@ from core.channels import (
     ChannelNotFoundError,
     ChannelStorage,
 )
-from core.channels.adapter import DeniedChatLog, RouteFacts
+from core.channels.adapter import DeniedChatLog, RouteFacts, RunButtonBinding
 from core.channels.discord import DiscordChannelAdapter
 from core.channels.telegram import TelegramChannelAdapter
 from core.database import DatabaseUnavailableError
+from core.utils.timestamps import format_canonical_timestamp
 from tests.core.channels.channels_test_support import (
     BlockingAdapter,
     DelayedStopAdapter,
@@ -239,6 +243,71 @@ async def test_service_serves_running_channels_until_they_stop(
         assert service.denied_chats("tg-enabled") == []
         with pytest.raises(ChannelNotFoundError):
             await service.ensure_outbound_session("tg-enabled", "12345")
+    finally:
+        await service.aclose()
+        service.close()
+
+
+@pytest.mark.asyncio
+async def test_service_collects_expired_run_buttons_at_start_and_periodically(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = datetime(2026, 9, 1, tzinfo=UTC)
+    monkeypatch.setattr(state_module, "utc_now_timestamp", lambda: format_canonical_timestamp(now))
+    paused: asyncio.Queue[float] = asyncio.Queue()
+    ticks: asyncio.Queue[None] = asyncio.Queue()
+
+    async def next_sweep(seconds: float) -> None:
+        paused.put_nowait(seconds)
+        await ticks.get()
+
+    monkeypatch.setattr(channels_module, "_sleep", next_sweep)
+    service = make_service(tmp_path)
+    try:
+        await service.create_channel(make_config(enabled=False))
+        state = service._state
+        for name in ("old", "later"):
+            state.save_run_button_binding(
+                "tg-assistant",
+                RunButtonBinding(
+                    id=name,
+                    platform_target="target",
+                    thread_id=None,
+                    origin_session_id="origin",
+                    original_button_data=("run:done",),
+                    created_at=format_canonical_timestamp(now),
+                    consumed=True,
+                ),
+            )
+            if name == "old":
+                now += state_module.RUN_BUTTON_RETENTION
+        service.start()
+        assert await paused.get() == 3600
+        assert (
+            state.claim_run_button_binding(
+                "tg-assistant", "old", platform_target="target", thread_id=None
+            ).status
+            == "missing"
+        )
+        assert (
+            state.claim_run_button_binding(
+                "tg-assistant", "later", platform_target="target", thread_id=None
+            ).status
+            == "consumed"
+        )
+        now += state_module.RUN_BUTTON_RETENTION
+        ticks.put_nowait(None)
+        assert await paused.get() == 3600
+        assert (
+            state.claim_run_button_binding(
+                "tg-assistant", "later", platform_target="target", thread_id=None
+            ).status
+            == "missing"
+        )
+        maintenance = tuple(service._retention_tasks)
+        service.stop()
+        await service.aclose()
+        assert maintenance and all(task.done() for task in maintenance)
     finally:
         await service.aclose()
         service.close()

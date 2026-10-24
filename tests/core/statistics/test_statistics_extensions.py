@@ -5,13 +5,16 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta
 
+from core.chat.messages import ChatMessage
 from core.sessions import ChatSessionManager, SessionAddress
 from core.tools import tool_success
 from core.usage import UsageRecorder
+from core.utils.timestamps import format_canonical_timestamp
 from tests.core.sessions.history_fixtures import seed_history
 from tests.core.statistics.statistics_test_support import (
     BASE,
     StatisticsFactory,
+    _admit,
     _assistant,
     _run_summary,
     _tool,
@@ -121,7 +124,9 @@ def test_windowed_report_keeps_only_groups_with_in_window_activity(
     manager: ChatSessionManager, statistics: StatisticsFactory
 ) -> None:
     old = BASE - timedelta(days=30)
-    _participant(manager, group_id="swr_old", participant_id="p1", name="Ada", model="p/m", at=old)
+    address = _participant(
+        manager, group_id="swr_old", participant_id="p1", name="Ada", model="p/m", at=old
+    )
     _participant(manager, group_id="swr_new", participant_id="p2", name="Bo", model="p/m")
     service = statistics([])
 
@@ -136,6 +141,25 @@ def test_windowed_report_keeps_only_groups_with_in_window_activity(
     assert extension["groups"][0]["title"] is None
     [extension] = all_time["extensions"]["extensions"]
     assert [group["group_id"] for group in extension["groups"]] == ["swr_new", "swr_old"]
+
+    # A new Tool start keeps an otherwise old group visible before any Result
+    # exists. A later record outside the window must not hide its activity.
+    started_at = BASE + timedelta(minutes=1)
+    _admit(manager, address, "pending", at=started_at)
+    writer = manager.get(address).for_run("pending")
+    asyncio.run(
+        writer.start_tool_invocation_async(
+            call_id="pending", name="read", started_at=format_canonical_timestamp(started_at)
+        )
+    )
+    writer.append(ChatMessage.note("later", timestamp=BASE + timedelta(days=2)))
+    [extension] = service.report(
+        since=BASE, until=BASE + timedelta(hours=1), sections=["extensions"]
+    )["extensions"]["extensions"]
+    assert [group["group_id"] for group in extension["groups"]] == ["swr_old", "swr_new"]
+    activity = extension["groups"][0]["activity"]
+    assert activity["tool_calls"] == 1
+    assert activity["last_activity"] == format_canonical_timestamp(started_at)
 
 
 def test_deleted_group_leaves_the_report(

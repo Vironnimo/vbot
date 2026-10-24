@@ -49,6 +49,7 @@ def test_create_allocates_unique_files_in_the_category_directory(
     [
         ("unknown", ".log"),
         ("atomic", ".tmp"),
+        ("bash", ".log"),
         ("commands", "log"),
         ("commands", "../escape"),
     ],
@@ -69,16 +70,30 @@ def test_constructor_rejects_category_path_traversal(tmp_path: Path) -> None:
         TemporaryFileManager(tmp_path, retention={"..": timedelta(hours=1)})
 
 
-def test_sweep_applies_category_retention_and_spares_active_files(tmp_path: Path) -> None:
+@pytest.mark.parametrize("command_folder", ["commands", "bash"])
+def test_sweep_applies_category_retention_and_spares_active_files(
+    tmp_path: Path, command_folder: str
+) -> None:
     manager = TemporaryFileManager(tmp_path)
+
+    def command_log(index: int):
+        if command_folder == "commands":
+            return manager.create("commands", ".log")
+        path = manager.root / "bash" / f"old-command-{index}.log"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("retired shell output", encoding="utf-8")
+        return manager.reopen(path)
+
     active = manager.create("subagents", ".md")
     expired_subagent = manager.create("subagents", ".md")
-    retained_command = manager.create("commands", ".log")
-    expired_command = manager.create("commands", ".log")
+    active_command = command_log(0)
+    retained_command = command_log(1)
+    expired_command = command_log(2)
     expired_subagent.finish()
     retained_command.finish()
     expired_command.finish()
     _age(active.path, seconds=96 * 60 * 60)
+    _age(active_command.path, seconds=96 * 60 * 60)
     _age(expired_subagent.path, seconds=25 * 60 * 60)
     _age(retained_command.path, seconds=25 * 60 * 60)
     _age(expired_command.path, seconds=73 * 60 * 60)
@@ -86,12 +101,31 @@ def test_sweep_applies_category_retention_and_spares_active_files(tmp_path: Path
     manager.sweep()
 
     assert active.path.exists()
+    assert active_command.path.exists()
     assert not expired_subagent.path.exists()
     assert retained_command.path.exists()
     assert not expired_command.path.exists()
 
 
-@pytest.mark.parametrize("redirected", ["artifacts", "temp", "commands"])
+@pytest.mark.parametrize("commands_enabled", [False, True])
+def test_retired_shell_logs_follow_the_enabled_commands_policy(
+    tmp_path: Path, commands_enabled: bool
+) -> None:
+    manager = TemporaryFileManager(
+        tmp_path,
+        retention={"commands" if commands_enabled else "subagents": timedelta(hours=1)},
+    )
+    retired = manager.root / "bash" / "old-command.log"
+    retired.parent.mkdir(parents=True)
+    retired.write_text("retired shell output", encoding="utf-8")
+    _age(retired, seconds=2 * 60 * 60)
+
+    manager.sweep()
+
+    assert retired.exists() is not commands_enabled
+
+
+@pytest.mark.parametrize("redirected", ["artifacts", "temp", "commands", "bash"])
 def test_sweep_never_follows_redirected_category_directories(
     tmp_path: Path, redirected: str
 ) -> None:
@@ -99,7 +133,7 @@ def test_sweep_never_follows_redirected_category_directories(
     manager = TemporaryFileManager(data_dir)
     outside = tmp_path / "outside"
     outside.mkdir()
-    parts = ["artifacts", "temp", "commands"]
+    parts = ["artifacts", "temp", "bash" if redirected == "bash" else "commands"]
     depth = parts.index(redirected)
     link = data_dir.joinpath(*parts[: depth + 1])
     category = outside.joinpath(*parts[depth + 1 :])

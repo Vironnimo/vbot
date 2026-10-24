@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import stat
+from datetime import timedelta
 from typing import TYPE_CHECKING
 
 from core.attachments.attachments import AttachmentError, AttachmentNotFoundError
@@ -10,20 +11,19 @@ from core.database import DatabaseError
 from core.storage.layout import DataDirectoryLayout
 from core.utils.file_status import is_link_status, stat_or_none
 from core.utils.logging import get_logger
+from core.utils.timestamps import parse_timestamp, utc_now_timestamp
 
 if TYPE_CHECKING:
     from core.attachments.attachments import AttachmentStore
     from core.sessions import ChatSessionManager
 
 _LOGGER = get_logger("attachments")
+UNUSED_UPLOAD_LIFETIME = timedelta(days=10)
 
 
 def collect_session_orphans(store: AttachmentStore, sessions: ChatSessionManager) -> int:
     """No Run, producer or queued admission may overlap this lifecycle pass."""
     try:
-        candidates = sessions.unreferenced_attachment_ids()
-        if not candidates:
-            return 0
         root = store._attachments_dir
         status = stat_or_none(root, follow_symlinks=False)
         if status is not None and (
@@ -32,6 +32,10 @@ def collect_session_orphans(store: AttachmentStore, sessions: ChatSessionManager
             or root.resolve() != DataDirectoryLayout(store._data_dir.resolve()).attachments
         ):
             raise AttachmentError("Attachment collection requires its canonical directory")
+        expired = _expired_upload_ids(store) if status is not None else ()
+        candidates = sessions.unreferenced_attachment_ids(additional=expired)
+        if not candidates:
+            return 0
     except (AttachmentError, DatabaseError, OSError) as exc:
         _LOGGER.warning("Attachment collection deferred (reason=%s)", type(exc).__name__)
         return 0
@@ -77,3 +81,25 @@ def collect_session_orphans(store: AttachmentStore, sessions: ChatSessionManager
         if removed:
             _LOGGER.info("Unreferenced attachments removed (count=%d)", removed)
     return removed
+
+
+def _expired_upload_ids(store: AttachmentStore) -> tuple[str, ...]:
+    """Valid ten-day-old uploads are candidates, never authority to delete them."""
+    cutoff = parse_timestamp(utc_now_timestamp()) - UNUSED_UPLOAD_LIFETIME
+    expired: list[str] = []
+    for sidecar in store._attachments_dir.iterdir():
+        if sidecar.suffix != ".json":
+            continue
+        try:
+            status = stat_or_none(sidecar, follow_symlinks=False)
+            if status is None or is_link_status(status) or not stat.S_ISREG(status.st_mode):
+                continue
+            record = store._get_record(sidecar.stem, require_blob=False)
+            if parse_timestamp(record.stored_at) <= cutoff:
+                expired.append(record.id)
+        except (AttachmentError, OSError, ValueError) as exc:
+            _LOGGER.warning(
+                "Attachment upload expiry deferred (reason=%s)",
+                type(exc).__name__,
+            )
+    return tuple(expired)

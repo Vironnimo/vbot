@@ -180,9 +180,11 @@ class SessionStore:
     def referenced_attachment_ids(self) -> frozenset[str]:
         return self._read(_store_attachments.referenced)
 
-    def unreferenced_attachment_ids(self) -> tuple[str, ...]:
-        """Collectable known blobs at a quiescent startup/shutdown boundary only."""
-        candidates = self._read(_store_attachments.unreferenced)
+    def unreferenced_attachment_ids(self, *, additional: Sequence[str] = ()) -> tuple[str, ...]:
+        """Unowned known or supplied blobs at a quiescent lifecycle boundary only."""
+        candidates = self._read(
+            lambda connection: _store_attachments.unreferenced(connection, additional=additional)
+        )
         if not candidates:
             return ()
         protected: set[str] = set()

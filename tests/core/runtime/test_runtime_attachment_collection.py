@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+import core.attachments._collection as collection
 from core.attachments import AttachmentStore
 from core.chat import ChatMessage
 from core.runtime import Runtime
@@ -16,16 +19,25 @@ from core.utils.config import Config
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("closing", ["clean", "failed", "synchronous"])
+@pytest.mark.parametrize("admitted", [True, False], ids=["orphan", "unused-upload"])
 async def test_shutdown_only_collects_after_a_successful_async_drain(
-    config: Config, tmp_path: Path, closing: str
+    config: Config, tmp_path: Path, closing: str, admitted: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     runtime = Runtime(config)
     sessions = ChatSessionManager(tmp_path)
     attachments = AttachmentStore(tmp_path)
     record = attachments.store("file.txt", b"bytes")
-    session = sessions.create("coder")
-    session.append(ChatMessage.user(f"Path: {record.file_path}"))
-    sessions.delete(session.address)
+    if admitted:
+        session = sessions.create("coder")
+        session.append(ChatMessage.user(f"Path: {record.file_path}"))
+        sessions.delete(session.address)
+    else:
+        now = datetime(2026, 10, 25, tzinfo=UTC)
+        monkeypatch.setattr(collection, "utc_now_timestamp", lambda: now.isoformat())
+        sidecar = Path(record.file_path).with_suffix(".json")
+        metadata = json.loads(sidecar.read_text(encoding="utf-8"))
+        metadata["stored_at"] = (now - timedelta(days=10)).isoformat()
+        sidecar.write_text(json.dumps(metadata), encoding="utf-8", newline="\n")
     runtime._chat_sessions = sessions  # noqa: SLF001 - lifecycle-owned resources.
     runtime._attachment_store = attachments  # noqa: SLF001
     if closing == "failed":

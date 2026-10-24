@@ -84,6 +84,12 @@ async def test_a_completed_tool_call_runs_while_the_model_still_streams(tmp_path
         yield _call("call_paris", "Paris")
         # The stream moved past the first call: it runs before the turn ends.
         await _until(lambda: started == ["call_berlin"])
+        session = runtime.chat_sessions.get(session_address("coder", SESSION_ID))
+        [invocation] = session.tool_invocations_since().invocations
+        # Dispatch is durable even before its Assistant turn or Result commits.
+        assert invocation.name == "get_weather"
+        assert (invocation.status, invocation.result_ok) == ("running", None)
+        assert not any(message.role == "tool" for message in history(runtime))
         yield {"type": "finish", "reason": "tool_calls"}
 
     async def final_turn() -> AsyncIterator[JsonObject]:
@@ -112,6 +118,13 @@ async def test_a_completed_tool_call_runs_while_the_model_still_streams(tmp_path
     berlin = {"city": "Berl\ufffdin"}
     assert started_events[0].payload["tool_call"]["arguments"] == berlin
     assert (tool_turn_message.tool_calls or [])[0].arguments == berlin
+    invocations = (
+        runtime.chat_sessions.get(session_address("coder", SESSION_ID))
+        .tool_invocations_since()
+        .invocations
+    )
+    assert len(invocations) == last_run(runtime).tool_call_count == 2
+    assert all(item.status == "completed" and item.result_ok is True for item in invocations)
 
 
 @pytest.mark.asyncio
