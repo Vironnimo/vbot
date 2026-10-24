@@ -25,7 +25,11 @@
 
   function schedule() {
     clearTimeout(timer);
-    if (!disposed && visibility.visible && !busy)
+    const pending =
+      status?.setup === 'installing' ||
+      status?.state === 'starting' ||
+      status?.state === 'pairing';
+    if (!disposed && visibility.visible && !busy && (pending || error))
       timer = setTimeout(refresh, 3000);
   }
   async function refresh() {
@@ -75,10 +79,11 @@
 
   $effect(() => {
     const visible = visibility.visible;
+    const collapsed = hideWhenConnected;
     untrack(() => {
       ++revision;
       clearTimeout(timer);
-      if (visible) void refresh();
+      if (visible && (!collapsed || !connected)) void refresh();
     });
   });
   onDestroy(() => {

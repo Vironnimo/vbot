@@ -7,6 +7,7 @@ import time
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -718,13 +719,14 @@ class RunExecution:
             note = await pending
             async with sessions.write_lock(session.address):
                 await context.session_snapshot.refresh(session)
-                await context.session_snapshot.append(session, [note])
-                await sessions.run_async(
-                    sessions.mutate_metadata,
-                    session.address,
-                    lambda metadata: metadata.update(
-                        {CONTEXT_COMMANDS_META_KEY: {"note_id": note.id}}
+                await context.session_snapshot.commit(
+                    session,
+                    partial(
+                        session.append_many_async,
+                        [note],
+                        metadata_update={CONTEXT_COMMANDS_META_KEY: {"note_id": note.id}},
                     ),
+                    written=[note],
                 )
         except RunInterruptedError:
             raise

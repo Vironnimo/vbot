@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from core.chat.errors import ChatSessionError
@@ -205,14 +205,16 @@ class SessionLifecycle:
             self._notify_callbacks("title_changed", self.title_changed_callbacks, target)
         return ChatSession(self._store, target)
 
-    async def archive(self, address: SessionAddress) -> ArchiveEntryRef:
+    async def archive(
+        self, address: SessionAddress, *, facts: Mapping[str, Any] | None = None
+    ) -> ArchiveEntryRef:
         """Archive one live Session as its own ``session`` archive entry.
 
         Its live review forks join the entry, except one with a running Run.
         An owner-managed Session refuses with a ``ChatSessionError``.
         """
         async with self.write_lock(address):
-            entry = await self._store.run_async(self._store.archive, address)
+            entry = await self._store.run_async(self._store.archive, address, facts=facts)
         self._notify_archive_changed()
         return entry
 

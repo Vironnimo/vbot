@@ -253,19 +253,19 @@ async def test_session_without_passages_is_stamped_and_not_reread(
 async def test_session_that_stops_yielding_passages_loses_its_rows(
     sessions: ChatSessionManager,
     vector_backend: VectorBackendFactory,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = sessions.create("coder", session_id="becomes-empty")
-    session.append(ChatMessage.user("I love bananas and fruit", timestamp=timestamp(1)))
+    original = ChatMessage.user("I love bananas and fruit", timestamp=timestamp(1))
+    session.append(original)
     embeddings = StubEmbeddings()
     recall = vector_backend(embeddings=embeddings)
     await embed_documents(recall.index, sessions, embeddings)
     first = await recall.search_page(request("fruit"))
     assert [hit.session_id for hit in first.hits] == ["becomes-empty"]
 
-    # A changed history that no longer yields Passages (as under a stricter policy).
-    session.append(ChatMessage.user("still here, but inert", timestamp=timestamp(2)))
-    monkeypatch.setattr(_passage_catalog, "build_session_passages", lambda _messages: [])
+    # A real history edit invalidates the append cursor. An empty replacement
+    # has no searchable text, so the previous Passage must disappear.
+    session.apply_edit(original.id, [ChatMessage.user("", timestamp=timestamp(2))])
     second = await recall.search_page(request("fruit"))
 
     assert second.hits == ()

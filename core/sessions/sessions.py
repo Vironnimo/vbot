@@ -208,8 +208,10 @@ class ChatSessionManager:
             run_kind=run_kind,
         )
 
-    async def archive(self, address: SessionAddress) -> ArchiveEntryRef:
-        return await self._lifecycle.archive(address)
+    async def archive(
+        self, address: SessionAddress, *, facts: Mapping[str, Any] | None = None
+    ) -> ArchiveEntryRef:
+        return await self._lifecycle.archive(address, facts=facts)
 
     def set_title(self, address: SessionAddress, title: str) -> str | None:
         return self._lifecycle.set_title(address, title)

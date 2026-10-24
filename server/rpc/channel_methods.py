@@ -40,8 +40,12 @@ async def _list_channels(state: Any, params: JsonObject) -> JsonObject:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "channel.list does not accept params")
 
     try:
-        configs = await state.runtime.channel_service.list_channels_async()
-        channels = [config.to_dict() for config in configs]
+        channel_service = state.runtime.channel_service
+        configs = await channel_service.list_channels_async()
+        channels = [
+            {**config.to_dict(), **_channel_status_facts(channel_service, config)}
+            for config in configs
+        ]
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return {"channels": channels}
@@ -382,16 +386,19 @@ async def _channel_status(state: Any, params: JsonObject) -> JsonObject:
     try:
         channel_service = state.runtime.channel_service
         config = await channel_service.get_channel(channel_id)
-        health = _channel_health(channel_service, config)
-        denied_chats = [entry.to_dict() for entry in channel_service.denied_chats(channel_id)]
+        return _channel_status_facts(channel_service, config)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
+
+
+def _channel_status_facts(channel_service: Any, config: ChannelConfig) -> JsonObject:
+    """In-memory row facts shared by list and the detailed status read."""
     return {
         "id": config.id,
-        **health,
-        "denied_chats": denied_chats,
+        **_channel_health(channel_service, config),
+        "denied_chats": [entry.to_dict() for entry in channel_service.denied_chats(config.id)],
         **(
-            channel_service.connection_status(channel_id)
+            channel_service.connection_status(config.id)
             if config.platform in {"slack", "mattermost", "whatsapp"}
             else {}
         ),

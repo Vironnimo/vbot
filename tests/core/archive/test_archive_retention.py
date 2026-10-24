@@ -456,8 +456,12 @@ async def test_a_sweep_deletes_idle_ephemeral_sessions_and_keeps_fresh_busy_and_
 
 
 @pytest.mark.asyncio
-async def test_an_ephemeral_session_whose_purge_is_skipped_stays_archived_and_warns(
-    world: ArchiveWorld, timer: _Timer, caplog: pytest.LogCaptureFixture
+@pytest.mark.parametrize("retention_unknown", [False, True], ids=["disabled", "unreadable"])
+async def test_an_ephemeral_session_whose_purge_is_skipped_is_retried_after_restart(
+    world: ArchiveWorld,
+    timer: _Timer,
+    caplog: pytest.LogCaptureFixture,
+    retention_unknown: bool,
 ) -> None:
     agent_with_session(world, "coder")
     for session_id in ("first", "second"):
@@ -484,13 +488,53 @@ async def test_an_ephemeral_session_whose_purge_is_skipped_stays_archived_and_wa
     )
     await _sweep_once(service, timer)
 
-    # The other Session is still deleted; the skipped one stays restorable.
+    # The other Session is still deleted; the skipped one keeps its expiry intent.
     assert ("first", "live") not in world.session_rows("coder")
     assert ("second", "live") not in world.session_rows("coder")
-    assert len(world.sessions.archive_ledger.page(ArchiveEntryFilter()).entries) == 1
+    entries = world.sessions.archive_ledger.page(ArchiveEntryFilter()).entries
+    assert len(entries) == 1
+    assert entries[0].facts["ephemeral_expiry"] is True
     assert "Deleted 1 expired Ephemeral Sessions" in caplog.messages
     assert [
         record.getMessage().split(" (")[0]
         for record in caplog.records
         if record.levelno >= logging.WARNING and "Ephemeral" in record.getMessage()
     ] == ["Could not purge an expired Ephemeral Session"]
+
+    # A new service must retry from durable intent, with ordinary retention off.
+    await _sweep_once(_service(world, _Setting(None, unknown=retention_unknown)), timer)
+    assert not world.sessions.archive_ledger.page(ArchiveEntryFilter()).entries
+    assert all(session_id != "first" for session_id, _state in world.session_rows("coder"))
+
+
+@pytest.mark.asyncio
+async def test_ephemeral_expiry_survives_stop_after_archive_before_cleanup(
+    world: ArchiveWorld, timer: _Timer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent_with_session(world, "coder")
+    address = world.sessions.create(
+        "coder", session_id="expired", metadata={"ephemeral": True}
+    ).address
+    with sqlite3.connect(world.data_dir / "sessions.db") as connection:
+        connection.execute(
+            "UPDATE sessions SET last_activity_at = ? WHERE agent_id = 'coder' "
+            "AND session_id = 'expired'",
+            (format_canonical_timestamp(_NOW - timedelta(hours=30)),),
+        )
+
+    async def stop_after_archive(_roots: Any) -> None:
+        raise asyncio.CancelledError
+
+    with monkeypatch.context() as interruption:
+        interruption.setattr(world.scratch_areas, "remove_areas", stop_after_archive)
+        with pytest.raises(asyncio.CancelledError):
+            await _service(world, _Setting(None)).expire_ephemeral_sessions()
+
+    assert not world.sessions.exists(address)
+    entries = world.sessions.archive_ledger.page(ArchiveEntryFilter()).entries
+    assert len(entries) == 1
+    assert entries[0].facts["ephemeral_expiry"] is True
+
+    await _sweep_once(_service(world, _Setting(None)), timer)
+    assert not world.sessions.archive_ledger.page(ArchiveEntryFilter()).entries
+    assert all(session_id != "expired" for session_id, _state in world.session_rows("coder"))

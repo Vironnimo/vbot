@@ -92,6 +92,13 @@ and the installer's `UpdateChannel` definition record the update channel the
 installed package follows. A development build without a release key is usable
 with an explicitly selected local `vbot update --package <archive>`.
 
+CI never passes the private key to the builder, compilers, dependency installation
+or smokes. It embeds the existing public key from `scripts/install.sh` in each
+installer. After all three shapes pass, a fresh signing job runs only the isolated
+`scripts/sign_packages.py` against the opaque archives. Its private key must match
+that published public identity. Only the final `vbot-windows` artifact carries
+signatures; intermediate `unsigned-windows-*` artifacts are not published.
+
 CI builds and signs every published package; nothing is published from a local
 build. The [Windows package workflow](../../.github/workflows/windows-package.yml)
 builds all three shapes, smoke-tests each payload's installation, update and

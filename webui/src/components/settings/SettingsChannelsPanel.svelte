@@ -200,7 +200,7 @@
 
         {#if channel.platform === 'whatsapp' || channel.denied_chats?.length}
           <div class="s-channel-attention">
-            {#if channel.platform === 'whatsapp'}
+            {#if channel.platform === 'whatsapp' && (expanded || channel.running !== true)}
               <WhatsAppSetup
                 {active}
                 channelId={channel.id}

@@ -297,7 +297,9 @@ class RequestBuilder:
         for declaration in capability.prompt_blocks:
             block_id = f"extension_session:{declaration.slug}"
             try:
-                rendered = await invoke_extension_handler(declaration.render, binding)
+                rendered = await invoke_extension_handler(
+                    declaration.render, binding, extension_name=capability.identity.name
+                )
             except Exception:
                 _LOGGER.warning("Session prompt block %r failed", declaration.slug, exc_info=True)
                 if failed_blocks is not None:

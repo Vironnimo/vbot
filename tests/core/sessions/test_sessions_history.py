@@ -53,6 +53,7 @@ def test_cursor_reads_only_messages_appended_after_the_snapshot(manager) -> None
 
 def test_append_returns_every_record_since_the_cursor(manager) -> None:
     session = manager.create("coder", session_id="session-one")
+    manager.mutate_metadata(session.address, lambda metadata: metadata.update({"other": 1}))
     session.start_run("run-one")
     session.append(ChatMessage.user("first"))
     initial = session.load_since()
@@ -62,6 +63,7 @@ def test_append_returns_every_record_since_the_cursor(manager) -> None:
     delta = session.append_many(
         [ChatMessage.assistant(model="test", content="second")],
         since=initial.cursor,
+        metadata_update={"context_commands_ran": {"note_id": "saved-note"}},
     )
 
     assert delta is not None
@@ -69,6 +71,15 @@ def test_append_returns_every_record_since_the_cursor(manager) -> None:
     assert [message.role for message in delta.active_messages] == ["note", "assistant"]
     latest = session.load_since()
     assert latest is not None and delta.cursor == latest.cursor
+    assert manager.metadata_value(session.address, "other") == 1
+    assert manager.metadata_value(session.address, "context_commands_ran") == {
+        "note_id": "saved-note"
+    }
+    # Invalid metadata rolls back the accompanying history and cursor too.
+    with pytest.raises(ChatSessionError):
+        session.append_many([ChatMessage.note("rejected")], metadata_update={"seen_skills": []})
+    unchanged = session.load_since()
+    assert unchanged is not None and unchanged.cursor == latest.cursor
 
 
 def test_compaction_checkpoint_commits_only_while_its_cursor_is_current(manager) -> None:

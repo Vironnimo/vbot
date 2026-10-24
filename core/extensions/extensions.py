@@ -473,7 +473,9 @@ class ExtensionRegistry:
             raise SessionCapabilityExpiredError("session capability expired")
         if capability.runtime is None:
             return None
-        result = await invoke_extension_handler(capability.runtime.before_request, context)
+        result = await invoke_extension_handler(
+            capability.runtime.before_request, context, extension_name=capability.identity.name
+        )
         if not self._session_capability_current(binding, capability, tool_registry):
             raise SessionCapabilityExpiredError("session capability expired")
         if result is None:
@@ -503,7 +505,12 @@ class ExtensionRegistry:
         runtime = capability.runtime
         if runtime is not None and runtime.acknowledge_delivery is not None:
             assert capability is not None
-            await invoke_extension_handler(runtime.acknowledge_delivery, context, delivery)
+            await invoke_extension_handler(
+                runtime.acknowledge_delivery,
+                context,
+                delivery,
+                extension_name=capability.identity.name,
+            )
             if not self._session_capability_current(binding, capability, tool_registry):
                 raise SessionCapabilityExpiredError("session capability expired")
 
@@ -526,6 +533,7 @@ class ExtensionRegistry:
         result = await invoke_extension_handler(
             runtime.reconcile_tool_batch,
             context,
+            extension_name=capability.identity.name,
             receipts=receipts,
             persisted_call_ids=persisted_call_ids,
             turn_end_requested=turn_end_requested,
@@ -548,7 +556,12 @@ class ExtensionRegistry:
             raise SessionCapabilityExpiredError("session capability expired")
         if capability.runtime is None:
             return
-        await invoke_extension_handler(capability.runtime.run_finished, context, outcome=outcome)
+        await invoke_extension_handler(
+            capability.runtime.run_finished,
+            context,
+            extension_name=capability.identity.name,
+            outcome=outcome,
+        )
         if not self._session_capability_current(binding, capability, tool_registry):
             raise SessionCapabilityExpiredError("session capability expired")
 

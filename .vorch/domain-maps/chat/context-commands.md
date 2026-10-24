@@ -23,7 +23,7 @@ Read when changing the commands a Session starts with: which Runs run them, wher
 
 ## The note
 
-One persisted note (`ChatMessage.note`, a System Reminder; `model-communication.md`) after the first input, before the first Model request, recorded in the metadata marker as `{"note_id": ...}`. It is a snapshot: nothing refreshes it, and Compaction summarizes it like other history.
+One persisted note (`ChatMessage.note`, a System Reminder; `model-communication.md`) after the first input, before the first Model request, recorded in the metadata marker as `{"note_id": ...}`. The note and marker commit in the same Session transaction, so a Stop after that commit cannot repeat the commands. It is a snapshot: nothing refreshes it, and Compaction summarizes it like other history.
 
 - A sentence names who set the commands up (`for new Sessions in this Project` or `for your new Sessions in your Workspace`) and the working directory, then a JSON record per command in order: `{"command", "exit_code", "output", "cut"?}` or `{"command", "error"}`, escaped with `quote_external_value` so angle brackets in outputs cannot open tags. Commands, outputs and errors are masked for known Secret values.
 - Outputs are LF-normalized, trimmed of trailing spaces and surrounding blank lines, and cut to an equal share of 8,000 characters (`CONTEXT_OUTPUT_MAX_CHARS`) among the commands that ran, at a line break in the second half of the share where one exists; a cut is named in the note.

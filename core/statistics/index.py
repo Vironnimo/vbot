@@ -34,6 +34,7 @@ database's bounded worker pool through :meth:`StatisticsIndex.run_async`.
 from __future__ import annotations
 
 import contextlib
+import json
 import sqlite3
 import threading
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -624,7 +625,11 @@ def _reconcile(
             )
     versions = _source(sessions.list_history_versions, [entry.address for entry in listed.values()])
     _follow_history(connection, _source(lambda: sessions.history_id), changes)
-    stored = _stored_sessions(connection)
+    stored = _stored_sessions(
+        connection,
+        selected=None if prune else tuple(listed),
+        generations=tuple(version[0] for version in versions.values()),
+    )
     # A scoped read need not prune other scopes, but an observed generation
     # at a new address proves its old projection obsolete. Retire it before
     # inserting the destination so ledger joins have exactly one Session.
@@ -720,7 +725,33 @@ def _follow_history(
     connection.execute("INSERT INTO stat_session_state (history_id) VALUES (?)", (history_id,))
 
 
-def _stored_sessions(connection: sqlite3.Connection) -> dict[tuple[str, str, str], _StoredSession]:
+def _stored_sessions(
+    connection: sqlite3.Connection,
+    *,
+    selected: Sequence[tuple[str, str, str]] | None,
+    generations: Sequence[str],
+) -> dict[tuple[str, str, str], _StoredSession]:
+    columns = """
+        project_id, agent_id, session_id, session_key, generation_id,
+        history_revision, next_seq, last_message_id, min_instant, max_instant,
+        owner_name, is_subagent
+    """
+    query = f"SELECT {columns} FROM stat_sessions"
+    parameters: tuple[str, ...] = ()
+    if selected is not None:
+        # Exact addresses and the generations observed there are independent
+        # indexed lookups: the latter also finds a moved Session's former row.
+        query += """
+            WHERE (project_id, agent_id, session_id) IN (
+                SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),
+                    json_extract(value, '$[2]') FROM json_each(?)
+            )
+        """
+        query += f"""
+            UNION SELECT {columns} FROM stat_sessions
+            WHERE generation_id <> '' AND generation_id IN (SELECT value FROM json_each(?))
+        """
+        parameters = (json.dumps(selected), json.dumps(generations))
     return {
         (str(row[0]), str(row[1]), str(row[2])): _StoredSession(
             session_key=int(row[3]),
@@ -732,14 +763,7 @@ def _stored_sessions(connection: sqlite3.Connection) -> dict[tuple[str, str, str
             max_instant=row[9],
             flags=(str(row[10]), int(row[11])),
         )
-        for row in connection.execute(
-            """
-            SELECT project_id, agent_id, session_id, session_key, generation_id,
-                history_revision, next_seq, last_message_id, min_instant, max_instant,
-                owner_name, is_subagent
-            FROM stat_sessions
-            """
-        )
+        for row in connection.execute(query, parameters)
     }
 
 

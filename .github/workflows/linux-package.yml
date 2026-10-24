@@ -67,11 +67,12 @@ jobs:
       - name: Install the builder's dependencies
         run: python -m pip install httpx cryptography psutil
       - name: Build package and dependency inventory
-        env:
-          VBOT_RELEASE_SIGNING_KEY: ${{ secrets.VBOT_RELEASE_SIGNING_KEY }}
         run: |
           revision="$(git rev-parse HEAD)"
           version="$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")"
+          if [ "${{ inputs.release_mode }}" = "true" ]; then
+            python -c "from pathlib import Path; from scripts.package_build import verify_release_source; verify_release_source(Path('.'), '$revision')"
+          fi
           arguments=(
             --source .
             --output build/linux
@@ -81,9 +82,6 @@ jobs:
             --channel "${{ inputs.channel || 'release' }}"
             --cache "${RUNNER_TEMP}/vbot-runtime-cache"
           )
-          if [ "${{ inputs.release_mode }}" = "true" ]; then
-            arguments+=(--release-mode)
-          fi
           python scripts/build_linux.py "${arguments[@]}"
       - name: Smoke packaged install, update, lifecycle and uninstall
         run: python scripts/linux/smoke.py --package "build/linux/${{ matrix.platform }}/server"
@@ -94,10 +92,44 @@ jobs:
           cp "build/linux/artifacts/vbot-${{ matrix.platform }}-server.zip" "$files/"
           cp "build/linux/artifacts/vbot-${{ matrix.platform }}-server-runtime-inventory.json" "$files/"
           cp build/linux/artifacts/vbot-release.json "$files/"
-          signature="build/linux/artifacts/vbot-${{ matrix.platform }}-server.zip.sig"
-          if [ -f "$signature" ]; then cp "$signature" "$files/"; fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: vbot-${{ matrix.platform }}
+          name: unsigned-${{ matrix.platform }}
           path: build/linux/release-files/*
+          if-no-files-found: error
+
+  sign:
+    name: Sign Linux archives
+    needs: package
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          sparse-checkout: |
+            scripts/sign_packages.py
+            scripts/install.sh
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.14"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: unsigned-linux-*
+          path: assets
+          merge-multiple: true
+      - name: Install signing dependency
+        if: inputs.release_mode
+        run: >-
+          python -m pip install --only-binary=:all: cryptography==50.0.1
+      - name: Sign opaque update archives
+        if: inputs.release_mode
+        env:
+          VBOT_RELEASE_SIGNING_KEY: ${{ secrets.VBOT_RELEASE_SIGNING_KEY }}
+        run: python -I scripts/sign_packages.py --dir assets --platform linux
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: vbot-linux
+          path: assets/*
           if-no-files-found: error

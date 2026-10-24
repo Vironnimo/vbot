@@ -47,7 +47,9 @@ importlib.import_module(sys.argv[2])
 """
 
 
-@pytest.mark.parametrize("module", ["scripts.build_windows", "scripts.build_linux"])
+@pytest.mark.parametrize(
+    "module", ["scripts.build_windows", "scripts.build_linux", "scripts.sign_packages"]
+)
 def test_build_script_imports_with_only_the_standard_library(module: str) -> None:
     result = subprocess.run(
         [sys.executable, "-I", "-c", _BARE_IMPORT, str(ROOT), module],

@@ -60,7 +60,7 @@ describe('SettingsView Channels', () => {
     await openChannelsPanel();
   }
 
-  it('retries a failed channel list, then lists channels and resolves the running status of each, without a manual refresh', async () => {
+  it('retries a failed channel list and shows row status without per-channel reads until disclosure', async () => {
     let listFailure = new Error('channels offline');
     const backend = createSettingsRpcMock({
       channels: [
@@ -101,9 +101,14 @@ describe('SettingsView Channels', () => {
     expect(section.querySelector('[role="alert"]')).toBeNull();
     expect(document.body.textContent).toContain('tg-assistant');
     expect(callsTo('channel.list')).toHaveLength(2);
-    expect(callsTo('channel.status').map(([, params]) => params.id)).toEqual(
-      expect.arrayContaining(['tg-assistant', 'tg-work']),
+    expect(callsTo('channel.status')).toHaveLength(0);
+    expect(callsTo('channel.access.get')).toHaveLength(0);
+    expect(document.querySelector('.s-channel-card').textContent).toContain(
+      t('settings.channels.running'),
     );
+    buttonByAriaLabel('Edit channel tg-assistant').click();
+    await waitForCall('channel.access.get', { id: 'tg-assistant' });
+    expect(callsTo('channel.access.get')).toHaveLength(1);
     expect(
       Array.from(
         document.querySelectorAll('[data-settings-section="channels"] button'),
@@ -142,6 +147,7 @@ describe('SettingsView Channels', () => {
       },
     });
 
+    buttonByAriaLabel('Edit channel tg-assistant').click();
     await waitForCall('channel.access.get', { id: 'tg-assistant' });
     await waitForCondition(() =>
       document.querySelector('.s-channel-access-group-title'),

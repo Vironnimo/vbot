@@ -15,6 +15,7 @@ from core.chat._context_commands import CONTEXT_COMMANDS_META_KEY, CONTEXT_OUTPU
 from core.permissions import PermissionBoundary
 from core.projects import ProjectStore
 from core.runs import RunCancelledError
+from core.sessions import ChatSession
 from core.tools import ToolRegistry
 from tests.core.chat.chat_loop_support import (
     StubAdapter,
@@ -80,7 +81,10 @@ def _record(note: ChatMessage) -> list[dict[str, Any]]:
 
 
 @pytest.mark.asyncio
-async def test_the_first_run_of_a_session_gets_one_note_with_every_output(tmp_path: Path) -> None:
+@pytest.mark.parametrize("stop_after_note", [False, True])
+async def test_the_first_run_of_a_session_gets_one_note_with_every_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stop_after_note: bool
+) -> None:
     long_output = "<b>row</b>\n" * 1000
     runner = _Runner(
         {
@@ -96,16 +100,41 @@ async def test_the_first_run_of_a_session_gets_one_note_with_every_output(tmp_pa
     )
     session = runtime.chat_sessions.create("coder", session_id="source")
     loop = build_chat_loop(runtime)
-    for _ in range(2):
+    original_append = ChatSession.append_many_async
+    stopped_after_note = False
+
+    async def append_then_stop(
+        current: ChatSession, messages: list[ChatMessage], **kwargs: Any
+    ) -> Any:
+        nonlocal stopped_after_note
+        result = await original_append(current, messages, **kwargs)
+        if stop_after_note and not stopped_after_note and _context_notes(messages):
+            stopped_after_note = True
+            runtime.chat_runs.get(current.run_id).request_cancel(reason="user")
+            await asyncio.sleep(0)
+        return result
+
+    monkeypatch.setattr(ChatSession, "append_many_async", append_then_stop)
+    for index in range(2):
         run = await loop.start_run("coder", "Work", session_id=session.id)
-        await run.wait()
+        if stop_after_note and index == 0:
+            with pytest.raises(RunCancelledError):
+                await run.wait()
+            [saved_note] = _context_notes(session.load_active())
+            assert runtime.chat_sessions.metadata_value(
+                session.address, CONTEXT_COMMANDS_META_KEY
+            ) == {"note_id": saved_note.id}
+        else:
+            await run.wait()
 
     # Once, in the Workspace, after the first input and before the first answer.
     assert [workdir for _command, workdir in runner.calls] == [tmp_path / "workspace"] * 3
     messages = session.load_active()
     [note] = _context_notes(messages)
     assert isinstance(note.content, str)
-    assert [message.role for message in messages[:3]] == ["user", "note", "assistant"]
+    assert [message.role for message in messages[:2]] == ["user", "note"]
+    if not stop_after_note:
+        assert messages[2].role == "assistant"
     assert runtime.chat_sessions.metadata_value(session.address, CONTEXT_COMMANDS_META_KEY) == {
         "note_id": note.id
     }

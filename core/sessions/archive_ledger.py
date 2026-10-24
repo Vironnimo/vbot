@@ -274,6 +274,10 @@ class SessionArchiveLedger:
         """Entries an interrupted operation left in a transient state or with pending cleanup."""
         return self._store._read(_store_archive.unsettled)
 
+    def pending_purges(self) -> tuple[ArchiveEntry, ...]:
+        """Started purges and expired Ephemeral Session entries awaiting their purge."""
+        return self._store._read(_store_archive.pending_purges)
+
     def due(
         self, before: str, *, after: ArchiveEntry | None = None, limit: int = 100
     ) -> tuple[ArchiveEntry, ...]:
