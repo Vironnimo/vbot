@@ -623,11 +623,9 @@ export function scheduleRowDetails(
       {
         label: t('cron.form.watchRuns'),
         value: job.watch
-          ? t(
-              job.watch.always
-                ? 'cron.watchRuns.always'
-                : 'cron.watchRuns.onChange',
-            )
+          ? job.watch.always
+            ? t('cron.watchRuns.always')
+            : t('cron.watchRuns.onChange')
           : '',
       },
       {
