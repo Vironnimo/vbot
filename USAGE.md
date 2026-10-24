@@ -687,7 +687,7 @@ vbot session policy set coder SESSION_ID --policy '{"enabled":false,"trigger":{"
 vbot session delete coder SESSION_ID --yes
 ```
 
-`session list` returns at most 100 Sessions by default. Use `--limit`, pass the returned JSON as `--cursor`, or explicitly request `--all` to collect every page.
+`session list` returns at most 40 Sessions by default. Use `--limit`, run the `Next:` command it prints for the following page, or explicitly request `--all` to collect every page.
 
 Deleting an Agent, Project, or Session moves its vBot-owned state into the archive rather than erasing it (see [Archive](#archive)). Project source repositories are never archived or removed.
 
