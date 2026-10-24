@@ -23,6 +23,7 @@ const loadSettingsAgentSecretsPanel = () =>
   import('../../components/settings/SettingsAgentSecretsPanel.svelte');
 const loadSettingsDebugPanel = () =>
   import('../../components/settings/SettingsDebugPanel.svelte');
+const loadDebugView = () => import('../../components/DebugView.svelte');
 const loadSettingsArchivePanel = () =>
   import('../../components/settings/SettingsArchivePanel.svelte');
 const loadSettingsExtensionsPanel = () =>
@@ -78,7 +79,8 @@ export const settingsPanelLoaders = {
   appearance: loadSettingsAppearancePanel,
   archive_retention: loadSettingsArchivePanel,
   archive_entries: loadArchiveEntriesPanel,
-  debug: loadSettingsDebugPanel,
+  debug_capture: loadSettingsDebugPanel,
+  debug_traces: loadDebugView,
   server: loadSettingsGeneralPanel,
   access: loadSettingsAccessPanel,
   desktop_connection: loadDesktopConnectionSettings,

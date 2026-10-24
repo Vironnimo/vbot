@@ -62,7 +62,6 @@ export default Object.freeze({
   'debug.captureDisabled': 'Capture disabled',
   'debug.inspectorSubtitle':
     'Explore exactly what was sent to the Provider and what came back.',
-  'debug.fullCapture': 'Stored locally · full request and response bodies',
   'debug.captureAndStorage': 'Capture & storage',
   'debug.capturePrivacy':
     'Bodies are stored in full, including prompts. Recognized secret headers and URL parameters are redacted; body content is not redacted.',
@@ -111,9 +110,9 @@ export default Object.freeze({
   'debug.traceType': 'Type',
   'debug.traceId': 'Trace ID',
   'debug.captureEnabledHint':
-    'Every request vBot sends to a Provider is recorded with its response. Turn debug mode off in Settings → Debug.',
+    'Provider requests and responses are being recorded. Use the switch above to turn capture off.',
   'debug.captureDisabledHint':
-    'No new traces are recorded. Turn on debug mode in Settings → Debug to record Provider requests and responses.',
+    'Enable debug mode above to record and inspect Provider requests and responses, or run a Model Probe.',
   'debug.statusCountHint':
     'Stored traces and the trace limit. Beyond {limit} traces, the oldest are removed.',
   'debug.previousMatchShortcut': 'Previous match (Shift+Enter)',
@@ -123,7 +122,6 @@ export default Object.freeze({
   'debug.modelProbe.needsProvider': 'Select a Provider first.',
   'debug.modelProbe.needsConnection': 'Select a Connection first.',
   'debug.modelProbe.running': 'A probe is running.',
-  'debug.settings': 'Debug',
   'debug.enabled': 'Enable debug mode',
   'debug.traceLimit': 'Trace limit',
   'debug.request': 'Request',
@@ -134,7 +132,7 @@ export default Object.freeze({
   'debug.streamRaw': 'Raw',
   'debug.metadata': 'Metadata',
   'debug.emptyState':
-    'No traces captured yet. Enable debug mode in Settings and send a message to start recording provider requests and responses.',
+    'Send a message or run a Model Probe to capture Provider requests and responses.',
   'debug.clearConfirm': 'Clear all traces? This cannot be undone.',
   'debug.modelProbe.run': 'Probe',
   'debug.modelProbe.provider': 'Provider',
@@ -149,7 +147,7 @@ export default Object.freeze({
   'debug.enabledDescription':
     'Records full Provider requests and responses, including prompts.',
   'debug.enabledHelp':
-    'Debug mode records every request vBot sends to a Provider and its response in full, including the complete prompt content sent to Models. While it is on, the Debug view in the menu shows these traces.\n\nTraces are stored on the computer running the vBot server. API keys, tokens, and other secret values are redacted before storing.',
+    'Debug mode records Provider requests and responses, including prompts, for inspection below.\n\nTraces are stored on the computer running the vBot server. Recognized secret headers and URL parameters are redacted; body content is not redacted.',
   'debug.traceLimitHelp':
     'How many traces to keep. When a new trace goes over this limit, the oldest traces are removed. Between 1 and 500; 50 by default.',
   'statistics.range.label': 'Time range',

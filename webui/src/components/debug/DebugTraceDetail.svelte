@@ -59,7 +59,7 @@
 </script>
 
 <section class="debug-view__detail-panel" aria-label={t('debug.traceDetail')}>
-  <div class="detail-back">
+  <div class="detail-back" hidden={!trace && !loading && !error}>
     <Button variant="tertiary" onClick={onBack}
       >← {t('debug.backToTraces')}</Button
     >
@@ -207,7 +207,7 @@
     background: var(--surface);
   }
   .detail-back {
-    display: none;
+    padding: 6px 10px 0;
   }
   .detail-header {
     padding: 18px 20px 8px;
@@ -352,10 +352,6 @@
     color: var(--text-lo);
   }
   @media (max-width: 760px) {
-    .detail-back {
-      display: block;
-      padding: 6px 10px 0;
-    }
     .detail-header {
       padding: 10px 14px;
     }

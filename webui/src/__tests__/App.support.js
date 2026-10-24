@@ -410,7 +410,7 @@ export function sidebarNavButton(viewIdOrTitle) {
 export function settingsPanelButton(pageId) {
   return buttonWithText(
     'nav.settings-nav .snav-item',
-    t(`settings.pages.${pageId}`),
+    pageId === 'debug' ? t('debug.title') : t(`settings.pages.${pageId}`),
   );
 }
 
@@ -541,6 +541,7 @@ export function createSettingsRpcMock({ initialDebugEnabled = false } = {}) {
   return createAppRpcMock({
     methods: {
       'settings.get': settings,
+      'debug.trace_list': () => ({ traces: [] }),
       'settings.update': (params) => {
         if (params.subagents) subagents = { ...subagents, ...params.subagents };
         if (params.debug) debug = { ...debug, ...params.debug };

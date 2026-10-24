@@ -90,6 +90,49 @@ describe('SettingsView editor saving', () => {
     await openSubAgentsPanel();
   }
 
+  it('validates Debug retention and preserves a newer limit through a slow save', async () => {
+    const held = holdFirstSave();
+    const onToast = vi.fn();
+    rpcMock.mockImplementation(held.backend);
+    mountedComponent = mount(SettingsView, {
+      target: document.body,
+      props: { onToast },
+    });
+    await openSettingsSection('Debug', 'debug_capture');
+    vi.useFakeTimers();
+    const selector = '#settings-debug-trace-limit';
+    const input = document.querySelector(selector);
+    expect(input.closest('.s-row').hidden).toBe(false);
+    setInputValue(selector, '501');
+    getButton('Save').click();
+    await flushAsyncUpdates();
+    expect(getSettingsUpdateCalls()).toHaveLength(0);
+    expect(onToast).toHaveBeenCalledWith(
+      expect.objectContaining({ variant: 'error' }),
+    );
+
+    setInputValue(selector, '75');
+    getButton('Save').click();
+    await flushAsyncUpdates();
+    expect(getSettingsUpdateCalls()[0][1]).toEqual({
+      debug: { enabled: false, trace_limit: 75 },
+      base: { debug: { enabled: false, trace_limit: 50 } },
+    });
+    setInputValue(selector, '90');
+    held.release();
+    await flushAsyncUpdates();
+    expect(input.value).toBe('90');
+    expect(document.querySelector(selector)).toBe(input);
+    getButton('Save').click();
+    await flushAsyncUpdates();
+    expect(getSettingsUpdateCalls().at(-1)[1].debug.trace_limit).toBe(90);
+    expect(
+      document.querySelector(
+        '[data-settings-section="debug_capture"] .save-status button',
+      ),
+    ).toBeNull();
+  });
+
   it('auto-saves 800 ms after the last change and restarts the interval on every edit', async () => {
     await mountSubAgents();
     vi.useFakeTimers();

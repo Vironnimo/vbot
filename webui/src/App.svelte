@@ -14,7 +14,6 @@
   const loadSettingsView = () => import('./components/SettingsView.svelte');
   const loadLogsView = () => import('./components/LogsView.svelte');
   const loadStatisticsView = () => import('./components/StatisticsView.svelte');
-  const loadDebugView = () => import('./components/DebugView.svelte');
   const loadDesktopConnectionSettings = () =>
     import('./components/settings/DesktopConnectionSettings.svelte');
 
@@ -70,11 +69,6 @@
       section: 'system',
     },
     {
-      id: 'debug',
-      label: () => t('navigation.debug'),
-      section: 'system',
-    },
-    {
       id: 'settings',
       label: () => t('navigation.settings'),
       section: 'settings',
@@ -105,11 +99,7 @@
     createAppController,
     createAppControllerState,
   } from '$lib/appController.js';
-  import {
-    debugStatus,
-    getServedWebuiBuild,
-    reportClientMetrics,
-  } from '$lib/api.js';
+  import { getServedWebuiBuild, reportClientMetrics } from '$lib/api.js';
   import { startClientMetrics } from '$lib/clientMetrics.js';
   import { loadComponent } from '$lib/lazyContent.js';
   import { isWebuiOutdated } from '$lib/webuiBuild.js';
@@ -165,11 +155,7 @@
     onPagesLoaded: () => navigator.resolvePendingStart(),
   });
 
-  const visibleNavigationItems = $derived(
-    debugEnabled
-      ? extensions.allNavigationItems
-      : extensions.allNavigationItems.filter((item) => item.id !== 'debug'),
-  );
+  const visibleNavigationItems = $derived(extensions.allNavigationItems);
 
   // Main menu indicators by view id (`{count, tone, label}`), each reported
   // by the view that owns its meaning.
@@ -184,10 +170,6 @@
   });
   provideAutosaveContext(autosave);
   let appController;
-
-  // Unknown until the first status read; Debug stays reachable meanwhile so a
-  // startup link to it is not lost.
-  let debugEnabled = $state(null);
 
   let terminalsView = $state();
 
@@ -335,8 +317,6 @@
   const navigator = createNavigator({
     defaultView: navigationItems[0].id,
     isKnownView,
-    resolveView: (viewId) =>
-      viewId === 'debug' && debugEnabled === false ? 'settings' : viewId,
     gate: navigationGate,
     guardExit: desktopAccessor,
     handleInput: desktopAccessor,
@@ -476,14 +456,6 @@
   const navigateToProjectSkill = (projectId, skillId) =>
     navigator.navigate('skills', [`project:${projectId}`, skillId]);
 
-  const handleDebugEnabledChange = (enabled) => {
-    const isEnabled = enabled === true;
-    debugEnabled = isEnabled;
-    if (!isEnabled && activeViewId === 'debug') {
-      navigator.replace('settings');
-    }
-  };
-
   appController = createAppController({
     state: appControllerState,
     onAppError: (message) => {
@@ -512,8 +484,6 @@
   navigator.start();
 
   onMount(() => {
-    let cancelled = false;
-
     const stopClientMetrics = startClientMetrics({
       report: reportClientMetrics,
     });
@@ -546,25 +516,12 @@
     // mounted first.
     void selection.seedAgentsFromServer();
 
-    debugStatus()
-      .then((result) => {
-        if (!cancelled) {
-          // Also leaves the Debug view when the initial hash pointed at it
-          // while Debug Mode is disabled.
-          handleDebugEnabledChange(result?.enabled ?? false);
-        }
-      })
-      .catch(() => {
-        // debug RPC unavailable — keep debug navigation hidden
-      });
-
     // Seed app-wide appearance preferences and the operational state that
     // drives first-run onboarding. Chat appearance preferences are passed to
     // ChatView; the language seed closes the startup-language gap.
     void setup.loadAppSettings();
 
     return () => {
-      cancelled = true;
       autosave.destroy();
       stopDesktopSessionRequests();
       stopDesktopRestartRequests();
@@ -890,7 +847,7 @@
               desktopCapabilities={desktop.desktopCapabilities}
               desktopVoice={desktop.desktopVoice}
               desktopZoom={desktop.desktopZoom}
-              onDebugEnabledChange={handleDebugEnabledChange}
+              {debugTracesRefreshToken}
               onOpenSetupGuide={setup.reopenOnboarding}
               {modelsRefreshToken}
               {recallIndexStatus}
@@ -923,15 +880,6 @@
         <LazyContent load={loadStatisticsView}>
           {#snippet children(Component)}
             <Component navigation={navigator.view('statistics')} />
-          {/snippet}
-        </LazyContent>
-      {:else if activeViewId === 'debug'}
-        <LazyContent load={loadDebugView}>
-          {#snippet children(Component)}
-            <Component
-              navigation={navigator.view('debug')}
-              {debugTracesRefreshToken}
-            />
           {/snippet}
         </LazyContent>
       {/if}

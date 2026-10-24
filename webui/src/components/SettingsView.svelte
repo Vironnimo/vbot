@@ -39,7 +39,7 @@
   ]);
   let {
     // The place is `[page]` or `[page, section]`, or `[page, subPage]` on a
-    // page with sub-pages (an Archive entry: `['archive', entryId]`); an App
+    // page with sub-pages (an Archive entry or Debug trace); an App
     // deep link may name a page or a section id alone. An empty place shows
     // the General page.
     navigation = createStandaloneNavigation(),
@@ -57,7 +57,7 @@
     // The app-level window zoom owner in a Desktop that offers it, else null
     // (see app/desktopZoom.svelte.js).
     desktopZoom = null,
-    onDebugEnabledChange = noop,
+    debugTracesRefreshToken = 0,
     onOpenSetupGuide = noop,
     modelsRefreshToken = 0,
     // The latest pushed Recall index status, applied by the Conversation
@@ -474,12 +474,18 @@
       {sessionsRefreshToken}
       {onToast}
     />
-  {:else if panelId === 'debug'}
+  {:else if panelId === 'debug_capture'}
     <Panel
       {settings}
       onCommit={(next) => commitSettings(next, ['debug'])}
       onError={(message) => reportSettingsError(message)}
-      {onDebugEnabledChange}
+    />
+  {:else if panelId === 'debug_traces'}
+    <Panel
+      {settings}
+      {active}
+      navigation={pageNavigation.debugNavigation}
+      {debugTracesRefreshToken}
     />
   {:else if panelId === 'server'}
     <Panel

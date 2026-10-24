@@ -61,5 +61,5 @@ Applied before disk, **structured only** - on request and response header and qu
 
 Read these only when your task matches - not by default.
 
-- Changing the Debug tab (`DebugView.svelte`, `components/debug/`, `lib/debugView.js`) -> `debug/webui-inspection.md`
+- Changing Settings -> Debug (`DebugView.svelte`, `components/debug/`, `lib/debugView.js`) -> `debug/webui-inspection.md`
 - Using or changing the worker pools and the `debug-traces` `OrderedWorker` -> `runtime/workers.md`

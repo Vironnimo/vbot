@@ -489,10 +489,6 @@
                 {:else if item.id === 'statistics'}
                   <path d="M2.5 13.5h11" />
                   <path d="M4.5 13.5V10.5M8 13.5V8M11.5 13.5V5" />
-                {:else if item.id === 'debug'}
-                  <rect x="5.5" y="5" width="5" height="7.5" rx="2.5" />
-                  <path d="M6.5 5 5 3m4.5 2L11 3" />
-                  <path d="M5.5 7.5H3m2.5 3-2 1.5m7-4.5H13m-2.5 3 2 1.5" />
                 {:else}
                   <path d="m7 5-3 5m5-5 3 5M5 12h6" />
                   <circle cx="8" cy="3" r="2" />

@@ -195,7 +195,7 @@ export function createNavigator({
   // Whether a view id names a destination that exists now.
   isKnownView = () => true,
   // Maps an existing but unavailable destination to its replacement (for
-  // example Debug while Debug Mode is off); returns the view id to show.
+  // example a view whose capability is unavailable); returns the view id to show.
   resolveView = (viewId) => viewId,
   // Runs an action once pending autosave edits are saved (App's transition).
   gate = (action) => action(),
