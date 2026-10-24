@@ -17,6 +17,8 @@ from core.chat._output_speed import (
     OutputTimer,
     reported_speed,
 )
+from core.chat._stream_repetition import StreamRepetitionGuard, before_repetition
+from core.chat.messages import USAGE_OUTPUT_TOKENS_ESTIMATED_FIELD
 from core.providers.adapter import (
     TERMINAL_OUTCOME_UNKNOWN,
     TerminalOutcome,
@@ -59,6 +61,17 @@ class StreamingDeltaError(StreamingError):
     """Raised when an adapter yields an invalid normalized streaming delta."""
 
     failure_class = "provider"
+
+
+class StreamingRepetitionError(StreamingDeltaError):
+    """A text channel entered a long exact loop; its repeated suffix was removed."""
+
+    def __init__(self, channel: Literal["content", "reasoning"]) -> None:
+        super().__init__(
+            "The Model response was stopped after excessive repetition; "
+            "the repeated output was omitted."
+        )
+        self.channel = channel
 
 
 class StreamingChunkTimeoutError(StreamingError):
@@ -511,6 +524,8 @@ class StreamingAccumulator:
     def __init__(self) -> None:
         self._content_parts: list[str] = []
         self._reasoning_parts: list[str] = []
+        self._content_guard = StreamRepetitionGuard()
+        self._reasoning_guard = StreamRepetitionGuard()
         self._reasoning_summary: list[str] = []
         self._last_text_delta_type: str | None = None
         self._reasoning_meta: JsonObject | None = None
@@ -698,6 +713,7 @@ class StreamingAccumulator:
         self._last_text_delta_type = "content_delta"
         self._output_timer.output(len(text), answer=True, content=True)
         self._content_parts.append(text)
+        self._check_repetition("content", self._content_guard, self._content_parts, text)
         return StreamingVisibleDelta(
             event_type=ASSISTANT_OUTPUT_DELTA_EVENT,
             payload={"content_delta": text},
@@ -712,6 +728,7 @@ class StreamingAccumulator:
         self._record_reasoning_activity()
         self._output_timer.output(len(text), answer=False)
         self._reasoning_parts.append(text)
+        self._check_repetition("reasoning", self._reasoning_guard, self._reasoning_parts, text)
         payload: JsonObject = {"reasoning_delta": text}
         index = delta.get("summary_index")
         summary_text = delta.get("summary_text")
@@ -723,6 +740,38 @@ class StreamingAccumulator:
             self._reasoning_summary[index] += summary_text
             payload.update(summary_index=index, summary_text=summary_text)
         return StreamingVisibleDelta(event_type=REASONING_DELTA_EVENT, payload=payload)
+
+    def _check_repetition(
+        self,
+        channel: Literal["content", "reasoning"],
+        guard: StreamRepetitionGuard,
+        parts: list[str],
+        text: str,
+    ) -> None:
+        if (span := guard.feed(text)) is None:
+            return
+        if "output_tokens" not in (self._usage or {}):
+            from core.utils.tokens import estimate_output_tokens
+
+            # The discarded suffix still consumed generation. Preserve an
+            # explicitly estimated count before removing it from replayable text.
+            usage = dict(self._usage or {})
+            reported_reasoning = usage.get("reasoning_tokens")
+            usage["output_tokens"] = estimate_output_tokens(
+                {"content": self.partial_content, "reasoning": self.partial_reasoning},
+                reasoning_tokens=(
+                    reported_reasoning if isinstance(reported_reasoning, int) else None
+                ),
+            )
+            usage[USAGE_OUTPUT_TOKENS_ESTIMATED_FIELD] = True
+            usage["estimated"] = True
+            self._usage = usage
+        parts[:] = [before_repetition(parts, span)]
+        # An altered response cannot replay its signed Reasoning, and display
+        # sections from the rejected output must not reintroduce its loop.
+        self._reasoning_meta = None
+        self._reasoning_summary.clear()
+        raise StreamingRepetitionError(channel)
 
     def _record_reasoning_activity(self) -> None:
         now_perf = time.monotonic()
@@ -875,9 +924,10 @@ async def stream_model_response(
     """
     accumulator = StreamingAccumulator()
     chunk_timeout_seconds = stream_stall_timeout(adapter)
+    source = adapter.stream(messages, model_id=model_id, **request_options)
     try:
         async for delta in iter_with_chunk_timeout(
-            adapter.stream(messages, model_id=model_id, **request_options),
+            source,
             timeout_seconds=chunk_timeout_seconds,
             progress_timeout_seconds=(
                 STREAM_PROGRESS_TIMEOUT_SECONDS if chunk_timeout_seconds is not None else None
@@ -911,6 +961,18 @@ async def stream_model_response(
             on_tool_calls(list(normalized["tool_calls"]))
         return normalized
     except Exception as exc:
+        if isinstance(exc, StreamingRepetitionError):
+            # A guard can add an output estimate without a Provider usage
+            # delta. Standalone callers account through this observer alone.
+            if on_usage is not None and accumulator.usage is not None:
+                _report_usage(on_usage, accumulator.usage)
+            try:
+                await _close_repetition_stream(source)
+            except asyncio.CancelledError:
+                if not accumulator.has_taken_tool_calls:
+                    raise
+                # Once calls escaped, their sanitized response must reach the
+                # caller even when transport cleanup is cancelled.
         if accumulator.has_taken_tool_calls:
             raise StreamBrokenAfterToolCallsError(
                 exc, accumulator.finalize_partial_fields().to_response_dict()
@@ -1049,3 +1111,13 @@ async def _close_async_iterator(iterator: AsyncIterator[JsonObject]) -> None:
     result = close()
     if result is not None:
         await result
+
+
+async def _close_repetition_stream(iterator: AsyncIterator[JsonObject]) -> None:
+    """Close a rejected stream without losing its sanitized output on a cleanup error."""
+    try:
+        await _close_async_iterator(iterator)
+    except Exception as exc:
+        # The primary repetition failure is reported by the caller; cleanup
+        # detail must not replace it or discard already started Tool Calls.
+        _LOGGER.debug("Failed to close repetitive Model stream (error_type=%s)", type(exc).__name__)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -33,7 +34,9 @@ from core.chat.streaming import (
     StreamingAccumulator,
     StreamingChunkTimeoutError,
     StreamingProgressTimeoutError,
+    StreamingRepetitionError,
     StreamRecoveryAction,
+    _close_repetition_stream,
     decide_stream_recovery,
     iter_with_chunk_timeout,
 )
@@ -207,6 +210,30 @@ async def consume_stream_response(
             raise NetworkError("Provider stream ended without finish delta")
         assistant_fields = accumulator.finalize_assistant_fields()
         _check_empty_response(assistant_fields.to_response_dict(), assistant_fields.finish_reason)
+    except StreamingRepetitionError as exc:
+        # The accumulator has removed only the degenerate suffix. Preserve
+        # the safe prefix and any started calls, then fail without replay,
+        # continuation or a Model switch that could amplify the same output.
+        delta_emitter.close()
+        # Cancellation here cannot abandon the already visible output or
+        # started Tool effects. Return their sanitized boundary first;
+        # the Run's ordinary cancellation path then persists and settles it.
+        with suppress(asyncio.CancelledError):
+            await _close_repetition_stream(stream)
+        step = _finalize_interrupted_partial(
+            public_model,
+            response_model,
+            accumulator,
+            run,
+            interruption_cause=(
+                ("user" if run.cancel_reason == "user" else "internal")
+                if run.cancel_requested
+                else "provider"
+            ),
+            output_scope=output_scope,
+            message_id=message_id,
+        )
+        return replace(step, failure=None if run.cancel_requested else exc)
     except (
         ProviderError,
         NetworkError,
@@ -503,8 +530,8 @@ def _finalize_interrupted_partial(
     The visible answer streamed so far is finalized into an assistant message
     flagged ``interrupted`` (no finish reason; any in-flight tool call is
     dropped — it was never executed, so dropping it is side-effect-free).
-    Tool Calls that already started stay with the turn (only a cancelled
-    Run ends with them; any other break keeps them through
+    Tool Calls that already started stay with the turn (a cancelled or
+    repetition-stopped Run ends with them; other breaks keep them through
     :meth:`_finalize_after_started_tools`).
     A provider break after answer text asks the progression loop for a fresh
     continuation request in the same Run. Exhausted replay may instead ask
