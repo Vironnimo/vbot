@@ -27,6 +27,7 @@ from core.recall import (
     RecallSearchError,
     VectorHeader,
 )
+from core.recall import _passage_catalog as catalog_module
 from core.recall import passage_index as passage_index_module
 from core.recall._passage_catalog import (
     Candidates,
@@ -867,7 +868,7 @@ def _stored_passages(path: Path) -> dict[str, int]:
 
 
 async def test_search_refresh_rewrites_only_changed_passages(
-    sessions: ChatSessionManager, recall: HybridRecallBackend
+    sessions: ChatSessionManager, recall: HybridRecallBackend, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     session = sessions.create("coder", session_id="growing")
     session.append_many(
@@ -878,11 +879,20 @@ async def test_search_refresh_rewrites_only_changed_passages(
     )
     await recall.search_page(request("needle"))
     before = _stored_passages(recall.index.path)
+    projected: list[str] = []
+    original = catalog_module.build_session_passages
 
-    session.append(ChatMessage.user("needle tail " + "y" * 1000, timestamp=timestamp(9)))
+    def build(messages):
+        projected.extend(message.content for message in messages)
+        return original(messages)
+
+    monkeypatch.setattr(catalog_module, "build_session_passages", build)
+    tail = "needle tail " + "y" * 1000
+    session.append(ChatMessage.user(tail, timestamp=timestamp(9)))
     page = await recall.search_page(request("tail"))
     after = _stored_passages(recall.index.path)
 
+    assert projected == [tail]
     kept = before.keys() & after.keys()
     assert kept
     assert all(before[passage_id] == after[passage_id] for passage_id in kept)

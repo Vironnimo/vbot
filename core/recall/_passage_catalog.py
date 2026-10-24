@@ -48,6 +48,7 @@ from core.sessions import (
     SessionAddress,
     SessionNotFoundError,
     SessionReadBatch,
+    SessionReadCursor,
 )
 from core.utils.timestamps import format_canonical_timestamp
 
@@ -67,6 +68,8 @@ CREATE TABLE indexed_sessions (
   session_id TEXT NOT NULL,
   generation_id TEXT NOT NULL,
   history_revision INTEGER NOT NULL,
+  next_seq INTEGER,
+  last_message_id TEXT,
   UNIQUE (project_id, agent_id, session_id)
 ) STRICT;
 
@@ -191,11 +194,25 @@ def passage_columns(alias: str) -> str:
 
 
 @dataclass(frozen=True)
+class SessionStamp:
+    """A canonical version and its validated append position, when available."""
+
+    version: SessionVersion
+    cursor: SessionReadCursor | None
+
+
+def _session_stamp(row: Sequence[Any]) -> SessionStamp:
+    version = (str(row[0]), int(row[1]))
+    cursor = SessionReadCursor(*version, int(row[2]), row[3]) if row[2] is not None else None
+    return SessionStamp(version, cursor)
+
+
+@dataclass(frozen=True)
 class SessionPassages:
-    """The complete Passage set of one changed Session at one canonical version.
+    """Passages for one version: the complete set or a validated appended tail.
 
     ``owned`` holds, per Passage, whether its last Message is one of the
-    Session's own entries.
+    Session's own entries. Incremental plans keep the previously stored views.
     """
 
     session_id: str
@@ -203,6 +220,8 @@ class SessionPassages:
     version: SessionVersion
     passages: tuple[Passage, ...]
     owned: tuple[bool, ...]
+    cursor: SessionReadCursor | None = None
+    incremental: bool = False
 
 
 @dataclass(frozen=True)
@@ -233,12 +252,13 @@ class SourceReadError(Exception):
 
 def read_stamps(
     connection: sqlite3.Connection, *, agent_id: str, project: str
-) -> dict[str, SessionVersion]:
-    """Return ``{session_id: (generation_id, history_revision)}`` for one scope."""
+) -> dict[str, SessionStamp]:
+    """Return versions and append cursors for one scope."""
     return {
-        str(row[0]): (str(row[1]), int(row[2]))
+        str(row[0]): _session_stamp(row[1:])
         for row in connection.execute(
-            "SELECT session_id, generation_id, history_revision FROM indexed_sessions "
+            "SELECT session_id, generation_id, history_revision, next_seq, last_message_id "
+            "FROM indexed_sessions "
             "WHERE project_id = ? AND agent_id = ?",
             (project, agent_id),
         )
@@ -247,25 +267,27 @@ def read_stamps(
 
 def read_all_stamps(
     connection: sqlite3.Connection,
-) -> dict[tuple[str, str], dict[str, SessionVersion]]:
+) -> dict[tuple[str, str], dict[str, SessionStamp]]:
     """Return every indexed Session's freshness stamp by stored ``(project, agent_id)`` scope."""
-    stamps: dict[tuple[str, str], dict[str, SessionVersion]] = {}
+    stamps: dict[tuple[str, str], dict[str, SessionStamp]] = {}
     for row in connection.execute(
-        "SELECT project_id, agent_id, session_id, generation_id, history_revision "
+        "SELECT project_id, agent_id, session_id, generation_id, history_revision, "
+        "next_seq, last_message_id "
         "FROM indexed_sessions"
     ):
-        stamps.setdefault((str(row[0]), str(row[1])), {})[str(row[2])] = (str(row[3]), int(row[4]))
+        stamps.setdefault((str(row[0]), str(row[1])), {})[str(row[2])] = _session_stamp(row[3:])
     return stamps
 
 
-def is_current(scope: RecallScope, stamps: Mapping[str, SessionVersion]) -> bool:
+def is_current(scope: RecallScope, stamps: Mapping[str, SessionStamp]) -> bool:
     """Whether a scope's catalog already matches *scope*, so a refresh would change nothing.
 
     It does when every candidate's stamp equals its version and no indexed
     Session left the live scope.
     """
     return all(
-        stamps.get(session_id) == version for session_id, version in scope.candidates.items()
+        session_id in stamps and stamps[session_id].version == version
+        for session_id, version in scope.candidates.items()
     ) and all(session_id in scope.live_session_ids for session_id in stamps)
 
 
@@ -286,7 +308,9 @@ def follow_history(connection: sqlite3.Connection, history_id: str) -> None:
     """
     if follows_history(connection, history_id):
         return
-    connection.execute("UPDATE indexed_sessions SET history_revision = -1")
+    connection.execute(
+        "UPDATE indexed_sessions SET history_revision = -1, next_seq = NULL, last_message_id = NULL"
+    )
     connection.execute("DELETE FROM catalog_history")
     connection.execute("INSERT INTO catalog_history (history_id) VALUES (?)", (history_id,))
 
@@ -296,7 +320,7 @@ def plan_refresh(
     agent_id: str,
     project_id: str | None,
     scope: RecallScope,
-    stamps: Mapping[str, SessionVersion],
+    stamps: Mapping[str, SessionStamp],
 ) -> CatalogPlan:
     """Reread the candidates whose stamp changed and build their Passages.
 
@@ -306,14 +330,20 @@ def plan_refresh(
     pruned = {session_id for session_id in stamps if session_id not in scope.live_session_ids}
     changes: list[SessionPassages] = []
     for session_id, version in sorted(scope.candidates.items()):
-        previous = stamps.get(session_id)
+        stamp = stamps.get(session_id)
+        previous = None if stamp is None else stamp.version
         if previous == version:
             continue
+        cursor = None if stamp is None else stamp.cursor
         address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
         try:
-            # One read transaction returns the current view together with the
-            # exact version it belongs to.
-            batch = sessions.get(address).load_since(None)
+            # Canonical cursor validation distinguishes ordinary appends from
+            # edits, takeover, recreation and materialized lineage changes.
+            session = sessions.get(address)
+            batch = session.load_since(cursor)
+            incremental = cursor is not None and batch is not None
+            if batch is None:
+                batch = session.load_since(None)
         except SessionNotFoundError:
             # Vanished since the scope read: its rows describe no live Session.
             if previous is not None:
@@ -321,12 +351,16 @@ def plan_refresh(
             continue
         if batch is None:  # Only a stale cursor yields no batch; a full read has none.
             continue
-        changes.append(_session_passages(session_id, previous, batch))
+        changes.append(_session_passages(session_id, previous, batch, incremental=incremental))
     return CatalogPlan(agent_id, stored_scope(project_id), tuple(sorted(pruned)), tuple(changes))
 
 
 def _session_passages(
-    session_id: str, previous: SessionVersion | None, batch: SessionReadBatch
+    session_id: str,
+    previous: SessionVersion | None,
+    batch: SessionReadBatch,
+    *,
+    incremental: bool,
 ) -> SessionPassages:
     passages: list[Passage] = []
     owned: list[bool] = []
@@ -342,6 +376,8 @@ def _session_passages(
         version=(batch.cursor.generation_id, batch.cursor.history_revision),
         passages=tuple(passages),
         owned=tuple(owned),
+        cursor=batch.cursor,
+        incremental=incremental,
     )
 
 
@@ -391,14 +427,26 @@ def _apply_change(
             "WHERE session_ref = ?",
             (*change.version, session_ref),
         )
-    existing = {
-        str(row[0]): (int(row[1]), bool(row[2]))
-        for row in connection.execute(
-            "SELECT p.passage_key, v.passage_ref, v.owned FROM passage_views AS v "
-            "JOIN passages AS p ON p.passage_ref = v.passage_ref WHERE v.session_ref = ?",
-            (session_ref,),
-        )
-    }
+    connection.execute(
+        "UPDATE indexed_sessions SET next_seq = ?, last_message_id = ? WHERE session_ref = ?",
+        (
+            None if change.cursor is None else change.cursor.next_seq,
+            None if change.cursor is None else change.cursor.last_message_id,
+            session_ref,
+        ),
+    )
+    existing = (
+        {}
+        if change.incremental
+        else {
+            str(row[0]): (int(row[1]), bool(row[2]))
+            for row in connection.execute(
+                "SELECT p.passage_key, v.passage_ref, v.owned FROM passage_views AS v "
+                "JOIN passages AS p ON p.passage_ref = v.passage_ref WHERE v.session_ref = ?",
+                (session_ref,),
+            )
+        }
+    )
     target: dict[str, tuple[Passage, bool]] = {}
     for passage, owned in zip(change.passages, change.owned, strict=True):
         key = passage_key(passage)
@@ -423,7 +471,9 @@ def _apply_change(
             continue
         passage_ref = _insert_passage(connection, plan, key, passage, added)
         connection.execute(
-            "INSERT INTO passage_views (session_ref, passage_ref, owned) VALUES (?, ?, ?)",
+            "INSERT INTO passage_views (session_ref, passage_ref, owned) VALUES (?, ?, ?) "
+            "ON CONFLICT (session_ref, passage_ref) "
+            "DO UPDATE SET owned = MAX(owned, excluded.owned)",
             (session_ref, passage_ref, int(owned)),
         )
     return added
@@ -638,9 +688,10 @@ class PassageCatalog:
     ) -> dict[str, SessionVersion]:
         """Return the freshness stamp of every indexed Session of one scope."""
         project = stored_scope(project_id)
-        return await self.read(
+        stamps = await self.read(
             lambda connection: read_stamps(connection, agent_id=agent_id, project=project)
         )
+        return {session_id: stamp.version for session_id, stamp in stamps.items()}
 
     async def refresh(
         self,
@@ -715,7 +766,7 @@ class PassageCatalog:
         agent_id: str,
         project_id: str | None,
         scope: RecallScope,
-        stamps: Mapping[str, SessionVersion],
+        stamps: Mapping[str, SessionStamp],
     ) -> None:
         """Reread the changed candidates of one scope and write the plan."""
         if is_current(scope, stamps):
