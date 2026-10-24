@@ -313,7 +313,15 @@ def normalize_cron_arguments(contract: ToolContract, arguments: Any) -> Any:
         enum_fields=("action", WATCH_RUNS_FIELD),
         field_aliases=_FIELD_ALIASES,
         field_normalizers={"action": _action_word, WATCH_RUNS_FIELD: _watch_runs_word},
-        empty_as_omitted=("id", "target", "name", "prompt", "schedule", TIMEZONE_FIELD),
+        empty_as_omitted=(
+            "id",
+            "target",
+            "name",
+            "prompt",
+            "schedule",
+            TIMEZONE_FIELD,
+            WATCH_RUNS_FIELD,
+        ),
     )
     if not isinstance(normalized, dict):
         return normalized
@@ -763,8 +771,9 @@ def _omit_placeholders(arguments: dict[str, Any], problems: _Problems) -> None:
         arguments["target"] = SELF_TARGET
     elif "target" in arguments and _is_stand_in(target, PLACEHOLDER_WORDS):
         del arguments["target"]
-    if TIMEZONE_FIELD in arguments and _is_stand_in(arguments[TIMEZONE_FIELD], PLACEHOLDER_WORDS):
-        del arguments[TIMEZONE_FIELD]
+    for name in (TIMEZONE_FIELD, WATCH_RUNS_FIELD):
+        if name in arguments and _is_stand_in(arguments[name], PLACEHOLDER_WORDS):
+            del arguments[name]
     if "repeat" in arguments:
         repeat = arguments["repeat"]
         if isinstance(repeat, str) and spelling(repeat) in _REPEAT_UNLIMITED_WORDS:

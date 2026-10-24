@@ -601,7 +601,8 @@ def test_stand_in_target_is_refused(tool: CronTool, call: dict[str, Any], defaul
     )
 
 
-def test_placeholder_fields_are_omitted(tool: CronTool) -> None:
+@pytest.mark.parametrize("watch_runs", [None, "", "<on_change or always>"])
+def test_placeholder_fields_are_omitted(tool: CronTool, watch_runs: str | None) -> None:
     job, _text = tool.created(
         {
             "action": "create",
@@ -609,10 +610,12 @@ def test_placeholder_fields_are_omitted(tool: CronTool) -> None:
             "schedule": "every 2h",
             "target": "self",
             "name": "<name>",
+            "watch": None,
+            "watch_runs": watch_runs,
         },
     )
 
-    assert (job.agent_id, job.name) == ("agent-one", JOB_PROMPT)
+    assert (job.agent_id, job.name, job.watch) == ("agent-one", JOB_PROMPT, None)
 
 
 @pytest.mark.parametrize("word", ["self", "me", "current"])
