@@ -349,9 +349,11 @@ async def test_model_list_outputs_per_model_connections_allowlist(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("fast_connection", ["oauth", "api-key"])
 async def test_model_catalog_reports_wire_profiles_per_usable_connection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    fast_connection: str,
 ) -> None:
     """``model.list`` reports each usable Connection's wire status; ``model.get``
     adds the profile summary and the facts live traffic taught, as requests use them,
@@ -365,6 +367,12 @@ async def test_model_catalog_reports_wire_profiles_per_usable_connection(
         "openai",
         {
             "format_version": 1,
+            "family_defaults": [
+                {
+                    "when": {"connections": [fast_connection], "prefix": ["gpt-5.2"]},
+                    "set": {"request": {"fast_mode": True}},
+                }
+            ],
             "models": {
                 "gpt-5.2": {
                     "verified": {"date": "2026-09-30", "connections": ["api-key"]},
@@ -397,9 +405,18 @@ async def test_model_catalog_reports_wire_profiles_per_usable_connection(
     model = (await rpc_result(state, "model.get", model="openai/gpt-5.2"))["model"]
 
     assert listed["openai/gpt-5.2"]["wire_profiles"] == {
-        "oauth": {"wire_status": "configured", "verified_at": None},
-        "api-key": {"wire_status": "verified", "verified_at": "2026-09-30"},
+        "oauth": {
+            "wire_status": "configured",
+            "verified_at": None,
+            **({"fast_mode": True} if fast_connection == "oauth" else {}),
+        },
+        "api-key": {
+            "wire_status": "verified",
+            "verified_at": "2026-09-30",
+            **({"fast_mode": True} if fast_connection == "api-key" else {}),
+        },
     }
+    assert listed["openai/gpt-5.2"].get("fast_mode", False) is (fast_connection == "oauth")
     assert listed["openai/gpt-4.1-mini"]["wire_profiles"] == {
         "oauth": {"wire_status": "inferred", "verified_at": None},
         "api-key": {"wire_status": "inferred", "verified_at": None},
@@ -409,6 +426,7 @@ async def test_model_catalog_reports_wire_profiles_per_usable_connection(
             "wire_status": "configured",
             "verified_at": None,
             "protocol": "chat_completions",
+            **({"fast_mode": True} if fast_connection == "oauth" else {}),
             "reasoning_dialect": "reasoning_effort",
             "reasoning_ladder": ["low", "high"],
             "replay_fidelity": "readable_only",
@@ -426,6 +444,7 @@ async def test_model_catalog_reports_wire_profiles_per_usable_connection(
             "wire_status": "verified",
             "verified_at": "2026-09-30",
             "protocol": "chat_completions",
+            **({"fast_mode": True} if fast_connection == "api-key" else {}),
             "reasoning_dialect": "reasoning_effort",
             "reasoning_ladder": ["low", "high"],
             "replay_fidelity": "readable_only",

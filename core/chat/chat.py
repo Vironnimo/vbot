@@ -89,12 +89,15 @@ class _NewSession:
     actor: str | None = None
     working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT
     ephemeral: bool = False
+    fast_mode: bool = False
 
     def metadata(self, agent: Any, permission_ceiling: PermissionCeiling | None) -> JsonObject:
         """The metadata the Session is created with."""
         metadata = (
             self.agent_overrides.with_ceiling(permission_ceiling).capture(agent).session_metadata()
         )
+        if self.fast_mode:
+            metadata["fast_mode"] = True
         if self.ephemeral:
             metadata[SESSION_EPHEMERAL_META_KEY] = True
         return metadata
@@ -167,6 +170,7 @@ class ChatLoop:
         agent_overrides: AgentOverrides | None = None,
         working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT,
         ephemeral: bool = False,
+        fast_mode: bool = False,
         input_origin: InputOrigin | None = None,
         reply_surface: ReplySurface | None = None,
         project_id: str | None = None,
@@ -183,6 +187,7 @@ class ChatLoop:
             agent_overrides=agent_overrides,
             working_project_id=working_project_id,
             ephemeral=ephemeral,
+            fast_mode=fast_mode,
             input_origin=input_origin,
             reply_surface=reply_surface,
             project_id=project_id,

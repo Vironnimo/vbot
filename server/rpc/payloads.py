@@ -405,6 +405,7 @@ def _wire_profile_detail_response(profile: Any, learned: Any) -> JsonObject:
 
     return {
         **_wire_status_response(profile.status, profile.verification),
+        **({"fast_mode": True} if profile.request.fast_mode else {}),
         "protocol": profile.protocol,
         "reasoning_dialect": profile.reasoning.dialect,
         "reasoning_ladder": list(profile.reasoning.ladder),

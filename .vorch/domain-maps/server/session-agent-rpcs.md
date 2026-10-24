@@ -10,6 +10,8 @@ The server side of `session.*`, `agent.*`, `tool.list`, `permissions.*` and `lea
 
 `agent.update` also accepts `subagent_allow`, a string list that patches only the delegation allow-list through the Agent store's locked sparse update (`agent/configuration.md` -> Tool permission and Tool settings). It is update-only and conflicts with a full `tools` replacement; change reporting still names the persisted `tools` field.
 
+`session.set_fast_mode {agent_id, session_id, enabled}` accepts a Boolean and atomically changes only the Session's `fast_mode` metadata, then publishes a scoped Session invalidation. It never remembers an Agent default; `session.get` and lists expose the preference when true. Chat applies it at the next Model request (`chat/run-execution.md` -> Fast mode).
+
 ## Permission Rules
 
 - `agent.create`/`agent.update` accept `permission_rules` (an object normalized by `normalize_permission_rules`, `null` removes it; a malformed set is `invalid_request` naming `params.permission_rules...`). Payload fields: `agent/configuration.md` -> Fields.

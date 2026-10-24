@@ -720,6 +720,19 @@ class ProviderAdapter(ABC):
     # Per-request conversation context
     # ------------------------------------------------------------------
 
+    def fast_mode_kwargs(self, model_id: str, *, enabled: bool) -> JsonObject:
+        """Translate the Chat's speed preference for a route that offers Fast.
+
+        Fast is opt-in, independent of Reasoning. Only Responses profiles that
+        declare it may request priority processing; other routes stay unchanged.
+        """
+        if not enabled:
+            return {}
+        profile = self.wire_profile(model_id)
+        if profile.protocol == "responses" and profile.request.fast_mode:
+            return {"service_tier": "priority"}
+        return {}
+
     def request_context_kwargs(
         self,
         *,

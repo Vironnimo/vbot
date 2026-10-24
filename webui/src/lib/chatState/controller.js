@@ -24,6 +24,7 @@ import {
   markSessionRead as requestMarkSessionRead,
   removeFromQueue as requestRemoveFromQueue,
   setSessionAgentOverrides as requestSetSessionAgentOverrides,
+  setSessionFastMode as requestSetSessionFastMode,
   showProject as requestShowProject,
   startChatRun as requestStartChatRun,
   updateQueueItem as requestUpdateQueueItem,
@@ -84,6 +85,7 @@ function defaultChatOperations() {
     removeFromQueue: (...args) => requestRemoveFromQueue(...args),
     setSessionAgentOverrides: (...args) =>
       requestSetSessionAgentOverrides(...args),
+    setSessionFastMode: (...args) => requestSetSessionFastMode(...args),
     showProject: (...args) => requestShowProject(...args),
     startChatRun: (...args) => requestStartChatRun(...args),
     updateQueueItem: (...args) => requestUpdateQueueItem(...args),
@@ -844,6 +846,7 @@ export function createChatController({
     sendMessage,
     setSessionAgentOverrides: (...args) =>
       operations.setSessionAgentOverrides(...args),
+    setSessionFastMode: (...args) => operations.setSessionFastMode(...args),
     sendToNewSession,
     stopAll,
     stopCommand,
@@ -887,6 +890,7 @@ function normalizeBuiltInCommandName(value) {
 // Project) and the Agent overrides it holds (`agentOverrides`).
 function newSessionParams(draft) {
   const params = {};
+  if (draft.fastMode === true) params.fast_mode = true;
   if (draft.workingProjectId !== undefined) {
     params.working_project_id = draft.workingProjectId;
   }

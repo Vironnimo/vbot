@@ -369,6 +369,29 @@ export function setSessionAgentOverrides(
   );
 }
 
+// The speed preference belongs only to this Session.
+export function setSessionFastMode(agentId, sessionId, enabled, options = {}) {
+  requireNonEmptyString(
+    agentId,
+    'Agent id must be a non-empty string',
+    'session.set_fast_mode',
+  );
+  requireNonEmptyString(
+    sessionId,
+    'Session id must be a non-empty string',
+    'session.set_fast_mode',
+  );
+  return rpc(
+    'session.set_fast_mode',
+    {
+      agent_id: agentId,
+      session_id: sessionId,
+      enabled,
+    },
+    options,
+  );
+}
+
 // Archives the Session; `permanent` deletes it right away instead.
 export function deleteSession(
   agentId,

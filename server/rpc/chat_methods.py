@@ -281,6 +281,7 @@ async def _start_chat_in_new_session(
             agent_overrides=target.agent_overrides,
             working_project_id=target.working_project_id,
             ephemeral=target.ephemeral,
+            fast_mode=target.fast_mode,
             input_origin=input_origin,
             reply_surface=reply_surface,
             project_id=project_id,

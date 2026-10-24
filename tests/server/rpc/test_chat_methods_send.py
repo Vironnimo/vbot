@@ -251,6 +251,7 @@ async def test_submission_parses_content_blocks_and_forwards_the_input_origin(
             "params.new_session.agent_overrides values must not be null",
         ),
         ("chat.stream", {"new_session": {"ephemeral": "yes"}}, "params.new_session.ephemeral"),
+        ("chat.stream", {"new_session": {"fast_mode": "yes"}}, "params.new_session.fast_mode"),
         # A command creates its Session through its own path, which would keep it.
         (
             "chat.stream",
@@ -632,6 +633,7 @@ async def test_new_session_is_created_with_its_first_message_and_overrides(
             **({"session_id": requested_id} if requested_id else {}),
             "agent_overrides": {"model": "openai/gpt-4.1-mini"},
             "working_project_id": "vbot",
+            "fast_mode": True,
             **({"ephemeral": True} if ephemeral else {}),
         },
         content="Hi",
@@ -659,6 +661,7 @@ async def test_new_session_is_created_with_its_first_message_and_overrides(
     assert state.runtime.agent_resolver.session_overrides(address).model == "openai/gpt-4.1-mini"
     # The Session works in the chosen Project for its whole life.
     assert sessions.metadata_value(address, "working_project_id") == "vbot"
+    assert sessions.metadata_value(address, "fast_mode") is True
     # The Identity Agent's new Session becomes current, unless it is ephemeral:
     # the user keeps the conversation they had. Other windows list it (later
     # changes come from the Run itself).

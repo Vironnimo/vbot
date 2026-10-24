@@ -58,6 +58,7 @@ from core.providers.errors import (
 from core.runs import (
     PROVIDER_REQUEST_STATUS_EVENT,
 )
+from core.sessions import SessionAddress
 from core.utils.logging import get_logger
 from core.utils.retry import RetryNotice, caller_owns_retries
 
@@ -194,9 +195,13 @@ class WireRequestRunner:
         messages, tools = await _CHAT_TRANSFORM_WORKERS.run(
             model_facing_request, messages, tools, self._dependencies.secret_masker
         )
+        fast_mode = await self._dependencies.sessions.metadata_value_async(
+            SessionAddress(run.project_id, run.agent_id, run.session_id), "fast_mode"
+        )
         request_context = {
             **_resolve_request_context_kwargs(adapter, run, prompt_cache_affinity_id),
             **effort_kwargs,
+            **adapter.fast_mode_kwargs(model_id, enabled=fast_mode is True),
         }
         # Sampling reaches the wire only when configured; otherwise the
         # Provider's own default applies.

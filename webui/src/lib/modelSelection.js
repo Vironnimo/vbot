@@ -341,6 +341,16 @@ export function parseModelSelectionValue(selectedValue) {
   };
 }
 
+/** Whether the selected Model route offers the Session's Fast mode. */
+export function modelSupportsFastMode(selectedValue, models = []) {
+  const { model, connectionLocalId } = parseModelSelectionValue(selectedValue);
+  const entry = models.find((candidate) => candidate.id === model);
+  return connectionLocalId
+    ? entry?.wire_profiles?.[connectionLocalId.split(':')[0]]?.fast_mode ===
+        true
+    : entry?.fast_mode === true;
+}
+
 /**
  * A stored Model value's parts for display: the Model id and, when the value
  * pins a Connection, that Connection's label (with its account).

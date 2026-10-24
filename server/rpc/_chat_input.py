@@ -167,6 +167,7 @@ class _NewSessionTarget:
     working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT
     session_id: str | None = None
     ephemeral: bool = False
+    fast_mode: bool = False
 
 
 async def _execute_new_session_chat_command(
@@ -196,6 +197,7 @@ async def _execute_new_session_chat_command(
                 project_id=project_id,
                 reply_surface=reply_surface,
                 agent_overrides=target.agent_overrides,
+                fast_mode=target.fast_mode,
                 working_project_id=target.working_project_id,
                 on_change=on_change,
                 session_id=target.session_id,
@@ -355,7 +357,7 @@ def _chat_target(
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.new_session must be an object")
     _reject_unsupported(
         new_session,
-        {"session_id", "agent_overrides", "working_project_id", "ephemeral"},
+        {"session_id", "agent_overrides", "working_project_id", "ephemeral", "fast_mode"},
         "params.new_session",
     )
     requested_id = new_session.get("session_id")
@@ -375,9 +377,15 @@ def _chat_target(
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST, "params.new_session.ephemeral must be true or false"
         )
+    fast_mode = new_session.get("fast_mode", False)
+    if not isinstance(fast_mode, bool):
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST, "params.new_session.fast_mode must be true or false"
+        )
     return _NewSessionTarget(
         AgentOverrides(**overrides) if overrides else AgentOverrides(),
         _optional_working_project(new_session, project_id, label="params.new_session"),
         requested_id,
         ephemeral,
+        fast_mode,
     )

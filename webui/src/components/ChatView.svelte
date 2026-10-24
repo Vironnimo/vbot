@@ -1026,6 +1026,7 @@
                       onSelectProject={sessionSettings.selectProject}
                       onSelectAgent={moveDraftToAgent}
                       onSelectModel={sessionSettings.selectModel}
+                      onSelectFastMode={sessionSettings.selectFastMode}
                       onSelectThinkingEffort={sessionSettings.selectThinkingEffort}
                       onModelPickerOpen={() =>
                         void sessionSettings.loadCatalog().catch(() => {})}

@@ -8,6 +8,7 @@
   //   a Project team Agent, a read-only name.
   // - Agent: in a draft only, the Agents that can work in its Project; a
   //   choice moves the draft to that Agent.
+  // - Fast: a Session-only toggle for supported routes, initially off.
   // - Model: the Session's concrete choice, initially copied from the Agent;
   //   the row names the Model by its catalog name, the tooltip by its id.
   // - Thinking effort: Provider default or a level the effective Model
@@ -25,6 +26,7 @@
     filterModelSelectOptions,
     modelFilterFooterLabel,
     modelIdParts,
+    modelSupportsFastMode,
     modelSelectionParts,
     parseModelSelectionValue,
     selectModelValue,
@@ -49,6 +51,7 @@
     onSelectProject = noop,
     onSelectAgent = noop,
     onSelectModel = noop,
+    onSelectFastMode = noop,
     onSelectThinkingEffort = noop,
     onModelPickerOpen = noop,
   } = $props();
@@ -238,6 +241,15 @@
       ],
       placement: 'top',
     };
+  });
+
+  let fastModeVisible = $derived(modelSupportsFastMode(view.model, models));
+  let fastModeTooltip = $derived({
+    title: view.fastMode
+      ? t('chat.sessionSettings.fastOn')
+      : t('chat.sessionSettings.fastOff'),
+    text: t('chat.sessionSettings.fastHint'),
+    placement: 'top',
   });
 
   // --- Output speed ----------------------------------------------------
@@ -500,6 +512,21 @@
       pending={view.pending}
       onClick={view.save}
     />
+    {#if fastModeVisible}
+      <button
+        type="button"
+        class="session-settings__fast"
+        class:session-settings__fast--enabled={view.fastMode}
+        aria-label={t('chat.sessionSettings.fastMode')}
+        aria-pressed={view.fastMode === true}
+        use:tooltip={fastModeTooltip}
+        onclick={() => onSelectFastMode(!view.fastMode)}
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="m13 2-10 12h8l-1 8 11-12h-8z" />
+        </svg>
+      </button>
+    {/if}
     <span
       class="session-settings__field session-settings__field--model"
       class:session-settings__field--override={Boolean(view.model)}
@@ -586,6 +613,41 @@
     flex: 0 1 auto;
     justify-content: flex-end;
     margin-left: auto;
+  }
+
+  .session-settings__fast {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 4px;
+    border: 1px solid transparent;
+    border-radius: var(--r-md);
+    color: var(--text-lo);
+    background: transparent;
+    cursor: pointer;
+  }
+  .session-settings__fast svg {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.7;
+    stroke-linejoin: round;
+  }
+  .session-settings__fast--enabled {
+    color: var(--text-hi);
+  }
+  .session-settings__fast--enabled svg {
+    fill: currentColor;
+  }
+  .session-settings__fast:hover {
+    color: var(--text-hi);
+    background: var(--surface-3);
+  }
+  .session-settings__fast:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
   }
 
   .session-settings__field {

@@ -89,6 +89,7 @@ _SESSION_LIST_COLUMNS = f"""
     s.agent_overrides_json,
     s.working_project_id,
     json_extract(s.metadata_json, '$.goal') AS goal_json,
+    json_extract(s.metadata_json, '$.fast_mode') AS fast_mode,
     CASE WHEN s.agent_id = 'live-voice' AND s.project_id = '' THEN (
       SELECT backend.session_id FROM sessions AS backend
       WHERE backend.state = 'live' AND backend.project_id = s.project_id

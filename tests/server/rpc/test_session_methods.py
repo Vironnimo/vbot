@@ -1062,3 +1062,27 @@ async def test_session_partial_mutation_preserves_concurrent_title(
             assert stored["compaction_policy"] == _POLICY
     finally:
         sessions.close()
+
+
+@pytest.mark.asyncio
+async def test_fast_mode_is_session_only_and_new_sessions_start_standard(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    sessions = state.runtime.chat_sessions
+    target = {"agent_id": "coder", "session_id": "fast-chat"}
+    await rpc_result(state, "session.create", **target)
+    address = SessionAddress(None, "coder", "fast-chat")
+    before = sessions.get_metadata(address)
+    for enabled in (True, False):
+        assert await rpc_result(state, "session.set_fast_mode", **target, enabled=enabled) == {
+            "fast_mode": enabled
+        }
+        row = (await rpc_result(state, "session.get", **target))["session"]
+        assert row.get("fast_mode", False) is enabled
+        assert sessions.get_metadata(address) == {**before, "fast_mode": enabled}
+    await rpc_result(state, "session.set_fast_mode", **target, enabled=True)
+    await rpc_result(state, "session.create", agent_id="coder", session_id="another-chat")
+    assert not sessions.metadata_value(SessionAddress(None, "coder", "another-chat"), "fast_mode")
+    assert not resource_changes(state, "agents")
+    error = await rpc_error(state, "session.set_fast_mode", **target, enabled="true")
+    assert error["code"] == "invalid_request"
+    assert sessions.metadata_value(address, "fast_mode") is True

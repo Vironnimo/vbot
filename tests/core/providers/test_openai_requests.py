@@ -636,3 +636,42 @@ async def test_codex_gpt_5_6_does_not_assume_the_public_reasoning_context() -> N
 
     assert payload["reasoning"] == {"effort": "high", "summary": "auto"}
     assert adapter.reasoning_replay_policy("gpt-5.6-sol") == "full_history"
+
+
+@pytest.mark.parametrize(
+    ("factory", "model_id", "enabled", "expected"),
+    [
+        (codex_adapter, "gpt-6.1-sol", True, "priority"),
+        (codex_adapter, "gpt-6.1-sol", False, None),
+        (codex_adapter, "gpt-5-codex", True, None),
+        (platform_adapter, "gpt-6.1-sol", True, None),
+    ],
+)
+@pytest.mark.asyncio
+async def test_fast_mode_reaches_only_supported_routes(
+    factory, model_id, enabled, expected
+) -> None:
+    adapter = factory()
+    try:
+        with respx.mock:
+            route = respx.post(
+                OPENAI_SUBSCRIPTION_URL if factory is codex_adapter else PLATFORM_RESPONSES_URL
+            ).mock(
+                return_value=codex_sse_response(
+                    {"id": "resp_fast", "status": "completed", "output": []}
+                )
+            )
+            # All callers use the same Provider-owned speed translation.
+            async for _ in adapter.stream(
+                SAMPLE_MESSAGES,
+                model_id=model_id,
+                **adapter.fast_mode_kwargs(model_id, enabled=enabled),
+            ):
+                pass
+        request = route.calls.last.request
+        assert json.loads(request.content).get("service_tier") == expected
+        assert request.headers.get("x-codex-routing-hint") == (
+            f"model={model_id};tier=priority" if expected else None
+        )
+    finally:
+        await adapter.aclose()

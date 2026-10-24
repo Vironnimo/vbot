@@ -132,6 +132,12 @@ A Session Model override leaves `fallback_models` unchanged, so the Agent's exis
 
 Sampling is sent only when configured: the chat request carries the resolved Agent's `temperature` and `top_p` (`agent.md`) and nothing otherwise, so the Provider's own default applies. Kernel-internal callers (Compaction, titles, image understanding) send no sampling parameters.
 
+## Fast mode
+
+The Session's optional `fast_mode` preference applies only to Chat Model steps. `WireRequestRunner` reads it before each new request, so a toggle during a Run takes effect at the next step, including after a Tool call. The Adapter translates it through `fast_mode_kwargs`; an unsupported primary or fallback route sends no speed parameter. Reasoning, prompt text, and Agent defaults are independent. Session titles, Compaction and other standalone Model jobs keep their ordinary speed.
+
+Ordinary Accessor first sends and commands that create a Session capture `new_session.fast_mode` in its creating metadata write. Later edits use `session.set_fast_mode`; a fresh Session or fork starts with Standard. No Agent configuration field or automatic task default enables it.
+
 ## Interruption
 
 Canonical Session history is the only record of an interrupted Run. What the Run persisted before it stopped stays in its original form: User input, complete Assistant turns, Tool Results, and an `interrupted` Assistant partial when readable output existed. Nothing replays that work into a later request a second time, and an interrupted partial's readable and opaque Reasoning stays durable evidence that no later request sends (native `reasoning` and `reasoning_meta` are stripped even under same-scope `full_history`). The normalized cause is stored on the partial as `interruption_cause` beside `interrupted: true`, so internal result consumers such as Sub-Agents can tell a partial terminal result apart; both annotations stay out of Provider-visible fields. There is no Continue or Discard action.

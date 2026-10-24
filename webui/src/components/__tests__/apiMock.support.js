@@ -217,6 +217,12 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
         agent_overrides: agentOverrides,
         ...(options.remember ? { remember: true } : {}),
       }),
+    setSessionFastMode: (agentId, sessionId, enabled) =>
+      call('session.set_fast_mode', {
+        agent_id: agentId,
+        session_id: sessionId,
+        enabled,
+      }),
     listPrompts: (params = {}) => call('prompt.list', params),
     updatePromptBlock: (params) => call('prompt.update', params),
     resetPromptBlock: (params) => call('prompt.reset', params),

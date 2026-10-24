@@ -273,6 +273,8 @@ def _summary(state: sqlite3.Row, metadata_keys: Sequence[str] = ()) -> JsonObjec
     ):
         if state[key] is not None:
             summary[key] = str(state[key])
+    if state["fast_mode"] == 1:
+        summary["fast_mode"] = True
     if state["is_subagent"]:
         summary["is_subagent_session"] = True
     parent = _store_values._subagent_parent_from_state(state)

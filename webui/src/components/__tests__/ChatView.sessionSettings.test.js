@@ -79,7 +79,7 @@ function settingsRpcMock(options = {}) {
     if (method === 'chat.stream' && params.content?.startsWith('/model ')) {
       agents[0].model = params.content.slice(7);
     }
-    if (method === 'model.list') return { models: MODELS };
+    if (method === 'model.list') return { models: options.models ?? MODELS };
     if (method === 'connection.list') return { connections: [] };
     if (method === 'files.list') return { files: ['notes.md'] };
     if (method === 'session.set_agent_overrides') {
@@ -144,6 +144,106 @@ async function choose(name, label) {
 
 describe('ChatView Session settings', () => {
   const chat = setupChatViewTestSuite();
+
+  const FAST = 'openai/gpt-6.1-sol';
+  const fastModel = {
+    ...catalogModel(
+      FAST,
+      { supported: true, levels: ['low', 'high'] },
+      'GPT-6.1 Sol',
+    ),
+    provider_id: 'openai',
+    fast_mode: true,
+    wire_profiles: { subscription: { fast_mode: true } },
+  };
+
+  it('starts a new chat in Standard and submits Fast only for the chosen draft', async () => {
+    rpcMock.mockImplementation(
+      settingsRpcMock({
+        agents: [createAgent({ current_session_id: '', model: FAST })],
+        models: [...MODELS, fastModel],
+        streamHandler: () => ({
+          ...runningRun('run-fast'),
+          session_id: 'created-fast',
+        }),
+      }),
+    );
+    await chat.mountChat({}, { ready: null });
+    await waitForCondition(() => picker('Fast mode') !== null);
+    expect(picker('Fast mode').getAttribute('aria-pressed')).toBe('false');
+    picker('Fast mode').click();
+    flushSync();
+    expect(picker('Fast mode').getAttribute('aria-pressed')).toBe('true');
+    expect(
+      picker('Fast mode').classList.contains('session-settings__fast--enabled'),
+    ).toBe(true);
+    expect(rpcCalls('agent.update')).toEqual([]);
+    sendComposerMessage('Hi');
+    await waitForCondition(() => rpcCalls('chat.stream').length === 1);
+    expect(rpcCalls('chat.stream')[0].new_session.fast_mode).toBe(true);
+    findNewSessionButton().click();
+    flushSync();
+    await waitForCondition(
+      () => picker('Fast mode')?.getAttribute('aria-pressed') === 'false',
+    );
+    expect(rpcCalls('session.set_fast_mode')).toEqual([]);
+  });
+
+  it('persists Fast per Session, follows external changes, and clears it for an unsupported Model', async () => {
+    let enabled = true;
+    let storedModel = FAST;
+    getSessionMock.mockImplementation(async () => ({
+      session: {
+        id: 'session-1',
+        fast_mode: enabled,
+        agent_overrides: { model: storedModel },
+      },
+    }));
+    const base = settingsRpcMock({
+      agents: [createAgent({ model: FAST })],
+      models: [...MODELS, fastModel],
+    });
+    rpcMock.mockImplementation((method, params) => {
+      if (method === 'session.set_fast_mode') {
+        enabled = params.enabled;
+        return { fast_mode: enabled };
+      }
+      if (
+        method === 'session.set_agent_overrides' &&
+        params.agent_overrides.model
+      )
+        storedModel = params.agent_overrides.model;
+      return base(method, params);
+    });
+    const props = reactiveProps({});
+    await chat.mountChat(props);
+    await waitForCondition(
+      () => picker('Fast mode')?.getAttribute('aria-pressed') === 'true',
+    );
+    picker('Fast mode').click();
+    await waitForCondition(
+      () => rpcCalls('session.set_fast_mode').length === 1,
+    );
+    expect(rpcCalls('session.set_fast_mode')[0]).toEqual({
+      agent_id: 'alpha',
+      session_id: 'session-1',
+      enabled: false,
+    });
+    expect(rpcCalls('agent.update')).toEqual([]);
+    enabled = true;
+    props.sessionInvalidations = [
+      { id: 1, scope: { agent_id: 'alpha', session_id: 'session-1' } },
+    ];
+    await waitForCondition(
+      () => picker('Fast mode')?.getAttribute('aria-pressed') === 'true',
+    );
+    await choose('Model', SONNET);
+    await waitForCondition(() => picker('Fast mode') === null);
+    await waitForCondition(
+      () => rpcCalls('session.set_fast_mode').length === 2,
+    );
+    expect(rpcCalls('session.set_fast_mode')[1].enabled).toBe(false);
+  });
 
   describe('draft', () => {
     // An Identity Agent without a current Session shows its draft.

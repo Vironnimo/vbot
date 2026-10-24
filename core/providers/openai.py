@@ -385,6 +385,19 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         )
 
     @override
+    def _stable_request_headers(
+        self, model_id: str, request_kwargs: dict[str, Any]
+    ) -> dict[str, str]:
+        headers = super()._stable_request_headers(model_id, request_kwargs)
+        if (
+            self._responses_endpoint == CODEX_RESPONSES_ENDPOINT
+            and self.wire_profile(model_id).request.fast_mode
+            and request_kwargs.get("service_tier") == "priority"
+        ):
+            headers.setdefault("x-codex-routing-hint", f"model={model_id};tier=priority")
+        return headers
+
+    @override
     async def _build_headers(self, cache_scope_id: str | None = None) -> dict[str, str]:
         if self._connection_mode == CODEX_RESPONSES_MODE:
             return await self._build_codex_headers(cache_scope_id)
