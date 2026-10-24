@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager, nullcontext
@@ -30,14 +31,16 @@ from core.channels.config import (
     _normalize_channel_id,
 )
 from core.channels.engine import ChannelConversationEngine
-from core.channels.state import ChannelStateStore
+from core.channels.state import RUN_BUTTON_PRUNE_BATCH_SIZE, ChannelStateStore
 from core.channels.storage import ChannelStorage
 from core.chat.messages import ReplySurface
 from core.config_validation import (
     JsonObject,
 )
+from core.database import DatabaseError
 from core.extensions import InteractionButton, InteractionEvent, InteractionResponder
 from core.utils.ids import is_reserved_name, reserved_name_message
+from core.utils.log_conditions import LoggedConditions
 from core.utils.logging import get_logger
 from core.utils.workers import settle_before_cancelling
 
@@ -50,6 +53,8 @@ if TYPE_CHECKING:
     from core.sessions import ChatSessionManager
 
 _LOGGER = get_logger("channels")
+_RUN_BUTTON_SWEEP_SECONDS = 60 * 60
+_sleep = asyncio.sleep
 
 
 class ChannelService:
@@ -93,6 +98,8 @@ class ChannelService:
             raise
         self._observations = ChannelObservationInbox(self._state, chat_sessions, self._storage.get)
         self._observation_tasks: set[asyncio.Task[None]] = set()
+        self._retention_tasks: set[asyncio.Task[None]] = set()
+        self._retention_conditions = LoggedConditions()
         self._whatsapp_setup_tasks: dict[str, asyncio.Task[None]] = {}
         self._whatsapp_setup_states: dict[str, dict[str, Any]] = {}
         self._whatsapp_operations: dict[str, asyncio.Lock] = {}
@@ -120,6 +127,36 @@ class ChannelService:
 
     def start(self) -> None:
         self._connections.start()
+        loop = _get_running_loop_or_none()
+        if loop is not None and not any(
+            not task.done() and not task.cancelling() for task in self._retention_tasks
+        ):
+            task = loop.create_task(self._retain_run_buttons(), name="channel-button-retention")
+            self._retention_tasks.add(task)
+            task.add_done_callback(self._retention_tasks.discard)
+
+    async def _retain_run_buttons(self) -> None:
+        """Prune at start and hourly, yielding between bounded database batches."""
+        while True:
+            try:
+                while (
+                    await self._state.run_async(self._state.prune_run_button_bindings)
+                    == RUN_BUTTON_PRUNE_BATCH_SIZE
+                ):
+                    pass
+            except Exception as error:
+                if self._retention_conditions.started("run-buttons", type(error).__name__):
+                    expected = isinstance(error, (DatabaseError, OSError))
+                    _LOGGER.log(
+                        logging.WARNING if expected else logging.ERROR,
+                        "Run-button cleanup deferred (error_type=%s)",
+                        type(error).__name__,
+                        exc_info=not expected,
+                    )
+            else:
+                if self._retention_conditions.ended("run-buttons"):
+                    _LOGGER.info("Run-button cleanup recovered")
+            await _sleep(_RUN_BUTTON_SWEEP_SECONDS)
 
     def stop(self) -> None:
         """Stop the adapters and observation recovery without awaiting them.
@@ -129,6 +166,8 @@ class ChannelService:
         as after a failed Runtime start.
         """
         self._stop_adapters()
+        for task in self._retention_tasks:
+            task.cancel()
         for task in self._observation_tasks:
             task.cancel()
 
@@ -173,13 +212,18 @@ class ChannelService:
 
     def close(self) -> None:
         """Close the Channel state database after the adapters stopped. Idempotent."""
+        for task in self._retention_tasks:
+            task.cancel()
         self._state.close()
 
     async def aclose(self) -> None:
         """Stop all channel tasks and await their cancellation/shutdown paths."""
         tasks = self._connections.pending_tasks()
+        tasks.extend(self._retention_tasks)
         tasks.extend(self._whatsapp_setup_tasks.values())
         self._stop_adapters()
+        for task in self._retention_tasks:
+            task.cancel()
         tasks.extend(self._connections.pending_tasks())
 
         pending_tasks = _unique_pending_tasks(tasks)

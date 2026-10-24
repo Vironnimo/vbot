@@ -49,6 +49,7 @@ from core.runs import (
     WaitingWorkLimitError,
 )
 from core.utils.logging import get_logger
+from core.utils.workers import settle_before_cancelling
 
 if TYPE_CHECKING:
     from core.automation.automation import TriggerService
@@ -171,6 +172,7 @@ class ChannelConversationEngine:
         self._chat_workers: dict[str, asyncio.Task[None]] = {}
         self._busy_reply_times: OrderedDict[str, float] = OrderedDict()
         self._bound_tap_locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
+        self._retained_run_button_claims: set[str] = set()
 
     @property
     def config(self) -> ChannelConfig:
@@ -493,24 +495,20 @@ class ChannelConversationEngine:
                     ),
                 )
                 if admitted:
+                    self._retained_run_button_claims.add(binding_id)
                     return "enqueued"
             finally:
-                if (
-                    not admitted
-                    and not terminal
-                    and claim is not None
-                    and claim.status == "claimed"
-                ):
-                    cleanup = asyncio.create_task(rollback())
-                    cancelled = False
-                    while not cleanup.done():
-                        try:
-                            await asyncio.shield(cleanup)
-                        except asyncio.CancelledError:
-                            cancelled = True
-                    cleanup.result()
-                    if cancelled:
-                        raise asyncio.CancelledError
+                try:
+                    if (
+                        not admitted
+                        and not terminal
+                        and claim is not None
+                        and claim.status == "claimed"
+                    ):
+                        await settle_before_cancelling(rollback())
+                finally:
+                    if not admitted and claim is not None and claim.status == "claimed":
+                        registry.finish_run_button_claim(self._config.id, binding_id)
 
         await self._reject_overflow(conversation)
         return "busy"
@@ -639,6 +637,8 @@ class ChannelConversationEngine:
                 # Handled without a Run taking the item over: its notice is not owed.
                 # A cancelled worker leaves it owed for the Channel's next engine.
                 await self._replies.settle_admitted(queued.pending)
+                if isinstance(queued, _QueuedInternalPrompt) and queued.binding_id is not None:
+                    self._finish_run_button_claim(queued.binding_id)
         finally:
             if self._chat_workers.get(platform_target) is asyncio.current_task():
                 self._chat_workers.pop(platform_target, None)
@@ -1000,6 +1000,14 @@ class ChannelConversationEngine:
 
     # -- Lifecycle --------------------------------------------------------------------
 
+    def _finish_run_button_claim(self, binding_id: str) -> None:
+        if binding_id not in self._retained_run_button_claims:
+            return
+        self._retained_run_button_claims.remove(binding_id)
+        registry = self._run_button_binding_registry
+        assert registry is not None
+        registry.finish_run_button_claim(self._config.id, binding_id)
+
     async def stop(self) -> None:
         """End this engine: cancel its workers and relays, keeping every owed reply.
 
@@ -1020,7 +1028,11 @@ class ChannelConversationEngine:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
-        await self._replies.finish_stop()
+        try:
+            await self._replies.finish_stop()
+        finally:
+            for binding_id in tuple(self._retained_run_button_claims):
+                self._finish_run_button_claim(binding_id)
         if self._observation_recordings:
             await asyncio.gather(*self._observation_recordings)
             self._observation_recordings.clear()

@@ -52,7 +52,7 @@ class RunButtonClaim:
 class RunButtonBindingRegistry(Protocol):
     """Persistence seam used by the engine without importing Channel storage.
 
-    The methods block; async callers run them through :meth:`run_async`.
+    Persistence methods block; async callers run them through :meth:`run_async`.
     """
 
     def claim_run_button_binding(
@@ -65,6 +65,13 @@ class RunButtonBindingRegistry(Protocol):
     ) -> RunButtonClaim: ...
 
     def restore_run_button_binding(self, channel_id: str, binding_id: str) -> bool: ...
+
+    def finish_run_button_claim(self, channel_id: str, binding_id: str) -> None:
+        """Release in-memory retention protection after admitted work or compensation settles.
+
+        This does no persistence I/O and can run on the Event Loop.
+        """
+        ...
 
     async def run_async[Result](
         self, function: Callable[..., Result], *arguments: Any, **keyword_arguments: Any

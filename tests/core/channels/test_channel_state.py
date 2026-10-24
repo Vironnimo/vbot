@@ -484,6 +484,89 @@ def test_run_button_claims_check_target_and_thread_and_can_be_restored(
     assert store.restore_run_button_binding("tg", "binding") is False
 
 
+def test_run_button_retention_keeps_unused_and_unfinished_bindings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = datetime(2026, 9, 1, tzinfo=UTC)
+    now = first
+    monkeypatch.setattr(state_module, "utc_now_timestamp", lambda: format_canonical_timestamp(now))
+    state = _open(tmp_path)
+    state.reset("tg", "telegram")
+    try:
+        for name in ("expired", "active", "pending", "running"):
+            state.save_run_button_binding("tg", _binding(name))
+            assert (
+                state.claim_run_button_binding(
+                    "tg", name, platform_target="-100", thread_id=None
+                ).status
+                == "claimed"
+            )
+            if name != "active":
+                state.finish_run_button_claim("tg", name)
+        state.save_run_button_binding("tg", _binding("unused"))
+        now += timedelta(microseconds=1)
+        state.save_run_button_binding(
+            "tg",
+            replace(
+                _binding("recent"),
+                created_at=format_canonical_timestamp(first - timedelta(days=100)),
+            ),
+        )
+        assert (
+            state.claim_run_button_binding(
+                "tg", "recent", platform_target="-100", thread_id=None
+            ).status
+            == "claimed"
+        )
+        state.finish_run_button_claim("tg", "recent")
+
+        now = first + state_module.RUN_BUTTON_RETENTION
+        state.owe_reply("tg", replace(_owed("queued", "engine"), binding_id="pending"))
+        state.owe_reply("tg", replace(_owed("work", "engine"), binding_id="running"))
+        state.owe_reply("tg", _owed("work", "engine", run_id="run-1"))
+        replies, dropped = state.take_pending_replies("tg", "reader")
+        assert dropped == 0
+        assert {reply.binding_id for reply in replies} == {"pending", "running"}
+
+        assert state.prune_run_button_bindings() == 1
+        for name in ("active", "pending", "running", "recent"):
+            assert (
+                state.claim_run_button_binding(
+                    "tg", name, platform_target="-100", thread_id=None
+                ).status
+                == "consumed"
+            )
+        # Compensation can still restore its old claim; it becomes pending again.
+        assert state.restore_run_button_binding("tg", "active")
+        state.finish_run_button_claim("tg", "active")
+        state.settle_reply("tg", "queued")
+        state.settle_reply("tg", "work")
+        assert state.prune_run_button_bindings() == 2
+    finally:
+        state.close()
+
+    # Expired taps remain terminal after restart; never-used and restored taps survive.
+    reopened = _open(tmp_path)
+    try:
+        for name in ("expired", "pending", "running"):
+            assert (
+                reopened.claim_run_button_binding(
+                    "tg", name, platform_target="-100", thread_id=None
+                ).status
+                == "missing"
+            )
+        for name in ("unused", "active"):
+            assert (
+                reopened.claim_run_button_binding(
+                    "tg", name, platform_target="-100", thread_id=None
+                ).status
+                == "claimed"
+            )
+            reopened.finish_run_button_claim("tg", name)
+    finally:
+        reopened.close()
+
+
 def test_owed_replies_are_sent_at_most_once_and_handed_on_by_owner(
     store: ChannelStateStore,
 ) -> None:
