@@ -10,7 +10,7 @@ The one-time conversion of the plaintext credential files the Secret Store repla
 
 ## Import record
 
-`plaintext_import` in `secrets.json` (only while a conversion is unfinished): `{imported_at, sources: {relative path: {fingerprint, entries: {name: value fingerprint}}}, retiring_sources?, backups_pending?}`. Optional `retiring_sources` uses the same source records but only journals pending deletion: imports preserve it and never mirror those files or remove their stored values. Fingerprints are HMACs under the data key and reveal nothing without it. The first record format (`sources: {path: fingerprint}` plus `credentials`/`oauth_tokens` name lists) is still read; its entries count as not put there by the import, so a conversion never replaces or removes them.
+`plaintext_import` in `secrets.json` (only while a conversion is unfinished): `{imported_at, sources: {relative path: {fingerprint, entries: {name: value fingerprint}}}, retiring_sources?, backups_pending?}`. Optional `retiring_sources` uses the same source records but only journals pending deletion: imports preserve it and never mirror those files or remove their stored values. Fingerprints are HMACs under the data key and reveal nothing without it. The first record format (`sources: {path: fingerprint}` plus `credentials`/`oauth_tokens` name lists) is still read; its entries count as not put there by the import, so a conversion never replaces or removes them. User decision 2026-10-25: retain this read compatibility as a narrow exception to the PROJECT.md prohibition on old-field branches; new Import records use the current shape.
 
 ## Conversion
 
