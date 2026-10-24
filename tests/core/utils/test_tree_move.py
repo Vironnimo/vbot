@@ -191,8 +191,31 @@ def _link_directory(link: Path, target: Path) -> None:
         link.symlink_to(target, target_is_directory=True)
 
 
-def _deny_listing(folder: Path) -> None:
-    """Deny the owner the listing of ``folder``, as an Agent can do in its own folders."""
+def _deny_listing(folder: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Deny listing until the real owner-access repair runs, even on privileged runners."""
+    original = folder.stat()
+    real_scandir = os.scandir
+    real_restore = tree_move._restore_owner_access
+    denied = True
+
+    def scandir(path: Any = ".") -> Any:
+        matches = (
+            os.path.samestat(os.fstat(path), original)
+            if isinstance(path, int)
+            else Path(os.path.abspath(os.fsdecode(path))) == folder
+        )
+        if denied and matches:
+            raise PermissionError(errno.EACCES, "Access is denied", str(folder))
+        return real_scandir(path)
+
+    def restore(path: Path | str) -> None:
+        nonlocal denied
+        real_restore(path)
+        if Path(path) == folder:
+            denied = False
+
+    monkeypatch.setattr(os, "scandir", scandir)
+    monkeypatch.setattr(tree_move, "_restore_owner_access", restore)
     if sys.platform != "win32":
         folder.chmod(0)
         return
@@ -203,8 +226,8 @@ def _deny_listing(folder: Path) -> None:
     assert advapi32.InitializeAcl(empty, len(empty), 2)
     # DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION: no entry grants anything.
     assert not advapi32.SetNamedSecurityInfoW(str(folder), 1, 0x80000004, None, None, empty, None)
-    with pytest.raises(PermissionError):
-        os.listdir(folder)
+    with pytest.raises(PermissionError), os.scandir(folder):
+        pass
 
 
 @pytest.mark.parametrize("stop", [None, lambda: None], ids=["at-once", "stoppable"])
@@ -220,7 +243,7 @@ def test_remove_tree_deletes_only_inside_its_root_and_never_follows_links(
     read_only.chmod(stat.S_IREAD)
     (tree / "denied" / "inner").mkdir(parents=True)
     (tree / "denied" / "inner" / "probe.txt").write_text("probe", encoding="utf-8")
-    _deny_listing(tree / "denied")
+    _deny_listing(tree / "denied", monkeypatch)
     _link_directory(within / "link", outside)
     # Each link refuses its first removal, as a read-only link does on Windows; clearing
     # that attribute must never reach the read-only directory the link points at.
