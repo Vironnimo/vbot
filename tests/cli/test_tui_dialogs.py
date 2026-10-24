@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Any, override
-from unittest.mock import AsyncMock, call
+from unittest.mock import ANY, AsyncMock, call
 
 import httpx
 import pytest
@@ -576,6 +576,7 @@ async def test_file_picker_keeps_local_uploads_separate_from_server_mentions(
                     {"type": "file", **attachment},
                 ],
                 "file_mentions": ["src/server.py"],
+                "input_id": ANY,
             },
         )
 
