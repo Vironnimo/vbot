@@ -5,7 +5,6 @@ import {
   disableChannel,
   enableChannel,
   getChannelAccess,
-  getChannelStatus,
   grantChannelAdmin,
   listAgents,
   listChannels,
@@ -69,6 +68,8 @@ export function createChannelsSettings(context) {
   let channelAgentsRequested = 0;
   let channelAgentsShown = 0;
   let pendingExternalReload = $state(false);
+  let accessRevision = 0;
+  let lastPanelActive = null;
 
   let channelBaseline = $state('');
   const autosaveContext = useAutosaveContext();
@@ -126,6 +127,12 @@ export function createChannelsSettings(context) {
 
   onMount(() => {
     void loadChannelsPanel();
+  });
+
+  $effect(() => {
+    const active = context.active;
+    if (lastPanelActive === false && active) pendingExternalReload = true;
+    lastPanelActive = active;
   });
 
   $effect(() => {
@@ -197,6 +204,7 @@ export function createChannelsSettings(context) {
     channelBaseline = JSON.stringify(channelFormValues);
     channelFormVisible = true;
     clearChannelFeedback();
+    void loadChannelAccess(channel.id);
   }
 
   function cancelChannelForm() {
@@ -329,37 +337,31 @@ export function createChannelsSettings(context) {
         channelPanelState,
         channelsResult,
       );
-      const statusResults = await Promise.all(
-        nextState.channels.map(async (channel) => {
-          try {
-            const status = await getChannelStatus(channel.id);
-            let access = null;
-            try {
-              access = await getChannelAccess(channel.id);
-            } catch {
-              // Channel status remains useful when access state cannot be loaded.
-            }
-            return { ...status, access };
-          } catch {
-            return {
-              id: channel.id,
-              enabled: channel.enabled,
-              running: channel.running,
-            };
-          }
-        }),
+      const previousById = Object.fromEntries(
+        channelPanelState.channels.map((channel) => [channel.id, channel]),
       );
-
       channelPanelState = {
         ...nextState,
-        channels: mergeChannelStatuses(nextState.channels, statusResults),
+        channels: mergeChannelStatuses(
+          nextState.channels,
+          channelsResult.channels,
+        ).map((channel) => ({
+          ...channel,
+          access:
+            previousById[channel.id]?.platform === channel.platform
+              ? (previousById[channel.id]?.access ?? channel.access)
+              : channel.access,
+        })),
         loading: false,
         error: null,
       };
       const editedChannel = channelPanelState.channels.find((channel) =>
         isEditingChannel(channel),
       );
-      if (editedChannel) rebaseChannelForm(editedChannel);
+      if (editedChannel) {
+        rebaseChannelForm(editedChannel);
+        await loadChannelAccess(editedChannel.id);
+      }
       // A Channel removed elsewhere takes its open edit form with it.
       if (
         channelFormVisible &&
@@ -376,6 +378,26 @@ export function createChannelsSettings(context) {
         loading: false,
         error: `${t('settings.loadError')} ${error.message}`,
       };
+    }
+  }
+
+  async function loadChannelAccess(channelId) {
+    const request = ++accessRevision;
+    try {
+      const access = await getChannelAccess(channelId);
+      if (request !== accessRevision) return;
+      const channel = channelPanelState.channels.find(
+        (entry) => entry.id === channelId && isEditingChannel(entry),
+      );
+      if (!channel) return;
+      channelPanelState = {
+        ...channelPanelState,
+        channels: mergeChannelStatuses(channelPanelState.channels, [
+          { ...channel, access },
+        ]),
+      };
+    } catch {
+      // A failed access read does not prevent editing the Channel config.
     }
   }
 

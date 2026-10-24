@@ -138,11 +138,28 @@ def _state(
 
 @pytest.mark.asyncio
 async def test_channel_list_returns_serialized_channels() -> None:
-    config = _channel_config()
+    config = _channel_config(platform="whatsapp", token_env_var="")
+    service = _channel_service(config)
+    service.connection_status.return_value = {"connected": False}
 
-    result = await rpc_result(_state(_channel_service(config)), "channel.list")
+    result = await rpc_result(_state(service), "channel.list")
 
-    assert result == {"channels": [config.to_dict()]}
+    assert result == {
+        "channels": [
+            {
+                **config.to_dict(),
+                "enabled": True,
+                "running": True,
+                "failed": False,
+                "failure_reason": None,
+                "denied_chats": [],
+                "connected": False,
+            }
+        ]
+    }
+    service.get_channel.assert_not_awaited()
+    service.channel_access.assert_not_called()
+    service.whatsapp_status.assert_not_called()
 
 
 @pytest.mark.asyncio

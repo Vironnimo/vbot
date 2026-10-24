@@ -544,6 +544,7 @@ export function createSettingsRpcMock(options = {}) {
       return {
         channels: channels.map((channel) => ({
           ...channel,
+          ...channelStatuses.get(channel.id),
           allowed_chat_ids: [...channel.allowed_chat_ids],
         })),
       };
