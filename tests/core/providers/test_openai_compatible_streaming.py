@@ -659,6 +659,7 @@ async def test_stream_emits_usage_from_the_usage_chunk(final_chunk, expected_tai
     ("reply", "error_type", "attempts"),
     [
         pytest.param(httpx.Response(401, text="Unauthorized"), ProviderAuthError, 1, id="401"),
+        pytest.param(httpx.Response(500, text="server error"), ProviderError, 1, id="500-fatal"),
         pytest.param(httpx.TimeoutException("timed out"), ProviderTimeoutError, 4, id="timeout"),
         pytest.param(httpx.ConnectError("connection failed"), NetworkError, 4, id="connect"),
     ],

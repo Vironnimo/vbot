@@ -31,6 +31,7 @@ from tests.core.chat.assistant_turn_test_support import (
 )
 
 from .openai_test_support import (
+    CHAT_COMPLETIONS_URL,
     COMPLETED_RESPONSE,
     OPENAI_SUBSCRIPTION_URL,
     PLATFORM_RESPONSES_URL,
@@ -153,7 +154,8 @@ async def test_codex_send_times_out_and_closes_the_response_when_its_stream_stal
 
 
 @pytest.mark.asyncio
-async def test_codex_stream_connect_retry_rebuilds_account_headers() -> None:
+@pytest.mark.parametrize("status", [500, 503])
+async def test_codex_stream_connect_retry_rebuilds_account_headers(status: int) -> None:
     """A retried Codex stream connect re-consults the token getter (OAuth refresh)."""
 
     adapter = codex_adapter(
@@ -166,7 +168,7 @@ async def test_codex_stream_connect_retry_rebuilds_account_headers() -> None:
 
     with respx.mock:
         route = respx.post(OPENAI_SUBSCRIPTION_URL).mock(
-            side_effect=[httpx.Response(503, text="Service Unavailable"), sse_response(body)]
+            side_effect=[httpx.Response(status, text="temporarily unavailable"), sse_response(body)]
         )
         await _collect(adapter)
 
@@ -174,6 +176,62 @@ async def test_codex_stream_connect_retry_rebuilds_account_headers() -> None:
         "acct-stale",
         "acct-fresh",
     ]
+
+
+@pytest.mark.parametrize(
+    ("subscription", "model_id", "url", "compressed", "websocket"),
+    [
+        (True, MODEL_ID, OPENAI_SUBSCRIPTION_URL, False, False),
+        (True, MODEL_ID, OPENAI_SUBSCRIPTION_URL, True, False),
+        (True, MODEL_ID, OPENAI_SUBSCRIPTION_URL, False, True),
+        (False, MODEL_ID, PLATFORM_RESPONSES_URL, False, False),
+        (False, MODEL_ID, PLATFORM_RESPONSES_URL, True, False),
+        (False, MODEL_ID, PLATFORM_RESPONSES_URL, False, True),
+        (False, "gpt-4.1", CHAT_COMPLETIONS_URL, False, False),
+    ],
+    ids=[
+        "codex",
+        "codex-zstd",
+        "codex-ws-fallback",
+        "platform",
+        "platform-zstd",
+        "platform-ws-fallback",
+        "chat-completions",
+    ],
+)
+@pytest.mark.parametrize("streaming", [False, True], ids=["send", "stream"])
+@pytest.mark.asyncio
+async def test_http_500_retries_only_stream_establishment(
+    subscription: bool, model_id: str, url: str, compressed: bool, websocket: bool, streaming: bool
+) -> None:
+    connector = AsyncMock(side_effect=OSError("test websocket unavailable"))
+    factory = codex_adapter if subscription else platform_adapter
+    adapter = factory(responses_websocket_connect=connector)
+    context = {"conversation_id": "coder:session"} if websocket else {}
+    messages = _user_messages("A" * RESPONSES_ZSTD_MIN_BYTES) if compressed else SAMPLE_MESSAGES
+    try:
+        with respx.mock, caller_owns_retries():
+            route = respx.post(url).mock(
+                return_value=httpx.Response(
+                    500, text="test-server-error", headers={"Retry-After": "2"}
+                )
+            )
+            with pytest.raises(ProviderError) as caught:
+                if streaming:
+                    _ = [
+                        chunk
+                        async for chunk in adapter.stream(messages, model_id=model_id, **context)
+                    ]
+                else:
+                    await adapter.send(messages, model_id=model_id, **context)
+        assert caught.value.status_code == 500
+        assert caught.value.retryable is streaming
+        assert caught.value.retry_after == (2.0 if streaming else None)
+        assert route.call_count == 1
+        assert bool(connector.await_count) is (websocket and (streaming or subscription))
+        assert (route.calls[0].request.headers.get("Content-Encoding") == "zstd") is compressed
+    finally:
+        await adapter.aclose()
 
 
 @pytest.mark.parametrize(

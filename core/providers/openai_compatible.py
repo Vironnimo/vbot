@@ -663,6 +663,16 @@ class OpenAICompatibleAdapter(ProviderAdapter):
 
         return wrap_network_error(exc)
 
+    def _classify_stream_http_status(
+        self,
+        status_code: int,
+        *,
+        detail: str,
+        response_headers: httpx.Headers,
+    ) -> None:
+        """Classify failure while establishing a stream, before any output."""
+        self._classify_http_status(status_code, detail=detail, response_headers=response_headers)
+
     # ------------------------------------------------------------------
     # send() — non-streaming
     # ------------------------------------------------------------------
@@ -847,7 +857,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             error_body: str,
             response_headers: httpx.Headers,
         ) -> None:
-            self._classify_http_status(
+            self._classify_stream_http_status(
                 status_code,
                 detail=format_http_error_detail(status_code, error_body),
                 response_headers=response_headers,

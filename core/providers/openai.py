@@ -16,6 +16,7 @@ import re
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import aclosing
 from dataclasses import replace
+from functools import partial
 from typing import TYPE_CHECKING, Any, ClassVar, cast, override
 
 import httpx
@@ -100,6 +101,7 @@ from core.providers.http import (
     PROVIDER_NON_STREAMING_READ_TIMEOUT_SECONDS,
     HttpErrorStatusHandler,
     PreparedRequest,
+    classify_http_status,
     connect_streaming_with_retry,
     format_http_error_detail,
     iter_stream_lines,
@@ -462,6 +464,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
                 cache_scope_id=prompt_cache_affinity_id,
                 conversation_id=conversation_id,
                 states=states,
+                handle_error_status=self._handle_error_status,
             )
             try:
                 while True:
@@ -646,6 +649,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         cache_scope_id: str | None,
         conversation_id: str | None,
         states: list[ResponsesStreamState] | None = None,
+        handle_error_status: HttpErrorStatusHandler | None = None,
     ) -> AsyncGenerator[dict[str, Any]]:
         """Stream one Responses request, learning from a rejection before its first delta.
 
@@ -681,6 +685,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
                 cache_scope_id=cache_scope_id,
                 conversation_id=conversation_id,
                 state=state,
+                handle_error_status=handle_error_status,
             )
 
         plan = self._request_plan(messages, model_id, build)
@@ -759,6 +764,37 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             response_headers=response_headers,
         )
 
+    @override
+    def _classify_stream_http_status(
+        self,
+        status_code: int,
+        *,
+        detail: str,
+        response_headers: httpx.Headers,
+    ) -> None:
+        """OpenAI's HTTP 500 before a stream starts uses the caller's recovery budget."""
+        if status_code == 500 and self._config.id == "openai":
+            classify_http_status(
+                status_code,
+                idempotent=False,
+                extra_retryable={500},
+                detail=detail,
+                response_headers=response_headers,
+            )
+        self._classify_http_status(status_code, detail=detail, response_headers=response_headers)
+
+    def _handle_stream_error_status(
+        self,
+        status_code: int,
+        error_body: str,
+        response_headers: httpx.Headers,
+    ) -> None:
+        self._classify_stream_http_status(
+            status_code,
+            detail=format_http_error_detail(status_code, error_body),
+            response_headers=response_headers,
+        )
+
     async def _attempt_headers(
         self, cache_scope_id: str | None, request_headers: Mapping[str, str]
     ) -> dict[str, str]:
@@ -799,6 +835,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             request,
             headers={**request.headers, **request_headers},
             cache_scope_id=cache_scope_id,
+            handle_error_status=self._handle_error_status,
         )
 
     async def _connect_stream(
@@ -808,6 +845,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         *,
         request_headers: Mapping[str, str],
         cache_scope_id: str | None = None,
+        handle_error_status: HttpErrorStatusHandler | None = None,
     ) -> httpx.Response:
         """Establish one streaming POST; a large Responses body goes compressed."""
 
@@ -831,6 +869,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             request,
             headers={**request.headers, **request_headers},
             cache_scope_id=cache_scope_id,
+            handle_error_status=handle_error_status or self._handle_stream_error_status,
         )
 
     async def _send_body[T](
@@ -844,6 +883,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         *,
         headers: Mapping[str, str],
         cache_scope_id: str | None,
+        handle_error_status: HttpErrorStatusHandler,
     ) -> T:
         """Send ``request``'s body with ``send``, zstd-compressed when it is a large Responses body.
 
@@ -865,7 +905,10 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
                 return await send(
                     await request.zstd_body(),
                     lambda: self._attempt_headers(cache_scope_id, compressed_headers),
-                    self._handle_compressed_error_status,
+                    partial(
+                        self._handle_compressed_error_status,
+                        handle_error_status=handle_error_status,
+                    ),
                 )
             except _CompressedBodyRejectedError as rejected:
                 self._responses_transports.stop_compressing_requests(self._responses_connection)
@@ -877,7 +920,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         return await send(
             body,
             lambda: self._attempt_headers(cache_scope_id, headers),
-            self._handle_error_status,
+            handle_error_status,
         )
 
     def _handle_compressed_error_status(
@@ -885,6 +928,8 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         status_code: int,
         error_body: str,
         response_headers: httpx.Headers,
+        *,
+        handle_error_status: HttpErrorStatusHandler,
     ) -> None:
         """Tell a rejected request encoding from any other error of a compressed request."""
         if (
@@ -893,7 +938,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             or (status_code == 400 and _COMPRESSION_REJECTION.search(error_body.lower()))
         ):
             raise _CompressedBodyRejectedError(f"HTTP {status_code}")
-        self._handle_error_status(status_code, error_body, response_headers)
+        handle_error_status(status_code, error_body, response_headers)
 
     async def _stream_responses(
         self,
@@ -903,6 +948,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         cache_scope_id: str | None = None,
         conversation_id: str | None = None,
         state: ResponsesStreamState | None = None,
+        handle_error_status: HttpErrorStatusHandler | None = None,
     ) -> AsyncGenerator[dict[str, Any]]:
         stream_state = state or _responses_stream_state(self.display_timezone)
         if (
@@ -917,6 +963,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
                     cache_scope_id=cache_scope_id,
                     conversation_id=conversation_id,
                     state=stream_state,
+                    handle_error_status=handle_error_status,
                 )
             ) as deltas:
                 async for delta in deltas:
@@ -928,6 +975,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
                 request_headers=request_headers,
                 cache_scope_id=cache_scope_id,
                 state=stream_state,
+                handle_error_status=handle_error_status,
             )
         ) as deltas:
             async for delta in deltas:
@@ -940,12 +988,14 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         request_headers: Mapping[str, str],
         cache_scope_id: str | None,
         state: ResponsesStreamState,
+        handle_error_status: HttpErrorStatusHandler | None = None,
     ) -> AsyncGenerator[dict[str, Any]]:
         response = await self._connect_stream(
             self._responses_endpoint,
             request,
             request_headers=request_headers,
             cache_scope_id=cache_scope_id,
+            handle_error_status=handle_error_status,
         )
         async with aclosing(self._responses_sse_deltas(response, state)) as deltas:
             async for delta in deltas:
@@ -1001,6 +1051,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         cache_scope_id: str,
         conversation_id: str,
         state: ResponsesStreamState,
+        handle_error_status: HttpErrorStatusHandler | None = None,
     ) -> AsyncGenerator[dict[str, Any]]:
         websocket_headers, account_id = await self._websocket_headers(cache_scope_id)
         # The socket sends its handshake headers once; the request's stable
@@ -1043,6 +1094,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
                 request_headers=request_headers,
                 cache_scope_id=cache_scope_id,
                 state=state,
+                handle_error_status=handle_error_status,
             )
         ) as deltas:
             async for delta in deltas:
