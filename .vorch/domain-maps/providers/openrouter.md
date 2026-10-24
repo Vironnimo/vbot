@@ -10,6 +10,7 @@ OpenAI-compatible Provider with OpenRouter-specific reasoning, per-Model Chat Co
 - Runtime endpoints: OpenAI-compatible `POST /chat/completions` by default; stateless `POST /responses` for the exact OpenRouter GPT-5.6 Sol/Terra/Luna and `-pro` Model ids (a protocol rule in `resources/wire/openrouter.json`).
 - Catalog endpoint: `GET /models`
 - Routing catalogs: `GET /providers` for base Provider slugs and `GET /models/{author}/{slug}/endpoints` for one Model's exact endpoint tags, exposed to Settings through `provider.routing_options`
+- App attribution: every request, catalog calls included, carries the config's `extra_headers`: `HTTP-Referer: https://github.com/Vironnimo/vbot` (the app's identity on OpenRouter's app pages and rankings), `X-OpenRouter-Title: vBot` and `X-OpenRouter-Categories: personal-agent,cli-agent` (at most two; OpenRouter drops unknown values). Until 2026-10-24 the referer was `https://vbot.app`, a domain unrelated to the project.
 
 The 2026-09-22 refresh adds `openai/gpt-6-sol` and `openai/gpt-6-luna` plus OpenRouter's Pro and batch variants. The base ids are selectable through the existing Chat Completions route. Synthetic live calls through the actual Adapter returned one Tool Call for each base id both at Provider-default reasoning and with explicit `none`; this does not establish the same result for Pro or batch variants.
 

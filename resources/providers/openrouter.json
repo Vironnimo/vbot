@@ -20,8 +20,9 @@
     "max_tokens": 8192
   },
   "extra_headers": {
-    "HTTP-Referer": "https://vbot.app",
-    "X-Title": "vBot"
+    "HTTP-Referer": "https://github.com/Vironnimo/vbot",
+    "X-OpenRouter-Title": "vBot",
+    "X-OpenRouter-Categories": "personal-agent,cli-agent"
   },
   "models_endpoint": "/models"
 }
