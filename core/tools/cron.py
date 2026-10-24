@@ -95,6 +95,7 @@ _UPDATE_FIELDS = (
     "repeat",
     "session",
     "deliver",
+    "notification_policy",
     "watch",
     WATCH_RUNS_FIELD,
     ENABLED_FIELD,
@@ -198,7 +199,15 @@ CRON_TOOL_PARAMETERS: JsonObject = {
             "enum": ["here", "app", "none"],
             "description": (
                 "Where each run's final answer goes: here (this chat, or vBot outside a chat), "
-                "app (vBot, with a notification) or none. Omit on create for here."
+                "app (vBot) or none. Omit on create for here."
+            ),
+        },
+        "notification_policy": {
+            "type": "string",
+            "enum": ["all", "errors", "muted"],
+            "description": (
+                "Badges and desktop notifications in vBot. Omit on create for all; "
+                "on update to keep the setting. Channel delivery is controlled by deliver."
             ),
         },
         "watch": {
@@ -447,6 +456,11 @@ async def _handle_create(
         status="paused" if paused else "active",
         project_id=project_id,
         delivery=delivery.stored(),
+        **(
+            {"notification_policy": arguments["notification_policy"]}
+            if "notification_policy" in arguments
+            else {}
+        ),
         watch=watch,
         permission_ceiling=ceiling,
         actor="tool",
@@ -488,7 +502,8 @@ async def _handle_update(
         raise CronCallRefusedError(
             refusal(
                 "update needs a field to change: name, prompt, schedule, event_id, repeat, "
-                "target, session, deliver, watch or watch_runs. To pause or resume the job, use "
+                "target, session, deliver, notification_policy, watch or watch_runs. "
+                "To pause or resume the job, use "
                 "disable or "
                 "enable.",
                 arguments,
@@ -500,7 +515,7 @@ async def _handle_update(
     updates: dict[str, Any] = {}
     if "target" in arguments:
         updates["agent_id"], updates["project_id"] = _target_agent(context, arguments["target"])
-    for name in ("name", "prompt"):
+    for name in ("name", "prompt", "notification_policy"):
         if name in arguments:
             updates[name] = arguments[name]
     if "schedule" in arguments or "event_id" in arguments:
@@ -550,7 +565,7 @@ async def _handle_update(
         updates["status"] = "active" if arguments[ENABLED_FIELD] else "paused"
     current = cron_service.get_job(job_id)
     ceiling = current.permission_ceiling
-    if context.permissions.restricted:
+    if context.permissions.restricted and set(updates) != {"notification_policy"}:
         moved = "agent_id" in updates
         await _check_pinned_session(
             session_ancestors,
@@ -567,13 +582,14 @@ async def _handle_update(
         joined = join_ceilings(current.ceiling(), context.permissions.ceiling(source="cron"))
         ceiling = joined.to_ceiling_dict() if joined is not None else None
         updates["permission_ceiling"] = ceiling
-    await _check_watch(
-        cron_service,
-        updates.get("watch", current.watch),
-        updates.get("agent_id", current.agent_id),
-        updates["project_id"] if "agent_id" in updates else current.project_id,
-        ceiling,
-    )
+    if set(updates) != {"notification_policy"}:
+        await _check_watch(
+            cron_service,
+            updates.get("watch", current.watch),
+            updates.get("agent_id", current.agent_id),
+            updates["project_id"] if "agent_id" in updates else current.project_id,
+            ceiling,
+        )
     job = await cron_service.update_job(job_id, actor="tool", **updates)
     notes = [note] if note else []
     # A job that just became a webhook job got its secret with this call.
@@ -1027,6 +1043,7 @@ def _job_fields(cron_service: CronService, job: CronJob, zone: ZoneInfo) -> Json
     if job.session_id:
         data["session"] = job.session_id
     data["deliver"] = _delivery_text(job.delivery)
+    data["notification_policy"] = job.notification_policy
     if job.notifications:
         data["delivery_progress"] = job.delivery_progress()
     if job.schedule_type != "once" and job.remaining_runs is not None:

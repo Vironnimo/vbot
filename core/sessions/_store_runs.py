@@ -14,6 +14,7 @@ from core.sessions import (
     _store_codec,
     _store_fts,
     _store_mutations,
+    _store_notifications,
     _store_values,
 )
 from core.sessions._io import _encode_chat_history_cursor
@@ -25,6 +26,7 @@ from core.sessions._types import (
     SessionRunAdmission,
     SessionRunCompletion,
 )
+from core.sessions.notifications import notification_allowed
 from core.utils.surrogates import replace_lone_surrogates, without_lone_surrogates
 from core.utils.timestamps import utc_now_timestamp
 
@@ -159,6 +161,18 @@ def admit_run(
         ),
     )
     run_key = int(cursor.lastrowid or 0)
+    if admission.schedule_id is not None:
+        connection.execute(
+            "INSERT INTO run_notifications (run_key, session_key, schedule_id, policy, eligible) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                run_key,
+                session_key,
+                admission.schedule_id,
+                admission.notification_policy,
+                int(admission.notification_eligible),
+            ),
+        )
     if admission.accessor_input_id is not None:
         _store_accessor_inputs.claim(connection, address, admission.accessor_input_id, run_key)
     if owner is not None:
@@ -290,6 +304,26 @@ def finish_run(
         completion.contributes_to_activity and summary.subagent_reply_target == "parent"
     )
     read = run_key if read_on_completion else state["read_completion_run_key"]
+    source = connection.execute(
+        "SELECT schedule_id, policy FROM run_notifications WHERE run_key = ?", (run_key,)
+    ).fetchone()
+    policy = (
+        (completion.notification_policy or source["policy"])
+        if source is not None and source["schedule_id"] is not None
+        else state["notification_policy"]
+    )
+    connection.execute(
+        "INSERT INTO run_notifications (run_key, session_key, eligible, is_read, policy) "
+        "VALUES (?, ?, ?, ?, ?) ON CONFLICT(run_key) DO UPDATE SET "
+        "eligible = excluded.eligible, is_read = excluded.is_read, policy = excluded.policy",
+        (
+            run_key,
+            session_key,
+            int(completion.contributes_to_activity),
+            int(read_on_completion or not completion.contributes_to_activity),
+            policy,
+        ),
+    )
     connection.execute(
         "UPDATE sessions SET next_seq = ?, last_activity_at = ?, "
         "last_entry_id = ?, latest_completion_run_key = ?, latest_completion_status = ?, "
@@ -302,9 +336,18 @@ def finish_run(
     generation_id = str(state["generation_id"])
     result: JsonObject = {
         "history_persisted": True,
+        "notification_allowed": (
+            completion.contributes_to_activity
+            and not read_on_completion
+            and notification_allowed(policy, completion.status)
+        ),
+        "schedule_id": source["schedule_id"] if source is not None else None,
         "history_generation_id": generation_id,
         "history_cursor": _encode_chat_history_cursor(generation_id, seq + 1),
     }
+    result["notification_activity"] = _completion_activity_from_state(
+        _completion_activity(connection, session_key)
+    )
     if read_on_completion:
         result["completion_read"] = True
     return result
@@ -469,7 +512,9 @@ def recover_interrupted_runs(connection: sqlite3.Connection) -> tuple[RecoveredR
     """
     now = utc_now_timestamp()
     rows = connection.execute(
-        "SELECT r.run_key, r.run_id, r.run_kind, r.work_id, r.contributes_to_activity, "
+        "SELECT r.run_key, r.run_id, r.run_kind, r.work_id, "
+        "COALESCE((SELECT n.eligible FROM run_notifications AS n WHERE n.run_key = r.run_key), "
+        "r.contributes_to_activity) AS contributes_to_activity, "
         "r.iteration_count, r.started_at, s.project_id, s.agent_id, s.session_id FROM runs AS r "
         "JOIN sessions AS s ON s.session_key = r.session_key "
         "WHERE r.status = 'running' AND r.inherited = 0 AND s.state = 'live' "
@@ -537,4 +582,6 @@ def mark_terminal_run_read(
             (session_key,),
         )
         activity = _completion_activity(connection, session_key)
-    return _completion_activity_from_state(activity), marked
+    newly_read = _store_notifications.mark_runs_read(connection, address, [run_id])
+    result = _completion_activity_from_state(_completion_activity(connection, session_key))
+    return result, marked or bool(newly_read)

@@ -492,6 +492,9 @@ async def _server_event_from_run_event(
         )
     if event.type in RUN_TERMINAL_EVENT_TYPES:
         payload["status"] = event.payload.get("status")
+        for field in ("notification_allowed", "schedule_id", "notification_activity"):
+            if field in event.payload:
+                payload[field] = event.payload[field]
         if "timing" in event.payload:
             payload["timing"] = remove_opaque_provider_metadata(event.payload["timing"])
         if "session_usage" in event.payload:

@@ -56,6 +56,8 @@ An objective the user sets for one Session, which automatic Runs pursue one afte
 - `TriggerService` owns each supplied Waiting-Work Admission through admission: Queue transfer consumes it, while immediate starts (including fresh Sessions), failures, and cancellation release it. Callers must not depend on an unrelated later cleanup to return shared capacity (`test_automation.py`).
 - Completion delivery state is process-local; closing it (`TriggerService.aclose`) persists pending notices without an owner as a System Reminder, so Runtime closes it before canonical Sessions (`automation/completion-delivery.md`).
 
+Cron owns notification policy; Sessions owns each Run's source and read state (`automation/cron.md` -> App notifications and Run history).
+
 ## References
 
 Read these only when your task matches - not by default.

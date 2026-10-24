@@ -145,6 +145,7 @@ _MUTABLE_FIELDS = frozenset(
         "delivery",
         "watch",
         "permission_ceiling",
+        "notification_policy",
     )
 )
 
@@ -337,6 +338,12 @@ def _validate_cron_job_data(diagnostics: list[JsonDiagnostic], item_path: str, i
         add_error(diagnostics, item_path, "Expected a JSON object")
         return
     warn_unknown_keys(diagnostics, item_path, item, CRON_JOB_SHAPE.fields, "cron job field")
+    validate_optional_allowed_string(
+        diagnostics,
+        f"{item_path}.notification_policy",
+        item.get("notification_policy"),
+        frozenset({"all", "errors", "muted"}),
+    )
     validate_non_empty_string(diagnostics, f"{item_path}.id", item.get("id"), required=True)
     _validate_cron_agent_id(diagnostics, f"{item_path}.agent_id", item.get("agent_id"))
     validate_non_empty_string(diagnostics, f"{item_path}.name", item.get("name"), required=True)
@@ -599,6 +606,7 @@ class CronJob:
     event_progress: EventProgress | None = None
     # Where each Run's final answer goes; None delivers it nowhere.
     delivery: CronDelivery | None = None
+    notification_policy: str = "all"
     # The latest final answer that was not [SILENT], for the next Run's context.
     last_result: CronResult | None = None
     # Whether the latest Run succeeded with a [SILENT] (or empty) answer.
@@ -622,6 +630,40 @@ class CronJob:
     # ``None``: the job was set up by the user or a full-access Session.
     permission_ceiling: dict[str, Any] | None = None
 
+    def notification_activity(self, runs: dict[str, Any]) -> dict[str, Any]:
+        unread = int(runs.get("unread_count", 0))
+        errors = int(runs.get("unread_error_count", 0))
+        alert = int(self.unread_alert is not None)
+        count = (
+            0
+            if self.notification_policy == "muted"
+            else int(
+                runs.get("visible_unread_error_count", errors)
+                if self.notification_policy == "errors"
+                else runs.get("visible_unread_count", unread)
+            )
+            + alert
+        )
+        return {
+            **runs,
+            "unread_count": unread,
+            "alert_at": self.unread_alert.at if self.unread_alert else None,
+            "notification_count": count,
+            "last_activity_at": max(
+                filter(
+                    None,
+                    (
+                        runs.get("last_activity_at"),
+                        self.last_completed_at,
+                        self.last_attempt_at,
+                        self.created_at,
+                        self.unread_alert.at if self.unread_alert else None,
+                    ),
+                ),
+                key=datetime.fromisoformat,
+            ),
+        }
+
     def ceiling(self) -> PermissionCeiling | None:
         """The stored creator boundary every fire of this job runs under."""
         if self.permission_ceiling is None:
@@ -639,6 +681,7 @@ class CronJob:
             "agent_id": self.agent_id,
             "name": self.name,
             "prompt": self.prompt,
+            "notification_policy": self.notification_policy,
             "schedule_type": self.schedule_type,
             "cron_expression": self.cron_expression,
             "interval_seconds": self.interval_seconds,
@@ -727,6 +770,7 @@ class CronJob:
             last_attempt_at=payload.get("last_attempt_at"),
             last_completed_at=payload.get("last_completed_at"),
             last_run_id=payload.get("last_run_id"),
+            notification_policy=payload.get("notification_policy", "all"),
             last_outcome=payload.get("last_outcome"),
             last_error=payload.get("last_error"),
             consecutive_failures=int(payload.get("consecutive_failures") or 0),
@@ -808,7 +852,7 @@ class CronDelivery:
     """Where a job's Run answers and failure alerts go.
 
     ``chat`` sends them to one chat of a Channel of the job's Identity Agent;
-    ``app`` shows the Run's Session to the user in vBot with a notification;
+    ``app`` makes the Run's result available in vBot; its policy controls attention;
     ``none`` delivers nothing (a job stores it as no delivery at all).
     """
 
@@ -1056,6 +1100,12 @@ def _parse_utc_timestamp(value: str, *, field_name: str) -> datetime:
 
 
 def normalize_job_fields(job: CronJob) -> None:
+    if not isinstance(job.notification_policy, str) or job.notification_policy not in {
+        "all",
+        "errors",
+        "muted",
+    }:
+        raise CronJobValidationError("notification_policy must be all, errors or muted")
     if not isinstance(job.id, str) or not job.id:
         raise CronJobValidationError("id must be a non-empty string")
 

@@ -200,6 +200,8 @@ async def test_run_once_job_fires_in_its_project_and_marks_completed(
         None,
         project_id="vbot",
         run_kind=RunKind.CRON,
+        schedule_id=job.id,
+        notification_policy=ANY,
         contributes_to_agent_activity=False,
         context_note=ANY,
         completion_activity=ANY,
@@ -367,9 +369,9 @@ async def test_what_reaches_the_user_follows_the_jobs_delivery(
         await service._execution._trigger_job_run(job)
 
     assert service.get_job(job.id).status == "failed"
-    # vBot reports the answer, the second failure of the streak and the stop,
-    # each through its Run.
-    reported = [True, False, False, True, False, False, True]
+    # Every failed app Run remains unread; the policy controls its notification.
+    # External delivery keeps its existing failure-streak alerts.
+    reported = [True, False, True, True, True, True, True]
     assert decisions == (reported if delivery == "app" else [False] * len(reported))
     assert in_app == []
     await service._notifications.flush()
@@ -814,6 +816,8 @@ async def test_run_once_job_retries_completed_save_without_refiring(
         None,
         project_id=None,
         run_kind=RunKind.CRON,
+        schedule_id=job.id,
+        notification_policy=ANY,
         contributes_to_agent_activity=False,
         context_note=ANY,
         completion_activity=ANY,

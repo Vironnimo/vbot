@@ -218,10 +218,19 @@ export function createChatViewNavigation(context) {
 
     // An entry naming the active Agent's current Session shows it as current.
     setViewedSession(navigation.agentId, navigation.sessionId, false);
+    const session = ensureSessionState(
+      context.chatState,
+      navigation.agentId,
+      navigation.sessionId,
+    );
+    const focused = navigation.runId
+      ? context.chatController.focusRun(session, navigation.runId)
+      : (session.focusedHistory = null);
     await context.loadHistoryForSession(
       navigation.agentId,
       navigation.sessionId,
     );
+    await focused;
   };
 
   // Copied URLs have no history-state selection. A selectable linked Agent
@@ -545,11 +554,13 @@ export function createChatViewNavigation(context) {
   // `sessionId` for a draft), null while it is not known yet.
   const shownSession = () => {
     const ownAddress = context.target.activeOwnAgentAddress();
+    const runId = context.target.activeSessionState?.focusedHistory?.focusRunId;
     if (viewingSessionId) {
       return {
         agentId: viewingSessionAgentId || ownAddress,
         sessionId: viewingSessionId,
         subAgent: viewingSubAgentSession,
+        ...(runId ? { runId } : {}),
       };
     }
     const draft = context.target.activeDraft();
@@ -558,7 +569,12 @@ export function createChatViewNavigation(context) {
     }
     const sessionId = ownCurrentSession();
     return ownAddress && sessionId
-      ? { agentId: ownAddress, sessionId, subAgent: false }
+      ? {
+          agentId: ownAddress,
+          sessionId,
+          subAgent: false,
+          ...(runId ? { runId } : {}),
+        }
       : null;
   };
 
@@ -578,7 +594,7 @@ export function createChatViewNavigation(context) {
     const session = shownSession();
     untrack(() => {
       if (!session) return;
-      const key = `${session.agentId}::${session.sessionId}::${session.subAgent}`;
+      const key = `${session.agentId}::${session.sessionId}::${session.subAgent}::${session.runId ?? ''}`;
       if (key === reportedSessionKey) return;
       reportedSessionKey = key;
       const replace = !stepMarked;

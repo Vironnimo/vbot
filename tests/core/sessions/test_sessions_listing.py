@@ -172,6 +172,15 @@ def test_session_list_page_is_bounded_filtered_and_keeps_required_session(manage
             "title",
             "run_kinds",
             "working_project_id",
+            "notification_policy",
+            "notification_revision",
+            "notification_count",
+            "notification_run_id",
+            "notification_run_status",
+            "notification_run_at",
+            "local_unread_count",
+            "has_chat_results",
+            "has_schedule_runs",
             "latest_completion_run_id",
             "has_unread_completion",
             "unread_run_id",
@@ -253,6 +262,20 @@ def test_completion_activity_reads_completed_sessions_for_many_scopes(manager) -
         [(None, "coder"), ("vbot", "coder"), (None, "unknown"), (None, "coder")]
     )
 
+    for rows in activity.values():
+        for row in rows:
+            assert row.pop("notification_policy") == "all"
+            assert row.pop("has_chat_results") is True
+            assert row.pop("has_schedule_runs") is False
+            assert isinstance(row.pop("notification_revision"), int)
+            assert (
+                row.pop("notification_count")
+                == row.pop("local_unread_count")
+                == int(row["has_unread_completion"])
+            )
+            assert row.pop("notification_run_id") == row["unread_run_id"]
+            assert row.pop("notification_run_status") == row["unread_run_status"]
+            assert row.pop("notification_run_at") == row["unread_run_at"]
     assert activity == {
         (None, "coder"): [
             {

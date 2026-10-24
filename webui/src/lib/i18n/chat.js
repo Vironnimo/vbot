@@ -1,4 +1,6 @@
 export default Object.freeze({
+  'chat.selectedResult': 'Selected Run',
+  'chat.showConversation': 'Show latest messages',
   'audio.label': 'Speech audio',
   'audio.play': 'Play audio',
   'audio.pause': 'Pause audio',

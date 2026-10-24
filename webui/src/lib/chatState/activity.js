@@ -215,12 +215,15 @@ export function createChatActivity({
           chatState.sessions[sessionKey(target.agentAddress, target.sessionId)];
         if (sessionState) {
           clearSessionCompletionActivity(sessionState);
+          sessionState.notificationRevision = -1;
+          sessionState.readRunIds = [];
+          sessionState.localUnreadCount = 0;
+          sessionState.notificationPolicy = 'all';
         }
       } else if (target.readRunId) {
-        if (!applyReadAcknowledgement(target)) {
-          stale.add(target.agentAddress);
-        }
-      } else if (target.runId && !retainsTerminalRunEvent(target.runId)) {
+        applyReadAcknowledgement(target);
+        stale.add(target.agentAddress);
+      } else if (!target.runId || !retainsTerminalRunEvent(target.runId)) {
         stale.add(target.agentAddress);
       }
     }
@@ -247,8 +250,9 @@ export function createChatActivity({
     return true;
   }
 
-  async function markSessionCompletionRead(sessionState) {
-    const runId = sessionState?.unreadRunId;
+  async function markSessionCompletionRead(sessionState, visibleRunIds = null) {
+    const ids = visibleRunIds ?? [sessionState?.unreadRunId].filter(Boolean);
+    const runId = ids.join(',');
     if (
       !sessionState?.agentId ||
       !sessionState?.sessionId ||
@@ -262,8 +266,11 @@ export function createChatActivity({
       const result = await operations.markSessionRead(
         sessionState.agentId,
         sessionState.sessionId,
-        runId,
+        ids.length === 1 ? ids[0] : ids,
       );
+      sessionState.readRunIds = [
+        ...new Set([...(sessionState.readRunIds ?? []), ...ids]),
+      ];
       // An activity read that started before this acknowledgement may still
       // report the Run unread; the same-Run guard in
       // applySessionCompletionActivity keeps the acknowledged state.

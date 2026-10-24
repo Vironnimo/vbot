@@ -12,6 +12,8 @@ Data snapshots, quarantine, restore, recovery incidents and the data-store marke
 
 `store.py` opens the database through the kernel, and private `_store_*` modules receive its connection (module map: `sessions/storage.md`). Helpers never open their own runtime connection or commit: entries, metadata, revisions, prompt state, Stream drafts, receipts and FTS effects share the caller's transaction. Helpers return typed records or summary dicts rather than raw rows, so `ChatSessionManager` does not decode storage columns.
 
+Notification policy, per-Run read marks and Schedule provenance belong to `ChatSessionManager.notifications` in this same database (`sessions/runs.md` -> Completion activity). Cron owns each Schedule's current rule; accessors use these persisted facts instead of separate read stores.
+
 ## Terms
 
 Core terms (Session, Agent, Run, Project, Working Project) live in `.vorch/GLOSSARY.md`.

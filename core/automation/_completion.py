@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from core.chat import ChatLoop, ChatMessage, ReplySurface, reply_surface_from_note
 from core.chat.messages import REPLY_SURFACE_NOTE_PREFIX, SubAgentMessage
@@ -79,6 +79,7 @@ class _CompletionNotice:
     claimed: bool = False
     # Display record of a ``message_parent`` message; the delivering note carries it.
     subagent_message: SubAgentMessage | None = None
+    schedule_options: dict[str, Any] = field(default_factory=dict)
 
     @property
     def read(self) -> bool:
@@ -204,10 +205,24 @@ class _CompletionDeliveryCoordinator:
         ) or self._run_was_user_cancelled(origin_run_id)
         if suppress_run:
             self._suppress_origin(address, origin_run_id)
+        schedule_options: dict[str, Any] = {}
+        try:
+            origin = self._run_manager.get(origin_run_id)
+        except RunNotFoundError:
+            pass
+        else:
+            if origin.schedule_id is not None:
+                schedule_options = {
+                    "schedule_id": origin.schedule_id,
+                    "notification_policy": origin.notification_policy,
+                    "completion_activity": origin.completion_activity,
+                    "contributes_to_agent_activity": False,
+                }
         delivered = asyncio.get_running_loop().create_future()
         notice = _CompletionNotice(
             id=notice_id,
             origin_run_id=origin_run_id,
+            schedule_options=schedule_options,
             # Results carry command output and terminal screens: every path
             # into the Session (note, Run input, owned Run) takes this body.
             body=self._secret_masker().mask(body),
@@ -390,6 +405,13 @@ class _CompletionDeliveryCoordinator:
                         )
                     else:
                         subagent_messages = _subagent_messages(pending)
+                        schedule_options = pending[0].schedule_options
+                        if any(
+                            notice.schedule_options.get("schedule_id")
+                            != schedule_options.get("schedule_id")
+                            for notice in pending
+                        ):
+                            schedule_options = {}
                         run = await self._chat_loop.start_run(
                             address.agent_id,
                             message,
@@ -401,6 +423,7 @@ class _CompletionDeliveryCoordinator:
                                 address, bucket, pending
                             ),
                             run_kind=RunKind.SYSTEM,
+                            **schedule_options,
                             # An empty note never reaches the Model; it carries
                             # the display record ahead of the input note.
                             context_note=(

@@ -230,6 +230,8 @@ class RunAdmission:
     # Overrides ``contributes_to_agent_activity`` for the finished Run once its
     # outcome is known, before the completion is recorded or announced.
     completion_activity: CompletionActivity | None = None
+    schedule_id: str | None = None
+    notification_policy: Callable[[], str] | None = None
 
 
 # Module-level singleton so ``admission`` can default without a call at the
@@ -340,6 +342,8 @@ class Run:
         source_session_id: str | None = None,
         expected_session_generation_id: str | None = None,
         completion_activity: CompletionActivity | None = None,
+        schedule_id: str | None = None,
+        notification_policy: Callable[[], str] | None = None,
         event_retention_limit: int = DEFAULT_RUN_EVENT_RETENTION_LIMIT,
         subscriber_queue_limit: int = DEFAULT_RUN_SUBSCRIBER_QUEUE_LIMIT,
     ) -> None:
@@ -362,6 +366,8 @@ class Run:
         self.contributes_to_agent_activity = contributes_to_agent_activity
         # Optional decision that replaces the flag above once the Run finished.
         self.completion_activity = completion_activity
+        self.schedule_id = schedule_id
+        self.notification_policy = notification_policy
         # Stable public correlation for work whose durable result must remain
         # addressable after the in-memory Run has been pruned. It is internal
         # to Run orchestration and is persisted only on the terminal summary.

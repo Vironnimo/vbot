@@ -159,13 +159,19 @@ class CronExecution:
                 try:
                     # Cron Runs never show as the Agent's running work; a job that
                     # delivers to vBot reports the finished Run there, decided by
-                    # its answer and failure streak.
+                    # its answer and notification policy.
                     run = await self._owner._trigger_service.trigger_run(
                         latest.agent_id,
                         latest.prompt,
                         latest.session_id,
                         project_id=latest.project_id,
                         run_kind=RunKind.CRON,
+                        schedule_id=latest.id,
+                        notification_policy=lambda: (
+                            self._owner.get_job(job.id).notification_policy
+                            if job.id in self._owner._jobs
+                            else "muted"
+                        ),
                         contributes_to_agent_activity=False,
                         context_note=self._owner._secret_masker().mask(context),
                         completion_activity=_delivery.completion_activity(

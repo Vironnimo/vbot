@@ -77,6 +77,8 @@ async def test_run_cron_job_fires_and_continues_after_trigger_failure(
         None,
         project_id=None,
         run_kind=RunKind.CRON,
+        schedule_id=job.id,
+        notification_policy=ANY,
         contributes_to_agent_activity=False,
         context_note=ANY,
         completion_activity=ANY,

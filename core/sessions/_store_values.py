@@ -41,7 +41,8 @@ _SESSION_STATE_COLUMNS = """
     s.list_visibility_mask, s.latest_completion_run_key, s.latest_completion_status,
     s.latest_completion_at, s.read_completion_run_key, s.prompt_cache_affinity_id,
     s.seen_skills_initialized, s.compaction_policy_json, s.metadata_json,
-    s.agent_overrides_json, s.working_project_id, s.subagent_parent_generation_id
+    s.agent_overrides_json, s.working_project_id, s.subagent_parent_generation_id,
+    s.notification_policy
 """
 # Derived facade values: the direct fork source's address and the Run kinds.
 _DERIVED_METADATA_COLUMNS = """
@@ -60,6 +61,37 @@ _COMPLETION_ACTIVITY_COLUMNS = """
     s.latest_completion_at,
     s.read_completion_run_key = s.latest_completion_run_key AS latest_completion_read
 """
+# Counters use the source's policy; local read state remains independent.
+_CHAT_NOTIFICATION_WHERE = """
+    n.session_key = s.session_key AND n.schedule_id IS NULL
+    AND n.eligible = 1 AND n.is_read = 0
+    AND (s.notification_policy = 'all' OR
+         (s.notification_policy = 'errors' AND r.status IN ('failed', 'interrupted')))
+"""
+_COMPLETION_ACTIVITY_COLUMNS += f""",
+    s.notification_policy,
+    EXISTS (SELECT 1 FROM run_notifications AS n WHERE n.session_key = s.session_key
+      AND n.schedule_id IS NULL AND n.eligible = 1) AS has_chat_results,
+    EXISTS (SELECT 1 FROM run_notifications AS n WHERE n.session_key = s.session_key
+      AND n.schedule_id IS NOT NULL) AS has_schedule_runs,
+    s.state_revision AS notification_revision,
+    (SELECT COUNT(*) FROM run_notifications AS n JOIN runs AS r ON r.run_key = n.run_key
+     WHERE {_CHAT_NOTIFICATION_WHERE}) AS notification_count,
+    (SELECT COUNT(*) FROM run_notifications AS n
+     WHERE n.session_key = s.session_key AND n.eligible = 1 AND n.is_read = 0) AS local_unread_count
+"""
+for _field, _column in (("id", "run_id"), ("status", "status"), ("at", "completed_at")):
+    _COMPLETION_ACTIVITY_COLUMNS += f""",
+        (SELECT r.{_column} FROM run_notifications AS n JOIN runs AS r ON r.run_key = n.run_key
+         WHERE {_CHAT_NOTIFICATION_WHERE} ORDER BY n.run_key DESC LIMIT 1)
+        AS notification_run_{_field}
+    """
+for _field, _column in (("id", "run_id"), ("status", "status"), ("at", "completed_at")):
+    _COMPLETION_ACTIVITY_COLUMNS += f""",
+        (SELECT r.{_column} FROM run_notifications AS n JOIN runs AS r ON r.run_key = n.run_key
+         WHERE n.session_key = s.session_key AND n.eligible = 1 AND n.is_read = 0
+         ORDER BY n.run_key DESC LIMIT 1) AS local_unread_run_{_field}
+    """
 _DERIVED_METADATA_JOIN = (
     "LEFT JOIN sessions AS fork_parent ON fork_parent.session_key = s.fork_parent_key"
 )
@@ -438,12 +470,18 @@ def _session_list_visibility_sql(
         "((s.list_visibility_mask & "
         f"{_LIST_VISIBILITY_SUBAGENT_SESSION | _LIST_VISIBILITY_SUBAGENT_PARENT}) != 0)"
     )
-    is_background = f"((s.list_visibility_mask & {_LIST_VISIBILITY_BACKGROUND}) != 0)"
-    # A background Run the user is told about (Agent activity, such as a Cron Run
-    # that delivers to vBot) makes its Session a conversation the user can open.
-    reported = "(s.latest_completion_run_key IS NOT NULL)"
+    scheduled = "EXISTS (SELECT 1 FROM run_notifications AS n WHERE n.session_key = s.session_key AND n.schedule_id IS NOT NULL)"
+    allowed = ", ".join(f"'{kind}'" for kind in (*_SESSION_LIST_BACKGROUND_KINDS, "system"))
+    is_background = (
+        f"((s.list_visibility_mask & {_LIST_VISIBILITY_BACKGROUND}) != 0 OR "
+        f"({scheduled} AND NOT EXISTS (SELECT 1 FROM session_run_kinds AS k "
+        f"WHERE k.session_key = s.session_key AND k.run_kind NOT IN ({allowed}))))"
+    )
+    # Scheduled continuations remain background; an eligible non-Schedule
+    # result makes this Session a conversation even when its kinds are internal.
+    reported = "EXISTS (SELECT 1 FROM run_notifications AS n WHERE n.session_key = s.session_key AND n.schedule_id IS NULL AND n.eligible = 1)"
     background_enabled = (
-        f"((s.list_visibility_mask & {_LIST_VISIBILITY_CRON}) = 0 OR ? = 1) "
+        f"(((s.list_visibility_mask & {_LIST_VISIBILITY_CRON}) = 0 AND NOT {scheduled}) OR ? = 1) "
         f"AND ((s.list_visibility_mask & {_LIST_VISIBILITY_MEMORY_REFLECTION}) = 0 OR ? = 1) "
         f"AND ((s.list_visibility_mask & {_LIST_VISIBILITY_SKILL_REFLECTION}) = 0 OR ? = 1) "
         f"AND ((s.list_visibility_mask & {_LIST_VISIBILITY_REFLECTION}) = 0 OR (? = 1 OR ? = 1))"

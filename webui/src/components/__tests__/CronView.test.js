@@ -91,6 +91,79 @@ describe('CronView', () => {
     return mountedComponent;
   }
 
+  it('opens five recent Runs, pages more, and reads only on an explicit action', async () => {
+    const job = cronJob({ id: 'job-history', name: 'Daily review' });
+    listCronJobsMock.mockResolvedValue({ jobs: [job] });
+    const runs = Array.from({ length: 7 }, (_, i) => ({
+      run_id: `run-${7 - i}`,
+      session_id: `session-${7 - i}`,
+      agent_id: 'coder',
+      project_id: 'work',
+      title: `Result ${7 - i}`,
+      status: 'completed',
+      started_at: '2026-10-24T10:00:00Z',
+      unread: true,
+    }));
+    const fallback = createAgentListRpcMock();
+    rpcMock.mockImplementation((method, params) => {
+      if (method === 'cron.runs')
+        return Promise.resolve({
+          runs: runs.slice(0, params.limit),
+          next_before: params.limit < runs.length ? 3 : null,
+        });
+      if (method === 'cron.mark_read') {
+        runs.forEach((run) => {
+          run.unread = false;
+        });
+        return Promise.resolve({ ok: true });
+      }
+      return fallback(method, params);
+    });
+    const onOpenSession = vi.fn();
+    const onRefreshActivity = vi.fn();
+    mountView({
+      onOpenSession,
+      onRefreshActivity,
+      scheduleActivity: { 'job-history': { unread_count: 7, read_through: 7 } },
+    });
+    await waitForCondition(() => document.querySelector('.cron-expand'));
+    expect(rpcMock.mock.calls.some(([method]) => method === 'cron.runs')).toBe(
+      false,
+    );
+    document.querySelector('.cron-expand').click();
+    flushSync();
+    await waitForCondition(
+      () => document.querySelectorAll('.cron-run').length === 5,
+    );
+    expect(
+      rpcMock.mock.calls.some(([method]) => method === 'cron.mark_read'),
+    ).toBe(false);
+    const more = [...document.querySelectorAll('.cron-runs button')].find(
+      (button) => button.textContent.includes(t('cron.runs.more')),
+    );
+    more.click();
+    await waitForCondition(
+      () => document.querySelectorAll('.cron-run').length === 7,
+    );
+    document.querySelectorAll('.cron-run')[6].click();
+    expect(onOpenSession).toHaveBeenCalledWith(
+      'coder@work',
+      'session-1',
+      false,
+      'run-1',
+    );
+    const read = [...document.querySelectorAll('.cron-runs button')].find(
+      (button) => button.textContent.includes(t('cron.runs.read')),
+    );
+    read.click();
+    await waitForCondition(() => onRefreshActivity.mock.calls.length === 1);
+    expect(rpcMock).toHaveBeenCalledWith('cron.mark_read', {
+      id: 'job-history',
+      through: 7,
+    });
+    expect(document.querySelectorAll('.cron-runs .unread-dot')).toHaveLength(0);
+  });
+
   it('lists active, paused, failed, completed, and missed job history', async () => {
     // Row times are relative to the local date in the schedule timezone.
     vi.useFakeTimers({ toFake: ['Date'] });
@@ -483,6 +556,7 @@ describe('CronView', () => {
       prompt: 'Prepare morning digest',
       schedule_type: 'cron',
       cron_expression: '0 6 * * *',
+      notification_policy: 'all',
       delivery: { kind: 'app' },
     });
     await waitForCondition(() => listCronJobsMock.mock.calls.length === 2);
@@ -509,6 +583,7 @@ describe('CronView', () => {
       cron_expression: '0 6 * * *',
       repeat: null,
       session_id: null,
+      notification_policy: 'all',
       delivery: { kind: 'none' },
       watch: null,
     });
@@ -641,6 +716,7 @@ describe('CronView', () => {
       run_at: storedRunAt,
       repeat: 1,
       session_id: 'session-preserve',
+      notification_policy: 'all',
       delivery: { kind: 'none' },
       watch: null,
     });
@@ -694,6 +770,7 @@ describe('CronView', () => {
       event_id: 'evt-1',
       event_time: 'start - 45m',
       session_id: null,
+      notification_policy: 'all',
       delivery: { kind: 'none' },
       watch: null,
     });
@@ -767,6 +844,7 @@ describe('CronView', () => {
       jobs: [
         cronJob({
           id: 'job-app',
+          notification_policy: 'all',
           delivery: { kind: 'app' },
           last_run_silent: true,
           last_result: {
@@ -823,6 +901,7 @@ describe('CronView', () => {
     expect(updateCronJobMock).toHaveBeenCalledWith(
       expect.objectContaining({
         id: 'job-app',
+        notification_policy: 'all',
         delivery: {
           kind: 'chat',
           channel_id: 'tg-alpha',
@@ -840,6 +919,7 @@ describe('CronView', () => {
           agent_id: 'builder',
           project_id: 'vbot',
           target: 'builder@vbot',
+          notification_policy: 'all',
           delivery: { kind: 'app' },
         }),
       ],

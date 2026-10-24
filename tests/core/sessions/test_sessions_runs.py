@@ -14,10 +14,99 @@ from core.chat import ChatMessage
 from core.chat.errors import ChatSessionError
 from core.chat.messages import ToolCall
 from core.runs import ChatRunManager, Run, RunAdmission, RunInterruptedError, RunKind
-from core.sessions import SESSION_RUN_KINDS_META_KEY, SessionAddress, SessionRunRecord
+from core.sessions import (
+    SESSION_RUN_KINDS_META_KEY,
+    SessionAddress,
+    SessionListFilters,
+    SessionRunRecord,
+)
 from core.sessions._types import SessionRunCompletion
 from core.sessions.errors import SessionNotFoundError
 from tests.core.sessions.history_fixtures import complete_run
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy,expected", [("all", 2), ("errors", 1), ("muted", 0)])
+async def test_notification_policy_filters_attention_without_marking_results_read(
+    manager, policy, expected
+):
+    session = manager.create("coder")
+    manager.notifications.set_policy(session.address, policy)
+    for index, status in enumerate(("completed", "failed")):
+        run = Run(run_id=f"result_{index}", agent_id="coder", session_id=session.id)
+        await manager.start_run(run)
+        result = await manager.finish_run(
+            run, status, {"timing": _summary(run.id).timing}, completion_reason=None
+        )
+        assert result["notification_allowed"] == (
+            policy == "all" or policy == "errors" and status == "failed"
+        )
+    row = manager.summary(session.address)
+    assert row["notification_count"] == expected
+    assert row["local_unread_count"] == 2
+    # Changing the rule also filters already unread results; it never reads them.
+    manager.notifications.set_policy(session.address, "all")
+    assert manager.summary(session.address)["notification_count"] == 2
+    manager.notifications.mark_read(session.address, ["result_1"])
+    assert manager.summary(session.address)["notification_count"] == 1
+    assert manager.summary(session.address)["unread_run_id"] == "result_0"
+    assert manager.summary(session.address)["has_unread_completion"] is True
+    manager.notifications.mark_read(session.address, ["result_0"])
+    assert manager.summary(session.address)["local_unread_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_schedule_history_and_read_state_follow_each_runs_source(manager):
+    session = manager.create("coder")
+    manager.notifications.set_policy(session.address, "muted")
+    for index in range(7):
+        run = Run(
+            run_id=f"scheduled_{index}",
+            agent_id="coder",
+            session_id=session.id,
+            run_kind=RunKind.SYSTEM if index == 6 else RunKind.CRON,
+            schedule_id="schedule_a",
+            notification_policy=lambda: "all",
+        )
+        await manager.start_run(run)
+        result = await manager.finish_run(
+            run, "completed", {"timing": _summary(run.id).timing}, completion_reason=None
+        )
+        assert result["schedule_id"] == "schedule_a"
+        assert result["notification_allowed"] is True
+    assert manager.summary(session.address)["notification_count"] == 0
+    assert (
+        manager.list_summaries_page(
+            [(None, "coder")], limit=10, filters=SessionListFilters(include_cron=False)
+        ).sessions
+        == ()
+    )
+    page = manager.notifications.schedule_runs("schedule_a")
+    assert [run["run_id"] for run in page["runs"]] == [f"scheduled_{i}" for i in range(6, 1, -1)]
+    assert all(run["unread"] for run in page["runs"])
+    older = manager.notifications.schedule_runs("schedule_a", before=int(page["next_before"]))
+    assert [run["run_id"] for run in older["runs"]] == ["scheduled_1", "scheduled_0"]
+    assert older["next_before"] is None
+    # Reading an older result updates both surfaces, and does not read a newer one.
+    await manager.mark_terminal_run_read_async(session.address, "scheduled_1")
+    assert manager.notifications.schedule_activity()["schedule_a"]["unread_count"] == 6
+    busy = manager.notifications.schedule_activity([session.address])["schedule_a"]
+    assert busy["unread_count"] == 6
+    assert busy["visible_unread_count"] == 0
+    through = manager.notifications.schedule_activity()["schedule_a"]["read_through"]
+    later = Run(
+        run_id="later",
+        agent_id="coder",
+        session_id=session.id,
+        run_kind=RunKind.CRON,
+        schedule_id="schedule_a",
+    )
+    await manager.start_run(later)
+    await manager.finish_run(
+        later, "completed", {"timing": _summary(later.id).timing}, completion_reason=None
+    )
+    assert manager.notifications.mark_schedule_read("schedule_a", through) == 6
+    assert manager.notifications.schedule_activity()["schedule_a"]["unread_count"] == 1
 
 
 def _summary(run_id: str, change_stats: dict[str, object] | None = None) -> ChatMessage:
@@ -527,3 +616,72 @@ async def test_change_statistics_persist_while_running_and_sum_per_session(manag
             {"path": "/repo/legacy.py", "added": None, "removed": None},
         ],
     }
+
+
+@pytest.mark.asyncio
+async def test_schedule_results_replaced_by_history_edit_leave_attention_and_history(manager):
+    session = manager.create("coder")
+    run = Run(
+        run_id="scheduled",
+        agent_id="coder",
+        session_id=session.id,
+        run_kind=RunKind.CRON,
+        schedule_id="schedule_a",
+    )
+    await manager.start_run(run)
+    question = ChatMessage.user("old question")
+    session.for_run(run.id).append_many(
+        [question, ChatMessage.assistant(model="test", content="old answer")]
+    )
+    await manager.finish_run(
+        run, "completed", {"timing": _summary(run.id).timing}, completion_reason=None
+    )
+    assert manager.summary(session.address)["local_unread_count"] == 1
+    session.apply_edit(question.id, [ChatMessage.user("replacement")])
+    assert manager.summary(session.address)["local_unread_count"] == 0
+    assert manager.notifications.schedule_runs("schedule_a")["runs"] == []
+    assert manager.notifications.schedule_activity() == {}
+
+
+@pytest.mark.asyncio
+async def test_adopting_known_legacy_schedule_run_preserves_read_state_and_other_results(manager):
+    session = manager.create("coder")
+    for run_id in ("older", "known_schedule", "newer"):
+        run = Run(run_id=run_id, agent_id="coder", session_id=session.id)
+        await manager.start_run(run)
+        await manager.finish_run(
+            run, "completed", {"timing": _summary(run.id).timing}, completion_reason=None
+        )
+    source = [("schedule_a", "coder", None, "known_schedule", "all")]
+    manager.notifications.adopt_schedule_runs(source)
+    manager.notifications.adopt_schedule_runs(source)
+    assert manager.summary(session.address)["notification_count"] == 2
+    assert manager.notifications.schedule_activity()["schedule_a"]["unread_count"] == 1
+    manager.notifications.mark_read(session.address, ["known_schedule"])
+    manager.notifications.adopt_schedule_runs(source)
+    assert manager.notifications.schedule_activity()["schedule_a"]["unread_count"] == 0
+    assert [row["run_id"] for row in manager.notifications.schedule_runs("schedule_a")["runs"]] == [
+        "known_schedule"
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reported", [False, True])
+async def test_schedule_recovery_preserves_source_and_delivery_eligibility(manager, reported):
+    session = manager.create("coder")
+    run = Run(
+        run_id="abandoned_schedule",
+        agent_id="coder",
+        session_id=session.id,
+        run_kind=RunKind.CRON,
+        schedule_id="schedule_a",
+        contributes_to_agent_activity=False,
+        completion_activity=lambda _status, _result: reported,
+    )
+    await manager.start_run(run)
+    manager.recover_interrupted_runs()
+    assert manager.summary(session.address)["notification_count"] == 0
+    activity = manager.notifications.schedule_activity()["schedule_a"]
+    assert activity["unread_count"] == int(reported)
+    assert activity["unread_error_count"] == int(reported)
+    assert manager.notifications.schedule_runs("schedule_a")["runs"][0]["status"] == "interrupted"

@@ -734,14 +734,27 @@ async def _list_session_activity(state: Any, params: JsonObject) -> JsonObject:
 
 async def _mark_session_read(state: Any, params: JsonObject) -> JsonObject:
     """Acknowledge the exact terminal Run rendered in one Session."""
-    _reject_unsupported(params, {"agent_id", "session_id", "run_id"}, "session.mark_read")
+    _reject_unsupported(
+        params, {"agent_id", "session_id", "run_id", "run_ids"}, "session.mark_read"
+    )
     address = _required_session_address(params)
-    run_id = _required_string(params, "run_id")
+    run_ids = (
+        _validate_string_list("run_ids", params["run_ids"])
+        if "run_ids" in params
+        else [_required_string(params, "run_id")]
+    )
+    if not 1 <= len(run_ids) <= 200 or ("run_id" in params and "run_ids" in params):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "Send run_id or 1-200 run_ids")
     try:
         await state.runtime.agent_resolver.resolve_agent_async(
             address.project_id, address.agent_id, require_model=False
         )
-        activity = await state.runtime.chat_sessions.mark_terminal_run_read_async(address, run_id)
+        sessions = state.runtime.chat_sessions
+        activity = (
+            await sessions.mark_terminal_run_read_async(address, run_ids[0])
+            if "run_ids" not in params
+            else await sessions.run_async(sessions.notifications.mark_read, address, run_ids)
+        )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
@@ -750,6 +763,49 @@ async def _mark_session_read(state: Any, params: JsonObject) -> JsonObject:
         "session_id": address.session_id,
         **activity,
     }
+
+
+async def _notification_status(state: Any, params: JsonObject) -> JsonObject:
+    from core.automation.cron import CronJobNotFoundError
+    from core.sessions.notifications import notification_allowed
+
+    _reject_unsupported(params, {"agent_id", "session_id", "run_id"}, "session.notification_status")
+    address = _required_session_address(params)
+    run_id = _required_string(params, "run_id")
+    sessions = state.runtime.chat_sessions
+    try:
+        result = await sessions.run_async(sessions.notifications.run_status, address, run_id)
+        policy = result.get("policy", "muted")
+        if schedule_id := result.get("schedule_id"):
+            try:
+                policy = state.runtime.cron_service.get_job(schedule_id).notification_policy
+            except CronJobNotFoundError:
+                policy = "muted"
+        return {
+            "allowed": bool(
+                result["eligible"]
+                and not result["is_read"]
+                and notification_allowed(policy, result.get("status", ""))
+            )
+        }
+    except Exception as error:
+        raise _map_expected_error(error) from error
+
+
+async def _set_notification_policy(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"agent_id", "session_id", "policy"}, "session.notification_policy")
+    address = _required_session_address(params)
+    policy = _required_string(params, "policy")
+    if policy not in {"all", "errors", "muted"}:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "policy must be all, errors or muted")
+    try:
+        sessions = state.runtime.chat_sessions
+        await sessions.run_async(sessions.notifications.set_policy, address, policy)
+        result = await sessions.run_async(sessions.summary, address)
+    except Exception as error:
+        raise _map_expected_error(error) from error
+    publish_session_changed(state, address)
+    return {"session": result}
 
 
 async def _fork_session(state: Any, params: JsonObject) -> JsonObject:
@@ -990,6 +1046,8 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "session.get": _get_session,
         "session.change_stats": _session_change_stats,
         "session.mark_read": _mark_session_read,
+        "session.notification_policy": _set_notification_policy,
+        "session.notification_status": _notification_status,
         "session.fork": _fork_session,
         "session.delete": _delete_session,
         "session.rename": _rename_session,

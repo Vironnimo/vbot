@@ -554,3 +554,43 @@ async def test_review_lineage_upgrade_captures_proven_sources_and_survives_moves
         assert manager.exists(elsewhere)
     finally:
         manager.close()
+
+
+@pytest.mark.asyncio
+async def test_notification_migration_preserves_only_the_known_latest_read_state(tmp_path: Path):
+    from core.runs import Run
+
+    manager = ChatSessionManager(tmp_path)
+    session = manager.create("coder")
+    for run_id in ("older", "latest"):
+        run = Run(run_id=run_id, agent_id="coder", session_id=session.id)
+        await manager.start_run(run)
+        await manager.finish_run(
+            run,
+            "completed",
+            {
+                "timing": {
+                    "started_at": "2026-10-24T10:00:00Z",
+                    "completed_at": "2026-10-24T10:00:01Z",
+                    "duration_ms": 1000,
+                }
+            },
+            completion_reason=None,
+        )
+    address = session.address
+    manager.close()
+    with sqlite3.connect(tmp_path / "sessions.db") as db:
+        db.execute("DELETE FROM run_notifications")
+        db.execute("DELETE FROM kernel_migrations WHERE name = 'sessions.0008_run_notifications'")
+    manager = ChatSessionManager(tmp_path)
+    try:
+        summary = manager.summary(address)
+        assert summary is not None
+        assert summary["local_unread_count"] == 1
+        assert summary["unread_run_id"] == "latest"
+        manager.notifications.mark_read(address, ["latest"])
+        summary = manager.summary(address)
+        assert summary is not None
+        assert summary["local_unread_count"] == 0
+    finally:
+        manager.close()

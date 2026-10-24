@@ -41,6 +41,7 @@ _CRON_PARAMS: JsonObject = {
     "cron_expression": "*/5 * * * *",
 }
 _CREATE_DEFAULTS: JsonObject = {
+    "notification_policy": "all",
     "name": None,
     "cron_expression": None,
     "interval_seconds": None,
@@ -457,6 +458,7 @@ async def test_cron_list_projects_each_job_with_its_next_fire_time() -> None:
                 "remaining_runs": None,
                 "session_id": "session-1",
                 "delivery": {"kind": "app"},
+                "notification_policy": "all",
                 "status": "active",
                 "last_fired_at": "2026-05-14T09:55:00+00:00",
                 "last_attempt_at": "2026-05-14T09:55:00+00:00",
@@ -794,3 +796,49 @@ async def test_a_webhook_secret_is_revealed_and_rotated_by_job(tmp_path: Path) -
     assert refused["code"] == "domain_error"
     assert "its schedule is not 'webhook'" in refused["message"]
     assert missing["code"] == "domain_error"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy,expected", [("all", 4), ("errors", 2), ("muted", 0)])
+async def test_schedule_policy_filters_attention_but_keeps_unread_and_bounded_acknowledgements(
+    policy, expected
+):
+    state = _cron_state()
+    job = _cron_job(
+        notification_policy=policy,
+        unread_alert=CronAlert(at="2026-10-24T09:00:00Z", kind="failure", message="Watch failed"),
+    )
+    state.runtime.cron_service.list_jobs.return_value = [job]
+    state.runtime.cron_service.get_job.return_value = job
+    notifications = SimpleNamespace(
+        schedule_activity=Mock(
+            return_value={
+                job.id: {
+                    "unread_count": 3,
+                    "unread_error_count": 1,
+                    "read_through": 42,
+                    "last_activity_at": "2026-10-24T10:00:00Z",
+                }
+            }
+        ),
+        schedule_runs=Mock(return_value={"runs": [], "next_before": None}),
+        mark_schedule_read=Mock(return_value=3),
+    )
+
+    async def run_async(function, *args, **kwargs):
+        return function(*args, **kwargs)
+
+    state.runtime.chat_sessions = SimpleNamespace(notifications=notifications, run_async=run_async)
+    result = await rpc_result(state, "cron.activity")
+    assert result["notification_count"] == expected
+    assert result["jobs"][job.id]["unread_count"] == 3
+    assert result["jobs"][job.id]["alert_at"] == job.unread_alert.at
+    await rpc_result(state, "cron.runs", id=job.id)
+    notifications.schedule_runs.assert_called_once_with(job.id, before=None, limit=5)
+    assert await rpc_result(
+        state, "cron.mark_read", id=job.id, through=42, alert_at=job.unread_alert.at
+    ) == {"marked_read": 3}
+    notifications.mark_schedule_read.assert_called_once_with(job.id, 42)
+    state.runtime.cron_service.acknowledge_alert.assert_awaited_once_with(
+        job.id, actor="rpc", expected_at=job.unread_alert.at
+    )

@@ -1,4 +1,13 @@
 export default Object.freeze({
+  'notifications.label': 'Notifications',
+  'notifications.all': 'All results',
+  'notifications.errors': 'Errors only',
+  'notifications.muted': 'Muted',
+  'notifications.sessionHelp':
+    'Controls badges and desktop notifications for this Session. Scheduled Runs use their Schedule’s setting. Unread results remain marked here.',
+  'notifications.scheduleHelp':
+    'Controls the Schedules badge and desktop notifications. Unread results remain marked in the Run history. Channel delivery has its own setting.',
+  'notifications.unread': 'Unread result',
   'live.title': 'Live voice',
   'live.agent.voice': 'Live voice',
   'live.agent.backend': 'Live backend',

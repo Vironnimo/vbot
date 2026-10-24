@@ -1359,3 +1359,44 @@ async def test_subagent_tree_lists_every_depth_with_its_session() -> None:
             },
         ]
     }
+
+
+@pytest.mark.asyncio
+async def test_timeline_opens_a_selected_run_without_reading_other_results(history: _History):
+    session = history.session()
+    seed_history(
+        session,
+        [
+            ChatMessage.user("first request"),
+            ChatMessage.assistant(model="test", content="first answer"),
+            _summary("first", "first-end"),
+            ChatMessage.user("second request"),
+            ChatMessage.assistant(model="test", content="second answer"),
+            _summary("second", "second-end"),
+            ChatMessage.user("third request"),
+            ChatMessage.assistant(model="test", content="third answer"),
+            _summary("third", "third-end"),
+        ],
+    )
+    before = history.sessions.summary(session.address)
+    assert before is not None
+    result = await history.read(
+        method="chat.timeline", session_id=session.id, focus_run_id="second"
+    )
+    assert [run["run_id"] for run in result["runs"]] == ["second"]
+    assert result["has_more"] is True
+    assert result["next_before"]
+    assert "second answer" in str(result["items"])
+    assert "third answer" not in str(result["items"])
+    assert "first answer" not in str(result["items"])
+    after = history.sessions.summary(session.address)
+    assert after is not None
+    assert after["local_unread_count"] == before["local_unread_count"]
+    for invalid in (
+        {"focus_run_id": "missing"},
+        {"focus_run_id": "second", "before": result["next_before"]},
+    ):
+        response = await call(
+            history.state, "chat.timeline", agent_id="coder", session_id=session.id, **invalid
+        )
+        assert response["ok"] is False

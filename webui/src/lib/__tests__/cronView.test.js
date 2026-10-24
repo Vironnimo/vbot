@@ -32,6 +32,7 @@ describe('cron form payloads and history projection', () => {
       schedule_type: 'interval',
       interval_seconds: 7200,
       repeat: 3,
+      notification_policy: 'all',
       delivery: { kind: 'app' },
     });
   });
@@ -48,6 +49,7 @@ describe('cron form payloads and history projection', () => {
       schedule_type: 'interval',
       interval_seconds: 3600,
       status: 'active',
+      notification_policy: 'all',
       delivery: {
         kind: 'chat',
         channel_id: 'tg-main',
@@ -263,6 +265,7 @@ describe('cron form payloads and history projection', () => {
       schedule_type: 'event',
       event_id: 'evt-1',
       event_time: 'end + 2d',
+      notification_policy: 'all',
       delivery: { kind: 'none' },
     });
     // More than 31 days from the event is no event time.
@@ -313,6 +316,7 @@ describe('cron form payloads and history projection', () => {
       prompt: 'Triage the issue',
       schedule_type: 'webhook',
       session_id: null,
+      notification_policy: 'all',
       delivery: { kind: 'none' },
       watch: null,
       repeat: 5,
@@ -328,6 +332,7 @@ describe('cron form payloads and history projection', () => {
       agent_id: 'main',
       prompt: 'Triage the issue',
       schedule_type: 'webhook',
+      notification_policy: 'all',
       delivery: { kind: 'app' },
     });
   });
@@ -503,4 +508,16 @@ describe('cron expressions and the schedule planner', () => {
     updateCronSchedule(form, { frequency: 'weekly' });
     expect(form.cron_expression).toBe('15 6 * * 2');
   });
+});
+
+it('orders Schedules by latest activity across time zones', () => {
+  const jobs = [
+    { id: 'older', created_at: '2026-10-01T00:00:00Z' },
+    { id: 'newer', created_at: '2026-10-24T08:30:00Z' },
+  ];
+  expect(
+    visibleCronJobs(jobs, 'UTC', {
+      older: { last_activity_at: '2026-10-24T11:00:00+02:00' },
+    }).map((job) => job.id),
+  ).toEqual(['older', 'newer']);
 });

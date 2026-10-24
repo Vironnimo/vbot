@@ -130,7 +130,7 @@ async def _chat_history(state: Any, params: JsonObject, *, timeline: bool = Fals
     """
     supported_fields = {"agent_id", "session_id", "limit", "before", "after"}
     if timeline:
-        supported_fields.add("child_limit")
+        supported_fields.update({"child_limit", "focus_run_id"})
     _reject_unsupported(params, supported_fields, "chat.history")
 
     agent_id, project_id = _required_agent_address(params, "agent_id")
@@ -138,6 +138,11 @@ async def _chat_history(state: Any, params: JsonObject, *, timeline: bool = Fals
     limit = _optional_positive_integer(params, "limit", max_value=MAX_CHAT_HISTORY_LIMIT)
     before = _optional_string(params, "before")
     after = _optional_string(params, "after")
+    focus_run_id = _optional_string(params, "focus_run_id")
+    if focus_run_id and (before or after):
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST, "focus_run_id cannot be combined with paging cursors"
+        )
     child_limit = (
         _optional_positive_integer(params, "child_limit", max_value=200) or 0 if timeline else 0
     )
@@ -187,6 +192,7 @@ async def _chat_history(state: Any, params: JsonObject, *, timeline: bool = Fals
                 active_reviews=active_reviews,
                 subagent_walk=subagent_walk,
                 complete_runs=timeline,
+                focus_run_id=focus_run_id,
             )
             latest_run = chat_runs.active_run(
                 agent_id=agent_id, session_id=session_id, project_id=project_id
@@ -196,7 +202,7 @@ async def _chat_history(state: Any, params: JsonObject, *, timeline: bool = Fals
         # Freeze the live projection at the same boundary as durable history.
         # A completion during projection must not turn an earlier page into idle history.
         live_timeline = None
-        if timeline and active_run_object is not None and before is None:
+        if timeline and active_run_object is not None and before is None and focus_run_id is None:
             from server.timeline import capture_run_timeline
 
             live_timeline = capture_run_timeline(active_run_object)
@@ -358,6 +364,7 @@ def _read_chat_history(
     active_reviews: list[Run] | None,
     subagent_walk: bool,
     complete_runs: bool = False,
+    focus_run_id: str | None = None,
 ) -> _ChatHistoryRead:
     """Read one History page and the Session facts it carries in one Session-pool hop.
 
@@ -371,6 +378,7 @@ def _read_chat_history(
         excluded_roles=("note", "history_edit"),
         complete_run_segment=True,
         complete_runs=complete_runs,
+        focus_run_id=focus_run_id,
         background_tool_names=COMMAND_STATUS_TOOL_NAMES if before is None else (),
         background_note_marker=COMMAND_STATUS_NOTE_MARKER if before is None else None,
         skip_unchanged=True,

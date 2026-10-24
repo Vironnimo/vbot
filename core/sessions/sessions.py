@@ -47,6 +47,7 @@ from core.sessions._types import (
 )
 from core.sessions.archive_ledger import SessionArchiveLedger
 from core.sessions.errors import FtsHealth, SessionNotFoundError
+from core.sessions.notifications import SessionNotifications
 from core.sessions.session import ChatSession
 from core.sessions.store import SessionStore
 from core.utils.logging import get_logger
@@ -73,6 +74,12 @@ class ChatSessionManager:
         self._completion_read_callbacks: list[Callable[[SessionAddress, str], None]] = []
         self._write_locks = _SessionWriteLocks()
         self._runs = SessionRunPersistence(
+            self._store,
+            lambda address, run_id: self._lifecycle._notify_callbacks(
+                "completion_read", self._completion_read_callbacks, address, run_id
+            ),
+        )
+        self.notifications = SessionNotifications(
             self._store,
             lambda address, run_id: self._lifecycle._notify_callbacks(
                 "completion_read", self._completion_read_callbacks, address, run_id

@@ -34,3 +34,5 @@ Its `last_usage` preserves the newest public Assistant Usage before child window
 Public Queue mutations await Chat-owned persistence before acknowledging removal, steering selection or edited content. Public Queue mutations publish `resource_changed(kind="queue")` with the full Session scope (`project_id`, bare `agent_id`, `session_id`); the TUI refreshes the addressed conversation when another accessor changes it.
 
 `chat.work {agent_id, session_id}` serves the Sub-Agent coordinator's live work snapshot of the Session's subtree (`subagents.md` -> Interfaces, `work_snapshot`), independently of paged History. Accessors refresh it from existing Run, command, Queue and Terminal events and reconnects.
+
+`chat.timeline` additionally accepts `focus_run_id` to read the selected Run in this Session's current History, with older-page cursor and bounded children. It cannot combine with `before` or `after`; a missing or superseded Run is refused. The read neither changes read state nor overlays unrelated live Timeline output.

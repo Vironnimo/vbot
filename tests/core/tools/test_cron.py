@@ -52,6 +52,7 @@ def test_schema_advertises_only_the_canonical_fields() -> None:
         "repeat",
         "session",
         "deliver",
+        "notification_policy",
         "watch",
         "watch_runs",
     ]
@@ -952,6 +953,7 @@ def test_event_job_runs_before_at_or_after_each_occurrence(
         f"next_run: {next_run}",
         "target: agent-one",
         "deliver: app",
+        "notification_policy: all",
     ]
 
 
@@ -1111,3 +1113,24 @@ def test_a_webhook_job_shows_its_url_and_hands_out_its_secret_once(tmp_path: Pat
     assert "requests_waiting: 1" in listed
     assert re.search(rf"^last_request: {BERLIN_TIME}$", listed, re.MULTILINE)
     assert secret not in listed
+
+
+def test_notification_policy_controls_app_attention_independently_of_delivery(tmp_path: Path):
+    tool = cron_tool(tmp_path)
+    job_id = tool.add_job(notification_policy="errors")
+    assert tool.only_job().notification_policy == "errors"
+    assert tool.only_job().delivery == CronDelivery(kind="app")
+    envelope, text = tool.call({"action": "update", "id": job_id, "notifications": "off"})
+    assert envelope["ok"] is True, text
+    assert envelope["data"]["notification_policy"] == "muted"
+    assert tool.only_job().delivery == CronDelivery(kind="app")
+    tool.refused({"action": "update", "id": job_id, "notification_policy": "urgent"})
+    # Legacy notify is a delivery alias and retains its existing meaning.
+    tool.succeeded({"action": "update", "id": job_id, "notify": "none"})
+    assert tool.only_job().delivery is None
+    assert tool.only_job().notification_policy == "muted"
+    # A terminal job remains configurable without changing its execution history.
+    tool.service._jobs[job_id].status = "completed"
+    tool.succeeded({"action": "update", "id": job_id, "notification_policy": "all"})
+    assert tool.only_job().status == "completed"
+    assert tool.only_job().notification_policy == "all"

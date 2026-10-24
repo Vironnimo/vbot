@@ -384,6 +384,7 @@ class CronService:
         status: CronJobStatus = "active",
         project_id: str | None = None,
         delivery: CronDelivery | None = None,
+        notification_policy: str = "all",
         watch: CronWatch | None = None,
         permission_ceiling: dict[str, Any] | None = None,
         actor: str = _DEFAULT_ACTOR,
@@ -433,6 +434,7 @@ class CronService:
                 created_at=_timing._utc_now_iso(),
                 project_id=project_id,
                 delivery=delivery,
+                notification_policy=notification_policy,
                 watch=watch,
                 permission_ceiling=permission_ceiling,
             )
@@ -739,7 +741,9 @@ class CronService:
             if job is not None:
                 job.notifications = notifications
 
-    async def acknowledge_alert(self, job_id: str, *, actor: str = _DEFAULT_ACTOR) -> CronJob:
+    async def acknowledge_alert(
+        self, job_id: str, *, actor: str = _DEFAULT_ACTOR, expected_at: str | None = None
+    ) -> CronJob:
         """Mark a job's unread alert as read; a job without one stays as it is."""
         async with self._edits:
             self._ensure_jobs_loaded()
@@ -747,7 +751,7 @@ class CronService:
             if job is None:
                 raise CronJobNotFoundError(f"Cron job not found: {job_id}")
             alert = job.unread_alert
-            if alert is not None:
+            if alert is not None and (expected_at is None or alert.at == expected_at):
                 job.unread_alert = None
 
                 def undo() -> None:
@@ -775,6 +779,8 @@ class CronService:
             kind=kind,
         )
         await self._execution._save_jobs_after_fire(job_id)
+        if job.notification_policy == "muted":
+            return
         self._raise_failure_alert(
             CronFailureAlert(
                 job_id=job.id,
@@ -800,7 +806,7 @@ class CronService:
             )
             issued = False
             try:
-                if changed_fields:
+                if changed_fields and changed_fields != ["notification_policy"]:
                     # A chat is checked when it or the job's Agent changes, so an
                     # unrelated edit (pausing, say) works while its Channel is gone.
                     await self._validate_references_async(
@@ -931,7 +937,11 @@ class CronService:
         if (
             job.status in TERMINAL_CRON_JOB_STATUSES
             and not rename
-            and any(getattr(job, name) != value for name, value in fields.items())
+            and any(
+                getattr(job, name) != value
+                for name, value in fields.items()
+                if name != "notification_policy"
+            )
         ):
             raise CronJobValidationError(
                 "Completed or missed jobs are immutable history and cannot be changed"
@@ -1012,7 +1022,10 @@ class CronService:
         if not changed_fields:
             return job, job, [], False
 
-        self._validate_job(candidate, validate_references=validate_references)
+        self._validate_job(
+            candidate,
+            validate_references=validate_references and changed_fields != ["notification_policy"],
+        )
         if watch_changed:
             self._check_watch_available(candidate)
         if (
@@ -1202,6 +1215,20 @@ class CronService:
             return
         try:
             self._jobs = self._load_jobs()
+            if self._sessions is not None and any(job.last_run_id for job in self._jobs.values()):
+                self._sessions.notifications.adopt_schedule_runs(
+                    [
+                        (
+                            job.id,
+                            job.agent_id,
+                            job.project_id,
+                            job.last_run_id,
+                            job.notification_policy,
+                        )
+                        for job in self._jobs.values()
+                        if job.last_run_id
+                    ]
+                )
             self._storage_load_error = None
             self._jobs_loaded = True
         except CronStorageError as error:

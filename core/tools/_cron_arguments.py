@@ -98,6 +98,7 @@ _CHANGE_FIELDS = (
     "repeat",
     "session",
     "deliver",
+    "notification_policy",
     "watch",
     WATCH_RUNS_FIELD,
     ENABLED_FIELD,
@@ -121,6 +122,7 @@ _FIELD_ALIASES = SpellingAliases(
             "target_agent",
             "target_agent_id",
         ),
+        "notification_policy": ("notifications",),
         "name": ("title", "label", "job_name", "display_name", "task_name"),
         "prompt": ("message", "instruction", "instructions", "task", "text", "content", "goal"),
         "repeat": (
@@ -298,6 +300,19 @@ _REPEAT_UNLIMITED_WORDS = frozenset({"unlimited", "infinite", "infinity", "forev
 _BOOLEAN_WORDS = {"true": True, "yes": True, "1": True, "false": False, "no": False, "0": False}
 
 
+def _notification_policy_word(value: str) -> str:
+    return {
+        "all": "all",
+        "errors": "errors",
+        "errorsonly": "errors",
+        "onlyerrors": "errors",
+        "muted": "muted",
+        "mute": "muted",
+        "off": "muted",
+        "none": "muted",
+    }.get(spelling(value), value)
+
+
 def normalize_cron_arguments(contract: ToolContract, arguments: Any) -> Any:
     """Return the canonical ``cron`` arguments for one Model call."""
     actions = tuple(contract.input_schema["properties"]["action"]["enum"])
@@ -310,9 +325,13 @@ def normalize_cron_arguments(contract: ToolContract, arguments: Any) -> Any:
     normalized = normalize_call_arguments(
         contract,
         value,
-        enum_fields=("action", WATCH_RUNS_FIELD),
+        enum_fields=("action", WATCH_RUNS_FIELD, "notification_policy"),
         field_aliases=_FIELD_ALIASES,
-        field_normalizers={"action": _action_word, WATCH_RUNS_FIELD: _watch_runs_word},
+        field_normalizers={
+            "action": _action_word,
+            WATCH_RUNS_FIELD: _watch_runs_word,
+            "notification_policy": _notification_policy_word,
+        },
         empty_as_omitted=(
             "id",
             "target",

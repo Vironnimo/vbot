@@ -17,6 +17,7 @@ from core.sessions import (
     _store_archive_backfill,
     _store_attachments,
     _store_fts,
+    _store_notifications,
     _store_values,
     _store_working_projects,
 )
@@ -87,6 +88,11 @@ def session_database_spec(
             ),
             # Older runtimes cannot recover accepted ordinary Accessor inputs.
             Migration("sessions.0007_accessor_inputs", breaks_older=True),
+            Migration(
+                "sessions.0008_run_notifications",
+                breaks_older=True,
+                apply=_store_notifications.backfill,
+            ),
         ),
         after_open=_store_fts._ensure_fts_schema,
         snapshot_facts=_SNAPSHOT_FACTS,

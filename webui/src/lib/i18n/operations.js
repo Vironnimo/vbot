@@ -1,4 +1,11 @@
 export default Object.freeze({
+  'cron.runs.expand': 'Show Runs for {name}',
+  'cron.runs.collapse': 'Hide Runs for {name}',
+  'cron.runs.empty': 'No Runs yet',
+  'cron.runs.more': 'Show more',
+  'cron.runs.read': 'Mark all as read',
+  'cron.runs.loading': 'Loading Runs…',
+  'cron.runs.unread': '{count} unread Schedule results',
   'computerControl.stopping': 'Stopping computer control…',
   'computerControl.hotkey':
     'Stop computer control — press Esc twice in any app',
@@ -643,7 +650,7 @@ export default Object.freeze({
   'cron.delivery.none': 'Not delivered',
   'cron.delivery.chat': 'Chat {chat} via {channel}',
   'cron.delivery.chatThread': 'Chat {chat}, thread {thread} via {channel}',
-  'cron.deliveryKind.app': 'vBot, with a notification',
+  'cron.deliveryKind.app': 'vBot',
   'cron.deliveryKind.chat': 'A Channel chat',
   'cron.deliveryKind.none': 'Nowhere',
   'cron.sections.webhook': 'Webhook',

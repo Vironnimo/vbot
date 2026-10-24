@@ -289,6 +289,41 @@ export function createChatHistory({
     }
   }
 
+  // A result link reads one bounded Run into a separate viewport. The live
+  // Session stays attached, so its composer and work controls remain current.
+  async function focusRun(sessionState, runId) {
+    const focused = ensureSessionState(
+      { sessions: {} },
+      sessionState.agentId,
+      sessionState.sessionId,
+    );
+    focused.focusRunId = runId;
+    focused.loading = true;
+    sessionState.focusedHistory = focused;
+    const displayed = sessionState.focusedHistory;
+    try {
+      const response = await operations.loadChatHistory({
+        agent_id: sessionState.agentId,
+        session_id: sessionState.sessionId,
+        focus_run_id: runId,
+        child_limit: 100,
+      });
+      if (sessionState.focusedHistory !== displayed) return false;
+      loadHistory(
+        displayed,
+        response.messages ?? [],
+        historyLoadOptions(response),
+      );
+      return true;
+    } catch (error) {
+      if (sessionState.focusedHistory === displayed)
+        displayed.actionError = errorMessage(error);
+      return false;
+    } finally {
+      displayed.loading = false;
+    }
+  }
+
   async function reconcileRunSession(sessionState, expectedRunId) {
     if (!sessionState?.agentId || !sessionState?.sessionId || !expectedRunId) {
       return false;
@@ -444,6 +479,7 @@ export function createChatHistory({
   }
 
   return {
+    focusRun,
     loadHistoryForSession,
     reconcileRunSession,
     loadOlderHistory,

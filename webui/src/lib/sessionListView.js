@@ -354,6 +354,8 @@ function isReportedBackgroundSession(session) {
   return (
     !isSubAgentSession(session) &&
     isBackgroundOnlySession(session) &&
+    session?.has_chat_results !== false &&
+    session?.has_chat_results !== 0 &&
     asOptionalText(session?.latest_completion_run_id) !== null
   );
 }
@@ -378,7 +380,11 @@ export function isBackgroundOnlySession(session) {
   return (
     !isChannelSession(session) &&
     runKinds.length > 0 &&
-    runKinds.every((runKind) => BACKGROUND_ONLY_RUN_KINDS.has(runKind))
+    runKinds.every(
+      (runKind) =>
+        BACKGROUND_ONLY_RUN_KINDS.has(runKind) ||
+        (runKind === 'system' && session?.has_schedule_runs === true),
+    )
   );
 }
 
@@ -397,7 +403,9 @@ function isHiddenCategoryEnabled(session, filters) {
   }
   return (Array.isArray(session?.run_kinds) ? session.run_kinds : []).every(
     (runKind) =>
-      (runKind === 'cron' && filters.cron) ||
+      ((runKind === 'cron' ||
+        (runKind === 'system' && session?.has_schedule_runs === true)) &&
+        filters.cron) ||
       (runKind === 'memory_reflection' && filters.memoryReflections) ||
       (runKind === 'skill_reflection' && filters.skillReflections) ||
       (runKind === 'reflection' &&
@@ -468,6 +476,8 @@ function normalizeSession(session) {
       session?.work_started_at,
       session?.waiting_for,
     ),
+    has_chat_results: session?.has_chat_results,
+    has_schedule_runs: session?.has_schedule_runs,
     latest_completion_run_id: asOptionalText(session?.latest_completion_run_id),
     unread_run_id: asOptionalText(session?.unread_run_id),
     unread_run_status: asOptionalText(session?.unread_run_status),
@@ -483,6 +493,7 @@ function normalizeSession(session) {
     run_kinds: runKinds,
     is_background_only: isBackgroundOnlySession({
       run_kinds: runKinds,
+      has_schedule_runs: session?.has_schedule_runs,
       platform,
       platform_conv_id: platformConvId,
     }),

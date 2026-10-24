@@ -414,6 +414,13 @@ describe('sessionListView helpers', () => {
     const next = applySessionList(createSessionListState(), [
       { id: 'user-session', run_kinds: ['user'] },
       { id: 'cron-session', run_kinds: ['cron'] },
+      {
+        id: 'schedule-follow-up',
+        run_kinds: ['cron', 'system'],
+        has_schedule_runs: true,
+        has_chat_results: false,
+        latest_completion_run_id: 'scheduled-result',
+      },
       { id: 'reflection-session', run_kinds: ['reflection'] },
       { id: 'memory-reflection-session', run_kinds: ['memory_reflection'] },
       { id: 'skill-reflection-session', run_kinds: ['skill_reflection'] },
@@ -426,7 +433,7 @@ describe('sessionListView helpers', () => {
         },
       },
       { id: 'mixed-session', run_kinds: ['cron', 'user'] },
-      // A Cron Run that reported to the user lists its Session.
+      // Legacy rows without source metadata retain their earlier presentation.
       {
         id: 'reported-cron-session',
         run_kinds: ['cron'],

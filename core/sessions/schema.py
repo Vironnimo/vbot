@@ -95,6 +95,7 @@ CREATE TABLE sessions (
   metadata_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json) AND json_type(metadata_json) = 'object'),
   agent_overrides_json TEXT CHECK (agent_overrides_json IS NULL OR (json_valid(agent_overrides_json) AND json_type(agent_overrides_json) = 'object')),
   working_project_id TEXT,
+  notification_policy TEXT NOT NULL DEFAULT 'all',
   CHECK ((latest_completion_run_key IS NULL) = (latest_completion_status IS NULL)),
   CHECK ((forked_at IS NULL) = (fork_point_seq IS NULL)),
   CHECK ((fork_parent_key IS NULL) OR (forked_at IS NOT NULL))
@@ -258,6 +259,20 @@ CREATE TABLE runs (
 
 -- Runs of one Session in start order (Run boundaries, reflection Runs, recovery).
 CREATE INDEX runs_by_session ON runs (session_key, start_seq);
+
+-- Read state is independent of eligibility for counters and native notifications.
+-- A source is bound at admission, so a crash cannot orphan a Scheduled Run.
+CREATE TABLE run_notifications (
+  run_key INTEGER PRIMARY KEY REFERENCES runs (run_key) ON DELETE CASCADE,
+  session_key INTEGER NOT NULL REFERENCES sessions (session_key) ON DELETE CASCADE,
+  schedule_id TEXT,
+  policy TEXT NOT NULL DEFAULT 'all',
+  eligible INTEGER NOT NULL DEFAULT 0,
+  is_read INTEGER NOT NULL DEFAULT 1
+) STRICT;
+CREATE INDEX run_notifications_by_session ON run_notifications (session_key, is_read, eligible, schedule_id, run_key DESC);
+CREATE INDEX run_notifications_unread ON run_notifications (session_key, run_key DESC) WHERE eligible = 1 AND is_read = 0;
+CREATE INDEX run_notifications_by_schedule ON run_notifications (schedule_id, run_key DESC) WHERE schedule_id IS NOT NULL;
 
 -- Run lookups by Work id (Run summaries and results of delegated work).
 CREATE INDEX runs_by_work ON runs (session_key, work_id) WHERE work_id IS NOT NULL;

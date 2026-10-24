@@ -127,8 +127,9 @@ def failure_alert_due(job: CronJob) -> bool:
 def completion_activity(job_of: Callable[[], CronJob | None]) -> CompletionActivity:
     """Decide whether a finished Run of a job delivering to vBot is reported there.
 
-    A completed Run is reported unless it answered [SILENT]; a failed one at the
-    failures the user is alerted to. ``job_of`` returns the live job, or None.
+    A completed Run is reported unless it answered [SILENT]; failures and
+    interruptions are eligible regardless of the external delivery escalation.
+    ``job_of`` returns the live job, or None.
     """
 
     def decide(status: RunStatus, result: Any) -> bool:
@@ -137,7 +138,7 @@ def completion_activity(job_of: Callable[[], CronJob | None]) -> CompletionActiv
             return False
         if status is RunStatus.COMPLETED:
             return not is_silent(final_answer_text(result))
-        return failure_alert_due(job)
+        return status in {RunStatus.FAILED, RunStatus.INTERRUPTED}
 
     return decide
 
@@ -177,7 +178,7 @@ def delivery_note(delivery: CronDelivery | None) -> str:
             f"worth reporting, answer exactly {SILENT_ANSWER} and nothing is sent."
         )
     return (
-        "Your final answer is shown to the user in vBot automatically, with a notification. "
+        "Your final answer is available to the user in vBot automatically. "
         f"If there is nothing worth reporting, answer exactly {SILENT_ANSWER} and the user is "
         "not notified."
     )

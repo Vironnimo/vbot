@@ -27,7 +27,7 @@ class _Sink:
         self.dismissed.append(key)
 
 
-def _server(settings: dict[str, bool] | None = None):
+def _server(settings: dict[str, bool] | None = None, *, allowed: bool = True):
     """Answer the RPCs a notifier makes, like a server with one Session."""
 
     async def rpc(method: str, params: dict[str, Any]) -> dict[str, Any] | None:
@@ -36,6 +36,8 @@ def _server(settings: dict[str, bool] | None = None):
         if method == "session.get":
             titled = params == {"agent_id": "coder", "session_id": "ses_1"}
             return {"session": {"title": "Fix login" if titled else "", "auto_title": None}}
+        if method == "session.notification_status":
+            return {"allowed": allowed}
         if method == "agent.get":
             return {"name": "Coder"} if params == {"id": "coder"} else None
         return None
@@ -130,6 +132,12 @@ _IDLE = _activity(
         ),
         pytest.param("run_completed", {"run_kind": "cron"}, "run_completed", id="cron-reported"),
         pytest.param("run_failed", {"run_kind": "cron"}, "automation_failed", id="cron-failed"),
+        pytest.param(
+            "run_failed",
+            {"run_kind": "system", "schedule_id": "job"},
+            "automation_failed",
+            id="scheduled-follow-up",
+        ),
         pytest.param("run_failed", {"run_kind": "subagent"}, None, id="subagent"),
         pytest.param(
             "run_failed",
@@ -421,3 +429,24 @@ def test_update_result_toast_describes_the_outcome(
     _notifier(sink).update_finished(operation, "Done.")
 
     assert sink.shown == [Toast("update:upd_1", "update_result", title, body, failure)]
+
+
+@pytest.mark.parametrize("allowed_at_emit,allowed_at_display", [(False, True), (True, False)])
+def test_notification_policy_is_checked_at_completion_and_again_before_showing_a_toast(
+    allowed_at_emit: bool, allowed_at_display: bool
+):
+    sink = _Sink()
+    notifier = Notifier(
+        sink,
+        _server(allowed=allowed_at_display),
+        owns_server=True,
+        update_active=lambda: False,
+        hold_seconds=0,
+    )
+
+    async def exercise():
+        notifier.event_received(_run_event(notification_allowed=allowed_at_emit))
+        await _settle()
+
+    asyncio.run(exercise())
+    assert sink.shown == []

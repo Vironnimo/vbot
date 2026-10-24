@@ -1087,6 +1087,8 @@ class ChatRunManager:
             source_session_id=admission.source_session_id,
             expected_session_generation_id=admission.expected_session_generation_id,
             completion_activity=admission.completion_activity,
+            schedule_id=admission.schedule_id,
+            notification_policy=admission.notification_policy,
             event_retention_limit=self._run_event_retention_limit,
         )
         run._started_from_queue_item_id = queue_item_id  # noqa: SLF001 - run carries its own start origin.

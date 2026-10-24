@@ -283,6 +283,21 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
       call('statistics.run_activity', params),
     listProjects: () => call('project.list'),
     listCronJobs: () => call('cron.list'),
+    loadCronActivity: () => call('cron.activity'),
+    listCronRuns: (id, { before = null, limit = 5 } = {}) =>
+      call('cron.runs', { id, limit, ...(before === null ? {} : { before }) }),
+    markCronRead: (id, activity) =>
+      call('cron.mark_read', {
+        id,
+        ...(activity.read_through ? { through: activity.read_through } : {}),
+        ...(activity.alert_at ? { alert_at: activity.alert_at } : {}),
+      }),
+    setSessionNotificationPolicy: (agentId, sessionId, policy) =>
+      call('session.notification_policy', {
+        agent_id: agentId,
+        session_id: sessionId,
+        policy,
+      }),
     getCronWebhookSecret: (id) => call('cron.webhook_secret', { id }),
     rotateCronWebhookSecret: (id) => call('cron.rotate_webhook_secret', { id }),
     showProject: (projectId) => call('project.show', { project_id: projectId }),

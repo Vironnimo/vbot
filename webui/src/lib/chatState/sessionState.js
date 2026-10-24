@@ -307,6 +307,19 @@ export function applySessionCompletionActivity(sessionState, source) {
   if (!sessionState) {
     return sessionState;
   }
+  const ordered = Number.isInteger(source?.notification_revision);
+  if (ordered) {
+    if (
+      source.notification_revision < (sessionState.notificationRevision ?? -1)
+    )
+      return sessionState;
+    sessionState.notificationRevision = source.notification_revision;
+    sessionState.notificationCount = source.notification_count;
+    sessionState.notificationRunId = source.notification_run_id ?? '';
+    sessionState.notificationRunAt = source.notification_run_at ?? '';
+    sessionState.notificationPolicy = source.notification_policy;
+    sessionState.localUnreadCount = source.local_unread_count;
+  }
   const lastActiveAt = normalizedActivityText(source?.last_active_at);
   const incomingUnreadAt = normalizedActivityText(source?.unread_run_at);
   const incomingHasUnread = source?.has_unread_completion === true;
@@ -319,10 +332,10 @@ export function applySessionCompletionActivity(sessionState, source) {
     (sessionState.hasUnreadCompletion
       ? normalizedActivityText(sessionState.unreadRunId)
       : '');
-  if (localLatestRunId && !incomingLatestRunId) {
+  if (!ordered && localLatestRunId && !incomingLatestRunId) {
     return sessionState;
   }
-  if (localLatestRunId && incomingLatestRunId) {
+  if (!ordered && localLatestRunId && incomingLatestRunId) {
     if (localLatestRunId === incomingLatestRunId) {
       if (incomingHasUnread && !sessionState.hasUnreadCompletion) {
         return sessionState;
@@ -367,8 +380,9 @@ export function agentActivityStatus(state, agentId, displayedSessionKey = '') {
     Object.values(state?.sessions ?? {}).some(
       (sessionState) =>
         sessionState.agentId === agentId &&
-        sessionState.key !== displayedSessionKey &&
-        sessionState.hasUnreadCompletion &&
+        (sessionState.key !== displayedSessionKey ||
+          sessionState.focusedHistory) &&
+        hasAttention(sessionState) &&
         isSessionIdle(state, sessionState),
     )
   ) {
@@ -399,10 +413,14 @@ export function newestUnreadSessionForAgent(state, agentId) {
 // agentActivityStatus, because its result is being read.
 export function agentUnreadResults(state, agentId, displayedSessionKey = '') {
   const sessions = unreadResultSessions(state, agentId).filter(
-    (sessionState) => sessionState.key !== displayedSessionKey,
+    (sessionState) =>
+      sessionState.key !== displayedSessionKey || sessionState.focusedHistory,
   );
   return {
-    count: sessions.length,
+    count: sessions.reduce(
+      (total, session) => total + (session.notificationCount ?? 1),
+      0,
+    ),
     latestAt: sessions.reduce(
       (latest, sessionState) =>
         Math.max(latest, unreadResultTimestamp(sessionState)),
@@ -415,15 +433,23 @@ function unreadResultSessions(state, agentId) {
   return Object.values(state?.sessions ?? {}).filter(
     (sessionState) =>
       sessionState.agentId === agentId &&
-      sessionState.hasUnreadCompletion &&
-      sessionState.unreadRunId &&
+      hasAttention(sessionState, true) &&
       isSessionIdle(state, sessionState),
   );
 }
 
+function hasAttention(sessionState, requireRunId = false) {
+  return Number.isInteger(sessionState.notificationCount)
+    ? sessionState.notificationCount > 0
+    : sessionState.hasUnreadCompletion &&
+        (!requireRunId || Boolean(sessionState.unreadRunId));
+}
+
 function unreadResultTimestamp(sessionState) {
   return activityTimestamp(
-    sessionState.unreadRunAt || sessionState.lastActiveAt,
+    sessionState.notificationRunAt ||
+      sessionState.unreadRunAt ||
+      sessionState.lastActiveAt,
   );
 }
 
@@ -451,6 +477,8 @@ export function sessionCompletionRunId(sessionState) {
 }
 
 export function clearSessionCompletionActivity(sessionState) {
+  if (Number.isInteger(sessionState.notificationCount))
+    sessionState.notificationCount = 0;
   sessionState.hasUnreadCompletion = false;
   sessionState.latestCompletionRunId = '';
   sessionState.unreadRunId = '';
