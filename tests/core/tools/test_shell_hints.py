@@ -1324,6 +1324,18 @@ def test_a_statement_powershell_could_not_run_behind_exit_code_0_is_named(
             "Traceback (most recent call last):\nTypeError: invalid mesh\n",
             False,
         ),
+        (
+            "blender --background --python-exit-code 1 --python scene.py",
+            0,
+            "Traceback (most recent call last):\nValueError: add-on failed\n",
+            False,
+        ),
+        (
+            "blender --background --python scene.py --python-exit-code 1",
+            0,
+            "Traceback (most recent call last):\nTypeError: invalid mesh\n",
+            True,
+        ),
         ("blender --background --python scene.py", 0, "Rendered scene\n", False),
         (
             "Get-Content 'blender.log'",

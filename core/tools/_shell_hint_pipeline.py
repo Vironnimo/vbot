@@ -63,6 +63,7 @@ _CMDLET_ERROR = re.compile(r"^([A-Za-z]+-[A-Za-z]+):[ \t]*(?:\r?$|\S[^\n]*)", re
 _PYTHON_TRACEBACK = re.compile(r"^Traceback \(most recent call last\):\r?$", re.M)
 _PYTHON_EXCEPTION = re.compile(r"^\w*(?:Error|Exception):[^\n]+", re.M)
 _BLENDER_PYTHON = re.compile(r"(?<!\S)--python(?:-expr)?(?=\s|$)")
+_BLENDER_EXIT_CODE = re.compile(r"(?<!\S)--python-exit-code\s+0*[1-9]")
 _LITERAL_ASSIGNMENT = re.compile(r"\$(\w+)[ \t]*=[ \t]*(['\"])([^'\"`$\r\n]+)\2[ \t]*$")
 _VARIABLE_WRITE = re.compile(r"\$(\w+)\b[ \t]*(?:[-+*/]?=|(?:\+\+|--)(?!\w))")
 _ERROR_SOURCE = re.compile(r"\s*\nLine \|\r?\n[ \t]*(\d+) \|[ \t]*(.+)\r?\n[ \t]*\|[ \t]*~+")
@@ -157,7 +158,7 @@ def _hint_reported_error(command: str, exit_code: int | None, output: str) -> st
     if (
         traceback is not None
         and _PYTHON_EXCEPTION.search(window, traceback.end())
-        and any(name == "blender" and _BLENDER_PYTHON.search(args) for name, args in invocations)
+        and any(name == "blender" and _blender_exits_zero(args) for name, args in invocations)
     ):
         return (
             "The output contains a Python traceback despite exit code 0. Blender defaults to "
@@ -166,6 +167,15 @@ def _hint_reported_error(command: str, exit_code: int | None, output: str) -> st
             "--python-expr to report Python exceptions through the exit code."
         )
     return None
+
+
+def _blender_exits_zero(args: str) -> bool:
+    """Whether Blender runs Python with exit code 0 for its exceptions.
+
+    ``--python-exit-code`` applies only to the scripts after it.
+    """
+    script = _BLENDER_PYTHON.search(args)
+    return script is not None and _BLENDER_EXIT_CODE.search(args, 0, script.start()) is None
 
 
 def _stage_text(command: str, code: str, start: int, end: int) -> str:

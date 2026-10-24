@@ -303,7 +303,8 @@ cancellation. Durable regressions live in `test_powershell.py` and `test_shell.p
   that cmdlet and the error's displayed source line or missing literal path
   belongs to this command. A matching header in a read log alone is insufficient.
   A Blender `--python`/`--python-expr` invocation with a traceback and exception
-  line gets the `--python-exit-code 1` hint. Program recognition excludes quoted
+  line gets the `--python-exit-code 1` hint, unless a nonzero
+  `--python-exit-code` precedes the first script. Program recognition excludes quoted
   source and comments; a single earlier literal assignment can identify a
   PowerShell call operator's executable. Neither hint changes execution or exit
   codes, and both advise checking partial effects before retrying. Replaying
