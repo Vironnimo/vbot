@@ -19,6 +19,15 @@ from typing import TYPE_CHECKING, Any, override
 
 import httpx
 
+from core.providers._http_pool import (
+    ProviderHTTPTransports as ProviderHTTPTransports,
+)
+from core.providers._http_pool import (
+    ProviderHTTPTransportScope as ProviderHTTPTransportScope,
+)
+from core.providers._http_pool import (
+    standalone_transport,
+)
 from core.providers.errors import (
     NetworkError,
     ProviderAuthError,
@@ -94,33 +103,32 @@ def build_async_client(
     base_url: str,
     timeout: httpx.Timeout | None = None,
     debug_recorder: ProviderDebugRecorder | None = None,
+    http_transport: ProviderHTTPTransportScope | None = None,
 ) -> httpx.AsyncClient:
     """Build the provider HTTP client — the single place wire capture is wired.
 
     When *debug_recorder* is provided, the client's transport is wrapped so
     every request and response (including streamed bodies) is captured raw and
-    persisted as a debug trace. With no recorder, a plain client is returned
-    and there is zero capture overhead.
+    persisted as a debug trace. Without a recorder there is no capture wrapper.
+    A Runtime scope borrows its network pools while this client keeps its own
+    headers, cookies and lifetime. Without a scope the client owns its transport.
 
     This is the only sanctioned way for a provider adapter to construct its
     client; adapters must not build a bare ``httpx.AsyncClient`` directly, or
     their traffic will silently not be traced.
     """
     effective_timeout = timeout if timeout is not None else provider_chat_timeout()
-    if debug_recorder is None:
-        return httpx.AsyncClient(
-            base_url=base_url,
-            timeout=effective_timeout,
-            verify=shared_ssl_context(),
+    transport = http_transport.borrow() if http_transport is not None else None
+    if debug_recorder is not None:
+        transport = _DebugCaptureTransport(
+            transport if transport is not None else standalone_transport(),
+            debug_recorder,
         )
-
     return httpx.AsyncClient(
         base_url=base_url,
         timeout=effective_timeout,
-        transport=_DebugCaptureTransport(
-            httpx.AsyncHTTPTransport(verify=shared_ssl_context()),
-            debug_recorder,
-        ),
+        verify=shared_ssl_context(),
+        transport=transport,
     )
 
 
@@ -176,6 +184,11 @@ class _DebugCaptureTransport(httpx.AsyncBaseTransport):
             raise
 
         capture.record_response_head(response.status_code, dict(response.headers))
+        if response.is_closed:
+            # Terminal Runtime shutdown can close an admitted response before
+            # this outer capture wrapper resumes from its transport await.
+            capture.finalize()
+            return response
         inner_stream = response.stream
         if isinstance(inner_stream, httpx.AsyncByteStream):
             response.stream = _CaptureByteStream(inner_stream, capture)

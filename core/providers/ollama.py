@@ -100,6 +100,7 @@ from core.utils.retry import retry_async
 
 if TYPE_CHECKING:
     from core.debug import ProviderDebugRecorder
+    from core.providers.http import ProviderHTTPTransportScope
 
 __all__ = [
     "CHAT_ENDPOINT",
@@ -144,6 +145,7 @@ class OllamaAdapter(ProviderAdapter):
         debug_recorder: ProviderDebugRecorder | None = None,
         *,
         connection_mode: str | None = None,
+        http_transport: ProviderHTTPTransportScope | None = None,
         local_context_resolver: Callable[[str], int | None] | None = None,
     ) -> None:
         self._config = config
@@ -158,6 +160,7 @@ class OllamaAdapter(ProviderAdapter):
         self._client = build_async_client(
             base_url=self._base_url,
             debug_recorder=debug_recorder,
+            http_transport=http_transport,
         )
 
     @classmethod

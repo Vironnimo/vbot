@@ -38,6 +38,7 @@ from core.providers.errors import (
 )
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.providers.token_getter import StaticTokenGetter
+from tests.core.model_tasks.model_tasks_test_support import task_http_transport
 
 TARGET = "xai/grok-voice-think-fast-2.0::subscription"
 INSTRUCTIONS = "Talk with the user."
@@ -871,8 +872,9 @@ def _runtime(token_getter: Any = None) -> SimpleNamespace:
     )
     return SimpleNamespace(
         providers=SimpleNamespace(get=lambda provider_id: provider),
-        get_connection_token_getter=lambda connection: (
-            token_getter or StaticTokenGetter("xai-token")
+        prepare_provider_http=lambda connection: (
+            token_getter or StaticTokenGetter("xai-token"),
+            task_http_transport(connection),
         ),
     )
 

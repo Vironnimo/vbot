@@ -513,8 +513,43 @@ async def test_api_key_accounts_resolve_their_suffixed_credentials(
     assert await adapter._token_getter() == "sk-work"  # type: ignore[attr-defined]
     assert isinstance(getter, StaticTokenGetter)
     assert await getter() == "sk-default"
+    # Pool ownership follows the effective Account, including an implicit choice.
+    _, default_scope = shared_runtime.prepare_provider_http(
+        ConnectionRef("openai", "openai:api-key")
+    )
+    assert (
+        default_scope
+        == shared_runtime.prepare_provider_http(ConnectionRef("openai", "openai:api-key:default"))[
+            1
+        ]
+    )
+    _, work_scope = shared_runtime.prepare_provider_http(
+        ConnectionRef("openai", "openai:api-key:work")
+    )
+    assert default_scope != work_scope
+    get_credentials = shared_runtime.provider_credentials.get_credentials
+
+    def credential_then_rotate(provider_id: str, connection_id: str | None = None) -> str:
+        credential = get_credentials(provider_id, connection_id)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        return credential
+
+    # A publication between reading the key and borrowing the scope must not
+    # choose another Account for the already-selected credential.
+    with monkeypatch.context() as race:
+        race.setattr(shared_runtime.provider_credentials, "get_credentials", credential_then_rotate)
+        prepared_getter, prepared_scope = shared_runtime.prepare_provider_http(
+            ConnectionRef("openai", "openai:api-key")
+        )
+    assert await prepared_getter() == "sk-default"
+    assert prepared_scope == default_scope
+    assert (
+        shared_runtime.prepare_provider_http(ConnectionRef("openai", "openai:api-key"))[1]
+        == work_scope
+    )
     with pytest.raises(ConfigError, match="missing"):
         shared_runtime.get_adapter(ConnectionRef("openai", "openai:api-key:missing"))
+    await adapter.aclose()
 
 
 def test_get_adapter_rejects_unusable_connections(

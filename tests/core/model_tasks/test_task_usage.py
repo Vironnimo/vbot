@@ -31,6 +31,7 @@ from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfi
 from core.providers.task_client import ProviderTaskClient
 from core.providers.token_getter import StaticTokenGetter
 from core.usage import UsageRecorder
+from tests.core.model_tasks.model_tasks_test_support import task_http_transport
 from tests.core.usage.usage_test_support import read_ledger
 
 BASE = "https://provider.example/api/v1"
@@ -69,7 +70,10 @@ def _runtime() -> Any:
     )
     return SimpleNamespace(
         providers=SimpleNamespace(get=lambda _identifier: provider),
-        get_connection_token_getter=lambda _connection: StaticTokenGetter("test-token"),
+        prepare_provider_http=lambda connection: (
+            StaticTokenGetter("test-token"),
+            task_http_transport(connection),
+        ),
         provider_debug_recorder=lambda **_: None,
     )
 

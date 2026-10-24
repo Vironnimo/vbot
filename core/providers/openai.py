@@ -118,6 +118,7 @@ if TYPE_CHECKING:
     from datetime import tzinfo
 
     from core.debug import ProviderDebugRecorder
+    from core.providers.http import ProviderHTTPTransportScope
 
 __all__ = [
     "CODEX_CACHE_SCOPE_HEADERS",
@@ -185,6 +186,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         debug_recorder: ProviderDebugRecorder | None = None,
         *,
         connection_mode: str | None = None,
+        http_transport: ProviderHTTPTransportScope | None = None,
         responses_transport: ResponsesTransport = _RESPONSES_TRANSPORT_AUTO,
         responses_websocket_connect: ResponsesWebSocketConnector | None = None,
         responses_transports: ResponsesTransports | None = None,
@@ -205,6 +207,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             model_lookup,
             debug_recorder,
             connection_mode=connection_mode,
+            http_transport=http_transport,
         )
         self._responses_transport = responses_transport
         self._owns_responses_transports = responses_transports is None

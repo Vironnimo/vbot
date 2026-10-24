@@ -55,6 +55,7 @@ from core.utils.retry import retry_async
 
 if TYPE_CHECKING:
     from core.debug import ProviderDebugRecorder
+    from core.providers.http import ProviderHTTPTransportScope
 
 
 OPENCODE_GO_RESPONSES_ENDPOINT = "/responses"
@@ -234,6 +235,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         debug_recorder: ProviderDebugRecorder | None = None,
         *,
         connection_mode: str | None = None,
+        http_transport: ProviderHTTPTransportScope | None = None,
     ) -> None:
         # ``connection_mode`` is accepted for parity with the unified
         # ``get_adapter`` call site but is not used by the OpenCode Go
@@ -247,6 +249,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
             auth_config,
             model_lookup=model_lookup,
             debug_recorder=debug_recorder,
+            http_transport=http_transport,
         )
         selected_auth_config = auth_config or config.connections[0].auth
         # The inner adapter shares the same recorder, client and wire profiles,

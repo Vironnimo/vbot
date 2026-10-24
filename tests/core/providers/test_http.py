@@ -600,15 +600,15 @@ async def test_debug_capture_preserves_streamed_uploads_without_reading_ahead(
     entered_transport = False
     sent_body = b""
 
-    class UploadTransport(httpx.AsyncBaseTransport):
-        @override
-        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-            nonlocal entered_transport, sent_body
-            entered_transport = True
-            sent_body = await request.aread()
-            if cancelled:
-                raise asyncio.CancelledError
-            return httpx.Response(200, stream=httpx.ByteStream(b"ok"))
+    async def upload(
+        _transport: httpx.AsyncHTTPTransport, request: httpx.Request
+    ) -> httpx.Response:
+        nonlocal entered_transport, sent_body
+        entered_transport = True
+        sent_body = await request.aread()
+        if cancelled:
+            raise asyncio.CancelledError
+        return httpx.Response(200, stream=httpx.ByteStream(b"ok"))
 
     async def chunks() -> AsyncIterator[bytes]:
         assert entered_transport
@@ -616,7 +616,7 @@ async def test_debug_capture_preserves_streamed_uploads_without_reading_ahead(
         yield b"second upload chunk\n"
         yield b"final upload chunk\n"
 
-    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **kwargs: UploadTransport())
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", upload)
     recorder = ProviderDebugRecorder(debug_store, body_limit=body_limit)
     async with build_async_client(base_url=_DEBUG_URL, debug_recorder=recorder) as client:
         request = (

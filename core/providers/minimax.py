@@ -23,6 +23,7 @@ from core.providers.wire_profiles import WireBinding
 
 if TYPE_CHECKING:
     from core.debug import ProviderDebugRecorder
+    from core.providers.http import ProviderHTTPTransportScope
 
 
 class MiniMaxAdapter(OpenAICompatibleAdapter):
@@ -45,6 +46,7 @@ class MiniMaxAdapter(OpenAICompatibleAdapter):
         debug_recorder: ProviderDebugRecorder | None = None,
         *,
         connection_mode: str | None = None,
+        http_transport: ProviderHTTPTransportScope | None = None,
     ) -> None:
         super().__init__(
             config,
@@ -54,6 +56,7 @@ class MiniMaxAdapter(OpenAICompatibleAdapter):
             model_lookup=model_lookup,
             debug_recorder=debug_recorder,
             connection_mode=connection_mode,
+            http_transport=http_transport,
         )
         selected_auth_config = auth_config or config.connections[0].auth
         self._messages = AnthropicCompatibleAdapter(

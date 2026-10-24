@@ -28,6 +28,7 @@ from core.providers.token_getter import TokenGetter
 
 if TYPE_CHECKING:
     from core.debug import ProviderDebugRecorder
+    from core.providers.http import ProviderHTTPTransportScope
 
 
 MODELS_DISCOVERY_PAGE_SIZE = "1000"
@@ -51,6 +52,7 @@ class AnthropicAdapter(AnthropicCompatibleAdapter):
         debug_recorder: ProviderDebugRecorder | None = None,
         *,
         connection_mode: str | None = None,
+        http_transport: ProviderHTTPTransportScope | None = None,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         super().__init__(
@@ -61,6 +63,7 @@ class AnthropicAdapter(AnthropicCompatibleAdapter):
             model_lookup,
             debug_recorder,
             connection_mode=connection_mode,
+            http_transport=http_transport,
             client=client,
             api_version=ANTHROPIC_VERSION,
             extra_retryable_statuses=frozenset({ANTHROPIC_OVERLOADED_STATUS}),

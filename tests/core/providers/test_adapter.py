@@ -19,9 +19,11 @@ from core.providers.adapter import (
     request_input_budget,
     resolve_request_input_budget,
 )
+from core.providers.adapter_types import ADAPTER_TYPES
 from core.providers.anthropic_compatible import AnthropicCompatibleAdapter
 from core.providers.errors import ProviderError
 from core.providers.github_copilot import GitHubCopilotAdapter
+from core.providers.http import ProviderHTTPTransports
 from core.providers.lmstudio import LMStudioAdapter
 from core.providers.openai import OpenAIAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
@@ -102,6 +104,56 @@ def test_optional_capabilities_degrade_safely_by_default() -> None:
     assert frozenset({"image/jpeg", "image/png", "image/gif", "image/webp"}) == (
         IMAGE_WIRE_MEDIA_TYPES
     )
+
+
+# ---------------------------------------------------------------------------
+# Runtime HTTP transport ownership
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("adapter_kind", [*ADAPTER_TYPES, "anthropic_compatible"])
+@pytest.mark.asyncio
+async def test_adapters_borrow_runtime_http_and_keep_client_state_per_adapter(
+    adapter_kind: str,
+) -> None:
+    transports = ProviderHTTPTransports()
+    scope = transports.scope("provider", "api-key", "account")
+    config = bearer_config("provider", adapter=adapter_kind)
+    adapter_type = (
+        AnthropicCompatibleAdapter
+        if adapter_kind == "anthropic_compatible"
+        else ADAPTER_TYPES[adapter_kind]
+    )
+    first = cast(Any, adapter_type)(config, TOKEN, http_transport=scope)
+    second = cast(Any, adapter_type)(config, TOKEN, http_transport=scope)
+    first_client = first._client  # noqa: SLF001 - HTTP client state has no public Adapter view
+    second_client = second._client  # noqa: SLF001
+    try:
+        with respx.mock:
+            route = respx.get(url__regex=r"https://provider\.example\.test/.*").mock(
+                side_effect=[
+                    httpx.Response(200, headers={"set-cookie": "adapter-state=first; Path=/"}),
+                    httpx.Response(200),
+                    httpx.Response(200),
+                ]
+            )
+            await first_client.get("transport-probe")
+            await second_client.get("transport-probe")
+            assert first_client.cookies["adapter-state"] == "first"
+            assert "cookie" not in route.calls[1].request.headers
+
+            await first.aclose()
+            assert first_client.is_closed
+            assert not second_client.is_closed
+            assert (await second_client.get("transport-probe")).status_code == 200
+
+            await transports.aclose()
+            with pytest.raises(RuntimeError):
+                await second_client.get("transport-probe")
+    finally:
+        await first.aclose()
+        await second.aclose()
+        await transports.aclose()
 
 
 # ---------------------------------------------------------------------------

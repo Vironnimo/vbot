@@ -19,6 +19,7 @@ from core.providers.token_getter import TokenGetter
 
 if TYPE_CHECKING:
     from core.debug import ProviderDebugRecorder
+    from core.providers.http import ProviderHTTPTransportScope
 
 
 class OllamaCloudAdapter(OpenAICompatibleAdapter):
@@ -47,6 +48,7 @@ class OllamaCloudAdapter(OpenAICompatibleAdapter):
         debug_recorder: ProviderDebugRecorder | None = None,
         *,
         connection_mode: str | None = None,
+        http_transport: ProviderHTTPTransportScope | None = None,
     ) -> None:
         native_base_url = base_url or config.base_url
         self._cloud_base_url = _ollama_openai_base_url(native_base_url)
@@ -58,6 +60,7 @@ class OllamaCloudAdapter(OpenAICompatibleAdapter):
             model_lookup=model_lookup,
             debug_recorder=debug_recorder,
             connection_mode=connection_mode,
+            http_transport=http_transport,
         )
 
     @override

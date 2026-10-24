@@ -108,6 +108,7 @@ from core.utils.tokens import estimate_structured_tokens
 
 if TYPE_CHECKING:
     from core.debug import ProviderDebugRecorder
+    from core.providers.http import ProviderHTTPTransportScope
 
 ANTHROPIC_BETA_HEADER = "anthropic-beta"
 EFFORT_UPDATES_BETA = "mid-conversation-output-config-2026-07-01"
@@ -173,6 +174,7 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         debug_recorder: ProviderDebugRecorder | None = None,
         *,
         connection_mode: str | None = None,
+        http_transport: ProviderHTTPTransportScope | None = None,
         client: httpx.AsyncClient | None = None,
         api_version: str | None = None,
         extra_retryable_statuses: frozenset[int] = frozenset(),
@@ -196,6 +198,7 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         self._client = client or build_async_client(
             base_url=base_url or config.base_url,
             debug_recorder=debug_recorder,
+            http_transport=http_transport,
         )
 
     # ------------------------------------------------------------------

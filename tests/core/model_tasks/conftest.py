@@ -1,13 +1,26 @@
 """Disposable canonical Usage stores and a network guard for Task Model tests."""
 
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 
 import pytest
+import pytest_asyncio
 
 from core.database import write_bootstrap_marker
 from core.model_tasks import model_files
+from core.providers.http import ProviderHTTPTransports
 from core.usage import UsageRecorder
+from tests.core.model_tasks import model_tasks_test_support
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _provider_http_transports(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[None]:
+    pool = ProviderHTTPTransports()
+    monkeypatch.setattr(model_tasks_test_support, "http_transports", pool, raising=False)
+    try:
+        yield
+    finally:
+        await pool.aclose()
 
 
 @pytest.fixture(autouse=True)

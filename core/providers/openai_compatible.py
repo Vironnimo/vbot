@@ -126,6 +126,7 @@ from core.utils.tokens import (
 
 if TYPE_CHECKING:
     from core.debug import ProviderDebugRecorder
+    from core.providers.http import ProviderHTTPTransportScope
 
 __all__ = [
     "CHAT_COMPLETIONS_ENDPOINT",
@@ -172,6 +173,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         debug_recorder: ProviderDebugRecorder | None = None,
         *,
         connection_mode: str | None = None,
+        http_transport: ProviderHTTPTransportScope | None = None,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self._config = config
@@ -185,6 +187,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         self._client = client or build_async_client(
             base_url=base_url or config.base_url,
             debug_recorder=debug_recorder,
+            http_transport=http_transport,
         )
 
     # ------------------------------------------------------------------
