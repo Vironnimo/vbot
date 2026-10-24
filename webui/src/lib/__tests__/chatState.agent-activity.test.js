@@ -567,7 +567,7 @@ describe('scoped completion activity', () => {
     ]);
   });
 
-  it('applies terminal and read facts it already holds without reading', async () => {
+  it('applies retained terminal facts and refreshes counts after read and settings invalidations', async () => {
     vi.useFakeTimers();
     try {
       const runEvents = createRunEventFeed();
@@ -594,6 +594,20 @@ describe('scoped completion activity', () => {
         payload: { run_id: 'run-one' },
       });
 
+      listSessionActivity.mockResolvedValue({
+        agents: [
+          {
+            agent_id: 'alpha',
+            sessions: [
+              {
+                id: 'one',
+                latest_completion_run_id: 'run-one',
+                has_unread_completion: false,
+              },
+            ],
+          },
+        ],
+      });
       controller.applySessionInvalidations([
         entry(1, terminalScope),
         entry(2, { agent_id: 'alpha', session_id: 'one' }),
@@ -606,7 +620,7 @@ describe('scoped completion activity', () => {
       ]);
       await vi.runAllTimersAsync();
 
-      expect(listSessionActivity).not.toHaveBeenCalled();
+      expect(listSessionActivity).toHaveBeenCalledExactlyOnceWith(['alpha']);
       expect(sessionState).toMatchObject({
         latestCompletionRunId: 'run-one',
         hasUnreadCompletion: false,

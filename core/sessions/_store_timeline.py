@@ -309,6 +309,7 @@ def chat_history_snapshot(
     background_tool_names: Sequence[str] = (),
     background_note_marker: str | None = None,
     complete_runs: bool = False,
+    focus_run_id: str | None = None,
     after: tuple[str, int] | None = None,
     skip_unchanged: bool = False,
 ) -> Callable[[], SessionChatHistorySnapshot]:
@@ -326,7 +327,36 @@ def chat_history_snapshot(
     if skip_unchanged and incremental and after is not None and after[1] == through:
         unchanged = _unchanged_history_snapshot(generation, through)
         return lambda: unchanged
-    if incremental:
+    editable: frozenset[str]
+    if focus_run_id is not None:
+        run = connection.execute(
+            "SELECT run_key FROM runs WHERE session_key = ? AND run_id = ?",
+            (state["session_key"], focus_run_id),
+        ).fetchone()
+        if run is None:
+            raise ChatSessionError("The selected Run is unavailable in this Session")
+        where, params = _role_filter(excluded_roles)
+        batch = _store_history.view_batch(
+            connection,
+            ranges,
+            where=" AND ".join(filter(None, [where, "e.run_key = ?"])),
+            params=[*params, run["run_key"]],
+        )
+        if not batch.rows:
+            raise ChatSessionError("The selected Run is no longer in this Session's history")
+        page_floor = int(batch.rows[0]["seq"])
+        through = int(batch.rows[-1]["seq"]) + 1
+        has_more = (
+            _store_history.view_seq(
+                connection, ranges, where=where, params=params, upper=page_floor
+            )
+            is not None
+        )
+        takeover = latest_takeover(connection, ranges)
+        editable = frozenset(
+            str(row["entry_id"]) for row in batch.rows if _editable(batch, row, takeover)
+        )
+    elif incremental:
         assert after is not None
         through = min(after[1] + (limit or 500), through)
         where, params = _role_filter(excluded_roles)
@@ -345,7 +375,7 @@ def chat_history_snapshot(
         if complete_runs:
             # The Runs these rows touch are read below, with their side rows.
             batch = _store_codec.EntryBatch(rows)
-            editable: frozenset[str] = frozenset()
+            editable = frozenset()
         else:
             batch = _store_codec.select_batch(connection, rows)
             takeover = latest_takeover(connection, ranges)

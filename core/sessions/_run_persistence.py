@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
+from core.runs import RunStatus
 from core.sessions._types import (
     JsonObject,
     SessionAddress,
@@ -69,6 +70,11 @@ class SessionRunPersistence:
             expected_generation_id=run.expected_session_generation_id,
             working_project_id=None if run.project_id is not None else run.working_project_id,
             accessor_input_id=run.accessor_input_id,
+            schedule_id=run.schedule_id,
+            notification_policy=run.notification_policy() if run.notification_policy else "all",
+            notification_eligible=bool(
+                run.completion_activity and run.completion_activity(RunStatus.INTERRUPTED, None)
+            ),
         )
         await self._store.run_async(self._store.execution.admit_run, address, admission)
 
@@ -86,6 +92,7 @@ class SessionRunPersistence:
             iteration_count=run.iteration_count,
             change_stats=payload.get("change_stats"),
             completion_reason=completion_reason,
+            notification_policy=run.notification_policy() if run.notification_policy else None,
             contributes_to_activity=run.contributes_to_agent_activity,
         )
         return await self._store.run_async(self._store.execution.finish_run, address, completion)

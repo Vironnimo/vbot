@@ -20,6 +20,8 @@
   import ComputerUseControl from './ComputerUseControl.svelte';
   import SecretGiveForm from './chat/SecretGiveForm.svelte';
   import SecretRequests from './chat/SecretRequests.svelte';
+  import SessionNotificationSettings from './sessions/SessionNotificationSettings.svelte';
+  import { applySessionCompletionActivity } from '$lib/chatState/sessionState.js';
   import ChatActivityPanel from './chat/ChatActivityPanel.svelte';
   import { reflectionTaskRows } from '../lib/chatTimelinePresentation.js';
   import { untrack } from 'svelte';
@@ -776,13 +778,38 @@
         style={`--chat-overlay-height: ${layout.footerOverlayHeight}px; --chat-scrollbar-width: ${layout.chatScrollbarWidth}px`}
       >
         <div class="chat-view__timeline-shell">
+          {#if target.activeSessionState?.focusedHistory}
+            <Banner appearance="compact">
+              {t('chat.selectedResult')}
+              <Button
+                variant="tertiary"
+                onClick={() =>
+                  (target.activeSessionState.focusedHistory = null)}
+                >{t('chat.showConversation')}</Button
+              >
+            </Banner>
+            {#if target.activeSessionState.focusedHistory.actionError}
+              <Banner variant="error"
+                >{target.activeSessionState.focusedHistory.actionError}</Banner
+              >
+              <Button
+                variant="tertiary"
+                onClick={() =>
+                  chatController.focusRun(
+                    target.activeSessionState,
+                    target.activeSessionState.focusedHistory.focusRunId,
+                  )}>{t('common.retry')}</Button
+              >
+            {/if}
+          {/if}
           <ChatTimeline
             timelineItems={activity.timelineItems}
-            sessionKey={target.activeSessionState?.key ?? ''}
+            sessionKey={`${target.activeSessionState?.key ?? ''}:${target.activeSessionState?.focusedHistory?.focusRunId ?? ''}`}
             currentRun={target.activeSessionState?.currentRun ?? null}
             agentName={target.activeAgent.name}
             {chatWorkingMode}
-            loadingHistory={layout.historyLoadingFeedbackVisible}
+            loadingHistory={target.activeSessionState?.focusedHistory
+              ?.loading ?? layout.historyLoadingFeedbackVisible}
             transientCards={actions.transientCards}
             submittedTurnScrollKey={actions.submittedTurnScrollKey}
             bottomOverlayHeight={layout.footerOverlayHeight}
@@ -790,10 +817,14 @@
               layout.chatScrollbarWidth = width;
             }}
             followSessionRequest={navigation.subAgentLinkFollowRequest}
-            hasOlderHistory={target.activeSessionState?.hasOlderHistory ===
-              true}
-            loadingOlderHistory={target.activeSessionState
-              ?.loadingOlderHistory === true}
+            hasOlderHistory={(
+              target.activeSessionState?.focusedHistory ??
+              target.activeSessionState
+            )?.hasOlderHistory === true}
+            loadingOlderHistory={(
+              target.activeSessionState?.focusedHistory ??
+              target.activeSessionState
+            )?.loadingOlderHistory === true}
             subAgentStatuses={chatState.subAgentStatuses}
             backgroundCommandStatuses={target.activeSessionState
               ?.backgroundCommandStatuses}
@@ -803,9 +834,17 @@
             ]?.state === SESSION_WAITING}
             onLoadOlder={actions.loadOlderHistory}
             onLoadRunHistory={(gap) =>
-              chatController.loadRunHistory(target.activeSessionState, gap)}
+              chatController.loadRunHistory(
+                target.activeSessionState?.focusedHistory ??
+                  target.activeSessionState,
+                gap,
+              )}
             onLoadToolCall={(call) =>
-              chatController.loadToolCall(target.activeSessionState, call)}
+              chatController.loadToolCall(
+                target.activeSessionState?.focusedHistory ??
+                  target.activeSessionState,
+                call,
+              )}
             onNavigateToSubAgent={navigation.handleNavigateToSubAgentLink}
             otherArea={subAgentOtherArea}
             onCancelToolCall={actions.handleCancelToolCall}
@@ -1088,7 +1127,22 @@
           onStopSubAgentWork={actions.handleStopSubAgentWork}
           onStopBackgroundCommand={actions.handleStopBackgroundCommand}
           onLoadCommandOutput={actions.loadCommandOutput}
-        />
+        >
+          {#snippet notificationSettings()}
+            {#if target.activeSessionState?.sessionId}
+              {#key target.activeSessionState.key}
+                {@const settingsSession = target.activeSessionState}
+                <SessionNotificationSettings
+                  agentId={settingsSession.agentId}
+                  sessionId={settingsSession.sessionId}
+                  policy={settingsSession.notificationPolicy ?? 'all'}
+                  onCommit={(summary) =>
+                    applySessionCompletionActivity(settingsSession, summary)}
+                />
+              {/key}
+            {/if}
+          {/snippet}
+        </ChatActivityPanel>
       </div>
     </div>
   {/if}

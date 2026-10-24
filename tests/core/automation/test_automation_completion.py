@@ -38,6 +38,7 @@ class _CompletionChatLoop:
         self.reply_surfaces: list[ReplySurface | None] = []
         self.context_notes: list[ChatMessage | None] = []
         self.start_attempts = 0
+        self.runs: list[Run] = []
 
     async def start_run(
         self,
@@ -51,6 +52,7 @@ class _CompletionChatLoop:
         input_persisted_hook: Callable[[], None],
         run_kind: RunKind,
         context_note: ChatMessage | None = None,
+        **schedule_options: Any,
     ) -> Run:
         assert internal is True
         assert run_kind is RunKind.SYSTEM
@@ -63,11 +65,13 @@ class _CompletionChatLoop:
             input_persisted_hook()
             return content
 
-        return await self._run_manager.start(
+        run = await self._run_manager.start(
             SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id),
             executor,
-            admission=RunAdmission(run_kind=run_kind),
+            admission=RunAdmission(run_kind=run_kind, **schedule_options),
         )
+        self.runs.append(run)
+        return run
 
 
 class _OwnerAdmission:
@@ -971,3 +975,42 @@ async def test_user_cancelled_origin_gets_its_completions_as_notes_without_a_run
     notes = _notes(session)
     assert any("completed before cancellation" in note for note in notes)
     assert any("completed after cancellation" in note for note in notes)
+
+
+async def test_follow_up_of_scheduled_work_keeps_the_schedule_notification_source():
+    runs = ChatRunManager()
+
+    def policy():
+        return "errors"
+
+    async def execute(_run):
+        return "Waiting for the background command"
+
+    origin = await runs.start(
+        _ADDRESS,
+        execute,
+        admission=RunAdmission(
+            run_kind=RunKind.CRON,
+            schedule_id="schedule_a",
+            notification_policy=policy,
+            completion_activity=lambda _status, _result: True,
+            contributes_to_agent_activity=False,
+        ),
+    )
+    await origin.wait()
+    loop = _CompletionChatLoop(runs)
+    trigger = TriggerService(cast(Any, loop), runs, cast(Any, Mock()))
+    try:
+        delivered = trigger.submit_completion(
+            _ADDRESS, notice_id="command:one", origin_run_id=origin.id, body="Command finished"
+        )
+        await asyncio.wait_for(delivered, timeout=1)
+        [follow_up] = loop.runs
+        await follow_up.wait()
+        assert follow_up.schedule_id == "schedule_a"
+        assert follow_up.notification_policy is policy
+        assert follow_up.completion_activity is origin.completion_activity
+        assert follow_up.run_kind is RunKind.SYSTEM
+    finally:
+        await trigger.aclose()
+        await runs.aclose()

@@ -275,14 +275,21 @@ export function markSessionRead(agentId, sessionId, runId, options = {}) {
     'Session id must be a non-empty string',
     'session.mark_read',
   );
-  requireNonEmptyString(
-    runId,
-    'Run id must be a non-empty string',
-    'session.mark_read',
-  );
+  const ids = Array.isArray(runId) ? runId : [runId];
+  for (const id of ids) {
+    requireNonEmptyString(
+      id,
+      'Run id must be a non-empty string',
+      'session.mark_read',
+    );
+  }
   return rpc(
     'session.mark_read',
-    { agent_id: agentId, session_id: sessionId, run_id: runId },
+    {
+      agent_id: agentId,
+      session_id: sessionId,
+      ...(Array.isArray(runId) ? { run_ids: runId } : { run_id: runId }),
+    },
     options,
   );
 }
@@ -718,4 +725,21 @@ export function closePortal(portalId, options = {}) {
     'portal.close',
   );
   return rpc('portal.close', { id: portalId }, options);
+}
+
+export function setSessionNotificationPolicy(
+  agentId,
+  sessionId,
+  policy,
+  options = {},
+) {
+  return rpc(
+    'session.notification_policy',
+    {
+      agent_id: agentId,
+      session_id: sessionId,
+      policy,
+    },
+    options,
+  );
 }

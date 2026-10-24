@@ -233,3 +233,35 @@ export function deleteCalendarEvent(id, options = {}) {
 
   return rpc('calendar.delete', { id }, options);
 }
+
+export function loadCronActivity(options = {}) {
+  return rpc('cron.activity', {}, options);
+}
+
+export function listCronRuns(
+  id,
+  { before = null, limit = 5 } = {},
+  options = {},
+) {
+  return rpc(
+    'cron.runs',
+    { id, limit, ...(before === null ? {} : { before }) },
+    options,
+  );
+}
+
+export function markCronRead(
+  id,
+  { read_through: through, alert_at: alertAt } = {},
+  options = {},
+) {
+  return rpc(
+    'cron.mark_read',
+    {
+      id,
+      ...(through ? { through } : {}),
+      ...(alertAt ? { alert_at: alertAt } : {}),
+    },
+    options,
+  );
+}

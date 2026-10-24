@@ -345,7 +345,14 @@ export function createCronEditor(context) {
   async function persistForm(event = null) {
     event?.preventDefault();
 
-    if (submittingForm || !validateFormValues()) {
+    const onlyPolicyChanged =
+      !isCreating &&
+      selectedJob &&
+      cronFormFingerprint({
+        ...formValues,
+        notification_policy: selectedJob.notification_policy,
+      }) === formBaseline;
+    if (submittingForm || (!onlyPolicyChanged && !validateFormValues())) {
       return false;
     }
 
@@ -367,7 +374,14 @@ export function createCronEditor(context) {
         context.newJobDraft = null;
         context.showToast(t('cron.messages.created'));
       } else {
-        await updateCronJob(buildUpdateCronPayload(formValues));
+        await updateCronJob(
+          onlyPolicyChanged
+            ? {
+                id: selectedJobId,
+                notification_policy: formValues.notification_policy,
+              }
+            : buildUpdateCronPayload(formValues),
+        );
       }
 
       if (context.destroyed) {

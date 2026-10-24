@@ -57,7 +57,8 @@ export function createAppChatNavigation({ navigator, selection, openChat }) {
       if (
         shown?.agentId === agentId &&
         shown.sessionId === sessionId &&
-        shown.subAgent === subAgent
+        shown.subAgent === subAgent &&
+        (shown.runId ?? null) === (location.extra?.runId ?? null)
       ) {
         return;
       }
@@ -69,6 +70,7 @@ export function createAppChatNavigation({ navigator, selection, openChat }) {
               agentId,
               sessionId,
               subAgent,
+              runId: location.extra?.runId ?? null,
               followSession: subAgent && location.origin === 'app',
             }
           : agentId
@@ -99,16 +101,24 @@ export function createAppChatNavigation({ navigator, selection, openChat }) {
     )
       return false;
     const place = [session.agentId, session.sessionId];
-    const extra = chatExtra(session.subAgent);
+    const extra = {
+      ...chatExtra(session.subAgent),
+      ...(session.runId ? { runId: session.runId } : {}),
+    };
     return replace || activeViewId !== 'chat'
       ? chatNavigation.replace(place, { extra })
       : chatNavigation.navigate(place, { extra });
   };
 
-  const navigateToSession = (agentId, sessionId, subAgent = false) => {
+  const navigateToSession = (
+    agentId,
+    sessionId,
+    subAgent = false,
+    runId = null,
+  ) => {
     if (!agentId || !sessionId) return false;
     return navigator.navigate('chat', [agentId, sessionId], {
-      extra: chatExtra(subAgent),
+      extra: { ...chatExtra(subAgent), ...(runId ? { runId } : {}) },
     });
   };
 

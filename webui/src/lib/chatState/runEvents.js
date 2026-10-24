@@ -1,5 +1,6 @@
 import { isTerminalRunEvent } from '../api.js';
 import {
+  applySessionCompletionActivity,
   CHAT_STATUS_RUNNING,
   updateSessionUsage,
   CHAT_STATUS_IDLE,
@@ -310,6 +311,12 @@ function finishRun(sessionState, event) {
     sessionState.unreadRunAt = event?.timestamp ?? '';
   }
   sessionState.lastActiveAt = event?.timestamp ?? sessionState.lastActiveAt;
+  if (event?.payload?.notification_activity) {
+    applySessionCompletionActivity(
+      sessionState,
+      event.payload.notification_activity,
+    );
+  }
   return sessionState;
 }
 

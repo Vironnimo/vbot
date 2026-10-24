@@ -100,6 +100,7 @@
     CONNECTION_STATUS_DISCONNECTED,
     handleVisibilityChange,
   } from '$lib/connectionState.js';
+  import { createScheduleActivity } from './app/scheduleActivity.svelte.js';
   import {
     createAppController,
     createAppControllerState,
@@ -246,6 +247,33 @@
   let sessionActivity = $derived(appControllerState.sessionActivity);
   let connectionSnapshot = $derived(appControllerState.connectionSnapshot);
 
+  const schedules = createScheduleActivity({
+    get sessionActivity() {
+      return sessionActivity;
+    },
+    get refreshToken() {
+      return `${cronRefreshToken}:${sessionsRefreshToken}`;
+    },
+    get sessionInvalidations() {
+      return sessionInvalidations;
+    },
+    get connection() {
+      return connectionSnapshot;
+    },
+    get unavailable() {
+      return serverUnavailable;
+    },
+  });
+  $effect(() => {
+    navigationIndicators.cron =
+      schedules.count > 0
+        ? {
+            count: schedules.count,
+            tone: 'unread',
+            label: t('cron.runs.unread', { count: schedules.count }),
+          }
+        : null;
+  });
   let serverSwitcherOpen = $state(false);
 
   $effect(() => {
@@ -808,6 +836,10 @@
             <Component
               navigation={navigator.view('cron')}
               bind:newJobDraft={cronNewJobDraft}
+              scheduleActivity={schedules.jobs}
+              activityError={schedules.error}
+              onRefreshActivity={schedules.refresh}
+              onOpenSession={chatNavigation.navigateToSession}
               onToast={desktop.showToast}
               {serverUnavailable}
               {cronRefreshToken}

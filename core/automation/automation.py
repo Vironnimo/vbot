@@ -50,6 +50,8 @@ def _optional_run_kwargs(
     run_kind: RunKind,
     context_note: str | None = None,
     completion_activity: CompletionActivity | None = None,
+    schedule_id: str | None = None,
+    notification_policy: Callable[[], str] | None = None,
 ) -> dict[str, Any]:
     """Project non-default Run options onto the ChatLoop call."""
     options: dict[str, Any] = {}
@@ -57,6 +59,10 @@ def _optional_run_kwargs(
         options["context_note"] = context_note
     if completion_activity is not None:
         options["completion_activity"] = completion_activity
+    if schedule_id is not None:
+        options["schedule_id"] = schedule_id
+    if notification_policy is not None:
+        options["notification_policy"] = notification_policy
     if callback is not None:
         options["input_persisted_hook"] = callback
     if not contributes_to_agent_activity:
@@ -225,6 +231,8 @@ class TriggerService:
         contributes_to_agent_activity: bool = True,
         context_note: str | None = None,
         completion_activity: CompletionActivity | None = None,
+        schedule_id: str | None = None,
+        notification_policy: Callable[[], str] | None = None,
         permission_ceiling: PermissionCeiling | None = None,
     ) -> Run:
         """Start a run immediately, or queue it until the target session is idle.
@@ -255,6 +263,8 @@ class TriggerService:
             run_kind,
             context_note,
             completion_activity,
+            schedule_id,
+            notification_policy,
         )
         if session_id is None:
             session_kwargs: dict[str, Any] = {}

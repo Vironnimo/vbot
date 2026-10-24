@@ -148,6 +148,15 @@ def apply_edit(
         "AND superseded_at_seq IS NULL",
         (marker_seq, session_key, target),
     )
+    # Replaced results leave the current conversation; they must not keep an
+    # unread badge alive after their entries can no longer be opened.
+    connection.execute(
+        "UPDATE run_notifications SET eligible = 0, is_read = 1 WHERE session_key = ? "
+        "AND run_key IN (SELECT r.run_key FROM runs AS r JOIN entries AS e "
+        "ON e.entry_key = r.end_entry_key WHERE r.session_key = ? "
+        "AND e.superseded_at_seq IS NOT NULL)",
+        (session_key, session_key),
+    )
     _store_lineage.truncate(connection, session_key, target)
     marker = ChatMessage.history_edit(target_message_id)
     marker.validate()

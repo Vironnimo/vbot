@@ -100,13 +100,15 @@ def run_toast_kind(event_type: object, payload: dict[str, Any]) -> str | None:
     continuations) never notifies; cancellation is always the user's own action.
     """
 
+    if payload.get("notification_allowed") is False:
+        return None
     outcome = _RUN_OUTCOMES.get(str(event_type))
     if outcome is None:
         return None
     run_kind = payload.get("run_kind")
     # Protocol field of /ws Run events; present only when false.
     quiet = payload.get("contributes_to_agent_activity") is False
-    if run_kind in _AUTOMATION_RUN_KINDS:
+    if run_kind in _AUTOMATION_RUN_KINDS or payload.get("schedule_id"):
         if outcome != "completed":
             return "automation_failed"
         return None if quiet else "run_completed"
@@ -349,11 +351,17 @@ class Notifier:
         project_id = payload.get("project_id")
         session_id = str(payload.get("session_id") or "")
         address = f"{agent_id}@{project_id}" if project_id else agent_id
-        settings, session, agent = await asyncio.gather(
+        settings, session, agent, notification = await asyncio.gather(
             self._refresh_settings(),
             self._rpc("session.get", {"agent_id": address, "session_id": session_id}),
             self._rpc("agent.get", {"id": agent_id}) if not project_id else _none(),
+            self._rpc(
+                "session.notification_status",
+                {"agent_id": address, "session_id": session_id, "run_id": run_id},
+            ),
         )
+        if notification is not None and notification.get("allowed") is False:
+            return
         with self._lock:
             if run_id in self._acknowledged or not self._enabled.get(kind, True):
                 return

@@ -81,9 +81,26 @@ def _decode_state_object(payload: str, name: str) -> JsonObject:
 
 def _completion_activity_from_state(state: Any) -> JsonObject:
     """Decode one row of ``_store_values._COMPLETION_ACTIVITY_COLUMNS``."""
+    extra = {
+        key: state[key]
+        for key in (
+            "notification_policy",
+            "has_chat_results",
+            "has_schedule_runs",
+            "notification_revision",
+            "notification_count",
+            "notification_run_id",
+            "notification_run_status",
+            "notification_run_at",
+            "local_unread_count",
+        )
+    }
+    extra["has_chat_results"] = bool(extra["has_chat_results"])
+    extra["has_schedule_runs"] = bool(extra["has_schedule_runs"])
     latest_id = state["latest_completion_run_id"]
-    if latest_id is None or state["latest_completion_read"]:
+    if not state["local_unread_count"]:
         return {
+            **extra,
             "latest_completion_run_id": latest_id,
             "has_unread_completion": False,
             "unread_run_id": None,
@@ -91,11 +108,12 @@ def _completion_activity_from_state(state: Any) -> JsonObject:
             "unread_run_at": None,
         }
     return {
+        **extra,
         "latest_completion_run_id": latest_id,
         "has_unread_completion": True,
-        "unread_run_id": latest_id,
-        "unread_run_status": state["latest_completion_status"],
-        "unread_run_at": state["latest_completion_at"],
+        "unread_run_id": state["local_unread_run_id"],
+        "unread_run_status": state["local_unread_run_status"],
+        "unread_run_at": state["local_unread_run_at"],
     }
 
 

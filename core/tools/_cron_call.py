@@ -34,6 +34,7 @@ _CALL_ORDER = (
     "repeat",
     "session",
     "deliver",
+    "notification_policy",
     "watch",
     "watch_runs",
 )

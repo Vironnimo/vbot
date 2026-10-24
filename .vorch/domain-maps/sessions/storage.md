@@ -14,7 +14,7 @@ The public `core.sessions` package routes stable imports to the Session service 
 - `timeline` - the shared Chat History snapshot and edit eligibility (`_editable`, `latest_takeover`). Its `complete_runs` option expands requested page edges and touched incremental Runs inside one database snapshot, so semantic timeline callers receive complete Run segments; the limit is a target. The exact-Run read serves durable timeline reconnect without loading unrelated conversation history (`chat/timeline.md`).
 - `operations` - compound transactions: the Compaction commit and the history edit.
 - `prompts` - prompt pins, seen Skills and the prompt-cache affinity id.
-- `runs` - admission, completion, Stream drafts, restart recovery and completion activity.
+- `runs` - admission, completion, Stream drafts and restart recovery; `notifications` - per-Run eligibility, read marks, Schedule provenance, bounded Schedule History and notification policy.
 - `mutations` - lifecycle (create, move, fork, delete with delete-time detachment, the review forks that follow a Session), metadata writes and plain appends.
 - `archive` - the archive entry ledger: every statement on `archive_entries`, `archive_entry_sessions` and `archive_entry_trees`, the compare-and-set state transitions, archiving Sessions into an entry, making an entry's members live again, and the purge steps. `archive_backfill` - adoption of archives that have no entry (legacy trees under `archive/`, archived Sessions without membership); the only code that knows the legacy layouts. The public facade is `SessionArchiveLedger` (`archive_ledger.py`, `ChatSessionManager.archive_ledger`), which the archive service drives (`archive.md`).
 - `queries` - catalog, Session-list summaries, descriptors and revisions.
@@ -50,3 +50,5 @@ Connection and journal policy, the serialized writer, the read pool, error class
 ## Operator inspection
 
 Runtime Session readers use `ChatSessionManager`. The bundled `vbot-docs` Skill's script `scripts/sessions.py` additionally reads the Session database read-only for extended Session search and transcripts, scoped by Project/Agent/Session, live generation, current view and canonical sequence; it mirrors that view logic in SQL and creates no other runtime storage owner, so a schema change to those tables updates the script and `tests/resources/skills/test_vbot_docs_sessions.py`.
+
+`run_notifications` keeps each own Run's source Schedule, policy snapshot, delivery eligibility and read mark. Session notification policy lives on `sessions`; partial unread and source indexes keep result lookups bounded without sorting each Session's past. Migration `sessions.0008_run_notifications` adopts only the legacy latest completion and its known read state, never inventing unread history. Cron later attaches each saved `last_run_id` to its exact Schedule; earlier legacy Runs cannot be reliably assigned. The migration refuses older writers that would lose this state.

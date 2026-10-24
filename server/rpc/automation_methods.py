@@ -38,6 +38,7 @@ async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
         "repeat",
         "session_id",
         "delivery",
+        "notification_policy",
         "watch",
     }
     _reject_unsupported(params, supported_fields, "cron.create")
@@ -129,6 +130,7 @@ async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
                 session_id=session_id,
                 project_id=project_id,
                 delivery=delivery,
+                notification_policy=params.get("notification_policy", "all"),
                 watch=watch,
                 actor="rpc",
                 **event_fields,
@@ -153,6 +155,79 @@ def _cron_list(state: Any, params: JsonObject) -> JsonObject:
     }
 
 
+async def _cron_activity(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, set(), "cron.activity")
+    try:
+        sessions = state.runtime.chat_sessions
+        from server.rpc.event_bridge import session_activity_service
+
+        work = session_activity_service(state)
+        busy = [address for address, _ in work.snapshot()] if work is not None else []
+        activity = await sessions.run_async(sessions.notifications.schedule_activity, busy)
+        jobs = {
+            job.id: job.notification_activity(activity.get(job.id, {}))
+            for job in state.runtime.cron_service.list_jobs()
+        }
+        return {
+            "jobs": jobs,
+            "notification_count": sum(job["notification_count"] for job in jobs.values()),
+        }
+    except Exception as error:
+        raise _map_expected_error(error) from error
+
+
+async def _cron_runs(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"id", "before", "limit"}, "cron.runs")
+    job_id = _required_string(params, "id")
+    before = _optional_positive_integer(params, "before")
+    limit = _optional_positive_integer(params, "limit") or 5
+    if limit > 50:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "limit must be at most 50")
+    try:
+        state.runtime.cron_service.get_job(job_id)
+        sessions = state.runtime.chat_sessions
+        result: JsonObject = await sessions.run_async(
+            sessions.notifications.schedule_runs, job_id, before=before, limit=limit
+        )
+        from core.sessions import SessionAddress
+        from server.rpc.event_bridge import session_activity_service
+
+        work = session_activity_service(state)
+        if work is not None:
+            for row in result["runs"]:
+                address = SessionAddress(
+                    row["project_id"] or None, row["agent_id"], row["session_id"]
+                )
+                row["unread"] = row["unread"] and work.state(address).state == "idle"
+        return result
+    except Exception as error:
+        raise _map_expected_error(error) from error
+
+
+async def _cron_mark_read(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"id", "through", "alert_at"}, "cron.mark_read")
+    job_id = _required_string(params, "id")
+    through = _optional_positive_integer(params, "through")
+    alert_at = _optional_string(params, "alert_at")
+    if through is None and alert_at is None:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "through or alert_at is required")
+    try:
+        state.runtime.cron_service.get_job(job_id)
+        sessions = state.runtime.chat_sessions
+        count = (
+            await sessions.run_async(sessions.notifications.mark_schedule_read, job_id, through)
+            if through is not None
+            else 0
+        )
+        if alert_at is not None:
+            await state.runtime.cron_service.acknowledge_alert(
+                job_id, actor="rpc", expected_at=alert_at
+            )
+        return {"marked_read": count}
+    except Exception as error:
+        raise _map_expected_error(error) from error
+
+
 async def _cron_update(state: Any, params: JsonObject) -> JsonObject:
     supported_fields = {
         "id",
@@ -168,6 +243,7 @@ async def _cron_update(state: Any, params: JsonObject) -> JsonObject:
         "repeat",
         "session_id",
         "delivery",
+        "notification_policy",
         "watch",
         "status",
     }
@@ -221,6 +297,8 @@ async def _cron_update(state: Any, params: JsonObject) -> JsonObject:
         updates["remaining_runs"] = repeat
     if "session_id" in params:
         updates["session_id"] = _optional_string(params, "session_id")
+    if "notification_policy" in params:
+        updates["notification_policy"] = _required_string(params, "notification_policy")
     if "delivery" in params:
         updates["delivery"] = _optional_delivery(params)
     if "watch" in params:
@@ -390,6 +468,7 @@ def _cron_job_response(cron_service: Any, job: Any) -> JsonObject:
         "event_title": None if event is None else event.title,
         "remaining_runs": job.remaining_runs,
         "session_id": job.session_id,
+        "notification_policy": job.notification_policy,
         "delivery": (job.delivery or CronDelivery(kind="none")).to_dict(),
         "status": job.status,
         "last_fired_at": job.last_fired_at,
@@ -582,6 +661,9 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "bootstrap.disable": _bootstrap_disable,
         "cron.create": _cron_create,
         "cron.list": _cron_list,
+        "cron.activity": _cron_activity,
+        "cron.runs": _cron_runs,
+        "cron.mark_read": _cron_mark_read,
         "cron.update": _cron_update,
         "cron.delete": _cron_delete,
         "cron.webhook_secret": _cron_webhook_secret,

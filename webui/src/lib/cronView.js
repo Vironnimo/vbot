@@ -388,6 +388,7 @@ export function createCronFormValues(job = null, systemTimezone = 'UTC') {
       ...eventTimeFields('start', 0),
       repeat: '',
       session_id: '',
+      notification_policy: 'all',
       ...deliveryFormFields({ kind: CRON_DELIVERY_APP }),
       ...watchFormFields(null),
       original_run_at: '',
@@ -425,6 +426,7 @@ export function createCronFormValues(job = null, systemTimezone = 'UTC') {
         ? ''
         : String(normalized.remaining_runs),
     session_id: normalized.session_id ?? '',
+    notification_policy: normalized.notification_policy,
     ...deliveryFormFields(normalized.delivery),
     ...watchFormFields(normalized.watch),
     original_run_at: normalized.run_at ?? '',
@@ -517,8 +519,18 @@ function normalizeCronJobs(jobs, systemTimezone = 'UTC') {
   return rawJobs.map((job) => normalizeCronJob(job, systemTimezone));
 }
 
-export function visibleCronJobs(jobs, systemTimezone = 'UTC') {
-  return normalizeCronJobs(jobs, systemTimezone);
+export function visibleCronJobs(jobs, systemTimezone = 'UTC', activity = {}) {
+  const lastActivity = (job) =>
+    activity[job.id]?.last_activity_at ||
+    job.last_completed_at ||
+    job.last_attempt_at ||
+    job.created_at ||
+    '';
+  return normalizeCronJobs(jobs, systemTimezone).sort(
+    (a, b) =>
+      (Date.parse(lastActivity(b)) || 0) - (Date.parse(lastActivity(a)) || 0) ||
+      a.id.localeCompare(b.id),
+  );
 }
 
 // Values are compared as the payloads normalize them, so a draft that differs
@@ -539,6 +551,7 @@ export function cronFormFingerprint(formValues) {
     event_time: eventTimeText(values),
     repeat: repeatFingerprint(values.repeat),
     session_id: requiredText(values.session_id),
+    notification_policy: values.notification_policy ?? 'all',
     delivery: cronDeliveryPayload(values),
     watch: cronWatchPayload(values),
   });
@@ -586,6 +599,7 @@ export function buildCreateCronPayload(formValues) {
     payload.session_id = sessionId;
   }
   payload.delivery = cronDeliveryPayload(formValues);
+  payload.notification_policy = formValues.notification_policy ?? 'all';
   const watch = cronWatchPayload(formValues);
   if (watch !== null) {
     payload.watch = watch;
@@ -604,6 +618,7 @@ export function buildUpdateCronPayload(formValues) {
     prompt: requiredText(formValues?.prompt),
     schedule_type: scheduleType,
     session_id: optionalText(formValues?.session_id),
+    notification_policy: formValues.notification_policy ?? 'all',
     delivery: cronDeliveryPayload(formValues),
     watch: cronWatchPayload(formValues),
   };
@@ -682,6 +697,7 @@ function normalizeCronJob(job, systemTimezone = 'UTC') {
     event_title: optionalText(job?.event_title),
     remaining_runs: remainingRuns,
     session_id: optionalText(job?.session_id),
+    notification_policy: job?.notification_policy ?? 'all',
     delivery: normalizeDelivery(job?.delivery),
     // What the job checks before each Run, or null.
     watch: normalizeWatch(job?.watch),

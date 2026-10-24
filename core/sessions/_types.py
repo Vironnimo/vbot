@@ -96,6 +96,9 @@ class SessionRunAdmission:
     working_project_id: str | None = None
     # An ordinary Accessor input claimed atomically with this Run's admission.
     accessor_input_id: str | None = None
+    schedule_id: str | None = None
+    notification_policy: str = "all"
+    notification_eligible: bool = False
 
 
 @dataclass(frozen=True)
@@ -108,6 +111,7 @@ class SessionRunCompletion:
     change_stats: JsonObject | None = None
     completion_reason: str | None = None
     contributes_to_activity: bool = True
+    notification_policy: str | None = None
 
 
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")

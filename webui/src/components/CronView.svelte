@@ -1,4 +1,6 @@
 <script>
+  import CronRunHistory from './cron/CronRunHistory.svelte';
+  import NotificationPolicySelect from './sessions/NotificationPolicySelect.svelte';
   import CronTimingSettings from './cron/CronTimingSettings.svelte';
   import CronDeliverySettings from './cron/CronDeliverySettings.svelte';
   import CronWatchSettings from './cron/CronWatchSettings.svelte';
@@ -68,6 +70,10 @@
     onToast = noop,
     serverUnavailable = false,
     cronRefreshToken = 0,
+    scheduleActivity = {},
+    activityError = '',
+    onOpenSession = noop,
+    onRefreshActivity = noop,
     agentsRefreshToken = 0,
     projectsRefreshToken = 0,
   } = $props();
@@ -105,6 +111,7 @@
   });
 
   let viewState = $state(createCronViewState());
+  let expandedJobs = $state({});
 
   // Project teams power the project-agent options in the cron dropdown. They are
   // loaded lazily the first time the detail pane renders a form (one
@@ -135,7 +142,7 @@
   let hasAgents = $derived(viewState.agents.length > 0);
   let isLoading = $derived(viewState.loadingAgents || viewState.loadingJobs);
   let jobs = $derived(
-    visibleCronJobs(viewState.jobs, viewState.systemTimezone),
+    visibleCronJobs(viewState.jobs, viewState.systemTimezone, scheduleActivity),
   );
   // Identity agents (bare ids, unchanged) plus project agents addressed as
   // `agent@projekt`. A project option's value IS the address, so saving sends it
@@ -446,6 +453,12 @@
       </div>
 
       <div class="cron-list-scroll secondary-pane__scroll secondary-list">
+        {#if activityError && !serverUnavailable}
+          <Banner variant="error">{activityError}</Banner>
+          <Button variant="tertiary" onClick={onRefreshActivity}
+            >{t('common.retry')}</Button
+          >
+        {/if}
         {#if viewState.agentsError && !serverUnavailable}
           <div class="cron-load-error">
             <Banner variant="error" role="alert">
@@ -480,45 +493,87 @@
           <ul class="cron-list" aria-label={t('cron.list.ariaLabel')}>
             {#each jobs as job (job.id)}
               <li>
-                <button
-                  type="button"
-                  class="cron-item secondary-list__item"
-                  class:active={!editor.isCreating &&
-                    job.id === editor.selectedJobId}
-                  data-testid={`cron-item-${job.id}`}
-                  use:tooltip={() => scheduleRowDetails(job, { agentLabel })}
-                  onclick={() => editor.selectJob(job)}
-                  oncontextmenu={(event) => openMenu(job, event)}
-                  onkeydown={(event) => {
-                    if (isContextMenuKey(event)) openMenu(job, event);
-                  }}
-                >
-                  <span class="cron-item-inner">
-                    <span class="cron-item-head">
-                      <span
-                        class="cron-status-dot cron-status-dot--{statusChipVariant(
-                          job,
-                        )}"
-                        role="img"
-                        aria-label={statusLabel(job.status)}
-                      ></span>
-                      <span class="cron-item-name">
-                        {job.name}
-                      </span>
-                      {#if job.unread_alert}
+                <div class="cron-item-row">
+                  <button
+                    type="button"
+                    class="cron-expand"
+                    aria-expanded={Boolean(expandedJobs[job.id])}
+                    aria-controls={`cron-runs-${job.id}`}
+                    aria-label={t(
+                      expandedJobs[job.id]
+                        ? 'cron.runs.collapse'
+                        : 'cron.runs.expand',
+                      { name: job.name },
+                    )}
+                    onclick={() =>
+                      (expandedJobs[job.id] = !expandedJobs[job.id])}
+                  >
+                    <svg
+                      viewBox="0 0 16 16"
+                      width="14"
+                      height="14"
+                      aria-hidden="true"
+                      ><path
+                        d={expandedJobs[job.id]
+                          ? 'm4 6 4 4 4-4'
+                          : 'm6 4 4 4-4 4'}
+                      /></svg
+                    >
+                  </button>
+                  <button
+                    type="button"
+                    class="cron-item secondary-list__item"
+                    class:active={!editor.isCreating &&
+                      job.id === editor.selectedJobId}
+                    data-testid={`cron-item-${job.id}`}
+                    use:tooltip={() => scheduleRowDetails(job, { agentLabel })}
+                    onclick={() => editor.selectJob(job)}
+                    oncontextmenu={(event) => openMenu(job, event)}
+                    onkeydown={(event) => {
+                      if (isContextMenuKey(event)) openMenu(job, event);
+                    }}
+                  >
+                    <span class="cron-item-inner">
+                      <span class="cron-item-head">
                         <span
-                          class="cron-item-alert"
+                          class="cron-status-dot cron-status-dot--{statusChipVariant(
+                            job,
+                          )}"
                           role="img"
-                          aria-label={t('cron.alert.unread')}
-                          data-testid={`cron-item-alert-${job.id}`}
+                          aria-label={statusLabel(job.status)}
                         ></span>
-                      {/if}
+                        <span class="cron-item-name">
+                          {job.name}
+                        </span>
+                        {#if job.unread_alert || (scheduleActivity[job.id]?.visible_unread_count ?? scheduleActivity[job.id]?.unread_count) > 0}
+                          <span
+                            class="cron-item-alert"
+                            role="img"
+                            aria-label={t(
+                              job.unread_alert
+                                ? 'cron.alert.unread'
+                                : 'notifications.unread',
+                            )}
+                            data-testid={`cron-item-alert-${job.id}`}
+                          ></span>
+                        {/if}
+                      </span>
+                      <span class="cron-item-detail">
+                        {listRowDetail(job, viewState.systemTimezone)}
+                      </span>
                     </span>
-                    <span class="cron-item-detail">
-                      {listRowDetail(job, viewState.systemTimezone)}
-                    </span>
-                  </span>
-                </button>
+                  </button>
+                </div>
+                <div id={`cron-runs-${job.id}`}>
+                  {#if expandedJobs[job.id]}
+                    <CronRunHistory
+                      jobId={job.id}
+                      activity={scheduleActivity[job.id] ?? {}}
+                      {onOpenSession}
+                      onRead={onRefreshActivity}
+                    />
+                  {/if}
+                </div>
               </li>
             {/each}
           </ul>
@@ -957,6 +1012,17 @@
               </div>
             </section>
 
+            <section class="s-group">
+              <h3 class="s-group-title">{t('notifications.label')}</h3>
+              <p class="s-group-description">
+                {t('notifications.scheduleHelp')}
+              </p>
+              <NotificationPolicySelect
+                value={editor.formValues.notification_policy}
+                onChange={(value) =>
+                  editor.updateFormField('notification_policy', value)}
+              />
+            </section>
             <CronDeliverySettings {editor} {channels} />
 
             <!-- Identifier and deletion close the page, after everything the

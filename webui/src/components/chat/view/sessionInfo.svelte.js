@@ -1,6 +1,7 @@
 import { untrack } from 'svelte';
 
 import { isRunActive } from '$lib/chatState.js';
+import { applySessionCompletionActivity } from '$lib/chatState/sessionState.js';
 import {
   runChangeStats,
   sessionChangeStats,
@@ -184,6 +185,10 @@ export function createSessionInfo(context) {
         .then((result) => {
           const session = result?.session;
           if (current() && session) {
+            applySessionCompletionActivity(
+              context.target.activeSessionState,
+              session,
+            );
             summary = {
               displayName: sessionDisplayName(session),
               createdAt: session.created_at ?? null,

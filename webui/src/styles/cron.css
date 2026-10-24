@@ -566,3 +566,31 @@
     padding-inline: 14px;
   }
 }
+
+.cron-view .cron-item-row {
+  display: flex;
+  align-items: stretch;
+}
+.cron-view .cron-item-row .cron-item {
+  flex: 1;
+  min-width: 0;
+}
+.cron-view .cron-expand {
+  flex: 0 0 24px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-lo);
+  cursor: pointer;
+}
+.cron-view .cron-expand:hover {
+  background: var(--surface-3);
+  color: var(--text-hi);
+}
+.cron-view .cron-expand svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+}

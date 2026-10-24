@@ -21,6 +21,47 @@ import {
 } from './chatState.support.js';
 
 describe('History reads', () => {
+  it('focuses the selected Run while preserving live History and ignoring an older focus read', async () => {
+    const old = deferred();
+    const current = deferred();
+    const loadChatHistory = vi
+      .fn()
+      .mockReturnValueOnce(old.promise)
+      .mockReturnValueOnce(current.promise);
+    const { chatState, controller } = setupController({
+      operationOverrides: { loadChatHistory },
+    });
+    const session = ensureSessionState(chatState, 'alpha', 'session');
+    session.messages = [
+      { id: 'live', role: 'user', content: 'Current conversation' },
+    ];
+    const first = controller.focusRun(session, 'first');
+    const second = controller.focusRun(session, 'second');
+    expect(loadChatHistory).toHaveBeenLastCalledWith({
+      agent_id: 'alpha',
+      session_id: 'session',
+      focus_run_id: 'second',
+      child_limit: 100,
+    });
+    current.resolve({
+      messages: [
+        { id: 'second-answer', role: 'assistant', content: 'Selected result' },
+      ],
+      items: [],
+    });
+    expect(await second).toBe(true);
+    old.resolve({
+      messages: [
+        { id: 'first-answer', role: 'assistant', content: 'Earlier result' },
+      ],
+      items: [],
+    });
+    expect(await first).toBe(false);
+    expect(session.focusedHistory.focusRunId).toBe('second');
+    expect(session.focusedHistory.messages[0].content).toBe('Selected result');
+    expect(session.messages[0].content).toBe('Current conversation');
+  });
+
   it('ignores a child page once its Run gap is gone', async () => {
     const pending = deferred();
     const { chatState, controller } = setupController({

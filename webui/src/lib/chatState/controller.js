@@ -188,6 +188,7 @@ export function createChatController({
   });
   const {
     loadHistoryForSession,
+    focusRun,
     reconcileRunSession,
     loadOlderHistory,
     loadRunHistory,
@@ -828,6 +829,7 @@ export function createChatController({
     loadCurrentHistory,
     syncDisplayedHistoryLoad,
     loadHistoryForSession,
+    focusRun,
     loadOlderHistory,
     loadRunHistory,
     loadToolCall,
