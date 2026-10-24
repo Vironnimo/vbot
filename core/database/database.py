@@ -274,7 +274,7 @@ class Database:
         return self._runtime.is_closed()
 
     def close(self) -> None:
-        """Close every connection; in-flight pool work fails as unavailable."""
+        """Stop admission and close idle connections; active readers close on return."""
         self._runtime.close()
         if self._owns_workers:
             self._workers.shutdown(wait=False)
