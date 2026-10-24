@@ -8,6 +8,7 @@ with the corrected call. Schedules and time zones: ``test_cron_call_times.py``.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -350,7 +351,16 @@ def test_a_check_vbot_cannot_run_is_refused_with_watch(
     )
 
     assert cause in message
-    assert message.endswith('"watch":"<command or URL to check>"}') == send
+    _reason, separator, corrected = message.partition(" Send: ")
+    assert bool(separator) == send
+    if send:
+        assert json.loads(corrected) == {
+            "action": "create",
+            "prompt": JOB_PROMPT,
+            "schedule": "every 2h",
+            "watch": "<command or URL to check>",
+            "watch_runs": "always",
+        }
 
 
 def test_refusal_names_other_fields_the_corrected_call_drops(tool: CronTool) -> None:
