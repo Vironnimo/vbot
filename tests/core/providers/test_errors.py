@@ -12,6 +12,7 @@ import pytest
 from core.providers.errors import (
     NetworkError,
     ProviderAuthError,
+    ProviderContextOverflowError,
     ProviderRateLimitError,
     ProviderTimeoutError,
     ProviderUsageLimitError,
@@ -145,10 +146,40 @@ def test_network_error_is_retryable_without_becoming_a_provider_error() -> None:
         pytest.param(
             {"message": "too long", "error_type": "context_length_exceeded"},
             True,
-            ProviderError,
+            ProviderContextOverflowError,
             False,
             None,
             id="fatal-type-even-lenient",
+        ),
+        pytest.param(
+            {
+                "message": "prompt is too long: 208310 tokens > 200000 maximum",
+                "type": "invalid_request_error",
+            },
+            False,
+            ProviderContextOverflowError,
+            False,
+            None,
+            id="explicit-prompt-overflow",
+        ),
+        pytest.param(
+            {"message": "token limit exceeded", "code": "token_limit_exceeded"},
+            True,
+            ProviderError,
+            False,
+            None,
+            id="ambiguous-token-limit-is-not-context-overflow",
+        ),
+        pytest.param(
+            {
+                "message": "prompt is too long: 208310 tokens > 200000 maximum",
+                "code": "content_policy_violation",
+            },
+            True,
+            ProviderError,
+            False,
+            None,
+            id="explicit-refusal-beats-context-wording",
         ),
         pytest.param(
             {"message": "nope", "code": "permission_denied"},

@@ -36,7 +36,7 @@ from contextlib import aclosing
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from core.providers.errors import ProviderAuthError, ProviderError
+from core.providers.errors import ProviderAuthError, ProviderContextOverflowError, ProviderError
 from core.providers.http import (
     PreparedRequest,
     RequestPlan,
@@ -247,15 +247,25 @@ async def execute_learning_from_rejections[T](
                 wire.observe_effort_updates_rejected(model_id)
             else:
                 wire.observe_rejected_effort(model_id, lesson.rejected[0])
-            revised = await revise_request(
-                plan,
-                _LessonRevision(
-                    request.payload,
-                    profile.protocol,
-                    tuple(rejected_parameters),
-                    tuple(exclusive_groups),
-                ),
-            )
+            try:
+                revised = await revise_request(
+                    plan,
+                    _LessonRevision(
+                        request.payload,
+                        profile.protocol,
+                        tuple(rejected_parameters),
+                        tuple(exclusive_groups),
+                    ),
+                )
+            except ProviderError as rebuild_error:
+                # A learned smaller window may refuse this unchanged input
+                # locally. Preserve the remote rejection that proved it too
+                # large, so Compaction can reduce the input itself.
+                if lesson.kind == "context_window" and isinstance(
+                    error, ProviderContextOverflowError
+                ):
+                    raise error from rebuild_error
+                raise
             if revised is None:
                 raise
             _LOGGER.warning(

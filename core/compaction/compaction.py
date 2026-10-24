@@ -34,6 +34,7 @@ from core.compaction._estimates import (
     _request_estimator,
 )
 from core.compaction._model_request import _send_streaming_model_request
+from core.compaction._overflow import OVERFLOW_SUMMARY_NOTICE
 from core.compaction._tail import (
     _is_compaction_checkpoint_note,
     _is_compaction_summary_note,
@@ -455,7 +456,7 @@ class CompactionService:
         owner_name: str | None = None,
         group_id: str | None = None,
     ) -> ChatMessage:
-        """Execute at most one Model request and persist its assembled projection.
+        """Execute one Strategy plan with bounded request recovery and return its checkpoint.
 
         *estimate_factor* corrects local estimates for the active Model and
         *active_context* is Chat's Context of *request_messages* with
@@ -551,6 +552,11 @@ class CompactionService:
                             usage_recorder=self._usage_recorder,
                             model_reference=reference,
                             input_estimate=model_input.estimated,
+                            estimate_factor=(
+                                estimate_factor
+                                if same_target
+                                else self._input_estimate_factor(reference)
+                            ),
                             session_address=session_address,
                             run_id=run_id,
                             owner_name=owner_name,
@@ -664,6 +670,8 @@ def _finalize_compaction(
         summary = _summary_body(_extract_summary_text(response))
         if not summary:
             raise CompactionError("Summary response contained no summary text")
+        if response.get("_compaction_omitted_exchanges"):
+            summary = f"{OVERFLOW_SUMMARY_NOTICE}\n\n{summary}"
     if summary and prepared.strategy_id == STRATEGY_SUMMARY_TAIL:
         summary = _reference_summary(summary)
     projection = [*plan.before_summary]

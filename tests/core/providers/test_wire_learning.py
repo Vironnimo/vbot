@@ -19,7 +19,7 @@ import httpx
 import pytest
 import respx
 
-from core.providers.errors import ProviderAuthError, ProviderError
+from core.providers.errors import ProviderAuthError, ProviderContextOverflowError, ProviderError
 from core.providers.providers import REQUEST_ESTIMATE_MIN_MARGIN_TOKENS
 from core.utils.retry import caller_owns_retries
 
@@ -467,7 +467,7 @@ async def test_a_rejection_is_learned_retried_and_remembered_for_later_requests(
             400,
             "Your input exceeds the context window of this model. Please adjust your input "
             "and try again.",
-            ProviderError,
+            ProviderContextOverflowError,
             1,
             id="context-window-not-stated",
         ),

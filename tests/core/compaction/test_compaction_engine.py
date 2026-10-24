@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import random
 import threading
 from collections.abc import AsyncIterator
 from typing import Any, override
@@ -217,7 +218,7 @@ async def test_model_backed_strategies_require_the_active_request(strategy: str)
 
 @pytest.mark.asyncio
 async def test_automatic_compaction_rejects_projection_below_minimum_reclaim() -> None:
-    adapter = StubAdapter("A summary that is intentionally much larger " * 500)
+    adapter = StubAdapter("".join(random.Random(0).choices("abcdefghijklmnopqrstuvwxyz", k=22_000)))
     messages = [user("u1", "old"), assistant("a1", "short"), user("u2", "tail")]
 
     with pytest.raises(CompactionInsufficientReclaimError):
