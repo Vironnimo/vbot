@@ -512,7 +512,7 @@ class ConnectionRuntime:
             raise DatabaseUnavailableError(f"{self.label} backup failed: {destination}") from exc
 
     def close(self) -> None:
-        """Close pooled readers and the writer, releasing all tracking entries."""
+        """Close idle connections; checked-out readers close when their callbacks return."""
         with self._reader_condition:
             self._reader_access_closed = True
             self._reader_condition.wait_for(lambda: self._reader_io_pending == 0)
@@ -532,10 +532,10 @@ class ConnectionRuntime:
                         writer.execute("PRAGMA wal_checkpoint(PASSIVE)")
                 with contextlib.suppress(BaseException):
                     writer.close()
-        with self._reader_lock:
-            outstanding = list(self._reader_connections)
-        for connection in outstanding:
-            self._close_reader(connection)
+        # A checked-out reader belongs to its callback until the read context exits.
+        # Closing it here can clear CPython's native database pointer while execute()
+        # has released the GIL, crashing in sqlite3_last_insert_rowid(NULL).
+        # Its transaction boundary sees closed admission and closes it on return.
         with self._reader_condition:
             self._reader_condition.wait_for(lambda: self._reader_io_pending == 0)
 

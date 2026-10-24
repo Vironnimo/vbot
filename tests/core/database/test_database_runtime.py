@@ -565,7 +565,9 @@ def test_without_wal_reads_use_independent_query_only_transactions(
     database.checkpoint()  # A closed database has nothing to checkpoint either.
 
 
-@pytest.mark.parametrize("stage", ["idle", "checked-out", "inside-read", "reading-after-close"])
+@pytest.mark.parametrize(
+    "stage", ["idle", "checked-out", "inside-read", "reading-after-close", "executing"]
+)
 def test_close_releases_every_connection_and_refuses_further_work(
     wal_database: Database, monkeypatch: pytest.MonkeyPatch, stage: str
 ) -> None:
@@ -573,11 +575,35 @@ def test_close_releases_every_connection_and_refuses_further_work(
     late_read = database.read()
     assert note_bodies(database) == []  # Leave a reader in the pool.
     if stage in ("inside-read", "reading-after-close"):
-        # Shutdown closes checked-out readers without waiting for their callbacks.
+        # Shutdown leaves a leased connection usable until its callback returns.
         with pytest.raises(DatabaseUnavailableError), database.read() as reader:
             database.close()
+            assert database.live_connection_count() == 1
             if stage == "reading-after-close":
-                reader.execute("SELECT 1")
+                assert reader.execute("SELECT 1").fetchone()[0] == 1
+    elif stage == "executing":
+        executing, release = threading.Event(), threading.Event()
+
+        def hold() -> int:
+            executing.set()
+            assert release.wait(10)
+            return 1
+
+        def read() -> None:
+            with database.read() as reader:
+                reader.create_function("hold_read", 0, hold)
+                reader.execute("SELECT hold_read()").fetchone()
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            executing_read = executor.submit(read)
+            try:
+                assert executing.wait(10)
+                executor.submit(database.close).result(timeout=10)
+                assert database.live_connection_count() == 1
+            finally:
+                release.set()
+            with pytest.raises(DatabaseUnavailableError):
+                executing_read.result(timeout=10)
     elif stage == "checked-out":
         checked_out, release = threading.Event(), threading.Event()
         real_checkout = database._runtime._checkout_reader
