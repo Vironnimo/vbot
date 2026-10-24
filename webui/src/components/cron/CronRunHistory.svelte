@@ -6,6 +6,7 @@
   import { createCoalescedRefresh } from '$lib/sessionInvalidation.js';
   import { t } from '$lib/i18n.js';
   import { runStatusLabel } from '$lib/statisticsView.js';
+  import { tooltip } from '$lib/tooltip.js';
   import Button from '../ui/Button.svelte';
   import Banner from '../ui/Banner.svelte';
 
@@ -109,7 +110,7 @@
           <span class="cron-run-meta">
             <time
               datetime={run.started_at}
-              title={formatAbsoluteTime(run.started_at)}
+              use:tooltip={formatAbsoluteTime(run.started_at)}
               >{formatRelativeTime(run.started_at)}</time
             >
             <span>{runStatusLabel(run.status)}</span>
