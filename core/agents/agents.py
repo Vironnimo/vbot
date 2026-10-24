@@ -350,7 +350,8 @@ class AgentStore:
 
         The same side-effect-free, never-raising probe as :meth:`exists`: it neither
         seeds the Workspace nor verifies the current-Session pointer, and it returns
-        the raw persisted values without ``defaults.agent`` applied.
+        values without ``defaults.agent`` applied. Revoked unproven delegation
+        grants are excluded without rewriting the file.
         """
         with self._write_lock:
             if not is_valid_agent_id(agent_id):
@@ -783,6 +784,8 @@ class AgentStore:
     def _write_agent(self, agent: Agent) -> None:
         """Write one config; it never waits under the lock (see ``_repairing_read``)."""
         agent_path = self._agent_path(agent.id)
+        original = agent
+        agent = _delegation.without_unbound_grants(agent)
         allowed = agent.tools.get("subagent", {}).get("allowed_agents", [])
         agent = replace(
             agent,
@@ -799,12 +802,14 @@ class AgentStore:
                 write_json_document(agent_path, persisted, AGENT_FORMAT)
             except JsonDocumentWriteError as error:
                 raise AgentError(str(error)) from error
+        if agent is not original and agent.tools != original.tools:
+            _LOGGER.info("Unproven delegation grants revoked (agent=%s)", agent.id)
 
     def delegation_target_allowed(self, target_id: str, binding: str | int) -> bool:
         """Whether a captured explicit grant still addresses this Identity Agent.
 
-        No binding means a legacy grant and is handled by the caller. This check
-        fails closed for unavailable or invalid identity history.
+        Config loads exclude explicit Identity grants without bindings. This
+        check fails closed for unavailable or invalid identity history.
         """
         with self._write_lock:
             try:
@@ -857,23 +862,27 @@ class AgentStore:
                 data_dir=self._data_dir,
                 default_workspace=self._default_workspace(data["id"]),
             )
+            current = _delegation.without_unbound_grants(agent)
             self._seed_workspace(Path(agent.workspace))
-            if workspace_missing:
+            if workspace_missing or current is not agent:
                 self._write_agent(agent)
-            return agent
+            return current
 
     def _read_agent_config(self, agent_path: Path) -> Agent:
         """Load and construct an agent from its config file with no side effects.
 
         Unlike :meth:`_load_seeded_agent` this seeds no workspace and runs no
         current-session normalization, so a caller can inspect a dangling current
-        pointer before it would otherwise be silently replaced.
+        pointer before it would otherwise be silently replaced. Unproven legacy
+        delegation grants are filtered in memory, without writing.
         """
         data = _validated_agent_data(agent_path)
-        return _agent_from_dict(
-            data,
-            data_dir=self._data_dir,
-            default_workspace=self._default_workspace(data["id"]),
+        return _delegation.without_unbound_grants(
+            _agent_from_dict(
+                data,
+                data_dir=self._data_dir,
+                default_workspace=self._default_workspace(data["id"]),
+            )
         )
 
     def _with_live_current_sessions(self, agents: builtins.list[Agent]) -> builtins.list[Agent]:

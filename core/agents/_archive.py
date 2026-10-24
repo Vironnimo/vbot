@@ -261,12 +261,14 @@ def _restored_agent(
         if workspace is None
         else _resolve_workspace(workspace, data_dir=store.data_dir)
     )
-    return replace(
-        agent,
-        id=target_id,
-        workspace=str(restored_workspace),
-        root_project_id=root_project_id,
-        updated_at=utc_now_timestamp(),
+    return _delegation.without_unbound_grants(
+        replace(
+            agent,
+            id=target_id,
+            workspace=str(restored_workspace),
+            root_project_id=root_project_id,
+            updated_at=utc_now_timestamp(),
+        )
     )
 
 
@@ -347,8 +349,10 @@ def _delegation_grant_holder(store: AgentStore, grant: Grant) -> tuple[Agent | N
         data = matches[0]
         holder_id = data["id"]
     return (
-        _agent_from_dict(
-            data, data_dir=store.data_dir, default_workspace=store._default_workspace(holder_id)
+        _delegation.without_unbound_grants(
+            _agent_from_dict(
+                data, data_dir=store.data_dir, default_workspace=store._default_workspace(holder_id)
+            )
         ),
         None,
     )
@@ -370,8 +374,8 @@ def restore_delegation_grants(
 
     Each grant goes back at its recorded position only for the same holder
     incarnation, when it does not list the target yet. Missing or invalid
-    creation stamps cannot identify a holder and are skipped, including older
-    unstamped records. Best effort; returns the changed holders.
+    holder or target creation stamps cannot prove the original grant and are
+    skipped, including older unstamped records. Best effort; returns the changed holders.
     """
     changed: builtins.list[str] = []
     with store._change():
@@ -385,19 +389,18 @@ def restore_delegation_grants(
                 if holder is None or holder.id == target_id:
                     continue
                 bindings = dict(holder.delegation_bindings)
-                if "target_created_at" in grant:
-                    target_creation = grant["target_created_at"]
-                    if not isinstance(target_creation, str):
-                        continue
-                    try:
-                        parse_timestamp(target_creation)
-                    except ValueError:
-                        continue
-                    if store.exists(target_id) and not store.delegation_target_allowed(
-                        target_id, target_creation
-                    ):
-                        continue
-                    bindings[target_id] = target_creation
+                target_creation = grant.get("target_created_at")
+                if not isinstance(target_creation, str):
+                    continue
+                try:
+                    parse_timestamp(target_creation)
+                except ValueError:
+                    continue
+                if store.exists(target_id) and not store.delegation_target_allowed(
+                    target_id, target_creation
+                ):
+                    continue
+                bindings[target_id] = target_creation
                 tools = deepcopy(holder.tools)
                 subagent = tools.get("subagent")
                 if not isinstance(subagent, dict):

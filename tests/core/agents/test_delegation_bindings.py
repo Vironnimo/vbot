@@ -116,11 +116,62 @@ def test_future_grant_refuses_unavailable_or_inconsistent_history(
     assert not store.delegation_target_allowed("target", binding)
 
 
-def test_legacy_grants_are_not_reinterpreted_by_unrelated_writes(store: AgentStore) -> None:
-    store.create("holder", tools=_tools("future"))
-    rewrite(store, "holder", "delegation_bindings")
-    store.update("holder", tools=_tools("future"), name="Changed")
-    assert "delegation_bindings" not in persisted(store, "holder")
+@pytest.mark.parametrize("future", [False, True])
+def test_unproven_legacy_grants_are_revoked_once_and_can_be_deliberately_added_again(
+    store: AgentStore, monkeypatch: pytest.MonkeyPatch, future: bool
+) -> None:
+    if not future:
+        store.create("legacy")
+    store.create("proven")
+    allowed = ["holder", "legacy", "proven", "future", "teammate@project", "*"]
+    holder = store.create("holder", tools=_tools(*allowed))
+    bindings = dict(holder.delegation_bindings)
+    bindings.pop("legacy")
+    bindings.pop("holder")  # Self-delegation remains implicit without a binding.
+    rewrite(store, "holder", delegation_bindings=bindings, future_field={"kept": True})
+    before = persisted(store, "holder")
+    expected = _tools(*(target for target in allowed if target != "legacy"))
+
+    # Side-effect-free probes must already fail closed, before a repair can write.
+    probed = store.find("holder")
+    assert probed is not None and probed.tools == expected
+    assert persisted(store, "holder") == before
+    write_agent = store._write_agent
+    with monkeypatch.context() as failure:
+        failure.setattr(
+            store, "_write_agent", lambda _agent: (_ for _ in ()).throw(OSError("disk full"))
+        )
+        with pytest.raises(OSError, match="disk full"):
+            store.get("holder")
+    assert persisted(store, "holder") == before
+
+    writes: list[str] = []
+
+    def track_write(agent) -> None:
+        writes.append(agent.id)
+        write_agent(agent)
+
+    monkeypatch.setattr(store, "_write_agent", track_write)
+    migrated = store.get("holder")
+    assert migrated.tools == expected
+    assert migrated.delegation_bindings == bindings
+    assert persisted(store, "holder")["future_field"] == {"kept": True}
+    assert persisted(store, "holder")["tools"] == expected
+    assert writes == ["holder"]
+    store.get_raw("holder")
+    store.list()
+    assert writes == ["holder"]
+
+    renewed = store.update("holder", tools=_tools(*allowed), name="Changed")
+    assert "legacy" in renewed.delegation_bindings
+    if future:
+        store.create("legacy")
+    assert store.delegation_target_allowed("legacy", renewed.delegation_bindings["legacy"])
+    assert store.get("holder").tools == _tools(*allowed)
+    # Revoking the last explicit target remains self-only, never the wildcard default.
+    store.create("last", tools=_tools("legacy"))
+    rewrite(store, "last", "delegation_bindings")
+    assert store.get("last").tools == _tools()
     with pytest.raises(AgentError, match="Unknown agent fields"):
         store.update("holder", delegation_bindings={"future": 0})
 
