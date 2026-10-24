@@ -38,6 +38,7 @@ from core.projects import (
 )
 from core.runs import ActiveRunError, RunCancelledError, RunError, RunNotFoundError
 from core.sessions import SessionPageCursorError
+from core.sessions.errors import AccessorInputConflictError
 from core.storage import SettingsConflictError
 from core.tools.terminal_manager import (
     TerminalCapacityError,
@@ -67,6 +68,7 @@ from server.rpc.errors import (
     RPC_ERROR_CHANNEL_CONFIG,
     RPC_ERROR_CHANNEL_NOT_FOUND,
     RPC_ERROR_DOMAIN,
+    RPC_ERROR_INPUT_CONFLICT,
     RPC_ERROR_INVALID_REQUEST,
     RPC_ERROR_PERFORMANCE_RECORDING_ACTIVE,
     RPC_ERROR_PERFORMANCE_RECORDING_INACTIVE,
@@ -140,6 +142,8 @@ def _map_archive_error(error: ArchiveEntryError) -> RpcError:
 def _map_expected_error(error: Exception) -> RpcError:
     if isinstance(error, RpcError):
         return error
+    if isinstance(error, AccessorInputConflictError):
+        return RpcError(RPC_ERROR_INPUT_CONFLICT, str(error))
     if isinstance(error, ArchiveEntryError):
         return _map_archive_error(error)
     if isinstance(error, SessionCapabilityExpiredError):

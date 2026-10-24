@@ -22,6 +22,7 @@ from core.sessions._run_persistence import SessionRunPersistence
 from core.sessions._search_request import SessionSearchRequest
 from core.sessions._types import (
     AGENT_DEFAULT_PROJECT,
+    AccessorInputRecord,
     DeliveryReceipt,
     JsonObject,
     OwnedRunRecord,
@@ -377,6 +378,75 @@ class ChatSessionManager:
 
     def recover_interrupted_runs(self) -> None:
         return self._runs.recover_interrupted_runs()
+
+    async def accept_accessor_input_async(
+        self,
+        address: SessionAddress,
+        input_id: str,
+        *,
+        request_hash: str,
+        payload: JsonObject,
+        queue_id: str,
+        expected_generation_id: str | None = None,
+        attachment_ids: Sequence[str] = (),
+        fallback_input: ChatMessage | None = None,
+        fallback_notes: Sequence[ChatMessage] = (),
+    ) -> tuple[AccessorInputRecord, bool]:
+        """Commit ordinary input acceptance; exact retries return its original receipt."""
+        return await self._store.run_async(
+            self._store.execution.accept_accessor_input,
+            address,
+            input_id,
+            request_hash=request_hash,
+            payload=payload,
+            queue_id=queue_id,
+            expected_generation_id=expected_generation_id,
+            attachment_ids=attachment_ids,
+            fallback_input=fallback_input,
+            fallback_notes=fallback_notes,
+        )
+
+    async def lookup_accessor_input_async(
+        self, input_id: str, *, request_hash: str | None = None
+    ) -> AccessorInputRecord | None:
+        """Resolve an input before creating a new Session, including archived receipts."""
+        return await self._store.run_async(
+            self._store.execution.lookup_accessor_input, input_id, request_hash=request_hash
+        )
+
+    def queued_accessor_inputs(self) -> tuple[AccessorInputRecord, ...]:
+        """Read unclaimed inputs of live generations in acceptance order for restart."""
+        return self._store.execution.queued_accessor_inputs()
+
+    async def queued_accessor_inputs_async(self) -> tuple[AccessorInputRecord, ...]:
+        return await self._store.run_async(self.queued_accessor_inputs)
+
+    async def update_accessor_input_async(
+        self,
+        address: SessionAddress,
+        input_id: str,
+        *,
+        payload_patch: JsonObject,
+        attachment_ids: Sequence[str] | None = None,
+        fallback_input: ChatMessage | None = None,
+        fallback_notes: Sequence[ChatMessage] | None = None,
+    ) -> AccessorInputRecord:
+        """Edit queued execution context, preserving unknown payload and the request hash."""
+        return await self._store.run_async(
+            self._store.execution.update_accessor_input,
+            address,
+            input_id,
+            payload_patch=payload_patch,
+            attachment_ids=attachment_ids,
+            fallback_input=fallback_input,
+            fallback_notes=fallback_notes,
+        )
+
+    async def remove_accessor_input_async(self, address: SessionAddress, input_id: str) -> bool:
+        """Retire queued work while retaining its idempotency receipt."""
+        return await self._store.run_async(
+            self._store.execution.remove_accessor_input, address, input_id
+        )
 
     async def start_run(self, run: Run) -> None:
         return await self._runs.start_run(run)

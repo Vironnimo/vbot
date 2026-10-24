@@ -95,6 +95,7 @@ describe('ChatView Projects', () => {
           agent_id: 'alpha',
           session_id: 'session-1',
           content: 'Personal hello',
+          input_id: expect.any(String),
         },
       ]);
     });
@@ -147,6 +148,7 @@ describe('ChatView Projects', () => {
           agent_id: 'builder@vbot',
           session_id: 'builder-session',
           content: 'Hello project agent',
+          input_id: expect.any(String),
         },
       ]);
     });
@@ -200,6 +202,7 @@ describe('ChatView Projects', () => {
           agent_id: 'first@vbot',
           new_session: { agent_overrides: { thinking_effort_default: true } },
           content: 'Hello first',
+          input_id: expect.any(String),
         },
       ]);
       expect(onSessionNavigation).toHaveBeenLastCalledWith(

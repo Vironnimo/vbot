@@ -275,6 +275,7 @@ export function createChatViewLifecycle(context) {
       chatController.refreshReflections(sourceState),
   });
   const chatController = createChatController({
+    submissionScope: untrack(() => context.draftScope ?? 0),
     chatState,
     preserveSessionSelection: untrack(() => context.preserveSessionSelection),
     runStream,

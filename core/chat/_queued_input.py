@@ -110,7 +110,11 @@ async def persist_steering_input(
     )
     # The answer destination commits with the input, even if cancellation races.
     await session.append_many_async(
-        [*session.take_deferred_notes(), message], subagent_reply_target=reply_target
+        [*session.take_deferred_notes(), message],
+        subagent_reply_target=reply_target,
+        accessor_input_ids=(item.admission.accessor_input_id,)
+        if item.admission.accessor_input_id is not None
+        else (),
     )
     if request.reply_surface is not None:
         context.request = replace(context.request, reply_surface=request.reply_surface)

@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
 
 from core.agents import is_live_agent
+from core.chat._accessor_inputs import AccessorChatSubmission, AccessorInputs
 from core.chat._agentic_progression import AgenticProgression
 from core.chat._external_run import ExternalRun, start_external_run
 from core.chat._queued_input import QueuedChatInput as _QueuedRunExecutor
@@ -54,6 +55,7 @@ from core.runs import (
 from core.sessions import (
     AGENT_DEFAULT_PROJECT,
     SESSION_EPHEMERAL_META_KEY,
+    AccessorInputRecord,
     ChatSession,
     SessionAddress,
     TemporarySessionBinding,
@@ -119,6 +121,7 @@ class ChatLoop:
         self._compaction_service = compaction_service
         self._reflection_service = reflection_service
         self._session_title_service = session_title_service
+        self._accessor_inputs = AccessorInputs(self)
         wire_requests = WireRequestRunner(dependencies=dependencies)
         self._requests = RequestBuilder(dependencies, wire_requests, attachment_resolver)
         self._compaction_runs = CompactionRunCoordinator(
@@ -145,6 +148,76 @@ class ChatLoop:
     def compaction_service(self) -> CompactionService | None:
         """The loop's Compaction service; ``None`` disables Compaction."""
         return self._compaction_service
+
+    async def lookup_accessor_input(
+        self, input_id: str, *, request_hash: str
+    ) -> AccessorChatSubmission | None:
+        """Resolve a durable retry before any new Session or input expansion."""
+        return await self._accessor_inputs.lookup(input_id, request_hash)
+
+    async def submit_accessor_input(
+        self,
+        agent_id: str,
+        content: str | list[ContentBlock],
+        *,
+        input_id: str,
+        request_hash: str,
+        session_id: str | None = None,
+        new_session: bool = False,
+        agent_overrides: AgentOverrides | None = None,
+        working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT,
+        ephemeral: bool = False,
+        input_origin: InputOrigin | None = None,
+        reply_surface: ReplySurface | None = None,
+        project_id: str | None = None,
+        context_note: str | ChatMessage | None = None,
+    ) -> AccessorChatSubmission:
+        """Commit normal Accessor input and install it in the shared Run Queue."""
+        return await self._accessor_inputs.submit(
+            agent_id,
+            content,
+            input_id=input_id,
+            request_hash=request_hash,
+            session_id=session_id,
+            new_session=new_session,
+            agent_overrides=agent_overrides,
+            working_project_id=working_project_id,
+            ephemeral=ephemeral,
+            input_origin=input_origin,
+            reply_surface=reply_surface,
+            project_id=project_id,
+            context_note=context_note,
+        )
+
+    async def restore_accessor_inputs(self) -> None:
+        """Recover accepted, unstarted inputs before the server admits clients."""
+        await self._accessor_inputs.restore()
+
+    def prepare_accessor_inputs(self, records: Sequence[AccessorInputRecord]) -> None:
+        """Install startup input projections before bootstrap yields to producers."""
+        self._accessor_inputs.prepare(records)
+
+    async def remove_accessor_queued(self, address: SessionAddress, item_id: str) -> bool:
+        """Persist withdrawal before removing a queued input."""
+        return await self._accessor_inputs.remove(address, item_id)
+
+    async def steer_accessor_queued(self, address: SessionAddress, item_id: str) -> QueuedRunItem:
+        """Persist steering selection before exposing it in the Queue."""
+        return await self._accessor_inputs.steer(address, item_id)
+
+    async def update_accessor_queued(
+        self,
+        address: SessionAddress,
+        item_id: str,
+        content: str | list[ContentBlock],
+        *,
+        input_origin: InputOrigin | None = None,
+        reply_surface: ReplySurface | None = None,
+    ) -> bool:
+        """Persist edited captured input before replacing its queued executor."""
+        return await self._accessor_inputs.update(
+            address, item_id, content, input_origin=input_origin, reply_surface=reply_surface
+        )
 
     def run_executor(
         self,

@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 import pytest
 
 from core.chat import ChatMessage
-from core.chat.streaming import StreamingChunkTimeoutError
+from core.chat.streaming import StreamingChunkTimeoutError, StreamingRepetitionError
 from core.providers._responses_wire import (
     ResponsesStreamState,
     normalize_responses_stream_event,
@@ -19,6 +20,7 @@ from core.runs import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
     MODEL_STEP_USAGE_EVENT,
     STREAM_ATTEMPT_RESTARTED_EVENT,
+    RunCancelledError,
     RunInterruptedError,
     RunStatus,
 )
@@ -68,6 +70,103 @@ def _tool_call_preview(call_id: str, arguments: str) -> JsonObject:
 
 _META: JsonObject = {"type": "reasoning_meta", "reasoning_meta": {"sig": "x"}}
 _DISCARDED_REASONING: JsonObject = {"type": "reasoning_delta", "text": "Discarded plan."}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("channel", ["content", "reasoning"])
+@pytest.mark.parametrize("started_tool", [False, True])
+@pytest.mark.parametrize("prefix", ["", "Useful findings before the damaged output. [boundary]"])
+@pytest.mark.parametrize("close_cancellation", ["none", "user", "callback"])
+async def test_repetition_ends_the_run_without_replaying_corrupt_output(
+    tmp_path: Path, channel: str, started_tool: bool, prefix: str, close_cancellation: str
+) -> None:
+    executed: list[str] = []
+    tool_executed = asyncio.Event()
+    event_loop = asyncio.get_running_loop()
+
+    def run_weather(_context: Any, _arguments: Any) -> JsonObject:
+        executed.append("ran")
+        event_loop.call_soon_threadsafe(tool_executed.set)
+        return tool_success({"ok": True})
+
+    tools = ToolRegistry()
+    tools.register("get_weather", "Get weather.", {"type": "object"}, run_weather)
+    loop = "\nDegenerate repeated output with no new information. " * 40
+
+    class RepetitionAdapter(StubAdapter):
+        @override
+        async def stream(self, messages: list[JsonObject], *, model_id: str, **kwargs: Any) -> Any:
+            first_request = not self.stream_requests
+            side_effect_confirmed = False
+            try:
+                async for delta in super().stream(messages, model_id=model_id, **kwargs):
+                    yield delta
+                    # Moving past the complete Tool preview admits its call.
+                    # Let its real side effect happen before streaming enough
+                    # output to trigger the guard and its close-time Cancel.
+                    if (
+                        first_request
+                        and started_tool
+                        and not side_effect_confirmed
+                        and delta.get("type") in {"content_delta", "reasoning_delta"}
+                        and delta.get("text")
+                    ):
+                        await tool_executed.wait()
+                        side_effect_confirmed = True
+            finally:
+                if first_request and close_cancellation == "user":
+                    active = runtime.chat_runs.active_run(
+                        agent_id="coder", session_id="session-one", project_id=None
+                    )
+                    assert active is not None
+                    active.request_cancel(reason="user")
+                    # The pending cancellation interrupts this close callback's
+                    # next await; no timer or scheduling delay chooses the race.
+                    await asyncio.Event().wait()
+                elif first_request and close_cancellation == "callback":
+                    raise asyncio.CancelledError
+
+    adapter = RepetitionAdapter(
+        [],
+        stream_responses=[
+            [
+                *([_tool_call_preview("call_1", "{}")] if started_tool else []),
+                {"type": f"{channel}_delta", "text": prefix},
+                _META,
+                *[{"type": f"{channel}_delta", "text": loop} for _ in range(30)],
+                {"type": "finish", "reason": "output_truncated"},
+            ],
+            answer("The next user turn works."),
+        ],
+    )
+    runtime = stream_runtime(tmp_path, adapter, tools=tools)
+
+    with pytest.raises(
+        RunCancelledError if close_cancellation == "user" else StreamingRepetitionError
+    ):
+        await send_streaming(runtime)
+
+    assert last_run(runtime).status == (
+        RunStatus.CANCELLED if close_cancellation == "user" else RunStatus.FAILED
+    )
+    assert len(adapter.stream_requests) == 1
+    partial = next(message for message in history(runtime) if message.role == "assistant")
+    assert partial.interrupted
+    assert partial.interruption_cause == ("user" if close_cancellation == "user" else "provider")
+    assert (partial.content if channel == "content" else partial.reasoning) == prefix
+    assert partial.reasoning_meta is None
+    assert partial.reasoning_summary is None
+    assert executed == (["ran"] if started_tool else [])
+    assert [message.tool_call_id for message in history(runtime) if message.role == "tool"] == (
+        ["call_1"] if started_tool else []
+    )
+
+    await send_streaming(runtime, "Continue with the useful findings.")
+    assert len(adapter.stream_requests) == 2
+    next_context = adapter.stream_requests[1]["messages"]
+    assert "Degenerate repeated output" not in str(next_context)
+    assert last_run(runtime).status == RunStatus.COMPLETED
+    assert executed == (["ran"] if started_tool else [])
 
 
 @pytest.mark.asyncio

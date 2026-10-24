@@ -278,6 +278,7 @@ def create_app(
                 None if effective_safe_mode is not None else _start_statistics_warmup(app.state)
             )
             if effective_safe_mode is None:
+                await app_runtime.chat_loop.restore_accessor_inputs()
                 await _fire_extension_startup(app_runtime)
                 _start_speech_preload(app_runtime)
                 # A missing or incompatible runtime Model DB is detected before the

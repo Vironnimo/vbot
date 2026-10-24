@@ -371,11 +371,10 @@ class SubAgentTreeControl:
         async with self._admission_lock:
             below = await sessions.run_async(descendants, sessions, root, strict=True)
             addresses = [root, *(link.session for link in below)]
+            stopped += await manager.clear_queued_many(
+                [address for address in addresses if address != root or clear_root_queue]
+            )
             for address in addresses:
-                if address != root or clear_root_queue:
-                    stopped += manager.clear_queued(
-                        address.agent_id, address.session_id, project_id=address.project_id
-                    )
                 run = manager.active_run(
                     agent_id=address.agent_id,
                     session_id=address.session_id,

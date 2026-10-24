@@ -6,6 +6,12 @@ Bundled `vbot-docs` Skill (`resources/skills/vbot-docs/`), the Agents' guide to 
 
 | Text | Reason |
 |---|---|
+| Chat receipt: `Message ... was already accepted in Session ...; the earlier submission was not repeated.` / `Recorded input state: ...` | A historical deduplication receipt proves prior admission but supplies no live Run status; naming the recorded state prevents treating a removed Queue item as new running work. |
+| Chat receipt: `Note: the recovered answer shows its last 6000 characters.` | The exact Run lookup returns a bounded suffix; printing it as a complete answer would hide lost content. |
+| Chat receipt: `Current history or Queue could not be read; acceptance remains confirmed.` / `Next: vbot chat ... /status` | A failed reconciliation read does not undo the confirmed input or justify a new submission; the inspection retains the exact server and Session. |
+| Chat receipt refusal: `The accepted message receipt names no Session; inspect this server before sending again.` | A malformed acceptance cannot be followed or safely treated as non-admission. |
+| Chat receipt: `Its Session is no longer available.` / `references/chat.md` retired-Session acceptance sentence | A receipt survives archive/deletion and still confirms prior admission; prevents reopening or recreating its retired Session to recover an already accepted input. |
+| `references/chat.md` recovered acceptance paragraph and exit-code entry | The CLI can report confirmed admission after its one idempotent ordinary-message retry without a retained live Run; distinguishes that result from completed work and a separate CLI invocation, which creates new input. Commands retain their non-retry behavior. |
 | `projects-sessions.md` list paragraph: default 40, previews, shown/total, exact `Next:`, opaque cursor and full records via `--json` | Matches the compact listing and prevents treating a title preview as complete text, an opaque cursor as an id, or one page as the full Session history. |
 | `projects-sessions.md` Policy: `read it from list --json and keep its other fields` | Plain rows show only whether the Policy is inherited or overridden; replacing a Policy requires the full object. |
 | `projects-sessions.md` Delete: `delete moves the Session into the archive and prints how to restore it; --permanent --yes deletes it permanently.` | Describes direct reversible archiving and reserves confirmation for irreversible deletion. |

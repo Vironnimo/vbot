@@ -230,10 +230,16 @@ class SubmissionController:
     def accept(self, view: Conversation, original: JsonObject) -> None:
         view.uncertain = False
         view.uncertain_submission = None
+        view.retry_submission = None
         if view.draft == original.get("text"):
             view.draft = ""
-            if self.app.conversation is view:
-                self.app.query_one("#composer", TextArea).load_text("")
+        if self.app.conversation is view:
+            composer = self.app.query_one("#composer", TextArea)
+            if composer.text == original.get("text"):
+                # A programmatic submission can finish before TextArea's change
+                # event reaches the saved view; the composer is authoritative.
+                view.draft = ""
+                composer.load_text("")
         submitted_ids = {item["attachment_id"] for item in original.get("attachments", [])}
         view.attachments = [
             item for item in view.attachments if item["attachment_id"] not in submitted_ids
@@ -251,6 +257,7 @@ class SubmissionController:
             "project": view.project,
             "project_selected": view.project_selected,
             "draft_id": str(uuid.uuid4()),
+            "retry_submission": copy.deepcopy(view.retry_submission),
         }
 
     async def command_result(self, view: Conversation, result: JsonObject) -> None:
@@ -329,6 +336,11 @@ class SubmissionController:
                 ("The earlier message was accepted", "accepted"),
                 ("It was not accepted: restore the earlier draft", "restore"),
             ]
+            original_request = original.get("request") or {}
+            if original_request.get("input_id") and not str(
+                original.get("text", "")
+            ).lstrip().startswith("/"):
+                choices.append(("Retry the exact earlier message without duplicating it", "retry"))
             if not view.session and str(original.get("text", "")).lstrip().startswith("/"):
                 choices.append(("The Command completed without a Session", "sessionless"))
             choice = await self.app.push_screen_wait(
@@ -343,6 +355,9 @@ class SubmissionController:
                 await self.app.push_screen_wait(
                     TextDialog("Submission with unknown outcome", pretty(original), read_only=True)
                 )
+                return
+            if choice == "retry":
+                await self._dispatch(view, copy.deepcopy(original))
                 return
             if choice in {"accepted", "sessionless"}:
                 if choice == "accepted" and not view.session:
@@ -368,6 +383,9 @@ class SubmissionController:
             view.mentions = original["mentions"]
             view.uncertain = False
             view.uncertain_submission = None
+            view.retry_submission = (
+                copy.deepcopy(original) if original_request.get("input_id") else None
+            )
             self.app.query_one("#composer", TextArea).load_text(view.draft)
             self.changed(view)
             self.app._notice("Earlier draft restored. Later draft is in input history (Alt+Up).")
@@ -387,32 +405,62 @@ class SubmissionController:
             "attachments": copy.deepcopy(view.attachments),
             "mentions": list(view.mentions),
         }
-        submitted_attachments = {item["attachment_id"] for item in view.attachments}
-        submitted_mentions = set(view.mentions)
         self.pending.add(id(view))
         self.changed(view)
-        mutation_started = False
         try:
-            mention_params = view.params(draft=True)
-            request_agent = view.agent
-            mention_paths = await resolve_mentions(self.app.client, mention_params, text)
-            if not view.available or view.agent != request_agent:
-                self.app._notice(
-                    "The conversation changed while resolving files. Your draft is retained."
+            previous = view.retry_submission
+            previous_request = (previous or {}).get("request") or {}
+            if (
+                previous
+                and all(
+                    previous.get(key) == submitted[key]
+                    for key in ("text", "attachments", "mentions")
                 )
-                return
-            if mention_paths:
-                request["file_mentions"] = mention_paths
-            submitted["request"] = copy.deepcopy(request)
-            view.uncertain = True
-            view.uncertain_submission = submitted
+                and all(
+                    previous_request.get(key) == request.get(key)
+                    for key in ("agent_id", "session_id", "new_session", "reply_surface")
+                )
+            ):
+                submitted["request"] = copy.deepcopy(previous_request)
+            else:
+                if previous_request.get("new_session") is not None and view.session is None:
+                    # Editing a recovered first message starts a different input;
+                    # its proposed Session cannot belong to the earlier attempt.
+                    view.pending_session_id = new_id("ses")
+                    request["new_session"]["session_id"] = view.pending_session_id
+                mention_params = view.params(draft=True)
+                request_agent = view.agent
+                mention_paths = await resolve_mentions(self.app.client, mention_params, text)
+                if not view.available or view.agent != request_agent:
+                    self.app._notice(
+                        "The conversation changed while resolving files. Your draft is retained."
+                    )
+                    return
+                if mention_paths:
+                    request["file_mentions"] = mention_paths
+                if not text.lstrip().startswith("/"):
+                    request["input_id"] = new_id("inp")
+                submitted["request"] = copy.deepcopy(request)
+            await self._dispatch(view, submitted)
+        except ClientError as exc:
+            self.app._notice(str(exc) + " Your draft is retained.", error=True)
+            self.app.navigation.schedule_refresh()
+        finally:
+            self.pending.discard(id(view))
+
+    async def _dispatch(self, view: Conversation, submitted: JsonObject) -> None:
+        """Checkpoint and send one immutable envelope, including an explicit retry."""
+        text = submitted["text"]
+        self.pending.add(id(view))
+        view.uncertain = True
+        view.uncertain_submission = submitted
+        view.retry_submission = None
+        try:
             try:
                 await self.persist()
             except (OSError, ValueError) as exc:
                 view.uncertain = False
                 view.uncertain_submission = None
-                # The composer is the authority; its change message may still be
-                # queued, so mirror it here before persisting the view's draft.
                 view.draft = text
                 self.changed(view)
                 self.app._notice(
@@ -420,30 +468,23 @@ class SubmissionController:
                     error=True,
                 )
                 return
-            mutation_started = True
-            result = await self.app.client.rpc("chat.stream", request)
-        except ClientError as exc:
-            view.uncertain = mutation_started and exc.state == "unknown"
-            view.uncertain_submission = submitted if view.uncertain else None
-            self.changed(view)
-            self.app._notice(str(exc) + " Your draft is retained.", error=True)
-            self.app.navigation.schedule_refresh()
-            return
+            try:
+                result = await self.app.client.rpc("chat.stream", submitted["request"])
+            except ClientError as exc:
+                view.uncertain = exc.state == "unknown"
+                view.uncertain_submission = submitted if view.uncertain else None
+                if exc.state == "not_sent" and submitted["request"].get("input_id"):
+                    view.retry_submission = submitted
+                self.changed(view)
+                self.app._notice(str(exc) + " Your draft is retained.", error=True)
+                self.app.navigation.schedule_refresh()
+                return
         finally:
             self.pending.discard(id(view))
-        view.uncertain = False
-        view.uncertain_submission = None
         if text:
             self.history.append(text)
             self.history = self.history[-100:]
-        if view.draft == text:
-            view.draft = ""
-        view.attachments = [
-            item for item in view.attachments if item["attachment_id"] not in submitted_attachments
-        ]
-        view.mentions = [item for item in view.mentions if item not in submitted_mentions]
-        if self.app.conversation is view and self.app.query_one("#composer", TextArea).text == text:
-            self.app.query_one("#composer", TextArea).load_text("")
+        self.accept(view, submitted)
         await self._admitted(view, result)
 
     async def send_secret_command(self, view: Conversation, text: str, argument: str) -> None:
@@ -475,20 +516,37 @@ class SubmissionController:
 
     async def _admitted(self, view: Conversation, result: JsonObject) -> None:
         """Follow an accepted submission: its new Session, Command result and history."""
-        if result.get("session_id") and view.session is None:
-            self.app.navigation.views.pop(view.key, None)
-            view.session = result["session_id"]
+        if result.get("accepted") and result.get("session_available") is False:
             view.pending_session_id = None
-            self.app.navigation.views[view.key] = view
+            if view.session == result.get("session_id"):
+                view.available = False
+            self.changed(view)
+            self.app._notice("Earlier message was accepted; its Session is no longer available.")
+            return
+        if result.get("session_id") and view.session is None:
+            self.app.navigation.move_view(
+                view, result.get("agent_id") or view.agent, result["session_id"]
+            )
+            view.pending_session_id = None
             if self.app.conversation is view:
                 async with self.app._render_lock:
                     await self.app.transcript.clear()
+        elif (
+            result.get("session_id") and result.get("agent_id") and result["agent_id"] != view.agent
+        ):
+            self.app.navigation.move_view(view, result["agent_id"], result["session_id"])
         elif view.session is None:
             view.pending_session_id = None
         self.changed(view)
         if result.get("command_handled") and self.app.conversation is view:
             await self.command_result(view, result)
         else:
-            self.app._notice("Queued" if result.get("queued") else "Message accepted")
+            self.app._notice(
+                "Earlier message was already accepted"
+                if result.get("accepted")
+                else "Queued"
+                if result.get("queued")
+                else "Message accepted"
+            )
         if view.session:
             await self.app._guard(self.app.navigation.refresh(view))

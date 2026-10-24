@@ -7,6 +7,7 @@ from typing import Any
 JsonObject = dict[str, Any]
 
 RPC_ERROR_INVALID_REQUEST = "invalid_request"
+RPC_ERROR_INPUT_CONFLICT = "input_conflict"
 RPC_ERROR_METHOD_NOT_FOUND = "method_not_found"
 RPC_ERROR_INTERNAL = "internal_error"
 RPC_ERROR_SESSION_CAPABILITY_EXPIRED = "session_capability_expired"

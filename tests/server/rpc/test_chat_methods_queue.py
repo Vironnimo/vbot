@@ -85,6 +85,7 @@ class _QueueRuns:
 def _queue_state(runs: Any, loop: _RecordingLoop | None = None) -> SimpleNamespace:
     state = chat_state(loop)
     state.chat_runs = runs
+    state.chat_loop.manager = runs
     return state
 
 
@@ -172,7 +173,7 @@ async def test_queue_mutations_treat_unknown_and_internal_items_as_missing(
         ),
     ],
 )
-async def test_queue_update_rebuilds_the_item_under_its_address_and_resolved_session(
+async def test_queue_update_rebuilds_the_item_under_its_address(
     agent_address: str,
     project_id: str | None,
     content: Any,
@@ -181,10 +182,10 @@ async def test_queue_update_rebuilds_the_item_under_its_address_and_resolved_ses
     surface: str | None,
 ) -> None:
     # The queue key carries the project anchor, so the rebuild runs against the
-    # addressed project; the signal names the Session the rebuild resolved.
+    # addressed project; the signal names that same Session.
     item = _item("queue-1")
     runs = _QueueRuns(item)
-    loop = _RecordingLoop(resolved_session_id="resolved-s1")
+    loop = _RecordingLoop()
     state = _queue_state(runs, loop)
 
     response = await call(
@@ -211,9 +212,9 @@ async def test_queue_update_rebuilds_the_item_under_its_address_and_resolved_ses
     ]
     assert runs.list_calls == [("builder", "s1", project_id)]
     assert runs.update_calls == [
-        ("builder", "resolved-s1", "queue-1", "Edited preview", project_id, editable)
+        ("builder", "s1", "queue-1", "Edited preview", project_id, editable)
     ]
-    assert resource_changes(state, "queue") == _queue_signal("resolved-s1", project_id)
+    assert resource_changes(state, "queue") == _queue_signal("s1", project_id)
 
 
 @pytest.mark.asyncio

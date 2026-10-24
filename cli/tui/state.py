@@ -100,6 +100,7 @@ class Conversation:
     unread_output: bool = False
     uncertain: bool = False
     uncertain_submission: JsonObject | None = None
+    retry_submission: JsonObject | None = None
     pending_session_id: str | None = None
     items: list[JsonObject] = field(default_factory=list)
     facts: JsonObject = field(default_factory=dict)

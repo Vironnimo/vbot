@@ -26,6 +26,7 @@ from core.providers.errors import (
     ProviderRateLimitError,
     ProviderRequestTooLargeError,
     ProviderTimeoutError,
+    context_overflow_error,
 )
 from core.utils.http_status import (
     is_retryable_status,
@@ -290,6 +291,12 @@ def classify_http_status(
         too_large = ProviderRequestTooLargeError(detail=detail)
         too_large.status_code = status_code
         raise too_large
+
+    if status_code in {400, 422}:
+        overflow = context_overflow_error(detail)
+        if overflow is not None:
+            overflow.status_code = status_code
+            raise overflow
 
     retry_after: float | None = None
     if response_headers is not None:

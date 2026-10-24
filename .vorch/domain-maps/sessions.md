@@ -1,6 +1,6 @@
 # Sessions
 
-Canonical Session history, metadata, prompt state, completion activity, Stream drafts, and SQLite persistence.
+Canonical Session history, accepted Accessor input, metadata, prompt state, activity, Stream drafts and SQLite persistence.
 
 ## Overview
 
@@ -56,7 +56,7 @@ Temporary Session bindings, delivery receipts, Run execution owners and group ti
 ## Storage Contract
 
 - `sessions` stores one row per generation, with exactly one live row per public address and any number of archived generations. Entries, Runs, lineage, prompt state and owned relations reference the immutable surrogate `session_key`, so Agent renames and Session moves update one row.
-- `finish_run` returns the committed Chat History cursor; only then does Run management publish a persistence acknowledgement. Startup settles Runs left running as `interrupted` (`process_restart`) without replaying Model or Tool work, and Sessions writes their terminal line, which the Run manager never sees (`sessions/runs.md`).
+- `finish_run` returns the committed Chat History cursor; only then does Run management publish a persistence acknowledgement. Startup settles started Runs as `interrupted` (`process_restart`) without replay; unstarted Accessor receipts remain recoverable, and Sessions writes their terminal line, which the Run manager never sees (`sessions/runs.md`).
 - Missing live-address reads raise the typed `SessionNotFoundError` (a `ChatSessionError` subtype), allowing disposable consumers to distinguish a concurrent delete/archive race from storage failure.
 - Channel conversation pointers, conversation kinds and group participants are Channel state in `channels.db`, not Session metadata (Channel metadata keys: `channels.md`).
 

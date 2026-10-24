@@ -54,6 +54,7 @@ import { truncateSessionForEdit } from './history.js';
 import { startRun } from './runEvents.js';
 import { takeSessionInvalidations } from '../sessionInvalidation.js';
 import { resolveMoveActionFromResponse } from './addressing.js';
+import { createChatSubmissions } from './submissions.js';
 
 function defaultChatOperations() {
   return {
@@ -111,11 +112,15 @@ export function createChatController({
   onAgentSelected = () => {},
   onSessionCreated = () => {},
   onRestartQueueDiscarded = () => {},
+  submissionScope = '',
 }) {
   let handledConnectionSnapshot = null;
   let commandsLoadVersion = 0;
   let agentsLoadVersion = 0;
   let initialHistoryPending = false;
+  const submitChat = createChatSubmissions((params) =>
+    operations.startChatRun(params),
+  );
 
   // Feed positions: the newest one this owner applied, and the newest one a
   // hidden owner scanned for its displayed Session's Run starts. Those starts
@@ -384,7 +389,7 @@ export function createChatController({
         ? options.widgetStates
         : [];
     try {
-      const run = await operations.startChatRun({
+      const run = await submitChat(`${submissionScope}:${sessionState.key}`, {
         agent_id: sessionState.agentId,
         session_id: sessionState.sessionId,
         ...messageParams(content, options),
@@ -415,11 +420,21 @@ export function createChatController({
     }
     chatState.actionError = '';
     try {
-      const response = await operations.startChatRun({
-        agent_id: agentAddress,
-        new_session: newSessionParams(draft),
-        ...messageParams(content, options),
-      });
+      const response = await submitChat(
+        `${submissionScope}:${draft.key ?? `${agentAddress}::draft`}`,
+        {
+          agent_id: agentAddress,
+          new_session: newSessionParams(draft),
+          ...messageParams(content, options),
+        },
+      );
+      if (response?.accepted === true && response.session_available === false) {
+        return {
+          kind: 'accepted',
+          runId: response.run_id ?? '',
+          sessionState: null,
+        };
+      }
       const sessionId = createdSessionId(response);
       const sessionState = sessionId
         ? ensureSessionState(chatState, agentAddress, sessionId)
@@ -450,6 +465,15 @@ export function createChatController({
   // Apply an accepted message to its Session: a queued item joins the Queue,
   // a started Run attaches while the Session is displayed.
   async function admitSend(sessionState, run, previousRunId = undefined) {
+    if (run?.accepted === true && !run.sse_url) {
+      if (run.session_available !== false) {
+        await Promise.all([
+          syncSessionQueue(sessionState),
+          loadHistoryForSession(sessionState.agentId, sessionState.sessionId),
+        ]);
+      }
+      return { kind: 'accepted', runId: run.run_id ?? '' };
+    }
     if (run?.queued === true) {
       // The item may already have run while its send response was in flight.
       // Read the current Queue; the admission response cannot establish membership.

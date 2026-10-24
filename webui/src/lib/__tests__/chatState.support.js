@@ -13,6 +13,7 @@ export function setupController({
   isDisplayedSession = () => false,
   shouldLoadCurrentHistory = () => true,
   onSessionCreated = () => {},
+  submissionScope = '',
 } = {}) {
   const chatState = createChatState();
   const runStream = {
@@ -46,6 +47,7 @@ export function setupController({
     onAgentsChanged,
     onAgentSelected,
     onSessionCreated,
+    submissionScope,
   });
   return {
     chatState,

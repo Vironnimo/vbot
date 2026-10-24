@@ -3,14 +3,28 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from contextlib import nullcontext
 from typing import TYPE_CHECKING, Any
 
 from core.chat.messages import usage_token_is_estimated
 from core.chat.streaming import StreamingAccumulator, iter_with_chunk_timeout
+from core.compaction._estimates import _model_request_input_budget, _ModelRequestInput
+from core.compaction._overflow import (
+    OVERFLOW_TARGET_RATIO,
+    OVERFLOW_TOOL_CHARACTERS,
+    OverflowProjection,
+    smaller_compaction_request,
+)
 from core.compaction._workers import COMPACTION_WORKERS
 from core.compaction.errors import CompactionIncompleteError, CompactionLimitError
-from core.providers.adapter import TERMINAL_OUTCOME_STOP
+from core.providers.adapter import (
+    TERMINAL_OUTCOME_STOP,
+    estimate_wire_request_input_tokens,
+    request_input_budget,
+)
+from core.providers.errors import ProviderContextOverflowError
+from core.providers.providers import RequestInput
 from core.utils.logging import get_logger
 from core.utils.retry import compute_retry_delay
 
@@ -39,6 +53,7 @@ async def _send_streaming_model_request(
     usage_recorder: UsageRecorder | None = None,
     model_reference: str | None = None,
     input_estimate: int | None = None,
+    estimate_factor: float = 1.0,
     session_address: SessionAddress | None = None,
     run_id: str | None = None,
     owner_name: str | None = None,
@@ -55,7 +70,9 @@ async def _send_streaming_model_request(
     never be passed back through a raw-wire response parser.
 
     A retryable Provider failure is retried in place once after the shared
-    backoff. Acceptance failures and cancellation are never retried. Every
+    backoff. Confirmed Context rejection permits at most three smaller views,
+    reducing Tool observations before dropping older complete exchanges.
+    Acceptance failures and cancellation are never retried. Every
     attempt records its own Usage. One absolute deadline covers all attempts
     and their backoff, even while the Model keeps producing deltas.
 
@@ -65,41 +82,127 @@ async def _send_streaming_model_request(
     estimate calibration of ``model_reference``.
     """
     model = model_reference or str(request_options.get("model_id") or "unknown")
+    model_id = str(request_options.get("model_id") or model)
+    original_messages = messages
+    original_estimate = input_estimate
+    recovery_budget: RequestInput | None = None
+    reduction = 0
+    omitted_exchanges = 0
     budget = asyncio.timeout(MODEL_REQUEST_TIMEOUT_SECONDS)
     try:
         async with budget:
-            attempt = 0
+            transient_retries = 0
             while True:
                 if _budget_exhausted(budget):
                     raise CompactionLimitError(_TIME_LIMIT_MESSAGE)
-                attempt += 1
                 try:
-                    response = await _stream_attempt(
-                        adapter,
-                        messages,
-                        request_options,
-                        budget=budget,
-                        model=model,
-                        usage_recorder=usage_recorder,
-                        calibration=(
-                            (model_reference, input_estimate)
-                            if model_reference is not None and input_estimate is not None
-                            else None
-                        ),
-                        session_address=session_address,
-                        run_id=run_id,
-                        owner_name=owner_name,
-                        group_id=group_id,
+                    scope = (
+                        request_input_budget(model_id, recovery_budget)
+                        if recovery_budget is not None
+                        else nullcontext()
                     )
+                    with scope:
+                        response = await _stream_attempt(
+                            adapter,
+                            messages,
+                            request_options,
+                            budget=budget,
+                            model=model,
+                            usage_recorder=usage_recorder,
+                            calibration=(
+                                (model_reference, input_estimate)
+                                if model_reference is not None and input_estimate is not None
+                                else None
+                            ),
+                            session_address=session_address,
+                            run_id=run_id,
+                            owner_name=owner_name,
+                            group_id=group_id,
+                        )
                     if _budget_exhausted(budget):
                         raise CompactionLimitError(_TIME_LIMIT_MESSAGE)
+                    if omitted_exchanges:
+                        response["_compaction_omitted_exchanges"] = omitted_exchanges
                     return response
-                except Exception as error:
-                    if attempt >= MODEL_REQUEST_ATTEMPTS or not getattr(error, "retryable", False):
+                except ProviderContextOverflowError:
+
+                    def reduce_request(
+                        characters: int, omit_old_exchanges: bool
+                    ) -> tuple[OverflowProjection, _ModelRequestInput, bool]:
+                        def estimate(request: Sequence[dict[str, Any]]) -> int:
+                            return estimate_wire_request_input_tokens(
+                                adapter,
+                                request,
+                                model_id=model_id,
+                                tools=request_options.get("tools"),
+                            )
+
+                        initial = (
+                            original_estimate
+                            if original_estimate is not None
+                            else estimate(original_messages)
+                        )
+                        projected = smaller_compaction_request(
+                            original_messages,
+                            tool_characters=characters,
+                            target_tokens=round(initial * OVERFLOW_TARGET_RATIO),
+                            omit_old_exchanges=omit_old_exchanges,
+                            estimate=estimate,
+                        )
+                        counted = _model_request_input_budget(
+                            adapter,
+                            model_id,
+                            projected.messages,
+                            request_options.get("tools"),
+                            factor=estimate_factor,
+                        )
+                        return (
+                            projected,
+                            counted,
+                            _fits_reported_capacity(
+                                adapter, model_id, request_options, counted.budget
+                            ),
+                        )
+
+                    while reduction < len(OVERFLOW_TOOL_CHARACTERS):
+                        characters = OVERFLOW_TOOL_CHARACTERS[reduction]
+                        reduction += 1
+                        projected, counted, fits = await COMPACTION_WORKERS.run(
+                            reduce_request,
+                            characters,
+                            reduction == len(OVERFLOW_TOOL_CHARACTERS),
+                        )
+                        previous_estimate = input_estimate
+                        if previous_estimate is None:
+                            previous_estimate = await COMPACTION_WORKERS.run(
+                                estimate_wire_request_input_tokens,
+                                adapter,
+                                messages,
+                                model_id=model_id,
+                                tools=request_options.get("tools"),
+                            )
+                        if (
+                            fits
+                            and projected.messages != messages
+                            and counted.estimated < previous_estimate
+                        ):
+                            messages = projected.messages
+                            input_estimate = counted.estimated
+                            recovery_budget = counted.budget
+                            omitted_exchanges = projected.omitted_exchanges
+                            break
+                    else:
                         raise
+                except Exception as error:
+                    if transient_retries >= MODEL_REQUEST_ATTEMPTS - 1 or not getattr(
+                        error, "retryable", False
+                    ):
+                        raise
+                    transient_retries += 1
                     hint = getattr(error, "retry_after", None)
                     delay, _ = compute_retry_delay(
-                        attempt - 1, retry_after=hint if isinstance(hint, (int, float)) else None
+                        transient_retries - 1,
+                        retry_after=hint if isinstance(hint, (int, float)) else None,
                     )
                     _LOGGER.debug(
                         "Compaction Model request failed; retrying once in %.2fs "
@@ -116,6 +219,32 @@ async def _send_streaming_model_request(
         if not budget.expired():
             raise
         raise CompactionLimitError(_TIME_LIMIT_MESSAGE) from error
+
+
+def _fits_reported_capacity(
+    adapter: Any, model_id: str, options: dict[str, Any], request_input: RequestInput
+) -> bool:
+    """Skip a rescue view that a known Provider limit already makes impossible.
+
+    Called only after a confirmed remote overflow. The Adapter remains the
+    authority for its output allowance; this admission check does not invent a
+    window when none was reported, or enable recovery for a local-only failure.
+    """
+    input_limit = getattr(adapter, "input_token_limit", None)
+    limit = input_limit(model_id) if callable(input_limit) else None
+    if isinstance(limit, int) and limit > 0 and request_input.tokens > limit:
+        return False
+    reported = getattr(adapter, "reported_context_window", None)
+    window = reported(model_id) if callable(reported) else None
+    if not isinstance(window, int) or window <= 0:
+        return True
+    minimum = getattr(adapter, "minimum_output_tokens", None)
+    reserve = (
+        minimum(model_id, options.get("thinking_effort"), explicit_limit=options.get("max_tokens"))
+        if callable(minimum)
+        else 0
+    )
+    return request_input.tokens + max(1, reserve) <= window
 
 
 async def _stream_attempt(

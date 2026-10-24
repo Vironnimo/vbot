@@ -609,6 +609,9 @@
     sessionSettings,
     activity,
     reportAgentSelected,
+    get draftScope() {
+      return draftScope;
+    },
     get active() {
       return active;
     },

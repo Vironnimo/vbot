@@ -498,6 +498,47 @@ CREATE TABLE checkpoint_projections (
   projection_json TEXT NOT NULL CHECK (json_valid(projection_json) AND json_type(projection_json) = 'array')
 ) STRICT;
 
+-- Ordinary Accessor acceptance receipts and recoverable queued inputs. They
+-- belong to this exact Session generation, never a fork or materialized copy.
+CREATE TABLE session_accessor_inputs (
+  input_key INTEGER PRIMARY KEY,
+  input_id TEXT NOT NULL UNIQUE,
+  session_key INTEGER NOT NULL REFERENCES sessions (session_key) ON DELETE CASCADE,
+  queue_id TEXT NOT NULL UNIQUE,
+  request_hash TEXT NOT NULL,
+  state TEXT NOT NULL,
+  run_key INTEGER REFERENCES runs (run_key) ON DELETE SET NULL,
+  created_at TEXT NOT NULL
+) STRICT;
+
+-- Queued-input restoration in acceptance order.
+CREATE INDEX session_accessor_inputs_queued ON session_accessor_inputs (input_key) WHERE state = 'queued';
+-- Session purge and exact-generation ownership checks.
+CREATE INDEX session_accessor_inputs_by_session ON session_accessor_inputs (session_key, input_key);
+-- Run foreign-key cleanup.
+CREATE INDEX session_accessor_inputs_by_run ON session_accessor_inputs (run_key);
+
+CREATE TABLE session_accessor_input_payloads (
+  input_key INTEGER PRIMARY KEY REFERENCES session_accessor_inputs (input_key) ON DELETE CASCADE,
+  payload_json TEXT NOT NULL CHECK (json_valid(payload_json) AND json_type(payload_json) = 'object')
+) STRICT;
+
+-- The accepted canonical User carrier, independently of Chat's execution format,
+-- until History or terminal settlement preserves it.
+CREATE TABLE session_accessor_input_carriers (
+  input_key INTEGER PRIMARY KEY REFERENCES session_accessor_inputs (input_key) ON DELETE CASCADE,
+  message_json TEXT NOT NULL CHECK (json_valid(message_json) AND json_type(message_json) = 'object'),
+  notes_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(notes_json) AND json_type(notes_json) = 'array')
+) STRICT;
+
+CREATE TABLE session_accessor_input_attachments (
+  input_key INTEGER NOT NULL REFERENCES session_accessor_inputs (input_key) ON DELETE CASCADE,
+  attachment_id TEXT NOT NULL,
+  PRIMARY KEY (input_key, attachment_id)
+) STRICT, WITHOUT ROWID;
+-- Attachment lifecycle collection and snapshot reachability.
+CREATE INDEX session_accessor_input_attachments_by_id ON session_accessor_input_attachments (attachment_id);
+
 -- The streamed output of a running Run's current Model step that no Assistant
 -- entry holds yet, in append order. Appending the Run's next Assistant entry
 -- and finishing the Run delete it; restart recovery turns what is left into

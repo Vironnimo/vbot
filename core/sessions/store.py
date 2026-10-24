@@ -10,9 +10,11 @@ from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from core.chat.errors import ChatSessionError
 from core.database import Database, DatabaseError, open_database
 from core.database.snapshots import read_retained_snapshot_members
 from core.sessions import (
+    _store_accessor_inputs,
     _store_archive,
     _store_attachments,
     _store_external_notes,
@@ -503,6 +505,7 @@ class SessionStore:
         seen_skills: SeenSkillsUpdate | None = None,
         subagent_reply_target: str | None = None,
         since: SessionReadCursor | None = None,
+        accessor_input_ids: Sequence[str] = (),
     ) -> SessionReadBatch | None:
         """Append Messages in one transaction.
 
@@ -517,6 +520,15 @@ class SessionStore:
         """
 
         def _fn(connection: sqlite3.Connection) -> _store_history.HistoryDelta | None:
+            steering = None
+            if accessor_input_ids:
+                if not messages:
+                    raise ChatSessionError("Steered Accessor inputs require transcript messages")
+                steering = _store_accessor_inputs.prepare_steering(
+                    connection, address, accessor_input_ids, run_id
+                )
+                if steering is None:
+                    return self._select_since(connection, address, since)
             if subagent_reply_target is not None:
                 _store_mutations.record_subagent_reply_target(
                     connection, address, subagent_reply_target
@@ -534,6 +546,8 @@ class SessionStore:
                 _store_prompts.record_seen_skills(
                     connection, int(state["session_key"]), seen_skills
                 )
+            if steering is not None:
+                _store_accessor_inputs.commit_steering(connection, steering)
             return self._select_since(connection, address, since)
 
         delta = self._execute_write(_fn, patience_s=TRANSCRIPT_WRITE_PATIENCE_S)

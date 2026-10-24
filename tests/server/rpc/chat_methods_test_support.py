@@ -6,10 +6,13 @@ import asyncio
 from collections import OrderedDict
 from collections.abc import Callable
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 from core.chat import ChatMessage, CommandDispatcher
-from core.runs import ActiveRunError, ChatRunManager, QueuedRunItem, Run
+from core.chat.messages import queue_content_is_editable
+from core.runs import ActiveRunError, ChatRunManager, QueuedRunItem, Run, RunCancelledError
+from core.sessions import SessionAddress
+from core.sessions.errors import AccessorInputConflictError
 from server.events import ServerEventBus
 from server.file_delivery import FileDelivery
 from tests.server.rpc_test_support import call, resource_changes
@@ -64,6 +67,92 @@ class _RecordingLoop:
         self._queued_run = queued_run
         self._cancel_queued = cancel_queued
         self._resolved_session_id = resolved_session_id
+        self.submissions: dict[str, Any] = {}
+        self.submission_calls: list[JsonObject] = []
+        self.manager: Any = None
+
+    async def lookup_accessor_input(self, input_id: str, *, request_hash: str) -> Any:
+        previous = self.submissions.get(input_id)
+        if previous is not None and previous.record.request_hash != request_hash:
+            raise AccessorInputConflictError("input id already names different input")
+        return previous
+
+    async def submit_accessor_input(
+        self, agent_id: str, content: Any, *, input_id: str, request_hash: str, **kwargs: Any
+    ) -> Any:
+        self.submission_calls.append(
+            {"agent_id": agent_id, "content": content, "input_id": input_id, **kwargs}
+        )
+        previous = await self.lookup_accessor_input(input_id, request_hash=request_hash)
+        if previous is not None:
+            return previous
+        new_session = kwargs.pop("new_session", False)
+        if new_session and kwargs.get("session_id") is None:
+            kwargs["session_id"] = "new-session"
+        item = None
+        run: Run | None = None
+        try:
+            run = await self.start_run(agent_id, content, **kwargs)
+        except ActiveRunError:
+            item = await self.queue_run(agent_id, content, **kwargs)
+            if item.future.cancelled():
+                raise RunCancelledError(f"queued run cancelled: {item.item_id}") from None
+            run = item.future.result() if item.future.done() else None
+        record = SimpleNamespace(
+            input_id=input_id,
+            address=SessionAddress(kwargs.get("project_id"), agent_id, kwargs["session_id"]),
+            request_hash=request_hash,
+            state="run" if run is not None else "queued",
+            run_id=run.id if run is not None else None,
+            live=True,
+        )
+        result = SimpleNamespace(record=record, run=run, queued_item=item if run is None else None)
+        self.submissions[input_id] = result
+        return result
+
+    async def remove_accessor_queued(self, address: SessionAddress, item_id: str) -> bool:
+        return bool(
+            self.manager.remove_queued(
+                address.agent_id, address.session_id, item_id, project_id=address.project_id
+            )
+        )
+
+    async def steer_accessor_queued(self, address: SessionAddress, item_id: str) -> QueuedRunItem:
+        return cast(
+            QueuedRunItem,
+            self.manager.steer_queued(
+                address.agent_id, address.session_id, item_id, project_id=address.project_id
+            ),
+        )
+
+    async def update_accessor_queued(
+        self, address: SessionAddress, item_id: str, content: Any, **kwargs: Any
+    ) -> bool:
+        items = getattr(self.manager, "items", None)
+        if items is None:
+            items = self.manager.list_queued(
+                address.agent_id, address.session_id, project_id=address.project_id
+            )
+        item = next(item for item in items if item.item_id == item_id)
+        resolved_id, executor, display = await self.build_queue_update(
+            address.agent_id,
+            address.session_id,
+            content,
+            item,
+            project_id=address.project_id,
+            **kwargs,
+        )
+        return bool(
+            self.manager.update_queued(
+                address.agent_id,
+                resolved_id,
+                item_id,
+                executor,
+                display,
+                project_id=address.project_id,
+                editable=queue_content_is_editable(content),
+            )
+        )
 
     async def start_run(self, agent_id: str, content: Any, **kwargs: Any) -> Run:
         if self.start_error is not None:
@@ -155,7 +244,7 @@ class CurrentSessionAgents:
 def chat_state(loop: _RecordingLoop | None = None, **runtime: Any) -> SimpleNamespace:
     """Minimal server state for chat RPCs: a recording loop, real Runs and event bus."""
     runtime.setdefault("agents", CurrentSessionAgents())
-    return SimpleNamespace(
+    state = SimpleNamespace(
         chat_loop=loop or _RecordingLoop(),
         chat_runs=ChatRunManager(),
         command_dispatcher=CommandDispatcher(ChatRunManager()),
@@ -164,6 +253,8 @@ def chat_state(loop: _RecordingLoop | None = None, **runtime: Any) -> SimpleName
         file_delivery=FileDelivery(),
         runtime=SimpleNamespace(chat_sessions=_InlineSessionPool(), **runtime),
     )
+    state.chat_loop.manager = state.chat_runs
+    return state
 
 
 async def bridged_run_ids(state: Any) -> set[str]:

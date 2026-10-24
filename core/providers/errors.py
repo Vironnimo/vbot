@@ -8,7 +8,9 @@ utility can decide whether to re-attempt the call.
 
 import json
 import math
+import re
 from collections.abc import Mapping
+from contextlib import suppress
 from datetime import UTC, datetime, timedelta, tzinfo
 from typing import Any
 
@@ -71,6 +73,83 @@ class ProviderRequestTooLargeError(ProviderError):
                 + ". Reduce the request size, for example by sending fewer or smaller images."
             )
         super().__init__(message, retryable=False)
+
+
+class ProviderContextOverflowError(ProviderError):
+    """The Provider rejected the request because its input exceeds the Context window.
+
+    An unchanged retry cannot help. Consumers may explicitly project a smaller
+    request; local estimates and output-limit validation never raise this error.
+    """
+
+    failure_class = "rejected"
+    code = "provider_context_overflow"
+
+    def __init__(self, message: str = "") -> None:
+        super().__init__(message, retryable=False)
+
+
+_CONTEXT_OVERFLOW_CODES = frozenset({"context_length_exceeded", "exceed_context_size_error"})
+_GENERIC_REQUEST_ERROR_CODES = frozenset(
+    {
+        "error",
+        "invalid_request_error",
+        "invalid_request",
+        "bad_request",
+        "invalid_argument",
+        "INVALID_ARGUMENT",
+    }
+)
+_CONTEXT_OVERFLOW_TEXT = re.compile(
+    r"prompt is too long: \d+ tokens > \d+ maximum"
+    r"|exceed context limit: \d+ \+ \d+ > \d+"
+    r"|exceeds the model's maximum context length of \d+ tokens"
+    r"|this (?:model|endpoint)'s maximum context length is \d+ tokens[^\r\n]*requested"
+    r"|(?:your input|input|request) exceeds the context window",
+    re.IGNORECASE,
+)
+
+
+def context_overflow_error(
+    detail: str, *, classifier: str | None = None
+) -> ProviderContextOverflowError | None:
+    """Normalize explicit remote Context rejection evidence, never a generic token limit.
+
+    HTTP callers pass only rejected 400/422 bodies; stream callers pass their
+    extracted error classifier. Parsing the trailing JSON also recognizes a
+    compatible server's structured code when the HTTP detail has a status prefix.
+    """
+    if classifier in _CONTEXT_OVERFLOW_CODES:
+        return ProviderContextOverflowError(detail)
+    if classifier is not None and classifier not in _GENERIC_REQUEST_ERROR_CODES:
+        return None
+    start = detail.find("{")
+    payload: Any = None
+    if start >= 0:
+        with suppress(ValueError, RecursionError):
+            payload = json.loads(detail[start:])
+    if isinstance(payload, Mapping):
+        error = payload.get("error", payload)
+        if isinstance(error, Mapping):
+            metadata = error.get("metadata")
+            metadata = metadata if isinstance(metadata, Mapping) else {}
+            codes = [
+                value
+                for value in (
+                    metadata.get("error_type"),
+                    error.get("error_type"),
+                    error.get("code"),
+                    error.get("type"),
+                )
+                if isinstance(value, str)
+            ]
+            if any(code in _CONTEXT_OVERFLOW_CODES for code in codes):
+                return ProviderContextOverflowError(detail)
+            if any(code not in _GENERIC_REQUEST_ERROR_CODES for code in codes):
+                return None
+    if _CONTEXT_OVERFLOW_TEXT.search(detail):
+        return ProviderContextOverflowError(detail)
+    return None
 
 
 class ProviderStreamingUnsupportedError(ProviderError):
@@ -375,12 +454,15 @@ def classify_in_band_error_type(
         return ProviderTimeoutError(message)
     if classifier in IN_BAND_TRANSIENT_ERROR_CODES or numeric_code in {502, 503}:
         return _build(True)
-    if classifier in IN_BAND_FATAL_ERROR_CODES:
-        return _build(False)
     # Payment required: missing credits or a spending limit need the user, so
     # no retry or router leniency helps (OpenRouter's in-flight budget, which a
     # later attempt can pass, is classified before this).
     if numeric_code == 402:
+        return _build(False)
+    overflow = context_overflow_error(message, classifier=classifier)
+    if overflow is not None:
+        return overflow
+    if classifier in IN_BAND_FATAL_ERROR_CODES:
         return _build(False)
     if hints.get("retryable") is True:
         return _build(True)

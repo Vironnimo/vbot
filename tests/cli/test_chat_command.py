@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import ANY
 
 import httpx
 import pytest
@@ -188,7 +189,12 @@ def test_chat_starts_a_session_and_prints_the_answer(
     assert rpc.calls == [
         (
             "chat.stream",
-            {"agent_id": "main", "content": "What is vBot?", "new_session": new_session},
+            {
+                "agent_id": "main",
+                "content": "What is vBot?",
+                "new_session": new_session,
+                "input_id": ANY,
+            },
         ),
     ]
     # Events the chat.stream reply already carried are not requested again.
@@ -418,6 +424,7 @@ def test_chat_continue_without_a_conversation_starts_a_new_session(
         "agent_id": "coder@vbot",
         "content": "Go on",
         "new_session": {},
+        "input_id": ANY,
     }
     assert "s-new" in err
 
@@ -441,6 +448,7 @@ def test_chat_reads_the_message_from_piped_stdin(
         "agent_id": "main",
         "session_id": "s-given",
         "content": "Summarize this\nsecond line",
+        "input_id": ANY,
     }
 
 
@@ -605,7 +613,85 @@ def test_chat_json_reports_the_run_as_one_object(
         "agent_overrides": {"model": MODEL},
         "queue_item": None,
         "command": None,
+        "input_id": rpc.params("chat.stream")["input_id"],
     }
+
+
+@pytest.mark.parametrize(
+    ("prompt", "refused", "attempts"),
+    [("Hello", False, 2), ("/status", False, 1), ("Hello", True, 1)],
+)
+def test_chat_retries_only_ordinary_unknown_submissions(
+    rpc: FakeRpc,
+    run_stream: FakeRunStream,
+    run_cli: RunCli,
+    prompt: str,
+    refused: bool,
+    attempts: int,
+) -> None:
+    if refused:
+        rpc.fail("chat.stream", "input_conflict", "Input already used for different content")
+    else:
+        rpc.respond("chat.stream", [])
+        reply_run(rpc, "s-new")
+    if attempts == 2:
+        run_stream.connection(answer(3, "Recovered."), completed(4))
+
+    code, out, _err = run_cli("chat", prompt)
+
+    assert code == (0 if attempts == 2 else 1)
+    assert len(rpc.calls) == attempts
+    params = rpc.calls[0][1]
+    if prompt.startswith("/"):
+        assert "input_id" not in params
+    else:
+        assert isinstance(params["input_id"], str) and params["input_id"]
+    if attempts == 2:
+        assert rpc.calls[1][1] == params
+        assert out == "Recovered.\n"
+
+
+@pytest.mark.parametrize(("run_id", "available"), [(None, True), (RUN_ID, True), (RUN_ID, False)])
+def test_chat_reconciles_a_historical_receipt_without_new_work(
+    rpc: FakeRpc, run_cli: RunCli, run_id: str | None, available: bool
+) -> None:
+    rpc.respond("chat.stream", [])
+    receipt: dict[str, Any] = {
+        "accepted": True,
+        "session_id": "s-new",
+        "input_state": "removed" if run_id is None else "run",
+        "session_available": available,
+        "agent_id": "renamed",
+    }
+    if run_id:
+        receipt["run_id"] = run_id
+        rpc.reply(
+            "chat.run_result", {"found": True, "content": "Earlier answer", "truncated": True}
+        )
+    rpc.reply("chat.stream", receipt)
+    rpc.reply("chat.timeline", {"items": []})
+    rpc.reply("chat.queue_list", {"items": []})
+
+    code, out, _err = run_cli("chat", "--json", "Hello")
+
+    assert code == 0
+    report = json.loads(out)
+    assert report["status"] == "accepted"
+    assert report["run_id"] == run_id
+    assert report["input_state"] == receipt["input_state"]
+    assert report["input_id"] == rpc.calls[0][1]["input_id"]
+    assert rpc.calls[0] == rpc.calls[1]
+    assert rpc.methods == ["chat.stream", "chat.stream"] + (
+        ["chat.timeline", "chat.queue_list"] + (["chat.run_result"] if run_id else [])
+        if available
+        else []
+    )
+    assert report["agent_id"] == "renamed"
+    assert report["session_available"] is available
+    if available:
+        assert rpc.params("chat.timeline")["agent_id"] == "renamed"
+    assert report["message"] == ("Earlier answer" if run_id and available else "")
+    assert report["truncated"] is bool(run_id and available)
 
 
 def test_chat_reports_tool_calls_errors_and_retries_as_progress_on_stderr(

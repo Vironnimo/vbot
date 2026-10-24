@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -16,6 +17,7 @@ from core.chat.streaming import (
     StreamingAccumulator,
     StreamingDeltaBatcher,
     StreamingDeltaError,
+    StreamingRepetitionError,
     StreamingVisibleDelta,
 )
 from core.providers.errors import NetworkError, ProviderStreamingUnsupportedError
@@ -85,6 +87,53 @@ def test_partial_text_and_final_readable_phase_follow_each_channel() -> None:
     assert accumulator.ends_with_reasoning is True
     assert accumulator.partial_content == "Hello world"
     assert accumulator.partial_reasoning == "Plan misrouted tail"
+
+
+@pytest.mark.parametrize("channel", ["content", "reasoning"])
+@pytest.mark.parametrize("chunk_size", [1, 317, 200_000])
+def test_stream_repetition_removes_only_the_degenerate_suffix(
+    channel: str, chunk_size: int
+) -> None:
+    accumulator = StreamingAccumulator()
+    prefix = "Useful findings before the damaged output. [boundary]"
+    accumulator.add_delta({"type": f"{channel}_delta", "text": prefix})
+    accumulator.add_delta({"type": "reasoning_meta", "reasoning_meta": {"signature": "opaque"}})
+    repeated = "\nThe same generated paragraph repeats without making progress. " * 3_000
+
+    with pytest.raises(StreamingRepetitionError) as failure:
+        for offset in range(0, len(repeated), chunk_size):
+            accumulator.add_delta(
+                {"type": f"{channel}_delta", "text": repeated[offset : offset + chunk_size]}
+            )
+
+    assert failure.value.channel == channel
+    fields = accumulator.finalize_partial_fields()
+    retained = fields.content if channel == "content" else fields.reasoning
+    assert retained == prefix
+    assert fields.reasoning_meta is None
+    assert fields.reasoning_summary is None
+    assert fields.usage is not None
+    assert fields.usage["output_tokens"] > 100  # Includes the removed generation.
+    assert fields.usage["output_tokens_estimated"] is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Requested repeated phrase. " * 150,
+        "\n".join(f"| shared table prefix | row {index:04d} |" for index in range(1_600)),
+        "\n".join(
+            f"INSERT INTO events VALUES ({index}, 'same literal');" for index in range(1_600)
+        ),
+        "\n".join(f"2026-10-24 repeated log message: attempt={index}" for index in range(1_600)),
+    ],
+    ids=["ordinary-repeat", "table", "code", "log"],
+)
+def test_stream_repetition_accepts_short_repeats_and_varying_structured_output(text: str) -> None:
+    accumulator = StreamingAccumulator()
+    for offset in range(0, len(text), 317):
+        accumulator.add_delta({"type": "content_delta", "text": text[offset : offset + 317]})
+    assert accumulator.finalize_assistant_fields().content == text
 
 
 def test_batches_adjacent_visible_deltas_at_bounded_cadence() -> None:
@@ -617,15 +666,30 @@ def test_model_requests_stream_outside_the_documented_fallbacks() -> None:
 class _BreakingStreamAdapter:
     """Streams the given deltas, then raises; ``send`` answers with one text."""
 
-    def __init__(self, deltas: list[JsonObject], error: Exception) -> None:
+    def __init__(
+        self,
+        deltas: list[JsonObject],
+        error: Exception,
+        *,
+        close_error: BaseException | None = None,
+    ) -> None:
         self.deltas = deltas
         self.error = error
         self.sent = 0
+        self.closed = False
+        self.yielded = 0
+        self.close_error = close_error
 
     async def stream(self, messages: list[JsonObject], *, model_id: str, **_: Any) -> Any:
-        for delta in self.deltas:
-            yield delta
-        raise self.error
+        try:
+            for delta in self.deltas:
+                self.yielded += 1
+                yield delta
+            raise self.error
+        finally:
+            self.closed = True
+            if self.close_error is not None:
+                raise self.close_error
 
     async def send(self, messages: list[JsonObject], *, model_id: str, **_: Any) -> JsonObject:
         self.sent += 1
@@ -685,3 +749,83 @@ async def test_stream_model_response_reports_usage_before_a_break() -> None:
     with pytest.raises(NetworkError):
         await streaming_module.stream_model_response(broken, [], model_id="m", on_usage=observe)
     assert reported == [{"input_tokens": 9}, {"input_tokens": 9, "output_tokens": 2}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("started_tool", [False, True])
+@pytest.mark.parametrize(
+    "close_error", [None, NetworkError("transport cleanup failed"), asyncio.CancelledError()]
+)
+@pytest.mark.parametrize(
+    ("reported_output", "observer_failure"), [(4_000, False), (None, False), (None, True)]
+)
+async def test_stream_model_response_stops_repetition_and_closes_the_transport(
+    started_tool: bool,
+    close_error: BaseException | None,
+    reported_output: int | None,
+    observer_failure: bool,
+) -> None:
+    handed_out: list[str] = []
+    reported: list[JsonObject] = []
+
+    def observe(usage: JsonObject) -> None:
+        reported.append(usage)
+        if observer_failure:
+            raise RuntimeError("usage observer failed")
+
+    prefix = "Useful findings before the damaged output. [boundary]"
+    deltas = [_tool_delta('{"a":1}', name="first", id="call_1")] if started_tool else []
+    usage_delta: JsonObject = {"type": "usage", "input_tokens": 9}
+    if reported_output is not None:
+        usage_delta["output_tokens"] = reported_output
+    deltas.extend(
+        [
+            {"type": "content_delta", "text": prefix},
+            usage_delta,
+            *[
+                {"type": "content_delta", "text": "Repeated paragraph without progress. " * 100}
+                for _ in range(20)
+            ],
+        ]
+    )
+    adapter = _BreakingStreamAdapter(
+        deltas,
+        AssertionError("read past the repetition guard"),
+        close_error=close_error,
+    )
+
+    with pytest.raises(
+        StreamBrokenAfterToolCallsError
+        if started_tool
+        else asyncio.CancelledError
+        if isinstance(close_error, asyncio.CancelledError)
+        else StreamingRepetitionError
+    ) as failure:
+        await streaming_module.stream_model_response(
+            adapter,
+            [],
+            model_id="m",
+            on_tool_calls=lambda calls: handed_out.extend(call["id"] for call in calls),
+            on_usage=observe,
+        )
+
+    assert adapter.closed
+    assert adapter.yielded < len(deltas)
+    assert adapter.sent == 0
+    assert handed_out == (["call_1"] if started_tool else [])
+    assert reported[-1]["input_tokens"] == 9
+    if reported_output is not None:
+        assert all(
+            usage == {"input_tokens": 9, "output_tokens": reported_output} for usage in reported
+        )
+    else:
+        assert reported[0] == {"input_tokens": 9}
+        assert reported[-1]["output_tokens"] > 100  # Includes the removed generation.
+        assert reported[-1]["output_tokens_estimated"] is True
+        assert reported[-1]["estimated"] is True
+    if started_tool:
+        assert isinstance(failure.value, StreamBrokenAfterToolCallsError)
+        assert isinstance(failure.value.cause, StreamingRepetitionError)
+        assert failure.value.response["content"] == prefix
+        assert failure.value.response["usage"] == reported[-1]
+        assert [call["id"] for call in failure.value.response["tool_calls"]] == ["call_1"]

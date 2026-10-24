@@ -4,10 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from core.chat import (
-    ChatLoop,
-    queue_content_is_editable,
-)
+from core.chat import ChatLoop
 from core.runs import ChatRunManager, QueuedRunItem
 from core.sessions import (
     SessionAddress,
@@ -72,7 +69,7 @@ def _chat_queue_list(state: Any, params: JsonObject) -> JsonObject:
     return {"items": [item.to_dict() for item in items]}
 
 
-def _chat_queue_steer(state: Any, params: JsonObject) -> JsonObject:
+async def _chat_queue_steer(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"agent_id", "session_id", "item_id"}, "chat.queue_steer")
     address = _required_session_address(params)
     item_id = _required_string(params, "item_id")
@@ -80,16 +77,14 @@ def _chat_queue_steer(state: Any, params: JsonObject) -> JsonObject:
         manager: ChatRunManager = state.chat_runs
         if _public_queue_item(manager, address, item_id) is None:
             raise RpcError(RPC_ERROR_QUEUE_ITEM_NOT_FOUND, f"queued item not found: {item_id}")
-        item = manager.steer_queued(
-            address.agent_id, address.session_id, item_id, project_id=address.project_id
-        )
+        item = await state.chat_loop.steer_accessor_queued(address, item_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     _publish_queue_changed(state, address)
     return {"item": item.to_dict()}
 
 
-def _chat_queue_remove(state: Any, params: JsonObject) -> JsonObject:
+async def _chat_queue_remove(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"agent_id", "session_id", "item_id"}, "chat.queue_remove")
 
     address = _required_session_address(params)
@@ -104,9 +99,7 @@ def _chat_queue_remove(state: Any, params: JsonObject) -> JsonObject:
                 RPC_ERROR_QUEUE_ITEM_STEERING,
                 "queued item is being delivered into the running Run and can no longer be removed",
             )
-        removed = chat_runs.remove_queued(
-            address.agent_id, address.session_id, item_id, project_id=address.project_id
-        )
+        removed = await state.chat_loop.remove_accessor_queued(address, item_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
@@ -163,38 +156,19 @@ async def _chat_queue_update(state: Any, params: JsonObject) -> JsonObject:
         # the same anchor; otherwise a project session is looked up in the identity
         # anchor and the rebuild fails with session-not-found.
         chat_loop: ChatLoop = state.chat_loop
-        (
-            resolved_session_id,
-            updated_executor,
-            updated_display_content,
-        ) = await chat_loop.build_queue_update(
-            address.agent_id,
-            address.session_id,
-            content,
-            queued_item,
-            input_origin=input_origin,
-            project_id=address.project_id,
-            reply_surface=reply_surface,
-        )
-        updated = chat_runs.update_queued(
-            address.agent_id,
-            resolved_session_id,
+        updated = await chat_loop.update_accessor_queued(
+            address,
             item_id,
-            updated_executor,
-            updated_display_content,
-            project_id=address.project_id,
-            editable=queue_content_is_editable(content),
+            content,
+            input_origin=input_origin,
+            reply_surface=reply_surface,
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
     if not updated:
         raise RpcError(RPC_ERROR_QUEUE_ITEM_NOT_FOUND, f"queued item not found: {item_id}")
-    # Scope on the resolved session id — content can move an item to a different
-    # session, and that resolved id (not the raw input) is what was mutated.
-    _publish_queue_changed(
-        state, SessionAddress(address.project_id, address.agent_id, resolved_session_id)
-    )
+    _publish_queue_changed(state, address)
     return {"ok": True}
 
 

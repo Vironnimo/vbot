@@ -105,6 +105,7 @@ class ChatSession:
         seen_skills: SeenSkillsUpdate | None = None,
         subagent_reply_target: str | None = None,
         since: SessionReadCursor | None = None,
+        accessor_input_ids: Sequence[str] = (),
     ) -> SessionReadBatch | None:
         """Append *messages*; see ``SessionStore.append_messages`` for the options."""
         delta = self._store.append_messages(
@@ -116,6 +117,7 @@ class ChatSession:
             seen_skills=seen_skills,
             subagent_reply_target=subagent_reply_target,
             since=since,
+            accessor_input_ids=accessor_input_ids,
         )
         self._appended(messages)
         return delta
@@ -218,6 +220,7 @@ class ChatSession:
         seen_skills: SeenSkillsUpdate | None = None,
         subagent_reply_target: str | None = None,
         since: SessionReadCursor | None = None,
+        accessor_input_ids: Sequence[str] = (),
     ) -> SessionReadBatch | None:
         if not messages and seen_skills is None and subagent_reply_target is None:
             return None
@@ -228,6 +231,7 @@ class ChatSession:
                 seen_skills=seen_skills,
                 subagent_reply_target=subagent_reply_target,
                 since=since,
+                accessor_input_ids=accessor_input_ids,
             )
         )
 

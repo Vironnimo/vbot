@@ -222,6 +222,7 @@ class RunAdmission:
     work_id: str | None = None
     owner: RunExecutionOwner | None = None
     input_id: str | None = None
+    accessor_input_id: str | None = None
     # The Session a background review Run examines from its own fork; accessors
     # attribute the review to that Session without reading fork metadata.
     source_session_id: str | None = None
@@ -335,6 +336,7 @@ class Run:
         work_id: str | None = None,
         execution_owner: RunExecutionOwner | None = None,
         execution_input_id: str | None = None,
+        accessor_input_id: str | None = None,
         source_session_id: str | None = None,
         expected_session_generation_id: str | None = None,
         completion_activity: CompletionActivity | None = None,
@@ -350,6 +352,7 @@ class Run:
         self.project_id = project_id
         self.execution_owner = execution_owner
         self.execution_input_id = execution_input_id
+        self.accessor_input_id = accessor_input_id
         # Internal working context. This never participates in Session identity,
         # public addressing, events, or queue keys.
         self.working_project_id = working_project_id

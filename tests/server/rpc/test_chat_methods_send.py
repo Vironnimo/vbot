@@ -43,6 +43,71 @@ from tests.server.rpc_test_support import (
 WEBUI = ReplySurface.webui()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("new_session", [False, True])
+async def test_submission_identity_replays_before_file_expansion_or_session_creation(
+    monkeypatch: pytest.MonkeyPatch, new_session: bool
+) -> None:
+    from unittest.mock import AsyncMock
+
+    expand = AsyncMock(side_effect=lambda _state, _address, content, *_args, **_kwargs: content)
+    monkeypatch.setattr("server.rpc.chat_methods._expand_content_file_mentions", expand)
+    loop = _RecordingLoop()
+    state = chat_state(loop)
+    params = {
+        "agent_id": "builder",
+        "content": "Inspect @notes.md",
+        "input_id": "input-once",
+        "file_mentions": ["notes.md"],
+        **({"new_session": {"session_id": "s1"}} if new_session else {"session_id": "s1"}),
+    }
+    first = await call(state, "chat.stream", **params)
+    second = await call(state, "chat.send", **dict(reversed(list(params.items()))))
+
+    assert first["ok"] is second["ok"] is True
+    assert first["result"]["input_id"] == second["result"]["input_id"] == "input-once"
+    assert first["result"]["run_id"] == second["result"]["run_id"]
+    assert len(loop.start_calls) == len(loop.submission_calls) == expand.await_count == 1
+
+    conflict = await call(state, "chat.stream", **{**params, "content": "Different input"})
+    assert conflict["error"]["code"] == "input_conflict"
+    assert len(loop.start_calls) == expand.await_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("busy", [False, True])
+async def test_duplicate_submission_reports_live_queue_or_retained_receipt(busy: bool) -> None:
+    loop = _RecordingLoop(busy=busy)
+    state = chat_state(loop)
+    params = {
+        "agent_id": "builder",
+        "session_id": "s1",
+        "content": "Once",
+        "input_id": "input-once",
+    }
+    first = await call(state, "chat.stream", **params)
+    if busy:
+        replay = await call(state, "chat.stream", **params)
+        assert replay["result"]["item"]["id"] == first["result"]["item"]["id"]
+        assert len(loop.queue_calls) == 1
+    receipt = loop.submissions["input-once"]
+    receipt.run = receipt.queued_item = None
+    receipt.record.state = "removed" if busy else "run"
+    receipt.record.live = False
+
+    replay = await call(state, "chat.stream", **params)
+    assert replay["result"] == {
+        "accepted": True,
+        "input_id": "input-once",
+        "agent_id": "builder",
+        "session_id": "s1",
+        "session_available": False,
+        "input_state": receipt.record.state,
+        **({"run_id": receipt.record.run_id} if receipt.record.run_id else {}),
+    }
+    assert len(loop.submission_calls) == 1
+
+
 # ---------------------------------------------------------------------------
 # Submission path (recording chat loop)
 # ---------------------------------------------------------------------------
@@ -156,6 +221,10 @@ async def test_submission_parses_content_blocks_and_forwards_the_input_origin(
         ("chat.stream", {"session_id": "s1", "reply_surface": None}, "reply_surface"),
         ("chat.stream", {"new_session": {}, "dry_run": True}, "dry_run"),
         ("chat.send", {"session_id": "s1", "content": 123}, None),
+        *[
+            ("chat.stream", {"session_id": "s1", "input_id": value}, "input_id")
+            for value in (None, True, "", " ", "has space", "a" * 129)
+        ],
         (
             "chat.stream",
             {"session_id": "s1", "content": "Hi", "input_origin": "paste"},
@@ -242,10 +311,6 @@ async def test_send_snapshots_mentioned_files_into_the_content(
         storage=SimpleNamespace(data_dir=str(tmp_path)),
         file_read_state=file_state,
     )
-    state.chat_loop = SimpleNamespace(
-        start_run=loop.start_run, start_run_in_new_session=loop.start_run
-    )
-
     await call(
         state,
         "chat.send",
@@ -317,7 +382,12 @@ async def test_busy_session_queues_the_message_and_signals_the_queue(
     item = loop.queued_items[0]
     assert response == {
         "ok": True,
-        "result": {"queued": True, "session_id": "s1", "item": item.to_dict()},
+        "result": {
+            "queued": True,
+            "session_id": "s1",
+            "item": item.to_dict(),
+            "input_id": loop.submission_calls[0]["input_id"],
+        },
     }
     expected_origin = {} if origin is None else {"input_origin": origin}
     assert loop.queue_calls == [

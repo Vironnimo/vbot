@@ -355,6 +355,7 @@ describe('ChatView Sessions', () => {
             },
           },
           content: 'First message',
+          input_id: expect.any(String),
         },
       ]);
       // The created Session replaces the draft's history entry.
@@ -383,6 +384,7 @@ describe('ChatView Sessions', () => {
         agent_id: 'alpha',
         session_id: 'created-alpha',
         content: 'Second message',
+        input_id: expect.any(String),
       });
     });
 
@@ -1058,6 +1060,7 @@ describe('ChatView Sessions', () => {
             agent_id: override.agentId,
             session_id: override.sessionId,
             content: 'Continue child work',
+            input_id: expect.any(String),
           },
         ]);
         expect(selectedAgentName()).toBe(scenario.childAgentName);
@@ -1258,6 +1261,7 @@ describe('ChatView Sessions', () => {
           agent_id: 'librarian',
           session_id: 'lib-1',
           content: 'Why did you merge deploy?',
+          input_id: expect.any(String),
         },
       ]);
     });

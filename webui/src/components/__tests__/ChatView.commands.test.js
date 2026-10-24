@@ -335,6 +335,7 @@ describe('ChatView slash commands', () => {
               },
             },
             content: 'First draft message',
+            input_id: expect.any(String),
           },
         ]);
       },

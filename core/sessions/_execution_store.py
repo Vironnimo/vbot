@@ -13,6 +13,7 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING
 
 from core.sessions import (
+    _store_accessor_inputs,
     _store_commands,
     _store_extension_results,
     _store_external_notes,
@@ -21,7 +22,7 @@ from core.sessions import (
     _store_runs,
 )
 from core.sessions._archive_types import ArchiveEntryRef
-from core.sessions._types import JsonObject, OwnedRunRecord, RecoveredRun
+from core.sessions._types import AccessorInputRecord, JsonObject, OwnedRunRecord, RecoveredRun
 
 if TYPE_CHECKING:
     from core.chat.messages import ChatMessage
@@ -48,6 +49,77 @@ class SessionExecutionStore:
 
     def __init__(self, store: SessionStore) -> None:
         self._store = store
+
+    def accept_accessor_input(
+        self,
+        address: SessionAddress,
+        input_id: str,
+        *,
+        request_hash: str,
+        payload: JsonObject,
+        queue_id: str,
+        expected_generation_id: str | None,
+        attachment_ids: Sequence[str],
+        fallback_input: ChatMessage | None,
+        fallback_notes: Sequence[ChatMessage],
+    ) -> tuple[AccessorInputRecord, bool]:
+        row, created = self._store._execute_write(
+            lambda connection: _store_accessor_inputs.accept(
+                connection,
+                address,
+                input_id,
+                request_hash=request_hash,
+                payload=payload,
+                queue_id=queue_id,
+                expected_generation_id=expected_generation_id,
+                attachment_ids=attachment_ids,
+                fallback_input=fallback_input,
+                fallback_notes=fallback_notes,
+            )
+        )
+        return _store_accessor_inputs.decode(row), created
+
+    def lookup_accessor_input(
+        self, input_id: str, *, request_hash: str | None = None
+    ) -> AccessorInputRecord | None:
+        row = self._store._read(
+            lambda connection: _store_accessor_inputs.lookup(
+                connection, input_id, request_hash=request_hash
+            )
+        )
+        return None if row is None else _store_accessor_inputs.decode(row)
+
+    def queued_accessor_inputs(self) -> tuple[AccessorInputRecord, ...]:
+        rows = self._store._read(_store_accessor_inputs.queued)
+        return tuple(_store_accessor_inputs.decode(row) for row in rows)
+
+    def update_accessor_input(
+        self,
+        address: SessionAddress,
+        input_id: str,
+        *,
+        payload_patch: JsonObject,
+        attachment_ids: Sequence[str] | None,
+        fallback_input: ChatMessage | None,
+        fallback_notes: Sequence[ChatMessage] | None,
+    ) -> AccessorInputRecord:
+        row = self._store._execute_write(
+            lambda connection: _store_accessor_inputs.update(
+                connection,
+                address,
+                input_id,
+                payload_patch=payload_patch,
+                attachment_ids=attachment_ids,
+                fallback_input=fallback_input,
+                fallback_notes=fallback_notes,
+            )
+        )
+        return _store_accessor_inputs.decode(row)
+
+    def remove_accessor_input(self, address: SessionAddress, input_id: str) -> bool:
+        return self._store._execute_write(
+            lambda connection: _store_accessor_inputs.remove(connection, address, input_id)
+        )
 
     def admit_run(self, address: SessionAddress, admission: SessionRunAdmission) -> None:
         """Admit one Run with its Run kind and execution owner in one transaction."""

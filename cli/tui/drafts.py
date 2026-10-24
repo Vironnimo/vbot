@@ -45,6 +45,7 @@ _FIELDS = frozenset(
         "overrides",
         "uncertain",
         "uncertain_submission",
+        "retry_submission",
         "pending_session_id",
     }
 )
@@ -100,14 +101,15 @@ def _validate(value: Any) -> list[JsonDiagnostic]:
         _validate_input(record, location, errors)
         if not isinstance(record.get("overrides"), dict):
             add_error(errors, f"{location}.overrides", "must be an object")
-        submission = record.get("uncertain_submission")
-        if submission is not None:
-            if not isinstance(submission, dict):
-                add_error(errors, f"{location}.uncertain_submission", "must be an object or null")
-            else:
-                _validate_input(submission, f"{location}.uncertain_submission", errors)
-                if not isinstance(submission.get("text"), str):
-                    add_error(errors, f"{location}.uncertain_submission.text", "must be a string")
+        for field in ("uncertain_submission", "retry_submission"):
+            submission = record.get(field)
+            if submission is not None:
+                if not isinstance(submission, dict):
+                    add_error(errors, f"{location}.{field}", "must be an object or null")
+                else:
+                    _validate_input(submission, f"{location}.{field}", errors)
+                    if not isinstance(submission.get("text"), str):
+                        add_error(errors, f"{location}.{field}.text", "must be a string")
         recovery = record.get("edit_recovery")
         if recovery is not None and (
             not isinstance(recovery, dict)
@@ -178,6 +180,7 @@ def saved_input_record(value: JsonObject) -> JsonObject:
         draft=kept_draft(value["text"]),
         attachments=copy.deepcopy(value.get("attachments", [])),
         mentions=list(value.get("mentions", [])),
+        retry_submission=copy.deepcopy(value.get("retry_submission")),
     )
     record = {key: copy.deepcopy(getattr(view, key)) for key in _FIELDS}
     if value.get("operation") == "chat.edit":

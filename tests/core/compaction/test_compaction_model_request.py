@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import copy
+import json
+import random
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any, cast, override
 
+import httpx
 import pytest
+import respx
 
 import core.compaction._model_request as model_request
 from core.chat.streaming import (
@@ -15,12 +20,13 @@ from core.chat.streaming import (
     StreamingProgressTimeoutError,
     iter_with_chunk_timeout,
 )
+from core.chat.wire_shaping import system_reminder_request_message
 from core.compaction import CompactionError, CompactionService, CompactionSettings
 from core.compaction._model_request import _send_streaming_model_request
 from core.compaction.compaction import COMPACTION_REFERENCE_PREFIX, COMPACTION_SUMMARY_END_MARKER
-from core.providers.adapter import resolve_request_input_budget
+from core.providers.adapter import is_request_context_message, resolve_request_input_budget
 from core.providers.anthropic import AnthropicAdapter
-from core.providers.errors import NetworkError
+from core.providers.errors import NetworkError, ProviderContextOverflowError
 from core.providers.ollama import OllamaAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.providers import RequestInput
@@ -32,8 +38,10 @@ from tests.core.compaction.compaction_test_support import (
     assistant,
     compact,
     provider_request,
+    tool_step,
     user,
 )
+from tests.core.providers import openai_compatible_test_support as compatible
 
 
 @pytest.mark.asyncio
@@ -309,10 +317,18 @@ async def test_compaction_request_reads_and_teaches_its_input_estimate_calibrati
         (["output_truncated"], ["failed"], ["incomplete"]),
         (["cancelled"], ["cancelled"], [None]),
         (["rejected"], ["failed"], ["provider"]),
+        (["overflow"], ["failed"], ["rejected"]),
         (["dropped", "stop"], ["failed", "completed"], ["network", None]),
         (["dropped", "dropped"], ["failed", "failed"], ["network", "network"]),
     ],
-    ids=["truncated", "cancelled", "fatal-provider-error", "dropped-once", "dropped-twice"],
+    ids=[
+        "truncated",
+        "cancelled",
+        "fatal-provider-error",
+        "unreducible-context-overflow",
+        "dropped-once",
+        "dropped-twice",
+    ],
 )
 async def test_compaction_attempts_retain_usage_and_retry_a_transient_failure_once(
     monkeypatch: pytest.MonkeyPatch,
@@ -335,6 +351,8 @@ async def test_compaction_attempts_retain_usage_and_retry_a_transient_failure_on
                 raise asyncio.CancelledError
             if outcome == "rejected":
                 raise ProviderError("bad request", retryable=False)
+            if outcome == "overflow":
+                raise ProviderContextOverflowError("context rejected")
             if outcome == "dropped":
                 # A connection lost mid-stream surfaces as a retryable error.
                 raise NetworkError("stream dropped")
@@ -388,6 +406,272 @@ async def test_compaction_attempts_retain_usage_and_retry_a_transient_failure_on
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("strategy", ["summary_tail", "continuation"])
+@pytest.mark.parametrize(
+    ("outcomes", "earlier_user_characters"),
+    [
+        (["stop"], 0),
+        (["overflow", "stop"], 0),
+        (["overflow", "stop"], 80_000),
+        (["overflow", "overflow", "overflow", "stop"], 0),
+        (["overflow", "overflow", "overflow", "overflow"], 0),
+        (["overflow", "dropped", "overflow", "stop"], 0),
+        (["overflow", "dropped", "dropped"], 0),
+    ],
+    ids=[
+        "unchanged",
+        "reduced",
+        "observations-before-earlier-user-input",
+        "three-reductions",
+        "bounded",
+        "shared-recovery",
+        "transient-budget",
+    ],
+)
+async def test_compaction_reduces_only_rejected_requests_and_preserves_tool_cycles(
+    monkeypatch: pytest.MonkeyPatch,
+    strategy: str,
+    outcomes: list[str],
+    earlier_user_characters: int,
+) -> None:
+    waits = []
+
+    async def record_wait(delay: float) -> None:
+        waits.append(delay)
+
+    class RejectedAdapter(StubAdapter):
+        def __init__(self) -> None:
+            super().__init__("SUMMARY")
+            self.budgets: list[RequestInput] = []
+            self.estimates: list[int] = []
+
+        def estimate_request_input_tokens(self, messages, *, model_id, tools=None):
+            return sum(len(str(item.get("content", ""))) // 4 + 1 for item in messages) + 5 * len(
+                tools or []
+            )
+
+        @override
+        async def stream(self, messages, **kwargs):
+            self.requests.append({"messages": messages, **kwargs})
+            self.budgets.append(resolve_request_input_budget(kwargs["model_id"], -1))
+            self.estimates.append(
+                self.estimate_request_input_tokens(
+                    messages, model_id=kwargs["model_id"], tools=kwargs.get("tools")
+                )
+            )
+            yield {"type": "usage", "input_tokens": self.estimates[-1]}
+            outcome = outcomes[len(self.requests) - 1]
+            if outcome == "overflow":
+                raise ProviderContextOverflowError("context rejected")
+            if outcome == "dropped":
+                raise NetworkError("stream dropped")
+            yield {"type": "content_delta", "text": self.text}
+            yield {"type": "finish", "reason": "stop"}
+
+    monkeypatch.setattr(model_request, "_sleep", record_wait)
+    adapter = RejectedAdapter()
+    recorder = RecordingUsageRecorder()
+    messages = [
+        user("u1", "USER SENTINEL" + "u" * earlier_user_characters),
+        *tool_step("large", "HEAD SENTINEL\n" + "x" * 20_000 + "\nTAIL SENTINEL"),
+        assistant("answer", "ANSWER SENTINEL"),
+        user("u2", "LATEST USER SENTINEL"),
+    ]
+    original = copy.deepcopy([item.to_dict() for item in messages])
+    request = provider_request(messages)
+    request_before = copy.deepcopy(request)
+    tools = [{"type": "function", "function": {"name": "read", "parameters": {}}}]
+    operation = compact(
+        messages,
+        service=CompactionService(usage_recorder=cast(Any, recorder)),
+        summary_adapter=adapter,
+        summary_model_id="model",
+        summary_model_reference="openai/model",
+        active_adapter=adapter,
+        active_model_id="model",
+        active_model_reference="openai/model",
+        active_tools=tools,
+        estimate_factor=1.5,
+        settings=CompactionSettings(strategy=strategy, tail_tokens=1),
+        request_messages=request,
+    )
+    if outcomes[-1] == "stop":
+        checkpoint = await operation
+        assert checkpoint.usage is not None
+        assert checkpoint.usage["model_call"]["usage"]["usage_call_id"] == recorder.calls[-1]["id"]
+    else:
+        with pytest.raises(CompactionError):
+            await operation
+
+    assert len(adapter.requests) == len(outcomes)
+    assert request == request_before
+    assert [item.to_dict() for item in messages] == original
+    first = adapter.requests[0]["messages"]
+    # The initial request keeps the cache-friendly native prefix unchanged.
+    assert first[:-1] == request_before[: len(first) - 1]
+    latest = next(
+        item
+        for item in reversed(first)
+        if item["role"] == "user" and not is_request_context_message(item)
+    )
+    for sent in adapter.requests:
+        assert latest in sent["messages"]
+        if earlier_user_characters:
+            # Even when clipping observations alone misses a sizing target,
+            # do not discard earlier User requirements at the first level.
+            assert first[1] in sent["messages"]
+        assert sent["tools"] == tools
+        [call] = [item for item in sent["messages"] if item.get("tool_calls")]
+        [result] = [item for item in sent["messages"] if item["role"] == "tool"]
+        assert result["tool_call_id"] == call["tool_calls"][0]["id"] == "call-large"
+        assert result["name"] == "read"
+        assert "HEAD SENTINEL" in result["content"] and "TAIL SENTINEL" in result["content"]
+    assert adapter.budgets == [
+        RequestInput.estimate(round(count * 1.5)) for count in adapter.estimates
+    ]
+    expected_statuses = ["completed" if outcome == "stop" else "failed" for outcome in outcomes]
+    assert [call["status"] for call in recorder.calls] == expected_statuses
+    assert recorder.input_estimates == [
+        ("openai/model", count, count) for count in adapter.estimates
+    ]
+    for previous, current, outcome in zip(
+        adapter.estimates, adapter.estimates[1:], outcomes, strict=False
+    ):
+        assert current < previous if outcome == "overflow" else current == previous
+    assert len(waits) == (1 if "dropped" in outcomes else 0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("strategy", ["summary_tail", "continuation"])
+@pytest.mark.parametrize(
+    "text", ["Summary", "", _MARKERS_ONLY], ids=["summary", "empty", "framing-only"]
+)
+async def test_compaction_omits_only_old_complete_exchanges_after_context_rejection(strategy, text):
+    class RejectedAdapter(StubAdapter):
+        @override
+        async def stream(self, messages, **kwargs):
+            self.requests.append({"messages": messages, **kwargs})
+            if len(self.requests) == 1:
+                raise ProviderContextOverflowError("context rejected")
+            yield {"type": "content_delta", "text": text}
+            yield {"type": "finish", "reason": "stop"}
+
+    messages = [
+        user("old", "OLD USER SENTINEL " + "a" * 30_000),
+        *tool_step("old", "old observation"),
+        assistant("old-answer", "old answer"),
+        user("latest", "LATEST USER SENTINEL"),
+        *tool_step("latest", "LATEST OBSERVATION SENTINEL"),
+        assistant("latest-answer", "latest answer"),
+    ]
+    request = provider_request(messages)
+    prior_checkpoint = system_reminder_request_message("[compaction-summary] PRIOR SENTINEL")
+    request.insert(1, prior_checkpoint)
+    before = copy.deepcopy(request)
+    adapter = RejectedAdapter()
+    operation = compact(
+        messages,
+        summary_adapter=adapter,
+        summary_model_id="model",
+        active_adapter=adapter,
+        active_model_id="model",
+        request_messages=request,
+        settings=CompactionSettings(strategy=strategy, tail_tokens=1),
+    )
+    if text == "Summary":
+        checkpoint = await operation
+        # The limitation is deterministic checkpoint context, not just a suggestion
+        # the summary Model could forget to carry forward.
+        assert str(checkpoint.content).index("Summary") > str(checkpoint.content).index("Session")
+    else:
+        with pytest.raises(CompactionError):
+            await operation
+    assert len(adapter.requests) == 2
+    first, reduced = [item["messages"] for item in adapter.requests]
+    assert reduced[:2] == first[:2] == before[:2]
+    assert [item["id"] for item in reduced if "id" in item] == [
+        "system-1",
+        *(
+            item["id"]
+            for item in first
+            if item.get("id") in {"latest", "a-latest", "t-latest", "latest-answer"}
+        ),
+    ]
+    assert reduced[-1] == first[-1]
+    assert is_request_context_message(reduced[-2])
+    assert request == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("strategy", ["summary_tail", "continuation"])
+@pytest.mark.parametrize("context_window", [4096, 1024, 128])
+async def test_compaction_recovers_remote_overflow_after_the_adapter_learns_a_smaller_window(
+    strategy,
+    context_window,
+):
+    adapter = compatible.make_adapter(model=compatible.catalog_model(reasoning=False))
+    text = "".join(random.Random(0).choices("abcdefghijklmnopqrstuvwxyz", k=30_000))
+    messages = [user("u1", "REQUEST"), *tool_step("large", text), assistant("a1", "answer")]
+    try:
+        with respx.mock:
+            route = respx.post(compatible.OPENAI_URL).mock(
+                side_effect=[
+                    httpx.Response(
+                        400,
+                        json={
+                            "error": {
+                                "code": "context_length_exceeded",
+                                "message": "This model's maximum context length is "
+                                f"{context_window} tokens. "
+                                "However, you requested 20000 tokens.",
+                            }
+                        },
+                    ),
+                    compatible.sse_response(
+                        compatible.sse(
+                            {
+                                "choices": [
+                                    {
+                                        "delta": {"content": "SUMMARY"},
+                                        "finish_reason": "stop",
+                                    }
+                                ]
+                            }
+                        )
+                    ),
+                ]
+            )
+            operation = compact(
+                messages,
+                summary_adapter=adapter,
+                summary_model_id=compatible.MODEL_ID,
+                active_adapter=adapter,
+                active_model_id=compatible.MODEL_ID,
+                request_messages=provider_request(messages),
+                settings=CompactionSettings(strategy=strategy, tail_tokens=1),
+            )
+            if context_window == 128:
+                # No candidate fits even after exhausting all observation caps.
+                # Do not make another doomed Adapter/HTTP attempt.
+                with pytest.raises(CompactionError) as failure:
+                    await operation
+                assert isinstance(failure.value.__cause__, ProviderContextOverflowError)
+                assert route.call_count == 1
+                return
+            checkpoint = await operation
+        assert checkpoint.role == "compaction_checkpoint"
+        assert route.call_count == 2
+        assert adapter.reported_context_window(compatible.MODEL_ID) == context_window
+        first, second = [json.loads(call.request.content) for call in route.calls]
+        [original] = [item["content"] for item in first["messages"] if item["role"] == "tool"]
+        [reduced] = [item["content"] for item in second["messages"] if item["role"] == "tool"]
+        assert len(reduced) < len(original)
+        assert messages[2].content == text
+    finally:
+        await adapter.aclose()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("heartbeats", [False, True])
 async def test_compaction_stalled_stream_is_bounded_and_closed(monkeypatch, heartbeats):
     closed = asyncio.Event()
@@ -432,6 +716,7 @@ async def test_compaction_stalled_stream_is_bounded_and_closed(monkeypatch, hear
         "suppressed-cancellation",
         "hot-content",
         "hot-finish",
+        "overflow",
     ],
 )
 async def test_compaction_deadline_covers_active_output_and_recovery(monkeypatch, phase):
@@ -468,6 +753,8 @@ async def test_compaction_deadline_covers_active_output_and_recovery(monkeypatch
                 yield {"type": "usage", "input_tokens": 75}
                 if phase in {"retry", "backoff", "suppressed-backoff"} and attempts == 1:
                     raise NetworkError("stream dropped")
+                if phase == "overflow" and attempts == 1:
+                    raise ProviderContextOverflowError("context rejected")
                 try:
                     while True:
                         emitted += 1
@@ -505,6 +792,8 @@ async def test_compaction_deadline_covers_active_output_and_recovery(monkeypatch
     recorder = RecordingUsageRecorder()
     adapter = ActiveAdapter()
     messages = [user("u1", "Request"), assistant("a1", "Answer")]
+    if phase == "overflow":
+        messages[1:1] = tool_step("large", "observation " * 1000)
     with pytest.raises(CompactionError) as failure:
         await asyncio.wait_for(
             compact(
@@ -530,11 +819,13 @@ async def test_compaction_deadline_covers_active_output_and_recovery(monkeypatch
         assert emitted <= 3
     else:
         assert budgets[0].expired()
-    assert closed == attempts == (2 if phase == "retry" else 1)
+    assert closed == attempts == (2 if phase in {"retry", "overflow"} else 1)
     assert emitted >= 2 or phase in {"backoff", "suppressed-backoff"}
     assert [call["status"] for call in recorder.calls] == ["failed"] * attempts
     # A dropped stream fails before the deadline; the deadline stops the rest.
     dropped = ["network"] if phase in {"retry", "backoff", "suppressed-backoff"} else []
+    if phase == "overflow":
+        dropped = ["rejected"]
     limited = [] if phase in {"backoff", "suppressed-backoff"} else ["limit"]
     assert [call["failure_class"] for call in recorder.calls] == dropped + limited
     assert all(call["usage"]["input_tokens"] == 75 for call in recorder.calls)
@@ -550,6 +841,7 @@ async def test_compaction_summary_limit_rejects_without_retry_and_closes(
     closed = 0
     attempts = 0
     waits = []
+    text = "".join(random.Random(0).choices("abcdefghijklmnopqrstuvwxyz", k=characters))
 
     async def record_wait(delay: float) -> None:
         waits.append(delay)
@@ -561,8 +853,8 @@ async def test_compaction_summary_limit_rejects_without_retry_and_closes(
             attempts += 1
             try:
                 yield {"type": "usage", "input_tokens": 75}
-                yield {"type": "content_delta", "text": "S" * 50_000}
-                yield {"type": "content_delta", "text": "S" * (characters - 50_000)}
+                yield {"type": "content_delta", "text": text[:50_000]}
+                yield {"type": "content_delta", "text": text[50_000:]}
                 yield {"type": "finish", "reason": "stop"}
             finally:
                 closed += 1
@@ -585,7 +877,7 @@ async def test_compaction_summary_limit_rejects_without_retry_and_closes(
     )
     if characters == 100_000:
         checkpoint = await operation
-        assert "S" * characters in str(checkpoint.content)
+        assert text in str(checkpoint.content)
         expected_status = "completed"
     else:
         with pytest.raises(CompactionError):

@@ -20,6 +20,7 @@ from core.debug.store import DebugTraceStore
 from core.providers.errors import (
     NetworkError,
     ProviderAuthError,
+    ProviderContextOverflowError,
     ProviderError,
     ProviderRateLimitError,
     ProviderRequestTooLargeError,
@@ -162,6 +163,62 @@ def test_unusable_provider_json_is_a_fatal_error_naming_the_provider(
         (401, False, {"Retry-After": "9"}, "401 bad key", ProviderAuthError, False, None),
         # Chat retires delivered images and retries smaller after a body-size rejection.
         (413, False, None, "413 body too large", ProviderRequestTooLargeError, False, None),
+        (
+            400,
+            False,
+            None,
+            '400 {"error":{"code":"context_length_exceeded"}}',
+            ProviderContextOverflowError,
+            False,
+            None,
+        ),
+        (
+            422,
+            False,
+            None,
+            '422 {"error":{"type":"exceed_context_size_error"}}',
+            ProviderContextOverflowError,
+            False,
+            None,
+        ),
+        (
+            400,
+            False,
+            None,
+            '400 {"error":{"type":"invalid_request_error",'
+            '"message":"prompt is too long: 208310 tokens > 200000 maximum"}}',
+            ProviderContextOverflowError,
+            False,
+            None,
+        ),
+        (
+            400,
+            False,
+            None,
+            '400 {"error":{"code":["context_length_exceeded"]}}',
+            ProviderError,
+            False,
+            None,
+        ),
+        (
+            429,
+            False,
+            None,
+            '429 {"error":{"code":"token_limit_exceeded"}}',
+            ProviderRateLimitError,
+            True,
+            None,
+        ),
+        (
+            400,
+            False,
+            None,
+            '400 {"error":{"code":"content_policy_violation",'
+            '"message":"prompt is too long: 208310 tokens > 200000 maximum"}}',
+            ProviderError,
+            False,
+            None,
+        ),
     ],
     ids=[
         "rate-limit-retry-after",
@@ -174,6 +231,12 @@ def test_unusable_provider_json_is_a_fatal_error_naming_the_provider(
         "fatal-ignores-hint",
         "auth-ignores-hint",
         "request-too-large",
+        "context-overflow-structured-code",
+        "context-overflow-compatible-type",
+        "context-overflow-explicit-prompt-length",
+        "malformed-error-code-stays-generic",
+        "token-quota-is-not-context-overflow",
+        "explicit-refusal-beats-context-wording",
     ],
 )
 def test_error_status_raises_the_classified_error_with_status_detail_and_hint(

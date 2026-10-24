@@ -363,7 +363,7 @@ async def test_automatic_compaction_waits_for_the_next_runs_request(
 ) -> None:
     adapter = RecordingCompactionAdapter(
         [
-            {"content": "LONG_FINAL " * 8_000},
+            {"content": "".join(f"LONG_FINAL {index}\n" for index in range(8_000))},
             {"content": "NEXT_ANSWER"},
         ],
         summaries=["SUMMARY"],
