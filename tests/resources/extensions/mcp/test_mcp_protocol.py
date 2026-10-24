@@ -403,13 +403,13 @@ async def test_connections_reach_only_permitted_addresses(server, target, connec
 
 
 async def _stop_sse_shutdown_watcher() -> None:
-    """Cancel the shutdown watcher sse-starlette leaves behind after an in-process server.
+    """Cancel sse-starlette's watcher and reset its process-wide shutdown flag.
 
-    sse-starlette runs one watcher per Event Loop that polls until a running uvicorn
-    server exits. Since 3.5.0 it looks the server up again on every poll, and once
-    ``serve()`` has returned there is none, so the watcher would keep polling on the
-    worker's shared Event Loop during every later test.
+    Tests reuse one Event Loop. If the watcher observes an in-process server stop
+    before cancellation, its flag makes later SSE responses close at handshake.
     """
+    from sse_starlette.sse import AppStatus
+
     watchers = [
         task
         for task in asyncio.all_tasks()
@@ -418,6 +418,7 @@ async def _stop_sse_shutdown_watcher() -> None:
     for task in watchers:
         task.cancel()
     await asyncio.gather(*watchers, return_exceptions=True)
+    AppStatus.should_exit = False
 
 
 @pytest.mark.asyncio
