@@ -30,6 +30,7 @@ from core.utils.retry import retry_async
 
 if TYPE_CHECKING:
     from core.debug import ProviderDebugRecorder
+    from core.providers.http import ProviderHTTPTransportScope
 
 
 NATIVE_MODELS_ENDPOINT = "/api/v1/models"
@@ -53,6 +54,7 @@ class LMStudioAdapter(OpenAICompatibleAdapter):
         debug_recorder: ProviderDebugRecorder | None = None,
         *,
         connection_mode: str | None = None,
+        http_transport: ProviderHTTPTransportScope | None = None,
         local_context_resolver: Callable[[str], int | None] | None = None,
         loaded_context_reporter: Callable[[str, int | None], None] | None = None,
     ) -> None:
@@ -78,6 +80,7 @@ class LMStudioAdapter(OpenAICompatibleAdapter):
             model_lookup,
             debug_recorder,
             connection_mode=connection_mode,
+            http_transport=http_transport,
         )
 
     @classmethod

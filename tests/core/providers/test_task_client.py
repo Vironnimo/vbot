@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+import pytest_asyncio
 import respx
 
 from core.debug import DebugContext, DebugTraceStore, ProviderDebugRecorder
@@ -25,6 +26,7 @@ from core.providers.errors import (
     ProviderError,
     ProviderOutcomeUnknownError,
 )
+from core.providers.http import ProviderHTTPTransports, ProviderHTTPTransportScope
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.providers.task_client import (
     DEFAULT_TASK_REQUEST_RETRY_POLICY,
@@ -34,6 +36,7 @@ from core.providers.task_client import (
     classify_task_response,
     merge_extra_options,
 )
+from core.providers.token_getter import TokenGetter
 
 _PROVIDER_BASE_URL = "https://provider.example/api/v1"
 _CONNECTION_BASE_URL = "https://connection.example/api/v1"
@@ -99,9 +102,16 @@ async def _consume_json(response: httpx.Response) -> Any:
 class _StubRuntime:
     """Minimal ``TaskClientRuntime`` stand-in for target resolution."""
 
-    def __init__(self, provider: ProviderConfig, traces: DebugTraceStore | None = None) -> None:
+    def __init__(
+        self,
+        provider: ProviderConfig,
+        traces: DebugTraceStore | None = None,
+        *,
+        http_transports: ProviderHTTPTransports,
+    ) -> None:
         self.providers = SimpleNamespace(get=lambda provider_id: provider)
         self._traces = traces
+        self._http_transports = http_transports
 
     def provider_debug_recorder(
         self, *, body_limit: int | None = None
@@ -110,11 +120,22 @@ class _StubRuntime:
             return None
         return ProviderDebugRecorder(self._traces, body_limit=body_limit)
 
-    def get_connection_token_getter(self, connection: ConnectionRef):  # type: ignore[no-untyped-def]
+    def prepare_provider_http(
+        self, connection: ConnectionRef
+    ) -> tuple[TokenGetter, ProviderHTTPTransportScope]:
         async def _get_token() -> str:
             return "sk-test"
 
-        return _get_token
+        return _get_token, self._http_transports.scope(connection.provider_id, "api-key")
+
+
+@pytest_asyncio.fixture
+async def http_transports() -> AsyncIterator[ProviderHTTPTransports]:
+    pool = ProviderHTTPTransports()
+    try:
+        yield pool
+    finally:
+        await pool.aclose()
 
 
 @pytest.mark.parametrize(
@@ -145,6 +166,7 @@ async def test_from_runtime_binds_the_resolved_connection_credential_and_base_ur
     connection_base_url: str | None,
     expected_base_url: str,
     monkeypatch: pytest.MonkeyPatch,
+    http_transports: ProviderHTTPTransports,
 ) -> None:
     route = respx.post(f"{expected_base_url}/things").mock(
         return_value=httpx.Response(200, json=_OK)
@@ -155,20 +177,44 @@ async def test_from_runtime_binds_the_resolved_connection_credential_and_base_ur
         connection_id="example:api-key",
         local_connection_id="api-key",
     )
-    runtime = _StubRuntime(_make_provider(connection_base_url, adapter=adapter, base_url=base_url))
+    runtime = _StubRuntime(
+        _make_provider(connection_base_url, adapter=adapter, base_url=base_url),
+        http_transports=http_transports,
+    )
     loop_thread = threading.get_ident()
-    token_getter = runtime.get_connection_token_getter
+    expected_scope = http_transports.scope("example", "api-key", "first")
+    borrowed: list[ProviderHTTPTransportScope] = []
+    selected: list[str] = []
+    current_account = "first"
+    original_borrow = ProviderHTTPTransportScope.borrow
+
+    def borrow(scope: ProviderHTTPTransportScope) -> httpx.AsyncBaseTransport:
+        borrowed.append(scope)
+        return original_borrow(scope)
 
     def prepare(connection: ConnectionRef) -> Any:
+        nonlocal current_account
         assert threading.get_ident() != loop_thread
-        return token_getter(connection)
+        selected.append(current_account)
+        assert connection == ConnectionRef("example", "example:api-key")
+        # A credential publication changes the next implicit selection while
+        # setup is still in its worker. Getter and scope must stay one pair.
+        current_account = "second"
 
-    monkeypatch.setattr(runtime, "get_connection_token_getter", prepare)
+        async def credential() -> str:
+            return "sk-test"
+
+        return credential, expected_scope
+
+    monkeypatch.setattr(runtime, "prepare_provider_http", prepare)
+    monkeypatch.setattr(ProviderHTTPTransportScope, "borrow", borrow)
     client = await ProviderTaskClient.from_runtime_async(runtime, target)
 
     result = await client.post_and_parse("/things", timeout=5.0, parse=_json, json={"model": "m"})
 
     assert result == _OK
+    assert selected == ["first"] and current_account == "second"
+    assert borrowed == [expected_scope]
     request = route.calls.last.request
     assert (request.headers["authorization"], request.headers["x-title"]) == (
         "Bearer sk-test",
@@ -176,11 +222,68 @@ async def test_from_runtime_binds_the_resolved_connection_credential_and_base_ur
     )
 
 
+@pytest.mark.asyncio
+async def test_independent_task_clients_reuse_transport_without_caching_request_auth(
+    monkeypatch: pytest.MonkeyPatch, http_transports: ProviderHTTPTransports
+) -> None:
+    transports: list[Any] = []
+    authorizations: list[str] = []
+    token = "first-token"
+
+    class Transport(httpx.AsyncBaseTransport):
+        def __init__(self, **_kwargs: Any) -> None:
+            self.closed = False
+            transports.append(self)
+
+        @override
+        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+            assert not self.closed
+            authorizations.append(request.headers["Authorization"])
+            return httpx.Response(200, json=_OK)
+
+        @override
+        async def aclose(self) -> None:
+            self.closed = True
+
+    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"):
+        monkeypatch.delenv(name, raising=False)
+        monkeypatch.delenv(name.lower(), raising=False)
+    monkeypatch.setattr("httpx._client.AsyncHTTPTransport", Transport)
+    runtime = _StubRuntime(_make_provider(), http_transports=http_transports)
+
+    async def credential() -> str:
+        return token
+
+    monkeypatch.setattr(
+        runtime,
+        "prepare_provider_http",
+        lambda connection: (credential, http_transports.scope(connection.provider_id, "api-key")),
+    )
+    target = SimpleNamespace(
+        provider_id="example",
+        model_id="some-model",
+        connection_id="example:api-key",
+        local_connection_id="api-key",
+    )
+    first = await ProviderTaskClient.from_runtime_async(runtime, target)
+    second = await ProviderTaskClient.from_runtime_async(runtime, target)
+    assert transports == []
+
+    assert await first.post_and_parse("/things", timeout=5, parse=_json) == _OK
+    token = "second-token"
+    assert await second.post_and_parse("/things", timeout=5, parse=_json) == _OK
+
+    assert len(transports) == 1 and not transports[0].closed
+    assert authorizations == ["Bearer first-token", "Bearer second-token"]
+    await http_transports.aclose()
+    assert transports[0].closed
+
+
 @pytest.mark.parametrize("for_run", [True, False], ids=["run-request", "request-outside-a-run"])
 @respx.mock
 @pytest.mark.asyncio
 async def test_debug_mode_traces_only_requests_made_for_a_run(
-    tmp_path: Path, for_run: bool
+    tmp_path: Path, for_run: bool, http_transports: ProviderHTTPTransports
 ) -> None:
     respx.post(_THINGS_URL).mock(return_value=httpx.Response(200, json=_OK))
     traces = DebugTraceStore(tmp_path, trace_limit=10)
@@ -195,7 +298,7 @@ async def test_debug_mode_traces_only_requests_made_for_a_run(
         iteration_number=0,
     )
     client = ProviderTaskClient.from_runtime(
-        _StubRuntime(_make_provider(None), traces),
+        _StubRuntime(_make_provider(None), traces, http_transports=http_transports),
         SimpleNamespace(
             provider_id="example",
             model_id="example/some-model",
@@ -555,7 +658,7 @@ async def test_get_is_replay_safe_and_retries_a_transient_server_error() -> None
 @pytest.mark.parametrize("method", ["GET", "POST", "POST_STREAM"])
 @pytest.mark.parametrize("outcome", ["http_rejection", "parser_auth_error"])
 async def test_only_an_http_rejection_refreshes_the_token_and_replays_the_same_request(
-    method: str, outcome: str
+    method: str, outcome: str, http_transports: ProviderHTTPTransports
 ) -> None:
     class Getter:
         token = "old-test-token"
@@ -579,6 +682,7 @@ async def test_only_an_http_rejection_refreshes_the_token_and_replays_the_same_r
         connection=provider.connections[0],
         model_id="test-model",
         token_getter=getter,
+        http_transport=http_transports.scope("example", "api-key"),
     )
     first_status = 401 if outcome == "http_rejection" else 200
     route = respx.route(method=method.split("_")[0], url=_PROVIDER_BASE_URL + "/task").mock(
@@ -652,14 +756,14 @@ class _GatedResponseStream(httpx.AsyncByteStream):
 @respx.mock
 @pytest.mark.asyncio
 async def test_stream_delivers_before_completion_and_closes_every_outcome_without_replay(
-    tmp_path: Path, outcome: str
+    tmp_path: Path, outcome: str, http_transports: ProviderHTTPTransports
 ) -> None:
     stream = _GatedResponseStream(read_failure=outcome == "read_failure")
     route = respx.post(_THINGS_URL).mock(return_value=httpx.Response(200, stream=stream))
     observer = SimpleNamespace(start=AsyncMock(return_value="call"), finish=AsyncMock())
     traces = DebugTraceStore(tmp_path, trace_limit=10)
     client = ProviderTaskClient.from_runtime(
-        _StubRuntime(_make_provider(), traces),
+        _StubRuntime(_make_provider(), traces, http_transports=http_transports),
         SimpleNamespace(
             provider_id="example",
             model_id="example/some-model",

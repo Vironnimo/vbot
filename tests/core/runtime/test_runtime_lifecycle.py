@@ -652,7 +652,9 @@ async def test_loop_started_runtime_leaves_a_corrupt_cron_store_untouched(
     assert jobs_path.read_text(encoding="utf-8") == "{"
 
 
-def test_runtime_loads_and_reloads_custom_provider_settings_in_place(config: Config) -> None:
+def test_runtime_loads_and_reloads_custom_provider_settings_in_place(
+    config: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
     storage = StorageManager(config.data_dir)
     settings = {
         "name": "Local AI",
@@ -665,6 +667,8 @@ def test_runtime_loads_and_reloads_custom_provider_settings_in_place(config: Con
     runtime = Runtime(config, safe_startup_mode="test")
     runtime.start()
     try:
+        retire = Mock(wraps=runtime._provider_operations().retire_http_transports)
+        monkeypatch.setattr(runtime._provider_operations(), "retire_http_transports", retire)
         providers = runtime.providers
         models = runtime.models
         assert providers.get("local-ai").custom is True
@@ -684,6 +688,7 @@ def test_runtime_loads_and_reloads_custom_provider_settings_in_place(config: Con
         assert runtime.models is models
         assert providers.get("local-ai").name == "Renamed"
         assert models.get("local-ai", "chat-model").name == "Renamed Model"
+        retire.assert_called_once_with()
     finally:
         runtime.stop()
 

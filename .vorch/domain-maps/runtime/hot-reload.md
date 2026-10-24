@@ -16,3 +16,5 @@ The Runtime's live reload paths: `apply_settings_change` and the Provider, local
 - Surgical disable removes deactivated Extension backends from the selectable Recall catalog even when the active backend is unaffected; that active instance is retained unless its configured backend was removed.
 
 Live Skill, credential and Custom Provider reload orchestration and generation-checked publication live in `_settings.py`; Runtime keeps their stable public entrypoints.
+
+Only published credential snapshots and Custom Provider overlays retire ProviderRuntime's reusable HTTP pools. Existing responses finish on retired pools; subsequent requests use fresh connections even through already-created Adapters/Task clients (`providers/request-policy.md` -> HTTP, retry, and streaming). Superseded reload results do not retire them.

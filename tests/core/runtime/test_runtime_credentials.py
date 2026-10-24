@@ -6,6 +6,7 @@ import asyncio
 import os
 import threading
 from dataclasses import replace
+from unittest.mock import Mock
 
 import pytest
 
@@ -174,6 +175,8 @@ async def test_async_credential_reload_cannot_restore_a_superseded_snapshot(
     runtime = Runtime(config, safe_startup_mode="test")
     runtime.start()
     loop = asyncio.get_running_loop()
+    retire = Mock(wraps=runtime._provider_operations().retire_http_transports)
+    monkeypatch.setattr(runtime._provider_operations(), "retire_http_transports", retire)
     entered = asyncio.Event()
     release = threading.Event()
     load_environment = runtime.storage.load_environment
@@ -197,6 +200,8 @@ async def test_async_credential_reload_cannot_restore_a_superseded_snapshot(
         release.set()
         await pending
         assert runtime.resolve_environment_credential("CHANNEL_TOKEN_TEST") == "new"
+        # Only a published snapshot retires pools; stale reads cannot disturb them.
+        assert retire.call_count == (1 if replacement == "reload" else 0)
     finally:
         release.set()
         await pending

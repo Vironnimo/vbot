@@ -6,8 +6,6 @@ import asyncio
 import math
 from typing import Any, NamedTuple
 
-import httpx
-
 from core.model_tasks.decision_providers import ProviderDecisionClient
 from core.model_tasks.decision_types import (
     DecisionError,
@@ -20,7 +18,6 @@ from core.model_tasks.task_execution import TaskUsage, TaskUsageContext
 from core.providers.errors import NetworkError, ProviderError, ProviderRequestTooLargeError
 from core.providers.task_client import TaskClientRuntime
 from core.usage import UsageRecorder
-from core.utils.tls import shared_ssl_context
 from core.utils.tokens import estimate_json_tokens
 from core.utils.workers import BoundedWorkerPool
 
@@ -102,9 +99,7 @@ class DecisionService:
         target = resolved.target
         slots = asyncio.Semaphore(_ITEM_CONCURRENCY)
 
-        async def judge(
-            state: Any, http_client: httpx.AsyncClient
-        ) -> dict[str, Any] | DecisionError:
+        async def judge(state: Any) -> dict[str, Any] | DecisionError:
             try:
                 factor = (
                     self._usage_recorder.input_estimate_factor(target)
@@ -120,7 +115,6 @@ class DecisionService:
                         resolved,
                         state,
                         questions,
-                        http_client=http_client,
                         usage_context=usage_context,
                     )
                 await self._learn_input_estimate(target, result, estimate)
@@ -128,11 +122,8 @@ class DecisionService:
             except DecisionError as exc:
                 return exc
 
-        async with (
-            httpx.AsyncClient(verify=shared_ssl_context()) as http_client,
-            asyncio.TaskGroup() as group,
-        ):
-            tasks = [group.create_task(judge(state, http_client)) for state in states]
+        async with asyncio.TaskGroup() as group:
+            tasks = [group.create_task(judge(state)) for state in states]
         return [task.result() for task in tasks]
 
     async def _learn_input_estimate(
@@ -154,7 +145,6 @@ class DecisionService:
         state: Any,
         questions: list[dict[str, Any]],
         *,
-        http_client: httpx.AsyncClient | None = None,
         usage_context: TaskUsageContext | None = None,
     ) -> dict[str, Any]:
         ref = parse_task_model_target_id(target.target)
@@ -166,7 +156,7 @@ class DecisionService:
                     self._usage_recorder, "decision", ref, context=usage_context
                 ),
             )
-            return await client.evaluate(state, questions, http_client=http_client)
+            return await client.evaluate(state, questions)
         except ProviderError as exc:
             if isinstance(exc, ProviderRequestTooLargeError) or (
                 exc.status_code == 400 and _reports_context_overflow(str(exc))

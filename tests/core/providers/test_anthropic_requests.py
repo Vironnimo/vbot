@@ -19,7 +19,7 @@ from core.providers.adapter import (
     request_input_budget,
 )
 from core.providers.errors import ProviderError, ProviderRequestTooLargeError
-from core.providers.http import PROVIDER_NON_STREAMING_READ_TIMEOUT_SECONDS
+from core.providers.http import PROVIDER_NON_STREAMING_READ_TIMEOUT_SECONDS, ProviderHTTPTransports
 from core.providers.providers import GLOBAL_CONTEXT_WINDOW_FLOOR, RequestInput
 from core.providers.reasoning import REASONING_REPLAY_FULL_HISTORY
 
@@ -111,7 +111,12 @@ async def test_compatible_wire_keeps_native_policy_opt_in_and_borrowed_client_op
     """Only the native Adapter sends the version header; only the anthropic wire profile adds
     PDF input and cache markers."""
     borrowed = httpx.AsyncClient(base_url="https://minimal.anthropic.example/v1")
-    compatible = AnthropicCompatibleAdapter(NO_DEFAULTS_CONFIG, API_KEY, client=borrowed)
+    transports = ProviderHTTPTransports()
+    scope = transports.scope("anthropic", "api-key")
+    await transports.aclose()
+    compatible = AnthropicCompatibleAdapter(
+        NO_DEFAULTS_CONFIG, API_KEY, client=borrowed, http_transport=scope
+    )
 
     request = await send_request(compatible, url=MINIMAL_URL)
     await compatible.aclose()

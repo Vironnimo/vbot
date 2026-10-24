@@ -39,6 +39,7 @@ from core.providers.openai_subscription_auth import OPENAI_AUTH_CLAIM
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.providers.token_getter import StaticTokenGetter
 from core.tools.live import LiveToolHosts
+from tests.core.model_tasks.model_tasks_test_support import task_http_transport
 
 CODEX_CALLS_URL = (
     "https://chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas"
@@ -84,7 +85,10 @@ def _runtime(token: str) -> SimpleNamespace:
     )
     return SimpleNamespace(
         providers=SimpleNamespace(get=lambda provider_id: provider),
-        get_connection_token_getter=lambda connection: StaticTokenGetter(token),
+        prepare_provider_http=lambda connection: (
+            StaticTokenGetter(token),
+            task_http_transport(connection),
+        ),
     )
 
 

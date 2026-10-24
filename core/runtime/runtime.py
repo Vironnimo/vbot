@@ -76,6 +76,7 @@ from core.utils.logging import LogManager
 if TYPE_CHECKING:
     from core.permissions import PermissionBoundary, PermissionCeiling
     from core.projects import Project, RuntimeAgent
+    from core.providers.http import ProviderHTTPTransportScope
     from core.sessions import SessionAddress
 
 # Windows environment variable names are case-insensitive. The data-directory
@@ -990,6 +991,12 @@ class Runtime(RuntimeServiceGraph):
     def get_adapter(self, connection: ConnectionRef) -> ProviderAdapter:
         """Return a fully wired Adapter for one exact Provider Connection."""
         return self._provider_operations().get_adapter(connection)
+
+    def prepare_provider_http(
+        self, connection: ConnectionRef
+    ) -> tuple[TokenGetter, ProviderHTTPTransportScope]:
+        """Bind fresh credentials and reusable connections to one effective Account."""
+        return self._provider_operations().prepare_provider_http(connection)
 
     def get_connection_token_getter(self, connection: ConnectionRef) -> TokenGetter:
         """Return the refresh-capable token getter for one Provider Connection."""

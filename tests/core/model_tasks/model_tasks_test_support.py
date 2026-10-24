@@ -10,6 +10,17 @@ from core.model_tasks import (
     TASK_SPEECH_TO_TEXT,
 )
 from core.models import Capabilities, Model, ModelQuery, ModelRegistry, ReasoningCapabilities
+from core.providers.accounts import ConnectionRef, split_connection_id
+from core.providers.http import ProviderHTTPTransports, ProviderHTTPTransportScope
+
+# Installed by the task tests' fixture and drained at the end of each test.
+http_transports: ProviderHTTPTransports | None = None
+
+
+def task_http_transport(connection: ConnectionRef) -> ProviderHTTPTransportScope:
+    assert http_transports is not None
+    local_id, account_id = split_connection_id(connection.provider_id, connection.connection_id)
+    return http_transports.scope(connection.provider_id, local_id, account_id or "default")
 
 
 def _model(

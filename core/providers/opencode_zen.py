@@ -31,6 +31,7 @@ from core.providers.wire_profiles import WireBinding
 
 if TYPE_CHECKING:
     from core.debug import ProviderDebugRecorder
+    from core.providers.http import ProviderHTTPTransportScope
 
 __all__ = ["OpenCodeZenAdapter"]
 
@@ -170,6 +171,7 @@ class OpenCodeZenAdapter(OpenAIAdapter):
         debug_recorder: ProviderDebugRecorder | None = None,
         *,
         connection_mode: str | None = None,
+        http_transport: ProviderHTTPTransportScope | None = None,
     ) -> None:
         super().__init__(
             config,
@@ -179,6 +181,7 @@ class OpenCodeZenAdapter(OpenAIAdapter):
             model_lookup,
             debug_recorder,
             connection_mode=connection_mode,
+            http_transport=http_transport,
         )
         selected_auth = auth_config or config.connections[0].auth
         self._messages = _OpenCodeZenMessagesAdapter(

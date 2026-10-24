@@ -21,6 +21,7 @@ from core.providers.adapter import ModelLookup, ProviderAdapter, is_local_provid
 from core.providers.adapter_types import ADAPTER_TYPES
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.github_copilot import GitHubCopilotAdapter
+from core.providers.http import ProviderHTTPTransports, ProviderHTTPTransportScope
 from core.providers.lmstudio import LMStudioAdapter
 from core.providers.ollama import OllamaAdapter
 from core.providers.openai import OpenAIAdapter
@@ -93,6 +94,7 @@ class ProviderRuntime:
         self._loaded_context_windows: dict[str, int] = {}
         self._loaded_context_lock = threading.Lock()
         self._responses_transports = ResponsesTransports()
+        self._http_transports = ProviderHTTPTransports()
         self._wire_observations = self._load_wire_observations(storage)
         self._wire_profiles = WireProfiles(
             files=wire_profile_files(custom_providers, resources_path),
@@ -118,6 +120,7 @@ class ProviderRuntime:
         self._credentials = credentials
         self._token_store = token_store
         if storage.data_dir != self._storage.data_dir:
+            self.retire_http_transports()
             self._wire_observations.close()
             self._wire_observations = self._load_wire_observations(storage)
             self._wire_profiles.set_observations(self._wire_observations)
@@ -135,6 +138,15 @@ class ProviderRuntime:
         self._wire_profiles.replace_files(
             wire_profile_files(custom_providers, self._resources_path)
         )
+        self.retire_http_transports()
+
+    def retire_http_transports(self) -> None:
+        """Use fresh HTTP connections after published credential/configuration changes.
+
+        Active responses finish on their old connections; subsequent requests,
+        including those of existing Adapters, acquire the current pool generation.
+        """
+        self._http_transports.retire_all()
 
     @property
     def wire_profile_files(self) -> Mapping[str, WireProfileFile]:
@@ -193,15 +205,51 @@ class ProviderRuntime:
         ``connection_id`` is local (``subscription``); without it, every
         Connection of the Provider closes.
         """
-        await self._responses_transports.close_connection(provider_id, connection_id)
+        try:
+            await self._responses_transports.close_connection(provider_id, connection_id)
+        finally:
+            await self._http_transports.close_connection(provider_id, connection_id)
 
     async def aclose_transports(self) -> None:
         """Close every kept-open Provider connection (Runtime shutdown)."""
-        await self._responses_transports.aclose()
+        try:
+            await self._responses_transports.aclose()
+        finally:
+            await self._http_transports.aclose()
 
     def abort_transports(self) -> None:
         """Drop every kept-open Provider connection without waiting (synchronous shutdown)."""
-        self._responses_transports.abort()
+        try:
+            self._responses_transports.abort()
+        finally:
+            self._http_transports.abort()
+
+    def prepare_provider_http(
+        self, connection: ConnectionRef
+    ) -> tuple[TokenGetter, ProviderHTTPTransportScope]:
+        """Bind credentials and a lazy HTTP scope to the same effective Account."""
+        config, account_id = self._connection_config(
+            self._providers.get(connection.provider_id), connection.connection_id
+        )
+        return self._prepare_http(connection, config, account_id)
+
+    def _prepare_http(
+        self, connection: ConnectionRef, config: ConnectionConfig, account_id: str | None
+    ) -> tuple[TokenGetter, ProviderHTTPTransportScope]:
+        account_id = self._http_account_id(connection.provider_id, config, account_id)
+        return (
+            self._token_getter(connection, config, account_id),
+            self._http_transports.scope(connection.provider_id, config.id, account_id),
+        )
+
+    def _http_account_id(
+        self, provider_id: str, config: ConnectionConfig, account_id: str | None
+    ) -> str:
+        if account_id is not None:
+            return account_id
+        if config.type != "none":
+            return self._credentials.resolve_account_id(provider_id, config.id)
+        return DEFAULT_ACCOUNT_ID
 
     def get_adapter(self, connection: ConnectionRef) -> ProviderAdapter:
         provider_id = connection.provider_id
@@ -216,14 +264,14 @@ class ProviderRuntime:
                 f"Provider connection '{provider_id}:{connection_config.id}' is disabled — "
                 "enable it in Settings → Providers or via the provider CLI"
             )
-        token_getter = self._token_getter(connection, connection_config, account_id)
+        token_getter, http_transport = self._prepare_http(connection, connection_config, account_id)
         adapter_class = ADAPTER_TYPES.get(provider_config.adapter)
         if adapter_class is None:
             raise ConfigError(
                 f"Unknown adapter type '{provider_config.adapter}' for provider '{provider_id}'"
             )
 
-        extra_kwargs: dict[str, Any] = {}
+        extra_kwargs: dict[str, Any] = {"http_transport": http_transport}
         if adapter_class in (OllamaAdapter, LMStudioAdapter):
             extra_kwargs["local_context_resolver"] = self._local_context_resolver(provider_id)
         if adapter_class is LMStudioAdapter:
@@ -243,6 +291,9 @@ class ProviderRuntime:
             if copilot_endpoint:
                 base_url = copilot_endpoint
 
+        # Resolve fallible Settings/profile reads before constructing an owned client.
+        wire_profiles = self._wire_profiles.bind(provider_id, connection_config.id)
+        display_timezone = self._display_timezone()
         adapter = cast(Any, adapter_class)(
             provider_config,
             token_getter,
@@ -253,9 +304,9 @@ class ProviderRuntime:
             connection_mode=connection_config.mode,
             **extra_kwargs,
         )
-        adapter.bind_wire_profiles(self._wire_profiles.bind(provider_id, connection_config.id))
+        adapter.bind_wire_profiles(wire_profiles)
         adapter.local_endpoint = is_local_provider_base_url(base_url or provider_config.base_url)
-        adapter.display_timezone = self._display_timezone()
+        adapter.display_timezone = display_timezone
         return cast(ProviderAdapter, adapter)
 
     def _display_timezone(self) -> tzinfo:
@@ -522,14 +573,19 @@ class ProviderRuntime:
         provider_id = connection.provider_id
         if connection_config.type == "none":
             return StaticTokenGetter("")
+        resolved_connection_id = (
+            f"{provider_id}:{connection_config.id}:{account_id}"
+            if account_id is not None
+            else connection.connection_id
+        )
         if connection_config.type == "api_key":
             return StaticTokenGetter(
-                self._credentials.get_credentials(provider_id, connection.connection_id)
+                self._credentials.get_credentials(provider_id, resolved_connection_id)
             )
         if connection_config.type == "oauth":
             if connection_config.oauth is None:
                 return StaticTokenGetter(
-                    self._credentials.get_credentials(provider_id, connection.connection_id)
+                    self._credentials.get_credentials(provider_id, resolved_connection_id)
                 )
             resolved_account_id = account_id
             if resolved_account_id is None:

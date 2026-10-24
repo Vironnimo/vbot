@@ -17,6 +17,7 @@ from tests.core.model_tasks.model_tasks_test_support import (
     _Models,
     _Providers,
     _Storage,
+    task_http_transport,
 )
 
 QUESTIONS = [{"id": "q", "type": "noul", "instructions": "Relevant?"}]
@@ -51,7 +52,10 @@ def service(
     )
     runtime = SimpleNamespace(
         providers=SimpleNamespace(get=lambda _provider: openrouter),
-        get_connection_token_getter=lambda _connection: StaticTokenGetter("test-token"),
+        prepare_provider_http=lambda connection: (
+            StaticTokenGetter("test-token"),
+            task_http_transport(connection),
+        ),
         provider_debug_recorder=lambda **_: None,
     )
     return DecisionService(cast(TaskModelService, bindings), cast(Any, runtime))

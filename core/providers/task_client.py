@@ -33,6 +33,7 @@ from core.providers.errors import (
     ProviderRateLimitError,
 )
 from core.providers.http import (
+    ProviderHTTPTransportScope,
     build_async_client,
     classify_http_status,
     wrap_network_error,
@@ -145,8 +146,10 @@ class TaskClientRuntime(Protocol):
     @property
     def providers(self) -> _ProviderLookupProtocol: ...
 
-    def get_connection_token_getter(self, connection: ConnectionRef) -> TokenGetter:
-        """Return a refresh-capable token getter for one provider connection."""
+    def prepare_provider_http(
+        self, connection: ConnectionRef
+    ) -> tuple[TokenGetter, ProviderHTTPTransportScope]:
+        """Resolve one Account once and return its token getter and lazy HTTP scope."""
         ...
 
     def provider_debug_recorder(
@@ -212,6 +215,7 @@ class ProviderTaskClient:
         token_getter: TokenGetter | None = None,
         usage_observer: TaskRequestObserver | None = None,
         debug_recorder: ProviderDebugRecorder | None = None,
+        http_transport: ProviderHTTPTransportScope | None = None,
     ) -> None:
         if token_getter is None:
             if credential is None:
@@ -229,6 +233,7 @@ class ProviderTaskClient:
         )
         self._usage_observer = usage_observer
         self._debug_recorder = debug_recorder
+        self._http_transport = http_transport
 
     @classmethod
     def from_runtime(
@@ -248,12 +253,11 @@ class ProviderTaskClient:
 
         provider = runtime.providers.get(target_ref.provider_id)
         connection = provider.get_connection(target_ref.local_connection_id)
-        token_getter = runtime.get_connection_token_getter(
-            ConnectionRef(
-                target_ref.provider_id,
-                target_ref.connection_id,
-            )
+        connection_ref = ConnectionRef(
+            target_ref.provider_id,
+            target_ref.connection_id,
         )
+        token_getter, http_transport = runtime.prepare_provider_http(connection_ref)
         return cls(
             provider=provider,
             connection=connection,
@@ -261,6 +265,7 @@ class ProviderTaskClient:
             token_getter=token_getter,
             usage_observer=usage_observer,
             debug_recorder=_task_debug_recorder(runtime, debug_context),
+            http_transport=http_transport,
         )
 
     @classmethod
@@ -286,12 +291,13 @@ class ProviderTaskClient:
         )
 
     def http_client(self, timeout: float) -> httpx.AsyncClient:
-        """Return a new HTTP client for this target, traced while debug mode is on."""
+        """Return an isolated client borrowing this target's reusable HTTP transport."""
 
         return build_async_client(
             base_url=self._base_url,
             timeout=httpx.Timeout(timeout),
             debug_recorder=self._debug_recorder,
+            http_transport=self._http_transport,
         )
 
     async def post_and_parse[ParsedResultT](

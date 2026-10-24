@@ -16,7 +16,7 @@ from core.providers.adapter import (
     request_input_budget,
 )
 from core.providers.errors import ProviderError
-from core.providers.http import PROVIDER_NON_STREAMING_READ_TIMEOUT_SECONDS
+from core.providers.http import PROVIDER_NON_STREAMING_READ_TIMEOUT_SECONDS, ProviderHTTPTransports
 from core.providers.openai_compatible import REASONING_PARAMETER_NAMES
 from core.providers.providers import (
     AuthConfig,
@@ -127,12 +127,23 @@ def test_wire_declares_images_and_openai_audio_and_full_history_replay() -> None
     assert adapter.reasoning_replay_policy(MODEL_ID) == REASONING_REPLAY_FULL_HISTORY
 
 
+@pytest.mark.parametrize("borrow_client", [False, True])
 @pytest.mark.asyncio
-async def test_adapter_closes_its_own_client_on_context_exit() -> None:
-    async with make_adapter() as adapter:
+async def test_adapter_context_exit_closes_only_its_own_client(borrow_client: bool) -> None:
+    transports = ProviderHTTPTransports()
+    scope = transports.scope("openai", "api-key")
+    await transports.aclose()
+    borrowed = httpx.AsyncClient(base_url=OPENAI_CONFIG.base_url) if borrow_client else None
+    kwargs: dict[str, Any] = {"client": borrowed}
+    if borrow_client:
+        kwargs["http_transport"] = scope
+    async with make_adapter(**kwargs) as adapter:
         assert not adapter._client.is_closed  # noqa: SLF001 - owned client has no public view
+        assert (await send_request(adapter)).headers["authorization"] == f"Bearer {API_KEY}"
 
-    assert adapter._client.is_closed  # noqa: SLF001
+    assert adapter._client.is_closed is (not borrow_client)  # noqa: SLF001
+    if borrowed is not None:
+        await borrowed.aclose()
 
 
 # ---------------------------------------------------------------------------
