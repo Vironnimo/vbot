@@ -208,8 +208,9 @@ class ExternalRun:
         )
         self._iteration += 1
         assistant_id = _new_message_id()
+        dispatch_context = self._dispatch_context(run, permissions)
         tool_round = ToolRound(
-            self._dispatch_context(run, permissions),
+            dispatch_context,
             assistant_message_id=assistant_id,
             iteration_number=self._iteration,
         )
@@ -225,7 +226,9 @@ class ExternalRun:
                 ended = _ended_result(call)
                 await asyncio.shield(self._store_call(assistant_id, [ended]))
                 raise
-            await finish_despite_cancel(self._store_call(assistant_id, tool_messages))
+            await finish_despite_cancel(
+                self._store_call(assistant_id, tool_messages, dispatch_context=dispatch_context)
+            )
         finally:
             self._running_calls -= 1
             if self._running_calls == 0:
@@ -244,7 +247,8 @@ class ExternalRun:
         if failure and self._run is not None and not self._run.cancel_requested:
             self._failure = failure
             await self._append([ChatMessage.error(ERROR_KIND_PROVIDER_ERROR, failure)])
-        self._done.set()
+        async with self._write_lock:
+            self._done.set()
 
     async def discard(self) -> None:
         """End the Run of a conversation that never started and remove its Session."""
@@ -270,7 +274,8 @@ class ExternalRun:
                         "Ending an external conversation failed (run=%s)", run.id, exc_info=True
                     )
             await self._settle_calls()
-            self._done.set()
+            async with self._write_lock:
+                self._done.set()
             raise
         if self._failure is not None:
             raise ExternalRunFailedError(self._failure)
@@ -337,7 +342,13 @@ class ExternalRun:
             for assistant_id, call in list(self._unstored_calls.items()):
                 await self._store_call(assistant_id, [_ended_result(call)])
 
-    async def _store_call(self, assistant_id: str, tool_messages: list[ChatMessage]) -> None:
+    async def _store_call(
+        self,
+        assistant_id: str,
+        tool_messages: list[ChatMessage],
+        *,
+        dispatch_context: ToolDispatchContext | None = None,
+    ) -> None:
         """Store a call's turn with *tool_messages*, unless that turn is already stored."""
         call = self._unstored_calls.pop(assistant_id, None)
         if call is None:
@@ -345,11 +356,18 @@ class ExternalRun:
         turn = ChatMessage.assistant(
             model=self._model, content=None, tool_calls=[call], message_id=assistant_id
         )
-        await self._append(
+        result_facts = tool_result_facts(tool_messages)
+        if dispatch_context is not None:
+            result_facts = dispatch_context.with_result_payloads(result_facts)
+        stored = await self._append(
             [turn, *tool_messages],
-            tool_results=tool_result_facts(tool_messages),
+            tool_results=result_facts,
             with_notes=True,
         )
+        if stored and dispatch_context is not None:
+            for message in tool_messages:
+                assert message.tool_call_id is not None
+                dispatch_context.notify_result_persisted(message.tool_call_id)
 
     async def _append(
         self,
@@ -363,9 +381,11 @@ class ExternalRun:
         *with_notes* adds the notes Tool calls left, after *messages*.
         """
         run = self._run
-        if run is None or self._done.is_set():
+        if run is None:
             return False
         async with self._write_lock:
+            if self._done.is_set():
+                return False
             if with_notes:
                 messages = [*messages, *self._session.take_deferred_notes()]
                 self._session.begin_defer_notes()

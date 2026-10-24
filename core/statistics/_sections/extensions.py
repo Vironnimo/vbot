@@ -2,7 +2,7 @@
 
 Runs, Tool calls and errors are the Session's own; requests are the ledger's
 at the Session's address, in the report ``Totals`` shape. ``last_activity`` is
-the latest in-window record or request. Owners are sorted by name; groups
+the latest in-window record, Tool start or request. Owners are sorted by name; groups
 most recently active first, capped at ``TOP_EXTENSION_GROUPS``.
 """
 
@@ -206,6 +206,13 @@ def _last_activity(
                 (session_key, low, high),
             )
         participants[session_key].seen(max_instant)
+    for session_key, max_instant in context.query(
+        f"SELECT t.session_key, MAX(t.instant) FROM {context.sessions_table} s "
+        "CROSS JOIN stat_tools t ON t.session_key = s.session_key "
+        f"WHERE {context.instant_condition('t.instant')} GROUP BY t.session_key"
+    ):
+        if session_key in participants:
+            participants[session_key].seen(max_instant)
     for address, max_instant in context.query(
         f"""
         SELECT u.address, MAX((

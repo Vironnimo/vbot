@@ -128,6 +128,12 @@ async def test_user_cancel_after_visible_stream_closes_the_adapter_and_keeps_the
     assert messages[1].interruption_cause == "user"
     assert messages[1].tool_calls is None
     assert run.tool_call_count == 0
+    assert (
+        runtime.chat_sessions.get(session_address("coder", run.session_id))
+        .tool_invocations_since()
+        .invocations
+        == ()
+    )
     assert messages[-1].role == "run_summary"
     assert (messages[-1].status, messages[-1].completion_reason) == ("cancelled", "user")
     expected_events = [

@@ -20,9 +20,16 @@ from core.sessions import (
     _store_history,
     _store_owned,
     _store_runs,
+    _store_tool_invocations,
 )
 from core.sessions._archive_types import ArchiveEntryRef
-from core.sessions._types import AccessorInputRecord, JsonObject, OwnedRunRecord, RecoveredRun
+from core.sessions._types import (
+    AccessorInputRecord,
+    JsonObject,
+    OwnedRunRecord,
+    RecoveredRun,
+    SessionToolInvocationBatch,
+)
 
 if TYPE_CHECKING:
     from core.chat.messages import ChatMessage
@@ -140,6 +147,28 @@ class SessionExecutionStore:
         self._store._execute_write(
             lambda connection: _store_runs.record_run_changes(
                 connection, address, run_id, change_stats
+            )
+        )
+
+    def start_tool_invocation(
+        self, address: SessionAddress, run_id: str, *, call_id: str, name: str, started_at: str
+    ) -> int:
+        return self._store._execute_write(
+            lambda connection: _store_tool_invocations.start(
+                connection, address, run_id, call_id=call_id, name=name, started_at=started_at
+            )
+        )
+
+    def tool_invocations_since(
+        self,
+        address: SessionAddress,
+        after_revision: int = 0,
+        *,
+        expected_generation_id: str | None = None,
+    ) -> SessionToolInvocationBatch:
+        return self._store._read(
+            lambda connection: _store_tool_invocations.read_since(
+                connection, address, after_revision, expected_generation_id
             )
         )
 

@@ -366,6 +366,28 @@ CREATE TABLE assistant_output_files (
   PRIMARY KEY (entry_key, ordinal)
 ) STRICT, WITHOUT ROWID;
 
+-- Dispatch admission is independent of the Assistant entry and Result: eager
+-- calls can start before their turn is stored, and a stopped call may have no
+-- Result at all. This own-audit ledger is never inherited or materialized.
+CREATE TABLE tool_invocations (
+  invocation_key INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_key INTEGER NOT NULL REFERENCES sessions (session_key) ON DELETE CASCADE,
+  run_key INTEGER REFERENCES runs (run_key) ON DELETE CASCADE,
+  call_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  status TEXT NOT NULL,
+  result_ok INTEGER,
+  error_code TEXT,
+  duration_ms INTEGER,
+  result_entry_key INTEGER UNIQUE REFERENCES entries (entry_key) ON DELETE SET NULL,
+  source_revision INTEGER NOT NULL
+) STRICT;
+
+CREATE INDEX tool_invocations_by_session_revision
+  ON tool_invocations (session_key, source_revision, invocation_key);
+CREATE INDEX tool_invocations_by_run ON tool_invocations (run_key);
+
 CREATE TABLE tool_calls (
   call_key INTEGER PRIMARY KEY,
   entry_key INTEGER NOT NULL REFERENCES entries (entry_key) ON DELETE CASCADE,

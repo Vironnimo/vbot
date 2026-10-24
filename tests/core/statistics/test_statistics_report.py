@@ -12,18 +12,21 @@ import json
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from core.chat.messages import ChatMessage, ToolCall
 from core.models.pricing import TokenPricing, price_usage
-from core.sessions import ChatSessionManager, SessionAddress
+from core.sessions import ChatSessionManager, SessionAddress, ToolResultFacts
 from core.statistics import REPORT_SECTIONS
+from core.statistics.index import StatisticsIndex
 from core.tools import tool_failure, tool_success
 from core.usage import UsageRecorder
 from core.utils.errors import ProviderError
-from tests.core.sessions.history_fixtures import seed_history
+from core.utils.timestamps import format_canonical_timestamp
+from tests.core.sessions.history_fixtures import complete_run, seed_history
 from tests.core.statistics.statistics_test_support import (
     BASE,
     StatisticsFactory,
@@ -649,8 +652,13 @@ async def test_insights_appear_from_their_threshold_on(
 # -- Tools ----------------------------------------------------------------------
 
 
-def test_tools_report_outcomes_codes_and_approximate_latency(
-    manager: ChatSessionManager, statistics: StatisticsFactory
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal_status", ["cancelled", "interrupted"])
+async def test_tools_report_started_calls_outcomes_codes_and_approximate_latency(
+    tmp_path: Path,
+    manager: ChatSessionManager,
+    statistics: StatisticsFactory,
+    terminal_status: str,
 ) -> None:
     # Nine fast acceptances and one slow rejection with an error code.
     messages = [
@@ -670,9 +678,11 @@ def test_tools_report_outcomes_codes_and_approximate_latency(
             duration_ms=1000,
         )
     )
-    _write_session(manager, "main", messages)
+    session_id = _write_session(manager, "main", messages)
+    address = SessionAddress(None, "main", session_id)
+    service = statistics(clock=_clock)
 
-    tools = statistics(clock=_clock).report(sections=["tools"])["tools"]
+    tools = service.report(sections=["tools"])["tools"]
 
     assert tools["totals"] == {
         "calls": 10,
@@ -691,6 +701,96 @@ def test_tools_report_outcomes_codes_and_approximate_latency(
     assert read["top_codes"] == [{"code": "not_found", "count": 1}]
     assert tools["rejection_codes"] == [{"code": "not_found", "count": 1, "tools": ["read"]}]
     assert tools["by_agent"] == [{"agent_id": "main", "calls": 10, "rejected": 1, "tool_ms": 1090}]
+
+    # A declaration alone is not a started invocation. Each actual start is
+    # visible before its Result exists, without rereading earlier Tool history.
+    run_at = BASE + timedelta(hours=1, seconds=-2)
+    _admit(manager, address, "running-tools", at=run_at)
+    writer = manager.get(address).for_run("running-tools")
+    finished = ToolCall(id="finished", name="write", arguments={})
+    stopped = ToolCall(id="stopped", name="write", arguments={})
+    declaration = ToolCall(id="declaration", name="read", arguments={})
+    writer.append(
+        _assistant(
+            model=SONNET,
+            at=run_at,
+            tool_calls=[finished, stopped, declaration],
+        )
+    )
+    assert service.report(sections=["tools"])["tools"]["totals"]["calls"] == 10
+    started_at = run_at + timedelta(seconds=1)
+    invocation = await writer.start_tool_invocation_async(
+        call_id=finished.id,
+        name=finished.name,
+        started_at=format_canonical_timestamp(started_at),
+    )
+    await writer.start_tool_invocation_async(
+        call_id=stopped.id,
+        name=stopped.name,
+        started_at=format_canonical_timestamp(started_at),
+    )
+    pending = service.report(sections=["tools", "runs"])
+    assert pending["tools"]["totals"] == {
+        "calls": 12,
+        "accepted": 9,
+        "rejected": 1,
+        "unknown": 2,
+        "tool_ms": 1090,
+        "tools": 2,
+    }
+    pending_run = next(
+        row for row in pending["runs"]["most_steps"] if row["run_id"] == "running-tools"
+    )
+    assert pending_run["tool_calls"] == 2
+    result = ChatMessage.tool(
+        tool_call_id=finished.id,
+        name=finished.name,
+        content=json.dumps(tool_success({})),
+        timing=_timing(started_at, 1000),
+        timestamp=started_at + timedelta(seconds=1),
+    )
+    writer.append_many(
+        [result],
+        tool_results={
+            finished.id: ToolResultFacts("completed", ok=True, invocation_key=invocation)
+        },
+    )
+    complete_run(
+        writer,
+        _summary(
+            "running-tools",
+            status=terminal_status,
+            start=run_at,
+            duration_ms=2000,
+        ),
+    )
+    final = service.report(sections=["tools", "runs"])
+    assert {
+        key: final["tools"]["totals"][key]
+        for key in ("calls", "accepted", "rejected", "unknown", "tool_ms")
+    } == {
+        "calls": 12,
+        "accepted": 10,
+        "rejected": 1,
+        "unknown": 1,
+        "tool_ms": 2090,
+    }
+    assert (
+        next(row for row in final["runs"]["most_steps"] if row["run_id"] == "running-tools")[
+            "tool_calls"
+        ]
+        == 2
+    )
+    rebuilt = statistics(index=StatisticsIndex(tmp_path / "rebuilt"), clock=_clock)
+    assert final == rebuilt.report(sections=["tools", "runs"])
+    # The Result crosses the hour boundary; the invocation belongs to its
+    # start's report window, even after its outcome and duration settle.
+    assert (
+        service.report(since=BASE + timedelta(hours=1), sections=["tools"])["tools"]["totals"][
+            "calls"
+        ]
+        == 0
+    )
 
 
 # -- Diagnostics ----------------------------------------------------------------

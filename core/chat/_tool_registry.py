@@ -35,6 +35,8 @@ from core.tools import (
 )
 from core.utils.logging import get_logger
 from core.utils.surrogates import without_lone_surrogates
+from core.utils.timestamps import format_canonical_timestamp
+from core.utils.workers import settle_before_cancelling
 
 _LOGGER = get_logger("chat")
 
@@ -171,8 +173,6 @@ class _EmittingToolRegistry(ToolRegistry):
         # accessor. Tool-owned cleanup can register a moment later; Run retains
         # an early user request and fires that callback as soon as it arrives.
         self._run.begin_tool_call(context.tool_call_id)
-        self._run.tool_call_count += 1
-        self._run.tool_call_names.add(context.tool_name)
         started_at = datetime.now(UTC)
         started_perf = time.perf_counter()
         events = _CallEvents(arguments=arguments)
@@ -181,7 +181,7 @@ class _EmittingToolRegistry(ToolRegistry):
         try:
             rejection = self._rejections.get(context.tool_call_index)
             if rejection is not None:
-                return self._answer_without_running(
+                return await self._answer_without_running(
                     context,
                     events,
                     tool_failure(rejection.code, rejection.message, retryable=False),
@@ -197,7 +197,7 @@ class _EmittingToolRegistry(ToolRegistry):
                     _TOOL_REMOVED_MESSAGE.format(name=name),
                     retryable=False,
                 )
-                return self._answer_without_running(
+                return await self._answer_without_running(
                     context,
                     events,
                     removed_result,
@@ -219,7 +219,7 @@ class _EmittingToolRegistry(ToolRegistry):
             )
             if denial_message is not None:
                 denied_result = tool_failure("tool_not_allowed", denial_message)
-                return self._answer_without_running(
+                return await self._answer_without_running(
                     context,
                     events,
                     denied_result,
@@ -299,7 +299,13 @@ class _EmittingToolRegistry(ToolRegistry):
                 effective_arguments,
                 context=context,
             )
-            self._emit_started(context, events, display=started_display, fingerprint=fingerprint)
+            await self._emit_started(
+                context,
+                events,
+                display=started_display,
+                fingerprint=fingerprint,
+                started_at=started_at,
+            )
 
             if result is None:
                 result = await self._dispatch_with_failure_envelope(
@@ -370,7 +376,9 @@ class _EmittingToolRegistry(ToolRegistry):
             # still gets exactly one result, in its events and for the Model.
             if events.finished:
                 raise
-            return self._answer_failed_dispatch(context, events, error, started_at, started_perf)
+            return await self._answer_failed_dispatch(
+                context, events, error, started_at, started_perf
+            )
         finally:
             # Per-call cancel registry entries are scoped to a single dispatch.
             # Clearing on every exit path keeps the registry bounded and lets a
@@ -435,7 +443,7 @@ class _EmittingToolRegistry(ToolRegistry):
             )
             raise asyncio.CancelledError from None
 
-    def _answer_without_running(
+    async def _answer_without_running(
         self,
         context: ToolContext,
         events: _CallEvents,
@@ -451,7 +459,9 @@ class _EmittingToolRegistry(ToolRegistry):
         self._tool_timings[context.tool_call_id] = timing
         self._tool_displays[context.tool_call_id] = display
         fingerprint = _tool_context_schema_fingerprint(self, context)
-        self._emit_started(context, events, display=display, fingerprint=fingerprint)
+        await self._emit_started(
+            context, events, display=display, fingerprint=fingerprint, started_at=started_at
+        )
         self._emit_result(
             context,
             events,
@@ -463,7 +473,7 @@ class _EmittingToolRegistry(ToolRegistry):
         )
         return result
 
-    def _answer_failed_dispatch(
+    async def _answer_failed_dispatch(
         self,
         context: ToolContext,
         events: _CallEvents,
@@ -489,7 +499,9 @@ class _EmittingToolRegistry(ToolRegistry):
             display = _empty_tool_display_payload()
         fingerprint = _tool_context_schema_fingerprint(self, context)
         if not events.started:
-            self._emit_started(context, events, display=display, fingerprint=fingerprint)
+            await self._emit_started(
+                context, events, display=display, fingerprint=fingerprint, started_at=started_at
+            )
         timing = _timing_payload(started_at, started_perf)
         self._tool_timings[context.tool_call_id] = timing
         self._tool_displays[context.tool_call_id] = display
@@ -504,29 +516,42 @@ class _EmittingToolRegistry(ToolRegistry):
         )
         return result
 
-    def _emit_started(
+    async def _emit_started(
         self,
         context: ToolContext,
         events: _CallEvents,
         *,
         display: JsonObject,
         fingerprint: str,
+        started_at: datetime,
     ) -> None:
-        self._run.emit(
-            TOOL_CALL_STARTED_EVENT,
-            {
-                "assistant_message_id": self._assistant_message_id,
-                "tool_call": {
-                    "id": context.tool_call_id,
-                    "index": context.tool_call_index,
-                    "name": context.tool_name,
-                    "arguments": events.arguments,
+        async def admitted() -> None:
+            if self._result_payloads is not None:
+                await self._result_payloads.record_tool_started(
+                    context.tool_call_id, context.tool_name, format_canonical_timestamp(started_at)
+                )
+            self._run.tool_call_count += 1
+            self._run.tool_call_names.add(context.tool_name)
+            self._run.emit(
+                TOOL_CALL_STARTED_EVENT,
+                {
+                    "assistant_message_id": self._assistant_message_id,
+                    "tool_call": {
+                        "id": context.tool_call_id,
+                        "index": context.tool_call_index,
+                        "name": context.tool_name,
+                        "arguments": events.arguments,
+                    },
+                    "display": display,
+                    "schema_fingerprint": fingerprint,
                 },
-                "display": display,
-                "schema_fingerprint": fingerprint,
-            },
-        )
-        events.started = True
+            )
+            events.started = True
+
+        # A Stop after the admission transaction cannot erase its count, but
+        # still prevents entering the handler after this boundary settles.
+        await settle_before_cancelling(admitted())
+        self._run.raise_if_cancelled()
 
     def _emit_result(
         self,

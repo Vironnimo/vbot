@@ -14,6 +14,7 @@ The public `core.sessions` package routes stable imports to the Session service 
 - `timeline` - the shared Chat History snapshot and edit eligibility (`_editable`, `latest_takeover`). Its `complete_runs` option expands requested page edges and touched incremental Runs inside one database snapshot, so semantic timeline callers receive complete Run segments; the limit is a target. The exact-Run read serves durable timeline reconnect without loading unrelated conversation history (`chat/timeline.md`).
 - `operations` - compound transactions: the Compaction commit and the history edit.
 - `prompts` - prompt pins, seen Skills and the prompt-cache affinity id.
+- `tool_invocations` - durable dispatch admissions, exact Result settlement and incremental own-audit reads (`sessions/runs.md` -> Canonical Tool invocations).
 - `runs` - admission, completion, Stream drafts and restart recovery; `notifications` - per-Run eligibility, read marks, Schedule provenance, bounded Schedule History and notification policy.
 - `mutations` - lifecycle (create, move, fork, delete with delete-time detachment, the review forks that follow a Session), metadata writes and plain appends.
 - `archive` - the archive entry ledger: every statement on `archive_entries`, `archive_entry_sessions` and `archive_entry_trees`, the compare-and-set state transitions, archiving Sessions into an entry, making an entry's members live again, and the purge steps. `archive_backfill` - adoption of archives that have no entry (legacy trees under `archive/`, archived Sessions without membership); the only code that knows the legacy layouts. The public facade is `SessionArchiveLedger` (`archive_ledger.py`, `ChatSessionManager.archive_ledger`), which the archive service drives (`archive.md`).
@@ -38,6 +39,7 @@ Read helpers that reconstruct Messages or decode JSON columns (summaries, tempor
 - `SCHEMA_SQL` (`schema.py`) declares format generation 1 of the Session database. The kernel checks identity and generation, applies the additive reconcile and probes every table before readers open; an already current schema requires no write transaction.
 - Other named migrations: `sessions.0001_archive_entries` (`archive/legacy-adoption.md`), `sessions.0002_session_working_projects` and `sessions.0004_restore_provenance` (`sessions/ownership.md`), `sessions.0003_subagent_reply_targets` (`sessions/history-api.md` -> Sub-Agent reply targets), and `sessions.0006_review_lineage` (`sessions/lineage.md` -> Delete; refuses older writers that do not maintain review provenance).
 - `sessions.0007_accessor_inputs` refuses older runtimes that cannot recover accepted ordinary Accessor work. Its additive tables keep the indexed receipt narrow, the Chat-owned execution payload separate, the canonical fallback User/Notes independent of that opaque format, and attachment roots outside transcript entries; their lifetime follows the receipt's immutable Session key.
+- `sessions.0009_tool_invocations` adds the independent Tool-start ledger and backfills proven own Results in bounded batches; older writers are refused (`sessions/runs.md` -> Canonical Tool invocations).
 
 ## Kernel integration
 

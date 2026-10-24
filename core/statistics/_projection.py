@@ -1,7 +1,7 @@
 """Project canonical Session messages into typed Statistics index rows.
 
 Only the facts that report sections aggregate enter the index: roles,
-timestamps, Run ids, normalized Usage, output speed and cost accounting, Tool outcomes,
+timestamps, Run ids, normalized Usage, output speed and cost accounting,
 error kinds, Compaction measurements, Run terminal facts and Skill activation
 names. Message text, Reasoning, Tool arguments and results, and Skill content
 never do. Every derived value mirrors the normalization the report applies, so
@@ -21,7 +21,6 @@ from core.sessions import skill_context_note_name, skill_tool_activation_name
 from core.statistics._measurements import (
     UNKNOWN_MODEL_KEY,
     _duration_ms,
-    _parse_envelope,
     _provider_model_key,
     _speed_facts,
     _timing_field,
@@ -177,7 +176,6 @@ class ProjectedRows:
     session_key: int
     records: list[tuple[Any, ...]] = field(default_factory=list)
     calls: list[tuple[Any, ...]] = field(default_factory=list)
-    tools: list[tuple[Any, ...]] = field(default_factory=list)
     errors: list[tuple[Any, ...]] = field(default_factory=list)
     checkpoints: list[tuple[Any, ...]] = field(default_factory=list)
     runs: list[tuple[Any, ...]] = field(default_factory=list)
@@ -204,7 +202,8 @@ class ProjectedRows:
                 visible=isinstance(message.content, str) and bool(message.content.strip()),
             )
         elif role == "tool":
-            self._add_tool(seq, instant, message)
+            if activation := skill_tool_activation_name(message):
+                self._add_skill(seq, activation, message)
         elif role == "note":
             skill_name = skill_context_note_name(message)
             if skill_name is not None:
@@ -232,38 +231,6 @@ class ProjectedRows:
                 package.source if package else None,
                 package.name if package else None,
                 package.location if package else None,
-            )
-        )
-
-    def _add_tool(self, seq: int, instant: int, message: ChatMessage) -> None:
-        activation = skill_tool_activation_name(message)
-        outcome: int | None
-        error_code: str | None = None
-        if activation is not None:
-            # A loaded Skill activation is a successful Tool call by definition.
-            outcome = 1
-            self._add_skill(seq, activation, message)
-        else:
-            envelope = _parse_envelope(message.content)
-            if envelope is None:
-                outcome = None
-            elif envelope["ok"]:
-                outcome = 1
-            else:
-                outcome = 0
-                error_code = envelope["error"]["code"]
-        duration_ms = _duration_ms(message.timing)
-        self.tools.append(
-            (
-                self.session_key,
-                seq,
-                instant,
-                message.name or UNKNOWN_MODEL_KEY,
-                outcome,
-                error_code,
-                duration_ms,
-                message.run_id,
-                latency_bucket(duration_ms),
             )
         )
 

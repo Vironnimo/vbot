@@ -18,14 +18,14 @@ from core.chat.messages import ChatMessage, ToolCall
 from core.database import DatabaseUnavailableError
 from core.models.pricing import TokenPricing
 from core.runs import Run, RunExecutionOwner
-from core.sessions import ChatSessionManager, SessionAddress
+from core.sessions import ChatSessionManager, SessionAddress, ToolResultFacts
 from core.statistics import index as index_module
 from core.statistics._projection import datetime_instant
 from core.statistics.index import IndexView, StatisticsIndex, StatisticsScope
 from core.tools import tool_failure, tool_success
 from core.usage import UsagePage, UsageRecorder
 from core.utils.timestamps import format_canonical_timestamp
-from tests.core.sessions.history_fixtures import append_tool_fixture, seed_history
+from tests.core.sessions.history_fixtures import append_tool_fixture, complete_run, seed_history
 from tests.core.statistics.statistics_test_support import (
     BASE,
     StatisticsFactory,
@@ -34,6 +34,7 @@ from tests.core.statistics.statistics_test_support import (
     _call,
     _compaction,
     _run_summary,
+    _timing,
     _tool,
 )
 from tests.core.usage.usage_test_support import read_ledger
@@ -286,6 +287,61 @@ async def test_incremental_maintenance_equals_a_full_rebuild(
             alpha, replace(message, timing=None if duration is None else message.timing)
         )
         check()
+
+    # Tool starts revise only the lifecycle ledger, with no Message tail. Each
+    # intermediate state must update the existing hourly group and native Run
+    # without recovery concealing a failed incremental projection.
+    _admit(manager, alpha.address, "tool-lifecycle", at=_at(7198))
+    writer = alpha.for_run("tool-lifecycle")
+    completed = ToolCall(id="completed", name="lifecycle", arguments={})
+    cancelled = ToolCall(id="cancelled", name="lifecycle", arguments={})
+    unstarted = ToolCall(id="unstarted", name="lifecycle", arguments={})
+    writer.append(
+        _assistant(model="chat/m", at=_at(7198), tool_calls=[completed, cancelled, unstarted])
+    )
+    assert not [row for row in check()["agg_tools"] if row["name"] == "lifecycle"]
+    invocation_key = await writer.start_tool_invocation_async(
+        call_id=completed.id, name=completed.name, started_at=format_canonical_timestamp(_at(7199))
+    )
+    [tool] = [row for row in check()["agg_tools"] if row["name"] == "lifecycle"]
+    assert (tool["calls"], tool["accepted"], tool["rejected"], tool["unknown"]) == (1, 0, 0, 1)
+    await writer.start_tool_invocation_async(
+        call_id=cancelled.id, name=cancelled.name, started_at=format_canonical_timestamp(_at(7199))
+    )
+    [tool] = [row for row in check()["agg_tools"] if row["name"] == "lifecycle"]
+    assert (tool["calls"], tool["accepted"], tool["rejected"], tool["unknown"]) == (2, 0, 0, 2)
+    writer.append_many(
+        [
+            ChatMessage.tool(
+                tool_call_id=completed.id,
+                name=completed.name,
+                content=json.dumps(tool_failure("denied", "no")),
+                timing=_timing(_at(7199), 2000),
+                timestamp=_at(7201),
+            )
+        ],
+        tool_results={
+            completed.id: ToolResultFacts(
+                "failed", ok=False, error_code="denied", invocation_key=invocation_key
+            )
+        },
+    )
+    [tool] = [row for row in check()["agg_tools"] if row["name"] == "lifecycle"]
+    assert (tool["calls"], tool["accepted"], tool["rejected"], tool["unknown"]) == (2, 0, 1, 1)
+    assert (tool["duration_calls"], tool["duration_ms"], tool["max_ms"]) == (1, 2000, 2000)
+    complete_run(
+        writer,
+        _run_summary(status="cancelled", at=_at(7202), duration_ms=4000, run_id="tool-lifecycle"),
+    )
+    terminal = check()
+    assert [row for row in terminal["agg_tools"] if row["name"] == "lifecycle"] == [tool]
+    run = _runs(terminal)[("alpha", "tool-lifecycle")]
+    assert (run["status"], run["tool_calls"], run["tool_rejected"], run["tool_ms"]) == (
+        "cancelled",
+        2,
+        1,
+        2000,
+    )
 
     # Appends to a Session, a new Session whose requests were recorded before
     # it was indexed, and a call that starts now and finishes later.

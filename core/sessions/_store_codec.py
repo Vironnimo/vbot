@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from core.chat.errors import ChatSessionError
-from core.sessions import _store_attachments, _store_fts, _store_values
+from core.sessions import _store_attachments, _store_fts, _store_tool_invocations, _store_values
 from core.sessions._types import JsonObject, ToolResultFacts, ToolResultPayload
 from core.sessions.errors import SessionStoreCorruptError
 from core.utils.ids import is_safe_id
@@ -454,8 +454,11 @@ def link_tool_result(
         clauses.append("e.entry_id = ?")
         values.append(assistant_message_id)
     rows = connection.execute(
-        "SELECT c.call_key, c.result_entry_key FROM tool_calls AS c "
-        "JOIN entries AS e ON e.entry_key = c.entry_key WHERE " + " AND ".join(clauses),
+        "SELECT c.call_key, c.result_entry_key, c.name, e.run_key, "
+        "(e.seq >= COALESCE(s.fork_point_seq, 0) AND COALESCE(r.inherited, 0) = 0) AS own_call "
+        "FROM tool_calls AS c JOIN entries AS e ON e.entry_key = c.entry_key "
+        "JOIN sessions AS s ON s.session_key = e.session_key "
+        "LEFT JOIN runs AS r ON r.run_key = e.run_key WHERE " + " AND ".join(clauses),
         values,
     ).fetchall()
     if len(rows) != 1:
@@ -490,6 +493,23 @@ def link_tool_result(
             _store_values._optional_json(message.tool_media, "tool_media"),
             call_key,
         ),
+    )
+    _store_tool_invocations.link_result(
+        connection,
+        session_key=session_key,
+        run_key=rows[0]["run_key"],
+        result_entry_key=entry_key,
+        call_id=str(message.tool_call_id),
+        name=rows[0]["name"],
+        timestamp=_store_values._timestamp(message.timestamp, "Message timestamp"),
+        started_at=_store_values._optional_timestamp(timing.get("started_at"), "Tool timing"),
+        status="completed" if facts is None else facts.status,
+        result_ok=None if facts is None else facts.ok,
+        error_code=None if facts is None else facts.error_code,
+        duration_ms=timing.get("duration_ms"),
+        invocation_key=None if facts is None else facts.invocation_key,
+        content=message.content if isinstance(message.content, str) else None,
+        own_call=bool(rows[0]["own_call"]),
     )
     if facts is not None and facts.payloads:
         created_at = _store_values._timestamp(message.timestamp, "Message timestamp")

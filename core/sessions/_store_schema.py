@@ -18,6 +18,7 @@ from core.sessions import (
     _store_attachments,
     _store_fts,
     _store_notifications,
+    _store_tool_invocations,
     _store_values,
     _store_working_projects,
 )
@@ -92,6 +93,12 @@ def session_database_spec(
                 "sessions.0008_run_notifications",
                 breaks_older=True,
                 apply=_store_notifications.backfill,
+            ),
+            # Older writers cannot maintain canonical dispatch admissions.
+            Migration(
+                "sessions.0009_tool_invocations",
+                breaks_older=True,
+                apply=_store_tool_invocations.backfill,
             ),
         ),
         after_open=_store_fts._ensure_fts_schema,

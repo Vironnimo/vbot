@@ -46,6 +46,8 @@ from core.tools.availability import (
     agent_tool_settings,
 )
 from core.utils.logging import get_logger
+from core.utils.timestamps import format_canonical_timestamp
+from core.utils.workers import settle_before_cancelling
 
 _LOGGER = get_logger("chat")
 
@@ -252,7 +254,7 @@ class ToolRound:
         await self._batch.aclose()
 
 
-def _fail_tool_calls_without_dispatch(
+async def _fail_tool_calls_without_dispatch(
     context: ToolDispatchContext,
     tool_calls: list[ToolCall],
     *,
@@ -272,7 +274,6 @@ def _fail_tool_calls_without_dispatch(
 
     tool_messages: list[ChatMessage] = []
     for index, tool_call in enumerate(tool_calls, start=start_index):
-        context.run.tool_call_count += 1
         started_at = datetime.now(UTC)
         started_perf = time.perf_counter()
         contract = context.tool_contracts.get(tool_call.name)
@@ -286,6 +287,13 @@ def _fail_tool_calls_without_dispatch(
             tool_call.name,
             tool_call.arguments,
         )
+
+        async def admitted(call: ToolCall = tool_call, began: datetime = started_at) -> None:
+            await context.record_tool_started(call.id, call.name, format_canonical_timestamp(began))
+            context.run.tool_call_count += 1
+            context.run.tool_call_names.add(call.name)
+
+        await settle_before_cancelling(admitted())
         context.run.emit(
             TOOL_CALL_STARTED_EVENT,
             {

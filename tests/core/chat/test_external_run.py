@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -43,11 +44,27 @@ def _runtime(tmp_path: Path, tools: ToolRegistry, responses: list[Any] | None = 
     )
 
 
-def _tools(*, gate: asyncio.Event | None = None) -> ToolRegistry:
+def _tools(
+    *,
+    gate: asyncio.Event | None = None,
+    started: asyncio.Event | None = None,
+    after_persisted: Callable[[ToolContext], None] | None = None,
+) -> ToolRegistry:
     tools = ToolRegistry()
 
-    async def lookup(_context: Any, arguments: dict[str, Any]) -> Any:
+    async def lookup(context: ToolContext, arguments: dict[str, Any]) -> Any:
+        if after_persisted is not None:
+            context.after_result_persisted(lambda: after_persisted(context))
+        if started is not None:
+            started.set()
         if gate is not None:
+            task = asyncio.current_task()
+            assert task is not None
+
+            def stop_lookup() -> None:
+                task.cancel()
+
+            context.on_cancel(stop_lookup)
             await gate.wait()
         return tool_success({"found": arguments.get("q")})
 
@@ -72,8 +89,23 @@ def _stored(runtime: Any, session_id: str) -> list[tuple[str, Any]]:
 
 
 @pytest.mark.asyncio
-async def test_external_run_records_the_conversation_and_runs_tool_calls(tmp_path: Path) -> None:
-    runtime = _runtime(tmp_path, _tools())
+@pytest.mark.parametrize("callback_fails", [False, True])
+async def test_external_run_records_the_conversation_and_runs_tool_calls(
+    tmp_path: Path, callback_fails: bool
+) -> None:
+    acknowledged: list[str] = []
+
+    def after_persisted(context: ToolContext) -> None:
+        session = runtime.chat_sessions.get(session_address("coder", context.session_id))
+        assert any(
+            message.role == "tool" and message.tool_call_id == context.tool_call_id
+            for message in session.load()
+        )
+        acknowledged.append(context.tool_call_id)
+        if callback_fails:
+            raise RuntimeError("callback failed after its durable acknowledgement")
+
+    runtime = _runtime(tmp_path, _tools(after_persisted=after_persisted))
     loop = build_chat_loop(runtime)
 
     external = await loop.start_external_run(
@@ -113,6 +145,7 @@ async def test_external_run_records_the_conversation_and_runs_tool_calls(tmp_pat
     assert external.ended
     assert (await external.run_tool("call_3", "lookup", {}))["ok"] is False
     assert runtime.adapter.requests == []
+    assert acknowledged == ["call_1"]
 
 
 @pytest.mark.asyncio
@@ -175,19 +208,42 @@ async def test_external_run_tool_calls_work_in_the_project_inside_the_agents_rul
 
 
 @pytest.mark.asyncio
-async def test_cancelling_an_external_run_ends_the_conversation(tmp_path: Path) -> None:
-    gate = asyncio.Event()
-    runtime = _runtime(tmp_path, _tools(gate=gate))
+@pytest.mark.parametrize("cancel_at", ["admission", "handler"])
+async def test_cancelling_an_external_run_ends_the_conversation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cancel_at: str
+) -> None:
+    gate, started = asyncio.Event(), asyncio.Event()
+    acknowledged: list[str] = []
+    runtime = _runtime(
+        tmp_path,
+        _tools(
+            gate=gate,
+            started=started,
+            after_persisted=lambda context: acknowledged.append(context.tool_call_id),
+        ),
+    )
     loop = build_chat_loop(runtime)
     cancelled: list[bool] = []
     external = await loop.start_external_run(
         "coder", model="voice-model", title="Live call", on_cancel=lambda: cancelled.append(True)
     )
+    admitted, release_admission = asyncio.Event(), asyncio.Event()
+    if cancel_at == "admission":
+        start_invocation = external._session.start_tool_invocation_async  # noqa: SLF001
+
+        async def gated_admission(**options: Any) -> int:
+            key = await start_invocation(**options)
+            admitted.set()
+            await release_admission.wait()
+            return key
+
+        monkeypatch.setattr(external._session, "start_tool_invocation_async", gated_admission)  # noqa: SLF001
     call = asyncio.create_task(external.run_tool("call_1", "lookup", {"q": "slow"}))
-    await asyncio.sleep(0)
+    await asyncio.wait_for((admitted if cancel_at == "admission" else started).wait(), WAIT_SECONDS)
     run = external.run
 
     run.request_cancel()
+    release_admission.set()
     with pytest.raises(RunCancelledError):
         await asyncio.wait_for(run.wait(), WAIT_SECONDS)
     with pytest.raises(asyncio.CancelledError):
@@ -198,6 +254,11 @@ async def test_cancelling_an_external_run_ends_the_conversation(tmp_path: Path) 
     session = runtime.chat_sessions.get(session_address("coder", external.session_id))
     results = [json.loads(m.content) for m in session.load() if m.role == "tool"]
     assert [result["error"]["code"] for result in results] == ["tool_stopped"]
+    assert acknowledged == []
+    assert started.is_set() is (cancel_at == "handler")
+    [invocation] = session.tool_invocations_since().invocations
+    assert invocation.status == "cancelled" and invocation.result_ok is None
+    assert run.tool_call_count == 1
 
 
 @pytest.mark.asyncio
@@ -205,12 +266,20 @@ async def test_a_call_still_running_when_the_conversation_ends_is_stored_as_stop
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(external_run_module, "_SETTLE_SECONDS", 0)
-    gate = asyncio.Event()
-    runtime = _runtime(tmp_path, _tools(gate=gate))
+    gate, started = asyncio.Event(), asyncio.Event()
+    acknowledged: list[str] = []
+    runtime = _runtime(
+        tmp_path,
+        _tools(
+            gate=gate,
+            started=started,
+            after_persisted=lambda context: acknowledged.append(context.tool_call_id),
+        ),
+    )
     loop = build_chat_loop(runtime)
     external = await loop.start_external_run("coder", model="voice-model", title="Live call")
     call = asyncio.create_task(external.run_tool("call_1", "lookup", {"q": "slow"}))
-    await asyncio.sleep(0)
+    await started.wait()
 
     await external.finish()
     await asyncio.wait_for(external.run.wait(), WAIT_SECONDS)
@@ -223,13 +292,18 @@ async def test_a_call_still_running_when_the_conversation_ends_is_stored_as_stop
     assert [message.role for message in stored] == ["assistant", "tool"]
     assert stored[0].tool_calls[0].name == "lookup"
     assert json.loads(stored[1].content)["error"]["code"] == "tool_stopped"
+    assert acknowledged == []
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("ending", ["deadline", "finish"])
 async def test_a_deadline_while_a_finished_call_is_stored_returns_its_result(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ending: str
 ) -> None:
-    runtime = _runtime(tmp_path, _tools())
+    acknowledged: list[str] = []
+    runtime = _runtime(
+        tmp_path, _tools(after_persisted=lambda context: acknowledged.append(context.tool_call_id))
+    )
     loop = build_chat_loop(runtime)
     external = await loop.start_external_run("coder", model="voice-model", title="Live call")
     session = external._session  # noqa: SLF001
@@ -251,15 +325,60 @@ async def test_a_deadline_while_a_finished_call_is_stored_returns_its_result(
 
     call = asyncio.create_task(bounded_call())
     await storing.wait()
-    deadlines[0].reschedule(asyncio.get_running_loop().time())
-    await asyncio.sleep(0)
+    assert acknowledged == []
+    finishing: asyncio.Task[None] | None = None
+    if ending == "deadline":
+        deadlines[0].reschedule(asyncio.get_running_loop().time())
+        await asyncio.sleep(0)
+    else:
+        monkeypatch.setattr(external_run_module, "_SETTLE_SECONDS", 0)
+        settled = asyncio.Event()
+        settle_calls = external._settle_calls  # noqa: SLF001
+
+        async def observe_settle() -> None:
+            await settle_calls()
+            settled.set()
+
+        monkeypatch.setattr(external, "_settle_calls", observe_settle)
+        finishing = asyncio.create_task(external.finish())
+        await settled.wait()
+        assert not finishing.done()
     release.set()
     result = await asyncio.wait_for(call, WAIT_SECONDS)
-    await external.finish()
+    if finishing is not None:
+        await finishing
+    else:
+        await external.finish()
 
     # The voice Model hears the result that history holds, not a timeout.
     assert result["ok"] is True and result["data"] == {"found": "weather"}
     assert [role for role, _ in _stored(runtime, external.session_id)] == ["assistant", "tool"]
+    assert acknowledged == ["call_1"]
+
+
+@pytest.mark.asyncio
+async def test_a_tool_result_that_cannot_be_stored_is_not_acknowledged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    acknowledged: list[str] = []
+    runtime = _runtime(
+        tmp_path, _tools(after_persisted=lambda context: acknowledged.append(context.tool_call_id))
+    )
+    external = await build_chat_loop(runtime).start_external_run(
+        "coder", model="voice-model", title="Live call"
+    )
+
+    async def cannot_store(*_arguments: Any, **_options: Any) -> None:
+        raise OSError("simulated store failure")
+
+    monkeypatch.setattr(external._session, "append_many_async", cannot_store)  # noqa: SLF001
+    result = await external.run_tool("call_1", "lookup", {"q": "weather"})
+    await external.finish()
+    await asyncio.wait_for(external.run.wait(), WAIT_SECONDS)
+
+    assert result["ok"] is True
+    assert acknowledged == []
+    assert _stored(runtime, external.session_id) == []
 
 
 @pytest.mark.asyncio

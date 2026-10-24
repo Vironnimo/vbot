@@ -210,6 +210,9 @@ def finish_run(
     if run is None or run["status"] != "running" or run["inherited"]:
         raise ChatSessionError("Only an admitted running Run can be completed")
     run_key = int(run["run_key"])
+    from core.sessions import _store_tool_invocations
+
+    _store_tool_invocations.settle_run(connection, session_key, run_key, completion.status)
     if _store_accessor_inputs.materialize_unwritten_input(connection, address, completion.run_id):
         state = _store_values._require_live(connection, address)
     summary = ChatMessage.run_summary(
