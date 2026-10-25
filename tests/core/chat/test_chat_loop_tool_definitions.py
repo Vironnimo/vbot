@@ -134,7 +134,8 @@ async def test_tool_called_by_another_harness_name_runs_and_is_stored_under_its_
 
     messages = history(runtime)
     assert ("background_tasks" in _offered(runtime.adapter.requests[0])) is (tool_loading is None)
-    assert dispatched == ["web_fetch", "background_tasks", "computer"]
+    # Parallel handlers may start out of order; persisted Calls and Results may not.
+    assert sorted(dispatched) == ["background_tasks", "computer", "web_fetch"]
     assert _call_names(messages) == [
         "web_fetch",
         "TodoWrite",
@@ -143,12 +144,26 @@ async def test_tool_called_by_another_harness_name_runs_and_is_stored_under_its_
         "computer",
         "fetch",
     ]
+    assert [(m.tool_call_id, m.name) for m in messages if m.role == "tool"] == [
+        ("first", "web_fetch"),
+        ("second", "TodoWrite"),
+        ("third", "fetch"),
+        ("fourth", "background_tasks"),
+        ("fifth", "computer"),
+        ("sixth", "fetch"),
+    ]
+    results = tool_results(messages)
+    assert [result["data"]["id"] for result in results if result["ok"]] == [
+        "first",
+        "fourth",
+        "fifth",
+    ]
     unknown = next(m for m in messages if m.role == "tool" and m.name == "TodoWrite")
     assert "Unknown Tool: TodoWrite. Call one of the available Tools instead: " in str(
         unknown.content
     )
-    assert tool_results(messages)[2]["error"]["code"] == "tool_not_allowed"
-    assert tool_results(messages)[5]["error"]["code"] == "tool_not_allowed"
+    assert results[2]["error"]["code"] == "tool_not_allowed"
+    assert results[5]["error"]["code"] == "tool_not_allowed"
     assert _wire_call_names(runtime.adapter.requests[1]) == [
         "web_fetch",
         "TodoWrite",
