@@ -86,6 +86,9 @@ export default Object.freeze({
   'mcp.oauthClientIdHelpAria': 'About the OAuth client ID',
   'mcp.oauthClientIdHelp':
     "Only for a server that does not let vBot register itself. Register vBot with the server's sign-in service using the redirect URL shown in this connection's details, then enter the client ID it issues.",
+  'mcp.oauthClientMetadataUrl': 'Client metadata URL (optional)',
+  'mcp.oauthClientMetadataUrlHelp':
+    "Public HTTPS address of your own client metadata document (CIMD), containing this connection's redirect URL. Leave empty for vBot's automatic client selection. An entered OAuth client ID takes precedence.",
   'mcp.oauthClientSecret': 'Credential name for the client secret (optional)',
   'mcp.oauthClientSecretHelp':
     'Use a credential name, not the secret. After saving, open Credentials to set its value.',

@@ -1,0 +1,73 @@
+name: MCP client identity
+
+# The packaged document is also the public identity: publish its exact bytes.
+# Enable GitHub Pages with the GitHub Actions source once in repository settings.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "resources/extensions/mcp/client-metadata.json"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.repository == 'Vironnimo/vbot' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Configure GitHub Pages
+        id: pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+      - name: Validate and prepare the public client document
+        env:
+          PAGES_BASE_URL: ${{ steps.pages.outputs.base_url }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import shutil
+
+          source = Path("resources/extensions/mcp/client-metadata.json")
+          metadata = json.loads(source.read_text(encoding="utf-8"))
+          expected_url = os.environ["PAGES_BASE_URL"].rstrip("/") + "/oauth/client-metadata.json"
+          assert metadata["client_id"] == expected_url, "Client identity must match the published URL"
+          assert metadata["client_name"] == "vBot"
+          assert metadata["redirect_uris"], "The client must list its allowed callbacks"
+          assert metadata["token_endpoint_auth_method"] == "none", "The shared client is public"
+          assert "client_secret" not in metadata
+
+          site = Path(os.environ["RUNNER_TEMP"]) / "vbot-pages"
+          (site / "oauth").mkdir(parents=True)
+          shutil.copyfile(source, site / "oauth" / "client-metadata.json")
+          (site / "index.html").write_text(
+              '<!doctype html><html lang="en"><meta charset="utf-8">'
+              '<title>vBot client identity</title><h1>vBot client identity</h1>'
+              '<p><a href="oauth/client-metadata.json">OAuth client metadata</a></p>'
+              '<p><a href="https://github.com/Vironnimo/vbot">vBot project</a></p></html>\n',
+              encoding="utf-8",
+              newline="\n",
+          )
+          PY
+      - name: Upload the public files
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: ${{ runner.temp }}/vbot-pages
+      - name: Publish the client identity
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

@@ -53,11 +53,69 @@ def saved_connections(store):
             "oauth": True,
             "oauth_redirect_host": "127.0.0.2",
         },
+        {
+            "id": "example",
+            "transport": "http",
+            "url": "https://example.com/mcp",
+            "oauth_client_metadata_url": "https://client.example.com/client.json",
+        },
+        connection(oauth_client_metadata_url="https://client.example.com/client.json"),
+        *[
+            {
+                "id": "example",
+                "transport": "http",
+                "url": "https://example.com/mcp",
+                "oauth": True,
+                "oauth_client_metadata_url": url,
+            }
+            for url in (
+                "",
+                "http://client.example.com/client.json",
+                "https://client.example.com",
+                "https://client.example.com/",
+                "https://client.example.com/;parameters",
+                "https:///client.json",
+                "https://user:secret@client.example.com/client.json",
+                "https://client.example.com/client.json#fragment",
+                "https://client.example.com:invalid/client.json",
+                "https://client.example.com:65536/client.json",
+                " https://client.example.com/client.json",
+                "https://client.example.com/client\n.json",
+                "https://client.example.com/client\x7f.json",
+                "https://client.example.com/./client.json",
+                "https://client.example.com/oauth/../client.json",
+                "https://client.example.com/oauth/.",
+                "https://client.example.com/%2e/client.json",
+                "https://client.example.com/.%2E/client.json",
+                "https://client.example.com/%2e%2E/client.json",
+                "https://client.example.com/oauth/%2E.",
+                "https://client.example.com\\another.example/client.json",
+                "https://client.example.com/oauth\\client.json",
+            )
+        ],
     ],
 )
 def test_invalid_configuration_is_rejected(value):
     with pytest.raises(ValueError):
         validate_connection(value)
+
+
+@pytest.mark.parametrize("client_id", [None, "registered-client"])
+def test_client_metadata_identity_round_trips_without_rewriting_its_url(tmp_path, client_id):
+    record = {
+        "id": "example",
+        "transport": "http",
+        "url": "https://example.com/mcp",
+        "oauth": True,
+        "oauth_client_metadata_url": "https://client.example.com:8443/oauth%2Fclient%2ejson?v=1",
+        **({"oauth_client_id": client_id} if client_id else {}),
+    }
+    store = ConnectionStore(tmp_path)
+    store.save({"example": record})
+    loaded = store.load()
+    assert loaded == {"example": validate_connection(record)}
+    assert loaded["example"]["oauth_client_metadata_url"] == record["oauth_client_metadata_url"]
+    assert not store.issues
 
 
 def test_connection_description_is_one_trimmed_line_or_absent():

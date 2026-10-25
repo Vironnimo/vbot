@@ -36,13 +36,16 @@ default ``client_secret_basic``, or ``client_secret_post`` when the server lists
 only that, instead of being used as a public client that never sends its secret.
 An empty scope list produces no blank scope.
 
-Client registration, in order: a pre-registered client from the configuration
-(``oauth_client_id``, an optional ``oauth_client_secret`` credential reference,
-``oauth_scopes``), else dynamic registration. Client ID metadata documents are
-not offered: choosing and hosting a stable public HTTPS client identity remains
-open. A shared document can cover loopback IP callbacks with the same host and
-path across installation ports (RFC 8252 sections 7.3 and 8.4); other callback
-hosts or paths need matching entries. A pre-registered client is bound to the
+Client registration, in order: a pre-registered client from the configuration,
+an existing registration, then a Client ID Metadata Document (CIMD) when the
+authorization server advertises support, else dynamic registration. An explicit
+``oauth_client_metadata_url`` supplies the operator's document; otherwise the
+bundled ``client-metadata.json`` supplies vBot's public identity only for the
+callbacks it covers. Its loopback IP entries allow different ports, but require
+the same host and path (RFC 8252 sections 7.3 and 8.4); localhost entries match
+exactly. The authorization server fetches and validates the public document.
+Only that client identity is portable across authorization servers; tokens stay
+bound to their resource and issuer. A pre-registered client is bound to the
 authorization server of its first sign-in; when the server later names another
 one, sign-in fails instead of presenting the client to it.
 
@@ -60,6 +63,8 @@ import re
 import time
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from dataclasses import dataclass, fields
+from functools import cache
+from pathlib import Path
 from typing import Any, override
 from urllib.parse import parse_qs, urljoin, urlsplit, urlunsplit
 
@@ -127,6 +132,41 @@ def redirect_uri(config: dict[str, Any], host: ExtensionHost) -> str:
         parts = urlsplit(callback)
         return urlunsplit(parts._replace(netloc=f"localhost:{parts.port}"))
     return callback
+
+
+@cache
+def _builtin_client_identity() -> tuple[str, tuple[str, ...]]:
+    """The immutable packaged identity, also deployed verbatim to GitHub Pages."""
+    document = OAuthClientInformationFull.model_validate_json(
+        Path(__file__).with_name("client-metadata.json").read_text(encoding="utf-8")
+    )
+    return document.client_id, tuple(str(uri) for uri in document.redirect_uris or [])
+
+
+def _client_metadata_url(config: dict[str, Any], redirect: str) -> str | None:
+    """Select a public identity without replacing a configured client."""
+    if config.get("oauth_client_id"):
+        return None
+    if configured := config.get("oauth_client_metadata_url"):
+        return str(configured)
+    client_id, redirects = _builtin_client_identity()
+    if redirect in redirects:
+        return client_id
+    parsed = urlsplit(redirect)
+    if (
+        parsed.scheme == "http"
+        and parsed.hostname in {"127.0.0.1", "::1"}
+        and parsed.username is None
+        and parsed.password is None
+    ):
+        # RFC 8252's port exception belongs to IP literals, never localhost or
+        # arbitrary hosts. Every other URI component still has to match.
+        without_port = parsed._replace(netloc=parsed.hostname)
+        for registered in redirects:
+            entry = urlsplit(registered)
+            if without_port == entry._replace(netloc=entry.hostname or ""):
+                return client_id
+    return None
 
 
 def forget_sign_in(host: ExtensionHost, connection: str) -> bool:
@@ -267,6 +307,7 @@ class OAuthStorage:
         config: dict[str, Any],
         redirect: str,
         client_secret: str | None = None,
+        client_metadata_url: str | None = None,
     ) -> None:
         self._host = host
         self._config = config
@@ -274,6 +315,7 @@ class OAuthStorage:
         self._resource = resource_url_from_server_url(config["url"])
         self._redirect = redirect
         self._client_secret = client_secret
+        self._client_metadata_url = client_metadata_url
         self.context: OAuthContext | None = None
 
     def _document(self, key: str) -> dict[str, Any] | None:
@@ -298,6 +340,14 @@ class OAuthStorage:
         if issuer and registered and not _issuers_match(issuer, registered):
             return None
         return document
+
+    def _is_metadata_client(self, document: dict[str, Any] | None) -> bool:
+        """CIMD identity is portable; a DCR-issued URL alone does not establish it."""
+        return bool(
+            self._client_metadata_url
+            and document
+            and document.get("client_id") == self._client_metadata_url
+        )
 
     def signed_in(self) -> bool:
         """Whether tokens for this connection's URL are stored."""
@@ -391,7 +441,9 @@ class OAuthStorage:
             client = OAuthClientInformationFull.model_validate(document)
         except ValidationError:
             return None
-        if self._redirect not in {str(uri) for uri in client.redirect_uris or []}:
+        if not self._is_metadata_client(document) and self._redirect not in {
+            str(uri) for uri in client.redirect_uris or []
+        }:
             return None
         return client
 
@@ -419,6 +471,7 @@ class _Provider(OAuthClientProvider):
         *,
         storage: OAuthStorage,
         preregistered: bool,
+        client_metadata_url: str | None,
         redirect_handler: Callable[[str], Awaitable[None]],
         callback_handler: Callable[[], Awaitable[AuthorizationCodeResult]],
     ) -> None:
@@ -428,6 +481,7 @@ class _Provider(OAuthClientProvider):
             storage,
             redirect_handler=redirect_handler,
             callback_handler=callback_handler,
+            client_metadata_url=client_metadata_url,
         )
         self.context = _Context(
             **{field.name: getattr(self.context, field.name) for field in fields(self.context)}
@@ -576,6 +630,19 @@ class _Provider(OAuthClientProvider):
                 "with the new server and update the client ID, or sign in again to use "
                 "the configured client with it"
             )
+        metadata = self.context.oauth_metadata
+        client = self.context.client_info
+        cached_issuer = str(metadata.issuer) if metadata is not None else None
+        if cached_issuer is None and client is not None:
+            cached_issuer = client.issuer
+        if cached_issuer is not None and not _issuers_match(cached_issuer, issuer):
+            # A CIMD identity is portable, but endpoints, tokens and advertised
+            # support are not. The SDK otherwise retains old AS metadata with
+            # CIMD credentials, even if discovery at the new issuer fails.
+            self.context.oauth_metadata = None
+            self.context.clear_tokens()
+            self._storage.forget_tokens()
+            self._forget_registration()
         return issuer
 
 
@@ -608,12 +675,14 @@ class ConnectionOAuth:
         metadata._configured_scope = configured_scope
         # The URL as the SDK sends it, which is how a registration records it.
         sent_redirect = str(metadata.redirect_uris[0]) if metadata.redirect_uris else redirect
-        storage = OAuthStorage(self._host, self._config, sent_redirect, secret)
+        client_metadata_url = _client_metadata_url(self._config, sent_redirect)
+        storage = OAuthStorage(self._host, self._config, sent_redirect, secret, client_metadata_url)
         self._provider = _Provider(
             self._config["url"],
             metadata,
             storage=storage,
             preregistered=bool(self._config.get("oauth_client_id")),
+            client_metadata_url=client_metadata_url,
             redirect_handler=self.redirect,
             callback_handler=self.callback,
         )

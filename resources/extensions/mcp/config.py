@@ -14,7 +14,7 @@ import unicodedata
 from collections import Counter
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import urlparse, urlsplit
 
 from jsonschema import Draft202012Validator
 
@@ -50,6 +50,7 @@ ROOTS_POLICIES = ("off", "workspace")
 _OAUTH_CLIENT_FIELDS = (
     "oauth_redirect_host",
     "oauth_client_id",
+    "oauth_client_metadata_url",
     "oauth_client_secret",
     "oauth_scopes",
 )
@@ -76,6 +77,7 @@ CONNECTION_SCHEMA: dict[str, Any] = {
         # The server callback's host in the redirect URI: its loopback address, or this name.
         "oauth_redirect_host": {"enum": ["localhost"]},
         "oauth_client_id": {"type": "string", "minLength": 1},
+        "oauth_client_metadata_url": {"type": "string", "minLength": 1},
         # The name of the credential holding the client secret, never the secret.
         "oauth_client_secret": {"type": "string"},
         "oauth_scopes": {
@@ -94,6 +96,40 @@ CONNECTION_FIELDS = frozenset(CONNECTION_SCHEMA["properties"])
 CONNECTIONS_SHAPE = json_document(
     {"connections"}, {"connections": json_list(json_object(CONNECTION_FIELDS), key="id")}
 )
+
+
+def _validate_client_metadata_url(value: str) -> None:
+    """Keep the public client identifier exact and usable by the SDK's CIMD flow."""
+    try:
+        parsed = urlparse(value)
+        # Accessing port also rejects a non-numeric or out-of-range port.
+        _ = parsed.port
+        # Decode only the unreserved dot; an encoded slash remains part of its segment.
+        segments = urlsplit(value).path.split("/")
+        has_dot_segment = any(
+            re.sub("%2e", ".", segment, flags=re.IGNORECASE) in {".", ".."} for segment in segments
+        )
+        valid = (
+            parsed.scheme == "https"
+            and bool(parsed.hostname)
+            and parsed.path not in {"", "/"}
+            and parsed.username is None
+            and parsed.password is None
+            and "#" not in value
+            and "\\" not in value
+            and not has_dot_segment
+            and not any(
+                character.isspace() or ord(character) < 32 or ord(character) == 127
+                for character in value
+            )
+        )
+    except ValueError:
+        valid = False
+    if not valid:
+        raise ValueError(
+            "OAuth client metadata URL requires HTTPS, a host and a non-root path, "
+            "without credentials, fragments, whitespace, backslashes or dot path components"
+        )
 
 
 def validate_connection(value: Any) -> dict[str, Any]:
@@ -128,6 +164,8 @@ def validate_connection(value: Any) -> dict[str, Any]:
             raise ValueError("HTTP MCP connections cannot specify a local command or directory")
     if any(field in record for field in _OAUTH_CLIENT_FIELDS) and not record.get("oauth"):
         raise ValueError("OAuth client settings require an HTTP connection with OAuth enabled")
+    if "oauth_client_metadata_url" in record:
+        _validate_client_metadata_url(record["oauth_client_metadata_url"])
     if record.get("oauth_client_secret") and not record.get("oauth_client_id"):
         raise ValueError("An OAuth client secret requires an OAuth client ID")
     if record.get("oauth_client_secret") is not None and not re.fullmatch(

@@ -10,11 +10,12 @@ const mappings = [
   'credential_environment',
   'credential_headers',
 ];
-// Settings that exist only with OAuth: the redirect and a pre-registered client.
+// Settings that exist only with OAuth: the redirect and client identity.
 const oauthClientFields = [
   'oauth_redirect_uri',
   'oauth_redirect_host',
   'oauth_client_id',
+  'oauth_client_metadata_url',
   'oauth_client_secret',
   'oauth_scopes',
 ];
@@ -37,6 +38,7 @@ export function mcpDraft(configuration = null) {
     oauth: source.oauth ?? false,
     oauth_redirect_uri: source.oauth_redirect_uri ?? '',
     oauth_client_id: source.oauth_client_id ?? '',
+    oauth_client_metadata_url: source.oauth_client_metadata_url ?? '',
     oauth_client_secret: source.oauth_client_secret ?? '',
     oauth_scopes: (source.oauth_scopes ?? []).join(' '),
     sampling: source.sampling ?? 'off',
@@ -70,6 +72,9 @@ export function mcpConfiguration(draft) {
     record[field] = Object.fromEntries(entries);
   }
   record.oauth_client_id = (draft.oauth_client_id ?? '').trim();
+  record.oauth_client_metadata_url = (
+    draft.oauth_client_metadata_url ?? ''
+  ).trim();
   record.oauth_client_secret = (draft.oauth_client_secret ?? '').trim();
   record.oauth_scopes = [
     ...new Set((draft.oauth_scopes ?? '').split(/\s+/).filter(Boolean)),
