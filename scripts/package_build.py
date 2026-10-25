@@ -235,18 +235,22 @@ def write_manifest(
         "channel": channel,
         "files": file_hashes(version_root),
     }
-    if shape != "desktop-client":
-        # --source can name an older checkout than the running builder. Only
-        # the staged source's own declaration proves its authentication contract.
-        with (version_root / "app" / "pyproject.toml").open("rb") as stream:
-            project = tomllib.load(stream)
-        protocol = (
-            project.get("tool", {}).get("vbot", {}).get("package", {}).get("server-access-protocol")
-        )
+    # --source can name an older checkout than the running builder. Only the
+    # staged source's declarations prove its authentication and switching contracts.
+    with (version_root / "app" / "pyproject.toml").open("rb") as stream:
+        project = tomllib.load(stream)
+    declarations = project.get("tool", {}).get("vbot", {}).get("package", {})
+    for source_name, manifest_name in (
+        ("server-access-protocol", "server_access_protocol"),
+        ("version-switch-protocol", "version_switch_protocol"),
+    ):
+        if source_name == "server-access-protocol" and shape == "desktop-client":
+            continue
+        protocol = declarations.get(source_name)
         if protocol is not None:
             if type(protocol) is not int or protocol < 1:
-                raise BuildError("server-access-protocol must be a positive integer")
-            manifest["server_access_protocol"] = protocol
+                raise BuildError(f"{source_name} must be a positive integer")
+            manifest[manifest_name] = protocol
     (version_root / "release.json").write_text(
         json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
     )
@@ -267,6 +271,8 @@ def write_release_identity(artifacts: Path, manifest: dict[str, Any]) -> None:
         "schema_version": 1,
         **{name: manifest[name] for name in ("version_id", "version", "revision", "channel")},
     }
+    if "version_switch_protocol" in manifest:
+        identity["version_switch_protocol"] = manifest["version_switch_protocol"]
     (artifacts / RELEASE_IDENTITY_NAME).write_text(
         json.dumps(identity, indent=2) + "\n", encoding="utf-8"
     )

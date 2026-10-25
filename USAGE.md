@@ -134,7 +134,7 @@ Linux options are passed after `bash -s --`:
 |---|---|
 | `--dir <path>` | Installation directory; default `~/.local/share/vbot` or `$VBOT_DIR` |
 | `--main` | Install the newest main build; updates then follow main |
-| `--version <tag>` | Install a specific release tag, such as `v0.2.0`; cannot be combined with `--main` |
+| `--version <version>` | Install an exact release in `X.Y.Z` or `vX.Y.Z` form; cannot be combined with `--main` |
 | `--data-dir <path>` | Server data directory; default `~/.vbot` |
 | `--host <host>` | Server bind host; default from the access mode, `127.0.0.1` for `local` |
 | `--access <mode>` | Server access mode: `local` (default), `lan` or `authenticated`; its options `--allow-network`, `--allow-host`, `--public-url`, `--trusted-proxy`, `--tls-cert`, `--tls-key` are described in [Server access](#server-access) |
@@ -152,6 +152,8 @@ curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install
 ```
 
 </details>
+
+A selected release determines the initial installation, not a permanent version pin: subsequent `vbot update` calls follow the release channel. Both Installers verify that the downloaded release identity names the requested version and channel.
 
 Both Installers report each step with a status label; `NO_COLOR=1` disables color. When the Windows Installer fails, it prints the path of its technical log. With `-NoAutostart` or `--no-autostart`, start the server yourself with `vbot server start`.
 
@@ -239,7 +241,7 @@ vbot update --no-restart       # prepare a candidate without changing the active
 vbot update activate OPERATION_ID
 ```
 
-An update downloads the signed package of the channel, verifies its signature, and prepares the new version under `versions/<id>` beside the active one, with the same shape and server target and the Extension dependencies it needs. It then stops the server right away, like `vbot server stop`: active Runs are cancelled and keep their history up to that point, and queued messages are discarded. Then it creates a data snapshot of every canonical database and the JSON configuration documents. It verifies the candidate before switching `active-version` to it and verifies normal startup. If the candidate fails its verification start, the updater restores that snapshot, but only when the candidate changed the data and no other vBot server uses the data directory, and keeps the previous version once its startup is verified. After the candidate passed verification, the snapshot is never restored automatically; apart from this rollback, vBot restores a data snapshot on its own only to repair a damaged or missing database (see Data-store maintenance). If recovery cannot establish a safe result, the operation reports that it needs attention; when a data restore was interrupted, it names the `vbot data-store snapshot restore <snapshot-id> --all --yes` command that finishes it. An open Desktop window can continue using its previous version until reopened.
+An update downloads the signed package of the channel, verifies its signature, and prepares the new version under `versions/<id>` beside the active one, with the same shape and server target and the Extension dependencies it needs. It then stops the server right away, like `vbot server stop`: active Runs are cancelled and keep their history up to that point, and queued messages are discarded. Then it creates a data snapshot of every canonical database and the JSON configuration documents. It verifies the candidate before switching `active-version` to it and verifies normal startup. If the candidate fails its verification start, the updater restores that snapshot, but only when the candidate changed the data and no other vBot server uses the data directory, and keeps the previous version once its startup is verified. After the candidate passed verification, the snapshot is never restored automatically; apart from this rollback, vBot restores a data snapshot on its own only to repair a damaged or missing database (see Data-store maintenance). If recovery cannot establish a safe result, the operation reports that it needs attention; when a data restore was interrupted, it names the `vbot data-store snapshot restore <snapshot-id> --all --yes` command that finishes it. An open Desktop switches through its restart handoff.
 
 Switch the update channel, then update:
 
@@ -249,7 +251,25 @@ vbot update
 vbot application status            # shows the version, shape and channel
 ```
 
-The channel cannot change while an update is pending. `vbot update` never goes back to an older version: after switching from main to release, it installs nothing until a release newer than the running main build appears (a release of the same version counts as older, since main builds of a version follow its release). The refusal changes nothing and names the way back, `vbot application channel main`. To install an older version deliberately, download its package for your platform and shape from the release and run `vbot update --package <file>`; an older version may refuse data that a newer one already converted, in which case the update rolls back.
+The channel cannot change while an update is pending. `vbot update` never goes back to an older version: after switching from main to release, it installs nothing until a release newer than the running main build appears (a release of the same version counts as older, since main builds of a version follow its release). The refusal changes nothing and names the way back, `vbot application channel main`. To choose a release deliberately, use `vbot update <version>`, replacing `<version>` with its `X.Y.Z` version or `vX.Y.Z` tag. The selected signed release must declare version-switch support; the first release shipping that support is the earliest eligible target. Earlier releases are not supported downgrade targets. This command keeps the configured update channel and current data. It verifies the selected version before activation, and a failed verification retains the original installation and restores only changes made by that failed attempt. The startup check covers vBot's core data. Extensions do not run during it; their own database compatibility is checked when they open normally, and an Extension failure can leave that Extension unavailable while the server starts. A deliberately supplied `--package <file>` remains available for local builds; a supported installation also requires version-switch support in that candidate.
+
+To undo the last activated version change, including one whose normal server startup failed:
+
+```bash
+vbot rollback
+```
+
+This uses the retained previous installation and keeps current data. A previously stopped server stays stopped; a failed startup that had intended to restart a running server is recovered with that intent. An unresponsive owned server can be stopped through the normal bounded lifecycle path. A Desktop Client changes its application version without touching server data.
+
+If the previous version cannot use current data, rollback retains the current installation and reports its saved pre-update snapshot. Restoring that data is a separate, explicit decision: it discards data changes after the snapshot. Use the exact snapshot id printed by the result:
+
+```bash
+vbot rollback --restore-data <snapshot-id> --yes
+```
+
+The restore first saves and protects the current data. If the target fails verification, the updater restores that safety snapshot before verifying the original installation, provided no competing server or data change appears during recovery. Both restores block new canonical database opens and recheck existing writers before replacing data; a conflict preserves the data and requires inspection. Credentials and access state follow the data-store restore exclusions; external project files and other files outside data snapshots are not rewound. An interrupted restore remains offline for inspection instead of replaying a destructive step. `vbot update status <operation-id>` records the requested snapshot, whether restoration started, and the safety snapshot; a started restore alone does not mean completion. Agents can request a normal rollback, but the data-reset form requires the user's terminal because it can remove the originating Run's history and continuation.
+
+The application version and its data snapshot remain retained together until another activated version change replaces that recovery point. Ordinary snapshot cleanup cannot remove the retained snapshot; insufficient space fails the new snapshot instead. Historical releases before version-switch support remain installable through the existing Installer version option when their packages are available, but are not eligible targets of this supported return path.
 
 When called through Bash in a vBot Run, the command saves its operation before returning and automatically arranges a continuation in the same Session. The updater waits for the whole Tool batch to enter Session history, registers that continuation, and then stops the server, which cancels the originating Run together with every other active Run. The continuation checks the saved result; acceptance alone is not update success. Do not create an additional Bootstrap for this update path.
 

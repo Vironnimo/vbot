@@ -26,8 +26,9 @@ def _install(root: Path) -> Installation:
     return install
 
 
+@pytest.mark.parametrize("selector", [None, "1.2.2", "v1.2.2"])
 def test_human_packaged_update_waits_for_its_terminal_result(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, selector: str | None
 ) -> None:
     install = _install(tmp_path)
     requested: list[tuple[bool, str | None]] = []
@@ -39,6 +40,7 @@ def test_human_packaged_update_waits_for_its_terminal_result(
         token = kwargs["handoff_token"]
         assert token is None or isinstance(token, str)
         requested.append((bool(kwargs["restart"]), token))
+        assert kwargs.get("release_version") == ("1.2.2" if selector else None)
         return operation
 
     def wait(_install: Installation, operation_id: str, **_kwargs: object) -> Operation:
@@ -52,9 +54,119 @@ def test_human_packaged_update_waits_for_its_terminal_result(
     monkeypatch.setattr(operations, "request_update", request)
     monkeypatch.setattr(operations, "wait", wait)
 
-    assert command.dispatch(parse_args(["update"])) == 0
+    assert command.dispatch(parse_args(["update", *([selector] if selector else [])])) == 0
     assert requested == [(True, None)]
     assert waited == ["upd_human"]
+
+
+def test_prepared_release_activation_keeps_the_explicit_selection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    install = _install(tmp_path)
+    prepared = Operation(
+        id="upd_prepared",
+        phase="prepared",
+        candidate_version="rel_selected",
+        release_version="1.2.2",
+    )
+    prepared.save(install)
+    captured: list[dict[str, object]] = []
+
+    def request(_install: Installation, **kwargs: object) -> Operation:
+        captured.append(kwargs)
+        return Operation(id="upd_activation", phase="queued")
+
+    monkeypatch.setattr(command, "discover", lambda: install)
+    monkeypatch.setattr(operations, "request_update", request)
+    monkeypatch.delenv("VBOT_UPDATE_HANDOFF", raising=False)
+    monkeypatch.setattr(operations, "wait", lambda *_a, **_kw: pytest.fail("detached"))
+
+    assert run(["update", "activate", prepared.id, "--detach"]) == 0
+    assert len(captured) == 1
+    assert captured[0]["prepared_version"] == "rel_selected"
+    assert captured[0]["release_version"] == "1.2.2"
+    assert captured[0]["package"] is None
+    assert captured[0]["restart"] is True
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["update", "1.2.3", "--package", "release.zip"],
+        ["update", "1.2.3", "upd_previous"],
+        ["update", "1.2"],
+        ["update", "latest"],
+        ["update", "status", "--package", "release.zip"],
+        ["update", "activate", "upd_prepared", "--no-restart"],
+        ["rollback", "--yes"],
+        ["rollback", "--package", "release.zip"],
+    ],
+)
+def test_invalid_version_switch_arguments_never_dispatch(
+    monkeypatch: pytest.MonkeyPatch, arguments: list[str]
+) -> None:
+    monkeypatch.setattr(command, "dispatch", lambda *_a: pytest.fail("invalid request dispatched"))
+    with pytest.raises(SystemExit) as stopped:
+        run(arguments)
+    assert stopped.value.code == 2
+
+
+@pytest.mark.parametrize("arguments", [["update", "1.2.3"], ["rollback"]])
+def test_version_switches_refuse_a_development_checkout(
+    monkeypatch: pytest.MonkeyPatch, arguments: list[str]
+) -> None:
+    monkeypatch.setattr(command, "discover", lambda: None)
+    monkeypatch.setattr(
+        operations, "request_update", lambda *_a, **_kw: pytest.fail("not installed")
+    )
+    assert run(arguments) == 1
+
+
+@pytest.mark.parametrize("mode", ["keep", "unconfirmed", "confirmed", "agent"])
+def test_rollback_requires_confirmation_before_requesting_a_data_restore(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    from cli.application import rollback
+
+    install = _install(tmp_path)
+    point = Operation(id="upd_previous", data_snapshot="snap_before")
+    captured: list[dict[str, object]] = []
+    checked: list[str | None] = []
+
+    def target(_install: Installation, *, restore_snapshot: str | None = None) -> Operation:
+        checked.append(restore_snapshot)
+        return point
+
+    def request(_install: Installation, **kwargs: object) -> Operation:
+        captured.append(kwargs)
+        return Operation(id="upd_rollback", phase="queued", rollback=True)
+
+    monkeypatch.setattr(command, "discover", lambda: install)
+    monkeypatch.setattr(rollback, "require_rollback_target", target)
+    monkeypatch.setattr(operations, "request_update", request)
+    monkeypatch.setattr(operations, "wait", lambda *_a, **_kw: pytest.fail("detached"))
+    monkeypatch.delenv("VBOT_UPDATE_HANDOFF", raising=False)
+    monkeypatch.delenv("VBOT_RUN_AGENT_ID", raising=False)
+    if mode == "agent":
+        monkeypatch.setenv("VBOT_RUN_AGENT_ID", "test-agent")
+    arguments = ["rollback", "--detach"]
+    if mode != "keep":
+        arguments.extend(["--restore-data", "snap_before"])
+    if mode in {"confirmed", "agent"}:
+        arguments.append("--yes")
+
+    assert run(arguments) == (1 if mode in {"unconfirmed", "agent"} else 0)
+    if mode in {"unconfirmed", "agent"}:
+        assert captured == []
+        assert checked == (["snap_before"] if mode == "unconfirmed" else [])
+    else:
+        assert captured == [
+            {
+                "rollback": True,
+                "restore_snapshot": "snap_before" if mode == "confirmed" else None,
+                "handoff_token": None,
+            }
+        ]
 
 
 def test_agent_handoff_update_returns_after_acceptance_without_waiting(
@@ -255,9 +367,18 @@ def test_native_update_readable_output_uses_shared_status_markers(
         assert "test-error" in output
 
 
-def test_native_update_plain_output_is_one_structured_result(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("kind", ["channel", "release", "restoring"])
+def test_native_update_plain_output_is_one_structured_result(tmp_path, monkeypatch, capsys, kind):
     install = _install(tmp_path)
-    terminal = Operation(id="upd_plain", phase="completed")
+    terminal = Operation(
+        id="upd_plain",
+        phase="verifying" if kind == "restoring" else "completed",
+        release_version="1.2.2" if kind == "release" else None,
+        rollback=kind == "restoring",
+        restore_snapshot="snap_previous" if kind == "restoring" else None,
+        data_restore_started=kind == "restoring",
+        data_snapshot="snap_safety" if kind == "restoring" else None,
+    )
     monkeypatch.setattr(command, "discover", lambda: install)
     monkeypatch.delenv("VBOT_UPDATE_HANDOFF", raising=False)
     monkeypatch.setattr(operations, "request_update", lambda *a, **kw: terminal)
@@ -267,9 +388,27 @@ def test_native_update_plain_output_is_one_structured_result(tmp_path, monkeypat
         return terminal
 
     monkeypatch.setattr(operations, "wait", wait)
-    assert run(["update", "--output", "plain"]) == 0
+    arguments = ["update", "--output", "plain"]
+    if kind == "release":
+        arguments.append("1.2.2")
+    elif kind == "restoring":
+        # Status can be observed while the worker has started, but not finished,
+        # restoring data. It must not claim that the requested snapshot is restored.
+        arguments.extend(["status", terminal.id])
+        monkeypatch.setattr(operations, "status", lambda *_a: terminal)
+    assert run(arguments) == 0
     captured = capsys.readouterr()
-    assert json.loads(captured.out) == operations.public_result(terminal)
+    result = json.loads(captured.out)
+    assert result == operations.public_result(terminal)
+    assert result["release_version"] == ("1.2.2" if kind == "release" else None)
+    assert result["rollback"] is (kind == "restoring")
+    assert result["requested_restore_snapshot"] == (
+        "snap_previous" if kind == "restoring" else None
+    )
+    assert result["data_restore_started"] is (kind == "restoring")
+    assert result["safety_snapshot"] == ("snap_safety" if kind == "restoring" else None)
+    assert result["successful"] is (kind != "restoring")
+    assert "restored_snapshot" not in result
     assert not captured.err
 
 

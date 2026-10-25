@@ -36,7 +36,7 @@ For a question about a past conversation, use `session_search` first; read `refe
 | Install a Skill from a link, archive or folder; inspect, author, share, disable or pin Skills; review their history; restore deleted Skills; Librarian passes over an Agent's own Skills | `references/skills.md` |
 | Pinned Memory for an Identity Agent, its change history, restoring earlier entries | `references/memory.md` |
 | Logs, Provider traces, Session usage statistics and server performance | `references/diagnostics.md` |
-| Server start/stop/restart, update, uninstall, Autostart, Desktop, Doctor, access mode and paired devices, reaching another vBot server and signing in to it | `references/server.md` |
+| Server start/stop/restart, update, version selection, rollback, uninstall, Autostart, Desktop, Doctor, access mode and paired devices, reaching another vBot server and signing in to it | `references/server.md` |
 | Named credentials and the Secret Store, database health, data snapshots, configuration backups and recovery | `references/data-store.md` |
 | Agent Secrets that Agents use as `{{secret:NAME}}`: which Agents may use them and where, waiting Secret requests, Secret Sources such as password managers | `references/agent-secrets.md` |
 | Filesystem investigation, data location, backups or manual repair | `references/system-layout.md` |

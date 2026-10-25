@@ -68,9 +68,21 @@ def _add_update_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
     update_parser = subparsers.add_parser(
         "update",
         help=AREA_HELP["update"],
-        description=f"{AREA_HELP['update']}. Example: vbot update",
+        description=(
+            "Install the newest version of the configured channel, or an exact release "
+            "in X.Y.Z or vX.Y.Z form. An older release keeps current data and must pass "
+            "vBot's startup/data check; Extensions are checked on normal load. "
+            "The selected version does not change the update channel. "
+            "Example: vbot update"
+        ),
     )
-    update_parser.add_argument("update_action", nargs="?", choices=("status", "activate"))
+    update_parser.add_argument(
+        "update_action",
+        nargs="?",
+        type=_update_selector,
+        metavar="<version|status|activate>",
+        help="Exact release, status, or activate. Omit to update from the configured channel",
+    )
     update_parser.add_argument("operation_id", nargs="?")
     update_parser.add_argument(
         "--detach",
@@ -85,6 +97,50 @@ def _add_update_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
         action="store_true",
         help="Prepare the update without activating it; activate it later with: update activate",
     )
+    rollback = subparsers.add_parser(
+        "rollback",
+        help="Return to the previous installation, keeping current data",
+        description=(
+            "Return to the installation before the last activated version change. "
+            "Current data is kept unless --restore-data names its retained snapshot "
+            "and --yes confirms the data reset. A reset first saves the current data. "
+            "Example: vbot rollback"
+        ),
+    )
+    rollback.add_argument("--detach", action="store_true", help="Return after acceptance")
+    rollback.add_argument(
+        "--restore-data",
+        metavar="<snapshot-id>",
+        help="Restore the snapshot named by the failed rollback; omit to keep current data",
+    )
+    rollback.add_argument("--yes", action="store_true", help="Confirm the selected data reset")
+
+
+def _update_selector(value: str) -> str:
+    if value in {"status", "activate"}:
+        return value
+    from cli.application.state import normalize_release_version
+
+    try:
+        return normalize_release_version(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+
+
+def check_version_arguments(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    if args.area == "rollback":
+        if args.yes and args.restore_data is None:
+            parser.error("--yes confirms --restore-data; omit it to keep current data")
+        return
+    if args.area != "update":
+        return
+    selected_version = args.update_action not in {None, "status", "activate"}
+    if selected_version and (args.package or args.operation_id):
+        parser.error("a release version cannot be combined with a package or operation id")
+    if args.update_action in {"status", "activate"} and (args.package or args.no_restart):
+        parser.error("update status and update activate do not accept --package or --no-restart")
+    if args.update_action is None and args.operation_id:
+        parser.error("an operation id requires update status or update activate")
 
 
 def _add_application_parsers(

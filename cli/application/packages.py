@@ -19,15 +19,18 @@ from typing import TYPE_CHECKING, Any
 
 from cli.application.state import (
     CHANNEL_DOWNLOADS,
+    RELEASE_TAG_DOWNLOADS,
     ApplicationError,
     Installation,
     contained,
     current_platform,
+    normalize_release_version,
     package_name,
     read_json,
     safe_id,
 )
 from core.access.config import AccessConfig
+from core.utils.atomic import atomic_write_text
 from core.utils.file_status import is_link_status
 from core.utils.ids import is_reserved_name
 
@@ -39,6 +42,8 @@ MAX_PAYLOAD_BYTES = 12 * 1024**3
 MAX_FILES = 100_000
 #: The persisted Access Mode and request-authentication contract this updater admits.
 SERVER_ACCESS_PROTOCOL = 1
+#: Shared startup and rollback contract, present from the first supported target.
+VERSION_SWITCH_PROTOCOL = 1
 #: Published beside the packages of a release; names the version they contain so an
 #: update can skip a download when that version is already active.
 RELEASE_IDENTITY_ASSET = "vbot-release.json"
@@ -176,6 +181,30 @@ def require_access_compatible_release(release: dict[str, Any], access: AccessCon
         )
 
 
+def require_version_switch_release(release: dict[str, Any]) -> None:
+    """Admit only targets that implement the shared version-switch contract."""
+    protocol = release.get("version_switch_protocol")
+    if type(protocol) is not int or protocol != VERSION_SWITCH_PROTOCOL:
+        raise ApplicationError(
+            "This version does not support compatible version switching. "
+            "Choose a release that declares version-switch support."
+        )
+
+
+def _require_selected_release(release: dict[str, Any], version: str) -> None:
+    require_version_switch_release(release)
+    if release.get("channel") != "release" or release.get("version") != version:
+        raise ApplicationError(f"The package does not contain the selected release {version}.")
+
+
+def _require_matching_identity(release: dict[str, Any], identity: dict[str, Any]) -> None:
+    if any(
+        release.get(name) != identity.get(name)
+        for name in ("version_id", "version", "revision", "channel")
+    ):
+        raise ApplicationError("The signed package does not match its release identity.")
+
+
 def validate_release(
     root: Path,
     *,
@@ -271,15 +300,23 @@ def validate_release(
     return release
 
 
-def stage_package(install: Installation, archive: Path, *, local: bool = False) -> str:
+def stage_package(
+    install: Installation,
+    archive: Path,
+    *,
+    local: bool = False,
+    release_version: str | None = None,
+) -> str:
     """Install the package *archive* as a version and return its version id.
 
     A directory instead names a version this installation already holds, the
     prepared update ``update activate`` selects: it is verified in place.
     """
+    if release_version is not None:
+        release_version = normalize_release_version(release_version)
     archive = archive.expanduser().resolve()
     if archive.is_dir():
-        return _verify_installed_version(install, archive)
+        return _verify_installed_version(install, archive, release_version=release_version)
     if archive.stat().st_size > MAX_ARCHIVE_BYTES:
         raise ApplicationError("Release archive exceeds the size limit")
     if not local:
@@ -326,10 +363,22 @@ def stage_package(install: Installation, archive: Path, *, local: bool = False) 
             platform=current_platform(),
             access=install.access,
         )
-        if not local and manifest.get("channel") != install.channel:
+        if release_version is not None:
+            _require_selected_release(manifest, release_version)
+        selected_channel = "release" if release_version is not None else install.channel
+        if not local and manifest.get("channel") != selected_channel:
             raise ApplicationError(
-                f"Release package does not match the selected update channel '{install.channel}'."
+                f"Release package does not match the selected update channel '{selected_channel}'."
             )
+        if not local:
+            identity_path = archive.parent / RELEASE_IDENTITY_ASSET
+            try:
+                identity = read_json(identity_path, limit=MAX_IDENTITY_BYTES)
+            except ApplicationError as exc:
+                if release_version is not None or not isinstance(exc.__cause__, FileNotFoundError):
+                    raise
+            else:
+                _require_matching_identity(manifest, identity)
         version_id = manifest["version_id"]
         destination = install.version(version_id)
         if destination.exists():
@@ -351,7 +400,9 @@ def stage_package(install: Installation, archive: Path, *, local: bool = False) 
             shutil.rmtree(temporary)
 
 
-def _verify_installed_version(install: Installation, version: Path) -> str:
+def _verify_installed_version(
+    install: Installation, version: Path, *, release_version: str | None = None
+) -> str:
     """Verify an installed version exactly as staging its package would."""
 
     if version.parent != contained(install.root, "versions").resolve():
@@ -363,6 +414,8 @@ def _verify_installed_version(install: Installation, version: Path) -> str:
         access=install.access,
         remove_bytecode_caches=True,
     )
+    if release_version is not None:
+        _require_selected_release(manifest, release_version)
     version_id = str(manifest["version_id"])
     if install.version(version_id).resolve() != version:
         raise ApplicationError("The installed version does not match its release identity")
@@ -374,8 +427,9 @@ def download_release(
     operation_id: str,
     *,
     progress: Callable[[str, str | None], None] | None = None,
+    release_version: str | None = None,
 ) -> Path | None:
-    """Download the signed package of the installation's channel.
+    """Download the channel's package, or an explicitly selected published release.
 
     Reads the channel's release identity, then the package and its signature
     from the release it names, all from release downloads; it never queries the
@@ -383,7 +437,11 @@ def download_release(
     Returns ``None`` without downloading when the channel publishes the version
     that is already active, and raises ``OlderReleaseError`` without downloading
     when it publishes one that is not newer (``_not_newer``).
+    An explicit version uses its release tag independently of the update channel
+    and can go back, but only to a release with version-switch support.
     """
+    if release_version is not None:
+        release_version = normalize_release_version(release_version)
     if not install.release_public_key:
         raise ApplicationError("Official updates require a configured release signing key")
     # Imported here: the CLI parser loads this module through `install`, and help
@@ -392,24 +450,46 @@ def download_release(
 
     directory = contained(install.root, f"downloads/{safe_id(operation_id)}")
     expected = package_name(install.install_shape)
+    selected_channel = "release" if release_version is not None else install.channel
+    selected_base = (
+        f"{RELEASE_TAG_DOWNLOADS}/v{release_version}"
+        if release_version is not None
+        else install.download_base
+    )
     with httpx.Client(timeout=60, follow_redirects=True, trust_env=False) as client:
-        identity = _release_identity(client, f"{install.download_base}/{RELEASE_IDENTITY_ASSET}")
-        if identity.get("channel") != install.channel:
+        identity = _release_identity(client, f"{selected_base}/{RELEASE_IDENTITY_ASSET}")
+        if identity.get("channel") != selected_channel:
             raise ApplicationError(
-                f"Release identity does not match the selected update channel '{install.channel}'."
+                f"Release identity does not match the selected update channel '{selected_channel}'."
             )
+        if release_version is not None:
+            _require_selected_release(identity, release_version)
         label = version_label(identity)
         if identity["version_id"] == install.version().name:
+            if release_version is not None:
+                active = read_json(install.version() / "release.json", limit=32 * 1024**2)
+                _require_selected_release(active, release_version)
+                _require_matching_identity(active, identity)
             if progress:
                 progress("The published version is already installed", label)
             return None
         active = read_json(install.version() / "release.json", limit=32 * 1024**2)
-        if _not_newer(identity, active):
-            raise OlderReleaseError(_older_release_message(install, label, active))
-        base = install.asset_base(identity.get("version"))
+        if release_version is None and _not_newer(identity, active):
+            raise OlderReleaseError(_older_release_message(install, identity, active))
+        base = (
+            selected_base
+            if release_version is not None
+            else install.asset_base(identity.get("version"))
+        )
         if progress:
             progress("Downloading the application package", label)
         directory.mkdir(parents=True, exist_ok=True)
+        # Keep the bounded wire document compact: pretty-printing an accepted
+        # identity could exceed the same limit when staging reads it back.
+        atomic_write_text(
+            directory / RELEASE_IDENTITY_ASSET,
+            json.dumps(identity, ensure_ascii=False, separators=(",", ":")),
+        )
         for name in (expected, expected + ".sig"):
             limit = 1024 if name.endswith(".sig") else MAX_ARCHIVE_BYTES
             _download(client, f"{base}/{name}", directory / name, limit)
@@ -445,19 +525,27 @@ def _not_newer(offered: dict[str, Any], active: dict[str, Any]) -> bool:
     return offered.get("channel") == "release" and active.get("channel") == "main"
 
 
-def _older_release_message(install: Installation, label: str, active: dict[str, Any]) -> str:
+def _older_release_message(
+    install: Installation, offered: dict[str, Any], active: dict[str, Any]
+) -> str:
     active_channel = active.get("channel")
     back = (
-        f"Switch back with vbot application channel {active_channel} to keep receiving "
-        "updates, or install"
+        f"Switch back with vbot application channel {active_channel} to keep receiving updates. "
         if active_channel in CHANNEL_DOWNLOADS and active_channel != install.channel
-        else "Wait for a newer version, or install"
+        else "Wait for a newer version. "
+    )
+    version = offered.get("version")
+    deliberate = (
+        f"To select this release explicitly, run vbot update {version}."
+        if install.channel == "release"
+        and isinstance(version, str)
+        and re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version)
+        else "To select a published release explicitly, see vbot update --help."
     )
     return (
-        f"The {install.channel} channel offers vBot {label}, which is not newer than the "
-        f"active vBot {version_label(active)}, and vbot update never goes back to an "
-        f"older version. {back} that version deliberately with vbot update --package "
-        "<its downloaded package file>."
+        f"The {install.channel} channel offers vBot {version_label(offered)}, which is not newer "
+        f"than the active vBot {version_label(active)}. An update without an explicit version "
+        f"does not go back to an older version. {back}{deliberate}"
     )
 
 

@@ -195,12 +195,18 @@ def _equivalent_request(
     package: Path | None,
     restart: bool,
     handoff_ticket: str | None,
+    release_version: str | None = None,
+    rollback: bool = False,
+    restore_snapshot: str | None = None,
 ) -> bool:
     requested_package = str(package.expanduser().resolve()) if package is not None else None
     return (
-        operation.package == requested_package
+        (rollback or operation.package == requested_package)
         and operation.restart is restart
         and operation.handoff_ticket == handoff_ticket
+        and operation.release_version == release_version
+        and operation.rollback is rollback
+        and operation.restore_snapshot == restore_snapshot
     )
 
 
@@ -212,6 +218,9 @@ def request_update(
     restart: bool = True,
     handoff_token: str | None = None,
     host: bool = False,
+    release_version: str | None = None,
+    rollback: bool = False,
+    restore_snapshot: str | None = None,
 ) -> Operation:
     """Request an update, or join the equivalent one in progress.
 
@@ -225,6 +234,21 @@ def request_update(
     and returns once that tray started the worker. A confined requester whose
     handoff fails raises ``ApplicationError`` instead of starting the worker.
     """
+    from cli.application.state import normalize_release_version
+
+    if release_version is not None:
+        release_version = normalize_release_version(release_version)
+    if rollback and (
+        package is not None
+        or prepared_version is not None
+        or release_version is not None
+        or not restart
+    ):
+        raise ApplicationError("Rollback cannot be combined with a package, version or preparation")
+    if restore_snapshot is not None and not rollback:
+        raise ApplicationError("Only vbot rollback can restore the previous installation's data")
+    if release_version is not None and package is not None:
+        raise ApplicationError("Select either a release version or a local package")
     if prepared_version is not None:
         package = install.version(prepared_version)
         if not (package / "release.json").is_file():
@@ -243,6 +267,9 @@ def request_update(
                 package=package,
                 restart=restart,
                 handoff_ticket=handoff_ticket,
+                release_version=release_version,
+                rollback=rollback,
+                restore_snapshot=restore_snapshot,
             ):
                 raise ApplicationError(
                     f"Update {operation.id} is already in progress with different options; "
@@ -252,6 +279,14 @@ def request_update(
                 return operation
             handoff = _dispatch(install, operation, host=host)
         else:
+            require_current_host(install)
+            rollback_source: str | None = None
+            if rollback:
+                from cli.application.rollback import require_rollback_target
+
+                point = require_rollback_target(install, restore_snapshot=restore_snapshot)
+                rollback_source = point.id
+                package = install.version(point.previous_version)
             operation = create_operation(
                 install,
                 package=str(package.expanduser().resolve()) if package else None,
@@ -259,6 +294,10 @@ def request_update(
                 restart=restart,
                 previous_version=install.version().name,
                 handoff_ticket=handoff_ticket,
+                release_version=release_version,
+                rollback=rollback,
+                rollback_source=rollback_source,
+                restore_snapshot=restore_snapshot,
             )
             try:
                 handoff = _dispatch(install, operation, host=host)
@@ -300,6 +339,18 @@ def host_running(install: Installation) -> bool:
         return abs(process_started(process) - created) < 0.001 and bool(process.is_running())
     except psutil.Error:
         return False
+
+
+def require_current_host(install: Installation) -> None:
+    """An older dispatcher must never rewrite this worker's recovery metadata."""
+    if host_running(install):
+        record = read_json(contained(install.root, "host.json"), limit=4096)
+        if record.get("operation_protocol") != 2:
+            raise ApplicationError(
+                "The tray is still running the version from before version switching. "
+                "Close its menu and status window so it can restart, then retry. "
+                "No version change was started"
+            )
 
 
 def dispatch_requested(install: Installation) -> ServerRequest | None:
@@ -460,6 +511,7 @@ def _dispatch(install: Installation, operation: Operation, *, host: bool) -> _Ha
 
     if not host:
         if host_running(install):
+            require_current_host(install)
             _hand_to_host(install, operation)
             return True
         job = confining_job()
@@ -633,6 +685,8 @@ def result_summary(install: Installation, operation: Operation) -> str:
     """Describe a finished operation in one human sentence."""
 
     if operation.phase == "completed":
+        if operation.rollback:
+            return operation.message + "."
         if (
             operation.candidate_version
             and operation.candidate_version == operation.previous_version
@@ -662,6 +716,11 @@ def public_result(operation: Operation) -> dict[str, Any]:
         "candidate_version": operation.candidate_version,
         "previous_label": operation.previous_label,
         "target_label": operation.target_label,
+        "release_version": operation.release_version,
+        "rollback": operation.rollback,
+        "requested_restore_snapshot": operation.restore_snapshot,
+        "data_restore_started": operation.data_restore_started,
+        "safety_snapshot": operation.data_snapshot,
         "error": operation.error,
         "status_command": f"vbot update status {operation.id}",
     }

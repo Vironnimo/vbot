@@ -84,6 +84,14 @@ class ApplicationError(ValueError):
     """An installation cannot safely perform the requested operation."""
 
 
+def normalize_release_version(value: str) -> str:
+    """Accept an exact published release, with or without its tag's leading v."""
+    version = value.removeprefix("v")
+    if not _RELEASE_VERSION.fullmatch(version):
+        raise ApplicationError("Select a release version in X.Y.Z or vX.Y.Z form")
+    return version
+
+
 def current_platform() -> str:
     """Name the package platform of this host, as release manifests record it."""
     machine = _platform.machine().lower()
@@ -434,6 +442,12 @@ class Operation:
     error: str | None = None
     worker_pid: int | None = None
     worker_created: float | None = None
+    release_version: str | None = None
+    rollback: bool = False
+    rollback_source: str | None = None
+    restore_snapshot: str | None = None
+    data_snapshot: str | None = None
+    data_restore_started: bool = False
 
     @property
     def terminal(self) -> bool:
@@ -442,14 +456,13 @@ class Operation:
     def save(self, install: Installation) -> None:
         self.updated_at = timestamp()
         value = asdict(self)
-        # Display metadata is additive: a still-running tray/server from the
-        # previous version must continue reading the protocol-1 operation record.
-        labels = {name: value.pop(name) for name in ("previous_label", "target_label")}
-        if any(labels.values()):
-            write_json(
-                contained(install.root, f"operations/details/{safe_id(self.id)}.json"), labels
-            )
-        value["schema_version"] = 1
+        # Keep display and recovery metadata outside the original record shape.
+        # Admission prevents predecessor hosts from rewriting this sidecar.
+        labels = {name: value.pop(name) for name in _OPERATION_DETAILS}
+        write_json(contained(install.root, f"operations/details/{safe_id(self.id)}.json"), labels)
+        # Ordinary updates retain the original record shape. Explicit switches
+        # also mark their target intent in the root record's schema version.
+        value["schema_version"] = 2 if self.release_version is not None or self.rollback else 1
         write_json(contained(install.root, f"operations/{safe_id(self.id)}.json"), value)
 
     def transition(self, install: Installation, phase: str, message: str) -> None:
@@ -483,9 +496,40 @@ class Operation:
         _UPDATE_LOGGER.log(level, "Application update phase changed (%s)", " ".join(fields))
 
 
+_OPERATION_DETAILS = (
+    "previous_label",
+    "target_label",
+    "release_version",
+    "rollback",
+    "rollback_source",
+    "restore_snapshot",
+    "data_snapshot",
+    "data_restore_started",
+)
+
+
+def _requires_operation_details(install: Installation, value: dict[str, Any], schema: int) -> bool:
+    if schema == 2:
+        return True
+    previous = value.get("previous_version")
+    # A predecessor tray can still queue an ordinary update after activation.
+    # A supported worker writes full details and refuses that host before work.
+    if previous is None or value["phase"] == "queued":
+        return False
+    try:
+        release = read_json(install.version(previous) / "release.json", limit=32 * 1024**2)
+    except ApplicationError as exc:
+        if not isinstance(exc.__cause__, FileNotFoundError):
+            raise
+        # Retention can remove the payloads of completed historical operations.
+        return False
+    return release.get("version_switch_protocol") == 1
+
+
 def load_operation(install: Installation, operation_id: str) -> Operation:
     value = read_json(contained(install.root, f"operations/{safe_id(operation_id)}.json"))
-    if value.pop("schema_version", None) != 1 or value.get("id") != operation_id:
+    schema = value.pop("schema_version", None)
+    if type(schema) is not int or schema not in {1, 2} or value.get("id") != operation_id:
         raise ApplicationError("Unsupported update operation record")
     if value.get("phase") not in PHASES:
         raise ApplicationError("Invalid update operation phase")
@@ -510,8 +554,19 @@ def load_operation(install: Installation, operation_id: str) -> Operation:
     ):
         raise ApplicationError("Invalid update worker creation time")
     details = contained(install.root, f"operations/details/{safe_id(operation_id)}.json")
-    if details.is_file():
+    try:
         labels = read_json(details, limit=4096)
+    except ApplicationError as exc:
+        if not isinstance(exc.__cause__, FileNotFoundError):
+            raise
+        if _requires_operation_details(install, value, schema):
+            raise ApplicationError("Required version switching details are unavailable") from exc
+        labels = None
+    if labels is not None:
+        if not set(_OPERATION_DETAILS).issubset(labels) and _requires_operation_details(
+            install, value, schema
+        ):
+            raise ApplicationError("Required version switching details are incomplete")
         for name in ("previous_label", "target_label"):
             label = labels.get(name)
             if label is not None and (
@@ -519,6 +574,26 @@ def load_operation(install: Installation, operation_id: str) -> Operation:
             ):
                 raise ApplicationError("Invalid update version label")
             value[name] = label
+        release_version = labels.get("release_version")
+        if release_version is not None:
+            if not isinstance(release_version, str):
+                raise ApplicationError("Invalid selected release version")
+            value["release_version"] = normalize_release_version(release_version)
+        for name in ("rollback", "data_restore_started"):
+            if name in labels:
+                if type(labels[name]) is not bool:
+                    raise ApplicationError("Invalid version switching policy")
+                value[name] = labels[name]
+        if labels.get("rollback_source") is not None:
+            value["rollback_source"] = safe_id(labels["rollback_source"])
+        for name in ("restore_snapshot", "data_snapshot"):
+            snapshot = labels.get(name)
+            if snapshot is not None:
+                if not isinstance(snapshot, str) or not is_safe_id(snapshot.lower()):
+                    raise ApplicationError("Invalid application data snapshot reference")
+                value[name] = snapshot
+    if schema == 2 and not (value.get("release_version") is not None or value.get("rollback")):
+        raise ApplicationError("The version switching request has lost its selected target")
     try:
         return Operation(**value)
     except TypeError as exc:

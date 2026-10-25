@@ -4,7 +4,7 @@ Command-line accessor for local server lifecycle, RPC-backed management of a loc
 
 ## Overview
 
-Used by human users and agents. Local commands are server lifecycle (`server start|stop|restart|status`), `home`, the `desktop` GUI launch, `doctor`, the documented local data-store maintenance paths, and the packaged installation's `application`, `update`, `uninstall`/data reset and `autostart` (`cli/application/`; a development checkout refuses them). Every other command, including `chat`, calls the running server's RPC contract rather than reading or mutating runtime files directly. `tui` opens the interactive Textual accessor (`cli/tui.md`). Ordinary commands are automation-safe: they never open the browser and print explicit status/output. `tui` requires terminal stdin and stdout.
+Used by human users and agents. Local commands are server lifecycle (`server start|stop|restart|status`), `home`, the `desktop` GUI launch, `doctor`, the documented local data-store maintenance paths, and the packaged installation's `application`, `update`, `rollback`, `uninstall`/data reset and `autostart` (`cli/application/`; a development checkout refuses them). Every other command, including `chat`, calls the running server's RPC contract rather than reading or mutating runtime files directly. `tui` opens the interactive Textual accessor (`cli/tui.md`). Ordinary commands are automation-safe: they never open the browser and print explicit status/output. `tui` requires terminal stdin and stdout.
 
 ## Terms
 

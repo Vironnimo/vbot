@@ -51,7 +51,7 @@ if ($Desktop -and $DesktopClient) {
 if (-not [string]::IsNullOrWhiteSpace($Version) -and ($Version -notmatch '^v')) {
     $Version = "v$Version"
 }
-if (-not [string]::IsNullOrWhiteSpace($Version) -and ($Version -cnotmatch '^v[0-9A-Za-z][0-9A-Za-z._+-]*$')) {
+if (-not [string]::IsNullOrWhiteSpace($Version) -and ($Version -cnotmatch '^v[0-9]+\.[0-9]+\.[0-9]+$')) {
     throw "-Version needs a release version such as 0.2.0 or v0.2.0."
 }
 
@@ -197,6 +197,14 @@ function Install-NativeRelease {
     $release = if ($MainBuild) { "the newest main build" } elseif ([string]::IsNullOrWhiteSpace($Tag)) { "the latest release" } else { "release $Tag" }
     $identity = Get-ReleaseIdentity -Base $base -Release $release
     $releaseVersion = [string]$identity.version
+    $channel = $identity.PSObject.Properties["channel"]
+    $expectedChannel = if ($MainBuild) { "main" } else { "release" }
+    if ($null -eq $channel -or [string]$channel.Value -cne $expectedChannel) {
+        throw "$base/$ReleaseIdentityName does not match the selected update channel '$expectedChannel'."
+    }
+    if (-not [string]::IsNullOrWhiteSpace($Tag) -and "v$releaseVersion" -cne $Tag) {
+        throw "$base/$ReleaseIdentityName does not name the selected release $Tag."
+    }
     if (-not $MainBuild -and [string]::IsNullOrWhiteSpace($Tag)) {
         # Pin the tag the latest identity names: releases/latest can move to a
         # newer release before the download, which would mix two releases.

@@ -69,6 +69,7 @@ def _publish(
     *,
     identity: bool = True,
     version: str = "1.2.3",
+    channel: str = "release",
 ) -> None:
     """Publish the identity under ``base`` and the package of the release it names.
 
@@ -82,7 +83,10 @@ def _publish(
     assets = {ASSET: recorded} if recorded else {}
     if identity:
         (web / _web_name(f"{DOWNLOADS}/{base}/{IDENTITY}")).write_text(
-            json.dumps({"schema_version": 1, "version": version, "assets": assets}), "utf-8"
+            json.dumps(
+                {"schema_version": 1, "version": version, "channel": channel, "assets": assets}
+            ),
+            "utf-8",
         )
 
 
@@ -150,6 +154,15 @@ def _calls(environment: dict[str, str]) -> list[str]:
             None,
             id="version",
         ),
+        pytest.param(
+            ("--version", "1.2.3", "--no-autostart"),
+            "download/v1.2.3",
+            "download/v1.2.3",
+            "release",
+            False,
+            None,
+            id="bare-version",
+        ),
     ],
 )
 def test_installer_installs_the_verified_package_links_the_command_and_starts_the_unit(
@@ -162,7 +175,7 @@ def test_installer_installs_the_verified_package_links_the_command_and_starts_th
     digest: str | None,
 ) -> None:
     environment = _environment(tmp_path)
-    _publish(tmp_path / "web", base, _package(tmp_path / "package.zip"), digest)
+    _publish(tmp_path / "web", base, _package(tmp_path / "package.zip"), digest, channel=channel)
 
     result = _install(environment, "--port", "8500", *arguments)
 
@@ -200,29 +213,68 @@ def test_installer_installs_the_verified_package_links_the_command_and_starts_th
 
 
 @pytest.mark.parametrize(
-    ("arguments", "digest", "identity", "version", "message"),
+    ("arguments", "digest", "identity", "version", "channel", "message"),
     [
         pytest.param(
-            (), "0" * 64, True, "1.2.3", "does not match the SHA256 digest", id="digest-mismatch"
+            (),
+            "0" * 64,
+            True,
+            "1.2.3",
+            "release",
+            "does not match the SHA256 digest",
+            id="digest-mismatch",
         ),
-        pytest.param((), None, False, "1.2.3", f"Could not read {IDENTITY}", id="no-identity"),
+        pytest.param(
+            (), None, False, "1.2.3", "release", f"Could not read {IDENTITY}", id="no-identity"
+        ),
         pytest.param(
             ("--version", "v1.2.3"),
             "",
             True,
             "1.2.3",
+            "release",
             "not a valid vBot release identity",
             id="no-digest",
         ),
         pytest.param(
-            (), "0" * 63, True, "1.2.3", "not a valid vBot release identity", id="invalid-digest"
+            (),
+            "0" * 63,
+            True,
+            "1.2.3",
+            "release",
+            "not a valid vBot release identity",
+            id="invalid-digest",
         ),
         # The tag, given or named by the latest identity, becomes part of the download URL.
         pytest.param(
-            ("--version", "v1/../../x"), None, True, "1.2.3", "--version needs", id="unsafe-tag"
+            ("--version", "v1/../../x"),
+            None,
+            True,
+            "1.2.3",
+            "release",
+            "--version needs",
+            id="unsafe-tag",
         ),
         pytest.param(
-            (), None, True, "1.2.3-x", "names no valid release version", id="unsafe-version"
+            (),
+            None,
+            True,
+            "1.2.3-x",
+            "release",
+            "names no valid release version",
+            id="unsafe-version",
+        ),
+        pytest.param(
+            ("--version", "v1.2.3"),
+            None,
+            True,
+            "1.2.4",
+            "release",
+            "not a valid vBot release identity",
+            id="wrong-version",
+        ),
+        pytest.param(
+            (), None, True, "1.2.3", "main", "not a valid vBot release identity", id="wrong-channel"
         ),
     ],
 )
@@ -232,12 +284,15 @@ def test_installer_refuses_a_package_it_cannot_verify_against_the_release_identi
     digest: str | None,
     identity: bool,
     version: str,
+    channel: str,
     message: str,
 ) -> None:
     environment = _environment(tmp_path)
     package = _package(tmp_path / "package.zip")
     base = "download/v1.2.3" if arguments == ("--version", "v1.2.3") else "latest/download"
-    _publish(tmp_path / "web", base, package, digest, identity=identity, version=version)
+    _publish(
+        tmp_path / "web", base, package, digest, identity=identity, version=version, channel=channel
+    )
 
     result = _install(environment, *arguments)
 

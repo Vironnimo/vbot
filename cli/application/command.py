@@ -81,6 +81,9 @@ _INSTALLATION_AREAS = {
         "vbot update updates a packaged vBot installation. "
         "This is a development checkout: update it with git"
     ),
+    "rollback": (
+        "vbot rollback requires a packaged vBot installation; this is a development checkout"
+    ),
     "uninstall": (
         "vbot uninstall removes a packaged vBot installation. "
         "This is a development checkout: stop its server and delete the checkout yourself"
@@ -342,6 +345,36 @@ def _dispatch_installed(args: argparse.Namespace, install: Installation) -> int 
         ApplicationFacade(install).open_desktop(host=args.host, port=args.port)
         print("Desktop launch requested")
         return 0
+    if args.area == "rollback":
+        if args.restore_data is not None and not args.yes:
+            from cli.application.rollback import require_rollback_target
+
+            point = require_rollback_target(install, restore_snapshot=args.restore_data)
+            raise ApplicationError(
+                f"Restoring snapshot {args.restore_data} from update {point.id} discards "
+                "subsequent data changes. Nothing was changed. Confirm with "
+                f"vbot rollback --restore-data {args.restore_data} --yes"
+            )
+        if args.restore_data is not None:
+            from cli.device_management import run_refusal
+
+            refusal = run_refusal(
+                "rollback --restore-data",
+                "restore the saved data yourself in a terminal; "
+                "the restore can remove this Run's history",
+            )
+            if refusal is not None:
+                raise ApplicationError(refusal)
+        handoff = os.environ.get("VBOT_UPDATE_HANDOFF") if install.owns_server else None
+        operation = operations.request_update(
+            install, rollback=True, restore_snapshot=args.restore_data, handoff_token=handoff
+        )
+        if args.detach or handoff:
+            _print_update_result(install, operation, handoff=bool(handoff))
+            return 0
+        outcome = _wait_update(install, operation)
+        _print_update_result(install, outcome)
+        return 0 if outcome.phase == "completed" else 1
     if args.area == "update":
         if args.update_action == "status":
             value = operations.status(install, args.operation_id)
@@ -357,23 +390,29 @@ def _dispatch_installed(args: argparse.Namespace, install: Installation) -> int 
             )
         package: Path | None = None
         prepared_version: str | None = None
+        release_version = (
+            args.update_action if args.update_action not in {None, "status", "activate"} else None
+        )
         if args.update_action == "activate":
             prepared = operations.status(install, args.operation_id)
             if prepared is None or prepared.phase != "prepared" or not prepared.candidate_version:
                 raise ApplicationError("Select a prepared update operation to activate")
             prepared_version = prepared.candidate_version
+            release_version = prepared.release_version
         elif args.package:
             package = Path(args.package)
         handoff = os.environ.get("VBOT_UPDATE_HANDOFF") if not args.no_restart else None
         if handoff and not install.owns_server:
             # An Agent on another server updating a client has no local Run to resume.
             handoff = None
+        options = {"release_version": release_version} if release_version is not None else {}
         operation = operations.request_update(
             install,
             package=package,
             prepared_version=prepared_version,
             restart=not args.no_restart,
             handoff_token=handoff,
+            **options,
         )
         if args.detach or handoff:
             _print_update_result(install, operation, handoff=bool(handoff))

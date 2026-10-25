@@ -683,6 +683,42 @@ def test_operator_restore_excludes_other_operations_while_planning(
     assert read_maintenance(data_dir) is None
 
 
+@pytest.mark.parametrize("refuse", [True, False])
+def test_restore_admission_holds_the_guard_and_leaves_data_intact_on_refusal(
+    data_dir: Path, refuse: bool
+) -> None:
+    snapshot = snapshot_with_notes(data_dir, "saved")
+    database = open_database(notes_spec(data_dir))
+    add_note(database, "later")
+    database.close()
+
+    def admit() -> None:
+        assert read_maintenance(data_dir) is not None
+        with pytest.raises(DatabaseFormatError, match="maintenance"):
+            open_database(notes_spec(data_dir))
+        lock = acquire_operation_lock(data_dir, timeout=0)
+        if lock is not None:
+            lock.release()
+        assert lock is None
+        if refuse:
+            raise RuntimeError("another writer changed the data")
+
+    if refuse:
+        with pytest.raises(RuntimeError, match="another writer"):
+            restore_data_snapshot(data_dir, snapshot, before_restore=admit)
+        assert stored_bodies(notes_spec(data_dir)) == ["saved", "later"]
+        assert read_incident(data_dir, "notes") is None
+    else:
+        restore_data_snapshot(data_dir, snapshot, before_restore=admit)
+        assert stored_bodies(notes_spec(data_dir)) == ["saved"]
+    assert read_maintenance(data_dir) is None
+
+    existing = begin_maintenance(data_dir, "converter")
+    with pytest.raises(DatabaseFormatError, match="maintenance"):
+        restore_data_snapshot(data_dir, snapshot, before_restore=admit)
+    assert read_maintenance(data_dir) == existing
+
+
 def test_the_restore_id_changes_with_each_restore_and_survives_reopening(data_dir: Path) -> None:
     snapshot = snapshot_with_notes(data_dir, "saved")
 

@@ -762,6 +762,37 @@ def test_retention_prunes_only_after_a_verified_publish(
     assert len(list_data_snapshots(data_dir)) == 2
 
 
+def test_named_retention_survives_count_and_disk_pressure_until_released(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    open_database(notes_spec(data_dir)).close()
+    retained = create_data_snapshot(data_dir, reason="update", retain_as="upd_kept")
+    assert retained is not None
+    monkeypatch.setattr(snapshots_module, "SNAPSHOT_KEEP_COUNT", 1)
+    newest = snapshot_with_notes(data_dir, "new data")
+    assert set(list_data_snapshots(data_dir)) == {retained, newest}
+    real_usage = snapshots_module.shutil.disk_usage
+    with monkeypatch.context() as patched:
+        patched.setattr(
+            snapshots_module.shutil,
+            "disk_usage",
+            lambda path: real_usage(path)._replace(free=0),
+        )
+        assert create_data_snapshot(data_dir, reason="disk full") is None
+    assert retained.is_dir() and newest.is_dir()
+    snapshots_module.release_snapshot_retention(data_dir, "upd_kept")
+    final = snapshot_with_notes(data_dir, "released")
+    assert list_data_snapshots(data_dir) == [final]
+
+
+def test_unreadable_retention_refuses_snapshot_cleanup(data_dir: Path) -> None:
+    retained = snapshot_with_notes(data_dir, "kept")
+    (snapshot_root(data_dir) / "retention.json").write_text("{broken", encoding="utf-8")
+    assert create_data_snapshot(data_dir, reason="cannot prove retention") is None
+    assert retained.is_dir()
+    assert read_snapshot_health(data_dir)["state"] == "degraded"
+
+
 def test_publishing_never_reads_the_retained_snapshots_again(
     data_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
