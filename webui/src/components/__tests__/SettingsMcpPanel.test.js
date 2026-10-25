@@ -348,6 +348,52 @@ describe('MCP management surface', () => {
       arguments: { id: 'remote' },
     });
   });
+  it('edits and clears a custom client metadata URL without losing the explicit client ID', async () => {
+    records = [
+      {
+        id: 'remote',
+        configuration: {
+          id: 'remote',
+          transport: 'http',
+          url: 'https://mcp.example.com/mcp',
+          oauth: true,
+          oauth_client_id: 'registered-client',
+          oauth_client_metadata_url: 'https://client.example.com/old.json',
+          enabled: true,
+          timeout: 120,
+        },
+        state: 'connected',
+      },
+    ];
+    component = mount(Panel, { target: document.body });
+    await settle();
+    button('Edit').click();
+    await settle();
+    button('Advanced settings').click();
+    flushSync();
+    expect(field('Client metadata URL (optional)').value).toBe(
+      'https://client.example.com/old.json',
+    );
+    input(
+      'Client metadata URL (optional)',
+      'https://client.example.com/new.json',
+    );
+    submit();
+    await settle();
+    expect(records[0].configuration).toMatchObject({
+      oauth_client_id: 'registered-client',
+      oauth_client_metadata_url: 'https://client.example.com/new.json',
+    });
+    button('Edit').click();
+    await settle();
+    input('Client metadata URL (optional)', '');
+    submit();
+    await settle();
+    expect(records[0].configuration).not.toHaveProperty(
+      'oauth_client_metadata_url',
+    );
+    expect(records[0].configuration.oauth_client_id).toBe('registered-client');
+  });
   it('imports reviewed servers from pasted setup text with a typed credential', async () => {
     const files = {
       id: 'files',

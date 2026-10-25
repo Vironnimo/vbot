@@ -32,6 +32,7 @@ const oauthConfiguration = {
   oauth: true,
   oauth_redirect_host: 'localhost',
   oauth_client_id: 'vbot-client',
+  oauth_client_metadata_url: 'https://client.example.com/oauth/client.json',
   oauth_client_secret: 'REMOTE_CLIENT_SECRET',
   oauth_scopes: ['files:read', 'files:write'],
   enabled: true,
@@ -139,7 +140,7 @@ describe('MCP settings', () => {
     expect(result).not.toHaveProperty('command');
     expect(result).not.toHaveProperty('args');
   });
-  it('keeps a pre-registered OAuth client only while OAuth is on', () => {
+  it('keeps OAuth client settings only while OAuth is on', () => {
     const draft = mcpDraft(oauthConfiguration);
     expect(mcpConfiguration(draft)).toEqual(oauthConfiguration);
     expect(mcpCredentialNames(oauthConfiguration)).toEqual([
@@ -151,14 +152,23 @@ describe('MCP settings', () => {
       'files:read',
       'admin',
     ]);
+    draft.oauth_client_metadata_url = ' https://client.example.com/own.json ';
+    expect(mcpConfiguration(draft).oauth_client_metadata_url).toBe(
+      'https://client.example.com/own.json',
+    );
     const signedOut = mcpConfiguration({ ...draft, oauth: false });
     for (const field of [
       'oauth_redirect_host',
       'oauth_client_id',
+      'oauth_client_metadata_url',
       'oauth_client_secret',
       'oauth_scopes',
     ])
       expect(signedOut).not.toHaveProperty(field);
+    draft.oauth_client_metadata_url = '  ';
+    expect(mcpConfiguration(draft)).not.toHaveProperty(
+      'oauth_client_metadata_url',
+    );
   });
   it('rejects duplicate mapping keys instead of discarding an entry', () => {
     const draft = mcpDraft(configuration);

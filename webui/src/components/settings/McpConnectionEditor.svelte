@@ -520,6 +520,34 @@
                       />
                     </div>
                   </div>
+                  <div class="s-row">
+                    <div class="s-row-info">
+                      <label
+                        class="s-row-label"
+                        for={`${componentId}-client-metadata-url`}
+                      >
+                        {t('mcp.oauthClientMetadataUrl')}
+                      </label>
+                      <div
+                        class="s-row-desc"
+                        id={`${componentId}-client-metadata-url-desc`}
+                      >
+                        {t('mcp.oauthClientMetadataUrlHelp')}
+                      </div>
+                    </div>
+                    <div class="s-row-control">
+                      <TextField
+                        id={`${componentId}-client-metadata-url`}
+                        aria-describedby={`${componentId}-client-metadata-url-desc`}
+                        type="url"
+                        code
+                        value={draft.oauth_client_metadata_url}
+                        disabled={panelState.busy}
+                        onInput={(value) =>
+                          set('oauth_client_metadata_url', value)}
+                      />
+                    </div>
+                  </div>
                   {#if draft.oauth_client_id.trim()}
                     <div class="s-row">
                       <div class="s-row-info">

@@ -20,7 +20,12 @@ from mcp.client.auth import OAuthFlowError
 from core.extensions.oauth_redirects import OAuthRedirects
 from resources.extensions.mcp import _protocol as mcp_protocol
 from resources.extensions.mcp import client as mcp_client
-from resources.extensions.mcp._oauth import PASTE_REDIRECT_URI, ConnectionOAuth, OAuthStorage
+from resources.extensions.mcp._oauth import (
+    PASTE_REDIRECT_URI,
+    ConnectionOAuth,
+    OAuthStorage,
+    sign_in_status,
+)
 from resources.extensions.mcp.client import ConnectionRunner, InvocationNotSentError
 from resources.extensions.mcp.config import validate_connection
 from resources.extensions.mcp.interactions import InputRequests
@@ -34,6 +39,8 @@ from tests.resources.extensions.mcp.mcp_test_support import (
 RESOURCE = "https://mcp.example.com/mcp"
 ISSUER = "https://auth.example.com"
 CALLBACK = "http://127.0.0.1:8420/api/oauth/callback"
+CIMD = "https://vironnimo.github.io/vbot/oauth/client-metadata.json"
+CUSTOM_CIMD = "https://client.example.com/oauth/client.json"
 TOKENS = "VBOT_MCP_EXAMPLE_OAUTH_TOKENS"
 CLIENT = "VBOT_MCP_EXAMPLE_OAUTH_CLIENT"
 
@@ -62,6 +69,7 @@ class FakeServers:
         # (a registration field set to None is left out).
         self.resource_metadata: dict = {}
         self.server_metadata: dict = {}
+        self.metadata_status = 200
         self.registration: dict = {}
         # Scopes a registration may not ask for.
         self.unregistrable: set[str] = set()
@@ -109,6 +117,8 @@ class FakeServers:
                 )
         elif f"{url.scheme}://{url.host}" == self.issuer:
             if url.path == "/.well-known/oauth-authorization-server":
+                if self.metadata_status != 200:
+                    return httpx2.Response(self.metadata_status)
                 return httpx2.Response(
                     200,
                     json={
@@ -259,35 +269,146 @@ async def test_the_browser_callback_completes_a_sign_in_bound_to_its_server(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "failure",
+    "advertised, fields, client_id",
     [
-        None,
-        # Failures that refuse nothing (RFC 6749 section 5.2) keep the sign-in.
-        httpx2.Response(503, text="Service Unavailable"),
-        httpx2.Response(429, json={"error": "slow_down"}),
-        httpx2.Response(400, text="<html>Bad Gateway</html>"),
+        (None, {}, "registered-client"),
+        (False, {}, "registered-client"),
+        (True, {}, CIMD),
+        (True, {"oauth_redirect_uri": CALLBACK}, CIMD),
+        (True, {"oauth_redirect_uri": "http://[::1]:49152/api/oauth/callback"}, CIMD),
+        (True, {"oauth_redirect_uri": "http://localhost:22332/api/oauth/callback"}, CIMD),
+        (
+            True,
+            {"oauth_redirect_uri": "http://localhost:49152/api/oauth/callback"},
+            "registered-client",
+        ),
+        (True, {"oauth_redirect_uri": "http://127.0.0.1:8420/other"}, "registered-client"),
+        (
+            True,
+            {"oauth_redirect_uri": "http://127.0.0.2:8420/api/oauth/callback"},
+            "registered-client",
+        ),
+        (
+            True,
+            {"oauth_redirect_uri": f"{CALLBACK}?client=other"},
+            "registered-client",
+        ),
+        (
+            True,
+            {"oauth_redirect_uri": "https://my-vbot.example.com/api/oauth/callback"},
+            "registered-client",
+        ),
+        (
+            True,
+            {
+                "oauth_redirect_uri": "https://my-vbot.example.com/api/oauth/callback",
+                "oauth_client_metadata_url": CUSTOM_CIMD,
+            },
+            CUSTOM_CIMD,
+        ),
+        (False, {"oauth_client_metadata_url": CUSTOM_CIMD}, "registered-client"),
     ],
 )
-async def test_an_expiring_token_is_refreshed_after_a_restart_without_a_new_sign_in(host, failure):
+async def test_client_selection_matches_server_capability_and_callback(
+    host, advertised, fields, client_id
+):
+    servers = FakeServers()
+    if advertised is not None:
+        servers.server_metadata["client_id_metadata_document_supported"] = advertised
+    if client_id in {CIMD, CUSTOM_CIMD}:
+        # A CIMD-only server has no dynamic registration endpoint.
+        servers.server_metadata["registration_endpoint"] = None
+    inputs = InputRequests()
+    async with signed_client(oauth_connection(**fields), host, inputs, servers) as client:
+        request = asyncio.create_task(client.get(RESOURCE))
+        sign_in = await pending_sign_in(inputs, request)
+        assert sign_in["client_id"] == client_id
+        assert sign_in["redirect_uri"] == fields.get("oauth_redirect_uri", PASTE_REDIRECT_URI)
+        assert sign_in["code_challenge_method"] == "S256"
+        complete_sign_in(inputs, sign_in)
+        assert (await asyncio.wait_for(request, 5)).status_code == 200
+
+    assert servers.registered == (client_id == "registered-client")
+    token = servers.form("/token")
+    assert token["client_id"] == [client_id]
+    assert token["resource"] == [RESOURCE]
+    assert token["code_verifier"]
+    assert "client_secret" not in token
+    assert "authorization" not in servers.last("/token").headers
+    assert json.loads(host.resolve_credential(CLIENT))["client_id"] == client_id
+
+
+@pytest.mark.asyncio
+async def test_new_cimd_support_keeps_an_existing_dynamic_client(host):
     servers = FakeServers()
     inputs = InputRequests()
     async with signed_client(oauth_connection(), host, inputs, servers) as client:
         request = asyncio.create_task(client.get(RESOURCE))
+        complete_sign_in(inputs, await pending_sign_in(inputs, request))
+        assert (await asyncio.wait_for(request, 5)).status_code == 200
+    client_document = host.resolve_credential(CLIENT)
+    servers.server_metadata["client_id_metadata_document_supported"] = True
+    servers.accepted.clear()
+
+    # The next authorization discovers CIMD support but retains this installation's
+    # working registration, including after the provider was recreated.
+    async with signed_client(oauth_connection(), host, inputs, servers) as client:
+        request = asyncio.create_task(client.get(RESOURCE))
+        sign_in = await pending_sign_in(inputs, request)
+        assert sign_in["client_id"] == "registered-client"
+        complete_sign_in(inputs, sign_in)
+        assert (await asyncio.wait_for(request, 5)).status_code == 200
+
+    assert servers.registered == 1
+    assert host.resolve_credential(CLIENT) == client_document
+    assert servers.form("/token")["client_id"] == ["registered-client"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure, client_id, redirect_after_restart",
+    [
+        (None, "registered-client", None),
+        # Failures that refuse nothing (RFC 6749 section 5.2) keep the sign-in.
+        (httpx2.Response(503, text="Service Unavailable"), "registered-client", None),
+        (httpx2.Response(429, json={"error": "slow_down"}), "registered-client", None),
+        (httpx2.Response(400, text="<html>Bad Gateway</html>"), "registered-client", None),
+        (None, CIMD, None),
+        (httpx2.Response(503, text="Service Unavailable"), CIMD, None),
+        (None, CIMD, "http://127.0.0.1:49152/api/oauth/callback"),
+    ],
+)
+async def test_an_expiring_token_is_refreshed_after_a_restart_without_a_new_sign_in(
+    host, failure, client_id, redirect_after_restart
+):
+    servers = FakeServers()
+    servers.server_metadata["client_id_metadata_document_supported"] = client_id == CIMD
+    inputs = InputRequests()
+    config = (
+        oauth_connection(oauth_redirect_uri=CALLBACK)
+        if redirect_after_restart
+        else oauth_connection()
+    )
+    async with signed_client(config, host, inputs, servers) as client:
+        request = asyncio.create_task(client.get(RESOURCE))
         sign_in = await pending_sign_in(inputs, request)
         # Without a server callback, the user pastes where the browser went.
-        assert sign_in["redirect_uri"] == PASTE_REDIRECT_URI
+        assert sign_in["redirect_uri"] == config.get("oauth_redirect_uri", PASTE_REDIRECT_URI)
+        assert sign_in["client_id"] == client_id
         complete_sign_in(inputs, sign_in)
         assert (await asyncio.wait_for(request, 5)).status_code == 200
     stored = json.loads(host.resolve_credential(TOKENS))
     host.set_credential(TOKENS, json.dumps({**stored, "expires_at": time.time() + 10}))
     client_document = host.resolve_credential(CLIENT)
     servers.requests.clear()
+    if redirect_after_restart:
+        config = oauth_connection(oauth_redirect_uri=redirect_after_restart)
     if failure is not None:
         servers.token_failures.append(failure)
 
     # A new provider, as after a restart: it refreshes ahead of the expiry, at the
     # authorization server it signed in with, before sending the request.
-    async with signed_client(oauth_connection(), host, inputs, servers) as client:
+    async with signed_client(config, host, inputs, servers) as client:
         if failure is not None:
             # The failed refresh fails only this request, without a new sign-in.
             with pytest.raises(OAuthFlowError, match=f"HTTP {failure.status_code}"):
@@ -306,8 +427,65 @@ async def test_an_expiring_token_is_refreshed_after_a_restart_without_a_new_sign
     assert refresh["grant_type"] == ["refresh_token"]
     assert refresh["refresh_token"] == ["refresh-1"]
     assert refresh["resource"] == [RESOURCE]
+    assert refresh["client_id"] == [client_id]
+    assert host.resolve_credential(CLIENT) == client_document
     assert servers.requests[-1].headers["authorization"] == "Bearer access-2"
     assert json.loads(host.resolve_credential(TOKENS))["access_token"] == "access-2"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("new_cimd_support", [True, False, None])
+async def test_an_issuer_change_reselects_the_client_and_replaces_discovery(host, new_cimd_support):
+    servers = FakeServers()
+    servers.server_metadata["client_id_metadata_document_supported"] = True
+    inputs = InputRequests()
+    config = oauth_connection()
+    async with signed_client(config, host, inputs, servers) as client:
+        request = asyncio.create_task(client.get(RESOURCE))
+        complete_sign_in(inputs, await pending_sign_in(inputs, request), iss=ISSUER)
+        assert (await asyncio.wait_for(request, 5)).status_code == 200
+    assert json.loads(host.resolve_credential(CLIENT))["client_id"] == CIMD
+
+    # The resource's new issuer must replace discovery from the previous issuer,
+    # and its capabilities determine whether to use CIMD or register a new client.
+    servers.issuer = "https://other-auth.example.com"
+    servers.server_metadata["client_id_metadata_document_supported"] = new_cimd_support is True
+    if new_cimd_support is None:
+        servers.metadata_status = 404
+    servers.accepted.clear()
+    servers.requests.clear()
+    client_id = CIMD if new_cimd_support else "registered-client"
+    async with signed_client(config, host, inputs, servers) as client:
+        if new_cimd_support is None:
+            with pytest.raises(OAuthFlowError):
+                await asyncio.wait_for(client.get(RESOURCE), 1)
+            assert inputs.list() == []
+            assert servers.sent("auth.example.com") == []
+            assert servers.issued == 1
+            assert servers.registered == 0
+            return
+        request = asyncio.create_task(client.get(RESOURCE))
+        sign_in = await pending_sign_in(inputs, request)
+        assert sign_in["client_id"] == client_id
+        complete_sign_in(inputs, sign_in, iss=servers.issuer)
+        assert (await asyncio.wait_for(request, 5)).status_code == 200
+    client_document = json.loads(host.resolve_credential(CLIENT))
+    assert client_document["client_id"] == client_id
+    assert client_document["issuer"] == servers.issuer
+    assert servers.sent("auth.example.com") == []
+    assert sign_in_status(host, config)["signed_in"]
+    stored = json.loads(host.resolve_credential(TOKENS))
+    assert stored["authorization_server"]["issuer"] == servers.issuer
+    host.set_credential(TOKENS, json.dumps({**stored, "expires_at": time.time() + 10}))
+    servers.requests.clear()
+
+    async with signed_client(config, host, inputs, servers) as client:
+        assert (await asyncio.wait_for(client.get(RESOURCE), 5)).status_code == 200
+    assert inputs.list() == []
+    assert servers.sent("other-auth.example.com") == ["/token"]
+    assert servers.sent("auth.example.com") == []
+    assert servers.form("/token")["refresh_token"] == ["refresh-2"]
+    assert servers.registered == (not new_cimd_support)
 
 
 @pytest.mark.asyncio
@@ -318,8 +496,10 @@ async def test_a_preregistered_client_skips_registration_and_stays_with_its_serv
         oauth_client_id="vbot-client",
         oauth_client_secret="CLIENT_SECRET",
         oauth_scopes=["files:read"],
+        oauth_client_metadata_url=CUSTOM_CIMD,
     )
     servers = FakeServers()
+    servers.server_metadata["client_id_metadata_document_supported"] = True
     inputs = InputRequests()
     async with signed_client(config, host, inputs, servers) as client:
         request = asyncio.create_task(client.get(RESOURCE))
@@ -345,16 +525,23 @@ async def test_a_preregistered_client_skips_registration_and_stays_with_its_serv
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "refusal, registration",
+    "refusal, client_id, registration",
     [
-        ("token", "registered-client-2"),
-        ("authorization", "registered-client-2"),
-        ("refresh", "registered-client-2"),
-        ("spent_refresh", "registered-client"),
+        ("token", "registered-client", "registered-client-2"),
+        ("authorization", "registered-client", "registered-client-2"),
+        ("refresh", "registered-client", "registered-client-2"),
+        ("spent_refresh", "registered-client", "registered-client"),
+        ("token", CIMD, CIMD),
+        ("authorization", CIMD, CIMD),
+        ("refresh", CIMD, CIMD),
+        ("spent_refresh", CIMD, CIMD),
     ],
 )
-async def test_a_registration_the_server_no_longer_accepts_is_replaced(host, refusal, registration):
+async def test_a_registration_the_server_no_longer_accepts_is_replaced(
+    host, refusal, client_id, registration
+):
     servers = FakeServers()
+    servers.server_metadata["client_id_metadata_document_supported"] = client_id == CIMD
     inputs = InputRequests()
     async with signed_client(oauth_connection(), host, inputs, servers) as client:
         request = asyncio.create_task(client.get(RESOURCE))
@@ -367,14 +554,14 @@ async def test_a_registration_the_server_no_longer_accepts_is_replaced(host, ref
         servers.spent.add("refresh-1")
     else:
         # The authorization server expired or revoked the registration.
-        servers.forgotten.add("registered-client")
+        servers.forgotten.add(client_id)
 
     if refusal in {"token", "authorization"}:
         # The next sign-in presents the stored registration and does not complete.
         async with signed_client(oauth_connection(), host, inputs, servers) as client:
             request = asyncio.create_task(client.get(RESOURCE))
             sign_in = await pending_sign_in(inputs, request)
-            assert sign_in["client_id"] == "registered-client"
+            assert sign_in["client_id"] == client_id
             if refusal == "token":
                 complete_sign_in(inputs, sign_in)
                 with pytest.raises(OAuthFlowError, match="invalid_client"):
@@ -389,14 +576,17 @@ async def test_a_registration_the_server_no_longer_accepts_is_replaced(host, ref
         # A refresh is due; its refusal leads to a new sign-in in the same request.
         host.set_credential(TOKENS, json.dumps({**stored, "expires_at": time.time() + 10}))
 
-    # The sign-in after a refused registration registers again.
+    # Dynamic clients register again; a refused CIMD identity never falls back to DCR.
     async with signed_client(oauth_connection(), host, inputs, servers) as client:
         request = asyncio.create_task(client.get(RESOURCE))
         sign_in = await pending_sign_in(inputs, request)
         assert sign_in["client_id"] == registration
+        servers.forgotten.discard(client_id)
         complete_sign_in(inputs, sign_in)
         assert (await asyncio.wait_for(request, 5)).status_code == 200
     assert json.loads(host.resolve_credential(CLIENT))["client_id"] == registration
+    if client_id == CIMD:
+        assert servers.registered == 0
 
 
 @pytest.mark.asyncio
@@ -464,13 +654,33 @@ async def test_sign_in_refuses_an_authorization_server_with_another_issuer(host)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("change", ["reauthorize", "url", "remove"])
+@pytest.mark.parametrize(
+    "change",
+    [
+        "reauthorize",
+        "url",
+        "oauth_client_id",
+        "oauth_client_metadata_url",
+        "metadata_removed",
+        "unused_metadata_url",
+        "unused_metadata_removed",
+        "remove",
+    ],
+)
 async def test_signing_out_or_changing_the_server_forgets_the_sign_in(
     host, monkeypatch, caplog, change
 ):
     monkeypatch.setattr(ConnectionRunner, "start", lambda runner: None)
     service, _registry = await start_service(host)
-    connection = {"id": "example", "transport": "http", "url": RESOURCE, "oauth": True}
+    connection = {
+        "id": "example",
+        "transport": "http",
+        "url": RESOURCE,
+        "oauth": True,
+        "oauth_client_metadata_url": CUSTOM_CIMD,
+    }
+    if change.startswith("unused_metadata"):
+        connection["oauth_client_id"] = "configured-client"
     try:
         await service.management.manage("save", {"connection": connection})
         host.set_credential(TOKENS, json.dumps({"access_token": "a", "resource": RESOURCE}))
@@ -484,11 +694,33 @@ async def test_signing_out_or_changing_the_server_forgets_the_sign_in(
             elif change == "url":
                 moved = {**connection, "url": "https://moved.example.com/mcp"}
                 await service.management.manage("save", {"connection": moved})
+            elif change in {
+                "oauth_client_id",
+                "oauth_client_metadata_url",
+                "metadata_removed",
+                "unused_metadata_url",
+                "unused_metadata_removed",
+            }:
+                changed = dict(connection)
+                if change in {"metadata_removed", "unused_metadata_removed"}:
+                    changed.pop("oauth_client_metadata_url")
+                else:
+                    field = (
+                        "oauth_client_metadata_url" if change == "unused_metadata_url" else change
+                    )
+                    changed[field] = "https://changed.example.com/client.json"
+                await service.management.manage("save", {"connection": changed})
             else:
                 await service.management.manage("remove", {"id": "example"})
 
-        assert host.resolve_credential(TOKENS) == ""
-        assert host.resolve_credential(CLIENT) == ""
+        if change.startswith("unused_metadata"):
+            assert json.loads(host.resolve_credential(TOKENS))["access_token"] == "a"
+            assert json.loads(host.resolve_credential(CLIENT))["client_id"] == "c"
+            status = await service.management.manage("status", {"id": "example"})
+            assert status["oauth"]["signed_in"]
+        else:
+            assert host.resolve_credential(TOKENS) == ""
+            assert host.resolve_credential(CLIENT) == ""
         if change == "reauthorize":
             assert "MCP connection signed out (connection=example)" in caplog.text
     finally:

@@ -1,0 +1,16 @@
+{
+  "client_id": "https://vironnimo.github.io/vbot/oauth/client-metadata.json",
+  "client_name": "vBot",
+  "client_uri": "https://github.com/Vironnimo/vbot",
+  "application_type": "native",
+  "redirect_uris": [
+    "http://127.0.0.1:22332/api/oauth/callback",
+    "http://[::1]:22332/api/oauth/callback",
+    "http://localhost:22332/api/oauth/callback",
+    "http://localhost:22333/api/oauth/callback",
+    "http://localhost:8765/callback"
+  ],
+  "grant_types": ["authorization_code", "refresh_token"],
+  "response_types": ["code"],
+  "token_endpoint_auth_method": "none"
+}

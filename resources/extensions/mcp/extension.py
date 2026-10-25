@@ -861,8 +861,13 @@ def _without_description(config: dict[str, Any]) -> dict[str, Any]:
 
 def _signs_in_elsewhere(previous: dict[str, Any], config: dict[str, Any]) -> bool:
     """Whether a sign-in stored for *previous* no longer belongs to *config*."""
-    return not config.get("oauth") or any(
-        previous.get(key) != config.get(key) for key in ("url", "oauth_client_id")
+    return (
+        not config.get("oauth")
+        or any(previous.get(key) != config.get(key) for key in ("url", "oauth_client_id"))
+        or (
+            not config.get("oauth_client_id")
+            and previous.get("oauth_client_metadata_url") != config.get("oauth_client_metadata_url")
+        )
     )
 
 
