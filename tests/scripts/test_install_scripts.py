@@ -86,6 +86,9 @@ _NATIVE_MODES = (
     "missing",
     "no-digest",
     "unsafe-version",
+    "wrong-version",
+    "wrong-channel",
+    "no-channel",
     "digest",
     "signature",
 )
@@ -132,7 +135,9 @@ function Invoke-WebRequest {
         $assets = @{"vbot-windows-x86_64-$Shape.zip" = $sha}
         if ($Mode -ne "no-digest") { $assets["vBot-1.2.3-windows-x86_64-$Shape.exe"] = $sha }
         $version = if ($Mode -eq "unsafe-version") { "1.2.3-x" } else { "1.2.3" }
-        $identity = @{schema_version=1; version=$version; assets=$assets}
+        $channel = if ($Mode -in @("main", "wrong-channel")) { "main" } else { "release" }
+        $identity = @{schema_version=1; version=$version; channel=$channel; assets=$assets}
+        if ($Mode -eq "no-channel") { $identity.Remove("channel") }
         [IO.File]::WriteAllText($OutFile, (ConvertTo-Json -InputObject $identity -Depth 3))
         return
     }
@@ -172,7 +177,8 @@ foreach ($Mode in ($Modes -split ",")) {
     $Shape = if ($Mode -eq "desktop-client") { "desktop-client" } else { "server" }
     $calls = @(); $statuses = @(); $healthCalls = 0; $trayStarts = 0; $downloads = @()
     $failure = $null
-    $tag = if ($Mode -eq "version") { "v1.2.3" } else { "" }
+    $tag = if ($Mode -eq "version") { "v1.2.3" }
+        elseif ($Mode -eq "wrong-version") { "v1.2.2" } else { "" }
     # The main build passes access options and leaves the bind address to the mode.
     $HostName = if ($Mode -eq "main") { "" } else { "127.0.0.1" }
     $Access = if ($Mode -eq "main") { "authenticated" } else { "" }
@@ -242,10 +248,29 @@ $results | ConvertTo-Json -Compress -Depth 5
     assert "names no valid release version" in payloads["unsafe-version"]["error"]
     assert "does not match the SHA-256 digest" in payloads["digest"]["error"]
     assert "invalid Authenticode signature" in payloads["signature"]["error"]
+    assert payloads["wrong-version"]["error"] is not None
+    assert payloads["wrong-channel"]["error"] is not None
+    assert payloads["no-channel"]["error"] is not None
     # Without a verified digest the installer is never downloaded or run.
-    for mode in ("missing", "no-digest", "unsafe-version"):
+    for mode in (
+        "missing",
+        "no-digest",
+        "unsafe-version",
+        "wrong-version",
+        "wrong-channel",
+        "no-channel",
+    ):
         assert len(payloads[mode]["downloads"]) == 1, mode
-    for mode in ("missing", "no-digest", "unsafe-version", "digest", "signature"):
+    for mode in (
+        "missing",
+        "no-digest",
+        "unsafe-version",
+        "wrong-version",
+        "wrong-channel",
+        "no-channel",
+        "digest",
+        "signature",
+    ):
         assert payloads[mode]["calls"] == [], mode
 
 
@@ -285,6 +310,7 @@ ConvertTo-Json -InputObject $urls -Compress
         ),
         # The tag becomes part of the release download URL.
         ("-Version 1.2.3/../x", "-Version needs a release version such as 0.2.0 or v0.2.0."),
+        ("-Version v1.2.3-main", "-Version needs a release version such as 0.2.0 or v0.2.0."),
     ],
 )
 def test_windows_installer_failure_returns_to_a_script_block_caller(

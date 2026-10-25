@@ -281,6 +281,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         _check_chat_arguments(parser, args)
     if getattr(args, "area", None) == "archive" and args.command == "purge":
         _check_archive_purge_selection(parser, args)
+    if args.area in {"update", "rollback"}:
+        from cli._parser_lifecycle import check_version_arguments
+
+        check_version_arguments(parser, args)
     return args
 
 

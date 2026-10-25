@@ -645,6 +645,7 @@ def main() -> int:
                 contained(install.root, "host.json"),
                 {
                     "schema_version": 1,
+                    "operation_protocol": 2,
                     "pid": os.getpid(),
                     "process_created": process_started(psutil.Process()),
                 },

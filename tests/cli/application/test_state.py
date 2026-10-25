@@ -140,16 +140,128 @@ def test_operation_round_trip_and_invalid_phase_or_boolean_rejection(tmp_path: P
         load_operation(install, operation.id)
 
 
-def test_version_labels_round_trip_without_changing_protocol_one_fields(tmp_path):
+@pytest.mark.parametrize(
+    ("kind", "invalid"),
+    [
+        ("ordinary", None),
+        ("release", None),
+        ("rollback", None),
+        ("release", ("release_version", "main")),
+        ("release", ("release_version", ["1.2.3"])),
+        ("rollback", ("rollback", 1)),
+        ("rollback", ("data_restore_started", "true")),
+        ("rollback", ("rollback_source", "../outside")),
+        ("rollback", ("restore_snapshot", "../outside")),
+        ("rollback", ("data_snapshot", "../outside")),
+    ],
+)
+def test_operation_details_round_trip_with_the_established_root_fields(tmp_path, kind, invalid):
     install = _server_install(tmp_path)
     operation = Operation(
-        id="upd_labels", previous_label="1.0 (aaaaaaaa)", target_label="1.1 (bbbbbbbb)"
+        id="upd_labels",
+        previous_label="1.0 (aaaaaaaa)",
+        target_label="1.1 (bbbbbbbb)",
+        release_version="1.2.3" if kind == "release" else None,
+        rollback=kind == "rollback",
+        rollback_source="upd_previous" if kind == "rollback" else None,
+        restore_snapshot="snap_before" if kind == "rollback" else None,
+        data_snapshot="snap_current",
+        data_restore_started=kind == "rollback",
     )
     operation.save(install)
     saved = json.loads((tmp_path / "operations" / "upd_labels.json").read_text(encoding="utf-8"))
-    assert "previous_label" not in saved and "target_label" not in saved
+    assert saved["schema_version"] == (1 if kind == "ordinary" else 2)
+    assert (
+        not {
+            "previous_label",
+            "target_label",
+            "release_version",
+            "rollback",
+            "rollback_source",
+            "restore_snapshot",
+            "data_snapshot",
+            "data_restore_started",
+        }
+        & saved.keys()
+    )
     assert load_operation(install, operation.id) == operation
     assert len(state.operations(install)) == 1
+    if invalid is not None:
+        details = tmp_path / "operations/details/upd_labels.json"
+        payload = json.loads(details.read_text(encoding="utf-8"))
+        name, value = invalid
+        payload[name] = value
+        details.write_text(json.dumps(payload), encoding="utf-8")
+        with pytest.raises(ApplicationError):
+            load_operation(install, operation.id)
+
+
+@pytest.mark.parametrize("unavailable", ["missing", "denied", "incomplete"])
+def test_unavailable_operation_details_never_change_the_requested_action(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, unavailable: str
+) -> None:
+    install = _server_install(tmp_path)
+    operation = Operation(
+        id="upd_restore",
+        rollback=True,
+        rollback_source="upd_previous",
+        restore_snapshot="snap_before",
+    )
+    operation.save(install)
+    details = tmp_path / "operations/details/upd_restore.json"
+    if unavailable == "missing":
+        details.unlink()
+    elif unavailable == "incomplete":
+        details.write_text("{}", encoding="utf-8")
+    else:
+        original_read = Path.read_text
+
+        def denied(path: Path, *args, **kwargs):
+            if path == details:
+                raise PermissionError("operation details are unavailable")
+            return original_read(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", denied)
+    with pytest.raises(ApplicationError):
+        load_operation(install, operation.id)
+
+
+@pytest.mark.parametrize(
+    ("supported", "phase", "details"),
+    [
+        (False, "completed", "missing"),
+        (False, "completed", "labels"),
+        (True, "queued", "missing"),
+        (True, "preparing", "missing"),
+        (True, "completed", "missing"),
+        (True, "completed", "labels"),
+    ],
+)
+def test_protocol_one_preserves_legacy_upgrades_but_requires_supported_switch_details(
+    tmp_path: Path, supported: bool, phase: str, details: str
+) -> None:
+    install = _server_install(tmp_path)
+    previous = install.version("rel_previous")
+    previous.mkdir(parents=True)
+    (previous / "release.json").write_text(
+        json.dumps({"version_switch_protocol": 1} if supported else {}), encoding="utf-8"
+    )
+    operation = Operation(id="upd_historical", phase=phase, previous_version="rel_previous")
+    operation.save(install)
+    path = tmp_path / "operations/upd_historical.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == 1
+    sidecar = tmp_path / "operations/details/upd_historical.json"
+    if details == "missing":
+        sidecar.unlink()
+    else:
+        sidecar.write_text('{"previous_label": null, "target_label": null}', encoding="utf-8")
+
+    if supported and phase != "queued":
+        with pytest.raises(ApplicationError):
+            load_operation(install, operation.id)
+    else:
+        assert load_operation(install, operation.id) == operation
 
 
 def test_os_lock_rejects_an_overlapping_operation(tmp_path: Path):

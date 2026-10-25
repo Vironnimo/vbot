@@ -143,15 +143,17 @@ def test_backend_locks_refuse_stale_inputs_and_runtime_replacements(
 
 
 @pytest.mark.parametrize("protocol", [None, 1, True])
-def test_manifest_declares_only_the_packaged_sources_access_contract(
-    tmp_path: Path, protocol: object
+@pytest.mark.parametrize("contract", ["server-access-protocol", "version-switch-protocol"])
+@pytest.mark.parametrize("shape", ["server", "desktop-client"])
+def test_manifest_declares_only_the_packaged_sources_contracts(
+    tmp_path: Path, protocol: object, contract: str, shape: str
 ) -> None:
     app = tmp_path / "app"
     app.mkdir()
     text = "[project]\nname='vbot'\n"
     if protocol is not None:
         value = "true" if protocol is True else str(protocol)
-        text += f"[tool.vbot.package]\nserver-access-protocol={value}\n"
+        text += f"[tool.vbot.package]\n{contract}={value}\n"
     (app / "pyproject.toml").write_text(text, encoding="utf-8")
 
     def build() -> dict:
@@ -160,20 +162,30 @@ def test_manifest_declares_only_the_packaged_sources_access_contract(
             version="1.0.0",
             revision="abcdef",
             platform=current_platform(),
-            shape="server",
+            shape=shape,
             channel="main",
         )
 
-    if protocol is True:
+    absent = protocol is None or (
+        shape == "desktop-client" and contract == "server-access-protocol"
+    )
+    if protocol is True and not absent:
         with pytest.raises(RuntimeError):
             build()
         assert not (tmp_path / "release.json").exists()
     else:
         manifest = build()
-        if protocol is None:
-            assert "server_access_protocol" not in manifest
+        field = contract.replace("-", "_")
+        if absent:
+            assert field not in manifest
         else:
-            assert manifest["server_access_protocol"] == protocol
+            assert manifest[field] == protocol
+        package_build.write_release_identity(tmp_path, manifest)
+        identity = json.loads((tmp_path / package_build.RELEASE_IDENTITY_NAME).read_text())
+        if contract == "version-switch-protocol" and not absent:
+            assert identity[field] == protocol
+        else:
+            assert field not in identity
 
 
 def test_packaged_bytecode_is_deterministic_verified_and_loads_after_extraction(

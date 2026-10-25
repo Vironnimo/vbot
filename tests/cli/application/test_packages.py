@@ -82,6 +82,9 @@ def _archive(
     platform: str | None = None,
     access_protocol: object = None,
     channel: str | None = None,
+    release_version: str | None = None,
+    revision: str | None = None,
+    switch_protocol: object = None,
 ) -> Path:
     payload = _payload(shape=shape, marker=marker)
     files = {name: hashlib.sha256(data).hexdigest() for name, data in payload.items()}
@@ -99,6 +102,12 @@ def _archive(
         manifest["server_access_protocol"] = access_protocol
     if channel is not None:
         manifest["channel"] = channel
+    if release_version is not None:
+        manifest["version"] = release_version
+    if revision is not None:
+        manifest["revision"] = revision
+    if switch_protocol is not None:
+        manifest["version_switch_protocol"] = switch_protocol
     with zipfile.ZipFile(path, "w") as bundle:
         for name, data in payload.items():
             bundle.writestr(name, data)
@@ -686,8 +695,104 @@ def test_download_refuses_a_channel_version_not_newer_than_the_active_one(
     assert f"vBot {offered} (bbbbbbbb)" in message
     assert f"active vBot {active_version} (aaaaaaaa)" in message
     # The way back to updates names the channel the active version came from.
-    assert "vbot update --package" in message
+    assert (
+        f"vbot update {offered}" in message
+        if channel == "release"
+        else "vbot update --help" in message
+    )
     if active_channel != channel:
         assert f"vbot application channel {active_channel}" in message
     else:
         assert "vbot application channel" not in message
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "none",
+        "large-identity",
+        "already-active",
+        "identity-version",
+        "identity-channel",
+        "identity-protocol",
+        "signed-version",
+        "signed-channel",
+        "signed-protocol",
+        "signed-protocol-bool",
+        "signed-revision",
+        "signed-identity",
+    ],
+)
+def test_selected_release_requires_the_exact_supported_signed_target(
+    tmp_path: Path, change: str
+) -> None:
+    respx = pytest.importorskip("respx")
+    install = _active_install(tmp_path, "main", {"version": "2.0.0", "channel": "main"})
+    selected = "1.2.3"
+    version_id = "rel_active" if change == "already-active" else "rel_selected"
+    revision = "a" * 40
+    archive = _archive(
+        tmp_path / "package.zip",
+        version="rel_other" if change == "signed-identity" else version_id,
+        channel="main" if change == "signed-channel" else "release",
+        release_version="1.2.4" if change == "signed-version" else selected,
+        revision="b" * 40 if change == "signed-revision" else revision,
+        switch_protocol=(
+            None if change == "signed-protocol" else True if change == "signed-protocol-bool" else 1
+        ),
+    )
+    public_key = _sign(archive, Ed25519PrivateKey.generate())
+    install = replace(install, release_public_key=public_key)
+    identity = {
+        "schema_version": 1,
+        "version_id": version_id,
+        "version": "1.2.4" if change == "identity-version" else selected,
+        "revision": revision,
+        "channel": "main" if change == "identity-channel" else "release",
+        "version_switch_protocol": 2 if change == "identity-protocol" else 1,
+    }
+    if change == "large-identity":
+        identity["assets"] = {f"asset-{number}": "a" * 64 for number in range(47)}
+        assert len(json.dumps(identity, separators=(",", ":"))) <= packages.MAX_IDENTITY_BYTES
+        assert len(json.dumps(identity, indent=2)) > packages.MAX_IDENTITY_BYTES
+    if change == "already-active":
+        (install.version() / "release.json").write_text(json.dumps(identity), encoding="utf-8")
+    base = f"{_DOWNLOADS}/download/v{selected}"
+    name = package_name(install.install_shape)
+    with respx.mock(assert_all_called=False) as router:
+        identity_route = router.get(f"{base}/{RELEASE_IDENTITY_ASSET}").respond(json=identity)
+        package_route = router.get(f"{base}/{name}").respond(content=archive.read_bytes())
+        router.get(f"{base}/{name}.sig").respond(
+            content=archive.with_suffix(".zip.sig").read_bytes()
+        )
+        if change.startswith("identity-"):
+            with pytest.raises(ApplicationError):
+                download_release(install, "upd_selected", release_version=f"v{selected}")
+            assert not package_route.called
+            assert not (install.root / "downloads").exists()
+            return
+        downloaded = download_release(install, "upd_selected", release_version=f"v{selected}")
+        assert identity_route.called
+        if change == "already-active":
+            assert downloaded is None
+            assert not package_route.called
+            return
+        assert downloaded is not None
+        assert json.loads((downloaded.parent / RELEASE_IDENTITY_ASSET).read_text()) == identity
+        if change.startswith("signed-"):
+            with pytest.raises(ApplicationError):
+                stage_package(install, downloaded, release_version=selected)
+            assert not install.version(version_id).exists()
+            assert install.version().name == "rel_active"
+            return
+        assert stage_package(install, downloaded, release_version=selected) == version_id
+        assert (
+            stage_package(
+                install, install.version(version_id), local=True, release_version=f"v{selected}"
+            )
+            == version_id
+        )
+        with pytest.raises(ApplicationError):
+            stage_package(install, install.version(version_id), local=True, release_version="1.2.4")
+        assert install.channel == "main"
+        assert install.version().name == "rel_active"

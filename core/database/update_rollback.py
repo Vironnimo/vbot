@@ -141,7 +141,11 @@ def data_changed_since(data_dir: Path, snapshot: UpdateSnapshot) -> str | None:
 
 
 def create_update_snapshot(
-    data_dir: Path, *, operation_id: str, specs: Iterable[DatabaseSpec] = ()
+    data_dir: Path,
+    *,
+    operation_id: str,
+    specs: Iterable[DatabaseSpec] = (),
+    retain_as: str | None = None,
 ) -> UpdateSnapshot | None:
     """Take the pre-update data snapshot while no server runs on ``data_dir``.
 
@@ -165,7 +169,7 @@ def create_update_snapshot(
     if missing is not None:
         raise DatabaseUnavailableError(missing)
     before = data_stamp(data_dir)
-    created = create_data_snapshot(data_dir, reason=reason, specs=specs)
+    created = create_data_snapshot(data_dir, reason=reason, specs=specs, retain_as=retain_as)
     if created is None:
         health = read_snapshot_health(data_dir)
         raise DatabaseUnavailableError(

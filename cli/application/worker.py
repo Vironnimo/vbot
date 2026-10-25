@@ -28,6 +28,7 @@ from cli.application.packages import (
     OlderReleaseError,
     download_release,
     require_access_compatible_release,
+    require_version_switch_release,
     stage_package,
     validate_release,
     version_label,
@@ -166,9 +167,15 @@ def take_update_snapshot(install: Installation, operation: Operation) -> UpdateS
     if running is not None:
         raise ApplicationError(f"The data snapshot needs a stopped server, but {running}")
     try:
-        return create_update_snapshot(
-            data_dir, operation_id=operation.id, specs=_database_specs(data_dir)
+        snapshot = create_update_snapshot(
+            data_dir,
+            operation_id=operation.id,
+            specs=_database_specs(data_dir),
+            retain_as=operation.id,
         )
+        operation.data_snapshot = snapshot.snapshot_id if snapshot is not None else None
+        operation.save(install)
+        return snapshot
     except (DatabaseError, OSError, ValueError) as exc:
         raise ApplicationError(f"The pre-update data snapshot failed: {exc}") from exc
 
@@ -241,7 +248,37 @@ def roll_back_data(
         )
         return f"The new version left the data unchanged; snapshot {snapshot_id} was not needed."
     try:
-        restore_update_snapshot(data_dir, snapshot, specs=_database_specs(data_dir))
+        if operation.data_restore_started:
+            # This operation deliberately retired newer database registrations.
+            # The ordinary automatic rollback fence correctly refuses those;
+            # the captured safety snapshot restores them through operator restore.
+            from core.database.recovery import restore_data_snapshot
+            from core.database.snapshots import snapshot_root
+            from core.database.update_rollback import data_stamp, describe_change
+
+            before_recovery = data_stamp(data_dir)
+
+            def admit_recovery() -> None:
+                refusal = _live_servers(data_dir) or describe_change(
+                    before_recovery, data_stamp(data_dir)
+                )
+                if refusal is not None:
+                    raise ApplicationError(
+                        f"The safety snapshot {snapshot_id} was not restored: {refusal}. "
+                        "The preserved data needs inspection before starting vBot"
+                    )
+
+            restore_data_snapshot(
+                data_dir,
+                snapshot_root(data_dir) / snapshot.snapshot_id,
+                specs=_database_specs(data_dir),
+                documents=True,
+                retire_unlisted=True,
+                cause="failed user-selected application rollback",
+                before_restore=admit_recovery,
+            )
+        else:
+            restore_update_snapshot(data_dir, snapshot, specs=_database_specs(data_dir))
     except UpdateRollbackRefusedError as exc:
         _log_data_kept(operation, snapshot_id, str(exc))
         return not_restored.format(reason=str(exc))
@@ -335,6 +372,15 @@ def recover_interrupted(install: Installation, operation: Operation) -> bool:
     """
     if operation.phase not in {"stopping", "activating", "verifying"}:
         return False
+    if operation.data_restore_started and operation.phase != "verifying":
+        operation.transition(
+            install,
+            "needs_attention",
+            "The requested data restore was interrupted. No data restore was repeated. "
+            f"Inspect vbot data-store status and vbot update status {operation.id}; "
+            f"the safety snapshot is {operation.data_snapshot}",
+        )
+        return True
     if operation.phase in {"stopping", "activating"}:
         interrupted = _interrupted_restore(install, operation)
         if interrupted is not None:
@@ -390,8 +436,22 @@ def recover_interrupted(install: Installation, operation: Operation) -> bool:
 def execute(install: Installation, operation: Operation) -> None:
     if operation.terminal:
         return
+    from cli.application.operations import require_current_host
+
+    # The predecessor tray can itself queue an ordinary update after activation.
+    # Refuse before any data work: it cannot safely recover our richer records.
+    require_current_host(install)
     if recover_interrupted(install, operation):
         return
+    if install.version().name != operation.previous_version:
+        raise ApplicationError("The active installation changed after this update was requested")
+    rollback_point: Operation | None = None
+    if operation.rollback:
+        from cli.application.rollback import require_rollback_target
+
+        rollback_point = require_rollback_target(
+            install, source=operation.rollback_source, restore_snapshot=operation.restore_snapshot
+        )
     operation.previous_label = version_label(
         read_json(install.version() / "release.json", limit=32 * 1024**2)
     )
@@ -410,10 +470,20 @@ def execute(install: Installation, operation: Operation) -> None:
             if package.is_dir()
             else "Unpacking and verifying the selected package"
         )
-        candidate = stage_package(install, package, local=operation.local_package)
+        candidate = stage_package(
+            install,
+            package,
+            local=operation.local_package,
+            release_version=operation.release_version,
+        )
     else:
         try:
-            archive = download_release(install, operation.id, progress=progress)
+            archive = download_release(
+                install,
+                operation.id,
+                progress=progress,
+                release_version=operation.release_version,
+            )
         except OlderReleaseError as exc:
             # An expected refusal before anything changed, not a worker failure.
             operation.error = str(exc)
@@ -425,13 +495,22 @@ def execute(install: Installation, operation: Operation) -> None:
             candidate = install.version().name
         else:
             progress("Unpacking and verifying the downloaded package")
-            candidate = stage_package(install, archive, local=False)
+            candidate = stage_package(
+                install, archive, local=False, release_version=operation.release_version
+            )
     candidate_release = read_json(install.version(candidate) / "release.json", limit=32 * 1024**2)
     if candidate != install.version().name:
         # Before dependencies, stopping, or a verification launch; prepared
-        # updates re-enter here as well. Rollback keeps the original pointer and
-        # may restart the exact previous baseline even when it predates the marker.
+        # updates re-enter here as well. Automatic recovery of a failed forward
+        # update can still restart its original pre-feature baseline.
         require_access_compatible_release(candidate_release, install.access)
+        active_release = read_json(install.version() / "release.json", limit=32 * 1024**2)
+        if (
+            operation.rollback
+            or operation.release_version is not None
+            or active_release.get("version_switch_protocol") is not None
+        ):
+            require_version_switch_release(candidate_release)
     from cli.application.dependencies import prepare_for_version
 
     progress("Checking Extension dependencies")
@@ -458,9 +537,13 @@ def execute(install: Installation, operation: Operation) -> None:
             raise ApplicationError(
                 "The server target is occupied by a different application version or startup mode"
             )
-        operation.server_was_running = state != "absent"
+        operation.server_was_running = state != "absent" or (
+            rollback_point is not None
+            and rollback_point.phase == "needs_attention"
+            and rollback_point.server_was_running
+        )
         operation.save(install)
-        if state == "unresponsive":
+        if state == "unresponsive" and not operation.rollback:
             # A server that does not answer may not honor a normal shutdown, and no
             # continuation can be armed through it: fail before anything changed,
             # leaving it running.
@@ -472,14 +555,14 @@ def execute(install: Installation, operation: Operation) -> None:
                 restart=False,
             )
             return
-        if state == "running":
+        if state == "running" or (state == "unresponsive" and operation.rollback):
             arm_continuation(install, operation)
             # The update takes effect at once: a normal server shutdown, which
             # cancels active Runs and queued work instead of waiting for them.
             operation.transition(install, "stopping", "Stopping the current server")
             require_ok(processes.stop(install, initiator="update"))
-        # Taken only now: no server can write between this snapshot and a rollback.
-        # With no server running, its claim check also proves that none started since.
+        # Take the checkpoint offline, then check both claims and data changes
+        # before using it to guard a candidate start or a selected data restore.
         operation.transition(install, "stopping", "Saving a recovery snapshot of the data")
         try:
             update_snapshot = take_update_snapshot(install, operation)
@@ -492,6 +575,68 @@ def execute(install: Installation, operation: Operation) -> None:
         if fence is not None:
             keep_previous(install, operation, f"The new version was not started: {fence}")
             return
+        if operation.restore_snapshot is not None:
+            if update_snapshot is None:
+                keep_previous(
+                    install, operation, "The current data could not be saved for recovery"
+                )
+                return
+            from core.database.recovery import restore_data_snapshot
+            from core.database.snapshots import snapshot_root
+
+            data_dir = _data_dir(install)
+            selected = snapshot_root(data_dir) / operation.restore_snapshot
+            try:
+                restore_data_snapshot(
+                    data_dir, selected, documents=True, retire_unlisted=True, check_only=True
+                )
+            except (DatabaseError, OSError, ValueError) as exc:
+                keep_previous(
+                    install, operation, f"The selected data snapshot cannot be restored: {exc}"
+                )
+                return
+
+            def admit_restore() -> None:
+                # The restore owner already holds its maintenance guard: a new
+                # server cannot open data between this check and replacement.
+                fence = data_fence(install, update_snapshot)
+                if fence is not None:
+                    raise ApplicationError(f"The data was not restored: {fence}")
+                operation.data_restore_started = True
+                operation.transition(
+                    install, "activating", "Restoring the approved pre-update data snapshot"
+                )
+
+            try:
+                restore_data_snapshot(
+                    data_dir,
+                    selected,
+                    documents=True,
+                    retire_unlisted=True,
+                    cause="user-approved application rollback",
+                    before_restore=admit_restore,
+                )
+            except ApplicationError as exc:
+                if operation.data_restore_started:
+                    raise
+                keep_previous(install, operation, str(exc))
+                return
+            except (DatabaseError, OSError, ValueError) as exc:
+                if not operation.data_restore_started:
+                    keep_previous(
+                        install, operation, f"The selected data snapshot cannot be restored: {exc}"
+                    )
+                    return
+                raise ApplicationError(
+                    f"The requested data restore did not complete: {exc}. Finish it with "
+                    f"vbot data-store snapshot restore {operation.restore_snapshot} --all --yes; "
+                    f"the safety snapshot is {operation.data_snapshot}"
+                ) from exc
+            running = _live_servers(data_dir)
+            if running is not None:
+                raise ApplicationError(
+                    f"The data was restored but the candidate cannot start: {running}"
+                )
         # No producer/user admission in verification mode. The candidate is the
         # only writer until it stops, so its failure may restore the snapshot.
         # Dispatch already detached this worker from vBot's lifetime Job. It
@@ -506,6 +651,16 @@ def execute(install: Installation, operation: Operation) -> None:
         else:
             operation.error = verified.message
             data_note = roll_back_data(install, operation, update_snapshot)
+            if (
+                rollback_point is not None
+                and operation.restore_snapshot is None
+                and rollback_point.data_snapshot is not None
+            ):
+                data_note += (
+                    " Restoring the previous installation's saved data discards changes "
+                    f"made after its snapshot. To approve this, run vbot rollback "
+                    f"--restore-data {rollback_point.data_snapshot} --yes."
+                )
             # Old code is not run against the data without a probe.
             previous = operation.previous_version
             old_check = processes.start(
@@ -514,7 +669,12 @@ def execute(install: Installation, operation: Operation) -> None:
             if old_check.ok:
                 require_ok(processes.stop(install, initiator="update"))
                 if operation.server_was_running:
-                    require_ok(processes.start(install, version_id=previous, breakaway=False))
+                    restarted = processes.start(install, version_id=previous, breakaway=False)
+                    if not restarted.ok:
+                        raise ApplicationError(
+                            f"The current version could not restart: {restarted.message}. "
+                            f"{data_note}"
+                        )
                 operation.transition(
                     install,
                     "rolled_back",
@@ -534,7 +694,14 @@ def execute(install: Installation, operation: Operation) -> None:
     operation.transition(
         install,
         "completed",
-        "Desktop client updated; an open Desktop restarts into the new version right away"
+        (
+            f"Previous installation restored. Data restored from {operation.restore_snapshot}; "
+            f"the prior current data is saved in {operation.data_snapshot}"
+        )
+        if operation.restore_snapshot is not None
+        else "Previous installation restored; current data was kept"
+        if operation.rollback
+        else "Desktop client updated; an open Desktop restarts into the new version right away"
         if not install.owns_server
         else "Application update completed and startup verified"
         if operation.server_was_running
@@ -566,6 +733,17 @@ def run(install: Installation, operation_id: str) -> None:
             execute(install, operation)
             if operation.phase == "completed":
                 retired = retire_unneeded(install)
+            if operation.terminal and operation.phase != "needs_attention":
+                from cli.application.rollback import release_unused_snapshot_claims
+
+                try:
+                    release_unused_snapshot_claims(install)
+                except ApplicationError, DatabaseError, OSError, ValueError:
+                    _LOGGER.warning(
+                        "Kept application data snapshot claims after cleanup failed (operation=%s)",
+                        operation.id,
+                        exc_info=True,
+                    )
     except Exception as exc:
         _LOGGER.exception("Application update failed (operation=%s)", operation.id)
         operation.error = str(exc)

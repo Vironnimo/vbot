@@ -77,6 +77,13 @@ from core.database._snapshot_manifest import (
 from core.database._snapshot_manifest import (
     snapshot_root as snapshot_root,
 )
+from core.database._snapshot_retention import (
+    release_snapshot_retention as release_snapshot_retention,
+)
+from core.database._snapshot_retention import (
+    retain_snapshot_locked,
+    retained_snapshot_ids,
+)
 from core.database._snapshot_verification import (
     UNUSABLE_COPY_ERRORS as UNUSABLE_COPY_ERRORS,
 )
@@ -111,6 +118,7 @@ from core.database.spec import (
 )
 from core.utils.atomic import atomic_write_text, replace_path
 from core.utils.file_status import exists_strict, is_file_strict, is_link_status
+from core.utils.ids import is_safe_id
 from core.utils.timestamps import (
     is_canonical_timestamp,
     utc_now_timestamp,
@@ -454,6 +462,7 @@ def create_data_snapshot(
     specs: Iterable[DatabaseSpec] = (),
     cancelled: Callable[[], bool] | None = None,
     barrier: SnapshotBarrier | None = None,
+    retain_as: str | None = None,
 ) -> Path | None:
     """Capture, verify and atomically publish one snapshot of the durable data.
 
@@ -471,6 +480,8 @@ def create_data_snapshot(
     data_dir = Path(data_dir)
     if not reason or not reason.strip():
         raise ValueError("snapshot reason must be non-empty")
+    if retain_as is not None and not is_safe_id(retain_as):
+        raise ValueError("invalid snapshot retention owner")
     require_no_maintenance(data_dir)
     marker = read_marker(data_dir)
     if marker is None or not marker.databases:
@@ -597,6 +608,8 @@ def create_data_snapshot(
         replace_path(partial, final)
         partial = None
         fsync_dir(root)
+        if retain_as is not None:
+            retain_snapshot_locked(data_dir, retain_as, snapshot_id)
         _prune_snapshots(data_dir, protected_snapshot=final)
         _LOGGER.info(
             "Created data snapshot (snapshot=%s databases=%d documents=%d reason=%s "
@@ -682,6 +695,7 @@ def _make_room(data_dir: Path, needed: int) -> bool:
     the free space cannot be read or a snapshot cannot be removed.
     """
     root = snapshot_root(data_dir)
+    retained = retained_snapshot_ids(data_dir)
     if shutil.disk_usage(root).free >= needed + SNAPSHOT_RESERVE_BYTES:
         return True
     try:
@@ -701,7 +715,17 @@ def _make_room(data_dir: Path, needed: int) -> bool:
         while shutil.disk_usage(root).free < needed + SNAPSHOT_RESERVE_BYTES:
             if len(oldest_first) <= 1:
                 return False
-            child, manifest = oldest_first.pop(0)
+            removable = next(
+                (
+                    index
+                    for index, (_, item) in enumerate(oldest_first[:-1])
+                    if item.snapshot_id not in retained
+                ),
+                None,
+            )
+            if removable is None:
+                return False
+            child, manifest = oldest_first.pop(removable)
             remove_tree(child, within=root)
             removed.append(manifest.snapshot_id)
     finally:
@@ -715,6 +739,7 @@ def _make_room(data_dir: Path, needed: int) -> bool:
 
 def _prune_snapshots(data_dir: Path, *, protected_snapshot: Path) -> None:
     """Apply count and byte retention around the snapshot just published."""
+    retained_ids = retained_snapshot_ids(data_dir)
     try:
         children = _published_children(data_dir)
     except DatabaseUnavailableError:
@@ -737,7 +762,9 @@ def _prune_snapshots(data_dir: Path, *, protected_snapshot: Path) -> None:
     root = snapshot_root(data_dir)
     for child, manifest in others:
         over_budget = total + manifest.total_size > SNAPSHOT_KEEP_BYTES
-        if retained >= SNAPSHOT_KEEP_COUNT or (over_budget and retained >= SNAPSHOT_KEEP_MINIMUM):
+        if manifest.snapshot_id not in retained_ids and (
+            retained >= SNAPSHOT_KEEP_COUNT or (over_budget and retained >= SNAPSHOT_KEEP_MINIMUM)
+        ):
             with suppress(OSError):
                 remove_tree(child, within=root)
         else:

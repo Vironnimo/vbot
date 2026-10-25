@@ -50,7 +50,8 @@ Prints the absolute `vbot_root` of the running checkout/install and the resolved
 ## Update
 
 ```bash
-vbot update [--no-restart] [--detach]
+vbot update [<version>] [--no-restart] [--detach]
+vbot rollback [--detach]
 vbot update status [<operation-id>]
 vbot update activate <operation-id>
 vbot application status
@@ -59,11 +60,15 @@ vbot application channel main|release
 
 Every vBot installation updates from the signed packages of its update channel: `release` installs published releases, `main` the newest build of vBot's main branch. `vbot application status` shows the channel. `vbot application channel main|release` switches it; the next `vbot update` applies it. Change the channel only when the user asks.
 
-First inspect `vbot home`. Its `application_root` field identifies the installation; `vbot_root` is the readable active version, never edit it. Without `application_root`, this vBot runs from a development checkout: `update`, `uninstall`, `autostart` and `application` refuse there. A development checkout is updated with git; report that to the user instead of updating it yourself.
+Use `vbot update <version>` for an exact published release; replace `<version>` with the release requested by the user. The command keeps the configured update channel and refuses a target that fails vBot's startup/data check. Extensions are checked when they load normally; successful verification does not prove they work. Eligible targets start with the first release declaring version-switch support; releases before it are refused.
 
-The updater stops the server at once, like `vbot server stop`: it cancels every active Run, including Runs in other Sessions, and discards queued messages. Run `vbot update` directly. It returns a saved operation id before the server stops and arranges a continuation in this Session by itself, so create no Bootstrap for it. After acceptance, end your turn; the server stop cancels it once this Tool batch is saved. Never repeat an accepted update. The continuation inspects `vbot update status <operation-id>` before it reports success, because acceptance is not completion. When the channel has no newer version, the update reports that vBot is up to date and the server keeps running.
+Use `vbot rollback` to return to the previous installation with current data. Restoring its saved data requires the user to approve the loss of subsequent changes and run the printed command in their terminal. A started restore is not proof of success: read the operation result and its safety-snapshot reference. Never change a data format marker to bypass a refusal.
 
-`--output plain` returns the structured result without progress, and `vbot update status <operation-id>` reads it later. `--detach` returns after acceptance; closing the terminal does not cancel the update. `vbot update --no-restart` prepares a version without activating it; `vbot update activate <operation-id>` activates it later. `--package <path>` installs a local package instead of the channel's. Open Desktop windows keep their version until reopened.
+First inspect `vbot home`. Its `application_root` field identifies the installation; `vbot_root` is the readable active version, never edit it. Without `application_root`, this vBot runs from a development checkout: `update`, `rollback`, `uninstall`, `autostart` and `application` refuse there. A development checkout is updated with git; report that to the user instead of updating it yourself.
+
+The updater stops the server at once, like `vbot server stop`: it cancels every active Run, including Runs in other Sessions, and discards queued messages. Run `vbot update` directly. It returns a saved operation id before the server stops and arranges a continuation in this Session by itself, so create no Bootstrap for it. After acceptance, end your turn; the server stop cancels it once this Tool batch is saved. Never repeat an accepted update. The continuation inspects `vbot update status <operation-id>` before it reports success, because acceptance is not completion. When the channel publishes the active version, the update reports that vBot is up to date and the server keeps running; an older channel version is refused. Normal rollback uses the same acceptance and continuation flow.
+
+`--output plain` returns the structured result without progress, and `vbot update status <operation-id>` reads it later. `--detach` returns after acceptance; closing the terminal does not cancel the update. `vbot update --no-restart` prepares a version without activating it; `vbot update activate <operation-id>` activates it later. `--package <path>` installs a local package instead of the channel's. An open Desktop switches through its restart handoff.
 
 Inspect the saved phase, message and error after a failure. `rolled_back` means the previous code was verified and retained; its message also states whether the updater restored the data from the snapshot it took before the update, found the data unchanged, or did not restore it and why. `needs_attention` means versions and data were preserved for inspection. If its message says a data restore did not complete, no version can start until the printed `vbot data-store snapshot restore <snapshot-id> --all --yes` completes; report this to the user and run it only when the user asks. Never restore a data snapshot on your own initiative.
 

@@ -33,7 +33,7 @@ import shutil
 import sqlite3
 import stat
 import uuid
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from contextlib import closing, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -91,6 +91,7 @@ from core.database.errors import (
 )
 from core.database.marker import (
     MarkerEntry,
+    _finish_maintenance_locked,
     acquire_operation_lock,
     maintenance_locked,
     operation_lock,
@@ -627,6 +628,7 @@ def restore_data_snapshot(
     retire_unlisted: bool = False,
     cause: str = "manual operator restore",
     check_only: bool = False,
+    before_restore: Callable[[], None] | None = None,
 ) -> SnapshotRestore:
     """Restore parts of one verified data snapshot while Runtime is stopped.
 
@@ -643,6 +645,10 @@ def restore_data_snapshot(
     from starting until it is repeated.
     ``specs`` add compatibility and owner-fact checks for the members they
     describe.
+    ``before_restore`` admits a fresh restore after validation, under the
+    maintenance guard and operation lock, before the first replacement. A
+    callback failure removes that fresh guard and leaves data unchanged. This
+    admission cannot resume existing maintenance and is skipped by ``check_only``.
     """
     data_dir = Path(data_dir)
     with operation_lock(data_dir):
@@ -655,6 +661,7 @@ def restore_data_snapshot(
             retire_unlisted=retire_unlisted,
             cause=cause,
             check_only=check_only,
+            before_restore=before_restore,
         )
 
 
@@ -668,8 +675,11 @@ def _restore_data_snapshot_locked(
     retire_unlisted: bool,
     cause: str,
     check_only: bool,
+    before_restore: Callable[[], None] | None = None,
 ) -> SnapshotRestore:
     """Plan and restore while the caller continuously holds the operation lock."""
+    if before_restore is not None:
+        require_no_maintenance(data_dir)
     marker = read_marker(data_dir)
     if marker is None:
         raise DatabaseFormatError(
@@ -725,7 +735,15 @@ def _restore_data_snapshot_locked(
             manifest.snapshot_id, selected, document_plan, retired, tuple(registered)
         )
     document_result: DocumentRestore | None = None
-    with maintenance_locked(data_dir, RESTORE_OPERATION, resume=True, scope=scope):
+    with maintenance_locked(data_dir, RESTORE_OPERATION, resume=True, scope=scope) as guard:
+        if before_restore is not None:
+            try:
+                before_restore()
+            except BaseException:
+                # No database, registration or document has changed yet. Never
+                # clear an earlier incomplete restore: admission excluded it.
+                _finish_maintenance_locked(data_dir, guard)
+                raise
         detected_at = utc_now_timestamp()
         for name in selected:
             if not _restore_member_locked(

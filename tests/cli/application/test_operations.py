@@ -12,7 +12,7 @@ from typing import cast
 import psutil  # type: ignore[import-untyped]
 import pytest
 
-from cli.application import operations
+from cli.application import operations, rollback
 from cli.application.state import ApplicationError, Installation, Operation, load_operation
 from core.utils import processes as core_processes
 from core.utils.processes import ForeignJob
@@ -47,11 +47,12 @@ def test_wait_returns_the_saved_terminal_human_result(tmp_path: Path):
     assert observed == ["completed"]
 
 
+@pytest.mark.parametrize("release_version", [None, "1.2.3"])
 def test_request_coalesces_a_live_operation_and_recovers_an_orphan(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, release_version: str | None
 ):
     install = _install(tmp_path)
-    pending = Operation(id="upd_pending", phase="preparing")
+    pending = Operation(id="upd_pending", phase="preparing", release_version=release_version)
     spawned: list[str] = []
     monkeypatch.setattr(operations, "operations", lambda _install: [pending])
     monkeypatch.setattr(
@@ -59,14 +60,37 @@ def test_request_coalesces_a_live_operation_and_recovers_an_orphan(
     )
 
     monkeypatch.setattr(operations, "worker_alive", lambda _operation: True)
-    assert operations.request_update(install) is pending
+    selector = f"v{release_version}" if release_version else None
+    assert operations.request_update(install, release_version=selector) is pending
     assert spawned == []
 
     monkeypatch.setattr(operations, "worker_alive", lambda _operation: False)
-    assert operations.request_update(install) is pending
+    assert operations.request_update(install, release_version=selector) is pending
     assert spawned == [pending.id]
     operations.recover_operations(install)
     assert spawned == [pending.id, pending.id]
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"release_version": "1.2.3", "package": Path("release.zip")},
+        {"rollback": True, "package": Path("release.zip")},
+        {"rollback": True, "prepared_version": "rel_prepared"},
+        {"rollback": True, "release_version": "1.2.3"},
+        {"rollback": True, "restart": False},
+        {"restore_snapshot": "snap_before"},
+    ],
+)
+def test_conflicting_switch_requests_create_no_operation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, options: dict
+) -> None:
+    install = _install(tmp_path)
+    monkeypatch.setattr(operations, "spawn_worker", lambda *_a: pytest.fail("invalid request"))
+
+    with pytest.raises(ApplicationError):
+        operations.request_update(install, **options)
+    assert operations.operations(install) == []
 
 
 @pytest.mark.parametrize("in_service", [False, True], ids=["shell", "systemd-service"])
@@ -116,20 +140,36 @@ def test_worker_spawn_is_detached_and_strips_run_caller_environment(
     assert arguments[0] == ("systemd-run" if scoped else str(install.interpreter(role="Update")))
 
 
+@pytest.mark.parametrize(
+    ("selected", "requested"),
+    [
+        ({}, {"restart": False}),
+        ({}, {"release_version": "1.2.3"}),
+        ({"release_version": "1.2.3"}, {}),
+        ({"release_version": "1.2.3"}, {"release_version": "1.2.4"}),
+        ({}, {"rollback": True}),
+        (
+            {"rollback": True, "rollback_source": "upd_previous"},
+            {"rollback": True, "restore_snapshot": "snap_before"},
+        ),
+    ],
+)
 def test_pending_update_rejects_incompatible_request(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, selected: dict, requested: dict
 ) -> None:
     install = _install(tmp_path)
-    pending = Operation(id="upd_pending", phase="preparing", restart=True)
+    pending = Operation(id="upd_pending", phase="preparing", restart=True, **selected)
     pending.save(install)
     monkeypatch.setattr(operations, "worker_alive", lambda _operation: True)
 
     with pytest.raises(ApplicationError, match="different options"):
-        operations.request_update(install, restart=False)
+        operations.request_update(install, **requested)
+    assert load_operation(install, pending.id) == pending
 
 
+@pytest.mark.parametrize("release_version", [None, "1.2.3"])
 def test_a_prepared_version_is_selected_in_place_and_a_repeat_joins_it(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, release_version: str | None
 ) -> None:
     # `update activate` writes no copy of the prepared version that a worker could be
     # reading, so a repeated activation joins the running one.
@@ -141,11 +181,19 @@ def test_a_prepared_version_is_selected_in_place_and_a_repeat_joins_it(
     monkeypatch.setattr(operations, "spawn_worker", lambda _install, item: spawned.append(item.id))
     monkeypatch.setattr(operations, "worker_alive", lambda _operation: True)
 
-    accepted = operations.request_update(install, prepared_version="rel_prepared")
+    accepted = operations.request_update(
+        install, prepared_version="rel_prepared", release_version=release_version
+    )
 
     assert (accepted.package, accepted.local_package) == (str(prepared.resolve()), True)
+    assert load_operation(install, accepted.id).release_version == release_version
     assert not (tmp_path / "staging").exists()
-    assert operations.request_update(install, prepared_version="rel_prepared").id == accepted.id
+    assert (
+        operations.request_update(
+            install, prepared_version="rel_prepared", release_version=release_version
+        ).id
+        == accepted.id
+    )
     with pytest.raises(ApplicationError, match="different options"):
         operations.request_update(install)
     assert spawned == [accepted.id]
@@ -153,17 +201,20 @@ def test_a_prepared_version_is_selected_in_place_and_a_repeat_joins_it(
         operations.request_update(install, prepared_version="rel_retired")
 
 
+@pytest.mark.parametrize("release_version", [None, "v1.2.3"])
 def test_operation_is_persisted_before_spawn_and_spawn_failure_is_saved(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, release_version: str | None
 ):
     install = _install(tmp_path)
     observed: list[str] = []
 
     def verify_persisted(_install: Installation, operation: Operation) -> None:
-        observed.append(load_operation(install, operation.id).phase)
+        saved = load_operation(install, operation.id)
+        observed.append(saved.phase)
+        assert saved.release_version == ("1.2.3" if release_version else None)
 
     monkeypatch.setattr(operations, "spawn_worker", verify_persisted)
-    accepted = operations.request_update(install)
+    accepted = operations.request_update(install, release_version=release_version)
     assert observed == ["queued"]
     assert load_operation(install, accepted.id).phase == "queued"
     accepted.transition(install, "completed", "first request finished")
@@ -174,11 +225,111 @@ def test_operation_is_persisted_before_spawn_and_spawn_failure_is_saved(
         lambda _install, _operation: (_ for _ in ()).throw(ApplicationError("spawn unavailable")),
     )
     with pytest.raises(ApplicationError, match="spawn unavailable"):
-        operations.request_update(install)
+        operations.request_update(install, release_version=release_version)
     failed = operations.status(install)
     assert failed is not None
     assert failed.phase == "failed"
     assert failed.error == "spawn unavailable"
+
+
+@pytest.mark.parametrize("restore_snapshot", [None, "snap_before"])
+@pytest.mark.parametrize("phase", ["completed", "needs_attention"])
+def test_rollback_request_binds_the_last_activated_switch_and_coalesces(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, restore_snapshot: str | None, phase: str
+) -> None:
+    install = _install(tmp_path)
+    previous = install.version("rel_previous")
+    previous.mkdir()
+    point = Operation(
+        id="upd_switch",
+        phase=phase,
+        previous_version="rel_previous",
+        candidate_version="rel_current",
+        data_snapshot="snap_before",
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+    point.save(install)
+    Operation(
+        id="upd_no_change",
+        phase="completed",
+        previous_version="rel_current",
+        candidate_version="rel_current",
+        created_at="2026-01-02T00:00:00+00:00",
+    ).save(install)
+    Operation(
+        id="upd_failure",
+        phase="failed",
+        previous_version="rel_current",
+        candidate_version="rel_broken",
+        created_at="2026-01-03T00:00:00+00:00",
+    ).save(install)
+    validated: list[Path] = []
+    spawned: list[Operation] = []
+
+    def validate(path: Path, **_kwargs: object) -> dict[str, object]:
+        validated.append(path)
+        return {"version_switch_protocol": 1}
+
+    monkeypatch.setattr(rollback, "validate_release", validate)
+    monkeypatch.setattr(
+        rollback, "read_manifest", lambda *_a: SimpleNamespace(reason="update upd_switch")
+    )
+    monkeypatch.setattr(
+        operations,
+        "spawn_worker",
+        lambda _install, operation: spawned.append(load_operation(install, operation.id)),
+    )
+    monkeypatch.setattr(operations, "worker_alive", lambda _operation: True)
+
+    accepted = operations.request_update(install, rollback=True, restore_snapshot=restore_snapshot)
+
+    assert validated == [previous]
+    assert accepted.rollback is True
+    assert accepted.rollback_source == point.id
+    assert accepted.restore_snapshot == restore_snapshot
+    assert accepted.previous_version == "rel_current"
+    assert accepted.package == str(previous.resolve())
+    assert accepted.local_package is True
+    assert spawned == [accepted]
+    assert (
+        operations.request_update(install, rollback=True, restore_snapshot=restore_snapshot).id
+        == accepted.id
+    )
+    assert len(spawned) == 1
+    assert validated == [previous]
+
+
+@pytest.mark.parametrize(
+    "change", ["no-switch", "different-active", "unsupported", "wrong-snapshot"]
+)
+def test_rollback_request_refuses_an_unavailable_or_unrelated_target_before_spawn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    install = _install(tmp_path)
+    if change != "no-switch":
+        Operation(
+            id="upd_switch",
+            phase="completed",
+            previous_version="rel_previous",
+            candidate_version="rel_other" if change == "different-active" else "rel_current",
+            data_snapshot="snap_before",
+        ).save(install)
+    monkeypatch.setattr(
+        rollback,
+        "validate_release",
+        lambda *_a, **_kw: {} if change == "unsupported" else {"version_switch_protocol": 1},
+    )
+    monkeypatch.setattr(
+        operations, "spawn_worker", lambda *_a: pytest.fail("invalid rollback must not dispatch")
+    )
+
+    with pytest.raises(ApplicationError):
+        operations.request_update(
+            install,
+            rollback=True,
+            restore_snapshot="snap_other" if change == "wrong-snapshot" else None,
+        )
+    assert all(item.terminal for item in operations.operations(install))
 
 
 @pytest.mark.parametrize("exit_code", [0, 111])
@@ -234,7 +385,12 @@ def _running_tray(install: Installation) -> None:
     parent = psutil.Process(os.getppid())
     (install.root / "host.json").write_text(
         json.dumps(
-            {"schema_version": 1, "pid": parent.pid, "process_created": process_started(parent)}
+            {
+                "schema_version": 1,
+                "pid": parent.pid,
+                "process_created": process_started(parent),
+                "operation_protocol": 2,
+            }
         ),
         encoding="utf-8",
     )
@@ -255,6 +411,71 @@ def _tray_dispatches(install: Installation, monkeypatch: pytest.MonkeyPatch) -> 
         operations, "_sleep", lambda _seconds: operations.dispatch_requested(install)
     )
     return spawned
+
+
+@pytest.mark.parametrize(
+    ("kind", "protocol"),
+    [
+        ("channel", None),
+        ("release", None),
+        ("rollback", None),
+        ("channel", 2),
+        ("release", 2),
+        ("rollback", 2),
+    ],
+)
+def test_version_switch_requests_wait_for_a_compatible_running_host_before_writing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str, protocol: int | None
+) -> None:
+    install = _install(tmp_path)
+    (install.root / "host.json").write_text(
+        json.dumps({"operation_protocol": protocol}), encoding="utf-8"
+    )
+    monkeypatch.setattr(operations, "host_running", lambda _install: True)
+    spawned = _tray_dispatches(install, monkeypatch)
+    checked: list[str | None] = []
+
+    def target(_install: Installation, *, restore_snapshot: str | None) -> Operation:
+        checked.append(restore_snapshot)
+        return Operation(id="upd_previous", previous_version="rel_previous")
+
+    monkeypatch.setattr(rollback, "require_rollback_target", target)
+    options = (
+        {"release_version": "1.2.3"} if kind == "release" else {"rollback": kind == "rollback"}
+    )
+    if protocol != 2:
+        with pytest.raises(ApplicationError, match="tray is still running"):
+            operations.request_update(install, **options)
+        assert operations.operations(install) == []
+        assert spawned == checked == []
+        assert not (install.root / operations.DISPATCH_REQUEST).exists()
+    else:
+        accepted = operations.request_update(install, **options)
+        assert spawned == [accepted.id]
+        assert checked == ([None] if kind == "rollback" else [])
+        saved = json.loads((install.root / "operations" / f"{accepted.id}.json").read_text())
+        assert saved["schema_version"] == (1 if kind == "channel" else 2)
+
+
+@pytest.mark.parametrize("entry", ["repeat", "recovery"])
+def test_orphan_is_not_dispatched_to_a_host_that_would_drop_recovery_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entry: str
+) -> None:
+    install = _install(tmp_path)
+    _running_tray(install)
+    record = json.loads((install.root / "host.json").read_text())
+    del record["operation_protocol"]
+    (install.root / "host.json").write_text(json.dumps(record), encoding="utf-8")
+    pending = Operation(id="upd_orphan", phase="activating", previous_version="rel_current")
+    pending.data_snapshot = "20261025T123456Z-1234abcd"
+    pending.save(install)
+    with pytest.raises(ApplicationError, match="tray is still running"):
+        if entry == "repeat":
+            operations.request_update(install)
+        else:
+            operations.recover_operations(install)
+    assert not (install.root / operations.DISPATCH_REQUEST).exists()
+    assert load_operation(install, pending.id).data_snapshot == pending.data_snapshot
 
 
 _CONFINED = ForeignJob("codex.exe", 4711, confines_children=True)

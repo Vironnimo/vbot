@@ -33,7 +33,7 @@ Usage: install.sh [options]
 Options:
   --dir <path>        Application directory (default: ~/.local/share/vbot or \$VBOT_DIR)
   --main              Install the newest main build; updates then follow main
-  --version <tag>     Install a specific release (for example v0.2.0)
+  --version <version> Install a specific release (for example 0.2.0 or v0.2.0)
   --data-dir <path>   Server data directory (default: ~/.vbot)
   --host <host>       Server bind host (default: 127.0.0.1, or 0.0.0.0 for --access lan)
   --port <port>       Server port (default: 22332)
@@ -90,9 +90,11 @@ while [ "$#" -gt 0 ]; do
 done
 
 [ "$CHANNEL" = "main" ] && [ -n "$VERSION" ] && fail "Choose either --main or --version"
-case "$VERSION" in
-    .* | *[!A-Za-z0-9._+-]*) fail "--version needs a release tag such as v0.2.0" ;;
-esac
+if [ -n "$VERSION" ]; then
+    VERSION="${VERSION#v}"
+    [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+        || fail "--version needs a release version such as 0.2.0 or v0.2.0"
+fi
 case "$PORT" in
     "" | *[!0-9]*) fail "--port must be a number" ;;
 esac
@@ -117,8 +119,8 @@ if [ "$CHANNEL" = "main" ]; then
     BASE="$DOWNLOADS/download/main-build"
     RELEASE="the newest main build"
 elif [ -n "$VERSION" ]; then
-    BASE="$DOWNLOADS/download/$VERSION"
-    RELEASE="release $VERSION"
+    BASE="$DOWNLOADS/download/v$VERSION"
+    RELEASE="release v$VERSION"
 else
     BASE="$DOWNLOADS/latest/download"
     RELEASE="the latest release"
@@ -133,7 +135,7 @@ curl -fsSL "$BASE/$IDENTITY" -o "$WORK/$IDENTITY" \
     || fail "Could not read $IDENTITY of $RELEASE from $BASE: the release does not exist, publishes no $IDENTITY, or GitHub cannot be reached"
 # The release identity names the version and records the SHA256 digest of each
 # asset; both the version and the package's digest are required.
-FACTS="$(python3 - "$WORK/$IDENTITY" "$ASSET" <<'PY'
+FACTS="$(python3 - "$WORK/$IDENTITY" "$ASSET" "$CHANNEL" "$VERSION" <<'PY'
 import json, re, sys
 try:
     with open(sys.argv[1], encoding="utf-8") as handle:
@@ -143,6 +145,10 @@ except (OSError, ValueError):
 if not isinstance(identity, dict) or identity.get("schema_version") != 1:
     raise SystemExit(1)
 version = identity.get("version")
+if identity.get("channel") != sys.argv[3]:
+    raise SystemExit(1)
+if sys.argv[4] and version != sys.argv[4]:
+    raise SystemExit(1)
 assets = identity.get("assets")
 digest = assets.get(sys.argv[2]) if isinstance(assets, dict) else None
 if not isinstance(version, str) or not re.fullmatch(r"[0-9A-Za-z.+-]{1,64}", version):
