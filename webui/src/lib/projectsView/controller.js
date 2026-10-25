@@ -156,6 +156,7 @@ export function createProjectsController({
         auto_instructions: state.editForm.auto_instructions,
         auto_load: state.editForm.auto_load,
         folder_instructions: state.editForm.folder_instructions,
+        memory_enabled: state.editForm.memory_enabled,
         context_commands: state.editForm.context_commands,
         allowed_tools: state.editForm.allowed_tools,
         skills_bundled_enabled: state.editForm.skills_bundled_enabled,
@@ -285,7 +286,12 @@ export function createProjectsController({
       state.projects[0] ??
       null;
     if (projectToOpen) {
+      const expandedMembers =
+        projectToOpen.project_id === state.selectedProjectId
+          ? state.expandedMembers
+          : {};
       selectProject(projectToOpen.project_id);
+      state.expandedMembers = expandedMembers;
     } else {
       clearSelectedProject();
     }
@@ -723,6 +729,7 @@ export function createProjectsController({
         tool_access: { mode: 'all' },
         tool_loading: null,
         permission_rules: null,
+        project_memory_enabled: true,
       }
     );
   }
@@ -791,6 +798,8 @@ export function createProjectsController({
     if (field === 'permission_rules') {
       return normalizePermissionRules(draft.permission_rules);
     }
+    if (field === 'project_memory_enabled')
+      return draft.project_memory_enabled === true;
     return draft.thinking_effort;
   }
 
@@ -817,6 +826,8 @@ export function createProjectsController({
     if (field === 'permission_rules') {
       return normalizePermissionRules(draft.permission_rules) !== null;
     }
+    if (field === 'project_memory_enabled')
+      return typeof draft.project_memory_enabled === 'boolean';
     return typeof draft.thinking_effort === 'string';
   }
 

@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from core.memory import MemoryPromptMode
 from core.tools import Tool, ToolRegistry
 from core.tools.availability import (
     ToolAccess,
@@ -170,17 +171,21 @@ def test_followed_tool_requires_one_of_its_sources_and_can_be_denied_independent
     assert resolve("bash", "subagent", denied=("bash", "subagent")) == ()
 
 
-def test_denials_win_over_memory_activation_and_session_grants() -> None:
+@pytest.mark.parametrize(("memory_mode", "project_memory"), [("agent_user", False), ("off", True)])
+def test_denials_win_over_memory_activation_and_session_grants(
+    memory_mode: MemoryPromptMode, project_memory: bool
+) -> None:
     tools = _catalog(
-        ("memory", {"activation": "memory_mode", **_IDENTITY}),
+        ("memory", {"activation": "memory_mode"}),
         ("inbox", {"activation": "session_grant"}),
     )
 
     resolution = resolve_tool_access(
         ToolAccess(mode="selected", allowed=(), denied=("memory", "inbox")),
         tools,
-        "agent_user",
+        memory_mode,
         workspace="workspace",
+        project_memory_enabled=project_memory,
         session_tool_grants=("inbox",),
     )
 
@@ -188,13 +193,16 @@ def test_denials_win_over_memory_activation_and_session_grants() -> None:
     assert resolution.session_tool_grants == ()
 
 
-def test_a_fixed_selection_activates_nothing_by_memory_mode_or_session_grant() -> None:
+@pytest.mark.parametrize(("memory_mode", "project_memory"), [("agent_user", False), ("off", True)])
+def test_a_fixed_selection_activates_nothing_by_memory_mode_or_session_grant(
+    memory_mode: MemoryPromptMode, project_memory: bool
+) -> None:
     # A built-in Agent's Tools: only the listed Tools and the Tools following them.
     tools = _catalog(
         ("skill", {}),
         ("skill_manage", {**_IDENTITY}),
         ("skill_audit", {"activation": "follows", "activation_source": "skill"}),
-        ("memory", {"activation": "memory_mode", **_IDENTITY}),
+        ("memory", {"activation": "memory_mode"}),
         ("inbox", {"activation": "session_grant"}),
     )
     allowed = ("skill", "skill_manage")
@@ -203,8 +211,9 @@ def test_a_fixed_selection_activates_nothing_by_memory_mode_or_session_grant() -
         resolution = resolve_tool_access(
             ToolAccess(mode="selected", allowed=allowed, fixed=fixed),
             tools,
-            "agent_user",
+            memory_mode,
             workspace="workspace",
+            project_memory_enabled=project_memory,
             session_tool_grants=("inbox",),
         )
         return resolution.allowed_tools, resolution.session_tool_grants
@@ -226,15 +235,33 @@ def test_a_fixed_selection_activates_nothing_by_memory_mode_or_session_grant() -
     }
 
 
-def test_memory_activation_is_independent_of_selected_direct_tools() -> None:
-    tools = _catalog(("read", {}), ("memory", {"activation": "memory_mode", **_IDENTITY}))
+@pytest.mark.parametrize(
+    ("memory_mode", "project_memory", "workspace"),
+    [("agent_user", False, "workspace"), ("off", True, "")],
+)
+def test_memory_activation_is_independent_of_selected_direct_tools(
+    memory_mode: MemoryPromptMode, project_memory: bool, workspace: str
+) -> None:
+    tools = _catalog(("read", {}), ("memory", {"activation": "memory_mode"}))
     policy = ToolAccess(mode="selected")
 
-    active = resolve_tool_access(policy, tools, "agent_user", workspace="workspace")
-    off = resolve_tool_access(policy, tools, "off", workspace="workspace")
+    active = resolve_tool_access(
+        policy, tools, memory_mode, workspace=workspace, project_memory_enabled=project_memory
+    )
+    off = resolve_tool_access(policy, tools, "off", workspace=workspace)
 
     assert active.allowed_tools == ("memory",)
     assert off.allowed_tools == ()
+    assert (
+        resolve_tool_access(
+            ToolAccess(mode="none"),
+            tools,
+            memory_mode,
+            workspace=workspace,
+            project_memory_enabled=project_memory,
+        ).allowed_tools
+        == ()
+    )
 
 
 @pytest.mark.parametrize(

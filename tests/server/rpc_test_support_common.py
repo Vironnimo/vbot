@@ -107,6 +107,7 @@ class StubAgent:
     top_p: float | None = None
     thinking_effort: str | None = ""
     memory_prompt_mode: str = DEFAULT_MEMORY_PROMPT_MODE
+    project_memory_enabled: bool = True
     allowed_tools: list[str] | None = None
     tool_access: ToolAccess | None = None
     allowed_skills: list[str] | None = None
@@ -325,6 +326,7 @@ class StubProject:
     display_name: str
     cwd: str
     auto_load: tuple[str, ...] = ()
+    memory_enabled: bool = True
 
     @property
     def instruction_files(self) -> list[str]:
@@ -351,6 +353,9 @@ class StubProjects:
 
     def exists(self, project_id: str) -> bool:
         return project_id in self._projects
+
+    def memory_workspace(self, project_id: str) -> Path:
+        return Path(self.get(project_id).cwd).parent / "projects" / project_id
 
     def find_by_cwd(self, cwd: object) -> StubProject | None:
         # Mirror the real store: match on the cwd-identity key so the rooted-agent

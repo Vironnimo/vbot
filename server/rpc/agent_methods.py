@@ -392,6 +392,7 @@ def _agent_changes(params: JsonObject, *, blocked: set[str], for_create: bool) -
         "model",
         "fallback_models",
         "memory_prompt_mode",
+        "project_memory_enabled",
         "temperature",
         "top_p",
         "thinking_effort",
@@ -579,7 +580,7 @@ def _validate_agent_field(key: str, value: Any) -> Any:
                 subagent["allowed_agents"],
             )
         return dict(value)
-    if key in ("custom_system_prompt_enabled", "librarian_enabled"):
+    if key in ("custom_system_prompt_enabled", "librarian_enabled", "project_memory_enabled"):
         if not isinstance(value, bool):
             raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{key} must be a boolean")
         return value

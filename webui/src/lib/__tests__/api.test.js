@@ -376,6 +376,46 @@ describe('RPC wrappers', () => {
       { agent_id: 'coder', scope: 'agent', entry_id: 2 },
     ],
     [
+      'memory.list (Project)',
+      (o) => api.listProjectMemories('demo', o),
+      { project_id: 'demo' },
+    ],
+    [
+      'memory.add (Project)',
+      (o) => api.addProjectMemory('demo', 'Keep changes reviewable.', o),
+      {
+        project_id: 'demo',
+        scope: 'project',
+        content: 'Keep changes reviewable.',
+      },
+    ],
+    [
+      'memory.replace (Project)',
+      (o) =>
+        api.replaceProjectMemory('demo', 2, 'Discuss deployment first.', o),
+      {
+        project_id: 'demo',
+        scope: 'project',
+        entry_id: 2,
+        content: 'Discuss deployment first.',
+      },
+    ],
+    [
+      'memory.remove (Project)',
+      (o) => api.removeProjectMemory('demo', 2, o),
+      { project_id: 'demo', scope: 'project', entry_id: 2 },
+    ],
+    [
+      'memory.history (Project)',
+      (o) => api.listProjectMemoryHistory('demo', o),
+      { project_id: 'demo' },
+    ],
+    [
+      'memory.revert (Project)',
+      (o) => api.revertProjectMemory('demo', 3, o),
+      { project_id: 'demo', revisions: [3] },
+    ],
+    [
       'project.add',
       (o) =>
         api.addProject(

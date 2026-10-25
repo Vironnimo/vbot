@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -85,10 +86,19 @@ async def _learning_undo(state: Any, params: JsonObject) -> JsonObject:
     except LearningUndoFailedError as exc:
         # It may have written before it failed, so open views refresh.
         _announce(state, agent_id, memory=True, skills=True)
+        publish_resource_changed(state, RESOURCE_KIND_MEMORIES)
         raise _map_expected_error(exc) from exc
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    _announce(state, agent_id, memory=result.memory_changed, skills=result.skills_changed)
+    _announce(
+        state,
+        agent_id,
+        memory=result.memory_changed,
+        skills=result.skills_changed,
+        project_ids={
+            change.project_id for change in result.changes.changes if change.project_id is not None
+        },
+    )
     response: JsonObject = result.changes.to_dict()
     return response
 
@@ -103,9 +113,20 @@ async def _agent_workspace(state: Any, agent_id: str) -> Path:
     return Path(agent.workspace)
 
 
-def _announce(state: Any, agent_id: str, *, memory: bool, skills: bool) -> None:
+def _announce(
+    state: Any,
+    agent_id: str,
+    *,
+    memory: bool,
+    skills: bool,
+    project_ids: Iterable[str] = (),
+) -> None:
     if memory:
         publish_resource_changed(state, RESOURCE_KIND_MEMORIES, scope={"agent_id": agent_id})
+        for project_id in sorted(project_ids):
+            publish_resource_changed(
+                state, RESOURCE_KIND_MEMORIES, scope={"project_id": project_id}
+            )
     if skills:
         state.runtime.invalidate_agent_skills(agent_id)
         publish_resource_changed(state, RESOURCE_KIND_SKILLS)

@@ -16,6 +16,7 @@ from core.memory import (
     MemoryService,
     MemoryWriter,
 )
+from core.projects import ProjectError, ProjectStore
 from core.tools.availability import MEMORY_TOOL_NAME
 from core.tools.call_syntax import normalize_call_arguments, spelling
 from core.tools.contracts import compile_tool_contract
@@ -34,12 +35,14 @@ from core.tools.tools import (
 MEMORY_TOOL_DESCRIPTION = (
     "Manage Memory: facts shown to you in every future Session. Scope user holds facts "
     "about the user and preferences that apply to all of their work; scope agent holds "
-    "stable environment and project facts. A lesson for one kind of task belongs in that "
+    "stable environment facts; scope project holds lasting project decisions, user preferences "
+    "and corrections shared with other Agents working in that Project. A lesson for one kind "
+    "of task belongs in that "
     "task's Skill, not in Memory. Change or remove an entry by old_text, any unique part of "
     "its current text; a failed match returns the current entries."
 )
 MEMORY_ACTIONS = ("list", "add", "replace", "remove")
-MEMORY_SCOPES = ("user", "agent")
+MEMORY_SCOPES = ("user", "agent", "project")
 # Both scopes in Memory block order.
 _ALL_SCOPES: tuple[MemoryScope, ...] = ("agent", "user")
 _MEMORY_SCOPE_PARAMETER: JsonObject = {
@@ -73,6 +76,7 @@ MEMORY_TOOL_PARAMETERS: JsonObject = {
             "description": "list shows current entries; add, replace, or remove changes one.",
         },
         "scope": _MEMORY_SCOPE_PARAMETER,
+        "project_id": {"type": "string"},
         "content": _MEMORY_CONTENT_PARAMETER,
         "old_text": _MEMORY_OLD_TEXT_PARAMETER,
     },
@@ -107,6 +111,7 @@ _ACTION_SYNONYMS: dict[str, tuple[str, ...]] = {
 _SCOPE_SYNONYMS: dict[str, tuple[str, ...]] = {
     "user": ("user", "profile", "userprofile", "usermd"),
     "agent": ("agent", "memory", "agentmemory", "memorymd"),
+    "project": ("project", "projectmemory"),
 }
 
 # Consecutive failed mutations tolerated per run before the tool cuts the loop off.
@@ -117,7 +122,7 @@ _SCOPE_SYNONYMS: dict[str, tuple[str, ...]] = {
 _MAX_MEMORY_FAILURES_PER_RUN = 3
 _PREVIEW_CHARS = 200
 # How the user sees each scope, the same headings the Memory block shows.
-_NAMES = {"agent": "Agent Memory", "user": "User Profile"}
+_NAMES = {"agent": "Agent Memory", "user": "User Profile", "project": "Project Memory"}
 
 
 class _MemoryThrashTracker:
@@ -159,13 +164,15 @@ class _MemoryRefusalError(Exception):
         self.code = code
 
 
-def make_memory_handler(memory_service: MemoryService):
+def make_memory_handler(memory_service: MemoryService, projects: ProjectStore | None = None):
     """Create a memory tool handler bound to a memory service."""
 
     tracker = _MemoryThrashTracker()
 
     async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
-        return await run_tool_worker(memory_handler, context, arguments, memory_service, tracker)
+        return await run_tool_worker(
+            memory_handler, context, arguments, memory_service, tracker, projects
+        )
 
     return handler
 
@@ -175,6 +182,7 @@ def memory_handler(
     arguments: JsonObject,
     memory_service: MemoryService,
     tracker: _MemoryThrashTracker | None = None,
+    projects: ProjectStore | None = None,
 ) -> JsonObject:
     """Handle a memory tool call and return a stable vBot result envelope.
 
@@ -189,8 +197,122 @@ def memory_handler(
         )
     scope = arguments.get("scope")
     if scope is not None and scope not in MEMORY_SCOPES:
-        return tool_failure("invalid_arguments", "scope must be user or agent")
+        return tool_failure("invalid_arguments", "scope must be user, agent or project")
+    if scope == "project":
+        return _project_memory_result(context, arguments, memory_service, tracker, projects)
+    if arguments.get("project_id") is not None:
+        return tool_failure(
+            "invalid_arguments",
+            "Nothing was changed. project_id targets Project Memory; set scope to project.",
+        )
+    if getattr(context, "memory_prompt_mode", "agent_user") == "off":
+        return tool_failure(
+            "memory_unavailable",
+            "Nothing was changed. Personal Memory is disabled for this Agent. "
+            + (
+                "Use scope project for the active Project's Memory."
+                if getattr(context, "project_memory_enabled", False)
+                else "Ask the user to enable the needed Memory scope in the Agent settings."
+            ),
+        )
     workspace = Path(context.workspace)
+    return _run_memory_operation(context, arguments, memory_service, tracker, workspace, scope)
+
+
+def _project_memory_result(
+    context: ToolContext,
+    arguments: JsonObject,
+    service: MemoryService,
+    tracker: _MemoryThrashTracker | None,
+    projects: ProjectStore | None,
+) -> JsonObject:
+    """Resolve a live Project target without changing the Session's execution identity."""
+    if not getattr(context, "project_memory_enabled", False) or projects is None:
+        return tool_failure(
+            "memory_unavailable",
+            "Nothing was changed. Project Memory is unavailable for this Agent. "
+            "Ask the user to enable Project Memory in the Agent settings.",
+        )
+    active = {
+        project_id
+        for project_id in (context.working_project_id, context.skill_project_id)
+        if project_id is not None
+    }
+    selected = arguments.get("project_id")
+    if selected is not None and not isinstance(selected, str):
+        return tool_failure(
+            "invalid_arguments", "Nothing was changed. project_id must be a string."
+        )
+    if selected is not None and selected not in active:
+        return tool_failure(
+            "memory_project_unavailable",
+            f"Nothing was changed. Project {selected!r} is not an active Project Context. "
+            "Use the Working Project or load the intended Project Context first.",
+        )
+    if selected is None:
+        if len(active) != 1:
+            choices = ", ".join(sorted(active))
+            return tool_failure(
+                "memory_project_ambiguous" if active else "memory_project_unavailable",
+                "Nothing was changed. "
+                + (
+                    f"More than one Project Context is active: {choices}. "
+                    "Set project_id to the Project whose Memory you mean."
+                    if active
+                    else "No Project Context is active. Work in a Project or load its "
+                    "Project Context before using Project Memory."
+                ),
+            )
+        selected = next(iter(active))
+    if not isinstance(selected, str):
+        return tool_failure(
+            "invalid_arguments", "Nothing was changed. project_id must be a string."
+        )
+    try:
+        # The owner lock holds capability checks, the anchor and the complete
+        # write together, so archival cannot detach a resolved Memory path.
+        with projects.configuration_guard():
+            project = projects.get(selected)
+            if not project.memory_enabled:
+                return tool_failure(
+                    "memory_unavailable",
+                    f"Nothing was changed. Project Memory is disabled for {selected!r}. "
+                    "Ask the user to enable it in that Project's settings.",
+                )
+            result = _run_memory_operation(
+                context,
+                arguments,
+                service,
+                tracker,
+                projects.memory_workspace(selected),
+                "project",
+                project_id=selected,
+            )
+    except ProjectError, OSError:
+        return tool_failure(
+            "memory_error",
+            f"Nothing was changed. Project Memory for {selected!r} is unavailable. "
+            "Restore access to the registered Project before retrying.",
+        )
+    if result["ok"]:
+        result["data"]["project_id"] = selected
+        result["data"]["content"] = f"Project {selected!r}:\n{result['data']['content']}"
+    else:
+        result["error"]["message"] = f"Project {selected!r}: {result['error']['message']}"
+    return result
+
+
+def _run_memory_operation(
+    context: ToolContext,
+    arguments: JsonObject,
+    memory_service: MemoryService,
+    tracker: _MemoryThrashTracker | None,
+    workspace: Path,
+    scope: str | None,
+    *,
+    project_id: str | None = None,
+) -> JsonObject:
+    action = str(arguments["action"])
     if action == "list":
         try:
             return tool_success(_list_result(memory_service, workspace, scope))
@@ -198,7 +320,9 @@ def memory_handler(
             return tool_failure("memory_error", str(error))
 
     try:
-        data = _mutate(memory_service, context, action, scope, arguments)
+        data = _mutate(
+            memory_service, context, action, scope, arguments, workspace, project_id=project_id
+        )
     except _MemoryRefusalError as refusal:
         if refusal.code == "invalid_arguments":
             return tool_failure(refusal.code, str(refusal))
@@ -256,26 +380,31 @@ def _mutate(
     action: str,
     scope: str | None,
     arguments: JsonObject,
+    workspace: Path,
+    *,
+    project_id: str | None = None,
 ) -> JsonObject:
     """Apply one mutation and show the user the entries it changed."""
-    workspace = Path(context.workspace)
     writer = MemoryWriter(
         agent_id=context.agent_id,
         actor="tool",
         session_id=context.session_id,
         run_id=context.run_id,
         run_kind=None if context.run_kind is None else context.run_kind.value,
+        project_id=project_id,
     )
     content = arguments.get("content")
     old_text = arguments.get("old_text")
     entry_id = arguments.get("entry_id")
     if action == "add":
-        return _add(service, context, scope, content, old_text, entry_id, writer)
+        return _add(service, context, scope, content, old_text, entry_id, writer, workspace)
     if old_text is None and entry_id is None and action == "remove" and content is not None:
         # The entry text itself, sent in the only text field the Agent had for it.
         old_text, content = content, None
     if entry_id is not None:
-        old_text = _checked_entry_id(service, workspace, action, scope, entry_id, old_text, content)
+        old_text = _checked_entry_id(
+            service, workspace, action, scope, entry_id, old_text, content, project_id=project_id
+        )
     if old_text is None:
         raise _MemoryRefusalError(
             "invalid_arguments",
@@ -286,14 +415,15 @@ def _mutate(
         raise _MemoryRefusalError(
             "invalid_arguments",
             "remove deletes the entry and takes no content. To change the entry's text "
-            f"instead, call memory with {_call('replace', scope, old_text, content)}. Nothing "
+            f"instead, call memory with "
+            f"{_call('replace', scope, old_text, content, project_id=project_id)}. Nothing "
             "changed.",
         )
     if action == "replace" and content is None:
         raise _MemoryRefusalError(
             "invalid_arguments",
             "replace needs content: the entry's new text. To delete the entry, call memory "
-            f"with {_call('remove', scope, old_text)}. Nothing changed.",
+            f"with {_call('remove', scope, old_text, project_id=project_id)}. Nothing changed.",
         )
     target = _memory_scope(scope) if scope is not None else _scope_for(service, workspace, old_text)
     if action == "replace":
@@ -329,6 +459,7 @@ def _add(
     old_text: Any,
     entry_id: Any,
     writer: MemoryWriter,
+    workspace: Path,
 ) -> JsonObject:
     if old_text is not None or entry_id is not None:
         located = f'the entry containing "{_preview(str(old_text))}"' if old_text else "an entry"
@@ -347,7 +478,6 @@ def _add(
     if not isinstance(content, str) or not content.strip():
         raise _MemoryRefusalError("invalid_arguments", "add needs content: the fact to save.")
     target = _memory_scope(scope)
-    workspace = Path(context.workspace)
     existing = {entry.content for entry in service.list_entries(workspace, target)}
     entry = service.add_entry(workspace, target, content, writer=writer)
     if entry.content in existing:
@@ -370,6 +500,8 @@ def _checked_entry_id(
     entry_id: Any,
     old_text: Any,
     content: Any,
+    *,
+    project_id: str | None = None,
 ) -> str:
     """Refuse a positional id unless old_text already names the same entry."""
     if scope is None:
@@ -398,7 +530,7 @@ def _checked_entry_id(
         "Memory entries are addressed by text, not entry_id: positions change as entries "
         f'change. Entry {entry_id} of {target} Memory currently reads "{_preview(text)}". If '
         f"that is the entry you mean, call memory with "
-        f"{_call(action, target, text, replacement)}. Nothing changed.",
+        f"{_call(action, target, text, replacement, project_id=project_id)}. Nothing changed.",
     )
 
 
@@ -450,10 +582,19 @@ def _full_message(service: MemoryService, workspace: Path, error: MemoryBudgetEr
     )
 
 
-def _call(action: str, scope: str | None, old_text: str, content: str | None = None) -> str:
+def _call(
+    action: str,
+    scope: str | None,
+    old_text: str,
+    content: str | None = None,
+    *,
+    project_id: str | None = None,
+) -> str:
     call: JsonObject = {"action": action}
     if scope is not None:
         call["scope"] = scope
+    if project_id is not None:
+        call["project_id"] = project_id
     call["old_text"] = old_text
     if content is not None:
         call["content"] = content
@@ -476,6 +617,8 @@ def _memory_scope(scope: str) -> MemoryScope:
         return "user"
     if scope == "agent":
         return "agent"
+    if scope == "project":
+        return "project"
     raise ValueError(f"scope must be one of: {', '.join(MEMORY_SCOPES)}")
 
 
@@ -503,7 +646,9 @@ def _normalize_memory_arguments(contract: Any, arguments: Any) -> Any:
     )
 
 
-def register_memory_tool(registry: ToolRegistry, memory_service: MemoryService) -> None:
+def register_memory_tool(
+    registry: ToolRegistry, memory_service: MemoryService, projects: ProjectStore | None = None
+) -> None:
     """Register the memory tool with a vBot tool registry."""
     runtime_contract = compile_tool_contract(
         name="memory",
@@ -520,15 +665,15 @@ def register_memory_tool(registry: ToolRegistry, memory_service: MemoryService) 
         MEMORY_TOOL_NAME,
         MEMORY_TOOL_DESCRIPTION,
         MEMORY_TOOL_PARAMETERS,
-        make_memory_handler(memory_service),
+        make_memory_handler(memory_service, projects),
         summary="Save lasting facts about the user and the environment.",
         activation="memory_mode",
-        constraints=("identity_agent",),
         open_input_schema=True,
         unadvertised_parameters=_MEMORY_UNADVERTISED_PARAMETERS,
         argument_normalizer=lambda arguments: _normalize_memory_arguments(
             runtime_contract, arguments
         ),
+        announce_changes=("description", "parameters.scope", "parameters.project_id"),
         # Same-turn Memory calls apply in the order written, so "free space, then add"
         # works within one message and text addressing never races a sibling change.
         parallel_safe=False,

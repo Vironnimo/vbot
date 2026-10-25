@@ -46,6 +46,7 @@ class TemporaryAgentConfig:
     fallback_models: list[str] | None = None
     instructions: str = ""
     prompt_blocks: list[str] | None = None
+    project_memory_enabled: bool = True
     # ``None`` inherits the global Compaction Policy; a dict is the participant's
     # complete Agent-level Policy for automatic and manual Compaction.
     compaction_policy: dict[str, Any] | None = None
@@ -70,6 +71,8 @@ class TemporaryAgentConfig:
             raise ValueError("temporary name must be a non-empty string")
         if not isinstance(self.instructions, str):
             raise ValueError("temporary instructions must be a string")
+        if not isinstance(self.project_memory_enabled, bool):
+            raise ValueError("temporary project_memory_enabled must be a boolean")
         if self.prompt_blocks is not None:
             if (
                 not isinstance(self.prompt_blocks, list)
@@ -148,6 +151,7 @@ class TemporaryAgent:
     top_p: float | None = None
     thinking_effort: str | None = None
     memory_prompt_mode: MemoryPromptMode = MEMORY_PROMPT_MODE_OFF
+    project_memory_enabled: bool = True
     custom_system_prompt_enabled: bool = False
     current_session_id: str = ""
     created_at: str = ""
@@ -258,6 +262,8 @@ class TemporaryAgentRegistry:
         # idempotent re-creation still reconciles.
         if config.compaction_policy is not None:
             result["compaction_policy"] = deepcopy(config.compaction_policy)
+        if not config.project_memory_enabled:
+            result["project_memory_enabled"] = False
         if config.top_p is not None:
             result["top_p"] = config.top_p
         if config.tool_access.fixed:
@@ -281,6 +287,9 @@ class TemporaryAgentRegistry:
         if validate_bindings(bindings):
             raise ValueError("temporary Session binding configuration is invalid")
         compaction_policy = config.get("compaction_policy")
+        project_memory_enabled = config.get("project_memory_enabled", True)
+        if not isinstance(project_memory_enabled, bool):
+            raise ValueError("temporary Session binding configuration is invalid")
         if compaction_policy is not None and not isinstance(compaction_policy, dict):
             raise ValueError("temporary Session binding configuration is invalid")
         try:
@@ -302,6 +311,7 @@ class TemporaryAgentRegistry:
                 temperature=config.get("temperature"),
                 top_p=config.get("top_p"),
                 thinking_effort=config.get("thinking_effort"),
+                project_memory_enabled=project_memory_enabled and address.project_id is not None,
                 current_session_id=address.session_id,
                 compaction_policy=deepcopy(compaction_policy),
                 # Unreadable stored rules refuse the Session instead of dropping them.

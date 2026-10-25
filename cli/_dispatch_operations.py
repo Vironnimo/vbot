@@ -298,6 +298,21 @@ def dispatch_memory_command(
 ) -> CommandResult:
     """Dispatch one parsed memory command against the server RPC client."""
 
+    project = args.project
+    scope = getattr(args, "scope", None)
+    if (project and scope not in {None, "project"}) or (not project and scope == "project"):
+        return CommandResult(
+            ok=False,
+            message=(
+                "Project Memory needs --project and scope project; personal Memory uses "
+                "scope agent or user without --project. Nothing was changed."
+            ),
+            instance=instance,
+        )
+    if project:
+        scope = "project"
+    elif scope is None and args.command in {"add", "replace", "remove"}:
+        scope = "agent"
     try:
         content = _optional_content_from_args(args)
     except (OSError, ValueError) as exc:
@@ -307,21 +322,27 @@ def dispatch_memory_command(
             instance=instance,
         )
     if args.command == "list":
-        return memory_list(instance, args.agent, args.scope)
+        return memory_list(instance, args.agent, scope, project=project)
     if args.command == "add":
-        return memory_add(instance, args.agent, args.scope, content or "")
+        return memory_add(instance, args.agent, scope or "agent", content or "", project=project)
     if args.command == "replace":
-        return memory_replace(instance, args.agent, args.scope, args.entry_id, content or "")
+        return memory_replace(
+            instance, args.agent, scope or "agent", args.entry_id, content or "", project=project
+        )
     if args.command == "remove":
-        return memory_remove(instance, args.agent, args.scope, args.entry_id, args.yes)
+        return memory_remove(
+            instance, args.agent, scope or "agent", args.entry_id, args.yes, project=project
+        )
     if args.command == "history":
-        return memory_history(instance, args.agent, args.scope, args.limit)
+        return memory_history(instance, args.agent, scope, args.limit, project=project)
     if args.command == "show":
-        return memory_show(instance, args.agent, args.revision)
+        return memory_show(instance, args.agent, args.revision, project=project)
     if args.command == "diff":
-        return memory_diff(instance, args.agent, args.from_revision, args.to_revision)
+        return memory_diff(
+            instance, args.agent, args.from_revision, args.to_revision, project=project
+        )
     if args.command == "revert":
-        return memory_revert(instance, args.agent, args.revisions)
+        return memory_revert(instance, args.agent, args.revisions, project=project)
     raise ValueError(f"Unsupported memory command: {args.command}")
 
 

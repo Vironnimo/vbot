@@ -135,10 +135,15 @@ export const reflectionOutcomeLabel = (outcome) => {
   return t('chat.activity.outcome.nothing');
 };
 
-const memoryScopeLabel = (scope) =>
-  scope === 'user'
+const memoryScopeLabel = (scope, projectId) => {
+  if (scope === 'project')
+    return projectId
+      ? t('chat.activity.change.projectMemory', { project: projectId })
+      : t('chat.memoryScope.project');
+  return scope === 'user'
     ? t('chat.activity.change.userMemory')
     : t('chat.activity.change.agentMemory');
+};
 
 const changeKindLabel = (kind) => {
   switch (kind) {
@@ -181,7 +186,7 @@ export const reflectionChangeItems = (changes) =>
         key: `${change.store}:${index}`,
         kind: changeKindLabel(change.kind),
         place: memory
-          ? memoryScopeLabel(change.scope)
+          ? memoryScopeLabel(change.scope, change.project_id)
           : typeof change.skill === 'string'
             ? change.skill
             : '',
@@ -248,7 +253,7 @@ export function reflectionUndoErrorText(error) {
   const actor = later ? laterActorLabel(later) : '';
   const time = later ? formatAbsoluteTime(later.at) || String(later.at) : '';
   if (conflict.store === 'memory') {
-    const scope = memoryScopeLabel(conflict.scope);
+    const scope = memoryScopeLabel(conflict.scope, conflict.project_id);
     const text = quotedEntry(conflict.text);
     return later
       ? t('chat.activity.undoConflict.memoryBy', { scope, text, actor, time })

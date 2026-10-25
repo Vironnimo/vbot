@@ -761,6 +761,7 @@
             <Component
               navigation={navigator.view('projects')}
               selectedProjectId={selection.managedProjectId}
+              {memoriesRefreshToken}
               onProjectSelected={selection.selectManagedProject}
               onToast={desktop.showToast}
               onNavigateToSettingsPanel={navigateToSettingsPanel}

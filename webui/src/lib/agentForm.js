@@ -57,6 +57,7 @@ const EDITABLE_AGENT_FIELDS = Object.freeze([
   'top_p',
   'thinking_effort',
   'memory_prompt_mode',
+  'project_memory_enabled',
   'workspace',
   'root_project_id',
   'tool_access',
@@ -94,6 +95,9 @@ export function createAgentFormValues(agent = {}) {
     top_p: hasValue(raw.top_p) ? String(raw.top_p) : '',
     thinking_effort: asText(raw.thinking_effort),
     memory_prompt_mode: normalizeMemoryPromptMode(agent.memory_prompt_mode),
+    project_memory_enabled:
+      agent.project_memory_enabled ??
+      normalizeMemoryPromptMode(agent.memory_prompt_mode) !== 'off',
     tool_access: normalizeToolAccess(agent.tool_access),
     allowed_skills: normalizeArrayList(
       agent.allowed_skills,
@@ -298,6 +302,9 @@ function normalizeValues(values = {}) {
     top_p: asText(values.top_p).trim(),
     thinking_effort: asText(values.thinking_effort).trim(),
     memory_prompt_mode: normalizeMemoryPromptMode(values.memory_prompt_mode),
+    project_memory_enabled:
+      values.project_memory_enabled ??
+      normalizeMemoryPromptMode(values.memory_prompt_mode) !== 'off',
     tool_access: normalizeToolAccess(values.tool_access),
     allowed_skills: normalizeArrayList(values.allowed_skills),
     excluded_skills: normalizeArrayList(values.excluded_skills, []),
@@ -359,6 +366,7 @@ function buildAgentPayload(normalized, sampling, options = {}) {
     fallback_models: normalized.fallback_models,
     thinking_effort: normalized.thinking_effort || null,
     memory_prompt_mode: normalized.memory_prompt_mode,
+    project_memory_enabled: normalized.project_memory_enabled,
     tool_access: normalized.tool_access,
     allowed_skills: normalized.allowed_skills,
     excluded_skills: normalized.excluded_skills,

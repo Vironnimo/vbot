@@ -606,6 +606,7 @@ def callable_review_dimensions(agent: Any, tools: Sequence[Any]) -> tuple[bool, 
             tools,
             agent.memory_prompt_mode,
             workspace=agent.workspace or "",
+            project_memory_enabled=getattr(agent, "project_memory_enabled", False),
         ).allowed_tools
     )
     return (

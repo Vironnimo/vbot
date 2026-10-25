@@ -15,6 +15,7 @@ from core.memory import (
     MEMORY_FILES_PRODUCER_NAME,
 )
 from core.prompts._context import (
+    project_memory_visible,
     render_memory_files,
 )
 from core.prompts._formatting import (
@@ -32,6 +33,7 @@ from core.prompts._types import (
     ChannelPromptRegistry,
     MemoryPromptProvider,
     PinnedSkillCatalog,
+    ProjectPromptContext,
     PromptAgent,
     SkillPromptRegistry,
 )
@@ -182,7 +184,11 @@ class PromptRenderInputs:
             if context.memory_files_context is not None:
                 return context.memory_files_context
             return render_memory_files(
-                self._memory_provider, context.agent, context.tool_available, context.read_observer
+                self._memory_provider,
+                context.agent,
+                context.tool_available,
+                context.read_observer,
+                context.project_context,
             )
 
         return {
@@ -201,6 +207,7 @@ class PromptRenderInputs:
         effective_tool_names: Collection[str] | None = None,
         session_tool_grants: Sequence[str] = (),
         subagent_session: bool = False,
+        project_context: ProjectPromptContext | None = None,
     ) -> bool:
         """Return whether a block's owner is active for *agent* (gate 2, D5).
 
@@ -209,7 +216,7 @@ class PromptRenderInputs:
 
         - ``always`` → always true.
         - ``identity`` → the Agent has an Identity/Memory Workspace.
-        - ``memory`` → the memory tool is enabled for the agent.
+        - ``memory`` → personal or Working Project Memory is enabled for the Agent.
         - ``tool:<name>`` → ``<name>`` is among *effective_tool_names* when given,
           else in the agent's effective allowed tools. A trailing ``*`` matches
           any listed Tool whose name starts with the text before it.
@@ -226,7 +233,9 @@ class PromptRenderInputs:
             return bool(agent.workspace)
         if owner == "memory":
             mode = getattr(agent, "memory_prompt_mode", DEFAULT_MEMORY_PROMPT_MODE)
-            return bool(agent.workspace) and memory_tool_enabled(mode)
+            return (bool(agent.workspace) and memory_tool_enabled(mode)) or project_memory_visible(
+                agent, project_context
+            )
         if owner == "channel":
             return bool(self._agent_enabled_channels(agent))
         if owner == BLOCK_OWNER_SUBAGENT_SESSION:

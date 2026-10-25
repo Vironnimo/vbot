@@ -539,61 +539,66 @@ describe('ChatTimeline Tools', () => {
       expect(items[3]).toBe('Not a link');
     });
 
-    it('shows changed Memory entries with their scope and revision', () => {
-      const display = structuredDisplay({
-        details: [
-          {
-            type: 'memory_changes',
-            scope: 'user',
-            revision: 12,
-            changes: [
-              {
-                op: 'replaced',
-                previous: 'Works in UTC+2.',
-                text: 'Works in UTC+1.',
-              },
-              { op: 'added', text: 'Prefers German.' },
-              { op: 'replaced', text: 'No previous text.' },
-            ],
-          },
-          { type: 'memory_changes', scope: 'other', changes: [] },
-        ],
-      });
-      timeline.render(
-        sessionWithTool([
-          toolItem({
-            id: 'call',
-            name: 'memory',
-            arguments: { action: 'replace' },
-            result: '{"ok": true}',
-            ...{ display },
-          }),
-        ]),
-      );
-
-      openDisclosures('.tool-event');
-      const sections = document.querySelectorAll('.tool-memory');
-      expect(sections).toHaveLength(1);
-      expect(sections[0].querySelector('.teb-label').textContent).toBe(
-        t('chat.memoryScope.user'),
-      );
-      expect(
-        sections[0].querySelector('.tool-memory__revision').textContent,
-      ).toBe(t('chat.memoryRevision', { revision: 12 }));
-      expect(
-        Array.from(
-          sections[0].querySelectorAll('.tool-memory__change'),
-          (row) => [
-            row.className.replace(/.*tool-memory__change--/, ''),
-            row.querySelector('.tool-memory__text').textContent,
+    it.each(['user', 'project'])(
+      'shows changed %s Memory entries with their scope and revision',
+      (scope) => {
+        const display = structuredDisplay({
+          details: [
+            {
+              type: 'memory_changes',
+              scope,
+              revision: 12,
+              changes: [
+                {
+                  op: 'replaced',
+                  previous: 'Works in UTC+2.',
+                  text: 'Works in UTC+1.',
+                },
+                { op: 'added', text: 'Prefers German.' },
+                { op: 'replaced', text: 'No previous text.' },
+              ],
+            },
+            { type: 'memory_changes', scope: 'other', changes: [] },
           ],
-        ),
-      ).toEqual([
-        ['removed', 'Works in UTC+2.'],
-        ['added', 'Works in UTC+1.'],
-        ['added', 'Prefers German.'],
-      ]);
-    });
+        });
+        timeline.render(
+          sessionWithTool([
+            toolItem({
+              id: 'call',
+              name: 'memory',
+              arguments: { action: 'replace' },
+              result: '{"ok": true}',
+              ...{ display },
+            }),
+          ]),
+        );
+
+        openDisclosures('.tool-event');
+        const sections = document.querySelectorAll('.tool-memory');
+        expect(sections).toHaveLength(1);
+        expect(sections[0].querySelector('.teb-label').textContent).toBe(
+          scope === 'project'
+            ? t('chat.memoryScope.project')
+            : t('chat.memoryScope.user'),
+        );
+        expect(
+          sections[0].querySelector('.tool-memory__revision').textContent,
+        ).toBe(t('chat.memoryRevision', { revision: 12 }));
+        expect(
+          Array.from(
+            sections[0].querySelectorAll('.tool-memory__change'),
+            (row) => [
+              row.className.replace(/.*tool-memory__change--/, ''),
+              row.querySelector('.tool-memory__text').textContent,
+            ],
+          ),
+        ).toEqual([
+          ['removed', 'Works in UTC+2.'],
+          ['added', 'Works in UTC+1.'],
+          ['added', 'Prefers German.'],
+        ]);
+      },
+    );
 
     it('starts a long command at two lines and opens it on request', () => {
       // jsdom has no layout: with the 20 px fallback line, 60 px of command

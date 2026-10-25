@@ -146,7 +146,9 @@ class StubPrompts:
     def render_soul(self, _agent: StubAgent, *, on_read: object = None) -> str:
         return ""
 
-    def render_memory_files(self, _agent: StubAgent, *, on_read: object = None) -> str:
+    def render_memory_files(
+        self, _agent: StubAgent, *, project_context: object = None, on_read: object = None
+    ) -> str:
         return ""
 
     def render_skill_catalog(self, _agent: StubAgent, skill_registry: object = None) -> Any:

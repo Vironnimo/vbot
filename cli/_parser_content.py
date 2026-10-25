@@ -495,9 +495,9 @@ def _add_memory_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
         MEMORY_HELP["history"],
         example="memory history assistant --limit 10",
     )
-    history_parser.add_argument("agent", metavar="<agent-id>", help="Identity Agent id")
+    _add_memory_owner_argument(history_parser)
     history_parser.add_argument(
-        "--scope", choices=("agent", "user"), help="Only changes of this memory scope"
+        "--scope", choices=("agent", "user", "project"), help="Only changes of this memory scope"
     )
     history_parser.add_argument(
         "--limit",
@@ -510,13 +510,13 @@ def _add_memory_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
     show_parser = _add_command_parser(
         memory_subparsers, "show", MEMORY_HELP["show"], example="memory show assistant 12"
     )
-    show_parser.add_argument("agent", metavar="<agent-id>", help="Identity Agent id")
+    _add_memory_owner_argument(show_parser)
     show_parser.add_argument("revision", type=int, metavar="<revision>")
 
     diff_parser = _add_command_parser(
         memory_subparsers, "diff", MEMORY_HELP["diff"], example="memory diff assistant 12"
     )
-    diff_parser.add_argument("agent", metavar="<agent-id>", help="Identity Agent id")
+    _add_memory_owner_argument(diff_parser)
     diff_parser.add_argument("from_revision", type=int, metavar="<from-revision>")
     diff_parser.add_argument(
         "to_revision",
@@ -529,7 +529,7 @@ def _add_memory_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
     revert_parser = _add_command_parser(
         memory_subparsers, "revert", MEMORY_HELP["revert"], example="memory revert assistant 14"
     )
-    revert_parser.add_argument("agent", metavar="<agent-id>", help="Identity Agent id")
+    _add_memory_owner_argument(revert_parser)
     revert_parser.add_argument("revisions", type=int, nargs="+", metavar="<revision>")
 
 
@@ -560,16 +560,27 @@ def _add_librarian_parsers(
 def _add_memory_agent_argument(
     parser: argparse.ArgumentParser, *, scope_default: str | None = "agent"
 ) -> None:
-    parser.add_argument("agent", metavar="<agent-id>", help="Identity Agent id")
+    _add_memory_owner_argument(parser)
     parser.add_argument(
         "--scope",
-        choices=("agent", "user"),
-        default=scope_default,
+        choices=("agent", "user", "project"),
+        default=None,
         help=(
             "Memory scope to show. Omit to show both scopes."
             if scope_default is None
             else "Memory file to operate on (default: agent)"
         ),
+    )
+
+
+def _add_memory_owner_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "agent", metavar="<id>", help="Identity Agent id, or Project id with --project"
+    )
+    parser.add_argument(
+        "--project",
+        action="store_true",
+        help="Select shared Project Memory for this id; the scope is project",
     )
 
 

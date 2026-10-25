@@ -222,6 +222,7 @@ def _runtime_allowed_tools(
         tool_registry.list_tools(),
         getattr(agent, "memory_prompt_mode", "agent_user"),
         workspace=getattr(agent, "workspace", "") or "",
+        project_memory_enabled=getattr(agent, "project_memory_enabled", False),
         session_tool_grants=session_tool_grants,
     ).allowed_tools
 

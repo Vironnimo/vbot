@@ -137,6 +137,7 @@ OVERRIDE_FIELDS: frozenset[str] = frozenset(
         "tool_access",
         "tool_loading",
         "permission_rules",
+        "project_memory_enabled",
     }
 )
 
@@ -162,6 +163,7 @@ _PROJECT_CONFIG_FIELDS = frozenset(
         "skills_project_disabled",
         "sources",
         "model_mappings",
+        "memory_enabled",
         "updated_at",
     }
 )
@@ -301,7 +303,7 @@ def validate_project_data(data: Any) -> list[JsonDiagnostic]:
     _validate_auto_load_list(diagnostics, "$.auto_load", data.get("auto_load"))
     if (problem := context_commands_problem(data.get("context_commands"))) is not None:
         add_error(diagnostics, "$.context_commands", problem)
-    for switch in ("auto_instructions", "folder_instructions"):
+    for switch in ("auto_instructions", "folder_instructions", "memory_enabled"):
         if switch in data and not isinstance(data[switch], bool):
             add_error(diagnostics, f"$.{switch}", "must be true or false")
     validate_required_fields(diagnostics, "$", data, frozenset({"allowed_tools"}))
@@ -511,6 +513,7 @@ class Project:
     # surface. An empty override object is an entry holding only fields this vBot does
     # not model: it overrides nothing, and the writer keeps those fields on disk.
     overrides: dict[str, dict[str, Any]]
+    memory_enabled: bool = True
 
     @property
     def skill_roots(self) -> list[Path]:
@@ -569,6 +572,7 @@ class Project:
         for switch, enabled in (
             ("auto_instructions", self.auto_instructions),
             ("folder_instructions", self.folder_instructions),
+            ("memory_enabled", self.memory_enabled),
         ):
             if not enabled:
                 data[switch] = False
@@ -590,6 +594,7 @@ def build_project(
     auto_load: list[str] | None = None,
     auto_instructions: bool = True,
     folder_instructions: bool = True,
+    memory_enabled: bool = True,
     context_commands: list[str] | None = None,
     allowed_tools: list[str] | None = None,
     skills_bundled_enabled: list[str] | None = None,
@@ -655,6 +660,7 @@ def build_project(
         auto_instructions=_validate_switch("auto_instructions", auto_instructions),
         auto_load=validated_auto_load,
         folder_instructions=_validate_switch("folder_instructions", folder_instructions),
+        memory_enabled=_validate_switch("memory_enabled", memory_enabled),
         context_commands=validated_context_commands,
         allowed_tools=validated_allowed_tools,
         skills_bundled_enabled=validated_skills_bundled,
@@ -691,6 +697,7 @@ def project_from_dict(data: dict[str, Any]) -> Project:
         auto_instructions=data.get("auto_instructions", True),
         auto_load=list(cast("list[str]", data.get("auto_load") or [])),
         folder_instructions=data.get("folder_instructions", True),
+        memory_enabled=data.get("memory_enabled", True),
         context_commands=normalize_context_commands(data.get("context_commands")),
         allowed_tools=_allowed_tools_from_data(data.get("allowed_tools")),
         skills_bundled_enabled=list(cast("list[str]", data.get("skills_bundled_enabled") or [])),
@@ -867,6 +874,10 @@ def _validate_override(agent_id: str, override: Any) -> dict[str, Any]:
     if unknown:
         raise ProjectError(f"overrides[{agent_id!r}] has unknown fields: {', '.join(unknown)}")
     validated: dict[str, Any] = {}
+    if "project_memory_enabled" in override:
+        validated["project_memory_enabled"] = _validate_switch(
+            "project_memory_enabled", override["project_memory_enabled"]
+        )
     if "model" in override:
         model = override["model"]
         if not isinstance(model, str) or not model.strip():

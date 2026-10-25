@@ -201,6 +201,7 @@ describe('Projects controller loading', () => {
     });
 
     await controller.loadProjects();
+    state.expandedMembers = { reviewer: true };
     controller.updateProjectsRefreshToken(0);
     controller.openAdd();
     await controller.updateProjectsRefreshToken(1);
@@ -212,6 +213,7 @@ describe('Projects controller loading', () => {
 
     expect(state.projects[0].display_name).toBe('Fresh name');
     expect(state.selectedProjectId).toBe('project-one');
+    expect(state.expandedMembers).toEqual({ reviewer: true });
   });
 });
 
@@ -805,6 +807,7 @@ describe('Projects controller Team overrides', () => {
       // Switched off, the override keeps its Always loaded list.
       tool_loading: { on_demand: false, always_loaded: ['read'] },
       permission_rules: { read: 'work_area', deny: ['Read(.env)'] },
+      project_memory_enabled: true,
     });
     expect(controller.overrideDraft('planner')).toEqual({
       model: 'openai/gpt-5.2',
@@ -815,6 +818,7 @@ describe('Projects controller Team overrides', () => {
       tool_access: { mode: 'all' },
       tool_loading: null,
       permission_rules: null,
+      project_memory_enabled: true,
     });
   });
 
@@ -833,6 +837,8 @@ describe('Projects controller Team overrides', () => {
     ],
     ['tool_loading', { on_demand: false }, { on_demand: false }],
     ['tool_loading', {}, null],
+    ['project_memory_enabled', false, false],
+    ['project_memory_enabled', true, true],
   ])('sets the %s override typed as %j to %j', async (field, draft, sent) => {
     const setOverride = vi.fn().mockResolvedValue({ scan });
     const { controller } = await loadedController({}, { setOverride });

@@ -78,6 +78,7 @@ def _temporary_config_from_binding(binding: Any) -> TemporaryAgentConfig:
             fallback_models=raw.get("fallback_models"),
             instructions=raw.get("instructions", ""),
             prompt_blocks=raw.get("prompt_blocks"),
+            project_memory_enabled=raw.get("project_memory_enabled", True),
             permission_rules=raw.get("permission_rules"),
             permission_ceiling=raw.get("permission_ceiling"),
         )
@@ -448,6 +449,7 @@ class ExtensionHostFactory:
             available,
             resolved.memory_prompt_mode,
             workspace=resolved.workspace,
+            project_memory_enabled=resolved.project_memory_enabled,
             session_tool_grants=session_tool_grants,
         )
         effective_by_name = {tool.name: tool for tool in available}
@@ -645,7 +647,12 @@ class ExtensionHostFactory:
         project = self.projects.get(project_id) if project_id else None
         context = (
             ProjectPromptContext.from_project(
-                project.project_id, project.display_name, project.cwd, project.instruction_files
+                project.project_id,
+                project.display_name,
+                project.cwd,
+                project.instruction_files,
+                memory_workspace=self.projects.memory_workspace(project.project_id),
+                memory_enabled=project.memory_enabled,
             )
             if project is not None
             else None

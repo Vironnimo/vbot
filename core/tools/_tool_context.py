@@ -34,6 +34,7 @@ from core.utils.paths import file_url_path
 
 if TYPE_CHECKING:
     from core.chat.messages import ReplySurface
+    from core.memory import MemoryPromptMode
 
 _DISPLAY_MEDIA_KINDS = ("image", "video", "audio")
 # An allowlist entry that allows every Tool.
@@ -231,6 +232,8 @@ class ToolContext:
     # project run its ``project_id``), or ``None`` for the Agent's Workspace. A
     # Sub-Agent of an Identity Agent spawned from this Run works there too.
     working_project_id: str | None = None
+    memory_prompt_mode: MemoryPromptMode = "agent_user"
+    project_memory_enabled: bool = False
     # The Agent whose Skills this call reads and changes when it is not the calling
     # Agent: the Agent a Librarian Session is bound to. ``None`` (every other
     # Session) is the calling Agent; read :attr:`skill_subject_id`.
@@ -774,6 +777,8 @@ class ToolExecutionConfig:
     skill_project_id: str | None = None
     # Working Project of the owning Run; see ``ToolContext.working_project_id``.
     working_project_id: str | None = None
+    memory_prompt_mode: MemoryPromptMode = "agent_user"
+    project_memory_enabled: bool = False
     # Agent whose Skills this group works on; see ``ToolContext.skill_agent_id``.
     skill_agent_id: str | None = None
     # Kind of the owning Run; see ``ToolContext.run_kind``.

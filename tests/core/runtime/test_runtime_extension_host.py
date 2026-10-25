@@ -91,6 +91,22 @@ async def test_owner_prompt_inspection_uses_selected_blocks_and_private_tool_den
     preview = await host.inspect_prompt(denied, None)
     assert {tool["name"] for tool in preview["tools"]} == SWARM_PRIVATE_TOOLS - {"swarm_state"}
 
+    runtime.projects.create("memory-repo", "Memory Repo", tmp_path)
+    runtime.memory.add_entry(
+        runtime.projects.memory_workspace("memory-repo"), "project", "project-memory-sentinel"
+    )
+    for agent_enabled, project_enabled in ((True, True), (False, True), (True, False)):
+        runtime.projects.update("memory-repo", memory_enabled=project_enabled)
+        project_config = replace(
+            config,
+            prompt_blocks=["memory:guidance"],
+            project_memory_enabled=agent_enabled,
+            tool_access=replace(config.tool_access, denied=("memory",)),
+        )
+        preview = await host.inspect_prompt(project_config, "memory-repo")
+        assert ("project-memory-sentinel" in preview["text"]) is (agent_enabled and project_enabled)
+        assert "memory" not in {tool["name"] for tool in preview["tools"]}
+
 
 @pytest.mark.asyncio
 async def test_swarm_formation_snapshots_a_repository_profile_through_the_real_host(
@@ -356,6 +372,7 @@ async def test_temporary_group_preflight_validates_participants_before_opening(
             replace(
                 _participant(valid_cwd),
                 tool_access=ToolAccess(mode="selected", allowed=("read", "search_files")),
+                project_memory_enabled=False,
             ),
             project_id="narrow",
         )

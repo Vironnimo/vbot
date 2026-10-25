@@ -145,6 +145,8 @@ def _agent_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
         changes["thinking_effort"] = args.thinking_effort
     if args.memory_prompt_mode is not None:
         changes["memory_prompt_mode"] = args.memory_prompt_mode
+    if args.project_memory is not None:
+        changes["project_memory_enabled"] = args.project_memory == "true"
     if args.custom_system_prompt is not None:
         changes["custom_system_prompt_enabled"] = args.custom_system_prompt == "true"
     if args.librarian is not None:
@@ -310,6 +312,8 @@ def _project_set_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _apply_project_instruction_switches(args: argparse.Namespace, target: dict[str, Any]) -> None:
+    if getattr(args, "memory", None) is not None:
+        target["memory_enabled"] = args.memory == "on"
     for switch in ("auto_instructions", "folder_instructions"):
         value = getattr(args, switch, None)
         if value is not None:

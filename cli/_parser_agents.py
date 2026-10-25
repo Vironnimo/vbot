@@ -179,6 +179,11 @@ def _add_agent_change_arguments(
         help="Which workspace memory files become prompt-visible",
     )
     parser.add_argument(
+        "--project-memory",
+        choices=("true", "false"),
+        help="Use shared Memory from enabled Projects; independent of workspace Memory",
+    )
+    parser.add_argument(
         "--custom-system-prompt",
         choices=("true", "false"),
         help="Enable or disable the agent's own editable prompt fragments",
@@ -549,6 +554,7 @@ def _add_project_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
             "tool_access",
             "tool_loading",
             "permission_rules",
+            "project_memory_enabled",
         ),
         help="Override field",
     )
@@ -581,6 +587,7 @@ def _add_project_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
             "tool_access",
             "tool_loading",
             "permission_rules",
+            "project_memory_enabled",
         ),
         help="Override field to clear",
     )
@@ -619,6 +626,11 @@ def _add_project_instruction_arguments(
     parser: argparse.ArgumentParser, *, default: str | None
 ) -> None:
     omitted = "Omit for on." if default == "on" else "Omit to keep the current setting."
+    parser.add_argument(
+        "--memory",
+        choices=("on", "off"),
+        help="Allow Agents to use this Project's shared Memory. " + omitted,
+    )
     parser.add_argument(
         "--auto-instructions",
         choices=("on", "off"),

@@ -168,6 +168,53 @@ def test_memory_mode_change_replaces_only_memory_snapshot(tmp_path, before, afte
     assert pinned_memory_files(dependencies, agent.id, "s1", agent, None) == memory
 
 
+@pytest.mark.parametrize("gate", ["agent", "project"])
+def test_shared_memory_pins_refresh_when_its_scope_changes(tmp_path: Path, gate: str) -> None:
+    from dataclasses import replace
+
+    from core.prompts.pinned_context import pinned_memory_files
+    from tests.core.prompts.prompts_test_support import _agent, _facade_manager
+
+    anchor = tmp_path / "first-anchor"
+    anchor.mkdir()
+    (anchor / "MEMORY.md").write_text("- FIRST_PROJECT_SENTINEL", encoding="utf-8")
+    context = ProjectPromptContext.from_project(
+        "first-project", "First", tmp_path, (), memory_workspace=anchor
+    )
+    agent = _agent("", memory_prompt_mode="off", project_memory_enabled=True)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=cast(Any, agent), adapter=StubAdapter([]))
+    runtime.system_prompts = _facade_manager(tmp_path)
+    runtime.chat_sessions.create(agent.id, session_id="s1")
+    dependencies = build_chat_loop(runtime)._dependencies
+
+    def capture(receiving_agent=agent, project=context):
+        return pinned_memory_files(dependencies, agent.id, "s1", receiving_agent, None, project)
+
+    first = capture()
+    assert first is not None and "FIRST_PROJECT_SENTINEL" in first
+    (anchor / "MEMORY.md").write_text("- UPDATED_PROJECT_SENTINEL", encoding="utf-8")
+    assert capture() == first
+
+    disabled = (
+        capture(replace(agent, project_memory_enabled=False))
+        if gate == "agent"
+        else capture(project=replace(context, memory_enabled=False))
+    )
+    assert disabled == ""
+    refreshed = capture()
+    assert refreshed is not None and "UPDATED_PROJECT_SENTINEL" in refreshed
+    assert "FIRST_PROJECT_SENTINEL" not in refreshed
+
+    other_anchor = tmp_path / "other-anchor"
+    other_anchor.mkdir()
+    (other_anchor / "MEMORY.md").write_text("- OTHER_PROJECT_SENTINEL", encoding="utf-8")
+    other = capture(
+        project=replace(context, project_id="other-project", memory_workspace=other_anchor)
+    )
+    assert other is not None and "OTHER_PROJECT_SENTINEL" in other
+    assert "UPDATED_PROJECT_SENTINEL" not in other
+
+
 BODY = "Use {memory} and {project_files} literally."
 
 
@@ -283,10 +330,12 @@ async def test_session_scope_selects_body_working_project_skills_and_pins(
     assert (agent_id, agent_body) == (AGENT_ID, body)
     # A Project Run never pulls a same-named identity Agent's private Skill home.
     assert set(runtime.skills_for_calls) == {skill_pool}
-    # A config agent has no workspace, so it has no SOUL or memory to pin.
+    # A Project Agent has shared Memory but no personal SOUL.
     address = session_address(AGENT_ID, "s1", project_id)
-    for slot in (PINNED_SOUL_CONTEXT_SLOT, PINNED_MEMORY_FILES_SLOT):
-        assert (runtime.chat_sessions.prompt_pin(address, slot) is not None) is personal_pins
+    assert (
+        runtime.chat_sessions.prompt_pin(address, PINNED_SOUL_CONTEXT_SLOT) is not None
+    ) is personal_pins
+    assert runtime.chat_sessions.prompt_pin(address, PINNED_MEMORY_FILES_SLOT) is not None
     agents_md = (repo / "AGENTS.md").resolve()
     if not working_project:
         assert project_context is None
@@ -301,6 +350,36 @@ async def test_session_scope_selects_body_working_project_skills_and_pins(
     # Auto-loaded files count as read for this Session only, so the Agent may edit them.
     assert runtime.file_read_state.check_stale("s1", agents_md) is None
     assert runtime.file_read_state.check_stale("other", agents_md) is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ["project", "identity-in-a-project", "identity"])
+async def test_working_project_memory_reaches_models_for_each_agent_kind(
+    tmp_path: Path, scope: str
+) -> None:
+    from tests.core.prompts.prompts_test_support import _agent, _facade_manager
+
+    repo = _repo(tmp_path)
+    project_id = PROJECT_ID if scope == "project" else None
+    if project_id:
+        runtime, adapter = _project_runtime(tmp_path, repo)
+    else:
+        runtime, adapter = _identity_runtime(
+            tmp_path,
+            repo,
+            working_project_id=PROJECT_ID if scope == "identity-in-a-project" else None,
+        )
+        runtime.agents._agent = _agent(repo, agent_id=AGENT_ID, project_memory_enabled=True)
+    memory_workspace = runtime.projects.memory_workspace(PROJECT_ID)
+    memory_workspace.mkdir(parents=True)
+    (memory_workspace / "MEMORY.md").write_text("- SHARED_PROJECT_SENTINEL", encoding="utf-8")
+    runtime.system_prompts = _facade_manager(tmp_path)
+
+    await build_chat_loop(runtime).send(AGENT_ID, "Hi", session_id="s1", project_id=project_id)
+
+    system = _system_message(adapter)
+    assert ("SHARED_PROJECT_SENTINEL" in system) is (scope != "identity")
+    assert system.count("<memory>") == 1
 
 
 @pytest.mark.asyncio
@@ -348,6 +427,7 @@ async def test_soul_memory_and_skill_catalog_are_pinned_per_session(tmp_path: Pa
     assert runtime.chat_sessions.prompt_pin(address, PINNED_MEMORY_FILES_SLOT) == {
         "text": "Memory of coder",
         "mode": "agent_user",
+        "memory_project_id": None,
     }
     catalog = runtime.chat_sessions.prompt_pin(address, PINNED_SKILL_CATALOG_SLOT)
     assert catalog is not None and catalog["catalog_text"] == "catalog:1"

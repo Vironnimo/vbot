@@ -27,6 +27,7 @@ describe('createAgentFormValues', () => {
       top_p: '',
       thinking_effort: '',
       memory_prompt_mode: 'agent_user',
+      project_memory_enabled: true,
       tool_access: { mode: 'all' },
       allowed_skills: ['*'],
       excluded_skills: [],
@@ -116,6 +117,19 @@ describe('createAgentFormValues', () => {
       createAgentFormValues({ allowed_skills: 'debugging\nctx7' })
         .allowed_skills,
     ).toEqual(['*']);
+    expect(
+      createAgentFormValues({ memory_prompt_mode: 'off' })
+        .project_memory_enabled,
+    ).toBe(false);
+    expect(
+      createAgentFormValues({
+        memory_prompt_mode: 'off',
+        project_memory_enabled: true,
+      }),
+    ).toMatchObject({
+      memory_prompt_mode: 'off',
+      project_memory_enabled: true,
+    });
   });
 });
 
@@ -158,6 +172,7 @@ describe('normalizeAgentForm', () => {
       temperature: 0.25,
       thinking_effort: 'low',
       memory_prompt_mode: 'off',
+      project_memory_enabled: false,
       tool_access: { mode: 'selected', allowed: ['read', 'write'] },
       allowed_skills: ['debugging'],
       excluded_skills: ['ctx7'],

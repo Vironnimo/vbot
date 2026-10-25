@@ -55,11 +55,12 @@ def test_config_agent_resolves_to_runnable_runtime_agent(
     assert runtime_agent.id == "builder"
     assert runtime_agent.model == "openai/gpt-5.2"
     assert runtime_agent.body == "You build.\n"
-    # v1 config-agent invariants: no workspace, no memory tool. With no agent
+    # Project Agents have no personal Workspace or Memory. With no agent
     # denials the effective tools are exactly the project Tool Whitelist ceiling;
     # skills stay wildcard until Phase 3 wires the project skill rule.
     assert runtime_agent.workspace == ""
     assert runtime_agent.memory_prompt_mode == "off"
+    assert runtime_agent.project_memory_enabled is True
     assert runtime_agent.tool_access == ToolAccess(
         mode="selected",
         allowed=tuple(PROJECT_DEFAULT_ALLOWED_TOOLS),
@@ -69,6 +70,14 @@ def test_config_agent_resolves_to_runnable_runtime_agent(
     assert runtime_agent.tools == {"subagent": {"allowed_agents": []}}
     assert runtime_agent.fallback_models == []
     assert runtime_agent.thinking_effort is None
+    projects.set_override(project.project_id, "builder", "project_memory_enabled", False)
+    assert resolver.resolve_agent(project.project_id, "builder").project_memory_enabled is False
+    assert resolver.effective_config(project.project_id, "builder")["project_memory_enabled"] == {
+        "value": False,
+        "source": "override",
+    }
+    projects.clear_override(project.project_id, "builder", "project_memory_enabled")
+    assert resolver.resolve_agent(project.project_id, "builder").project_memory_enabled is True
 
 
 @pytest.mark.parametrize("model", ["openai/gpt-5.2", "openai/unavailable"])

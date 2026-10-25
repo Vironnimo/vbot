@@ -406,7 +406,10 @@ def bootstrap(runtime: Runtime) -> None:
         # manager without importing tool classes into the prompt domain.
         runtime._tool_prompt_blocks = ToolPromptBlockRegistry()
         # Each Agent's Memory history lives beside its default Workspace.
-        runtime._memory_service = MemoryService(history_root=runtime._storage.layout.agents)
+        runtime._memory_service = MemoryService(
+            history_root=runtime._storage.layout.agents,
+            project_history_root=runtime._storage.layout.projects,
+        )
         # Read stamps protect full-file writes; the file edit Tools use the same
         # state for mutation locks and post-success drift warnings (file_state.py).
         runtime._file_state = FileReadState()
@@ -434,7 +437,6 @@ def bootstrap(runtime: Runtime) -> None:
             owner=f"builtin:{LIVE_BACKEND_BUILTIN}",
         )
         register_search_files_tool(runtime._tools)
-        register_memory_tool(runtime._tools, runtime._memory_service)
         # The local browser starts with the first page that needs it.
         runtime._page_browser = PageBrowser(runtime._storage.layout.temporary / "browser")
         register_web_fetch_tool(
@@ -578,7 +580,9 @@ def bootstrap(runtime: Runtime) -> None:
             lambda: runtime.system_prompts,
             runtime.project_context_skills,
             runtime._file_state,
+            memory_service=runtime._memory_service,
         )
+        register_memory_tool(runtime._tools, runtime._memory_service, projects=runtime._projects)
         runtime._temporary_agents = TemporaryAgentRegistry(
             runtime._chat_sessions,
             capture_delegation_bindings=runtime._agents.capture_delegation_bindings,
@@ -666,6 +670,11 @@ def bootstrap(runtime: Runtime) -> None:
             skills=runtime._skill_authoring,
             skill_home=runtime.agent_skills_dir,
             run_active=runtime._chat_run_manager.is_running,
+            project_memories=lambda: {
+                project.project_id: runtime.projects.memory_workspace(project.project_id)
+                for project in runtime.projects.list()
+            },
+            project_guard=runtime._projects.configuration_guard,
         )
         runtime._session_title_service = SessionTitleService(
             runtime, usage_recorder=runtime._usage_recorder

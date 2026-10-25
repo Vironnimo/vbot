@@ -20,18 +20,22 @@ _LOGGER = get_logger("memory")
 _PROMPT_CUT_CONDITIONS = LoggedConditions()
 
 
-MemoryScope = Literal["user", "agent"]
+MemoryScope = Literal["user", "agent", "project"]
 
 
 MemoryPromptMode = Literal["off", "agent", "agent_user"]
 
 
-MEMORY_SCOPES: tuple[MemoryScope, ...] = ("user", "agent")
+MEMORY_SCOPES: tuple[MemoryScope, ...] = ("user", "agent", "project")
+
+
+PERSONAL_MEMORY_SCOPES: tuple[MemoryScope, ...] = ("user", "agent")
 
 
 MEMORY_FILES: dict[MemoryScope, str] = {
     "user": "USER.md",
     "agent": "MEMORY.md",
+    "project": "MEMORY.md",
 }
 
 
@@ -68,6 +72,7 @@ MEMORY_PROMPT_MODE_SCOPES: dict[MemoryPromptMode, tuple[MemoryScope, ...]] = {
 MEMORY_SCOPE_LABELS: dict[MemoryScope, str] = {
     "agent": "# Agent Memory",
     "user": "# User Profile",
+    "project": "# Project Memory",
 }
 
 
@@ -94,7 +99,7 @@ _MAX_FILE_BYTES = 128 * 1024
 # content lengths), bounding how much pinned memory is injected into every prompt.
 # Both exceed _MAX_ENTRY_LENGTH so a single normal add into an empty scope always
 # fits; agent notes accumulate more than the user profile, so its budget is larger.
-_MAX_SCOPE_BUDGET: dict[MemoryScope, int] = {"agent": 4_000, "user": 3_000}
+_MAX_SCOPE_BUDGET: dict[MemoryScope, int] = {"agent": 4_000, "user": 3_000, "project": 3_000}
 
 
 # The budget also caps what the System Prompt shows of a scope, because a hand-edited
@@ -131,8 +136,9 @@ _MEMORY_GUIDANCE = (
     "about how to do one kind of task, including the user's preferences and corrections for "
     "that work, belong in that task's Skill, not in Memory, even when you cannot change "
     "Skills. User Memory holds who the user is and preferences that apply to all of their "
-    "work, such as the language to reply in. Agent Memory holds stable facts about the "
-    "environment and projects; name the project when a fact applies only there. Leave out "
+    "work, such as the language to reply in. Agent Memory holds stable environment facts; "
+    "Project Memory holds only important, lasting project decisions, user preferences and "
+    "corrections, not descriptions of the repository, its technology or workflows. Leave out "
     "task progress, completed-work logs, facts that are easy to look up again, transient "
     "failures, guesses and secrets. Write declarative facts, not instructions to yourself: "
     '"User prefers concise answers", not "Always answer concisely"; "Project uses pytest '
@@ -300,6 +306,7 @@ class MemoryWriter:
     session_id: str | None = None
     run_id: str | None = None
     run_kind: str | None = None
+    project_id: str | None = None
 
 
 _INTERNAL_WRITER = MemoryWriter()
@@ -345,6 +352,8 @@ def validate_memory_scope(scope: object) -> MemoryScope:
         return "user"
     if scope == "agent":
         return "agent"
+    if scope == "project":
+        return "project"
     supported = ", ".join(MEMORY_SCOPES)
     raise MemoryError(f"scope must be one of: {supported}")
 

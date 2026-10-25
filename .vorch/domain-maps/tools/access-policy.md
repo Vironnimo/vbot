@@ -4,7 +4,7 @@ How `core/tools/availability.py` resolves a Tool Access Policy, how opt-in, foll
 
 ## Policy resolution
 
-`normalize_tool_access` validates strict persisted policy; `resolve_tool_access` is the single resolver behind prompt/provider definitions and dispatch - mode selection, automatic activation (a declared follower is active while any of its sources is, `activation_sources(tool)`; Memory mode activates `memory`; grants activate theirs), constraints, `denied` as absolute veto, orphaned followers removed, mode `none` suppresses every activation path.
+`normalize_tool_access` validates strict persisted policy; `resolve_tool_access` is the single resolver behind prompt/provider definitions and dispatch - mode selection, automatic activation (a declared follower is active while any of its sources is, `activation_sources(tool)`; personal Memory mode or the Agent's Project Memory selection activates `memory`; grants activate theirs), constraints, `denied` as absolute veto, orphaned followers removed, mode `none` suppresses every activation path. Memory visibility remains independent of Tool permission (`memory.md`).
 
 `ToolAccess.fixed` (absent from public policy JSON; the Agent store sets it for the built-in Agents, `agent.md`, and an owner may set it for a temporary Agent) makes a `selected` list the whole Tool set: memory-mode and Session-grant Tools activate only when it names them, and nothing configurable outside it is added. Followers still follow the Tools it names, because each belongs to its sources' capability (the edit dialect of `apply_patch`, `background_tasks` beside the shell Tool and `subagent`, an MCP connection's remote Tools), and a denial still vetoes one (`test_availability.py`). Fixed sets therefore never list followers.
 

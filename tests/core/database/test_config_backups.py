@@ -71,6 +71,7 @@ def test_a_backup_holds_the_configuration_files_and_nothing_else(data_dir: Path)
         "agents/nova/workspace/SOUL.md": "# Soul\n",
         "agents/nova/workspace/USER.md": "- likes tea\n",
         "agents/nova/workspace/MEMORY.md": "- remembers\n",
+        "projects/demo/MEMORY.md": "- Keep design discussions separate from implementation.\n",
         "agents/nova/prompts/blocks/custom/notes.md": "agent block\n",
         "prompts/blocks/custom/notes.md": "default block\n",
         "cron/jobs.json": '{"format_version": 1, "jobs": []}\n',
@@ -82,6 +83,8 @@ def test_a_backup_holds_the_configuration_files_and_nothing_else(data_dir: Path)
     _write(data_dir, ".env", "OPENAI_API_KEY=plaintext\n")
     _write(data_dir, "oauth/github-copilot-oauth.json", '{"format_version": 1}\n')
     _write(data_dir, "agents/nova/workspace/notes.txt", "scratch\n")
+    _write(data_dir, "agents/nova/memory-history.jsonl", '{"revision": 1}\n')
+    _write(data_dir, "projects/demo/memory-history.jsonl", '{"revision": 1}\n')
     _write(data_dir, "agents/nova/skills/demo/SKILL.md", "skill\n")
     _write(data_dir, "artifacts/attachments/att_1.json", '{"format_version": 1}\n')
 

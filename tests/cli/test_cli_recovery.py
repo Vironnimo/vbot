@@ -127,12 +127,19 @@ def test_invalid_choices_retain_the_allowed_tokens(tokens, choices, capsys):
         (["skill", "delete", "demo", "--scope", "agent:a", "--yes"], "agent:a"),
         (["memory", "remove", "a", "1", "--scope", "user", "--yes"], "user"),
         (["memory", "list", "a"], None),
+        (["memory", "list", "p", "--project", "--scope", "project"], "project"),
+        (["memory", "add", "p", "--project", "--scope", "agent", "--content", "x"], None),
+        (["memory", "show", "p", "2", "--project"], None),
     ],
 )
 def test_inspection_keeps_content_scope(tmp_path, tokens, scope):
     args = parse_args(tokens)
     guidance = recovery_guidance(args, CommandResult(False, "test sentinel", instance(tmp_path)))
-    assert parse_args(guidance.commands[0][1:]).scope == scope
+    followup = parse_args(guidance.commands[0][1:])
+    assert followup.scope == scope
+    if args.area == "memory":
+        assert followup.project == args.project
+        assert followup.agent == args.agent
 
 
 def test_install_own_scope_recovery_does_not_copy_install_only_shorthand(tmp_path):
@@ -305,6 +312,7 @@ def test_agent_busy_inspects_sessions_unless_the_agent_runs_the_command_itself(
     "tokens,code,inspection",
     [
         (["memory", "list", "assistnt"], "agent_not_found", ("agent", "list")),
+        (["memory", "list", "missing", "--project"], "project_not_found", ("project", "list")),
         (["skill", "share", "a", "notes", "--to", "b"], "agent_not_found", ("agent", "list")),
         (["skill", "share", "a", "notes", "--to", "b"], "skill_not_found", ("skill", "inventory")),
         # Resolver-backed commands receive the precise code for a missing address part.

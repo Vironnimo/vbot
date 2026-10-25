@@ -96,6 +96,7 @@ class AgentMutations:
         top_p: float | None = None,
         thinking_effort: str | None = DEFAULT_THINKING_EFFORT,
         memory_prompt_mode: MemoryPromptMode = DEFAULT_MEMORY_PROMPT_MODE,
+        project_memory_enabled: bool | None = None,
         tool_access: ToolAccess | Mapping[str, Any] | None = None,
         allowed_skills: list[str] | None = None,
         excluded_skills: list[str] | None = None,
@@ -129,6 +130,11 @@ class AgentMutations:
             validated_top_p = _validate_top_p(top_p)
             validated_thinking_effort = _validate_thinking_effort(thinking_effort)
             validated_memory_prompt_mode = _validate_memory_prompt_mode(memory_prompt_mode)
+            validated_project_memory_enabled = (
+                validated_memory_prompt_mode != "off"
+                if project_memory_enabled is None
+                else _validate_bool_field("project_memory_enabled", project_memory_enabled)
+            )
             validated_tool_access = _validate_tool_access(tool_access)
             validated_allowed_skills = _validate_allowed_items("allowed_skills", allowed_skills)
             validated_excluded_skills = _validate_excluded_skills(excluded_skills)
@@ -168,6 +174,7 @@ class AgentMutations:
                 top_p=validated_top_p,
                 thinking_effort=validated_thinking_effort,
                 memory_prompt_mode=validated_memory_prompt_mode,
+                project_memory_enabled=validated_project_memory_enabled,
                 tool_access=validated_tool_access,
                 allowed_skills=validated_allowed_skills,
                 excluded_skills=validated_excluded_skills,
@@ -310,7 +317,11 @@ class AgentMutations:
                 )
             if "tools" in changes:
                 changes["tools"] = normalize_agent_tools(changes["tools"])
-            for bool_field in ("custom_system_prompt_enabled", "librarian_enabled"):
+            for bool_field in (
+                "custom_system_prompt_enabled",
+                "librarian_enabled",
+                "project_memory_enabled",
+            ):
                 if bool_field in changes:
                     changes[bool_field] = _validate_bool_field(bool_field, changes[bool_field])
             if "compaction_policy" in changes:

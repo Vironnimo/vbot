@@ -11,6 +11,7 @@ from typing import Any, cast
 
 import pytest
 
+from core.memory import MemoryService
 from core.permissions import BoundaryContext, PermissionBoundary, normalize_permission_rules
 from core.projects import ProjectStore
 from core.prompts import SystemPromptManager
@@ -35,6 +36,7 @@ def _context(
     project_id: str | None = None,
     tool_denial_resolver: Any = None,
     permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED,
+    project_memory_enabled: bool = False,
 ) -> ToolContext:
     return ToolContext(
         agent_id="coder",
@@ -49,6 +51,7 @@ def _context(
         project_id=project_id,
         tool_denial_resolver=tool_denial_resolver,
         permissions=permissions,
+        project_memory_enabled=project_memory_enabled,
     )
 
 
@@ -56,6 +59,7 @@ def _registry(
     projects: ProjectStore,
     file_state: FileReadState | None = None,
     skills: list[Any] | None = None,
+    memory_service: MemoryService | None = None,
 ) -> ToolRegistry:
     registry = ToolRegistry()
     renderer = _manager(projects.data_dir)
@@ -65,6 +69,7 @@ def _registry(
         lambda: renderer,
         lambda _project_id: list(skills or []),
         file_state or FileReadState(),
+        memory_service=memory_service,
     )
     return registry
 
@@ -89,6 +94,59 @@ def test_project_tool_exposes_open_model_schema(tmp_path: Path) -> None:
 
     assert tool.parameters["required"] == ["project_id"]
     assert tool.open_input_schema is True
+
+
+@pytest.mark.parametrize("agent_enabled", [False, True])
+@pytest.mark.parametrize("project_enabled", [False, True])
+def test_project_tool_loads_shared_memory_under_both_gates_even_when_read_only(
+    tmp_path: Path, agent_enabled: bool, project_enabled: bool
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    projects = ProjectStore(tmp_path / "data")
+    projects.create("atlas", "Atlas", repo)
+    projects.update("atlas", memory_enabled=project_enabled)
+    service = MemoryService()
+    anchor = projects.memory_workspace("atlas")
+    service.add_entry(anchor, "project", "Keep release approval explicit.")
+    state = FileReadState()
+    registry = _registry(projects, file_state=state, memory_service=service)
+    context = _context(
+        tmp_path,
+        project_memory_enabled=agent_enabled,
+        tool_denial_resolver=lambda tool: "read-only" if tool == "memory" else None,
+    )
+
+    result = asyncio.run(dispatch_as_executor(registry, context, {"project_id": "atlas"}))
+
+    assert result["ok"] is True
+    assert ("Keep release approval explicit." in result["data"]["content"]) is (
+        agent_enabled and project_enabled
+    )
+    assert context.working_project_id is None
+    assert context.workspace == tmp_path / "workspace"
+    if agent_enabled and project_enabled:
+        assert state.check_stale(context.session_id, anchor / "MEMORY.md") is None
+        assert "atlas" in result["data"]["content"]
+
+
+def test_project_tool_reports_unreadable_memory_without_loading_partial_context(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    projects = ProjectStore(tmp_path / "data")
+    projects.create("atlas", "Atlas", repo)
+    anchor = projects.memory_workspace("atlas")
+    (anchor / "MEMORY.md").write_bytes(b"\xff")
+    registry = _registry(projects, memory_service=MemoryService())
+    context = _context(tmp_path, project_memory_enabled=True)
+
+    result = asyncio.run(dispatch_as_executor(registry, context, {"project_id": "atlas"}))
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "project_memory_unavailable"
+    assert result["error"]["retryable"] is False
 
 
 @pytest.mark.parametrize(

@@ -377,6 +377,12 @@ async def test_agent_list_reports_the_effective_context_window(
         pytest.param({"temperature": None}, "temperature", None, id="clear-temperature"),
         pytest.param({"memory_prompt_mode": "off"}, "memory_prompt_mode", "off", id="memory-mode"),
         pytest.param(
+            {"project_memory_enabled": False},
+            "project_memory_enabled",
+            False,
+            id="project-memory",
+        ),
+        pytest.param(
             {"tool_access": {"mode": "selected", "allowed": ["read"], "denied": ["memory"]}},
             "tool_access",
             {"mode": "selected", "allowed": ["read"], "denied": ["memory"]},

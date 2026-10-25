@@ -46,7 +46,7 @@ MemoryChangeOp = Literal["added", "removed", "replaced"]
 MemoryRevisionKind = Literal["baseline", "edit", "external", "revert"]
 _CHANGE_OPS = frozenset({"added", "removed", "replaced"})
 _REVISION_KINDS = frozenset({"baseline", "edit", "external", "revert"})
-_SCOPES = frozenset({"agent", "user"})
+_SCOPES = frozenset({"agent", "user", "project"})
 
 
 @dataclass(frozen=True)
@@ -94,6 +94,7 @@ class MemoryRevision:
     run_id: str | None = None
     run_kind: str | None = None
     reverts: tuple[int, ...] = ()
+    agent_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data: dict[str, Any] = {
@@ -114,6 +115,8 @@ class MemoryRevision:
             data["run_kind"] = self.run_kind
         if self.reverts:
             data["reverts"] = list(self.reverts)
+        if self.agent_id is not None:
+            data["agent_id"] = self.agent_id
         return data
 
 
@@ -183,7 +186,7 @@ class MemoryHistory:
 
     def record(
         self,
-        agent_id: str,
+        owner_id: str,
         scope: MemoryScope,
         *,
         kind: MemoryRevisionKind,
@@ -193,10 +196,11 @@ class MemoryHistory:
         session_id: str | None = None,
         run_id: str | None = None,
         run_kind: str | None = None,
+        agent_id: str | None = None,
         reverts: Sequence[int] = (),
     ) -> MemoryRevision | None:
         """Append one revision whose ``changes`` led to ``entries``."""
-        path = self._path(agent_id)
+        path = self._path(owner_id)
         if path is None or not changes:
             return None
         with self._lock(path):
@@ -213,6 +217,7 @@ class MemoryHistory:
                 session_id=session_id,
                 run_id=run_id,
                 run_kind=run_kind,
+                agent_id=agent_id,
                 reverts=list(reverts),
             )
 
@@ -287,6 +292,7 @@ class MemoryHistory:
         session_id: str | None = None,
         run_id: str | None = None,
         run_kind: str | None = None,
+        agent_id: str | None = None,
         reverts: Sequence[int] = (),
     ) -> MemoryRevision:
         after = list(entries if entries is not None else state or ())
@@ -303,6 +309,7 @@ class MemoryHistory:
             run_id=run_id,
             run_kind=run_kind,
             reverts=tuple(reverts),
+            agent_id=agent_id,
         )
         line = json.dumps(
             {"v": _FORMAT_VERSION, **revision.to_dict(), "state": revision.state},
@@ -342,7 +349,7 @@ def state_at(
         if revision_id is not None and revision.id > revision_id:
             break
         _advance(log, revision)
-    return {scope: list(log.states.get(scope, [])) for scope in ("agent", "user")}
+    return {scope: list(log.states.get(scope, [])) for scope in ("agent", "user", "project")}
 
 
 def diff_entries(before: Sequence[str], after: Sequence[str]) -> tuple[MemoryChange, ...]:
@@ -739,6 +746,7 @@ def _parse_revision(line: bytes) -> MemoryRevision | None:
             run_id=_optional_text(data.get("run_id")),
             run_kind=_optional_text(data.get("run_kind")),
             reverts=tuple(_integer(item) for item in _array(data.get("reverts", []))),
+            agent_id=_optional_text(data.get("agent_id")),
         )
     # ValueError includes undecodable bytes and invalid JSON; RecursionError is
     # deeply nested JSON.

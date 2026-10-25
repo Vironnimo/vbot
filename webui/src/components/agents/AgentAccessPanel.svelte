@@ -256,6 +256,7 @@
         value={formValues.tool_access}
         tools={availableTools}
         memoryPromptMode={formValues.memory_prompt_mode}
+        projectMemoryEnabled={formValues.project_memory_enabled}
         {toolLoadingEditable}
         toolLoading={formValues.tool_loading}
         {toolLoadingDefault}

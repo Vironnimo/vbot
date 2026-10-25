@@ -39,6 +39,7 @@ export function createProjectEditForm(project = null) {
     auto_instructions: project?.auto_instructions !== false,
     auto_load: [...(project?.auto_load ?? [])],
     folder_instructions: project?.folder_instructions !== false,
+    memory_enabled: project?.memory_enabled !== false,
     // Edited as text, one command per line.
     context_commands: normalizeStringList(project?.context_commands).join('\n'),
     allowed_tools: [...(project?.allowed_tools ?? [])],
@@ -281,7 +282,11 @@ export function buildManageProjectPayload(formValues, project) {
   }
 
   // The instruction switches are on unless the Project stores them off.
-  for (const field of ['auto_instructions', 'folder_instructions']) {
+  for (const field of [
+    'auto_instructions',
+    'folder_instructions',
+    'memory_enabled',
+  ]) {
     const next = formValues?.[field] !== false;
     if (next !== (project?.[field] !== false)) {
       changes[field] = next;
@@ -592,6 +597,7 @@ export function normalizeProject(project) {
     auto_instructions: project?.auto_instructions !== false,
     auto_load: normalizeAutoLoad(project?.auto_load),
     folder_instructions: project?.folder_instructions !== false,
+    memory_enabled: project?.memory_enabled !== false,
     context_commands: normalizeStringList(project?.context_commands),
     // Which file is the main instruction file and which additional files are
     // missing, as the server found them.
@@ -625,6 +631,7 @@ const TEAM_EFFECTIVE_FIELDS = Object.freeze([
   'thinking_effort',
   'temperature',
   'top_p',
+  'project_memory_enabled',
 ]);
 
 // The winning-source discriminant the scan reports on `effective[field].source`
@@ -830,6 +837,10 @@ export function seedTeamOverrideDraft(member) {
     tool_loading: normalizeToolLoading(overrides.tool_loading),
     // The override's own rules; null while the member inherits every part.
     permission_rules: normalizePermissionRules(overrides.permission_rules),
+    project_memory_enabled:
+      overrides.project_memory_enabled ??
+      effective.project_memory_enabled?.value ??
+      true,
   };
 }
 

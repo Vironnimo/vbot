@@ -26,6 +26,7 @@ from core.agents import (
 )
 from core.agents._config import AGENT_DESCRIPTION_MAX_LENGTH
 from core.database import write_bootstrap_marker
+from core.memory import MemoryPromptMode
 from core.permissions import normalize_permission_rules
 from core.tools.availability import ToolAccess
 from core.tools.live import LIVE_TOOL_NAMES
@@ -56,6 +57,7 @@ def test_create_writes_agent_json_and_workspace_without_a_session(store: AgentSt
     assert "top_p" not in data
     assert data["thinking_effort"] is None
     assert data["memory_prompt_mode"] == "agent_user"
+    assert data["project_memory_enabled"] is True
     assert data["tool_access"] == {"mode": "all"}
     assert data["allowed_skills"] == ["*"]
     assert "tools" not in data
@@ -161,6 +163,7 @@ def test_minimal_agent_config_loads_all_optional_field_defaults(store: AgentStor
     assert agent.allowed_skills == ["*"]
     assert agent.tools == {}
     assert agent.memory_prompt_mode == "agent_user"
+    assert agent.project_memory_enabled is True
     assert agent.custom_system_prompt_enabled is False
     assert agent.root_project_id is None
     # A missing current-Session pointer stays empty: no Session is created for it.
@@ -168,6 +171,34 @@ def test_minimal_agent_config_loads_all_optional_field_defaults(store: AgentStor
     assert agent.created_at
     assert agent.updated_at
     assert Path(agent.workspace) == agent_dir / "workspace"
+
+
+@pytest.mark.parametrize(
+    ("personal_mode", "selection", "expected"),
+    [
+        ("off", None, False),
+        ("agent_user", None, True),
+        ("off", True, True),
+        ("agent", False, False),
+    ],
+)
+def test_project_memory_selection_is_independent_of_personal_memory(
+    store: AgentStore, personal_mode: MemoryPromptMode, selection: bool | None, expected: bool
+) -> None:
+    agent = store.create(
+        "coder", memory_prompt_mode=personal_mode, project_memory_enabled=selection
+    )
+    assert agent.project_memory_enabled is expected
+    assert store.get("coder").project_memory_enabled is expected
+    if selection is None:
+        # Documents from before the additional choice keep a Memory-off Agent off.
+        data = persisted(store, "coder")
+        data.pop("project_memory_enabled")
+        agent_path(store, "coder").write_text(json.dumps(data), encoding="utf-8")
+        assert store.get("coder").project_memory_enabled is expected
+    updated = store.update("coder", project_memory_enabled=not expected)
+    assert updated.project_memory_enabled is not expected
+    assert updated.memory_prompt_mode == personal_mode
 
 
 def test_list_skips_invalid_agent_without_hiding_valid_agents(
@@ -270,6 +301,7 @@ def test_ensure_builtin_agents_creates_them_outside_the_roster(store: AgentStore
             agent_id,
             tool_access={"mode": "all"},
             memory_prompt_mode="agent_user",
+            project_memory_enabled=True,
             custom_system_prompt_enabled=True,
             librarian_enabled=True,
             tools={"subagent": {"allowed_agents": ["*"]}},
@@ -287,10 +319,11 @@ def test_ensure_builtin_agents_creates_them_outside_the_roster(store: AgentStore
     for agent in (again, voice_again):
         assert (
             agent.memory_prompt_mode,
+            agent.project_memory_enabled,
             agent.custom_system_prompt_enabled,
             agent.librarian_enabled,
             agent.tools,
-        ) == ("off", False, False, {})
+        ) == ("off", False, False, False, {})
     assert store.librarian_problem() is None
 
 

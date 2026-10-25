@@ -6,6 +6,11 @@ Bundled `vbot-docs` Skill (`resources/skills/vbot-docs/`), the Agents' guide to 
 
 | Text | Reason |
 |---|---|
+| Agent `--project-memory`: `Use shared Memory from enabled Projects; independent of workspace Memory` | The Agent switch controls a separate scope, so selecting it with personal Memory off must remain understandable. |
+| Project `--memory`: `Allow Agents to use this Project's shared Memory.` and its omit rule | The Project switch gates Agent access while preserving entries and user editing; omission keeps defaults on create or the current switch on update. |
+| Memory target: `Identity Agent id, or Project id with --project` / `Select shared Project Memory for this id; the scope is project` | The same positional grammar supports all revision commands without confusing Project ids with Identity Agent ids. |
+| `Project Memory needs --project and scope project; personal Memory uses scope agent or user without --project. Nothing was changed.` | A conflicting owner/scope must be repaired before any RPC mutation rather than silently writing to another owner's Memory. |
+| `project_memory_enabled override must be true or false` | Team overrides have untyped positional input; other strings must not become truthy settings. |
 | Chat receipt: `Message ... was already accepted in Session ...; the earlier submission was not repeated.` / `Recorded input state: ...` | A historical deduplication receipt proves prior admission but supplies no live Run status; naming the recorded state prevents treating a removed Queue item as new running work. |
 | Chat receipt: `Note: the recovered answer shows its last 6000 characters.` | The exact Run lookup returns a bounded suffix; printing it as a complete answer would hide lost content. |
 | Chat receipt: `Current history or Queue could not be read; acceptance remains confirmed.` / `Next: vbot chat ... /status` | A failed reconciliation read does not undo the confirmed input or justify a new submission; the inspection retains the exact server and Session. |

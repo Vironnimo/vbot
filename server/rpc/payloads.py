@@ -234,6 +234,9 @@ def _agent_response(state: Any, agent: Any, persisted: Any = None) -> JsonObject
         "top_p": agent.top_p,
         "thinking_effort": agent.thinking_effort,
         "memory_prompt_mode": agent.memory_prompt_mode,
+        "project_memory_enabled": getattr(
+            agent, "project_memory_enabled", agent.memory_prompt_mode != "off"
+        ),
         "tool_access": agent.tool_access.to_dict(),
         "allowed_skills": list(agent.allowed_skills),
         "excluded_skills": list(getattr(agent, "excluded_skills", ()) or ()),

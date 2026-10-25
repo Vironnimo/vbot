@@ -101,6 +101,9 @@ class RuntimeAgent(Protocol):
     def tools(self) -> dict[str, Any]: ...
     @property
     def memory_prompt_mode(self) -> MemoryPromptMode: ...
+
+    @property
+    def project_memory_enabled(self) -> bool: ...
     @property
     def custom_system_prompt_enabled(self) -> bool: ...
     @property
@@ -301,6 +304,7 @@ class ConfigAgent:
     workspace: str = _CONFIG_AGENT_WORKSPACE
     root_project_id: str | None = None
     memory_prompt_mode: MemoryPromptMode = _CONFIG_AGENT_MEMORY_MODE
+    project_memory_enabled: bool = True
     custom_system_prompt_enabled: bool = _CONFIG_AGENT_CUSTOM_PROMPT_ENABLED
     current_session_id: str = ""
     created_at: str = _CONFIG_AGENT_TIMESTAMP

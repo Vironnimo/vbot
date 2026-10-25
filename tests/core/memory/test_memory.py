@@ -49,8 +49,9 @@ def _contents(service: MemoryService, workspace: Path, scope: MemoryScope) -> li
     [
         ("user", "USER.md", "# User Profile\n\nExisting prose.\n"),
         ("agent", "MEMORY.md", None),
+        ("project", "MEMORY.md", None),
     ],
-    ids=["prose-is-dropped", "missing-file-is-created"],
+    ids=["prose-is-dropped", "missing-file-is-created", "project-anchor"],
 )
 def test_add_entry_owns_the_file_as_bare_bullets(
     service: MemoryService,
@@ -181,21 +182,22 @@ def test_full_scope_rejects_growth_until_an_entry_is_removed(
     assert service.scope_usage(workspace, "user") == (budgets["user"], budgets["user"])
 
 
+@pytest.mark.parametrize("scope", ["user", "project"])
 def test_replace_may_grow_an_entry_exactly_to_the_budget(
-    service: MemoryService, workspace: Path
+    service: MemoryService, workspace: Path, scope: MemoryScope
 ) -> None:
-    _used, budget = service.scope_usage(workspace, "user")
+    _used, budget = service.scope_usage(workspace, scope)
     first = budget // 2
     second = budget - first
-    service.add_entry(workspace, "user", "a" * first)
-    service.add_entry(workspace, "user", "b" * (second - 100))
+    service.add_entry(workspace, scope, "a" * first)
+    service.add_entry(workspace, scope, "b" * (second - 100))
 
     # One character past the budget is rejected and the entry stays unchanged.
     with pytest.raises(MemoryError):
-        service.replace_entry(workspace, "user", 2, "c" * (second + 1))
-    assert _contents(service, workspace, "user")[1] == "b" * (second - 100)
+        service.replace_entry(workspace, scope, 2, "c" * (second + 1))
+    assert _contents(service, workspace, scope)[1] == "b" * (second - 100)
 
-    replaced = service.replace_entry(workspace, "user", 2, "c" * second)
+    replaced = service.replace_entry(workspace, scope, 2, "c" * second)
     assert replaced.content == "c" * second
 
 

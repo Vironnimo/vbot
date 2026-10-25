@@ -156,6 +156,7 @@ class Agent:
     current_session_id: str = ""
     custom_system_prompt_enabled: bool = DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED
     memory_prompt_mode: MemoryPromptMode = DEFAULT_MEMORY_PROMPT_MODE
+    project_memory_enabled: bool = True
     compaction_policy: dict[str, Any] | None = None
     # On-demand Tools (``core.tools.on_demand``): ``None`` leaves them off.
     tool_loading: dict[str, Any] | None = None

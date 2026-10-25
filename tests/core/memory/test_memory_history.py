@@ -19,6 +19,7 @@ from core.memory import (
     MemoryWriter,
 )
 from core.memory._history import MemoryHistory
+from core.tools.file_state import FileRead
 
 _TOOL = MemoryWriter(
     agent_id="coder", actor="tool", session_id="s-1", run_id="r-1", run_kind="user"
@@ -46,6 +47,56 @@ def _changes(revision_data: dict[str, object]) -> list[tuple[object, ...]]:
     changes = revision_data["changes"]
     assert isinstance(changes, list)
     return [(change["op"], change.get("previous"), change["text"]) for change in changes]
+
+
+def test_project_memory_is_shared_across_writers_with_an_independent_history(
+    tmp_path: Path, agents_root: Path, workspace: Path
+) -> None:
+    projects_root = tmp_path / "projects"
+    anchor = projects_root / "demo"
+    anchor.mkdir(parents=True)
+    service = MemoryService(history_root=agents_root, project_history_root=projects_root)
+    first = MemoryWriter(agent_id="coder", project_id="demo", actor="tool", run_id="r-1")
+    second = MemoryWriter(agent_id="reviewer", project_id="demo", actor="tool", run_id="r-2")
+    service.add_entry(workspace, "agent", "Personal preference.", writer=_TOOL)
+    added = service.add_entry(
+        anchor, "project", "Discuss design before implementing.", writer=first
+    )
+    replaced = service.replace_matching(
+        anchor, "project", "Discuss design", "Agree on design before implementing.", writer=second
+    )
+
+    revisions = service.history(anchor, project_id="demo")
+    assert [(r.id, r.scope, r.agent_id, r.run_id) for r in revisions] == [
+        (1, "project", "coder", "r-1"),
+        (2, "project", "reviewer", "r-2"),
+    ]
+    assert (added.revision, replaced.revision) == (1, 2)
+    assert service.entries_at(anchor, revision_id=1, project_id="demo") == {
+        "project": ["Discuss design before implementing."]
+    }
+    assert service.compare(anchor, None, 1, project_id="demo")["project"][0].op == "replaced"
+    assert service.check_revert(anchor, [2], writer=first) == ("project",)
+    reverted = service.revert(anchor, [2], writer=first)
+    assert reverted.changed == ("project",)
+    assert service.entries_at(anchor, project_id="demo") == {
+        "project": ["Discuss design before implementing."]
+    }
+    assert service.entries_at(workspace, "coder") == {"user": [], "agent": ["Personal preference."]}
+    assert len(service.recorded_revisions("coder")) == 1
+    assert len(service.recorded_revisions(project_id="demo")) == 3
+    assert not (anchor / "USER.md").exists()
+    assert (anchor / "memory-history.jsonl").is_file()
+
+    reads: list[FileRead] = []
+    rendered = service.read_prompt_scopes(
+        anchor, ("project",), memory_tool=None, on_read=reads.append
+    )
+    assert "Discuss design before implementing." in rendered
+    assert "Personal preference." not in rendered
+    assert "/3000 chars used" in rendered
+    assert [path for path, _stamp in reads] == [(anchor / "MEMORY.md").resolve()]
+    assert service.read_prompt_scopes(anchor, (), memory_tool=None) == ""
 
 
 def test_changes_are_recorded_with_their_writer_and_replay_to_every_state(

@@ -41,6 +41,7 @@
     // configurable Tools (`toolCatalogForEditor`).
     liveCall = false,
     memoryPromptMode = 'agent_user',
+    projectMemoryEnabled = false,
     showReset = false,
     resetLabel = '',
     // On-demand Tools: with `toolLoadingEditable` the editor shows the "Load
@@ -223,7 +224,7 @@
       );
     } else if (tool.activation === 'memory_mode') {
       notes.push(
-        memoryPromptMode === 'off'
+        memoryPromptMode === 'off' && !projectMemoryEnabled
           ? t('toolAccess.activation.memoryOff')
           : t('toolAccess.activation.memoryOn'),
       );

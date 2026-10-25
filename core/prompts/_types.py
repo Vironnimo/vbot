@@ -9,6 +9,7 @@ from typing import Any, Protocol
 
 from core.memory import (
     MemoryPromptMode,
+    MemoryScope,
 )
 from core.tools.availability import (
     SKILL_MANAGE_TOOL_NAME,
@@ -95,18 +96,21 @@ class PromptScope:
 
 @dataclass(frozen=True)
 class ProjectPromptContext:
-    """The Project inputs the prompt builder needs for the Working Project block.
+    """Project inputs for the Working Project block and shared Project Memory.
 
     Passed explicitly into ``build_system_prompt`` (and ``render_project_files``)
     so the prompt domain never imports Project or Agent classes. The caller owns
     where the stable Project id, display name, ``cwd``, and ``auto_load`` come from.
     ``cwd`` is the Project Workspace; ``auto_load`` is its ordered file list.
+    ``memory_workspace`` names the data-directory Anchor, never the repository.
     """
 
     project_id: str
     project_name: str
     cwd: Path
     auto_load: tuple[str, ...] = ()
+    memory_workspace: Path | None = None
+    memory_enabled: bool = True
 
     @classmethod
     def from_project(
@@ -115,6 +119,9 @@ class ProjectPromptContext:
         project_name: str,
         cwd: str | Path,
         auto_load: Sequence[str],
+        *,
+        memory_workspace: str | Path | None = None,
+        memory_enabled: bool = True,
     ) -> ProjectPromptContext:
         """Build a prompt context from one Project's presentation fields."""
         return cls(
@@ -122,6 +129,8 @@ class ProjectPromptContext:
             project_name=project_name,
             cwd=Path(cwd),
             auto_load=tuple(auto_load),
+            memory_workspace=Path(memory_workspace) if memory_workspace is not None else None,
+            memory_enabled=memory_enabled,
         )
 
 
@@ -364,4 +373,15 @@ class MemoryPromptProvider(Protocol):
         *memory_tool* is the name under which the Agent can call the memory Tool,
         or ``None`` when it cannot; the notice for a cut scope names it only then.
         """
+        ...
+
+    def read_prompt_scopes(
+        self,
+        workspace: Path,
+        scopes: Sequence[MemoryScope],
+        *,
+        memory_tool: str | None,
+        on_read: Callable[[FileRead], None] | None = None,
+    ) -> str:
+        """Render selected scopes from their owning Memory directory."""
         ...

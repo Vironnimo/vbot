@@ -7,7 +7,8 @@ from typing import Any
 
 import pytest
 
-from core.memory import MemoryWriter
+from core.automation import LearningChanges
+from core.memory import MemoryService, MemoryWriter
 from core.skills import SkillWriter
 from tests.server.rpc_test_support import (
     StubAdapter,
@@ -22,7 +23,7 @@ _MEMORY = MemoryWriter(agent_id="coder", actor="tool", run_id=REVIEW, run_kind="
 _SKILLS = SkillWriter(actor="reflection", run_id=REVIEW, run_kind="reflection")
 
 
-def _reviewed_agent(tmp_path: Path) -> tuple[Any, Path]:
+def _reviewed_agent(tmp_path: Path, *, with_project: bool = False) -> tuple[Any, Path]:
     """A state whose Agent ``coder`` has one review's Memory entry and Skill."""
     state = make_state(tmp_path, StubAdapter())
     agent_dir = tmp_path / "agents" / "coder"
@@ -36,14 +37,36 @@ def _reviewed_agent(tmp_path: Path) -> tuple[Any, Path]:
         "---\nname: deploy\ndescription: Deploy the app.\n---\n\n# Steps\n",
         writer=_SKILLS,
     )
+    if with_project:
+        project = tmp_path / "projects" / "sample"
+        project.mkdir(parents=True)
+        state.runtime.memory = MemoryService(
+            history_root=tmp_path / "agents", project_history_root=tmp_path / "projects"
+        )
+        state.runtime.memory.add_entry(
+            project,
+            "project",
+            "Changes need user review.",
+            writer=MemoryWriter(agent_id="coder", project_id="sample", run_id=REVIEW),
+        )
+        state.runtime.learning_changes = LearningChanges(
+            memory=state.runtime.memory,
+            skills=state.runtime.skill_authoring,
+            skill_home=lambda agent_id: tmp_path / "agents" / agent_id / "skills",
+            run_active=lambda run_id: state.runtime.chat_run_manager.is_running(run_id),
+            project_memories=lambda: {"sample": project},
+        )
     return state, agent_dir
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("with_project", [False, True], ids=["personal", "shared-project"])
 async def test_learning_changes_lists_a_runs_changes_and_undo_takes_them_back(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    with_project: bool,
 ) -> None:
-    state, agent_dir = _reviewed_agent(tmp_path)
+    state, agent_dir = _reviewed_agent(tmp_path, with_project=with_project)
 
     listed = await rpc_result(state, "learning.changes", agent_id="coder", run_id=REVIEW)
     # A Run still running cannot be undone yet.
@@ -54,22 +77,28 @@ async def test_learning_changes_lists_a_runs_changes_and_undo_takes_them_back(
     assert resource_changes(state) == []
     undone = await rpc_result(state, "learning.undo", agent_id="coder", run_id=REVIEW)
 
-    assert listed["summary"] == {"memory": 1, "skills": 1, "undone": False}
+    memory_count = 2 if with_project else 1
+    assert listed["summary"] == {"memory": memory_count, "skills": 1, "undone": False}
     assert [(change["store"], change["kind"]) for change in listed["changes"]] == [
         ("memory", "added"),
+        *([("memory", "added")] if with_project else []),
         ("skill", "created"),
     ]
-    assert undone["summary"] == {"memory": 1, "skills": 1, "undone": True}
+    if with_project:
+        assert listed["changes"][1]["project_id"] == "sample"
+        assert (tmp_path / "projects" / "sample" / "MEMORY.md").read_text(encoding="utf-8") == ""
+    assert undone["summary"] == {"memory": memory_count, "skills": 1, "undone": True}
     assert (agent_dir / "workspace" / "USER.md").read_text(encoding="utf-8") == ""
     assert not (agent_dir / "skills" / "deploy").exists()
     assert resource_changes(state) == [
         {"kind": "memories", "scope": {"agent_id": "coder"}},
+        *([{"kind": "memories", "scope": {"project_id": "sample"}}] if with_project else []),
         {"kind": "skills"},
     ]
     # A finished undo leaves nothing to take back and announces nothing.
     again = await rpc_result(state, "learning.undo", agent_id="coder", run_id=REVIEW)
     assert again == undone
-    assert len(resource_changes(state)) == 2
+    assert len(resource_changes(state)) == (3 if with_project else 2)
 
 
 @pytest.mark.asyncio

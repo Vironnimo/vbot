@@ -289,20 +289,34 @@ def test_temporary_nonidentity_grants_add_no_incarnation_restriction(
     assert not (tmp_path / "agents" / "retirements.json").exists()
 
 
+@pytest.mark.parametrize("project_memory_enabled", [False, True])
 def test_temporary_agent_config_is_an_immutable_snapshot(
-    tmp_path: Path, sessions: ChatSessionManager
+    tmp_path: Path, sessions: ChatSessionManager, project_memory_enabled: bool
 ) -> None:
     tools = {"nested": {"allowed": ["first"]}}
-    config = _config(tmp_path, allowed_skills=["shared"], tools=tools)
+    config = _config(
+        tmp_path,
+        allowed_skills=["shared"],
+        tools=tools,
+        project_memory_enabled=project_memory_enabled,
+    )
     tools["nested"]["allowed"].append("later")
     assert config.tools == {"nested": {"allowed": ["first"]}}
     assert tools == {"nested": {"allowed": ["first", "later"]}}
 
-    binding = TemporaryAgentRegistry(sessions).create(
-        owner_name="extension", group_id="group", participant_id="participant", config=config
+    registry = TemporaryAgentRegistry(sessions)
+    binding = registry.create(
+        owner_name="extension",
+        group_id="group",
+        participant_id="participant",
+        config=config,
+        project_id="snapshot-project",
     )
     config.tools["nested"]["allowed"].append("later")
     assert binding.config == {**binding.config, "tools": {"nested": {"allowed": ["first"]}}}
+    agent = registry.resolve(binding.address, generation_id=binding.generation_id)
+    assert agent is not None and agent.project_memory_enabled is project_memory_enabled
+    assert ("project_memory_enabled" not in binding.config) is project_memory_enabled
 
 
 def test_temporary_agent_compaction_policy_round_trips_and_absence_inherits(
@@ -388,12 +402,14 @@ def test_temporary_agent_permission_rules_and_ceiling_round_trip(
         ({"cwd": Path("relative")}, "cwd must be absolute"),
         ({"permission_rules": {"write": "nowhere"}}, "permission_rules.write"),
         ({"permission_ceiling": {"layers": "all"}}, "layers"),
+        ({"project_memory_enabled": "yes"}, "project_memory_enabled"),
     ],
     ids=[
         "invalid-compaction-policy",
         "relative-cwd",
         "invalid-permission-rules",
         "invalid-permission-ceiling",
+        "invalid-project-memory",
     ],
 )
 def test_temporary_agent_config_rejects_an_invalid_snapshot(
@@ -439,7 +455,7 @@ async def test_temporary_session_runs_only_through_protected_chat_path(
             for context in runtime.system_prompts.render_working_project_context_calls
         ] == ([project_id] if project_id is not None else [])
         assert runtime.system_prompts.render_soul_calls == 0
-        assert runtime.system_prompts.render_memory_files_calls == 0
+        assert runtime.system_prompts.render_memory_files_calls == (1 if project_id else 0)
     finally:
         runtime.chat_sessions.close()
 

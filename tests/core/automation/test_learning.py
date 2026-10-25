@@ -41,7 +41,9 @@ class _Agent:
         (agents / AGENT_ID).mkdir(parents=True)
         self.workspace = agents / AGENT_ID / "workspace"
         self.home = agents / AGENT_ID / "skills"
-        self.memory = MemoryService(history_root=agents)
+        self.project_root = tmp_path / "projects"
+        self.projects: dict[str, Path] = {}
+        self.memory = MemoryService(history_root=agents, project_history_root=self.project_root)
         self.skills = SkillAuthoringService()
         self.running: set[str] = set()
         self.learning = LearningChanges(
@@ -49,7 +51,14 @@ class _Agent:
             skills=self.skills,
             skill_home=lambda agent_id: self.home,
             run_active=self.running.__contains__,
+            project_memories=lambda: self.projects,
         )
+
+    def project(self, project_id: str = "sample") -> Path:
+        path = self.project_root / project_id
+        path.mkdir(parents=True, exist_ok=True)
+        self.projects[project_id] = path
+        return path
 
     def files(self) -> dict[str, bytes]:
         roots = (self.workspace, self.home)
@@ -106,13 +115,28 @@ def review(agent: _Agent) -> None:
 def test_the_changes_of_a_run_come_from_both_histories(agent: _Agent) -> None:
     review(agent)
     agent.memory.add_entry(agent.workspace, "agent", "Unrelated.", writer=OTHER_MEMORY)
+    project = agent.project()
+    agent.memory.add_entry(
+        project,
+        "project",
+        "Changes need user review.",
+        writer=MemoryWriter(agent_id=AGENT_ID, project_id="sample", run_id=REVIEW),
+    )
+    # A shared history keeps other Agents' contributions separate, even if a
+    # caller supplied the same Run label outside the globally unique Run API.
+    agent.memory.add_entry(
+        project,
+        "project",
+        "Another Agent's change.",
+        writer=MemoryWriter(agent_id="other-agent", project_id="sample", run_id=REVIEW),
+    )
 
     changes = agent.learning.of_run(AGENT_ID, REVIEW)
 
     assert changes.to_dict() == {
         "agent_id": AGENT_ID,
         "run_id": REVIEW,
-        "summary": {"memory": 2, "skills": 3, "undone": False},
+        "summary": {"memory": 3, "skills": 3, "undone": False},
         "changes": [
             {
                 "store": "memory",
@@ -129,6 +153,15 @@ def test_the_changes_of_a_run_come_from_both_histories(agent: _Agent) -> None:
                 "undone": False,
                 "scope": "agent",
                 "text": "Uses pytest with xdist.",
+            },
+            {
+                "store": "memory",
+                "kind": "added",
+                "revisions": [1],
+                "undone": False,
+                "scope": "project",
+                "text": "Changes need user review.",
+                "project_id": "sample",
             },
             {
                 "store": "skill",
@@ -160,7 +193,7 @@ def test_the_changes_of_a_run_come_from_both_histories(agent: _Agent) -> None:
     }
     summaries = agent.learning.summaries(AGENT_ID, [REVIEW, OTHER, "run-without-changes"])
     assert {run: summary.to_dict() for run, summary in summaries.items()} == {
-        REVIEW: {"memory": 2, "skills": 3, "undone": False},
+        REVIEW: {"memory": 3, "skills": 3, "undone": False},
         OTHER: {"memory": 2, "skills": 2, "undone": False},
         "run-without-changes": {"memory": 0, "skills": 0, "undone": False},
     }
@@ -195,6 +228,13 @@ def test_the_changes_of_a_run_are_its_net_effect(agent: _Agent) -> None:
 def test_undo_takes_back_every_change_of_the_run_as_a_person(agent: _Agent) -> None:
     before = agent.skill_files()
     review(agent)
+    project = agent.project()
+    agent.memory.add_entry(
+        project,
+        "project",
+        "Changes need user review.",
+        writer=MemoryWriter(agent_id=AGENT_ID, project_id="sample", run_id=REVIEW),
+    )
     agent.memory.add_entry(agent.workspace, "agent", "Unrelated.", writer=OTHER_MEMORY)
     files = agent.files()
     agent.running.add(REVIEW)
@@ -207,9 +247,10 @@ def test_undo_takes_back_every_change_of_the_run_as_a_person(agent: _Agent) -> N
     result = agent.learning.undo(AGENT_ID, REVIEW, workspace=agent.workspace, actor="rpc")
 
     assert (result.memory_changed, result.skills_changed) == (True, True)
-    assert result.changes.summary.to_dict() == {"memory": 2, "skills": 3, "undone": True}
+    assert result.changes.summary.to_dict() == {"memory": 3, "skills": 3, "undone": True}
     assert all(change.undone for change in result.changes.changes)
     assert agent.entries() == {"user": [], "agent": ["Uses pytest.", "Unrelated."]}
+    assert agent.memory.list_entries(project, "project") == []
     # Every Skill package is back as it was; the archived one returned home.
     assert agent.skill_files() == before
     memory_reverts = [r for r in agent.memory.recorded_revisions(AGENT_ID) if r.kind == "revert"]
@@ -249,6 +290,23 @@ def _change_skill_later(agent: _Agent) -> None:
     agent.skills.write_file(agent.home, "deploy", "references/hosts.md", "b\n", writer=HUMAN_WRITER)
 
 
+def _change_project_memory_later(agent: _Agent) -> None:
+    project = agent.project()
+    agent.memory.add_entry(
+        project,
+        "project",
+        "Changes need user review.",
+        writer=MemoryWriter(agent_id=AGENT_ID, project_id="sample", run_id=REVIEW),
+    )
+    agent.memory.replace_matching(
+        project,
+        "project",
+        "Changes need",
+        "Changes need a separate review Session.",
+        writer=MemoryWriter(agent_id="other-agent", project_id="sample", run_id=REVIEW),
+    )
+
+
 @pytest.mark.parametrize(
     ("change_later", "expected"),
     [
@@ -274,6 +332,17 @@ def _change_skill_later(agent: _Agent) -> None:
             id="memory-file-edited-outside-vbot",
         ),
         pytest.param(
+            _change_project_memory_later,
+            {
+                "store": "memory",
+                "revision": 1,
+                "later": "internal",
+                "scope": "project",
+                "project_id": "sample",
+            },
+            id="project-entry-changed-by-another-agent",
+        ),
+        pytest.param(
             _change_skill_later,
             {"store": "skill", "revision": 4, "later": "human", "skill": "deploy"},
             id="skill-file-changed",
@@ -297,11 +366,35 @@ def test_undo_refuses_when_a_later_change_touched_a_change_of_the_run(
     assert agent.files() == files
     assert not [r for r in agent.memory.recorded_revisions(AGENT_ID) if r.kind == "revert"]
     assert not [r for r in agent.skills.recorded_revisions(agent.home) if r.kind == "revert"]
+    assert not [
+        r
+        for project_id in agent.projects
+        for r in agent.memory.recorded_revisions(project_id=project_id)
+        if r.kind == "revert"
+    ]
 
 
 def _fail_the_memory_revert(patch: pytest.MonkeyPatch, agent: _Agent) -> None:
     def fail(*args: object, **kwargs: object) -> None:
         raise MemoryError("disk full")
+
+    patch.setattr(agent.memory, "revert", fail)
+
+
+def _fail_the_second_project_revert(patch: pytest.MonkeyPatch, agent: _Agent) -> None:
+    for project_id in ("first", "second"):
+        agent.memory.add_entry(
+            agent.project(project_id),
+            "project",
+            "Changes need user review.",
+            writer=MemoryWriter(agent_id=AGENT_ID, project_id=project_id, run_id=REVIEW),
+        )
+    revert = agent.memory.revert
+
+    def fail(workspace: Path, revisions: list[int], **kwargs: Any) -> Any:
+        if kwargs["writer"].project_id == "second":
+            raise MemoryError("disk full")
+        return revert(workspace, revisions, **kwargs)
 
     patch.setattr(agent.memory, "revert", fail)
 
@@ -336,6 +429,12 @@ def _fail_skill_writes(patch: pytest.MonkeyPatch, agent: _Agent) -> None:
             "The undo failed and nothing was changed: disk full",
             False,
             id="memory-write-fails",
+        ),
+        pytest.param(
+            _fail_the_second_project_revert,
+            "The undo failed and nothing was changed: disk full",
+            False,
+            id="project-write-fails-restores-personal-and-earlier-project",
         ),
         pytest.param(
             _fail_memory_writes_after_the_first,
@@ -374,6 +473,11 @@ def test_an_undo_that_fails_while_writing_says_what_changed_and_can_run_again(
     assert re.fullmatch(message, str(failed.value))
     assert agent.skill_files() == skill_files
     assert agent.entries() == ({**entries, "user": []} if user_memory_undone else entries)
+    assert all(
+        [entry.content for entry in agent.memory.list_entries(path, "project")]
+        == ["Changes need user review."]
+        for path in agent.projects.values()
+    )
     assert agent.learning.of_run(AGENT_ID, REVIEW).summary.undone is False
     # What the failed attempt left recorded belongs to the review itself, so it
     # never blocks undoing the rest.

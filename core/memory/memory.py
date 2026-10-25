@@ -61,12 +61,31 @@ class MemoryService:
         backend: FilePinnedMemoryBackend | None = None,
         *,
         history_root: Path | None = None,
+        project_history_root: Path | None = None,
     ) -> None:
         history = MemoryHistory(history_root) if history_root is not None else None
         self._backend = backend or FilePinnedMemoryBackend(history)
+        project_history = (
+            MemoryHistory(project_history_root) if project_history_root is not None else None
+        )
+        self._project_backend = FilePinnedMemoryBackend(project_history, project=True)
+
+    def _scope_backend(self, scope: MemoryScope) -> FilePinnedMemoryBackend:
+        return self._project_backend if validate_memory_scope(scope) == "project" else self._backend
+
+    def _history_owner(
+        self, agent_id: str | None, project_id: str | None
+    ) -> tuple[FilePinnedMemoryBackend, str]:
+        if project_id is not None:
+            if agent_id is not None:
+                raise MemoryError("name either an Agent or a Project Memory owner, not both")
+            return self._project_backend, project_id
+        if agent_id is None:
+            raise MemoryError("name an Agent or a Project Memory owner")
+        return self._backend, agent_id
 
     def list_entries(self, workspace: Path, scope: MemoryScope) -> list[MemoryEntry]:
-        return self._backend.list_entries(workspace, scope)
+        return self._scope_backend(scope).list_entries(workspace, scope)
 
     def add_entry(
         self,
@@ -76,7 +95,7 @@ class MemoryService:
         *,
         writer: MemoryWriter = _INTERNAL_WRITER,
     ) -> MemoryEntry:
-        return self._backend.add_entry(workspace, scope, content, writer=writer)
+        return self._scope_backend(scope).add_entry(workspace, scope, content, writer=writer)
 
     def replace_entry(
         self,
@@ -87,7 +106,9 @@ class MemoryService:
         *,
         writer: MemoryWriter = _INTERNAL_WRITER,
     ) -> MemoryEntry:
-        return self._backend.replace_entry(workspace, scope, entry_id, content, writer=writer)
+        return self._scope_backend(scope).replace_entry(
+            workspace, scope, entry_id, content, writer=writer
+        )
 
     def remove_entry(
         self,
@@ -97,10 +118,10 @@ class MemoryService:
         *,
         writer: MemoryWriter = _INTERNAL_WRITER,
     ) -> MemoryEntry:
-        return self._backend.remove_entry(workspace, scope, entry_id, writer=writer)
+        return self._scope_backend(scope).remove_entry(workspace, scope, entry_id, writer=writer)
 
     def find_matches(self, workspace: Path, scope: MemoryScope, old_text: str) -> list[str]:
-        return self._backend.find_matches(workspace, scope, old_text)
+        return self._scope_backend(scope).find_matches(workspace, scope, old_text)
 
     def replace_matching(
         self,
@@ -111,7 +132,9 @@ class MemoryService:
         *,
         writer: MemoryWriter = _INTERNAL_WRITER,
     ) -> MemoryTextChange:
-        return self._backend.replace_matching(workspace, scope, old_text, content, writer=writer)
+        return self._scope_backend(scope).replace_matching(
+            workspace, scope, old_text, content, writer=writer
+        )
 
     def remove_matching(
         self,
@@ -121,23 +144,42 @@ class MemoryService:
         *,
         writer: MemoryWriter = _INTERNAL_WRITER,
     ) -> MemoryTextChange:
-        return self._backend.remove_matching(workspace, scope, old_text, writer=writer)
+        return self._scope_backend(scope).remove_matching(workspace, scope, old_text, writer=writer)
 
-    def history(self, workspace: Path, agent_id: str) -> list[MemoryRevision]:
-        return self._backend.history(workspace, agent_id)
+    def history(
+        self, workspace: Path, agent_id: str | None = None, *, project_id: str | None = None
+    ) -> list[MemoryRevision]:
+        backend, owner_id = self._history_owner(agent_id, project_id)
+        return backend.history(workspace, owner_id)
 
     def entries_at(
-        self, workspace: Path, agent_id: str, revision_id: int | None
+        self,
+        workspace: Path,
+        agent_id: str | None = None,
+        revision_id: int | None = None,
+        *,
+        project_id: str | None = None,
     ) -> dict[MemoryScope, list[str]]:
-        return self._backend.entries_at(workspace, agent_id, revision_id)
+        backend, owner_id = self._history_owner(agent_id, project_id)
+        return backend.entries_at(workspace, owner_id, revision_id)
 
     def compare(
-        self, workspace: Path, agent_id: str, from_id: int, to_id: int | None = None
+        self,
+        workspace: Path,
+        agent_id: str | None,
+        from_id: int,
+        to_id: int | None = None,
+        *,
+        project_id: str | None = None,
     ) -> dict[MemoryScope, tuple[MemoryChange, ...]]:
-        return self._backend.compare(workspace, agent_id, from_id, to_id)
+        backend, owner_id = self._history_owner(agent_id, project_id)
+        return backend.compare(workspace, owner_id, from_id, to_id)
 
-    def recorded_revisions(self, agent_id: str) -> list[MemoryRevision]:
-        return self._backend.recorded_revisions(agent_id)
+    def recorded_revisions(
+        self, agent_id: str | None = None, *, project_id: str | None = None
+    ) -> list[MemoryRevision]:
+        backend, owner_id = self._history_owner(agent_id, project_id)
+        return backend.recorded_revisions(owner_id)
 
     def check_revert(
         self,
@@ -148,7 +190,8 @@ class MemoryService:
         strict: bool = False,
         related: Collection[int] = (),
     ) -> tuple[MemoryScope, ...]:
-        return self._backend.check_revert(
+        backend = self._project_backend if writer.project_id is not None else self._backend
+        return backend.check_revert(
             workspace, revision_ids, writer=writer, strict=strict, related=related
         )
 
@@ -161,12 +204,13 @@ class MemoryService:
         strict: bool = False,
         related: Collection[int] = (),
     ) -> MemoryRevertResult:
-        return self._backend.revert(
+        backend = self._project_backend if writer.project_id is not None else self._backend
+        return backend.revert(
             workspace, revision_ids, writer=writer, strict=strict, related=related
         )
 
     def scope_usage(self, workspace: Path, scope: MemoryScope) -> tuple[int, int]:
-        return self._backend.scope_usage(workspace, scope)
+        return self._scope_backend(scope).scope_usage(workspace, scope)
 
     def render_scopes(self, workspace: Path, scopes: Sequence[MemoryScope]) -> str:
         return self._backend.render_scopes(workspace, scopes)
@@ -181,6 +225,18 @@ class MemoryService:
     ) -> str:
         return self._backend.read_prompt_files(
             workspace, mode, memory_tool=memory_tool, on_read=on_read
+        )
+
+    def read_prompt_scopes(
+        self,
+        workspace: Path,
+        scopes: Sequence[MemoryScope],
+        *,
+        memory_tool: str | None,
+        on_read: Callable[[FileRead], None] | None = None,
+    ) -> str:
+        return self._backend.read_prompt_scopes(
+            workspace, scopes, memory_tool=memory_tool, on_read=on_read
         )
 
 

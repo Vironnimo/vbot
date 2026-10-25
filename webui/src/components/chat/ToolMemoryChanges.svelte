@@ -9,6 +9,7 @@
   const SCOPE_LABELS = {
     agent: () => t('chat.memoryScope.agent'),
     user: () => t('chat.memoryScope.user'),
+    project: () => t('chat.memoryScope.project'),
   };
   const CHANGE_LABELS = {
     added: () => t('chat.memoryChange.added'),

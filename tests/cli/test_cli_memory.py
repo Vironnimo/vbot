@@ -122,6 +122,58 @@ def test_memory_remove_requires_confirmation(rpc: FakeRpc, run_cli: RunCli) -> N
 
 
 @pytest.mark.parametrize(
+    ("command", "args", "params", "response", "shown"),
+    [
+        ("list", [], {}, {"scopes": {"project": [{"id": 1, "content": "Keep"}]}}, "#1: Keep"),
+        ("add", ["--content", "Keep"], {"scope": "project", "content": "Keep"},
+         {"entry": {"id": 1, "content": "Keep"}, "scopes": {"project": ["Keep"]}}, "project=1"),
+        ("replace", ["1", "--content", "Changed"],
+         {"scope": "project", "entry_id": 1, "content": "Changed"},
+         {"entry": {"id": 1, "content": "Changed"}, "scopes": {"project": ["Changed"]}},
+         "#1: Changed"),
+        ("remove", ["1", "--yes"], {"scope": "project", "entry_id": 1},
+         {"scopes": {"project": []}}, "project=0"),
+        ("history", [], {"scope": "project", "limit": 20}, {"revisions": [], "total": 0}, "vbot"),
+        ("show", ["2"], {"revision": 2}, {"scopes": {"project": ["Keep"]}}, "- Keep"),
+        ("diff", ["1", "2"], {"from": 1, "to": 2},
+         {"changes": {"project": [{"op": "added", "text": "Keep"}]}}, "+ Keep"),
+        ("revert", ["2", "3"], {"revisions": [2, 3]}, {"revisions": []}, "vbot"),
+    ],
+)  # fmt: skip
+def test_project_memory_commands_preserve_owner_and_scope(
+    rpc: FakeRpc,
+    run_cli: RunCli,
+    command: str,
+    args: list[str],
+    params: dict[str, Any],
+    response: dict[str, Any],
+    shown: str,
+) -> None:
+    rpc.reply(f"memory.{command}", {"project_id": "vbot", **response})
+
+    code, out, _err = run_cli("memory", command, "vbot", "--project", *args)
+
+    assert code == 0
+    assert rpc.calls == [(f"memory.{command}", {"project_id": "vbot", **params})]
+    assert shown in out
+    assert "agent scope:" not in out and "user scope:" not in out
+
+
+@pytest.mark.parametrize(
+    "selection",
+    [("--project", "--scope", "agent"), ("--project", "--scope", "user"), ("--scope", "project")],
+)
+def test_memory_rejects_scope_from_another_owner_before_rpc(
+    rpc: FakeRpc, run_cli: RunCli, selection: tuple[str, ...]
+) -> None:
+    code, out, err = run_cli("memory", "add", "vbot", *selection, "--content", "Keep")
+
+    assert code == 1
+    assert rpc.calls == []
+    assert "--project" in out + err and "scope" in out + err
+
+
+@pytest.mark.parametrize(
     ("command", "code", "lookup", "shown", "hidden"),
     [
         pytest.param(
@@ -147,6 +199,14 @@ def test_memory_remove_requires_confirmation(rpc: FakeRpc, run_cli: RunCli) -> N
             ["did you mean: assistant", "available agents: assistant, coder"],
             [],
             id="remove-unknown-agent",
+        ),
+        pytest.param(
+            "remove",
+            "project_not_found",
+            None,
+            ["entry 99 does not exist"],
+            ["available agents", "entry lookup"],
+            id="remove-unknown-project",
         ),
         pytest.param(
             "remove",
@@ -194,7 +254,10 @@ def test_memory_failure_lookup_follows_the_rpc_code_and_keeps_the_failure(
     if command == "list":
         result = memory_management.memory_list(instance, "assistnt")
     else:
-        result = memory_management.memory_remove(instance, "assistnt", "agent", 99, True)
+        project = code == "project_not_found"
+        result = memory_management.memory_remove(
+            instance, "assistnt", "project" if project else "agent", 99, True, project=project
+        )
 
     assert result.ok is False
     assert rpc.methods == [f"memory.{command}", *lookups]

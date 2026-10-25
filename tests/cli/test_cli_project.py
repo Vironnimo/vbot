@@ -33,6 +33,7 @@ def _project(**overrides: Any) -> dict[str, Any]:
         "display_name": "vBot",
         "cwd": "/repos/vbot",
         "cwd_exists": True,
+        "memory_enabled": True,
         "default_agent": "orchestrator",
         "default_model": "openai/gpt-5.2",
         "default_temperature": None,
@@ -68,6 +69,7 @@ def test_project_add_sends_every_option_and_previews_the_scan(
         "--auto-load", "AGENTS.md", "docs/guide.md",
         "--auto-instructions", "off",
         "--folder-instructions", "on",
+        "--memory", "off",
         "--allowed-tools", "read", "bash",
         "--enabled-bundled-skills", "vbot-docs",
     )  # fmt: skip
@@ -88,6 +90,7 @@ def test_project_add_sends_every_option_and_previews_the_scan(
                 "auto_load": ["AGENTS.md", "docs/guide.md"],
                 "auto_instructions": False,
                 "folder_instructions": True,
+                "memory_enabled": False,
                 "allowed_tools": ["read", "bash"],
                 "skills_bundled_enabled": ["vbot-docs"],
             },
@@ -98,6 +101,7 @@ def test_project_add_sends_every_option_and_previews_the_scan(
         "  display_name: vBot",
         "  cwd: /repos/vbot",
         "  cwd_exists: yes",
+        "  memory_enabled: yes",
         "  default_agent: orchestrator",
         "  default_model: openai/gpt-5.2",
         "  sources: 0",
@@ -269,6 +273,8 @@ def test_project_show_renders_the_team_and_the_default_knobs(
             {"auto_instructions": False, "folder_instructions": False},
             id="instruction-switches",
         ),
+        pytest.param(("--memory", "on"), {"memory_enabled": True}, id="memory-enabled"),
+        pytest.param(("--memory", "off"), {"memory_enabled": False}, id="memory-disabled"),
         pytest.param(
             ("--context-commands", "git status --short", "npm outdated"),
             {"context_commands": ["git status --short", "npm outdated"]},
@@ -321,6 +327,8 @@ def test_project_set_without_changes_lists_every_option(rpc: FakeRpc, run_cli: R
     ("field", "raw", "value"),
     [
         pytest.param("temperature", "0.35", 0.35, id="number"),
+        pytest.param("project_memory_enabled", "false", False, id="project-memory-disabled"),
+        pytest.param("project_memory_enabled", "true", True, id="project-memory-enabled"),
         pytest.param(
             "tool_access",
             '{"mode":"selected","allowed":["read"]}',

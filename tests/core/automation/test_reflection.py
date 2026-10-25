@@ -215,13 +215,17 @@ def _counter_generation(sessions: _FakeSessions, session_id: str = "s1") -> int:
 
 
 def _identity_agent(
-    *, memory_prompt_mode: str = "agent_user", tool_access: ToolAccess | None = None
+    *,
+    memory_prompt_mode: str = "agent_user",
+    tool_access: ToolAccess | None = None,
+    project_memory_enabled: bool = False,
 ) -> Any:
     return SimpleNamespace(
         id="main",
         name="Main Agent",
         workspace="/data/workspace-main",
         memory_prompt_mode=memory_prompt_mode,
+        project_memory_enabled=project_memory_enabled,
         tool_access=tool_access or ToolAccess(),
     )
 
@@ -588,6 +592,32 @@ async def test_run_end_accounting_follows_the_review_cadence(
             (5, 0),
             "skill",
             id="memory-unavailable",
+        ),
+        pytest.param(
+            _identity_agent(
+                memory_prompt_mode="off",
+                project_memory_enabled=True,
+                tool_access=ToolAccess(denied=("skill_manage",)),
+            ),
+            (1, 1),
+            (1, 5),
+            {"iteration_count": 3},
+            (0, 5),
+            "memory",
+            id="project-memory-only",
+        ),
+        pytest.param(
+            _identity_agent(
+                memory_prompt_mode="off",
+                project_memory_enabled=True,
+                tool_access=ToolAccess(denied=("memory", "skill_manage")),
+            ),
+            (1, 1),
+            (1, 5),
+            {"iteration_count": 3},
+            (1, 5),
+            None,
+            id="project-memory-tool-denied",
         ),
         pytest.param(
             _without(skill_manage=True),

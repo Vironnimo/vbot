@@ -53,6 +53,7 @@ PROJECT_SET_FLAGS = (
     "--context-commands",
     "--auto-instructions",
     "--folder-instructions",
+    "--memory",
     "--allowed-tools",
     "--enabled-bundled-skills",
     "--enabled-global-skills",
@@ -348,6 +349,7 @@ def _project_config_lines(project: object) -> list[str]:
         f"  auto_instructions: {_auto_instructions_text(project)}",
         f"  auto_load: {_format_string_list(project.get('auto_load'))}",
         f"  folder_instructions: {_switch_text(project.get('folder_instructions'))}",
+        f"  memory_enabled: {_bool_text(project.get('memory_enabled'))}",
     ]
     if project.get("context_commands"):
         commands = json.dumps(project["context_commands"], ensure_ascii=False)
@@ -510,6 +512,10 @@ def _thinking_effort_text(value: object) -> str:
 
 
 def _coerce_override_value(field: str, raw_value: str) -> object:
+    if field == "project_memory_enabled":
+        if raw_value not in {"true", "false"}:
+            raise ValueError("project_memory_enabled override must be true or false")
+        return raw_value == "true"
     if field in {"temperature", "top_p"}:
         try:
             return float(raw_value)

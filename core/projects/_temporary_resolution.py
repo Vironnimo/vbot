@@ -173,6 +173,7 @@ class TemporaryResolution:
             temperature=config.temperature,
             top_p=config.top_p,
             thinking_effort=config.thinking_effort,
+            project_memory_enabled=config.project_memory_enabled and project_id is not None,
             compaction_policy=config.compaction_policy,
             permission_rules=(
                 config.permission_rules

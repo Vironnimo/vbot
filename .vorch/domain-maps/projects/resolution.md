@@ -77,6 +77,8 @@ A Team member's `rule_files` are its profile, the profile's own `AgentProfile.ru
 
 Project capability configuration is a ceiling, not another fallback chain.
 
+A Project Agent's `project_memory_enabled` selection defaults to true and a Boolean per-Agent override can disable it; resolution and effective-config provenance expose that choice. The separate Project-wide `memory_enabled` switch remains the outer gate for rendering and Tool access (`memory.md`), without changing the Agent's personal `memory_prompt_mode: off` or giving it a Workspace.
+
 Without a vBot Tool override, effective Tool policy is:
 
 ```text

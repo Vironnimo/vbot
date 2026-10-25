@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from typing import Any, cast
@@ -28,6 +29,30 @@ JsonObject = dict[str, Any]
 _MEMORY_SCOPES: tuple[MemoryScope, ...] = ("agent", "user")
 # Memory files are read and rewritten here, never on the Event Loop.
 _MEMORY_RPC_WORKERS = BoundedWorkerPool(name="memory-rpc", max_workers=2)
+_OWNER_FIELDS = {"agent_id", "project_id"}
+
+
+@dataclass(frozen=True)
+class _MemoryOwner:
+    workspace: Path
+    agent_id: str | None = None
+    project_id: str | None = None
+
+    @property
+    def fields(self) -> JsonObject:
+        return (
+            {"project_id": self.project_id}
+            if self.project_id is not None
+            else {"agent_id": self.agent_id}
+        )
+
+    @property
+    def scopes(self) -> tuple[MemoryScope, ...]:
+        return ("project",) if self.project_id is not None else _MEMORY_SCOPES
+
+    @property
+    def writer(self) -> MemoryWriter:
+        return MemoryWriter(agent_id=self.agent_id, project_id=self.project_id, actor="rpc")
 
 
 def _guard_memory_mutation(handler: MutationHandler) -> MutationHandler:
@@ -43,28 +68,29 @@ def _guard_memory_mutation(handler: MutationHandler) -> MutationHandler:
 
 
 async def _list_memories(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"agent_id"}, "memory.list")
+    _reject_unsupported(params, _OWNER_FIELDS, "memory.list")
     async with _agent_reference_lock(state):
-        agent_id, workspace = await _agent_workspace(state, params)
-        return await _MEMORY_RPC_WORKERS.run(_memory_response, state, agent_id, workspace)
+        owner = await _memory_owner(state, params)
+        return await _MEMORY_RPC_WORKERS.run(
+            _operate, state, owner, partial(_memory_response, state, owner)
+        )
 
 
 @_guard_memory_mutation
 async def _add_memory(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"agent_id", "scope", "content"}, "memory.add")
-    agent_id, workspace = await _agent_workspace(state, params)
-    scope = _memory_scope(params)
+    _reject_unsupported(params, _OWNER_FIELDS | {"scope", "content"}, "memory.add")
+    owner = await _memory_owner(state, params)
+    scope = _memory_scope(params, owner)
     content = _required_string(params, "content")
     response = await _mutate_memory(
         state,
-        agent_id,
-        workspace,
+        owner,
         partial(
             state.runtime.memory.add_entry,
-            workspace,
+            owner.workspace,
             scope,
             content,
-            writer=MemoryWriter(agent_id=agent_id, actor="rpc"),
+            writer=owner.writer,
         ),
     )
     return response
@@ -74,24 +100,23 @@ async def _add_memory(state: Any, params: JsonObject) -> JsonObject:
 async def _replace_memory(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(
         params,
-        {"agent_id", "scope", "entry_id", "content"},
+        _OWNER_FIELDS | {"scope", "entry_id", "content"},
         "memory.replace",
     )
-    agent_id, workspace = await _agent_workspace(state, params)
-    scope = _memory_scope(params)
+    owner = await _memory_owner(state, params)
+    scope = _memory_scope(params, owner)
     entry_id = _positive_entry_id(params)
     content = _required_string(params, "content")
     response = await _mutate_memory(
         state,
-        agent_id,
-        workspace,
+        owner,
         partial(
             state.runtime.memory.replace_entry,
-            workspace,
+            owner.workspace,
             scope,
             entry_id,
             content,
-            writer=MemoryWriter(agent_id=agent_id, actor="rpc"),
+            writer=owner.writer,
         ),
     )
     return response
@@ -101,70 +126,90 @@ async def _replace_memory(state: Any, params: JsonObject) -> JsonObject:
 async def _remove_memory(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(
         params,
-        {"agent_id", "scope", "entry_id"},
+        _OWNER_FIELDS | {"scope", "entry_id"},
         "memory.remove",
     )
-    agent_id, workspace = await _agent_workspace(state, params)
-    scope = _memory_scope(params)
+    owner = await _memory_owner(state, params)
+    scope = _memory_scope(params, owner)
     entry_id = _positive_entry_id(params)
     response = await _mutate_memory(
         state,
-        agent_id,
-        workspace,
+        owner,
         partial(
             state.runtime.memory.remove_entry,
-            workspace,
+            owner.workspace,
             scope,
             entry_id,
-            writer=MemoryWriter(agent_id=agent_id, actor="rpc"),
+            writer=owner.writer,
         ),
     )
     return response
 
 
 async def _memory_history(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"agent_id", "scope", "limit"}, "memory.history")
-    scope = _memory_scope(params) if params.get("scope") is not None else None
+    _reject_unsupported(params, _OWNER_FIELDS | {"scope", "limit"}, "memory.history")
     limit = _optional_positive_int(params, "limit")
     async with _agent_reference_lock(state):
-        agent_id, workspace = await _agent_workspace(state, params)
+        owner = await _memory_owner(state, params)
+        scope = _memory_scope(params, owner) if params.get("scope") is not None else None
         revisions = await _MEMORY_RPC_WORKERS.run(
-            _expected(state.runtime.memory.history), workspace, agent_id
+            _operate,
+            state,
+            owner,
+            partial(state.runtime.memory.history, owner.workspace, **owner.fields),
         )
     if scope is not None:
         revisions = [revision for revision in revisions if revision.scope == scope]
     shown = revisions[-limit:] if limit is not None else revisions
     return {
-        "agent_id": agent_id,
+        **owner.fields,
         "total": len(revisions),
         "revisions": [_revision_response(revision) for revision in reversed(shown)],
     }
 
 
 async def _memory_show(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"agent_id", "revision"}, "memory.show")
+    _reject_unsupported(params, _OWNER_FIELDS | {"revision"}, "memory.show")
     revision = _optional_positive_int(params, "revision")
     async with _agent_reference_lock(state):
-        agent_id, workspace = await _agent_workspace(state, params)
+        owner = await _memory_owner(state, params)
         scopes = await _MEMORY_RPC_WORKERS.run(
-            _expected(state.runtime.memory.entries_at), workspace, agent_id, revision
+            _operate,
+            state,
+            owner,
+            partial(
+                state.runtime.memory.entries_at,
+                owner.workspace,
+                revision_id=revision,
+                **owner.fields,
+            ),
         )
-    return {"agent_id": agent_id, "revision": revision, "scopes": scopes}
+    return {**owner.fields, "revision": revision, "scopes": scopes}
 
 
 async def _memory_diff(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"agent_id", "from", "to"}, "memory.diff")
+    _reject_unsupported(params, _OWNER_FIELDS | {"from", "to"}, "memory.diff")
     from_id = _optional_positive_int(params, "from")
     if from_id is None:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.from must be a positive integer")
     to_id = _optional_positive_int(params, "to")
     async with _agent_reference_lock(state):
-        agent_id, workspace = await _agent_workspace(state, params)
+        owner = await _memory_owner(state, params)
         changes = await _MEMORY_RPC_WORKERS.run(
-            _expected(state.runtime.memory.compare), workspace, agent_id, from_id, to_id
+            _operate,
+            state,
+            owner,
+            partial(
+                state.runtime.memory.compare,
+                owner.workspace,
+                owner.agent_id,
+                from_id,
+                to_id,
+                project_id=owner.project_id,
+            ),
         )
     return {
-        "agent_id": agent_id,
+        **owner.fields,
         "from": from_id,
         "to": to_id,
         "changes": {
@@ -176,7 +221,7 @@ async def _memory_diff(state: Any, params: JsonObject) -> JsonObject:
 
 @_guard_memory_mutation
 async def _memory_revert(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"agent_id", "revisions"}, "memory.revert")
+    _reject_unsupported(params, _OWNER_FIELDS | {"revisions"}, "memory.revert")
     revision_ids = params.get("revisions")
     if (
         not isinstance(revision_ids, list)
@@ -190,38 +235,45 @@ async def _memory_revert(state: Any, params: JsonObject) -> JsonObject:
             RPC_ERROR_INVALID_REQUEST,
             "params.revisions must be a non-empty list of positive integers",
         )
-    agent_id, workspace = await _agent_workspace(state, params)
+    owner = await _memory_owner(state, params)
     try:
         result = await _MEMORY_RPC_WORKERS.run(
-            state.runtime.memory.revert,
-            workspace,
-            revision_ids,
-            writer=MemoryWriter(agent_id=agent_id, actor="rpc"),
+            _operate,
+            state,
+            owner,
+            partial(
+                state.runtime.memory.revert, owner.workspace, revision_ids, writer=owner.writer
+            ),
         )
     except MemoryRevertIncompleteError as exc:
         # The scopes it names keep their reverted entries, so open views refresh.
-        _publish_memory_changed(state, agent_id)
+        _publish_memory_changed(state, owner)
         raise _map_expected_error(exc) from exc
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     # Announce every changed file, whether or not the history recorded it.
     if result.changed:
-        _publish_memory_changed(state, agent_id)
-    response = await _MEMORY_RPC_WORKERS.run(_memory_response, state, agent_id, workspace)
+        _publish_memory_changed(state, owner)
+    response: JsonObject = await _MEMORY_RPC_WORKERS.run(
+        _operate, state, owner, partial(_memory_response, state, owner)
+    )
     response["revisions"] = [_revision_response(revision) for revision in result.revisions]
     return response
 
 
-def _expected[Result](operation: Callable[..., Result]) -> Callable[..., Result]:
-    """Run a Memory operation, mapping its expected failures to RPC errors."""
-
-    def run(*args: Any, **kwargs: Any) -> Result:
-        try:
-            return operation(*args, **kwargs)
-        except Exception as exc:
-            raise _map_expected_error(exc) from exc
-
-    return run
+def _operate[Result](state: Any, owner: _MemoryOwner, operation: Callable[[], Result]) -> Result:
+    """Keep Project lookup and file work inside its lifecycle/snapshot guard."""
+    try:
+        if owner.project_id is not None:
+            with state.runtime.projects.configuration_guard():
+                state.runtime.projects.memory_workspace(owner.project_id)
+                return operation()
+        return operation()
+    except MemoryRevertIncompleteError:
+        # Revert publishes the files left changed before mapping this error.
+        raise
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
 
 
 def _optional_positive_int(params: JsonObject, name: str) -> int | None:
@@ -239,44 +291,61 @@ def _revision_response(revision: MemoryRevision) -> JsonObject:
     return data
 
 
-async def _agent_workspace(state: Any, params: JsonObject) -> tuple[str, Path]:
+async def _memory_owner(state: Any, params: JsonObject) -> _MemoryOwner:
+    if ("agent_id" in params) == ("project_id" in params):
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "params must name exactly one of agent_id or project_id",
+        )
+    if "project_id" in params:
+        project_id = _required_string(params, "project_id")
+        workspace = await _MEMORY_RPC_WORKERS.run(_project_workspace, state, project_id)
+        return _MemoryOwner(workspace=workspace, project_id=project_id)
     agent_id = _required_string(params, "agent_id")
     try:
         agent = await state.runtime.agents.get_async(agent_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    return agent_id, Path(agent.workspace)
+    return _MemoryOwner(workspace=Path(agent.workspace), agent_id=agent_id)
+
+
+def _project_workspace(state: Any, project_id: str) -> Path:
+    try:
+        with state.runtime.projects.configuration_guard():
+            return cast(Path, state.runtime.projects.memory_workspace(project_id))
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
 
 
 async def _mutate_memory(
     state: Any,
-    agent_id: str,
-    workspace: Path,
+    owner: _MemoryOwner,
     mutation: Callable[[], MemoryEntry],
 ) -> JsonObject:
     """Apply one memory file mutation off the Event Loop, then announce it."""
-    response = await _MEMORY_RPC_WORKERS.run(_apply_mutation, state, agent_id, workspace, mutation)
-    _publish_memory_changed(state, agent_id)
+    response: JsonObject = await _MEMORY_RPC_WORKERS.run(
+        _operate, state, owner, partial(_apply_mutation, state, owner, mutation)
+    )
+    _publish_memory_changed(state, owner)
     return response
 
 
 def _apply_mutation(
     state: Any,
-    agent_id: str,
-    workspace: Path,
+    owner: _MemoryOwner,
     mutation: Callable[[], MemoryEntry],
 ) -> JsonObject:
     try:
         entry = mutation()
-        return _memory_response(state, agent_id, workspace, entry=entry)
+        return _memory_response(state, owner, entry=entry)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
 
-def _memory_scope(params: JsonObject) -> MemoryScope:
+def _memory_scope(params: JsonObject, owner: _MemoryOwner) -> MemoryScope:
     scope = params.get("scope")
-    if not isinstance(scope, str) or scope not in _MEMORY_SCOPES:
-        allowed = ", ".join(repr(item) for item in _MEMORY_SCOPES)
+    if not isinstance(scope, str) or scope not in owner.scopes:
+        allowed = ", ".join(repr(item) for item in owner.scopes)
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST,
             f"params.scope must be one of: {allowed}",
@@ -296,8 +365,7 @@ def _positive_entry_id(params: JsonObject) -> int:
 
 def _memory_response(
     state: Any,
-    agent_id: str,
-    workspace: Path,
+    owner: _MemoryOwner,
     *,
     entry: MemoryEntry | None = None,
 ) -> JsonObject:
@@ -305,13 +373,13 @@ def _memory_response(
         scopes = {
             scope: [
                 _entry_response(item)
-                for item in state.runtime.memory.list_entries(workspace, scope)
+                for item in state.runtime.memory.list_entries(owner.workspace, scope)
             ]
-            for scope in _MEMORY_SCOPES
+            for scope in owner.scopes
         }
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    response: JsonObject = {"agent_id": agent_id, "scopes": scopes}
+    response: JsonObject = {**owner.fields, "scopes": scopes}
     if entry is not None:
         response["entry"] = _entry_response(entry)
     return response
@@ -321,11 +389,11 @@ def _entry_response(entry: MemoryEntry) -> JsonObject:
     return {"id": entry.id, "scope": entry.scope, "content": entry.content}
 
 
-def _publish_memory_changed(state: Any, agent_id: str) -> None:
+def _publish_memory_changed(state: Any, owner: _MemoryOwner) -> None:
     publish_resource_changed(
         state,
         RESOURCE_KIND_MEMORIES,
-        scope={"agent_id": agent_id},
+        scope=owner.fields,
     )
 
 

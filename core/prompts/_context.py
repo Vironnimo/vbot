@@ -155,19 +155,51 @@ def render_memory_files(
     agent: PromptAgent,
     tool_available: ToolAvailability,
     on_read: Callable[[FileRead], None] | None,
+    project_context: ProjectPromptContext | None = None,
 ) -> str:
     mode = getattr(agent, "memory_prompt_mode", DEFAULT_MEMORY_PROMPT_MODE)
     workspace = agent.workspace
-    if not workspace:
+    project_visible = project_memory_visible(agent, project_context)
+    if not workspace and not project_visible:
         return ""
     # Asked only when the mode renders Memory: resolving the Tool set is not free.
     memory_tool = (
         model_tool_name(MEMORY_TOOL_NAME)
-        if memory_tool_enabled(mode) and tool_available(MEMORY_TOOL_NAME)
+        if (memory_tool_enabled(mode) or project_visible) and tool_available(MEMORY_TOOL_NAME)
         else None
     )
-    return read_memory_files(
-        Path(workspace), mode, provider=provider, memory_tool=memory_tool, on_read=on_read
+    sections: list[str] = []
+    if workspace:
+        sections.append(
+            read_memory_files(
+                Path(workspace), mode, provider=provider, memory_tool=memory_tool, on_read=on_read
+            )
+        )
+    if project_visible and project_context is not None:
+        from core.chat.wire_shaping import quote_external_value
+
+        assert project_context.memory_workspace is not None
+        project_memory = provider.read_prompt_scopes(
+            project_context.memory_workspace,
+            ("project",),
+            memory_tool=memory_tool,
+            on_read=on_read,
+        )
+        sections.append(
+            f"# Project: {quote_external_value(project_context.project_id)}\n\n{project_memory}"
+        )
+    return "\n\n".join(section for section in sections if section)
+
+
+def project_memory_visible(
+    agent: PromptAgent, project_context: ProjectPromptContext | None
+) -> bool:
+    """Whether the receiving Agent and its Working Project both allow shared Memory."""
+    return bool(
+        project_context is not None
+        and project_context.memory_enabled
+        and project_context.memory_workspace is not None
+        and getattr(agent, "project_memory_enabled", False)
     )
 
 

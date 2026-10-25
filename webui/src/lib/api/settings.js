@@ -323,6 +323,94 @@ export function removeAgentMemory(agentId, scope, entryId, options = {}) {
   );
 }
 
+export function listProjectMemories(projectId, options = {}) {
+  requireNonEmptyString(
+    projectId,
+    'Project id must be a non-empty string',
+    'memory.list',
+  );
+  return rpc('memory.list', { project_id: projectId }, options);
+}
+
+export function addProjectMemory(projectId, content, options = {}) {
+  requireNonEmptyString(
+    projectId,
+    'Project id must be a non-empty string',
+    'memory.add',
+  );
+  requireNonEmptyString(
+    content,
+    'Memory content must be a non-empty string',
+    'memory.add',
+  );
+  return rpc(
+    'memory.add',
+    { project_id: projectId, scope: 'project', content },
+    options,
+  );
+}
+
+export function replaceProjectMemory(
+  projectId,
+  entryId,
+  content,
+  options = {},
+) {
+  requireNonEmptyString(
+    projectId,
+    'Project id must be a non-empty string',
+    'memory.replace',
+  );
+  requirePositiveInteger(entryId, 'Memory entry id', 'memory.replace');
+  requireNonEmptyString(
+    content,
+    'Memory content must be a non-empty string',
+    'memory.replace',
+  );
+  return rpc(
+    'memory.replace',
+    { project_id: projectId, scope: 'project', entry_id: entryId, content },
+    options,
+  );
+}
+
+export function removeProjectMemory(projectId, entryId, options = {}) {
+  requireNonEmptyString(
+    projectId,
+    'Project id must be a non-empty string',
+    'memory.remove',
+  );
+  requirePositiveInteger(entryId, 'Memory entry id', 'memory.remove');
+  return rpc(
+    'memory.remove',
+    { project_id: projectId, scope: 'project', entry_id: entryId },
+    options,
+  );
+}
+
+export function listProjectMemoryHistory(projectId, options = {}) {
+  requireNonEmptyString(
+    projectId,
+    'Project id must be a non-empty string',
+    'memory.history',
+  );
+  return rpc('memory.history', { project_id: projectId }, options);
+}
+
+export function revertProjectMemory(projectId, revision, options = {}) {
+  requireNonEmptyString(
+    projectId,
+    'Project id must be a non-empty string',
+    'memory.revert',
+  );
+  requirePositiveInteger(revision, 'Memory revision', 'memory.revert');
+  return rpc(
+    'memory.revert',
+    { project_id: projectId, revisions: [revision] },
+    options,
+  );
+}
+
 export function listProviderRoutingOptions(params = {}, options = {}) {
   requirePlainObject(
     params,
