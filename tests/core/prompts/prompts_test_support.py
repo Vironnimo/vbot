@@ -275,6 +275,7 @@ def _agent(
     tools: dict[str, Any] | None = None,
     custom_system_prompt_enabled: bool = False,
     memory_prompt_mode: MemoryPromptMode = MEMORY_PROMPT_MODE_AGENT_USER,
+    project_memory_enabled: bool | None = None,
     thinking_effort: str | None = "high",
 ) -> Agent:
     return Agent(
@@ -286,6 +287,11 @@ def _agent(
         temperature=0.1,
         thinking_effort=thinking_effort,
         memory_prompt_mode=memory_prompt_mode,
+        project_memory_enabled=(
+            memory_prompt_mode != "off"
+            if project_memory_enabled is None
+            else project_memory_enabled
+        ),
         tool_access=(
             ToolAccess(mode="all")
             if allowed_tools is None or "*" in allowed_tools

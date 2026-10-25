@@ -56,7 +56,7 @@ How to read the maps: `AGENTS.md` -> Load context for the task.
 | recall.md | `core/recall/` | Recall backends, Passage index (FTS and vectors), semantic indexing |
 | statistics.md | `core/statistics/` | Disposable SQLite projection, report RPC |
 | usage.md | `core/usage/` | Durable Model request accounting, historical Usage import |
-| memory.md | `core/memory/` | Pinned memory service, workspace memory files |
+| memory.md | `core/memory/` | Pinned Memory, personal and shared Project scopes |
 | settings.md | `core/settings/` | Settings schemas, validation, update sections |
 | json-documents.md | cross-cutting | Generation 1 contract of every durable JSON document |
 | prompts.md | `core/prompts/` | System Prompt assembly, fragments, variables |

@@ -82,6 +82,7 @@ CONFIGURATION_FILE_PATTERNS: tuple[str, ...] = (
     "agents/*/workspace/SOUL.md",
     "agents/*/workspace/USER.md",
     "agents/*/workspace/MEMORY.md",
+    "projects/*/MEMORY.md",
     "prompts/*.md",
     "prompts/blocks/*/*.md",
     "agents/*/prompts/*.md",

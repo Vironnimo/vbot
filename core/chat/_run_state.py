@@ -664,6 +664,7 @@ class _CompactionPromptRefresh:
     prompt_read_paths: tuple[FileRead, ...]
     available_skill_names: tuple[str, ...]
     memory_prompt_mode: str | None = None
+    memory_project_id: str | None = None
     # Whether ``agent_body`` is a prompt-epoch pin (a Workspace-less Agent's body).
     pins_agent_body: bool = False
 
@@ -990,19 +991,11 @@ async def create_run_execution_context(
                 agent,
                 project_id,
             )
-            memory_files_context = await _CHAT_TRANSFORM_WORKERS.run(
-                pinned_memory_files,
-                dependencies,
-                run.agent_id,
-                run.session_id,
-                agent,
-                project_id,
-            )
             skill_project_id, identity_agent_id = resolve_skill_scope(
                 project_id, prompt_project, agent
             )
         else:
-            soul_context = memory_files_context = None
+            soul_context = None
             # A temporary participant has no identity-owned Skills, but an
             # explicitly selected Project still supplies its shared Skill pool.
             skill_project_id = working_project_id
@@ -1046,12 +1039,31 @@ async def create_run_execution_context(
             skill_registry=skill_registry,
         )
         # The frame carries only the instruction files the Run may read.
-        project_prompt_context = (
+        memory_workspace = (
             await _CHAT_TRANSFORM_WORKERS.run(
-                permitted_project_context, prompt_project, permissions.boundary
+                dependencies.projects.memory_workspace, prompt_project.project_id
             )
             if prompt_project is not None
             else None
+        )
+        project_prompt_context = (
+            await _CHAT_TRANSFORM_WORKERS.run(
+                permitted_project_context,
+                prompt_project,
+                permissions.boundary,
+                memory_workspace=memory_workspace,
+            )
+            if prompt_project is not None
+            else None
+        )
+        memory_files_context = await _CHAT_TRANSFORM_WORKERS.run(
+            pinned_memory_files,
+            dependencies,
+            run.agent_id,
+            run.session_id,
+            agent,
+            project_id,
+            project_prompt_context,
         )
         working_project_context = await _CHAT_TRANSFORM_WORKERS.run(
             pinned_working_project_context,

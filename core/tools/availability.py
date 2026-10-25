@@ -169,6 +169,7 @@ def resolve_tool_access(
     memory_prompt_mode: MemoryPromptMode,
     *,
     workspace: str = "",
+    project_memory_enabled: bool = False,
     session_tool_grants: Sequence[str] = (),
 ) -> ToolAccessResolution:
     """Resolve policy, automatic activation, constraints, grants, and denials once."""
@@ -206,8 +207,8 @@ def resolve_tool_access(
             continue
         if tool_access.fixed and name not in tool_access.allowed:
             continue
-        memory_activated = activation == TOOL_ACTIVATION_MEMORY_MODE and memory_tool_enabled(
-            memory_prompt_mode
+        memory_activated = activation == TOOL_ACTIVATION_MEMORY_MODE and (
+            memory_tool_enabled(memory_prompt_mode) or project_memory_enabled
         )
         session_granted = activation == TOOL_ACTIVATION_SESSION_GRANT and name in requested_grants
         if memory_activated or session_granted:

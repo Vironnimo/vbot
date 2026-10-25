@@ -89,6 +89,7 @@ async def test_team_member_reports_effective_repo_owned_agent_targets(tmp_path: 
         ("model", "openai/gpt-mini"),
         ("temperature", 0.4),
         ("thinking_effort", "high"),
+        ("project_memory_enabled", False),
     ],
 )
 async def test_set_override_is_the_winning_tier_until_cleared(

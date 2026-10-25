@@ -49,7 +49,7 @@ MAX_TOOL_DISPLAY_RESULTS = 20
 MAX_TOOL_DISPLAY_RESULT_TEXT_LENGTH = 600
 TOOL_DISPLAY_RESULT_FIELDS = ("meta", "time", "text")
 MAX_TOOL_DISPLAY_RESULT_URL_LENGTH = 2048
-TOOL_DISPLAY_MEMORY_SCOPES = frozenset({"agent", "user"})
+TOOL_DISPLAY_MEMORY_SCOPES = frozenset({"agent", "user", "project"})
 TOOL_DISPLAY_MEMORY_CHANGE_OPS = frozenset({"added", "removed", "replaced"})
 
 

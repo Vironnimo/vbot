@@ -21,6 +21,7 @@ def agent_payload(agent_id: str = "coder") -> dict[str, Any]:
         "temperature": 0.4,
         "thinking_effort": "high",
         "memory_prompt_mode": "agent_user",
+        "project_memory_enabled": True,
         "custom_system_prompt_enabled": False,
         "librarian_enabled": True,
         "tool_access": {"mode": "all"},
@@ -75,6 +76,7 @@ def test_agent_show_prints_every_agent_field(rpc: FakeRpc, run_cli: RunCli) -> N
         "top_p: -",
         "thinking_effort: high",
         "memory_prompt_mode: agent_user",
+        "project_memory_enabled: yes",
         "custom_system_prompt_enabled: no",
         "librarian_enabled: yes",
         'tool_access: {"mode":"all"}',
@@ -111,6 +113,7 @@ def test_agent_create_sends_the_given_fields(rpc: FakeRpc, run_cli: RunCli) -> N
     code, out, _err = run_cli(
         "agent", "create", "writer", "Writer",
         "--description", "Drafts texts",
+        "--project-memory", "false",
         "--model", "openai/gpt-5.2",
         "--tool-access-mode", "selected",
         "--tool-allow", "read_file",
@@ -130,6 +133,7 @@ def test_agent_create_sends_the_given_fields(rpc: FakeRpc, run_cli: RunCli) -> N
                 "id": "writer",
                 "name": "Writer",
                 "description": "Drafts texts",
+                "project_memory_enabled": False,
                 "model": "openai/gpt-5.2",
                 "tool_access": {"mode": "selected", "allowed": ["read_file"]},
                 "permission_rules": rules,
@@ -260,6 +264,16 @@ def test_agent_create_confirms_the_saved_agent(
                 "librarian_enabled": False,
             },
             id="clears-delegation-and-policy",
+        ),
+        pytest.param(
+            ("--memory-prompt-mode", "off", "--project-memory", "true"),
+            {"memory_prompt_mode": "off", "project_memory_enabled": True},
+            id="project-memory-only",
+        ),
+        pytest.param(
+            ("--project-memory", "false"),
+            {"project_memory_enabled": False},
+            id="project-memory-disabled",
         ),
         pytest.param(
             (

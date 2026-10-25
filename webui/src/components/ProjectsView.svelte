@@ -26,6 +26,7 @@
   import ProjectOverviewPanel from './projects/ProjectOverviewPanel.svelte';
   import ProjectTeamPanel from './projects/ProjectTeamPanel.svelte';
   import ProjectContextPanel from './projects/ProjectContextPanel.svelte';
+  import ProjectMemoryPanel from './projects/ProjectMemoryPanel.svelte';
   import ProjectAccessPanel from './projects/ProjectAccessPanel.svelte';
   import ProjectDialogs from './projects/ProjectDialogs.svelte';
   import { projectRowDetails } from './projects/projectLabels.js';
@@ -45,6 +46,7 @@
     projectsRefreshToken = 0,
     skillsRefreshToken = 0,
     agentsRefreshToken = 0,
+    memoriesRefreshToken = 0,
     // Opens a Skill's page in the Skills manager: (projectId, skillId).
     onOpenSkill = noop,
   } = $props();
@@ -490,6 +492,14 @@
                 </Button>{/snippet}
             </ProjectTeamPanel>
             <ProjectContextPanel bind:projectsState {projectsController} />
+            <ProjectMemoryPanel
+              projectId={selectedProject.project_id}
+              enabled={projectsState.editForm.memory_enabled}
+              onEnabledChange={(value) =>
+                (projectsState.editForm.memory_enabled = value)}
+              refreshToken={memoriesRefreshToken}
+              {onToast}
+            />
             <ProjectAccessPanel
               {projectsState}
               {projectsController}

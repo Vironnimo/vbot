@@ -175,6 +175,7 @@ class ProjectStore:
         default_top_p: float | None = None,
         auto_instructions: bool = True,
         folder_instructions: bool = True,
+        memory_enabled: bool = True,
     ) -> Project:
         """Create and persist a project anchor.
 
@@ -198,6 +199,7 @@ class ProjectStore:
                 auto_load=auto_load,
                 auto_instructions=auto_instructions,
                 folder_instructions=folder_instructions,
+                memory_enabled=memory_enabled,
             )
             _reject_reserved_project_id(project.project_id)
 
@@ -223,6 +225,12 @@ class ProjectStore:
             if config_path is None:
                 raise ProjectNotFoundError(f"Project not found: {project_id}")
             return self._read_project(config_path)
+
+    def memory_workspace(self, project_id: str) -> Path:
+        """Return the Memory home of an existing Project, independent of its repository."""
+        with self._write_lock:
+            self.get(project_id)
+            return self._project_dir(project_id)
 
     def refresh_sources(self, project_id: str, *, skill_scan: SkillScan | None = None) -> Project:
         """Discover newly present sources under the existing mutation lock."""
@@ -388,6 +396,7 @@ class ProjectStore:
                 "auto_load",
                 "auto_instructions",
                 "folder_instructions",
+                "memory_enabled",
                 "context_commands",
                 "allowed_tools",
                 "skills_bundled_enabled",
@@ -416,6 +425,7 @@ class ProjectStore:
                 auto_load=changes.get("auto_load", list(project.auto_load)),
                 auto_instructions=changes.get("auto_instructions", project.auto_instructions),
                 folder_instructions=changes.get("folder_instructions", project.folder_instructions),
+                memory_enabled=changes.get("memory_enabled", project.memory_enabled),
                 context_commands=changes.get("context_commands", list(project.context_commands)),
                 allowed_tools=changes.get("allowed_tools", list(project.allowed_tools)),
                 skills_bundled_enabled=changes.get(
@@ -507,6 +517,7 @@ class ProjectStore:
             auto_load=list(project.auto_load),
             auto_instructions=project.auto_instructions,
             folder_instructions=project.folder_instructions,
+            memory_enabled=project.memory_enabled,
             context_commands=list(project.context_commands),
             allowed_tools=list(project.allowed_tools),
             skills_bundled_enabled=list(project.skills_bundled_enabled),

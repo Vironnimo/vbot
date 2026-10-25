@@ -116,6 +116,8 @@ class ToolRound:
             # resolve the same pool the run's catalog advertises.
             skill_project_id=context.skill_project_id,
             working_project_id=run.working_project_id,
+            memory_prompt_mode=agent.memory_prompt_mode,
+            project_memory_enabled=agent.project_memory_enabled,
             skill_agent_id=getattr(agent, "skill_agent_id", None),
             run_kind=run.run_kind,
             subagent_session=context.subagent_session,

@@ -9,6 +9,7 @@ import pytest
 
 from core.memory import MemoryService
 from core.permissions import PermissionBoundary
+from core.projects import ProjectStore
 from core.runs import RunKind
 from core.tools.memory import MEMORY_TOOL_NAME, register_memory_tool
 from core.tools.tools import (
@@ -57,11 +58,12 @@ def run(
     *calls: JsonObject,
     registry: ToolRegistry | None = None,
     run_id: str = "run-1",
+    **context_fields: Any,
 ) -> list[JsonObject]:
     """Dispatch calls as one Assistant turn through the production executor."""
     registry = registry or memory_registry()
     config = ToolExecutionConfig(
-        agent_id="main",
+        agent_id=context_fields.pop("agent_id", "main"),
         session_id="session-1",
         run_id=run_id,
         workspace=workspace,
@@ -69,6 +71,7 @@ def run(
         vbot_root=workspace.parent,
         allowed_tools=[MEMORY_TOOL_NAME],
         permissions=PermissionBoundary.UNRESTRICTED,
+        **context_fields,
     )
     tool_calls = [
         ToolCall(id=f"call-{index}", name=MEMORY_TOOL_NAME, arguments=arguments)
@@ -107,10 +110,15 @@ def test_registration_offers_text_addressing_and_orders_calls() -> None:
     parameters = definition["parameters"]
 
     assert tool.parallel_safe is False
-    assert set(parameters["properties"]) == {"action", "scope", "content", "old_text"}
+    assert set(parameters["properties"]) == {"action", "scope", "project_id", "content", "old_text"}
     assert parameters["required"] == ["action"]
     assert "entry_id" not in str(definition)
-    assert all(schema.get("description") for schema in parameters["properties"].values())
+    assert all(
+        schema.get("description")
+        for name, schema in parameters["properties"].items()
+        if name != "project_id"
+    )
+    assert parameters["properties"]["scope"]["enum"] == ["user", "agent", "project"]
     listed = registry.display_for_call(
         MEMORY_TOOL_NAME,
         {"action": "list"},
@@ -136,6 +144,139 @@ def test_list_renders_scopes_like_the_memory_block(workspace: Path) -> None:
     assert both["data"]["count"] == 5
     assert listed_entries(content(agent)) == [line[2:] for line in AGENT.splitlines()]
     assert agent["data"]["count"] == 3
+
+
+def test_project_memory_is_shared_and_keeps_personal_memory_separate(workspace: Path) -> None:
+    projects = ProjectStore(workspace.parent / "data")
+    projects.create("atlas", "Atlas", workspace.parent)
+    service = MemoryService(project_history_root=projects.data_dir / "projects")
+    registry = ToolRegistry()
+    register_memory_tool(registry, service, projects)
+    fields: JsonObject = {"working_project_id": "atlas", "project_memory_enabled": True}
+
+    added = run(
+        workspace,
+        {"action": "add", "scope": "project", "content": "Review changes before deployment."},
+        registry=registry,
+        **fields,
+    )[0]
+    listed, replaced, removed = run(
+        workspace,
+        {"action": "list", "scope": "project"},
+        {
+            "action": "replace",
+            "scope": "project",
+            "old_text": "before deployment",
+            "content": "User approval is required before deployment.",
+        },
+        {"action": "remove", "scope": "project", "old_text": "User approval"},
+        registry=registry,
+        agent_id="reviewer",
+        **fields,
+    )
+
+    assert added["ok"] is True
+    assert listed["data"]["project_id"] == "atlas"
+    assert listed_entries(content(listed)) == ["Review changes before deployment."]
+    assert replaced["ok"] is True
+    assert removed["ok"] is True
+    assert service.list_entries(projects.memory_workspace("atlas"), "project") == []
+    assert files(workspace) == (AGENT, USER)
+
+
+@pytest.mark.parametrize("agent_enabled", [False, True])
+@pytest.mark.parametrize("project_enabled", [False, True])
+def test_project_memory_requires_both_switches(
+    workspace: Path, agent_enabled: bool, project_enabled: bool
+) -> None:
+    projects = ProjectStore(workspace.parent / "data")
+    projects.create("atlas", "Atlas", workspace.parent)
+    projects.update("atlas", memory_enabled=project_enabled)
+    registry = ToolRegistry()
+    service = MemoryService()
+    register_memory_tool(registry, service, projects)
+
+    result = run(
+        workspace,
+        {"action": "add", "scope": "project", "content": "Keep release approval explicit."},
+        registry=registry,
+        working_project_id="atlas",
+        project_memory_enabled=agent_enabled,
+    )[0]
+
+    enabled = agent_enabled and project_enabled
+    assert result["ok"] is enabled
+    assert bool(service.list_entries(projects.memory_workspace("atlas"), "project")) is enabled
+    if not enabled:
+        failure(result, "memory_unavailable")
+    assert files(workspace) == (AGENT, USER)
+
+
+def test_project_target_is_explicit_when_loaded_and_working_projects_differ(
+    workspace: Path,
+) -> None:
+    projects = ProjectStore(workspace.parent / "data")
+    for project_id in ("atlas", "other", "unloaded"):
+        repo = workspace.parent / project_id
+        repo.mkdir()
+        projects.create(project_id, project_id, repo)
+    registry = ToolRegistry()
+    service = MemoryService()
+    register_memory_tool(registry, service, projects)
+    add = {"action": "add", "scope": "project", "content": "Keep release approval explicit."}
+
+    ambiguous, foreign, chosen, incomplete = run(
+        workspace,
+        add,
+        {**add, "project_id": "unloaded"},
+        {**add, "project_id": "other"},
+        {
+            "action": "replace",
+            "scope": "project",
+            "project_id": "other",
+            "old_text": "Keep release",
+        },
+        registry=registry,
+        working_project_id="atlas",
+        skill_project_id="other",
+        project_memory_enabled=True,
+    )
+
+    failure(ambiguous, "memory_project_ambiguous")
+    failure(foreign, "memory_project_unavailable")
+    assert chosen["ok"] is True
+    assert chosen["data"]["project_id"] == "other"
+    assert '"project_id": "other"' in failure(incomplete, "invalid_arguments")
+    assert service.list_entries(projects.memory_workspace("atlas"), "project") == []
+    assert service.list_entries(projects.memory_workspace("unloaded"), "project") == []
+    assert [
+        entry.content
+        for entry in service.list_entries(projects.memory_workspace("other"), "project")
+    ] == [add["content"]]
+
+
+def test_project_only_agent_never_reads_or_writes_personal_files(workspace: Path) -> None:
+    projects = ProjectStore(workspace.parent / "data")
+    projects.create("atlas", "Atlas", workspace.parent)
+    registry = ToolRegistry()
+    service = MemoryService()
+    register_memory_tool(registry, service, projects)
+
+    omitted, personal, shared = run(
+        workspace,
+        {"action": "list"},
+        {"action": "add", "scope": "agent", "content": "Must not be written."},
+        {"action": "add", "scope": "project", "content": "Keep release approval explicit."},
+        registry=registry,
+        working_project_id="atlas",
+        project_memory_enabled=True,
+        memory_prompt_mode="off",
+    )
+
+    failure(omitted, "memory_unavailable")
+    failure(personal, "memory_unavailable")
+    assert shared["ok"] is True
+    assert files(workspace) == (AGENT, USER)
 
 
 def test_add_confirms_compactly_and_writes_lf(workspace: Path) -> None:

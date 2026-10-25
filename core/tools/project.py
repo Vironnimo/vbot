@@ -12,6 +12,7 @@ from difflib import get_close_matches
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
+from core.memory import MemoryError, MemoryService
 from core.permissions import PermissionDenied
 from core.projects import (
     InvalidProjectIdError,
@@ -107,6 +108,7 @@ def make_project_handler(
     get_renderer: ProjectContextRendererResolver,
     list_project_skills: ProjectSkillsResolver,
     file_state: FileReadState,
+    memory_service: MemoryService | None = None,
 ) -> Any:
     """Create the loader; only a successful persisted result activates its context."""
 
@@ -165,8 +167,25 @@ def make_project_handler(
         rendered_skills = renderer.render_project_skills(
             project.display_name, skills, tool_available=context.can_call
         )
+        has_instructions = bool(read_paths)
+        rendered_memory = ""
+        if memory_service is not None and getattr(context, "project_memory_enabled", False):
+            with projects.configuration_guard():
+                current = projects.get(project.project_id)
+                if current.memory_enabled:
+                    rendered_memory = memory_service.read_prompt_scopes(
+                        projects.memory_workspace(project.project_id),
+                        ("project",),
+                        memory_tool="memory" if context.can_call("memory") else None,
+                        on_read=read_paths.append,
+                    )
+                    rendered_memory = (
+                        f"Project {project.project_id!r}:\n{rendered_memory}"
+                        if rendered_memory
+                        else ""
+                    )
         content = _render_project_context(
-            context, project, bool(read_paths), rendered_files, rendered_skills
+            context, project, has_instructions, rendered_files, rendered_skills, rendered_memory
         )
         data: JsonObject = {
             "status": "loaded",
@@ -219,6 +238,14 @@ def make_project_handler(
             return tool_failure(
                 "project_not_found",
                 _project_not_found_message(projects, project_id),
+                retryable=False,
+            )
+        except MemoryError:
+            return tool_failure(
+                "project_memory_unavailable",
+                f"{_NO_LOAD} Project Memory for {project_id!r} could not be read. "
+                "Ask the user to repair or restore its Memory in the Project settings, "
+                "then load the Project again.",
                 retryable=False,
             )
         except (ProjectError, OSError) as error:
@@ -326,6 +353,7 @@ def register_project_tool(
     get_renderer: ProjectContextRendererResolver,
     list_project_skills: ProjectSkillsResolver,
     file_state: FileReadState,
+    memory_service: MemoryService | None = None,
 ) -> None:
     """Register the loader with its Project choices in the Tool definition."""
     conditions = LoggedConditions()
@@ -362,7 +390,9 @@ def register_project_tool(
         PROJECT_TOOL_DESCRIPTION,
         PROJECT_TOOL_PARAMETERS,
         offload_tool_handler(
-            make_project_handler(projects, get_renderer, list_project_skills, file_state)
+            make_project_handler(
+                projects, get_renderer, list_project_skills, file_state, memory_service
+            )
         ),
         summary="Load context for a registered Project.",
         constraints=("identity_agent",),
@@ -395,6 +425,7 @@ def _render_project_context(
     has_instructions: bool,
     rendered_files: str,
     rendered_skills: str,
+    rendered_memory: str = "",
 ) -> str:
     preamble = f"Project Context loaded for '{project.display_name}'."
     if has_instructions:
@@ -413,7 +444,9 @@ def _render_project_context(
         if context.skill_project_id is not None:
             preamble += " This replaces the previous Project Skill context."
     return "\n\n".join(
-        section for section in (preamble, rendered_files, rendered_skills) if section.strip()
+        section
+        for section in (preamble, rendered_files, rendered_memory, rendered_skills)
+        if section.strip()
     )
 
 

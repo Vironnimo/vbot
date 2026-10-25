@@ -440,7 +440,7 @@ export function toolDisplayRecordsError(display) {
     )
   );
 }
-const MEMORY_SCOPES = new Set(['agent', 'user']);
+const MEMORY_SCOPES = new Set(['agent', 'user', 'project']);
 const MEMORY_CHANGE_OPS = new Set(['added', 'removed', 'replaced']);
 const TEXT_LABELS = new Set([
   'command',

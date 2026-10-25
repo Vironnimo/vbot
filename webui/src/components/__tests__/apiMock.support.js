@@ -57,6 +57,27 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
     deleteAgent: (id, { permanent = false } = {}) =>
       call('agent.delete', { id, ...(permanent ? { permanent } : {}) }),
     listAgentMemories: (agentId) => call('memory.list', { agent_id: agentId }),
+    listProjectMemories: (projectId) =>
+      call('memory.list', { project_id: projectId }),
+    addProjectMemory: (projectId, content) =>
+      call('memory.add', { project_id: projectId, scope: 'project', content }),
+    replaceProjectMemory: (projectId, entryId, content) =>
+      call('memory.replace', {
+        project_id: projectId,
+        scope: 'project',
+        entry_id: entryId,
+        content,
+      }),
+    removeProjectMemory: (projectId, entryId) =>
+      call('memory.remove', {
+        project_id: projectId,
+        scope: 'project',
+        entry_id: entryId,
+      }),
+    listProjectMemoryHistory: (projectId) =>
+      call('memory.history', { project_id: projectId }),
+    revertProjectMemory: (projectId, revision) =>
+      call('memory.revert', { project_id: projectId, revisions: [revision] }),
     addAgentMemory: (agentId, scope, content) =>
       call('memory.add', { agent_id: agentId, scope, content }),
     replaceAgentMemory: (agentId, scope, entryId, content) =>

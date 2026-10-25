@@ -3,9 +3,9 @@
 The rendered Skill catalog, Working Project Context, SOUL block,
 pinned-memory text and Workspace-less Agent body are prompt-cache state: they
 stay byte-identical between successful Compactions (Memory also refreshes when
-its mode changes) so ordinary file changes cannot break the System Prompt
-prefix. Assembly reads and writes those snapshots through the narrow dependency
-slice declared by :class:`PinnedContextDependencies`.
+its mode or effective Memory Project changes) so ordinary file changes cannot
+break the System Prompt prefix. Assembly reads and writes those snapshots through
+the narrow dependency slice declared by :class:`PinnedContextDependencies`.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, Protocol
 
 from core.memory import DEFAULT_MEMORY_PROMPT_MODE
+from core.prompts._context import project_memory_visible
 from core.prompts.prompts import PinnedSkillCatalog
 from core.tools.file_state import FileRead
 
@@ -154,6 +155,7 @@ def prompt_epoch_pins(
     memory_files_context: str | None,
     memory_prompt_mode: str | None,
     agent_body: str | None,
+    memory_project_id: str | None = None,
 ) -> dict[str, dict[str, Any] | None]:
     """Return every prompt-epoch pin a new epoch starts with, by pin slot.
 
@@ -174,7 +176,11 @@ def prompt_epoch_pins(
             {PINNED_PROJECT_ATTRIBUTE: working_project_id},
         ),
         (PINNED_SOUL_CONTEXT_SLOT, soul_context, {}),
-        (PINNED_MEMORY_FILES_SLOT, memory_files_context, {"mode": memory_prompt_mode}),
+        (
+            PINNED_MEMORY_FILES_SLOT,
+            memory_files_context,
+            {"mode": memory_prompt_mode, "memory_project_id": memory_project_id},
+        ),
         (PINNED_AGENT_BODY_SLOT, agent_body, {}),
     )
     for slot, text, qualifiers in texts:
@@ -360,19 +366,18 @@ def pinned_memory_files(
     session_id: str,
     agent: Any,
     project_id: str | None,
+    project_context: ProjectPromptContext | None = None,
 ) -> str | None:
-    """Return the prompt epoch's pinned pinned-memory text for an Identity Agent.
-
-    ``None`` when the Agent has no Identity/Memory Workspace (a config agent):
-    its memory producer renders empty regardless, so no pin is stored or needed.
-    """
-    if not getattr(agent, "workspace", None):
+    """Pin personal and shared Project Memory together for the current prompt epoch."""
+    project_visible = project_memory_visible(agent, project_context)
+    if not getattr(agent, "workspace", None) and project_context is None:
         return None
     read_paths: list[FileRead] = []
 
     def render() -> str:
         return dependencies.get_system_prompts().render_memory_files(
             agent,
+            project_context=project_context,
             on_read=read_paths.append,
         )
 
@@ -383,7 +388,14 @@ def pinned_memory_files(
         session_id,
         project_id,
         render,
-        attributes={"mode": getattr(agent, "memory_prompt_mode", DEFAULT_MEMORY_PROMPT_MODE)},
+        attributes={
+            "mode": getattr(agent, "memory_prompt_mode", DEFAULT_MEMORY_PROMPT_MODE),
+            "memory_project_id": (
+                project_context.project_id
+                if project_visible and project_context is not None
+                else None
+            ),
+        },
         read_paths=read_paths,
     )
     stamp_prompt_files_read(dependencies.file_read_state, session_id, read_paths)

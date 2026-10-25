@@ -117,6 +117,7 @@ _ADD_FIELDS = frozenset(
         "auto_load",
         "auto_instructions",
         "folder_instructions",
+        "memory_enabled",
     }
 )
 _SET_MUTABLE_FIELDS = frozenset(
@@ -133,6 +134,7 @@ _SET_MUTABLE_FIELDS = frozenset(
         "auto_load",
         "auto_instructions",
         "folder_instructions",
+        "memory_enabled",
         "context_commands",
         "allowed_tools",
         "skills_bundled_enabled",
@@ -227,6 +229,7 @@ def _add_project_record(state: Any, params: JsonObject) -> tuple[Project, JsonOb
     auto_load = _optional_auto_load(params)
     auto_instructions = _optional_bool(params, "auto_instructions", default=True)
     folder_instructions = _optional_bool(params, "folder_instructions", default=True)
+    memory_enabled = _optional_bool(params, "memory_enabled", default=True)
     resolved_display_name = display_name or _display_name_from_cwd(cwd)
     project_id = _slug_from_display_name(resolved_display_name)
 
@@ -245,6 +248,7 @@ def _add_project_record(state: Any, params: JsonObject) -> tuple[Project, JsonOb
             auto_load=auto_load,
             auto_instructions=auto_instructions,
             folder_instructions=folder_instructions,
+            memory_enabled=memory_enabled,
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -626,6 +630,10 @@ def _validate_override_value(
             return normalize_tool_loading(value)
         except ValueError as exc:
             raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+    if field == "project_memory_enabled":
+        if not isinstance(value, bool):
+            raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.value must be a boolean")
+        return value
     if field == "permission_rules":
         try:
             return permission_rules_to_dict(normalize_permission_rules(value))
@@ -835,7 +843,7 @@ def _set_changes(params: JsonObject) -> JsonObject:
         changes["model_mappings"] = params["model_mappings"]
     if "auto_load" in params:
         changes["auto_load"] = _optional_auto_load(params)
-    for switch in ("auto_instructions", "folder_instructions"):
+    for switch in ("auto_instructions", "folder_instructions", "memory_enabled"):
         if switch in params:
             changes[switch] = _optional_bool(params, switch, default=True)
     if "context_commands" in params:
@@ -1005,6 +1013,7 @@ def _project_response(project: Project) -> JsonObject:
         "auto_instructions": project.auto_instructions,
         "auto_load": list(project.auto_load),
         "folder_instructions": project.folder_instructions,
+        "memory_enabled": project.memory_enabled,
         "instruction_status": _instruction_status(project),
         "context_commands": list(project.context_commands),
         "allowed_tools": list(project.allowed_tools),

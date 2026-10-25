@@ -1,15 +1,15 @@
 """The Memory and Skill changes one Run made, and their undo.
 
-A Run changes an Identity Agent's pinned Memory through the ``memory`` Tool and
+A Run changes personal and Project Memory through the ``memory`` Tool and
 the Agent's own Skills through ``skill_manage``. Both owners record every change
 in their history together with the id of the Run that made it, so the changes of
 one Run are derived from those two histories and nothing else is stored.
 Background learning (Reflection reviews now, the Librarian later) shows them to
 the user, and an undo takes back all of them or none.
 
-Only the Agent's own histories are read: its Memory and its private Skill home,
-the only places a background Run writes. A Memory change is the Run's net
-effect on one entry, so an entry the Run added and removed again is no change.
+The Agent's own histories and shared Project Memory histories are read. A Memory
+change is the Run's net effect on one entry, so an entry the Run added and removed
+again is no change.
 A change counts as undone while a ``revert`` revision that took it back is
 itself not undone.
 """
@@ -17,8 +17,8 @@ itself not undone.
 from __future__ import annotations
 
 import threading
-from collections.abc import Callable, Iterable, Iterator, Sequence
-from contextlib import contextmanager
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol
@@ -27,6 +27,7 @@ from core.memory import (
     MemoryError,
     MemoryRevertError,
     MemoryRevertIncompleteError,
+    MemoryRevertResult,
     MemoryRevision,
     MemoryScope,
     MemoryService,
@@ -51,7 +52,11 @@ LearningStore = Literal["memory", "skill"]
 # A Memory change shows at most this much of its entry text.
 PREVIEW_CHARACTERS = 160
 _SKILL_DOCUMENT = "SKILL.md"
-_MEMORY_SCOPE_NAMES: dict[str, str] = {"user": "User Memory", "agent": "Agent Memory"}
+_MEMORY_SCOPE_NAMES: dict[str, str] = {
+    "user": "User Memory",
+    "agent": "Agent Memory",
+    "project": "Project Memory",
+}
 
 
 @dataclass(frozen=True)
@@ -82,6 +87,7 @@ class LearningChange:
     files: tuple[str, ...] = ()
     absorbed_into: str | None = None
     followed: tuple[SkillReference, ...] = ()
+    project_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data: dict[str, Any] = {
@@ -93,6 +99,8 @@ class LearningChange:
         if self.store == "memory":
             data["scope"] = self.scope
             data["text"] = self.text
+            if self.project_id is not None:
+                data["project_id"] = self.project_id
         else:
             data["skill"] = self.skill
             data["files"] = list(self.files)
@@ -195,6 +203,7 @@ class LearningUndoConflictError(LearningUndoError):
         scope: MemoryScope | None = None,
         text: str | None = None,
         skill: str | None = None,
+        project_id: str | None = None,
     ) -> None:
         self.store: LearningStore = store
         self.revision = revision
@@ -202,6 +211,7 @@ class LearningUndoConflictError(LearningUndoError):
         self.scope: MemoryScope | None = scope
         self.text = text
         self.skill = skill
+        self.project_id = project_id
         if store == "memory":
             target = f'the {_MEMORY_SCOPE_NAMES.get(scope or "", "Memory")} entry "{text}"'
         else:
@@ -221,6 +231,8 @@ class LearningUndoConflictError(LearningUndoError):
         if self.store == "memory":
             data["scope"] = self.scope
             data["text"] = self.text
+            if self.project_id is not None:
+                data["project_id"] = self.project_id
         else:
             data["skill"] = self.skill
         return data
@@ -258,10 +270,11 @@ class _Revision(Protocol):
 
 @dataclass(frozen=True)
 class _Histories:
-    """Both histories of one Agent as read at one moment."""
+    """Personal and shared histories read under the Project configuration guard."""
 
     memory: list[MemoryRevision]
     skills: list[SkillRevision]
+    projects: Mapping[str, tuple[Path, list[MemoryRevision]]]
 
     def changes(self, agent_id: str, run_id: str) -> RunLearningChanges:
         memory_undone = _undone(self.memory)
@@ -277,6 +290,20 @@ class _Histories:
             )
             for entry in _net_memory_changes(self.memory, run_id)
         ]
+        for project_id, (_, memory_revisions) in self.projects.items():
+            undone = _undone(memory_revisions)
+            changes.extend(
+                LearningChange(
+                    store="memory",
+                    kind=entry.kind,
+                    revisions=tuple(entry.revisions),
+                    undone=all(revision in undone for revision in entry.revisions),
+                    scope=entry.scope,
+                    text=_preview(entry.shown),
+                    project_id=project_id,
+                )
+                for entry in _net_memory_changes(memory_revisions, run_id, agent_id=agent_id)
+            )
         for skill, revisions in self._skill_revisions(run_id).items():
             changes.append(_skill_change(skill, revisions, skill_undone))
         return RunLearningChanges(agent_id, run_id, tuple(changes))
@@ -303,6 +330,34 @@ class _Histories:
         ]
         return sorted(memory), sorted(skills)
 
+    def memory_undos(self, agent_id: str, run_id: str, workspace: Path) -> list[_MemoryUndo]:
+        personal, _ = self.pending(run_id)
+        plans = (
+            [_MemoryUndo(None, workspace, personal, _lineage(self.memory, run_id))]
+            if personal
+            else []
+        )
+        for project_id, (anchor, revisions) in self.projects.items():
+            undone = _undone(revisions)
+            pending = sorted(
+                {
+                    revision
+                    for entry in _net_memory_changes(revisions, run_id, agent_id=agent_id)
+                    for revision in entry.revisions
+                    if revision not in undone
+                }
+            )
+            if pending:
+                plans.append(
+                    _MemoryUndo(
+                        project_id,
+                        anchor,
+                        pending,
+                        _lineage(revisions, run_id, agent_id=agent_id),
+                    )
+                )
+        return plans
+
     def _skill_revisions(self, run_id: str) -> dict[str, list[SkillRevision]]:
         by_skill: dict[str, list[SkillRevision]] = {}
         for revision in self.skills:
@@ -311,10 +366,21 @@ class _Histories:
         return by_skill
 
 
+@dataclass(frozen=True)
+class _MemoryUndo:
+    project_id: str | None
+    workspace: Path
+    revisions: list[int]
+    related: set[int]
+
+    def writer(self, agent_id: str, actor: str) -> MemoryWriter:
+        return MemoryWriter(agent_id=agent_id, actor=actor, project_id=self.project_id)
+
+
 class LearningChanges:
     """Read and undo the Memory and Skill changes of a Run.
 
-    Reads are side-effect free and touch only the two history files. An undo
+    Reads are side-effect free and touch only the histories. An undo
     reverts the Run's revisions that are not undone yet in both stores, all or
     none: both stores are checked before either is written, and a later change
     by anyone to a Memory entry or Skill part the Run changed refuses the whole
@@ -330,17 +396,22 @@ class LearningChanges:
         skills: SkillAuthoringService,
         skill_home: Callable[[str], Path],
         run_active: Callable[[str], bool],
+        project_memories: Callable[[], Mapping[str, Path]] | None = None,
+        project_guard: Callable[[], AbstractContextManager[Any]] | None = None,
     ) -> None:
         self._memory = memory
         self._skills = skills
         self._skill_home = skill_home
         self._run_active = run_active
+        self._project_memories = project_memories or (lambda: {})
+        self._project_guard = project_guard or nullcontext
         self._undo_lock = threading.Lock()
 
     def of_run(self, agent_id: str, run_id: str) -> RunLearningChanges:
         """Return every change the Run made to the Agent's Memory and own Skills."""
         _check_ids(agent_id, run_id)
-        return self._read(agent_id).changes(agent_id, run_id)
+        with self._project_guard():
+            return self._read(agent_id).changes(agent_id, run_id)
 
     def summaries(self, agent_id: str, run_ids: Iterable[str]) -> dict[str, LearningSummary]:
         """Return the change counts of several Runs of one Agent, reading each history once."""
@@ -348,8 +419,9 @@ class LearningChanges:
         _check_ids(agent_id, *wanted)
         if not wanted:
             return {}
-        histories = self._read(agent_id)
-        return {run_id: histories.changes(agent_id, run_id).summary for run_id in wanted}
+        with self._project_guard():
+            histories = self._read(agent_id)
+            return {run_id: histories.changes(agent_id, run_id).summary for run_id in wanted}
 
     def undo(
         self, agent_id: str, run_id: str, *, workspace: Path, actor: str = "internal"
@@ -367,21 +439,25 @@ class LearningChanges:
         """
         _check_ids(agent_id, run_id)
         home = self._skill_home(agent_id)
-        writer = MemoryWriter(agent_id=agent_id, actor=actor)
-        with self._undo_lock:
+        with self._undo_lock, self._project_guard():
             if self._run_active(run_id):
                 raise LearningRunActiveError(run_id)
             histories = self._read(agent_id)
-            memory_ids, skill_ids = histories.pending(run_id)
-            if not memory_ids and not skill_ids:
+            _, skill_ids = histories.pending(run_id)
+            memory_plans = histories.memory_undos(agent_id, run_id, workspace)
+            if not memory_plans and not skill_ids:
                 return LearningUndoResult(histories.changes(agent_id, run_id), False, False)
-            memory_related = _lineage(histories.memory, run_id)
             skill_related = _lineage(histories.skills, run_id)
-            with self._refusals(agent_id, home):
-                if memory_ids:
+            for plan in memory_plans:
+                with self._refusals(agent_id, home, project_id=plan.project_id):
                     self._memory.check_revert(
-                        workspace, memory_ids, writer=writer, strict=True, related=memory_related
+                        plan.workspace,
+                        plan.revisions,
+                        writer=plan.writer(agent_id, actor),
+                        strict=True,
+                        related=plan.related,
                     )
+            with self._refusals(agent_id, home):
                 if skill_ids:
                     self._skills.check_revert(
                         home, skill_ids, writer=HUMAN_WRITER, related=skill_related
@@ -402,23 +478,41 @@ class LearningChanges:
                         len(skill_ids),
                     )
             memory_changed = False
-            if memory_ids:
+            applied: list[tuple[_MemoryUndo, MemoryRevertResult]] = []
+            for plan in memory_plans:
                 try:
                     reverted = self._memory.revert(
-                        workspace, memory_ids, writer=writer, strict=True, related=memory_related
+                        plan.workspace,
+                        plan.revisions,
+                        writer=plan.writer(agent_id, actor),
+                        strict=True,
+                        related=plan.related,
                     )
                 except Exception as error:
+                    restored = self._restore_memory(agent_id, actor, applied)
                     failure = self._fail_after_skills(
-                        agent_id, run_id, home, len(skill_ids), skill_reverts, error
+                        agent_id,
+                        run_id,
+                        home,
+                        len(skill_ids),
+                        skill_reverts,
+                        error,
+                        project_id=plan.project_id,
                     )
+                    if not restored:
+                        raise LearningUndoFailedError(
+                            "The undo stopped part-way; some Memory changes could not be "
+                            "restored. Inspect the remaining Run changes and undo again to finish."
+                        ) from error
                     raise failure from error
-                memory_changed = bool(reverted.changed)
+                applied.append((plan, reverted))
+                memory_changed = memory_changed or bool(reverted.changed)
             _LOGGER.info(
                 "Learning changes undone (agent=%s run=%s memory_revisions=%d "
                 "skill_revisions=%d actor=%s)",
                 agent_id,
                 run_id,
-                len(memory_ids),
+                sum(len(plan.revisions) for plan in memory_plans),
                 len(skill_ids),
                 actor,
             )
@@ -430,12 +524,46 @@ class LearningChanges:
         try:
             memory = self._memory.recorded_revisions(agent_id)
             skills = self._skills.recorded_revisions(self._skill_home(agent_id))
-        except (MemoryError, SkillAuthoringError) as error:
+            projects = {
+                project_id: (path, self._memory.recorded_revisions(project_id=project_id))
+                for project_id, path in sorted(self._project_memories().items())
+            }
+        except VBotError as error:
             raise LearningError(str(error)) from error
-        return _Histories(memory, skills)
+        return _Histories(memory, skills, projects)
+
+    def _restore_memory(
+        self,
+        agent_id: str,
+        actor: str,
+        applied: Sequence[tuple[_MemoryUndo, MemoryRevertResult]],
+    ) -> bool:
+        """Compensate completed Memory owners when a later owner's undo fails."""
+        restored = True
+        for plan, result in reversed(applied):
+            if len(result.revisions) < len(result.changed):
+                restored = False
+            if not result.revisions:
+                continue
+            try:
+                self._memory.revert(
+                    plan.workspace,
+                    [revision.id for revision in result.revisions],
+                    writer=plan.writer(agent_id, actor),
+                )
+            except Exception:
+                restored = False
+                _LOGGER.error(
+                    "Learning undo could not restore Memory (agent=%s project=%s)",
+                    agent_id,
+                    plan.project_id,
+                )
+        return restored
 
     @contextmanager
-    def _refusals(self, agent_id: str, home: Path) -> Iterator[None]:
+    def _refusals(
+        self, agent_id: str, home: Path, *, project_id: str | None = None
+    ) -> Iterator[None]:
         """Turn a refused revert into the undo's refusal, naming the blocking change.
 
         A Skill revert that could not take its own steps back changed packages,
@@ -444,7 +572,7 @@ class LearningChanges:
         try:
             yield
         except MemoryRevertError as error:
-            raise self._memory_conflict(agent_id, error) from error
+            raise self._memory_conflict(agent_id, error, project_id=project_id) from error
         except SkillRevertConflictError as error:
             raise self._skill_conflict(home, error) from error
         except SkillRevertIncompleteError as error:
@@ -454,11 +582,16 @@ class LearningChanges:
         except (MemoryError, SkillAuthoringError) as error:
             raise LearningUndoError(f"Nothing was undone: {error}") from error
 
-    def _memory_conflict(self, agent_id: str, error: MemoryRevertError) -> LearningUndoError:
+    def _memory_conflict(
+        self, agent_id: str, error: MemoryRevertError, *, project_id: str | None = None
+    ) -> LearningUndoError:
         conflict = error.conflicts[0]
         try:
             revisions = {
-                revision.id: revision for revision in self._memory.recorded_revisions(agent_id)
+                revision.id: revision
+                for revision in self._memory.recorded_revisions(
+                    None if project_id is not None else agent_id, project_id=project_id
+                )
             }
         except MemoryError:
             revisions = {}
@@ -470,6 +603,7 @@ class LearningChanges:
             later=_later(later),
             scope=target.scope if target is not None else None,
             text=_preview(conflict.text),
+            project_id=project_id,
         )
 
     def _skill_conflict(self, home: Path, error: SkillRevertConflictError) -> LearningUndoError:
@@ -493,6 +627,8 @@ class LearningChanges:
         skill_count: int,
         skill_reverts: Sequence[SkillRevision],
         failure: Exception,
+        *,
+        project_id: str | None = None,
     ) -> LearningError:
         """Take the Skill reverts back after the Memory revert failed; describe the outcome.
 
@@ -525,7 +661,7 @@ class LearningChanges:
         incomplete = failure if isinstance(failure, MemoryRevertIncompleteError) else None
         if incomplete is None and not skills_left:
             if isinstance(failure, MemoryRevertError):
-                return self._memory_conflict(agent_id, failure)
+                return self._memory_conflict(agent_id, failure, project_id=project_id)
             return LearningUndoFailedError(f"The undo failed and nothing was changed: {failure}")
         if incomplete is not None:
             names = " and ".join(_MEMORY_SCOPE_NAMES[scope] for scope in incomplete.changed)
@@ -578,13 +714,20 @@ def _undone(revisions: Sequence[_Revision]) -> set[int]:
     return undone
 
 
-def _lineage(revisions: Sequence[_Revision], run_id: str) -> set[int]:
+def _lineage(
+    revisions: Sequence[_Revision], run_id: str, *, agent_id: str | None = None
+) -> set[int]:
     """Return the Run's revisions and every revert chain that started from one of them.
 
     An earlier undo (or the restore of a failed one) left those reverts; they
     belong to the Run's own change and never block undoing it again.
     """
-    lineage = {revision.id for revision in revisions if revision.run_id == run_id}
+    lineage = {
+        revision.id
+        for revision in revisions
+        if revision.run_id == run_id
+        and (agent_id is None or getattr(revision, "agent_id", None) == agent_id)
+    }
     for revision in revisions:
         if any(target in lineage for target in revision.reverts):
             lineage.add(revision.id)
@@ -619,7 +762,9 @@ class _NetEntry:
         return self.text if self.text is not None else self.original or ""
 
 
-def _net_memory_changes(revisions: Sequence[MemoryRevision], run_id: str) -> list[_NetEntry]:
+def _net_memory_changes(
+    revisions: Sequence[MemoryRevision], run_id: str, *, agent_id: str | None = None
+) -> list[_NetEntry]:
     """Return the entries the Run's Memory edits changed for good, in the order it touched them.
 
     Each edit continues the entry it matches by text: a removal or replacement
@@ -628,7 +773,11 @@ def _net_memory_changes(revisions: Sequence[MemoryRevision], run_id: str) -> lis
     """
     entries: list[_NetEntry] = []
     for revision in revisions:
-        if revision.run_id != run_id or revision.kind != "edit":
+        if (
+            revision.run_id != run_id
+            or revision.kind != "edit"
+            or (agent_id is not None and revision.agent_id != agent_id)
+        ):
             continue
         for change in revision.changes:
             if change.op == "added":

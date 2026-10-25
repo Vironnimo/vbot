@@ -49,6 +49,7 @@ from core.prompts.pinned_context import (
     prompt_epoch_pins,
     stamp_prompt_files_read,
 )
+from core.prompts.prompts import project_memory_visible
 from core.providers.accounts import ConnectionRef
 from core.sessions import ChatSession, PromptEpoch
 from core.tools.file_state import FileRead
@@ -208,14 +209,6 @@ class ChatCompactionHost:
                 agent,
                 run.project_id,
             )
-            memory_files_context = await self.run_transform(
-                pinned_memory_files,
-                self._dependencies,
-                run.agent_id,
-                run.session_id,
-                agent,
-                run.project_id,
-            )
             agent_body = await self.run_transform(
                 pinned_agent_body,
                 self._dependencies,
@@ -268,10 +261,24 @@ class ChatCompactionHost:
             )
             prompt_context = (
                 await self.run_transform(
-                    permitted_project_context, prompt_project, permissions.boundary
+                    permitted_project_context,
+                    prompt_project,
+                    permissions.boundary,
+                    memory_workspace=await self.run_transform(
+                        self._dependencies.projects.memory_workspace, prompt_project.project_id
+                    ),
                 )
                 if prompt_project is not None
                 else None
+            )
+            memory_files_context = await self.run_transform(
+                pinned_memory_files,
+                self._dependencies,
+                run.agent_id,
+                run.session_id,
+                agent,
+                run.project_id,
+                prompt_context,
             )
             working_project_context = await self.run_transform(
                 pinned_working_project_context,
@@ -408,7 +415,14 @@ class ChatCompactionHost:
         is_temporary = isinstance(agent, TemporaryAgent)
         prompt_project = resolve_prompt_project(self._dependencies.projects, working_project_id)
         project_prompt_context = (
-            permitted_project_context(prompt_project, permissions, project_cwd)
+            permitted_project_context(
+                prompt_project,
+                permissions,
+                project_cwd,
+                memory_workspace=self._dependencies.projects.memory_workspace(
+                    prompt_project.project_id
+                ),
+            )
             if prompt_project is not None
             else None
         )
@@ -464,11 +478,15 @@ class ChatCompactionHost:
                 refreshed_agent,
                 on_read=identity_read_paths.append,
             )
+            read_paths.extend(identity_read_paths)
+        if getattr(refreshed_agent, "workspace", None) or project_memory_visible(
+            refreshed_agent, project_prompt_context
+        ):
             memory_files_context = system_prompts.render_memory_files(
                 refreshed_agent,
-                on_read=identity_read_paths.append,
+                project_context=project_prompt_context,
+                on_read=read_paths.append,
             )
-            read_paths.extend(identity_read_paths)
 
         available_skill_names = self._requests.available_skill_names(agent, prompt_skill_registry)
         return _CompactionPromptRefresh(
@@ -484,6 +502,12 @@ class ChatCompactionHost:
             available_skill_names=tuple(available_skill_names),
             memory_prompt_mode=getattr(
                 refreshed_agent, "memory_prompt_mode", DEFAULT_MEMORY_PROMPT_MODE
+            ),
+            memory_project_id=(
+                project_prompt_context.project_id
+                if project_prompt_context is not None
+                and project_memory_visible(refreshed_agent, project_prompt_context)
+                else None
             ),
             pins_agent_body=pins_agent_body(refreshed_agent),
         )
@@ -720,6 +744,7 @@ def _prompt_epoch(
                 soul_context=refresh.soul_context,
                 memory_files_context=refresh.memory_files_context,
                 memory_prompt_mode=refresh.memory_prompt_mode,
+                memory_project_id=refresh.memory_project_id,
                 agent_body=refresh.agent_body if refresh.pins_agent_body else None,
             ),
         },

@@ -63,6 +63,10 @@ def test_create_writes_the_anchor_with_seeded_defaults(data_dir: Path, repo: Pat
     project = store.create("vbot", "vBot", repo)
 
     anchor = data_dir / "projects" / "vbot"
+    assert project.memory_enabled is True
+    assert store.memory_workspace("vbot") == anchor
+    with pytest.raises(ProjectNotFoundError):
+        store.memory_workspace("VBOT")
     payload = json.loads((anchor / "project.json").read_text("utf-8"))
     assert not (anchor / "agents").exists()
     assert payload == {"format_version": PROJECT_FORMAT_VERSION, **project.to_dict()}

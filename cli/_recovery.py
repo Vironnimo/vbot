@@ -273,12 +273,21 @@ def _inspection(args: argparse.Namespace) -> list[str] | None:
         if not agent:
             return ["agent", "list"]
         if area == "memory" and args.command in {"history", "show", "diff", "revert"}:
-            return ["memory", "history", agent]
-        return (
-            [area, "list", agent, "--scope", args.scope]
-            if area == "memory" and args.scope is not None
-            else [area, "list", agent]
-        )
+            return [
+                "memory",
+                "history",
+                agent,
+                *(["--project"] if getattr(args, "project", False) else []),
+            ]
+        command = [area, "list", agent]
+        if area == "memory":
+            project = getattr(args, "project", False)
+            scopes = {"project"} if project else {"agent", "user"}
+            if args.scope in scopes:
+                command.extend(("--scope", args.scope))
+            if project:
+                command.append("--project")
+        return command
     if area == "config" and getattr(args, "path", None):
         return ["config", "describe", args.path]
     if area == "prompt":

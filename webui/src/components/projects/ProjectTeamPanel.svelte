@@ -3,6 +3,7 @@
   import InfoHint from '../ui/InfoHint.svelte';
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
+  import Toggle from '../ui/Toggle.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
   import { tooltip } from '$lib/tooltip.js';
   import SearchableDropdown from '../SearchableDropdown.svelte';
@@ -653,10 +654,47 @@
                           : t('projects.team.repositoryPolicyActive')}
                       </StatusChip>
                     </div>
+                    <div class="s-row s-row--compact">
+                      <div class="s-row-info">
+                        <div class="s-row-label">
+                          {t('memory.projectUsage')}
+                        </div>
+                        <div class="s-row-desc">
+                          {t('memory.projectUsageHelp')}
+                        </div>
+                        {#if memberFieldIsOverridden(member, 'project_memory_enabled')}
+                          <Button
+                            variant="tertiary"
+                            onClick={() =>
+                              applyClearOverride(
+                                member.agent_id,
+                                'project_memory_enabled',
+                              )}>{t('projects.team.clearOverride')}</Button
+                          >
+                        {/if}
+                      </div>
+                      <div class="s-row-control">
+                        <Toggle
+                          checked={overrideDraft(member.agent_id)
+                            .project_memory_enabled}
+                          ariaLabel={t('memory.projectUsage')}
+                          onChange={(value) =>
+                            updateOverrideDraft(
+                              member.agent_id,
+                              'project_memory_enabled',
+                              value,
+                            )}
+                        />
+                      </div>
+                    </div>
                     <ToolAccessEditor
                       value={overrideDraft(member.agent_id).tool_access}
                       tools={projectsState.toolCatalog}
                       ceiling={projectsState.editForm.allowed_tools}
+                      memoryPromptMode="off"
+                      projectMemoryEnabled={projectsState.editForm
+                        .memory_enabled &&
+                        overrideDraft(member.agent_id).project_memory_enabled}
                       disabled={isOverrideBusy(member.agent_id, 'tool_access')}
                       showReset={memberFieldIsOverridden(member, 'tool_access')}
                       toolLoadingEditable

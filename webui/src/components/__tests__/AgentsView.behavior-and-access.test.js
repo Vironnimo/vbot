@@ -30,9 +30,9 @@ vi.mock('$lib/api.js', () => rpcBackedApiMock(rpcMock));
 
 const { default: AgentsView } = await import('../AgentsView.svelte');
 
-const AGENT_MEMORY = () => t('agents.memory.scope.agent');
-const USER_PROFILE = () => t('agents.memory.scope.user');
-const ADD_MEMORY = () => t('agents.memory.add');
+const AGENT_MEMORY = () => t('memory.scope.agent');
+const USER_PROFILE = () => t('memory.scope.user');
+const ADD_MEMORY = () => t('memory.add');
 
 function toolAccessToggle(name) {
   const button = document.body.querySelector(
@@ -195,7 +195,7 @@ describe('AgentsView behavior and access', () => {
     },
   );
 
-  it('sends memory prompt mode and Librarian switch changes from the agent detail pane', async () => {
+  it('sends personal Memory, Project Memory and Librarian choices independently', async () => {
     rpcMock.mockImplementation(createAgentsRpcMock());
 
     mountedComponent = mount(AgentsView, { target: document.body });
@@ -215,6 +215,7 @@ describe('AgentsView behavior and access', () => {
     );
     expect(librarianToggle.getAttribute('aria-checked')).toBe('true');
     librarianToggle.click();
+    getButtonByAriaLabel(t('memory.projectUsage')).click();
     flushSync();
     submitAgentForm();
     await waitForCondition(() => getAgentUpdateCalls().length === 1, 100);
@@ -223,6 +224,7 @@ describe('AgentsView behavior and access', () => {
       id: 'alpha',
       memory_prompt_mode: 'agent',
       librarian_enabled: false,
+      project_memory_enabled: false,
     });
   });
 
@@ -240,7 +242,7 @@ describe('AgentsView behavior and access', () => {
 
     getButtonByAriaLabel('Manage Memory entries').click();
     flushSync();
-    await waitForText(t('agents.memory.emptyTitle'));
+    await waitForText(t('memory.emptyTitle'));
     expect(rpcParams('memory.list')).toEqual({ agent_id: 'alpha' });
 
     const scopes = Array.from(
@@ -313,7 +315,7 @@ describe('AgentsView behavior and access', () => {
       t('common.delete'),
     ).click();
     flushSync();
-    getButton(t('agents.memory.deleteConfirmAction')).click();
+    getButton(t('memory.deleteConfirmAction')).click();
     await waitForCondition(
       () => !document.body.textContent.includes('Keep releases focused.'),
       100,

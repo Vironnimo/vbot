@@ -30,7 +30,7 @@ A throwaway Session the user asked for when starting it (`vbot chat --ephemeral`
 A Session that another Session started through the `subagent` Tool to work on a task and report back, together with the Agent working in it; the starting Session is its Parent Session (`subagents.md`). Not the coding agent's own subagents.
 
 ## Memory
-Curated durable facts about the user and the work, kept as Markdown in an Identity Agent's Workspace and available to the Agent through its prompt or the `memory` Tool (`memory.md`). Not scratch notes, Session history, or a search index; recalling earlier conversations uses Sessions.
+Curated durable facts and preferences about the user and the work, owned by an Identity Agent or shared by a Project and available through the Agent's prompt or the `memory` Tool (`memory.md`). Not scratch notes, Session history, or a search index; recalling earlier conversations uses Sessions.
 
 ## Run
 One Session execution with a durable identity and lifecycle: an initiating request, any User messages steered into it, and all Model output and Tool calls until it completes, fails, is interrupted or is cancelled (`runs.md`). Can span multiple Model/Tool steps; not an Agent, Session, or single Provider HTTP request.
@@ -90,7 +90,7 @@ A registered repository that Agents work in, with its Sources, Team, defaults an
 The Project a Session works in for its whole life: its file and shell work, Project Skills and Project Context come from that repository (`sessions/ownership.md`). Not the Default Project, which only seeds new Sessions, and not the Session's addressing Project, which stays empty for an Identity Agent's Session working in a Project.
 
 ## Project Context
-The instructions, Project path and Project Skills that tell an Agent how to work in a registered Project, supplied for its Working Project or loaded explicitly by an Identity Agent through the `project` Tool (`projects.md`, `tools/project.md`). Not Team membership, a Working Project, or a change of the working directory.
+The instructions, Project path, Project Skills and enabled Project Memory that tell an Agent how to work in a registered Project, supplied for its Working Project or loaded explicitly by an Identity Agent through the `project` Tool (`projects.md`, `tools/project.md`). Not Team membership, a Working Project, or a change of the working directory.
 
 ## Scratch Area
 The temporary area in vBot's data directory for one conversation and its Sub-Agent tree, with an own Scratch folder for each participating Session (`tools/scratch.md`). Not a Workspace, Memory, a delivery location for the user, or the coding agent's own scratchpad directory.
@@ -99,7 +99,7 @@ The temporary area in vBot's data directory for one conversation and its Sub-Age
 A Project's addressable Agents, combined from the Project's active Sources (`projects.md`, `projects/scanning.md`). Membership belongs to the Project, not to vBot's stored Agents; loading Project Context does not make an Identity Agent a member.
 
 ## Project Agent
-An Agent of a Project's Team, which vBot resolves at runtime from its repository definition, Project defaults and overrides; it has no Workspace, Memory or stored identity of its own (`projects/resolution.md`). Code and older notes call it Config Agent. Not an Identity Agent.
+An Agent of a Project's Team, which vBot resolves at runtime from its repository definition, Project defaults and overrides; it has no Workspace, personal Memory or stored identity of its own (`projects/resolution.md`). Code and older notes call it Config Agent. Not an Identity Agent.
 
 ## Identity Agent
 An Agent that vBot stores with its own configuration, Workspace and Memory, which persist across Sessions (`agent.md`). Not a Project Agent or a temporary Agent.

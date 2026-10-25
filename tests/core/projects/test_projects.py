@@ -25,7 +25,9 @@ _TIMESTAMP = "2026-06-18T10:00:00Z"
 
 def test_build_project_fills_every_optional_field_with_its_default(tmp_path: Path) -> None:
     # A blank display name falls back to the Project id.
-    payload = build_project("scratch", "   ", tmp_path).to_dict()
+    project = build_project("scratch", "   ", tmp_path)
+    assert project.memory_enabled is True
+    payload = project.to_dict()
     created_at = payload.pop("created_at")
     updated_at = payload.pop("updated_at")
 
@@ -70,6 +72,7 @@ def test_build_project_keeps_every_explicit_field_through_a_round_trip(tmp_path:
         # Both switches are written only when off.
         "auto_instructions": False,
         "folder_instructions": False,
+        "memory_enabled": False,
         "auto_load": ["AGENTS.md"],
         "context_commands": ["git status --short", "npm outdated"],
         "allowed_tools": ["read", "grep"],
@@ -89,7 +92,7 @@ def test_build_project_keeps_every_explicit_field_through_a_round_trip(tmp_path:
                 # Switched off, the chosen always-loaded Tools stay for later.
                 "tool_loading": {"on_demand": False, "always_loaded": ["read"]},
             },
-            "coder": {"tool_loading": {"on_demand": True}},
+            "coder": {"tool_loading": {"on_demand": True}, "project_memory_enabled": False},
             # An entry holding only fields this vBot does not model loads as ``{}``.
             "future": {},
         },
@@ -294,6 +297,22 @@ def test_explicit_empty_tool_whitelist_is_kept(tmp_path: Path) -> None:
             "overrides['coder'].tool_loading.on_demand must be a boolean",
             id="override-tool-loading",
         ),
+        pytest.param(
+            "vbot",
+            None,
+            {"overrides": {"coder": {"project_memory_enabled": "yes"}}},
+            ProjectError,
+            "project_memory_enabled must be true or false",
+            id="override-project-memory",
+        ),
+        pytest.param(
+            "vbot",
+            None,
+            {"memory_enabled": "yes"},
+            ProjectError,
+            "memory_enabled must be true or false",
+            id="project-memory",
+        ),
     ],
 )
 def test_build_project_rejects_invalid_fields(
@@ -316,6 +335,7 @@ def test_override_fields_constant_contains_all_overridable_fields() -> None:
                 "temperature",
                 "top_p",
                 "thinking_effort",
+                "project_memory_enabled",
                 "compaction_policy",
                 "tool_access",
                 "tool_loading",

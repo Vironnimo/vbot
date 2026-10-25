@@ -25,7 +25,7 @@ from core.memory._definitions import (
     MEMORY_FILES,
     MEMORY_PROMPT_MODE_SCOPES,
     MEMORY_SCOPE_LABELS,
-    MEMORY_SCOPES,
+    PERSONAL_MEMORY_SCOPES,
     MemoryBudgetError,
     MemoryEntry,
     MemoryError,
@@ -75,8 +75,18 @@ class FilePinnedMemoryBackend:
     _file_locks: ClassVar[dict[str, threading.Lock]] = {}
     _file_locks_guard: ClassVar[threading.Lock] = threading.Lock()
 
-    def __init__(self, history: MemoryHistory | None = None) -> None:
+    def __init__(
+        self,
+        history: MemoryHistory | None = None,
+        *,
+        project: bool = False,
+    ) -> None:
         self._history = history
+        self._project = project
+        self._scopes: tuple[MemoryScope, ...] = ("project",) if project else PERSONAL_MEMORY_SCOPES
+
+    def _writer_owner(self, writer: MemoryWriter) -> str | None:
+        return writer.project_id if self._project else writer.agent_id
 
     @classmethod
     def _file_lock(cls, path: Path) -> threading.Lock:
@@ -220,7 +230,7 @@ class FilePinnedMemoryBackend:
         """
         history = self._require_history(agent_id)
         with self._scope_locks(workspace):
-            for scope in MEMORY_SCOPES:
+            for scope in self._scopes:
                 path = self._path(workspace, scope)
                 history.sync(agent_id, scope, _read_entries(path), path)
             return history.revisions(agent_id)
@@ -233,7 +243,7 @@ class FilePinnedMemoryBackend:
         if revision_id is not None:
             _require_revisions(revisions, [revision_id])
         replayed = state_at(revisions, revision_id)
-        return {scope: replayed[scope] for scope in MEMORY_SCOPES}
+        return {scope: replayed[scope] for scope in self._scopes}
 
     def compare(
         self, workspace: Path, agent_id: str, from_id: int, to_id: int | None = None
@@ -243,7 +253,7 @@ class FilePinnedMemoryBackend:
         _require_revisions(revisions, [from_id] if to_id is None else [from_id, to_id])
         before = state_at(revisions, from_id)
         after = state_at(revisions, to_id)
-        return {scope: diff_entries(before[scope], after[scope]) for scope in MEMORY_SCOPES}
+        return {scope: diff_entries(before[scope], after[scope]) for scope in self._scopes}
 
     def recorded_revisions(self, agent_id: str) -> list[MemoryRevision]:
         """Return the revisions the Agent's Memory history holds, oldest first.
@@ -273,7 +283,7 @@ class FilePinnedMemoryBackend:
         the files are recorded first, as every history read does. *strict* and
         *related* work as for :meth:`revert`.
         """
-        agent_id = writer.agent_id or ""
+        agent_id = self._writer_owner(writer) or ""
         history = self._require_history(agent_id)
         if not revision_ids:
             raise MemoryError("name at least one revision to revert")
@@ -307,7 +317,7 @@ class FilePinnedMemoryBackend:
         :class:`MemoryRevertIncompleteError` when that restore fails too; the
         scopes it names are recorded as reverted.
         """
-        agent_id = writer.agent_id or ""
+        agent_id = self._writer_owner(writer) or ""
         history = self._require_history(agent_id)
         if not revision_ids:
             raise MemoryError("name at least one revision to revert")
@@ -322,8 +332,9 @@ class FilePinnedMemoryBackend:
                 )
             except MemoryRevertIncompleteError as error:
                 _LOGGER.warning(
-                    "Memory revert failed part-way (agent=%s scopes=%s actor=%s)",
-                    agent_id,
+                    "Memory revert failed part-way (agent=%s project=%s scopes=%s actor=%s)",
+                    writer.agent_id or "unknown",
+                    writer.project_id or "none",
                     ",".join(error.changed),
                     writer.actor,
                 )
@@ -368,7 +379,7 @@ class FilePinnedMemoryBackend:
         Raises :class:`MemoryRevertError`, :class:`MemoryBudgetError` or
         :class:`MemoryError` when the revert cannot run.
         """
-        paths = {scope: self._path(workspace, scope) for scope in MEMORY_SCOPES}
+        paths = {scope: self._path(workspace, scope) for scope in self._scopes}
         originals = {scope: _read_file(path) for scope, path in paths.items()}
         current: dict[MemoryScope, list[str]] = {}
         for scope, path in paths.items():
@@ -389,7 +400,7 @@ class FilePinnedMemoryBackend:
         reverted, conflicts = revert_revisions(current, targets, revisions)
         if conflicts:
             raise MemoryRevertError(conflicts)
-        changed = [scope for scope in MEMORY_SCOPES if reverted[scope] != current[scope]]
+        changed = [scope for scope in self._scopes if reverted[scope] != current[scope]]
         for scope in changed:
             _enforce_scope_budget(scope, reverted[scope], _total(current[scope]))
         return _RevertPlan(paths, originals, current, reverted, targets, changed)
@@ -432,9 +443,27 @@ class FilePinnedMemoryBackend:
         names the Tool only when it is given.
         """
         validated_mode = validate_memory_prompt_mode(mode)
+        return self.read_prompt_scopes(
+            workspace,
+            MEMORY_PROMPT_MODE_SCOPES[validated_mode],
+            memory_tool=memory_tool,
+            on_read=on_read,
+        )
+
+    def read_prompt_scopes(
+        self,
+        workspace: Path,
+        scopes: Sequence[MemoryScope],
+        *,
+        memory_tool: str | None,
+        on_read: Callable[[FileRead], None] | None = None,
+    ) -> str:
+        """Render the selected scopes with the same bounded prompt projection."""
         return "\n\n".join(
-            self._render_prompt_scope(Path(workspace), scope, memory_tool, on_read)
-            for scope in MEMORY_PROMPT_MODE_SCOPES[validated_mode]
+            self._render_prompt_scope(
+                Path(workspace), validate_memory_scope(scope), memory_tool, on_read
+            )
+            for scope in scopes
         )
 
     def _render_scope_block(self, workspace: Path, scope: MemoryScope) -> str:
@@ -498,22 +527,24 @@ class FilePinnedMemoryBackend:
 
     @contextmanager
     def _scope_locks(self, workspace: Path) -> Iterator[None]:
-        # Always in MEMORY_SCOPES order; single-scope mutations hold only one lock.
+        # Always in the owner's scope order; single-scope mutations hold one lock.
         with ExitStack() as stack:
-            for scope in MEMORY_SCOPES:
+            for scope in self._scopes:
                 stack.enter_context(self._file_lock(self._path(workspace, scope)))
             yield
 
     def _require_history(self, agent_id: str) -> MemoryHistory:
         if self._history is None or not self._history.available(agent_id):
-            raise MemoryError(f"Agent '{agent_id}' has no Memory history")
+            owner = "Project" if self._project else "Agent"
+            raise MemoryError(f"{owner} '{agent_id}' has no Memory history")
         return self._history
 
     def _read_synced(self, path: Path, scope: MemoryScope, writer: MemoryWriter) -> list[str]:
         entries = _read_entries(path)
-        if self._history is not None and writer.agent_id:
+        owner_id = self._writer_owner(writer)
+        if self._history is not None and owner_id:
             try:
-                self._history.sync(writer.agent_id, scope, entries, path)
+                self._history.sync(owner_id, scope, entries, path)
             except Exception as exc:  # the change goes ahead without its history
                 _log_history_failure("not updated before a change", exc)
         return entries
@@ -548,11 +579,12 @@ class FilePinnedMemoryBackend:
         The change is already on disk, so a history failure only logs; the
         unrecorded change is noticed as ``external`` by a later operation.
         """
-        if self._history is None or not writer.agent_id:
+        owner_id = self._writer_owner(writer)
+        if self._history is None or not owner_id:
             return None
         try:
             return self._history.record(
-                writer.agent_id,
+                owner_id,
                 scope,
                 kind=kind,
                 actor=writer.actor,
@@ -561,6 +593,7 @@ class FilePinnedMemoryBackend:
                 session_id=writer.session_id,
                 run_id=writer.run_id,
                 run_kind=writer.run_kind,
+                agent_id=writer.agent_id if self._project else None,
                 reverts=reverts,
             )
         except Exception as exc:  # never fail the change the history describes
@@ -725,9 +758,10 @@ def _log_mutation(
     if before == after:
         return
     _LOGGER.info(
-        "Memory entry %s (agent=%s scope=%s actor=%s entries=%d chars_delta=%+d)",
+        "Memory entry %s (agent=%s project=%s scope=%s actor=%s entries=%d chars_delta=%+d)",
         event,
         writer.agent_id or "unknown",
+        writer.project_id or "none",
         scope,
         writer.actor,
         len(after),

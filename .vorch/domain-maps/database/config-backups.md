@@ -4,7 +4,7 @@ The format, API, capture, retention and restore of configuration backups (`core/
 
 ## Coverage
 
-The JSON document set (`secrets.json` included) plus `CONFIGURATION_FILE_PATTERNS`: `SOUL.md`/`USER.md`/`MEMORY.md` of Workspaces in their default location `agents/<id>/workspace/`, and the global and per-Agent prompt overrides under `prompts/`. Workspaces at a custom path, other Workspace files and Skills (own history) are outside it.
+The JSON document set (`secrets.json` included) plus `CONFIGURATION_FILE_PATTERNS`: `SOUL.md`/`USER.md`/`MEMORY.md` of Workspaces in their default location `agents/<id>/workspace/`, shared Project Memory at `projects/<id>/MEMORY.md`, and the global and per-Agent prompt overrides under `prompts/`. Workspaces at a custom path, other Workspace files, Agent and Project Memory history JSONL files, and Skills (own history) are outside it.
 
 ## Format
 

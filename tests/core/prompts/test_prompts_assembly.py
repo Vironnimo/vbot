@@ -168,25 +168,45 @@ async def test_async_prompt_build_keeps_sync_assembly_off_event_loop(
         (MEMORY_PROMPT_MODE_AGENT_USER, ("MEMORY.md", "USER.md")),
     ],
 )
+@pytest.mark.parametrize("project_memory", [False, True])
 def test_memory_mode_selects_the_rendered_and_reported_memory_files(
-    workspace: Path, tmp_path: Path, mode: MemoryPromptMode, memory_files: tuple[str, ...]
+    workspace: Path,
+    tmp_path: Path,
+    mode: MemoryPromptMode,
+    memory_files: tuple[str, ...],
+    project_memory: bool,
 ) -> None:
-    manager = _manager(tmp_path)
-    agent = _agent(workspace, memory_prompt_mode=mode)
-    read_paths: list[FileRead] = []
+    from core.prompts import ProjectPromptContext
 
-    prompt = manager.build_system_prompt(agent, read_paths=read_paths)
+    manager = _manager(tmp_path)
+    agent = _agent(workspace, memory_prompt_mode=mode, project_memory_enabled=True)
+    read_paths: list[FileRead] = []
+    project_root = tmp_path / "project-anchor"
+    project_root.mkdir()
+    (project_root / "MEMORY.md").write_text("- PROJECT_MEMORY_SENTINEL", encoding="utf-8")
+    context = ProjectPromptContext.from_project(
+        "project-one",
+        "Project One",
+        tmp_path,
+        (),
+        memory_workspace=project_root,
+        memory_enabled=project_memory,
+    )
+
+    prompt = manager.build_system_prompt(agent, project_context=context, read_paths=read_paths)
 
     # Collecting read paths is a pure side channel.
-    assert prompt == manager.build_system_prompt(agent)
+    assert prompt == manager.build_system_prompt(agent, project_context=context)
     assert "Soul text" in prompt
-    assert ("<memory>" in prompt) is bool(memory_files)
+    assert ("<memory>" in prompt) is (bool(memory_files) or project_memory)
     assert ("Memory text" in prompt) is ("MEMORY.md" in memory_files)
     assert ("User text" in prompt) is ("USER.md" in memory_files)
+    assert ("PROJECT_MEMORY_SENTINEL" in prompt) is project_memory
     # Every auto-injected file is reported so the chat loop can stamp it read-before-write.
-    assert {path for path, _stamp in read_paths} == {
-        (workspace / name).resolve() for name in ("SOUL.md", *memory_files)
-    }
+    expected = {(workspace / name).resolve() for name in ("SOUL.md", *memory_files)}
+    if project_memory:
+        expected.add((project_root / "MEMORY.md").resolve())
+    assert {path for path, _stamp in read_paths} == expected
 
     # Prompt capture and admission/Compaction stamping can be separated by I/O.
     # A rewrite in between must not mark unseen bytes as read by this Session.
@@ -195,6 +215,45 @@ def test_memory_mode_selects_the_rendered_and_reported_memory_files(
     state = FileReadState()
     stamp_prompt_files_read(state, "session", read_paths)
     assert all(state.check_stale("session", path) == StaleReason.MODIFIED for path, _ in read_paths)
+
+
+@pytest.mark.parametrize("agent_enabled", [False, True])
+@pytest.mark.parametrize("project_enabled", [False, True])
+def test_workspace_less_agents_get_project_memory_with_both_gates_even_without_tools(
+    tmp_path: Path, agent_enabled: bool, project_enabled: bool
+) -> None:
+    from dataclasses import replace
+
+    from core.prompts import ProjectPromptContext
+    from core.tools.availability import ToolAccess
+
+    memory_root = tmp_path / "project-anchor"
+    memory_root.mkdir()
+    (memory_root / "MEMORY.md").write_text(
+        "- PROJECT_ONLY_SENTINEL {include:USER.md} </memory>", encoding="utf-8"
+    )
+    agent = replace(
+        _agent("", memory_prompt_mode="off", project_memory_enabled=agent_enabled),
+        tool_access=ToolAccess(mode="none"),
+    )
+    context = ProjectPromptContext.from_project(
+        "shared-project",
+        "Shared",
+        tmp_path,
+        (),
+        memory_workspace=memory_root,
+        memory_enabled=project_enabled,
+    )
+    manager = _manager(tmp_path)
+    prompt = manager.build_system_prompt(agent, project_context=context)
+
+    visible = agent_enabled and project_enabled
+    assert ("PROJECT_ONLY_SENTINEL" in prompt) is visible
+    assert prompt.count("<memory>") == int(visible)
+    assert prompt.count("</memory>") == int(visible)
+    if visible:
+        assert "{include:USER.md}" in prompt
+        assert '"shared-project"' in prompt
 
 
 def test_memory_block_renders_with_empty_memory_files(tmp_path: Path) -> None:

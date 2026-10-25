@@ -119,6 +119,8 @@ class ToolExecutor:
                 project_id=config.project_id,
                 skill_project_id=config.skill_project_id,
                 working_project_id=config.working_project_id,
+                memory_prompt_mode=config.memory_prompt_mode,
+                project_memory_enabled=config.project_memory_enabled,
                 skill_agent_id=config.skill_agent_id,
                 run_kind=config.run_kind,
                 subagent_session=config.subagent_session,

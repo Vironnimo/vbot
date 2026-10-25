@@ -154,6 +154,7 @@ _AGENT_CONFIG_FIELDS = frozenset(
         "id",
         "librarian_enabled",
         "memory_prompt_mode",
+        "project_memory_enabled",
         "model",
         "name",
         "permission_rules",
@@ -338,6 +339,10 @@ def validate_agent_data(data: Any) -> list[JsonDiagnostic]:
             data["memory_prompt_mode"],
             frozenset(MEMORY_PROMPT_MODES),
         )
+    if data.get("project_memory_enabled") is not None and not isinstance(
+        data["project_memory_enabled"], bool
+    ):
+        add_error(diagnostics, "$.project_memory_enabled", "must be a boolean")
     if data.get("tool_access") is not None:
         tool_access = data["tool_access"]
         warn_unknown_fields(
@@ -758,6 +763,7 @@ def _agent_from_dict(
     temperature = data.get("temperature")
     top_p = data.get("top_p")
     memory_prompt_mode = data.get("memory_prompt_mode")
+    project_memory_enabled = data.get("project_memory_enabled")
     librarian_enabled = data.get("librarian_enabled")
     agent = Agent(
         id=agent_id,
@@ -779,6 +785,11 @@ def _agent_from_dict(
         top_p=None if top_p is None else float(top_p),
         thinking_effort=data.get("thinking_effort"),
         memory_prompt_mode=cast(MemoryPromptMode, memory_prompt_mode or DEFAULT_MEMORY_PROMPT_MODE),
+        project_memory_enabled=(
+            memory_prompt_mode != MEMORY_PROMPT_MODE_OFF
+            if project_memory_enabled is None
+            else bool(project_memory_enabled)
+        ),
         tool_access=_validate_tool_access(data.get("tool_access")),
         allowed_skills=_validate_allowed_items("allowed_skills", data.get("allowed_skills")),
         excluded_skills=_validate_excluded_skills(data.get("excluded_skills")),
@@ -819,6 +830,7 @@ def _with_builtin_capabilities(agent: Agent) -> Agent:
         agent,
         tool_access=tool_access,
         memory_prompt_mode=MEMORY_PROMPT_MODE_OFF,
+        project_memory_enabled=False,
         custom_system_prompt_enabled=False,
         librarian_enabled=False,
         root_project_id=None,

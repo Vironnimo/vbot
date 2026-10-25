@@ -1,15 +1,18 @@
 # Memory Tool
 
-Model-facing editing of pinned Memory entries in `USER.md` and `MEMORY.md` (storage contract: `memory.md`).
+Model-facing editing of pinned personal and shared Project Memory entries (storage contract: `memory.md`).
 
 ## Interfaces
 
-- Tool name `memory`; `register_memory_tool(registry, memory_service)` in `core/tools/memory.py`, bound to the Runtime's `MemoryService`. Activation follows the Agent's Memory mode (`activation="memory_mode"`, Identity Agents only).
-- Model-facing schema: one flat object with required `action` (`list`, `add`, `replace`, `remove`) and optional `scope` (`user`, `agent`), `content`, `old_text`; no `additionalProperties` keyword or defaults.
+- Tool name `memory`; `register_memory_tool(registry, memory_service, projects)` in `core/tools/memory.py`, bound to the Runtime's `MemoryService` and `ProjectStore`. Activation follows the Agent's personal Memory mode or Project Memory selection (`activation="memory_mode"`); Tool denial still wins.
+- Model-facing schema: one flat object with required `action` (`list`, `add`, `replace`, `remove`) and optional `scope` (`user`, `agent`, `project`), `project_id`, `content`, `old_text`; no `additionalProperties` keyword or defaults.
 - Entries are addressed by text: `old_text` is a unique part of an entry's current text. Matching (`core/memory/memory.py::match_memory_entries`) ignores whitespace runs and a copied leading `- ` bullet; an exact whole entry wins, then exact containment; only if neither exists are case, typographic quotes/dashes and Unicode compatibility forms ignored the same way. Loose whole matches of different entries are ambiguous. If those literal matches find nothing, an exactly copied JSON-quoted whole entry from the prompt or list also matches. The backend rematches under its file lock (`replace_matching`/`remove_matching`), so a concurrent change cannot redirect a write.
 - `scope` is required for `add` (never guessed). `list` without scope shows both scopes; `replace`/`remove` without scope use the one scope whose entries match `old_text` and fail when both or neither match.
+- Omitted scope retains that personal-only behavior. A Project-only Agent gets `memory_unavailable` for omitted or explicit personal scopes and must select `scope="project"`; no empty Workspace is resolved to the process working directory.
+- `scope="project"` requires both the Agent's `project_memory_enabled` and the Project's `memory_enabled`. Its target is one of the Run's Working Project and explicitly loaded Project Context (`working_project_id`, `skill_project_id`), never a directory inference or an arbitrary registered id. `project_id` selects among these; omission resolves only one unique active Project and otherwise refuses. The Project owner's configuration guard covers its live enablement check, Memory anchor resolution and complete operation, so archive and disabling cannot detach a write. Personal mode `off` does not prevent an enabled Project scope.
 - `entry_id` is an unadvertised parameter: positional ids copied from older results are refused with the entry currently at that position and the corrected `old_text` call, unless `old_text` names the same entry. The RPC surface still uses positional ids (`memory.md`).
 - `parallel_safe=False`: same-turn memory calls apply in written order, so "free space, then add" works in one message and text matching never races a sibling change.
+- Changes to the description, `scope` or `project_id` are announced through Chat's existing Tool-change mechanism so an existing prompt epoch can use the Project scope without waiting for Compaction.
 
 ## Argument Repair
 
@@ -18,6 +21,7 @@ The Tool-owned normalizer (`normalize_call_arguments`) repairs action/scope form
 ## Result Contract
 
 - Every success carries a `content` line (declared result schema). `list` renders exactly the Memory block format (`# Agent Memory (used/limit chars used)` / `# User Profile ...` plus bullets or `No entries yet.`) and a `count` that drives the Tool row's presentation-only result count. Mutations answer with one line: scope, usage after the change and, for replace/remove, the previous entry text (preview <= 200 chars). No mutation echoes the entry list.
+- Project successes additionally carry `project_id` and identify that Project in `content`; their list uses `# Project Memory`, and their changes use the same `memory_changes` display block and Project-owned revision history.
 - Duplicate adds and no-op replaces succeed with "nothing changed".
 - Display (`details=True`): a changing mutation records one `memory_changes` block (`tools/display.md` -> Display metadata) with its scope, the change (`added` text, `removed` text, or `replaced` previous and new text) and the Memory history revision the backend returns on `MemoryEntry.revision`/`MemoryTextChange.revision` (absent without a history, `memory/history.md`); the Tool passes a `MemoryWriter` with its Agent, Session and Run. A duplicate add or no-op replace records an info notice with the scope as `Agent Memory`/`User Profile` subject; `list` records nothing, so its row shows Args and Result directly; failures get the generic error notice. Coverage: `test_memory.py::test_the_user_sees_each_changed_entry_and_its_memory_revision`.
 - Failures change nothing and are never marked retryable: `memory_no_match` shows the searched scope(s) in block format; `memory_ambiguous` lists the matching entries (per scope when both match); `memory_full` states the resulting total, the characters to free and the current entries; `invalid_arguments` refusals (missing scope for add, replace without content, remove with content, add with old_text/entry_id, entry_id) name the corrected call as JSON. Other Memory validation or I/O failures return `memory_error`.

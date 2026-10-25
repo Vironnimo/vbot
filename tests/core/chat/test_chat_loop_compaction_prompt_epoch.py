@@ -375,6 +375,7 @@ async def test_compaction_refreshes_pinned_soul_and_memory(tmp_path: Path) -> No
     assert runtime.chat_sessions.prompt_pin(session.address, PINNED_MEMORY_FILES_SLOT) == {
         "text": "NEW_MEMORY_SENTINEL",
         "mode": "agent_user",
+        "memory_project_id": None,
     }
 
 
@@ -532,9 +533,13 @@ async def test_temporary_compaction_refreshes_epoch_without_identity_lookup(
     assert runtime.agent_resolver.calls == []
     assert context.agent_body == "TEMP_BODY_SENTINEL"
     assert prompt_pin(address, PINNED_AGENT_BODY_SLOT) == {"text": "TEMP_BODY_SENTINEL"}
-    assert context.soul_context is None and context.memory_files_context is None
+    assert context.soul_context is None
+    assert (context.memory_files_context is not None) is bool(project_id)
     assert prompt_pin(address, PINNED_SOUL_CONTEXT_SLOT) is None
-    assert prompt_pin(address, PINNED_MEMORY_FILES_SLOT) is None
+    memory_pin = prompt_pin(address, PINNED_MEMORY_FILES_SLOT)
+    assert (memory_pin is not None) is bool(project_id)
+    if memory_pin is not None:
+        assert memory_pin["memory_project_id"] == project_id
     project_pin = prompt_pin(address, PINNED_WORKING_PROJECT_CONTEXT_SLOT)
     if project_id:
         assert project_pin is not None

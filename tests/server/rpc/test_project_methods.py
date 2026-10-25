@@ -83,6 +83,7 @@ async def test_add_creates_the_project_with_seeded_defaults_and_a_scan_preview(
     project = result["project"]
     assert project["project_id"] == "vbot"
     assert project["cwd_exists"] is True
+    assert project["memory_enabled"] is True
     # The repository's instruction file loads with no configuration.
     assert (project["auto_instructions"], project["folder_instructions"]) == (True, True)
     assert project["auto_load"] == []
@@ -103,11 +104,13 @@ async def test_add_creates_the_project_with_seeded_defaults_and_a_scan_preview(
         project_id="vbot",
         auto_instructions=False,
         folder_instructions=False,
+        memory_enabled=False,
         auto_load=["NOTES.md"],
         context_commands=[" git status --short ", "git status --short"],
     )
     project = changed["project"]
     assert (project["auto_instructions"], project["folder_instructions"]) == (False, False)
+    assert project["memory_enabled"] is False
     assert project["context_commands"] == ["git status --short"]
     # The main file is still reported while off; an additional file that does
     # not exist is listed as missing.

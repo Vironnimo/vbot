@@ -294,6 +294,10 @@ async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
             prompt_project.display_name,
             prompt_project.cwd,
             prompt_project.auto_load,
+            memory_workspace=await _PROMPT_RPC_WORKERS.run(
+                state.runtime.projects.memory_workspace, prompt_project.project_id
+            ),
+            memory_enabled=prompt_project.memory_enabled,
         )
         if prompt_project is not None
         else None

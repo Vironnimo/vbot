@@ -12,11 +12,13 @@ Supplementary to `cli.md`. Covers the command shapes and output of the `agent`, 
 - `--copy-workspace-files` requires a Workspace destination in the same command. Clear/default flags send JSON `null` (or the stored empty-model sentinel); literal domain values such as `--thinking-effort none` remain distinct from clearing the field.
 - A full Agent response without effective Model persists successfully (onboarding resource) but appends an explicit cannot-run warning plus recovery commands (`model list --task chat`, `agent update --model`).
 - `agent create|update --librarian true|false` sets `librarian_enabled`; `agent show` prints it, and for the built-in Librarian a `builtin: librarian (...)` line saying which fields can change (its wording: `automation/librarian.md` -> Agent-facing text).
+- `agent create|update --project-memory true|false` selects Project Memory independently of personal `--memory-prompt-mode`; personal mode `off` with Project Memory enabled allows Project Memory alone. `agent show` prints the resolved selection.
 
 ## Project area
 
 - `project add/list/show/set/set-override/clear-override/detect/rm`. `detect [<path>]` reports detected Agent and Skill Sources with ids, paths, counts and problems, and answers a nonexistent path explicitly. `add`/`set --sources` replace the complete ordered selection as a JSON array; `--model-mappings` replaces the Model-wish table as a JSON object. Both use the shared strict CLI JSON readers. `--auto-instructions`/`--folder-instructions on|off` set the instruction switches (`projects/resolution.md` -> Project Context instructions). `show` and mutations print Source order/switches, both instruction switches with the main file found and missing additional files, Model mappings, Team status, translations and shadowed definitions. Override mutations target one Team Agent field without editing the repo (`compaction_policy`, `tool_access`, `tool_loading` and `permission_rules` take a JSON object; `permission_rules` also takes a preset name; `full-access` overrides the repository's rules and the default, `clear-override` follows them); the Team line shows `permission_rules=<json|full-access>`; a Tool override replaces the scanned repository Tool policy inside the Project Tool Whitelist (resolution tiers: `projects/resolution.md`). `rm` output: `cli/archive-commands.md`.
 - Project work is stateless - there is no current-Project flag; Projects ride the `agent@project` address form (`cli.md` -> Interfaces).
+- `project add|set --memory on|off` controls Agent access to shared Project Memory without deleting entries or disabling the user's Memory commands. Team overrides accept `project_memory_enabled` as `true` or `false`; `project show` prints the Project switch.
 
 ## Session area
 
@@ -33,6 +35,8 @@ Both create and update accept `--file <path>` instead of `--prompt` for local mu
 ## Memory
 
 `memory list|add|replace|remove <agent-id>` selects `--scope agent|user`, takes text from `--content` or `--file`, needs `--yes` for remove. `list` shows both Memory scopes unless an explicit `--scope agent` or `--scope user` filters it, and prints entry ids per scope so follow-ups can address entries; mutations default to the Agent scope (`test_cli_memory.py`). `memory history <agent-id> [--scope] [--limit 20]` prints revisions newest first with their changes (`+`/`-`/`~ ... ->`); `memory show <agent-id> <revision>` and `memory diff <agent-id> <from> [<to>]` inspect past states; `memory revert <agent-id> <revision>...` takes changes back all or none (contract in `memory/history.md`). Failure recovery for these points to `memory history`.
+
+Every Memory command also accepts `--project`, which interprets the same positional id as a Project id and uses scope `project` (`memory list vbot --project`, `memory revert vbot 7 --project`). An explicit personal scope with `--project`, or scope `project` without it, is refused before RPC. Success and recovery retain the selected Project; no Agent id is sent for these calls. The user can manage Project Memory while its Agent-access switch is off.
 
 ## Skill
 

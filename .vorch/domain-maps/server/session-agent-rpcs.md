@@ -25,6 +25,8 @@ The server side of `session.*`, `agent.*`, `tool.list`, `permissions.*` and `lea
 
 ## Learning RPCs
 
+Shared Project Memory changes carry `project_id` on their learning-change and conflict items. A successful undo also publishes a `memories` invalidation for each affected Project; a failed undo publishes a general Memory invalidation because it may have written several owners (`automation/learning-changes.md`).
+
 - `learning_methods.py` serves the Memory and Skill changes of one Run of an Identity Agent (`automation/learning-changes.md`): `learning.changes {agent_id, run_id}` -> `{agent_id, run_id, summary {memory, skills, undone}, changes}` and `learning.undo {agent_id, run_id}` -> the same shape after the undo. Both resolve the Agent's Workspace under the Agent reference lock and work on the `learning-rpc` pool; undo is a serialized mutation, records its reverts as `rpc`/`human`, and publishes `resource_changed(kind="memories", scope {agent_id})` and, after invalidating the Agent's Skills, `skills` for the stores it changed (both when a failed undo may have written). A refusal over a later change is `learning_undo_conflict` with `data {store, revision, later {revision, at, actor, run_kind?}, scope, text}` (Memory) or `{store, revision, later, skill}` (Skill); a Run that is still running is `active_run` with `data {run_id}`; other learning errors are `domain_error`. `_chat_reads.py` adds each finished review row's `outcome` (the summary) to `reflection_runs` (`server/events-and-reconnect.md` -> Reflection recovery). Tests: `tests/server/rpc/test_learning_methods.py`.
 
 ## Notification policy and read state

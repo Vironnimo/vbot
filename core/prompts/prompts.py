@@ -17,6 +17,7 @@ from core.prompts._catalog import (
     load_bundled_default_layout,
 )
 from core.prompts._context import (
+    project_memory_visible,
     render_memory_files,
     render_project_files,
     render_project_skills,
@@ -135,6 +136,7 @@ __all__ = [
     "SkillPromptMetadata",
     "SkillPromptRegistry",
     "SystemPromptManager",
+    "project_memory_visible",
     "ToolPromptRegistry",
     "USER_BLOCK_ID_PREFIX",
     "USER_BLOCK_SOURCE",
@@ -370,7 +372,10 @@ class SystemPromptManager:
             layout,
             context,
             owner_activity=self._owner_activity(
-                effective_tool_names, session_tool_grants, subagent_session=subagent_session
+                effective_tool_names,
+                session_tool_grants,
+                subagent_session=subagent_session,
+                project_context=project_context,
             ),
             override_resolver=self._catalog.override_resolver(prompt_scope),
             producers=producers,
@@ -439,7 +444,10 @@ class SystemPromptManager:
             read_observer=read_paths.append if read_paths is not None else None,
         )
         owner_activity = self._owner_activity(
-            effective_tool_names, session_tool_grants, subagent_session=subagent_session
+            effective_tool_names,
+            session_tool_grants,
+            subagent_session=subagent_session,
+            project_context=project_context,
         )
         definitions = self._collect_block_definitions(
             agent,
@@ -558,6 +566,7 @@ class SystemPromptManager:
         session_tool_grants: Sequence[str],
         *,
         subagent_session: bool = False,
+        project_context: ProjectPromptContext | None = None,
     ) -> OwnerActivity:
         return CallableOwnerActivity(
             lambda owner, owner_agent: self._inputs._is_owner_active(
@@ -566,6 +575,7 @@ class SystemPromptManager:
                 effective_tool_names=effective_tool_names,
                 session_tool_grants=session_tool_grants,
                 subagent_session=subagent_session,
+                project_context=project_context,
             )
         )
 
@@ -844,9 +854,13 @@ class SystemPromptManager:
         )
 
     def render_memory_files(
-        self, agent: PromptAgent, *, on_read: Callable[[FileRead], None] | None = None
+        self,
+        agent: PromptAgent,
+        *,
+        project_context: ProjectPromptContext | None = None,
+        on_read: Callable[[FileRead], None] | None = None,
     ) -> str:
-        """Render the pinned-memory text for the agent's memory prompt mode.
+        """Render enabled personal and Working Project Memory in one snapshot.
 
         The single live render path shared by the ``memory_files`` producer and by
         Chat's prompt-epoch snapshot. A section above its Memory budget shows the
@@ -854,14 +868,16 @@ class SystemPromptManager:
         when the Agent's current Tool policy offers it. When *on_read* is given,
         every on-disk memory file shown whole is reported so the agent can edit a
         file it was auto-shown from that render's captured metadata; an empty
-        workspace (a config agent) reports nothing and must never resolve against
-        ``Path(".")``.
+        Identity Workspace never resolves against ``Path(".")``. Shared Project
+        Memory uses the explicit Anchor in *project_context*, including for
+        Workspace-less Agents.
         """
         return render_memory_files(
             self._inputs._memory_provider,
             agent,
             self._tool_policy.tool_availability(agent),
             on_read,
+            project_context,
         )
 
     def _resolve_build_scope(self, agent: PromptAgent, scope: Any = None) -> PromptScope:

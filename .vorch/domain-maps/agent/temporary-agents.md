@@ -22,6 +22,8 @@ other owners and groups are outside its scope (`test_swarm_operations.py`).
 
 ## Prompt blocks and Compaction Policy
 
+Temporary configurations also carry `project_memory_enabled`, default true. Only false is stored in a binding, keeping older default snapshots identical for idempotent creation; resolution and preview preserve the selection. It permits Project Memory only while the Session has a selected Project whose shared Memory is enabled, and grants no personal Memory (`memory.md`).
+
 Temporary configurations and persisted bindings carry optional `prompt_blocks`:
 `None` inherits the normal layout; an explicit list selects all allowed System
 Prompt contributions. Prompts owns its assembly semantics. Continuation input may

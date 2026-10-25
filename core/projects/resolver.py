@@ -610,6 +610,9 @@ class AgentResolver:
         )
         return replace(
             result,
+            project_memory_enabled=project.overrides.get(agent_id, {}).get(
+                "project_memory_enabled", True
+            ),
             model_inherit=scanned.model == "inherit"
             and not project.overrides.get(agent_id, {}).get("model"),
         )
@@ -757,6 +760,16 @@ class AgentResolver:
             "top_p": _config_sampling_source("top_p", project, scanned, global_defaults),
             "thinking_effort": _config_thinking_effort_source(project, scanned, global_defaults),
             "tool_access": _config_tool_access_source(project, scanned),
+            "project_memory_enabled": {
+                "value": project.overrides.get(scanned.agent_id, {}).get(
+                    "project_memory_enabled", True
+                ),
+                "source": (
+                    "override"
+                    if "project_memory_enabled" in project.overrides.get(scanned.agent_id, {})
+                    else "project_default"
+                ),
+            },
             "permission_rules": permission_rules_source(
                 (("override", _override_permission_rules(project, scanned.agent_id)),),
                 global_defaults,

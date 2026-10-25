@@ -987,6 +987,17 @@ describe('Reflection rows', () => {
       'Nothing was undone: the Agent Memory entry “Uses pytest.” was changed again later by a background Reflection',
     ],
     [
+      'a later shared Project Memory change',
+      {
+        store: 'memory',
+        scope: 'project',
+        project_id: 'demo',
+        text: 'Discuss rollout.',
+        later: { actor: 'tool' },
+      },
+      'Nothing was undone: the Project Memory (demo) entry “Discuss rollout.” was changed again later by an Agent',
+    ],
+    [
       'a Skill edited outside vBot',
       { store: 'skill', skill: 'deploy', later: { actor: 'external' } },
       'Nothing was undone: Skill “deploy” was changed again later by an edit outside vBot',

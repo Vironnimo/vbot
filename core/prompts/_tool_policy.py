@@ -125,6 +125,7 @@ class PromptToolPolicy:
             self._registry.list_tools(),
             agent.memory_prompt_mode,
             workspace=agent.workspace,
+            project_memory_enabled=getattr(agent, "project_memory_enabled", False),
             session_tool_grants=session_tool_grants,
         )
         definitions = self._registry.provider_definitions(
@@ -162,6 +163,7 @@ class PromptToolPolicy:
             self._registry.list_tools(),
             agent.memory_prompt_mode,
             workspace=agent.workspace,
+            project_memory_enabled=getattr(agent, "project_memory_enabled", False),
             session_tool_grants=session_tool_grants,
         )
         definitions = self._registry.prompt_definitions(

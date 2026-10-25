@@ -176,6 +176,8 @@ class StubAgent:
     allowed_skills: list[str] | None = None
     workspace: Path | None = None
     root_project_id: str | None = None
+    project_memory_enabled: bool = False
+    memory_prompt_mode: str = "agent_user"
     tool_loading: dict[str, Any] | None = None
     permission_rules: PermissionRules | None = None
     permission_ceiling: PermissionCeiling | None = None
@@ -207,6 +209,7 @@ class StubProject:
     auto_load: list[str]
     display_name: str = ""
     folder_instructions: bool = False
+    memory_enabled: bool = True
 
     @property
     def instruction_files(self) -> list[str]:
@@ -232,6 +235,9 @@ class StubProjects:
 
     def list(self) -> list[StubProject]:
         return [self._projects[project_id] for project_id in sorted(self._projects)]
+
+    def memory_workspace(self, project_id: str) -> Path:
+        return Path(self.get(project_id).cwd).parent / "projects" / project_id
 
 
 class StubAgentResolver:
@@ -512,7 +518,9 @@ class StubPrompts:
         self.render_soul_calls += 1
         return f"Soul of {agent.id}"
 
-    def render_memory_files(self, agent: StubAgent, *, on_read: Any = None) -> str:
+    def render_memory_files(
+        self, agent: StubAgent, *, project_context: Any = None, on_read: Any = None
+    ) -> str:
         self.render_memory_files_calls += 1
         return f"Memory of {agent.id}"
 

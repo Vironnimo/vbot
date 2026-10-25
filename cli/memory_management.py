@@ -13,12 +13,24 @@ from cli.server_management import CommandResult, ServerInstance
 _AGENT_NOT_FOUND = "agent_not_found"
 
 
-def memory_list(instance: ServerInstance, agent_id: str, scope: str | None = None) -> CommandResult:
+def _owner_params(owner_id: str, project: bool) -> dict[str, str]:
+    return {"project_id" if project else "agent_id": owner_id}
+
+
+def _response_scopes(data: Mapping[str, Any]) -> tuple[str, ...]:
+    return ("project",) if "project_id" in data else ("agent", "user")
+
+
+def memory_list(
+    instance: ServerInstance, agent_id: str, scope: str | None = None, *, project: bool = False
+) -> CommandResult:
     """Return formatted pinned memory entries from `memory.list` RPC."""
 
-    payload = _rpc_call(instance, "memory.list", {"agent_id": agent_id})
+    payload = _rpc_call(instance, "memory.list", _owner_params(agent_id, project))
     if not payload.ok:
-        return _memory_failure_result(instance, agent_id, payload.to_command_result())
+        return _memory_failure_result(
+            instance, agent_id, payload.to_command_result(), project=project
+        )
     return CommandResult(
         ok=True,
         message=_format_memory_response(payload.data, verb="pinned memory for", scope=scope),
@@ -34,10 +46,12 @@ def _memory_failure_result(
     instance: ServerInstance,
     agent_id: str,
     failed: CommandResult,
+    *,
+    project: bool = False,
 ) -> CommandResult:
     """Attach known agents to unknown-agent failures for one-retry fixes."""
 
-    if not _is_unknown_agent(failed):
+    if project or not _is_unknown_agent(failed):
         return failed
     listing = _rpc_call(instance, "agent.list", {})
     agents = listing.data.get("agents") if listing.ok else None
@@ -62,6 +76,8 @@ def memory_add(
     agent_id: str,
     scope: str,
     content: str,
+    *,
+    project: bool = False,
 ) -> CommandResult:
     """Add one pinned memory entry via `memory.add` RPC."""
 
@@ -72,6 +88,7 @@ def memory_add(
         scope=scope,
         content=content,
         verb="added",
+        project=project,
     )
 
 
@@ -81,6 +98,8 @@ def memory_replace(
     scope: str,
     entry_id: int,
     content: str,
+    *,
+    project: bool = False,
 ) -> CommandResult:
     """Replace one pinned memory entry's content via `memory.replace` RPC."""
 
@@ -92,6 +111,7 @@ def memory_replace(
         entry_id=entry_id,
         content=content,
         verb="replaced",
+        project=project,
     )
 
 
@@ -101,6 +121,8 @@ def memory_remove(
     scope: str,
     entry_id: int,
     confirm: bool,
+    *,
+    project: bool = False,
 ) -> CommandResult:
     """Remove one pinned memory entry after explicit confirmation."""
 
@@ -120,6 +142,7 @@ def memory_remove(
         scope=scope,
         entry_id=entry_id,
         verb="removed",
+        project=project,
     )
 
 
@@ -132,8 +155,9 @@ def _memory_mutation(
     content: str | None = None,
     entry_id: int | None = None,
     verb: str,
+    project: bool = False,
 ) -> CommandResult:
-    params: dict[str, Any] = {"agent_id": agent_id, "scope": scope}
+    params: dict[str, Any] = {**_owner_params(agent_id, project), "scope": scope}
     if entry_id is not None:
         params["entry_id"] = entry_id
     if content is not None:
@@ -143,8 +167,10 @@ def _memory_mutation(
         failed = payload.to_command_result()
         if _is_unknown_agent(failed):
             return _memory_failure_result(instance, agent_id, failed)
+        if project and failed.failure is not None and failed.failure.code == "project_not_found":
+            return failed
         if entry_id is not None:
-            return _with_available_entry_ids(instance, agent_id, scope, failed)
+            return _with_available_entry_ids(instance, agent_id, scope, failed, project=project)
         return failed
     entry = payload.data.get("entry")
     lines = [f"{verb} memory entry in {agent_id} (scope: {scope})"]
@@ -159,14 +185,14 @@ def _memory_mutation(
 def _format_memory_response(data: object, *, verb: str, scope: str | None = None) -> str:
     if not isinstance(data, dict):
         return "memory unavailable: unexpected RPC result"
-    agent_id = _string_or_default(data.get("agent_id"), "?")
+    agent_id = _string_or_default(data.get("project_id", data.get("agent_id")), "?")
     scopes = data.get("scopes")
     lines = [f"{verb} {agent_id}:"]
     if not isinstance(scopes, dict):
         lines.append("no entries")
         return "\n".join(lines)
     total = 0
-    for scope_name in (scope,) if scope is not None else ("agent", "user"):
+    for scope_name in (scope,) if scope is not None else _response_scopes(data):
         entries = scopes.get(scope_name)
         if not isinstance(entries, list):
             entries = []
@@ -193,10 +219,12 @@ def _with_available_entry_ids(
     agent_id: str,
     scope: str,
     failed: CommandResult,
+    *,
+    project: bool = False,
 ) -> CommandResult:
     """Show the scope's existing entry ids after a failed entry mutation."""
 
-    listing = _rpc_call(instance, "memory.list", {"agent_id": agent_id})
+    listing = _rpc_call(instance, "memory.list", _owner_params(agent_id, project))
     if not listing.ok:
         return CommandResult(
             ok=False,
@@ -228,7 +256,7 @@ def _scope_counts(data: Mapping[str, Any]) -> str | None:
     if not isinstance(scopes, dict):
         return None
     parts = []
-    for scope_name in ("agent", "user"):
+    for scope_name in _response_scopes(data):
         entries = scopes.get(scope_name)
         count = len(entries) if isinstance(entries, list) else 0
         parts.append(f"{scope_name}={count}")
@@ -236,16 +264,23 @@ def _scope_counts(data: Mapping[str, Any]) -> str | None:
 
 
 def memory_history(
-    instance: ServerInstance, agent_id: str, scope: str | None, limit: int
+    instance: ServerInstance,
+    agent_id: str,
+    scope: str | None,
+    limit: int,
+    *,
+    project: bool = False,
 ) -> CommandResult:
     """Return the newest Memory revisions from `memory.history` RPC."""
 
-    params: dict[str, Any] = {"agent_id": agent_id, "limit": limit}
+    params: dict[str, Any] = {**_owner_params(agent_id, project), "limit": limit}
     if scope is not None:
         params["scope"] = scope
     payload = _rpc_call(instance, "memory.history", params)
     if not payload.ok:
-        return _memory_failure_result(instance, agent_id, payload.to_command_result())
+        return _memory_failure_result(
+            instance, agent_id, payload.to_command_result(), project=project
+        )
     revisions = _records(payload.data.get("revisions"))
     total = payload.data.get("total")
     scope_text = f" ({scope} scope)" if scope is not None else ""
@@ -263,15 +298,21 @@ def memory_history(
     return CommandResult(ok=True, message="\n".join(lines), instance=instance)
 
 
-def memory_show(instance: ServerInstance, agent_id: str, revision: int) -> CommandResult:
+def memory_show(
+    instance: ServerInstance, agent_id: str, revision: int, *, project: bool = False
+) -> CommandResult:
     """Return the Memory entries as they were after one revision (`memory.show` RPC)."""
 
-    payload = _rpc_call(instance, "memory.show", {"agent_id": agent_id, "revision": revision})
+    payload = _rpc_call(
+        instance, "memory.show", {**_owner_params(agent_id, project), "revision": revision}
+    )
     if not payload.ok:
-        return _memory_failure_result(instance, agent_id, payload.to_command_result())
+        return _memory_failure_result(
+            instance, agent_id, payload.to_command_result(), project=project
+        )
     scopes = payload.data.get("scopes")
     lines = [f"Memory of {agent_id} after revision {revision}:"]
-    for scope_name in ("agent", "user"):
+    for scope_name in _response_scopes(payload.data):
         entries = scopes.get(scope_name) if isinstance(scopes, dict) else None
         lines.append(f"{scope_name} scope:")
         if not isinstance(entries, list) or not entries:
@@ -282,21 +323,28 @@ def memory_show(instance: ServerInstance, agent_id: str, revision: int) -> Comma
 
 
 def memory_diff(
-    instance: ServerInstance, agent_id: str, from_revision: int, to_revision: int | None
+    instance: ServerInstance,
+    agent_id: str,
+    from_revision: int,
+    to_revision: int | None,
+    *,
+    project: bool = False,
 ) -> CommandResult:
     """Return how Memory changed between two revisions (`memory.diff` RPC)."""
 
-    params: dict[str, Any] = {"agent_id": agent_id, "from": from_revision}
+    params: dict[str, Any] = {**_owner_params(agent_id, project), "from": from_revision}
     if to_revision is not None:
         params["to"] = to_revision
     payload = _rpc_call(instance, "memory.diff", params)
     if not payload.ok:
-        return _memory_failure_result(instance, agent_id, payload.to_command_result())
+        return _memory_failure_result(
+            instance, agent_id, payload.to_command_result(), project=project
+        )
     target = f"revision {to_revision}" if to_revision is not None else "now"
     changes = payload.data.get("changes")
     lines = [f"Memory of {agent_id} from revision {from_revision} to {target}:"]
     changed = False
-    for scope_name in ("agent", "user"):
+    for scope_name in _response_scopes(payload.data):
         scope_changes = changes.get(scope_name) if isinstance(changes, dict) else None
         if not isinstance(scope_changes, list) or not scope_changes:
             continue
@@ -308,12 +356,18 @@ def memory_diff(
     return CommandResult(ok=True, message="\n".join(lines), instance=instance)
 
 
-def memory_revert(instance: ServerInstance, agent_id: str, revisions: list[int]) -> CommandResult:
+def memory_revert(
+    instance: ServerInstance, agent_id: str, revisions: list[int], *, project: bool = False
+) -> CommandResult:
     """Take back the changes of one or more revisions (`memory.revert` RPC)."""
 
-    payload = _rpc_call(instance, "memory.revert", {"agent_id": agent_id, "revisions": revisions})
+    payload = _rpc_call(
+        instance, "memory.revert", {**_owner_params(agent_id, project), "revisions": revisions}
+    )
     if not payload.ok:
-        return _memory_failure_result(instance, agent_id, payload.to_command_result())
+        return _memory_failure_result(
+            instance, agent_id, payload.to_command_result(), project=project
+        )
     named = ", ".join(str(revision) for revision in revisions)
     noun = "revisions" if len(revisions) > 1 else "revision"
     recorded = _records(payload.data.get("revisions"))

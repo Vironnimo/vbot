@@ -62,6 +62,7 @@ class StubAgent:
     root_project_id: str | None = None
     thinking_effort: str | None = "high"
     memory_prompt_mode: str = "off"
+    project_memory_enabled: bool = False
     tool_access: ToolAccess = ToolAccess(mode="all")
     allowed_skills: tuple[str, ...] = ()
     custom_system_prompt_enabled: bool = False
@@ -743,8 +744,12 @@ async def test_preview_renders_the_working_project_of_an_identity_agent(
         name="Coder",
         workspace=str(identity_workspace),
         root_project_id=default_project,
+        project_memory_enabled=True,
     )
     home_project = build_project("vbot", "vBot", repo, auto_load=[])
+    memory_workspace = tmp_path / "projects" / "vbot"
+    memory_workspace.mkdir(parents=True)
+    (memory_workspace / "MEMORY.md").write_text("- PROJECT_MEMORY_SENTINEL", encoding="utf-8")
     skills_for_calls: list[tuple[str | None, str | None]] = []
 
     def skills_for(project_id: str | None, agent_id: str | None = None) -> StubSkills:
@@ -754,7 +759,10 @@ async def test_preview_renders_the_working_project_of_an_identity_agent(
     state = _preview_state(
         _manager(tmp_path, agents=[agent]),
         agent,
-        projects=SimpleNamespace(get=lambda _project_id: home_project),
+        projects=SimpleNamespace(
+            get=lambda _project_id: home_project,
+            memory_workspace=lambda _project_id: memory_workspace,
+        ),
         skills_for=skills_for,
         session_projects={"in-vbot": "vbot", "in-workspace": None},
     )
@@ -768,6 +776,7 @@ async def test_preview_renders_the_working_project_of_an_identity_agent(
     assert (f"Project Workspace {model_path(repo)}" in result["text"]) is (
         skill_project is not None
     )
+    assert ("PROJECT_MEMORY_SENTINEL" in result["text"]) is (skill_project is not None)
 
 
 @pytest.mark.asyncio
@@ -789,10 +798,16 @@ async def test_preview_project_config_agent_renders_its_body_in_the_working_proj
         source="opencode",
     )
     project = build_project("vbot", "vBot", repo, auto_load=[])
+    memory_workspace = tmp_path / "projects" / "vbot"
+    memory_workspace.mkdir(parents=True)
+    (memory_workspace / "MEMORY.md").write_text("- PROJECT_ONLY_SENTINEL", encoding="utf-8")
     state = _preview_state(
         _manager(tmp_path, agents=[]),
         agent,
-        projects=SimpleNamespace(get=lambda _project_id: project),
+        projects=SimpleNamespace(
+            get=lambda _project_id: project,
+            memory_workspace=lambda _project_id: memory_workspace,
+        ),
     )
 
     result = await _preview_prompt(state, {"agent_id": "reviewer@vbot"})
@@ -810,6 +825,8 @@ async def test_preview_project_config_agent_renders_its_body_in_the_working_proj
     assert "Identity Workspace" not in result["text"]
     assert f"Root {tmp_path / 'app'}" not in result["text"]
     assert f"Data {tmp_path / 'data'}" not in result["text"]
+    assert "PROJECT_ONLY_SENTINEL" in result["text"]
+    assert result["text"].count("<memory>") == 1
 
 
 @pytest.mark.asyncio

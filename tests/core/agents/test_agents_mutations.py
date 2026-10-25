@@ -320,6 +320,7 @@ def test_workspace_copy_rolls_back_destination_when_the_move_fails(
         ({"temperature": True}, "temperature must be a number"),
         ({"thinking_effort": "turbo"}, "thinking_effort must be one of"),
         ({"memory_prompt_mode": 1}, "memory_prompt_mode must be a string"),
+        ({"project_memory_enabled": "yes"}, "project_memory_enabled must be a boolean"),
         (
             {
                 "tool_access": {

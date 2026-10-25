@@ -346,7 +346,11 @@ def _build_run_permissions(
 
 
 def permitted_project_context(
-    project: Project, boundary: PermissionBoundary, cwd: Path | None = None
+    project: Project,
+    boundary: PermissionBoundary,
+    cwd: Path | None = None,
+    *,
+    memory_workspace: Path | None = None,
 ) -> ProjectPromptContext:
     """The Working Project frame's input, with the instruction files *boundary* lets a Run read.
 
@@ -357,7 +361,14 @@ def permitted_project_context(
     """
     root = cwd if cwd is not None else Path(project.cwd)
     files = [name for name in project.auto_load if boundary.check_path(root / name, "read") is None]
-    return ProjectPromptContext.from_project(project.project_id, project.display_name, root, files)
+    return ProjectPromptContext.from_project(
+        project.project_id,
+        project.display_name,
+        root,
+        files,
+        memory_workspace=memory_workspace,
+        memory_enabled=project.memory_enabled,
+    )
 
 
 # The System Prompt block telling a restricted Agent its boundary. Chat adds it

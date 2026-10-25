@@ -12,8 +12,9 @@ import pytest
 
 import core.memory._file_backend as memory_module
 from core.agents import AgentStore
-from core.memory import MemoryError
+from core.memory import MemoryError, MemoryService
 from core.memory._history import MemoryHistory
+from core.projects import ProjectStore
 from tests.server.rpc_test_support import (
     StubAdapter,
     call,
@@ -103,6 +104,60 @@ async def test_memory_history_lists_compares_and_reverts_changes(tmp_path: Path)
 
 
 @pytest.mark.asyncio
+async def test_project_memory_crud_and_history_work_with_memory_disabled(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    projects = ProjectStore(tmp_path, sessions=state.runtime.chat_sessions)
+    state.runtime.projects = projects
+    state.runtime.memory = MemoryService(
+        history_root=tmp_path / "agents", project_history_root=tmp_path / "projects"
+    )
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    projects.create("demo", "Demo", repo)
+    projects.update("demo", memory_enabled=False)
+    try:
+        listed = await rpc_result(state, "memory.list", project_id="demo")
+        added = await rpc_result(
+            state, "memory.add", project_id="demo", scope="project", content="Discuss first."
+        )
+        await rpc_result(
+            state,
+            "memory.replace",
+            project_id="demo",
+            scope="project",
+            entry_id=1,
+            content="Agree on the design first.",
+        )
+        history = await rpc_result(state, "memory.history", project_id="demo")
+        shown = await rpc_result(state, "memory.show", project_id="demo", revision=1)
+        compared = await rpc_result(state, "memory.diff", project_id="demo", **{"from": 1})
+        reverted = await rpc_result(state, "memory.revert", project_id="demo", revisions=[2])
+        removed = await rpc_result(
+            state, "memory.remove", project_id="demo", scope="project", entry_id=1
+        )
+        wrong_scope = await rpc_error(
+            state, "memory.add", project_id="demo", scope="agent", content="Must not be written."
+        )
+        unknown = await rpc_error(state, "memory.list", project_id="missing")
+    finally:
+        projects.close()
+
+    assert listed == {"project_id": "demo", "scopes": {"project": []}}
+    assert added["entry"] == {"id": 1, "scope": "project", "content": "Discuss first."}
+    assert history["total"] == 2
+    assert [revision["scope"] for revision in history["revisions"]] == ["project", "project"]
+    assert shown == {"project_id": "demo", "revision": 1, "scopes": {"project": ["Discuss first."]}}
+    assert compared["changes"]["project"][0]["op"] == "replaced"
+    assert reverted["scopes"]["project"][0]["content"] == "Discuss first."
+    assert removed["scopes"] == {"project": []}
+    assert wrong_scope["code"] == "invalid_request"
+    assert unknown["code"] == "project_not_found"
+    assert (tmp_path / "projects" / "demo" / "MEMORY.md").read_text(encoding="utf-8") == ""
+    assert not (repo / "MEMORY.md").exists()
+    assert resource_changes(state) == [{"kind": "memories", "scope": {"project_id": "demo"}}] * 4
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["history-not-recorded", "restore-failed"])
 async def test_memory_revert_announces_changed_files_without_a_recorded_revision(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
@@ -147,6 +202,19 @@ async def test_memory_revert_announces_changed_files_without_a_recorded_revision
 @pytest.mark.parametrize(
     ("method", "params", "code", "named"),
     [
+        ("memory.list", {}, "invalid_request", "exactly one"),
+        (
+            "memory.add",
+            {"agent_id": "coder", "project_id": "demo", "scope": "project", "content": "x"},
+            "invalid_request",
+            "exactly one",
+        ),
+        (
+            "memory.add",
+            {"agent_id": "coder", "scope": "project", "content": "x"},
+            "invalid_request",
+            "params.scope must be one of",
+        ),
         (
             "memory.add",
             {"agent_id": "coder", "scope": "other", "content": "Fact"},
