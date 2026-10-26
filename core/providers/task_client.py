@@ -308,7 +308,7 @@ class ProviderTaskClient:
         parse: Callable[[httpx.Response], ParsedResultT],
         consume: Callable[[httpx.Response], Awaitable[ParsedResultT]] | None = None,
         json: JsonObject | None = None,
-        data: dict[str, str] | None = None,
+        data: Mapping[str, str | list[str]] | None = None,
         files: Any | None = None,
         headers: HeaderBuilder | None = None,
         retry_policy: TaskRequestRetryPolicy = DEFAULT_TASK_REQUEST_RETRY_POLICY,

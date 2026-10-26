@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import base64
 import json
-from collections.abc import Collection
+from collections.abc import AsyncIterator, Collection, Mapping
 from pathlib import Path
 from typing import Any
 
 import httpx
 
-from core.model_tasks.speech_audio import decode_speech_audio, pcm_to_wav
+from core.model_tasks.speech_audio import MAX_SPEECH_BYTES, decode_speech_audio, pcm_to_wav
 from core.model_tasks.speech_input import SpeechInputError, TranscriptionInputPolicy
 from core.model_tasks.speech_types import (
     SpeechAudioCallback,
@@ -18,6 +18,7 @@ from core.model_tasks.speech_types import (
     SpeechTranscriptionResult,
 )
 from core.providers.errors import ProviderError
+from core.providers.http import iter_sse_data, parse_sse_json_data
 from core.providers.task_client import (
     EXTRA_OPTIONS_KEY,
     NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY,
@@ -46,8 +47,6 @@ class ProviderSpeechClient(ProviderTaskClient):
         JSON ceiling is vBot's bound, including base64 and request options,
         not a claim about every upstream's maximum request size.
         """
-        if self._provider.id == "mistral":
-            raise ProviderError("Mistral speech execution is not implemented yet", retryable=False)
         if self._provider.id == "openai":
             # OpenAI Audio Transcriptions API reference, reviewed 2026-10-09.
             return TranscriptionInputPolicy(
@@ -89,6 +88,10 @@ class ProviderSpeechClient(ProviderTaskClient):
                 media_type=media_type,
                 options=options,
             )
+        if self._provider.id == "mistral":
+            return await self._transcribe_mistral(
+                audio, filename=filename, media_type=media_type, options=options
+            )
         return await self._transcribe_openai_compatible(
             audio,
             filename=filename,
@@ -99,11 +102,99 @@ class ProviderSpeechClient(ProviderTaskClient):
     async def synthesize(
         self, text: str, *, options: JsonObject, on_audio: SpeechAudioCallback | None = None
     ) -> SpeechSynthesisResult:
-        """Call an OpenAI-compatible text-to-speech endpoint."""
+        """Synthesize speech through the selected Provider's audio endpoint."""
 
         if self._provider.id == "mistral":
-            raise ProviderError("Mistral speech execution is not implemented yet", retryable=False)
+            return await self._synthesize_mistral(text, options=options, on_audio=on_audio)
         return await self._synthesize_openai_compatible(text, options=options, on_audio=on_audio)
+
+    async def _transcribe_mistral(
+        self, audio: bytes, *, filename: str, media_type: str, options: JsonObject
+    ) -> SpeechTranscriptionResult:
+        data: dict[str, str | list[str]] = {"model": self._model_id, "stream": "false"}
+        data.update(_mistral_stt_options(options))
+        extras = _multipart_extra_options(
+            options, protected_fields={*data, "file", "file_id", "file_url"}
+        )
+        data.update(extras)
+        # These are repeated multipart fields, not JSON-encoded arrays.
+        extra_values = options.get(EXTRA_OPTIONS_KEY)
+        if isinstance(extra_values, dict):
+            for key in ("context_bias", "timestamp_granularities"):
+                value = extra_values.get(key)
+                if key in extras and isinstance(value, list):
+                    if not all(isinstance(item, str) for item in value):
+                        raise ProviderError(f"{key} must contain strings", retryable=False)
+                    data[key] = value
+        return await self.post_and_parse(
+            OPENAI_TRANSCRIPTIONS_ENDPOINT,
+            timeout=DEFAULT_SPEECH_TIMEOUT,
+            parse=lambda response: _transcription_result(response.json()),
+            data=data,
+            files={"file": (filename or "recording.wav", audio, media_type or "audio/wav")},
+        )
+
+    async def _synthesize_mistral(
+        self, text: str, *, options: JsonObject, on_audio: SpeechAudioCallback | None
+    ) -> SpeechSynthesisResult:
+        response_format = _response_format(options)
+        if response_format not in {"mp3", "wav", "pcm", "flac", "opus"}:
+            raise ProviderError("Unsupported Mistral speech format", retryable=False)
+        payload: JsonObject = {
+            "model": self._model_id,
+            "input": text,
+            "voice_id": options.get("voice") or "gb_jane_neutral",
+            "response_format": response_format,
+            "stream": on_audio is not None,
+        }
+        if instructions := options.get("instructions"):
+            payload["instruction"] = instructions
+        merge_extra_options(payload, options)
+
+        def result(audio: bytes) -> SpeechSynthesisResult:
+            if not audio:
+                raise ValueError("Mistral speech response contains no audio")
+            if response_format == "pcm":
+                # Both Voxtral generations return mono PCM16 at 24 kHz.
+                return SpeechSynthesisResult(pcm_to_wav(audio, 24000), "audio/wav", "wav")
+            return SpeechSynthesisResult(
+                audio, _media_type_for_format(response_format), response_format
+            )
+
+        async def audio_chunks(response: httpx.Response) -> AsyncIterator[bytes]:
+            async for raw in iter_sse_data(response):
+                event = parse_sse_json_data(raw, context="Mistral speech")
+                if not isinstance(event, dict):
+                    raise ValueError("Mistral speech event must be an object")
+                if event.get("type") == "speech.audio.delta":
+                    yield _mistral_audio(event)
+                elif event.get("type") == "speech.audio.done":
+                    usage = event.get("usage")
+                    if self._usage_observer is not None and isinstance(usage, Mapping):
+                        await self._usage_observer.update_latest(usage)
+                    return
+                elif event.get("type") == "error" or "error" in event:
+                    raise ValueError("Mistral speech stream reported an error")
+            raise ValueError("Mistral speech stream ended before completion")
+
+        async def consume(response: httpx.Response) -> SpeechSynthesisResult:
+            assert on_audio is not None
+            audio = await decode_speech_audio(
+                audio_chunks(response),
+                on_audio,
+                audio_format=response_format,
+                pcm_sample_rate=24000 if response_format == "pcm" else None,
+            )
+            return result(audio)
+
+        return await self.post_and_parse(
+            SPEECH_ENDPOINT,
+            timeout=DEFAULT_SPEECH_TIMEOUT,
+            parse=lambda response: result(_mistral_audio(response.json())),
+            consume=consume if on_audio is not None else None,
+            json=payload,
+            retry_policy=NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY,
+        )
 
     async def _transcribe_openrouter(
         self,
@@ -309,6 +400,40 @@ def _normalized_stt_options(options: JsonObject, *, provider_id: str) -> JsonObj
     if provider_id == "openrouter" and isinstance(provider_options, dict):
         normalized["provider"] = dict(provider_options)
     return normalized
+
+
+def _mistral_audio(payload: Any) -> bytes:
+    encoded = payload.get("audio_data") if isinstance(payload, dict) else None
+    if not isinstance(encoded, str) or not encoded:
+        raise ValueError("Mistral speech response is missing audio_data")
+    if len(encoded) > 4 * ((MAX_SPEECH_BYTES + 2) // 3):
+        raise ValueError("Speech response exceeds the audio size limit")
+    audio = base64.b64decode(encoded, validate=True)
+    if not audio or len(audio) > MAX_SPEECH_BYTES:
+        raise ValueError("Mistral speech response has empty or oversized audio")
+    return audio
+
+
+def _mistral_stt_options(options: JsonObject) -> dict[str, str | list[str]]:
+    data: dict[str, str | list[str]] = {}
+    language = options.get("language")
+    if isinstance(language, str) and language.strip() and language.strip().lower() != "auto":
+        data["language"] = language.strip()
+    temperature = options.get("temperature")
+    if isinstance(temperature, int | float) and not isinstance(temperature, bool):
+        data["temperature"] = str(float(temperature))
+    context = options.get("context_bias")
+    if isinstance(context, str) and context.strip():
+        data["context_bias"] = [line.strip() for line in context.splitlines() if line.strip()]
+    granularity = options.get("timestamp_granularities")
+    granularities = [granularity] if isinstance(granularity, str) and granularity else []
+    if options.get("diarize") is True:
+        data["diarize"] = "true"
+        # Mistral permits exactly one granularity, and diarization requires segment.
+        granularities = ["segment"]
+    if granularities:
+        data["timestamp_granularities"] = granularities
+    return data
 
 
 def _multipart_stt_options(options: JsonObject) -> dict[str, str]:

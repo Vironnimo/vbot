@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-10-19T17:27:28.027955+00:00",
+  "fetched_at": "2026-10-26T09:18:40.685522+00:00",
   "models": {
     "beam": {
       "capabilities": {
@@ -34,7 +34,8 @@
         "api-key"
       ],
       "context_window": 1048576,
-      "max_output_tokens": null,
+      "family": "beam",
+      "max_output_tokens": 131072,
       "metadata": {
         "ollama": {
           "remote": true
@@ -386,8 +387,7 @@
         "input_modalities": [
           "text",
           "image",
-          "video",
-          "pdf"
+          "video"
         ],
         "json_mode": false,
         "output_modalities": [
@@ -755,7 +755,7 @@
         "api-key"
       ],
       "context_window": 512000,
-      "family": "minimax-m3",
+      "family": "minimax",
       "max_output_tokens": 131072,
       "metadata": {
         "ollama": {
@@ -913,9 +913,9 @@
       "name": "mistral-large-4",
       "pricing": {
         "rates": {
-          "cache_read": 0.14,
-          "input": 1.36,
-          "output": 4.18
+          "cache_read": 0.07,
+          "input": 0.68,
+          "output": 2.09
         },
         "source": "models.dev:ollama-cloud/mistral-large-4"
       }

@@ -15,8 +15,8 @@ from collections.abc import AsyncIterator
 from dataclasses import replace
 from email.parser import BytesParser
 from email.policy import default as default_policy
-from typing import cast, override
-from unittest.mock import Mock
+from typing import Any, cast, override
+from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
@@ -30,6 +30,7 @@ from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfi
 
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 OPENAI_BASE = "https://api.openai.com/v1"
+MISTRAL_BASE = "https://api.mistral.ai/v1"
 
 
 def test_audio_format_from_prefers_browser_mime_type() -> None:
@@ -43,6 +44,7 @@ def test_audio_format_from_prefers_browser_mime_type() -> None:
         ("openai", {"flac", "mp3", "mp4", "mpeg", "mpga", "m4a", "ogg", "wav", "webm"}, None),
         ("openrouter", {"wav", "mp3", "flac", "m4a", "ogg", "webm", "aac"}, 36_000_000),
         ("custom", {"wav", "flac"}, None),
+        ("mistral", {"wav", "flac"}, None),
     ],
 )
 def test_transcription_policy_preserves_only_the_targets_supported_formats(
@@ -54,13 +56,7 @@ def test_transcription_policy_preserves_only_the_targets_supported_formats(
     assert policy.max_request_bytes == max_request_bytes
 
 
-def test_unsupported_transcription_target_is_rejected_before_preparation() -> None:
-    with pytest.raises(ProviderError) as raised:
-        _client("mistral", "test-stt").transcription_input_policy()
-    assert raised.value.retryable is False
-
-
-@pytest.mark.parametrize("provider_id", ["openai", "openrouter", "custom"])
+@pytest.mark.parametrize("provider_id", ["openai", "openrouter", "custom", "mistral"])
 @pytest.mark.parametrize("audio_size", [8, 9], ids=["at-limit", "over-limit"])
 @pytest.mark.asyncio
 @respx.mock
@@ -205,12 +201,56 @@ async def test_multipart_transcription_sends_every_field_as_a_string(
     assert result.text == "hallo"
 
 
+@pytest.mark.parametrize("diarize", [False, True])
+@pytest.mark.asyncio
+@respx.mock
+async def test_mistral_transcription_sends_repeated_fields_and_normalizes_speaker_timestamps(
+    diarize: bool,
+) -> None:
+    payload = {
+        "text": "test transcript",
+        "language": "en",
+        "segments": [{"text": "test transcript", "start": 0, "end": 1, "speaker_id": "speaker_1"}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 2},
+    }
+    route = respx.post(MISTRAL_BASE + "/audio/transcriptions").respond(200, json=payload)
+    result = await _client("mistral", "voxtral-mini-2602").transcribe(
+        b"recording",
+        filename="sample.flac",
+        media_type="audio/flac",
+        options={
+            "language": "auto",
+            "temperature": 0,
+            "context_bias": " weather \n\nmeeting ",
+            "timestamp_granularities": "word",
+            "diarize": diarize,
+            "extra_options": {"return_language": True},
+        },
+    )
+    expected = {
+        "model": "voxtral-mini-2602",
+        "stream": "false",
+        "temperature": "0.0",
+        "context_bias": ["weather", "meeting"],
+        "timestamp_granularities": "segment" if diarize else "word",
+        "return_language": "true",
+        "file": ("sample.flac", "audio/flac", b"recording"),
+    }
+    if diarize:
+        expected["diarize"] = "true"
+    assert _form_parts(route.calls.last.request) == expected
+    assert result.to_dict() == payload
+
+
 @pytest.mark.parametrize(
     ("provider_id", "model_id", "field"),
     [
         pytest.param("openrouter", "openai/gpt-4o-transcribe", "model", id="json-model"),
         pytest.param("openai", "whisper-1", "model", id="multipart-model"),
         pytest.param("openai", "whisper-1", "file", id="multipart-file"),
+        pytest.param("mistral", "voxtral-mini-latest", "model", id="mistral-model"),
+        pytest.param("mistral", "voxtral-mini-latest", "file_url", id="mistral-input"),
+        pytest.param("mistral", "voxtral-mini-latest", "stream", id="mistral-stream"),
     ],
 )
 @pytest.mark.asyncio
@@ -230,6 +270,68 @@ async def test_transcription_extra_options_cannot_override_request_fields(
 
     assert caught.value.retryable is False
     assert route.call_count == 0
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_mistral_tts_decodes_json_audio_and_sends_its_own_voice_field() -> None:
+    audio = _wav_audio(b"\x01\x00" * 128)
+    route = respx.post(MISTRAL_BASE + "/audio/speech").respond(
+        200, json={"audio_data": base64.b64encode(audio).decode()}
+    )
+    result = await _client("mistral", "voxtral-mini-tts-3-0").synthesize(
+        "test speech",
+        options={
+            "voice": "voice_481",
+            "response_format": "wav",
+            "extra_options": {"expressiveness": 1.2},
+        },
+    )
+    assert (result.audio, result.format, result.media_type) == (audio, "wav", "audio/wav")
+    assert json.loads(route.calls.last.request.content) == {
+        "model": "voxtral-mini-tts-3-0",
+        "input": "test speech",
+        "voice_id": "voice_481",
+        "response_format": "wav",
+        "stream": False,
+        "expressiveness": 1.2,
+    }
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param({}, id="missing-audio"),
+        pytest.param({"audio_data": ""}, id="empty-audio"),
+        pytest.param({"audio_data": "!invalid"}, id="invalid-base64"),
+        pytest.param(
+            b'data: {"type":"speech.audio.delta","audio_data":"AQABAA=="}\n\n',
+            id="unfinished-stream",
+        ),
+        pytest.param(b'data: {"type":"error"}\n\n', id="stream-error"),
+        pytest.param(b"data: []\n\n", id="non-object-event"),
+    ],
+)
+@pytest.mark.asyncio
+@respx.mock
+async def test_mistral_tts_rejects_unusable_results_without_repeating_generation(body: Any) -> None:
+    streaming = isinstance(body, bytes)
+    response = (
+        httpx.Response(
+            200, stream=httpx.ByteStream(body), headers={"content-type": "text/event-stream"}
+        )
+        if streaming
+        else httpx.Response(200, json=body)
+    )
+    route = respx.post(MISTRAL_BASE + "/audio/speech").mock(return_value=response)
+    with pytest.raises(ProviderOutcomeUnknownError) as error:
+        await _client("mistral", "test-tts").synthesize(
+            "test speech",
+            options={"response_format": "pcm"},
+            on_audio=AsyncMock() if streaming else None,
+        )
+    assert not error.value.retryable
+    assert route.call_count == 1
 
 
 @pytest.mark.parametrize(
@@ -345,8 +447,9 @@ async def test_openrouter_tts_never_replays_an_unknown_outcome(
         ("openai", "application/octet-stream", 24000),
         ("openrouter", "audio/pcm;rate=22050;channels=1", 22050),
         ("openrouter", "application/octet-stream;rate=22050;channels=1", 22050),
+        ("mistral", "application/json", 24000),
     ],
-    ids=["openai-pcm", "openai-generic", "openrouter-pcm", "openrouter-generic"],
+    ids=["openai-pcm", "openai-generic", "openrouter-pcm", "openrouter-generic", "mistral-pcm"],
 )
 @pytest.mark.parametrize("streaming", [False, True], ids=["buffered", "streamed"])
 @pytest.mark.asyncio
@@ -355,10 +458,17 @@ async def test_pcm_synthesis_returns_a_playable_wav_with_the_original_samples(
     provider_id: str, content_type: str, sample_rate: int, streaming: bool
 ) -> None:
     pcm = b"\x01\x00\xff\xff" * 128
+    body = pcm
+    if provider_id == "mistral":
+        body = (
+            (_speech_event(pcm) + _speech_done())
+            if streaming
+            else json.dumps({"audio_data": base64.b64encode(pcm).decode()}).encode()
+        )
     route = respx.post(url__regex=r".*/audio/speech").mock(
         return_value=httpx.Response(
             200,
-            stream=httpx.ByteStream(pcm),
+            stream=httpx.ByteStream(body),
             headers={"content-type": content_type, "x-generation-id": "test-generation"},
         )
     )
@@ -374,7 +484,7 @@ async def test_pcm_synthesis_returns_a_playable_wav_with_the_original_samples(
     assert (result.media_type, result.format, result.generation_id) == (
         "audio/wav",
         "wav",
-        "test-generation",
+        None if provider_id == "mistral" else "test-generation",
     )
     with wave.open(io.BytesIO(result.audio), "rb") as wav:
         assert (wav.getframerate(), wav.getnchannels(), wav.getsampwidth()) == (sample_rate, 1, 2)
@@ -386,10 +496,12 @@ async def test_pcm_synthesis_returns_a_playable_wav_with_the_original_samples(
 
 
 @pytest.mark.parametrize("outcome", ["completed", "read_failure", "cancelled"])
+@pytest.mark.parametrize("provider_id", ["openai", "mistral"])
 @pytest.mark.asyncio
 @respx.mock
 async def test_streamed_tts_plays_before_provider_completion_and_closes_without_replay(
     outcome: str,
+    provider_id: str,
 ) -> None:
     first_pcm, last_pcm = b"\x01\x00" * 32768, b"\xfe\xff" * 1024
 
@@ -400,29 +512,33 @@ async def test_streamed_tts_plays_before_provider_completion_and_closes_without_
 
         @override
         async def __aiter__(self) -> AsyncIterator[bytes]:
-            yield first_pcm
+            yield _speech_event(first_pcm) if provider_id == "mistral" else first_pcm
             await self.release.wait()
             if outcome == "read_failure":
                 raise httpx.ReadError("test interrupted audio response")
-            yield last_pcm
+            yield (
+                (_speech_event(last_pcm) + _speech_done()) if provider_id == "mistral" else last_pcm
+            )
 
         @override
         async def aclose(self) -> None:
             self.closed = True
 
     stream = AudioStream()
-    route = respx.post(f"{OPENAI_BASE}/audio/speech").mock(
+    route = respx.post(url__regex=r".*/audio/speech").mock(
         return_value=httpx.Response(200, stream=stream, headers={"content-type": "audio/pcm"})
     )
     first_received = asyncio.Event()
     chunks: list[SpeechAudioChunk] = []
+    observer = AsyncMock()
+    observer.start.return_value = "test-call"
 
     async def on_audio(chunk: SpeechAudioChunk) -> None:
         chunks.append(chunk)
         first_received.set()
 
     task = asyncio.create_task(
-        _client("openai", "test-tts").synthesize(
+        _client(provider_id, "test-tts", usage_observer=observer).synthesize(
             "hello", options={"response_format": "pcm"}, on_audio=on_audio
         )
     )
@@ -450,6 +566,10 @@ async def test_streamed_tts_plays_before_provider_completion_and_closes_without_
             task.cancel()
         await asyncio.gather(task, return_exceptions=True)
     assert stream.closed and route.call_count == 1
+    if provider_id == "mistral" and outcome == "completed":
+        observer.update_latest.assert_awaited_once_with(
+            {"prompt_tokens": 3, "completion_tokens": 5}
+        )
 
 
 def _form_parts(request: httpx.Request) -> dict[str, object]:
@@ -461,18 +581,46 @@ def _form_parts(request: httpx.Request) -> dict[str, object]:
         name = part.get_param("name", header="content-disposition")
         payload = cast(bytes, part.get_payload(decode=True))
         filename = part.get_filename()
-        parts[str(name)] = (
-            (filename, part.get_content_type(), payload) if filename else payload.decode()
-        )
+        value = (filename, part.get_content_type(), payload) if filename else payload.decode()
+        key = str(name)
+        if key in parts:
+            previous = parts[key]
+            parts[key] = [*previous, value] if isinstance(previous, list) else [previous, value]
+        else:
+            parts[key] = value
     return parts
 
 
-def _client(provider_id: str, model_id: str) -> ProviderSpeechClient:
+def _speech_event(audio: bytes) -> bytes:
+    return (
+        "data: "
+        + json.dumps({"type": "speech.audio.delta", "audio_data": base64.b64encode(audio).decode()})
+        + "\n\n"
+    ).encode()
+
+
+def _speech_done() -> bytes:
+    return (
+        b'data: {"type":"speech.audio.done","usage":{"prompt_tokens":3,"completion_tokens":5}}\n\n'
+    )
+
+
+def _wav_audio(pcm: bytes) -> bytes:
+    output = io.BytesIO()
+    with wave.open(output, "wb") as wav:
+        wav.setparams((1, 2, 24000, 0, "NONE", "not compressed"))
+        wav.writeframes(pcm)
+    return output.getvalue()
+
+
+def _client(provider_id: str, model_id: str, **kwargs: Any) -> ProviderSpeechClient:
     provider = ProviderConfig(
         id=provider_id,
         name=provider_id,
         adapter=provider_id,
-        base_url=OPENROUTER_BASE if provider_id == "openrouter" else OPENAI_BASE,
+        base_url={"openrouter": OPENROUTER_BASE, "mistral": MISTRAL_BASE}.get(
+            provider_id, OPENAI_BASE
+        ),
         connections=[],
     )
     connection = ConnectionConfig(
@@ -482,5 +630,5 @@ def _client(provider_id: str, model_id: str) -> ProviderSpeechClient:
         auth=AuthConfig(header="Authorization", prefix="Bearer "),
     )
     return ProviderSpeechClient(
-        provider=provider, connection=connection, credential="sk-test", model_id=model_id
+        provider=provider, connection=connection, credential="sk-test", model_id=model_id, **kwargs
     )

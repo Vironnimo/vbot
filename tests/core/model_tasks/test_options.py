@@ -361,6 +361,45 @@ def test_stt_fields_depend_on_provider_protocol_and_model_support(
         assert fields["response_format"].default == "json"
 
 
+@pytest.mark.parametrize("task", [TASK_SPEECH_TO_TEXT, TASK_TEXT_TO_SPEECH])
+def test_speech_options_use_catalog_choices_and_omit_unadvertised_controls(task: str) -> None:
+    parameters = (
+        {
+            "language": {"type": "enum", "values": ["auto", "de"], "default": "auto"},
+            "context_bias": {"type": "string"},
+            "timestamp_granularities": {"type": "enum", "values": ["segment"]},
+            "diarize": {"type": "boolean", "default": False},
+        }
+        if task == TASK_SPEECH_TO_TEXT
+        else {
+            "voice": {"type": "string"},
+            "response_format": {"type": "enum", "values": ["mp3", "wav"], "default": "mp3"},
+        }
+    )
+    model = _make_model(
+        "speech",
+        supported_voices=("gb_jane_neutral", "voice_481"),
+        task_options={task: {"parameters": parameters}},
+    )
+    schema = option_schema_for(task, "mistral", "mistral/speech::api-key", model=model)
+    fields = {field.name: field for field in schema.fields}
+    assert list(fields) == [*parameters, "extra_options"]
+    validate_task_model_options(schema, schema.default_options())
+    if task == TASK_SPEECH_TO_TEXT:
+        assert _choices(fields["language"]) == ["auto", "de"]
+        assert _choices(fields["timestamp_granularities"]) == ["", "segment"]
+        assert fields["context_bias"].type == "textarea"
+        assert fields["diarize"].type == "boolean"
+        with pytest.raises(TaskModelOptionValidationError):
+            validate_task_model_options(schema, {"timestamp_granularities": "word"})
+    else:
+        assert _choices(fields["voice"]) == ["gb_jane_neutral", "voice_481"]
+        assert fields["voice"].default == "gb_jane_neutral"
+        assert _choices(fields["response_format"]) == ["mp3", "wav"]
+        with pytest.raises(TaskModelOptionValidationError):
+            validate_task_model_options(schema, {"speed": 1.5})
+
+
 # ---------------------------------------------------------------------------
 # Image — data-driven from capabilities.task_options
 # ---------------------------------------------------------------------------

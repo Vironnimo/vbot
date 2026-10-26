@@ -234,6 +234,81 @@ def test_non_chat_embed_ids_become_embedding_models(model_id: str) -> None:
     assert (model.capabilities.tools, model.capabilities.supported_parameters) == (False, ())
 
 
+@pytest.mark.parametrize("task", ["speech_to_text", "text_to_speech"])
+def test_catalog_projects_offline_speech_capabilities_without_chat(task: str) -> None:
+    flag = "audio_transcription" if task == "speech_to_text" else "audio_speech"
+    raw = _raw_model(model_id="future-speech-model", completion_chat=False)
+    raw["capabilities"][flag] = True
+    raw[f"{flag}_capabilities"] = {
+        "modes": ["offline"],
+        "languages": ["en", "de"],
+        "context_bias": True,
+        "diarization": True,
+        "timestamp_granularities": ["segment"],
+        "response_formats": ["mp3", "wav"],
+    }
+    model = MistralAdapter.normalize_catalog_entry(raw)
+    assert task in model.capabilities.task_types
+    assert "chat" not in model.capabilities.task_types
+    assert not model.capabilities.tools and not model.capabilities.json_mode
+    parameters = model.capabilities.task_options[task]["parameters"]
+    if task == "speech_to_text":
+        assert parameters["language"]["values"] == ("auto", "en", "de")
+        assert parameters["timestamp_granularities"]["values"] == ("segment",)
+        assert parameters["diarize"]["type"] == "boolean"
+        assert "prompt" not in parameters and "response_format" not in parameters
+    else:
+        assert parameters["response_format"]["values"] == ("mp3", "wav")
+        assert "speed" not in parameters and "instructions" not in parameters
+    raw[f"{flag}_capabilities"]["modes"] = ["realtime"]
+    with pytest.raises(CatalogEntrySkipped):
+        MistralAdapter.normalize_catalog_entry(raw)
+
+
+def test_audio_chat_is_not_a_transcription_target() -> None:
+    raw = _raw_model(model_id="voxtral-small-latest")
+    raw["capabilities"].update(audio=True, audio_transcription=False)
+    capabilities = MistralAdapter.normalize_catalog_entry(raw).capabilities
+    assert "audio" in capabilities.input_modalities
+    assert "audio_input" in capabilities.task_types
+    assert "speech_to_text" not in capabilities.task_types
+
+
+@pytest.mark.asyncio
+async def test_speech_voice_discovery_paginates_public_presets_and_respects_legacy_models() -> None:
+    raw = _raw_model(model_id="tts-alias", completion_chat=False)
+    raw["capabilities"]["audio_speech"] = True
+    raw["billing_model_name"] = "voxtral-mini-tts-2603"
+    old = MistralAdapter.normalize_catalog_entry(raw)
+    raw.update(id="future-tts", billing_model_name="future-tts")
+    new = MistralAdapter.normalize_catalog_entry(raw)
+    calls: list[str] = []
+
+    async def fetch(endpoint: str) -> dict[str, Any]:
+        calls.append(endpoint)
+        if len(calls) == 1:
+            return {
+                "data": [{"type": "preset", "slug": "gb_jane_neutral"}],
+                "next_page_token": "next/page",
+            }
+        return {
+            "data": [
+                {"type": "preset", "slug": "voice_481"},
+                {"type": "custom", "slug": "private-voice"},
+            ]
+        }
+
+    result = await MistralAdapter.discover_task_models({"old": old, "new": new}, fetch)
+    assert calls == [
+        "../v2/audio/voices?type=preset&page_size=100",
+        "../v2/audio/voices?type=preset&page_size=100&page_token=next%2Fpage",
+    ]
+    assert result["old"].capabilities.supported_voices == ("gb_jane_neutral",)
+    assert result["new"].capabilities.supported_voices == ("gb_jane_neutral", "voice_481")
+    assert old.capabilities.supported_voices == ()
+    assert await MistralAdapter.discover_task_models({}, fetch) == {}
+
+
 # ---------------------------------------------------------------------------
 # Reasoning wire
 # ---------------------------------------------------------------------------
