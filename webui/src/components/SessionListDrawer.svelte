@@ -35,7 +35,10 @@
   import CompactionPolicyEditor from './compaction/CompactionPolicyEditor.svelte';
   import { untrack } from 'svelte';
   import { formatAgentAddress, parseAgentAddress } from '$lib/agentAddress.js';
-  import { createSessionList } from './sessions/list.svelte.js';
+  import {
+    createSessionList,
+    PROJECT_GROUP_PAGE_SIZE,
+  } from './sessions/list.svelte.js';
   import { createSessionActions } from './sessions/actions.svelte.js';
   import { createSessionMenus } from './sessions/menus.svelte.js';
   import './sessions/sessions.css';
@@ -813,7 +816,11 @@
             onclick={() => list.loadMoreInGroup(group)}
           >
             {t('sessions.projects.showMore', {
-              count: Math.max(group.totalCount - group.sessions.length, 0),
+              count: Math.min(
+                PROJECT_GROUP_PAGE_SIZE,
+                Math.max(group.totalCount - group.sessions.length, 0),
+              ),
+              total: group.totalCount,
             })}
           </button>
         {/if}

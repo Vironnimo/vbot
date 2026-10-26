@@ -26,8 +26,7 @@ const SESSION_INITIAL_DISPLAY_LIMIT = 35;
 const SESSION_DISPLAY_INCREMENT = 20;
 // The newest Sessions a Project group shows, and how many more each
 // "Show more" adds.
-const PROJECT_GROUP_LIMIT = 5;
-const PROJECT_GROUP_INCREMENT = 10;
+export const PROJECT_GROUP_PAGE_SIZE = 5;
 
 // Owns authoritative Session-list snapshots, selection and pagination for
 // both list modes. Source changes and refreshes share one request generation.
@@ -330,7 +329,7 @@ export function createSessionList(context) {
     projectState = { ...projectState, loading: true, error: null };
     try {
       const result = await listSessionProjectGroups({
-        limit: PROJECT_GROUP_LIMIT,
+        limit: PROJECT_GROUP_PAGE_SIZE,
         ...categoryQuery(),
       });
       if (requestVersion !== loadVersion) {
@@ -361,7 +360,7 @@ export function createSessionList(context) {
     loadingMoreGroupKey = group.key;
     try {
       const page = await listProjectSessions(group.projectId, {
-        limit: PROJECT_GROUP_INCREMENT,
+        limit: PROJECT_GROUP_PAGE_SIZE,
         cursor,
         ...categoryQuery(),
       });

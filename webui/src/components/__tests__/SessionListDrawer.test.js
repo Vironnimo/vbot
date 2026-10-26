@@ -631,7 +631,7 @@ describe('SessionListDrawer by Project', () => {
     session_id: 'build-1',
   };
 
-  const serveGroups = () =>
+  const serveGroups = (totalCount = 3) =>
     api.listSessionProjectGroups.mockResolvedValue({
       groups: [
         {
@@ -649,7 +649,7 @@ describe('SessionListDrawer by Project', () => {
             }),
           ],
           next_cursor: vbotCursor,
-          total_count: 3,
+          total_count: totalCount,
         },
         { project_id: 'idle', sessions: [], next_cursor: null, total_count: 0 },
         {
@@ -685,17 +685,21 @@ describe('SessionListDrawer by Project', () => {
     );
 
   it('groups every Agent’s Sessions by Project and continues a group with its cursor', async () => {
-    serveGroups();
-    api.listProjectSessions.mockResolvedValue({
-      sessions: [
-        session('build-0', {
-          title: 'Older build',
-          agent_address: 'builder@vbot',
-        }),
-      ],
-      next_cursor: null,
-      total_count: 3,
-    });
+    serveGroups(8);
+    const lastPageCursor = { ...vbotCursor, session_id: 'older-4' };
+    api.listProjectSessions
+      .mockResolvedValueOnce({
+        sessions: Array.from({ length: 5 }, (_, index) =>
+          session(`older-${index}`, { agent_address: 'builder@vbot' }),
+        ),
+        next_cursor: lastPageCursor,
+        total_count: 8,
+      })
+      .mockResolvedValueOnce({
+        sessions: [session('oldest', { agent_address: 'builder@vbot' })],
+        next_cursor: null,
+        total_count: 8,
+      });
     const onFiltersChange = vi.fn();
     drawer.mount({
       currentSessionId: 'plan-1',
@@ -753,12 +757,23 @@ describe('SessionListDrawer by Project', () => {
       ),
     ).toBe(true);
 
-    buttonByText(t('sessions.projects.showMore', { count: 1 })).click();
+    buttonByText(
+      t('sessions.projects.showMore', { count: 5, total: 8 }),
+    ).click();
     flushSync();
-    await waitForCondition(() => groupRows('vBot').length === 3);
-    expect(api.listProjectSessions).toHaveBeenCalledWith(
+    await waitForCondition(() => groupRows('vBot').length === 7);
+    expect(api.listProjectSessions).toHaveBeenLastCalledWith(
       'vbot',
-      expect.objectContaining({ limit: 10, cursor: vbotCursor }),
+      expect.objectContaining({ limit: 5, cursor: vbotCursor }),
+    );
+    buttonByText(
+      t('sessions.projects.showMore', { count: 1, total: 8 }),
+    ).click();
+    flushSync();
+    await waitForCondition(() => groupRows('vBot').length === 8);
+    expect(api.listProjectSessions).toHaveBeenLastCalledWith(
+      'vbot',
+      expect.objectContaining({ limit: 5, cursor: lastPageCursor }),
     );
     expect(group('vBot').querySelector('.session-group__more')).toBeNull();
 
