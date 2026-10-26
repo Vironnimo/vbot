@@ -24,7 +24,8 @@ existing Run Queue. There is no second scheduler or mailbox database.
 - `send` returns after durable acceptance, not after the recipient reads or acts.
   Its baseline cursor is captured before admission so a fast reply is not lost.
   A replay of the same Tool invocation uses the same accepted-input receipt;
-  conflicting payloads fail instead of changing a previously accepted message.
+  identity includes the Run's iteration and call position because Providers can
+  reuse call ids. Conflicting payloads fail instead of changing an accepted message.
 - A received message is visible and carries a Session sender, rendered as quoted
   peer content for the Model. It reaches a running Run at its next Model boundary
   without aborting a Tool, or wakes an idle Session. Answers to the user keep their

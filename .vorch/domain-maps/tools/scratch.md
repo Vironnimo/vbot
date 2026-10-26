@@ -139,7 +139,7 @@ or Run fail. Optional announcement persistence is isolated by Chat too.
 
 Chat's `_scratch_context.py` owns the persisted Scratch reminder. At Run start,
 after resolving effective callable Tools, Chat calls `folder_for` for Run kinds
-`user`, `channel`, `cron`, `calendar`, `subagent` and `system` with at least one of
+`user`, `session_message`, `channel`, `cron`, `calendar`, `subagent` and `system` with at least one of
 `bash`, `terminal`, `write`, `edit` or `apply_patch`. Background learning kinds and
 `live` are excluded. The live Tool catalog, Run restriction and live denial apply,
 including a Tool enabled since the prompt epoch was pinned. Manual Compaction does

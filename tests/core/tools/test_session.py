@@ -104,9 +104,19 @@ async def test_send_preserves_intent_and_returns_a_pre_send_baseline(
     await dispatch_as_executor(registry, context, arguments)
     assert sender.calls[1]["input_id"] == call["input_id"]
     assert sender.calls[1]["request_hash"] == call["request_hash"]
-    other = replace(context, tool_call_id="another-call")
-    await dispatch_as_executor(registry, other, arguments)
-    assert sender.calls[2]["input_id"] != call["input_id"]
+    # Distinct invocations remain distinct even when the Provider reuses a call id.
+    for other in (
+        replace(context, tool_call_id="another-call"),
+        replace(context, iteration_number=context.iteration_number + 1),
+        replace(context, tool_call_index=context.tool_call_index + 1),
+        replace(context, run_id="another-run"),
+    ):
+        sent = await dispatch_as_executor(registry, other, arguments)
+        assert sent["ok"], sent
+        assert sender.calls[-1]["input_id"] not in {
+            previous["input_id"] for previous in sender.calls[:-1]
+        }
+        assert sender.calls[-1]["request_hash"] == call["request_hash"]
 
 
 @pytest.mark.parametrize(

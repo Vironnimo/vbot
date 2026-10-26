@@ -204,7 +204,17 @@ async def _send(
     baseline = await peers.read(context, target, limit=1)
     if context.is_cancelled():
         raise SessionPeerError("run_cancelled", "Nothing was sent. Your Run was cancelled.")
-    identity = json.dumps([source.id, context.run_id, context.tool_call_id], separators=(",", ":"))
+    # Providers can reuse call ids in later Assistant steps of the same Run.
+    identity = json.dumps(
+        [
+            source.id,
+            context.run_id,
+            context.iteration_number,
+            context.tool_call_index,
+            context.tool_call_id,
+        ],
+        separators=(",", ":"),
+    )
     payload = json.dumps([source.id, recipient.id, content], separators=(",", ":"))
     # This is an accepted-input idempotency key, not a new public Message id.
     input_id = "session:" + hashlib.sha256(identity.encode()).hexdigest()

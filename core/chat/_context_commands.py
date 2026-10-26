@@ -25,11 +25,12 @@ from core.secrets.agent_secrets import SecretMasker
 from core.utils.logging import get_logger
 
 CONTEXT_COMMANDS_META_KEY = "context_commands_ran"
-# The Runs a person or an automation starts; background learning Runs and Live
+# Ordinary conversation and automation Runs; background learning Runs and Live
 # calls never run them.
 CONTEXT_COMMAND_RUN_KINDS = frozenset(
     {
         RunKind.USER,
+        RunKind.SESSION_MESSAGE,
         RunKind.CHANNEL,
         RunKind.CRON,
         RunKind.CALENDAR,

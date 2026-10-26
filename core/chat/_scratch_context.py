@@ -19,6 +19,7 @@ _FILE_TOOLS = frozenset({"bash", "terminal", "write", "edit", "apply_patch"})
 SCRATCH_RUN_KINDS = frozenset(
     {
         RunKind.USER,
+        RunKind.SESSION_MESSAGE,
         RunKind.CHANNEL,
         RunKind.CRON,
         RunKind.CALENDAR,
