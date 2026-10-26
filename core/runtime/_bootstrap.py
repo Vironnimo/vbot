@@ -148,6 +148,7 @@ from core.tools.calendar import register_calendar_tool
 from core.tools.classify import register_classify_tool
 from core.tools.command_manager import CommandManager
 from core.tools.cron import SessionAncestors, register_cron_tool
+from core.tools.execute_code import register_execute_code_tool
 from core.tools.live import LIVE_TOOL_FAMILY, LiveToolHosts, register_live_tools
 from core.tools.load_tools import register_load_tools_tool
 from core.tools.portal import register_portal_tool
@@ -895,6 +896,12 @@ def bootstrap(runtime: Runtime) -> None:
             secrets=runtime._agent_secrets,
             command_checker=runtime._command_checker,
             subagents=runtime._subagent_coordinator,
+        )
+        register_execute_code_tool(
+            runtime._tools,
+            command_checker=runtime._command_checker,
+            credential_names=runtime.environment_credential_names,
+            scratch_areas=runtime._scratch_areas,
         )
         runtime._session_activity = SessionActivity(
             runs=runtime._chat_run_manager,

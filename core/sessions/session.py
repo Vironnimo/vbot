@@ -108,13 +108,14 @@ class ChatSession:
         since: SessionReadCursor | None = None,
         accessor_input_ids: Sequence[str] = (),
         metadata_update: JsonObject | None = None,
+        assistant_message_id: str | None = None,
     ) -> SessionReadBatch | None:
         """Append *messages*; see ``SessionStore.append_messages`` for the options."""
         delta = self._store.append_messages(
             self.address,
             messages,
             run_id=self.run_id,
-            assistant_message_id=self.assistant_message_id,
+            assistant_message_id=assistant_message_id or self.assistant_message_id,
             tool_results=tool_results,
             seen_skills=seen_skills,
             subagent_reply_target=subagent_reply_target,
@@ -225,6 +226,7 @@ class ChatSession:
         since: SessionReadCursor | None = None,
         accessor_input_ids: Sequence[str] = (),
         metadata_update: JsonObject | None = None,
+        assistant_message_id: str | None = None,
     ) -> SessionReadBatch | None:
         if (
             not messages
@@ -242,6 +244,7 @@ class ChatSession:
                 since=since,
                 accessor_input_ids=accessor_input_ids,
                 metadata_update=metadata_update,
+                assistant_message_id=assistant_message_id,
             )
         )
 

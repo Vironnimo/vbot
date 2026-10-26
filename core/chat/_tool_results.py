@@ -65,8 +65,9 @@ class ToolResultPersistence:
         run = context.run
         session = context.session
         loads = _tool_load_changes(context.request_state, tool_dispatch_context, tool_messages)
+        effected_messages = [*tool_dispatch_context.programmatic_results, *tool_messages]
         for note in await self._folder_instruction_notes(
-            context, tool_dispatch_context, tool_messages
+            context, tool_dispatch_context, effected_messages
         ):
             session.add_note_message(note)
         deferred_notes = session.take_deferred_notes()
@@ -112,7 +113,7 @@ class ToolResultPersistence:
                     receipts=owned_receipts,
                 ),
             )
-        else:
+        elif batch_messages:
             await context.session_snapshot.append(
                 session,
                 batch_messages,
@@ -125,11 +126,15 @@ class ToolResultPersistence:
             name="persist tool results",
             args={"run_id": run.id},
         )
-        for tool_message in tool_messages:
+        for tool_message in effected_messages:
             assert tool_message.tool_call_id is not None
             tool_dispatch_context.notify_result_persisted(tool_message.tool_call_id)
             loaded_project_id = project_tool_context_id(tool_message)
-            if context.project_id is None and loaded_project_id is not None:
+            if (
+                not tool_message.programmatic
+                and context.project_id is None
+                and loaded_project_id is not None
+            ):
                 await self._requests._apply_project_skill_context(context, loaded_project_id)
         return loads
 
@@ -204,7 +209,7 @@ class ToolResultPersistence:
 
         async def persist() -> None:
             tool_messages, media_outputs = await tool_round.settle_cancelled()
-            if not tool_messages:
+            if not tool_messages and not tool_dispatch_context.programmatic_results:
                 return
             tool_messages, _ = await self._requests.media.store_tool_media(
                 tool_messages, media_outputs

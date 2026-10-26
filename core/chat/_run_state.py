@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import partial
@@ -426,6 +427,9 @@ class _SessionSnapshot:
     active_lineage: list[ChatMessage]
     pending_edit_message_id: str | None = None
     _arrived_note_ids: set[str] = field(default_factory=set, init=False, repr=False)
+    # Session write ownership is scope-reentrant across a Run's child Tasks.
+    # This mutex owns the mutable cursor and its in-memory delta application.
+    _mutation_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
 
     @property
     def active_messages(self) -> list[ChatMessage]:
@@ -458,9 +462,10 @@ class _SessionSnapshot:
         ``None`` when the cursor could not continue (an edit or takeover) and
         the whole snapshot was replaced.
         """
-        batch = await session.load_since_async(self.cursor)
-        await self._apply(session, batch)
-        return None if batch is None else list(batch.active_messages)
+        async with self._mutation_lock:
+            batch = await session.load_since_async(self.cursor)
+            await self._apply(session, batch)
+            return None if batch is None else list(batch.active_messages)
 
     async def append(
         self,
@@ -505,16 +510,20 @@ class _SessionSnapshot:
         *subagent_reply_target* commits in that transaction too. The snapshot is
         replaced by the Session's state after the edit.
         """
-        target = self.pending_edit_message_id
-        if target is None:
-            raise ValueError("no history edit was admitted")
-        batch = await session.apply_edit_async(
-            target, messages, seen_skills=seen_skills, subagent_reply_target=subagent_reply_target
-        )
-        self.pending_edit_message_id = None
-        self.messages = list(batch.messages)
-        self.active_lineage = list(batch.active_messages)
-        self.cursor = batch.cursor
+        async with self._mutation_lock:
+            target = self.pending_edit_message_id
+            if target is None:
+                raise ValueError("no history edit was admitted")
+            batch = await session.apply_edit_async(
+                target,
+                messages,
+                seen_skills=seen_skills,
+                subagent_reply_target=subagent_reply_target,
+            )
+            self.pending_edit_message_id = None
+            self.messages = list(batch.messages)
+            self.active_lineage = list(batch.active_messages)
+            self.cursor = batch.cursor
 
     async def commit_checkpoint(
         self,
@@ -529,13 +538,14 @@ class _SessionSnapshot:
         without writing or advancing when another writer changed the Session
         since this snapshot's cursor.
         """
-        committed = await session.commit_compaction_async(
-            checkpoint, since=self.cursor, epoch=epoch
-        )
-        if committed is None:
-            return False
-        await self._apply(session, committed)
-        return True
+        async with self._mutation_lock:
+            committed = await session.commit_compaction_async(
+                checkpoint, since=self.cursor, epoch=epoch
+            )
+            if committed is None:
+                return False
+            await self._apply(session, committed)
+            return True
 
     async def commit(
         self,
@@ -550,10 +560,11 @@ class _SessionSnapshot:
         including other writers' appends, exactly as :meth:`refresh` would.
         *written* are the Messages the write itself appends.
         """
-        committed = await write(since=self.cursor)
-        if committed is not None:
-            session.acknowledge_deferred_notes(committed.messages)
-        await self._apply(session, committed, written={message.id for message in written})
+        async with self._mutation_lock:
+            committed = await write(since=self.cursor)
+            if committed is not None:
+                session.acknowledge_deferred_notes(committed.messages)
+            await self._apply(session, committed, written={message.id for message in written})
 
     async def flush_deferred_notes(self, session: ChatSession) -> None:
         """Persist deferred notes, then include every newer record."""
@@ -582,19 +593,20 @@ class _SessionSnapshot:
         :meth:`forget_arrived_notes`. The whole-history comparison runs only
         when a note arrived.
         """
-        self._arrived_note_ids.difference_update(note.id for note in delivering)
-        if not self._arrived_note_ids:
-            return [], False
-        missing, misplaced = await _CHAT_TRANSFORM_WORKERS.run(
-            _missing_arrived_notes,
-            list(self.active_messages),
-            list(request_messages),
-            frozenset(self._arrived_note_ids),
-            replay_policy,
-            agent_model,
-        )
-        self._arrived_note_ids = {note.id for note in missing}
-        return missing, misplaced
+        async with self._mutation_lock:
+            self._arrived_note_ids.difference_update(note.id for note in delivering)
+            if not self._arrived_note_ids:
+                return [], False
+            missing, misplaced = await _CHAT_TRANSFORM_WORKERS.run(
+                _missing_arrived_notes,
+                list(self.active_messages),
+                list(request_messages),
+                frozenset(self._arrived_note_ids),
+                replay_policy,
+                agent_model,
+            )
+            self._arrived_note_ids = {note.id for note in missing}
+            return missing, misplaced
 
     def forget_arrived_notes(self) -> None:
         """Treat every note in the snapshot as shown, after a request build from it."""

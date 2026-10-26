@@ -754,6 +754,8 @@ def called_tool_names(messages: Iterable[ChatMessage]) -> frozenset[str]:
 
     called: dict[str, str] = {}
     for message in messages:
+        if message.programmatic:
+            continue
         if message.role in ("compaction_checkpoint", "agent_takeover"):
             called.clear()
         elif message.role == "assistant":

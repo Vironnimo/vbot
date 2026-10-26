@@ -85,6 +85,11 @@ def test_passage_ids_and_boundaries_are_deterministic(
             tool_calls=[ToolCall(id="c3", name="bash", arguments={"command": "hidden"})],
             timestamp=timestamp(1),
         ),
+        replace(
+            ChatMessage.assistant(model="test", content="intermediate", timestamp=timestamp(1)),
+            programmatic=True,
+            parent_tool_call_id="call-code",
+        ),
         ChatMessage.run_summary(
             run_id="r1",
             status="completed",
@@ -96,7 +101,15 @@ def test_passage_ids_and_boundaries_are_deterministic(
             iteration_count=1,
         ),
     ],
-    ids=["tool", "recall-result", "note", "error", "assistant-metadata", "run-summary"],
+    ids=[
+        "tool",
+        "recall-result",
+        "note",
+        "error",
+        "assistant-metadata",
+        "programmatic-activity",
+        "run-summary",
+    ],
 )
 def test_passages_contain_only_conversation_text(excluded: ChatMessage) -> None:
     user = ChatMessage.user("user text", timestamp=timestamp(2))

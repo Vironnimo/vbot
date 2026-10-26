@@ -19,6 +19,7 @@ from tests.core.compaction.compaction_test_support import (
     checkpoint,
     compact,
     provider_request,
+    tool_step,
     user,
 )
 
@@ -70,10 +71,17 @@ class _WireAdapter(StubAdapter):
 
 
 @pytest.mark.asyncio
-async def test_continuation_counts_new_content_as_the_active_request_sends_it() -> None:
+@pytest.mark.parametrize("programmatic", [False, True])
+async def test_continuation_counts_new_content_as_the_active_request_sends_it(
+    programmatic: bool,
+) -> None:
     later = [user("u2", "later request " * 50), assistant("a2", "later answer " * 50)]
     messages = [user("u1", "old request"), checkpoint([], count=1_000), *later]
     request = provider_request(later)
+    if programmatic:
+        messages[-1:-1] = tool_step(
+            "child", "intermediate " * 5_000, parent_tool_call_id="call-code"
+        )
     # Replayed reasoning costs its reported tokens, never its text or opaque state.
     request[2].update(
         reasoning="long thought " * 2_000,
@@ -108,6 +116,7 @@ async def test_continuation_counts_new_content_as_the_active_request_sends_it() 
     # Only content after the previous checkpoint counts as newly compacted.
     assert result.usage is not None
     assert result.usage["compacted_token_count"] == 1_000 + later_tokens
+    assert "intermediate" not in str(active.requests)
     # The new summary replaces the previous one: the reclaim is the later content.
     with pytest.raises(CompactionInsufficientReclaimError):
         await compact(

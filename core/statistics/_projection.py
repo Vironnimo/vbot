@@ -185,6 +185,8 @@ class ProjectedRows:
 
     def add(self, seq: int, message: ChatMessage) -> None:
         """Project one canonical message at its Session sequence number."""
+        if message.programmatic:
+            return
         key = self.session_key
         instant = timestamp_instant(message.timestamp)
         day = instant // MICROSECONDS_PER_DAY

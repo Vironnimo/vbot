@@ -659,7 +659,7 @@ def recall_context(
         connection,
         ranges,
         columns="e.seq, e.role",
-        where="e.entry_id = ?",
+        where="e.entry_id = ? AND e.searchable = 1",
         params=(message_id,),
         descending=True,
         limit=1,
@@ -674,7 +674,7 @@ def recall_context(
     answer = view_seq(
         connection,
         ranges,
-        where=f"e.role = 'assistant' AND {_RECALL_HAS_TEXT}",
+        where=f"e.role = 'assistant' AND e.searchable = 1 AND {_RECALL_HAS_TEXT}",
         lower=first + 1,
         upper=_store_lineage.MAX_SEQ if following is None else following,
     )

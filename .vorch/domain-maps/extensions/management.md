@@ -31,6 +31,7 @@ What each `API_VERSION` (`extensions.md` -> Loading and identity invariants) add
 - v19: Tool rows of page History and Run streams carry bounded previews of their call (`rawTruncated`); `history.tool_call` (`extensionPageClient.readToolCall`) reads the whole call (`webui/extension-pages.md` -> Run streams and history).
 - v20: argument hints on slash Commands (`api.register_command(..., argument_hint=...)`, `chat/commands.md`).
 - v21: `host.computers`, the shared Computer registry for Session-policy resolution and native capability requests (`extensions/host.md`, `computers.md`).
+- v22: programmatic Tool calls through the owning Run (`ToolContext.call_tool`, `ToolContext.tool_calls_available`) and the `ToolContext.programmatic` result-projection marker (`tools/registry-dispatch.md` -> ToolContext).
 
 ## Offline document validation
 

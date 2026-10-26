@@ -10,7 +10,7 @@ import pytest
 
 from core.chat import ChatMessage
 from core.chat.messages import ToolCall
-from core.sessions import skill_tool_activation
+from core.sessions import is_skill_context_note, skill_tool_activation
 from core.skills import SkillRegistry
 from core.tools import JsonObject as ToolJsonObject
 from core.tools import ToolContext, ToolRegistry, tool_success
@@ -44,11 +44,12 @@ def _read_tool_registry() -> ToolRegistry:
     return tools
 
 
-def _write_skill(root: Path, name: str) -> None:
+def _write_skill(root: Path, name: str, *, requirements: str = "") -> None:
     skill_dir = root / name
     skill_dir.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text(
-        f"---\nname: {name}\ndescription: Project workflow.\n---\nUse the Project workflow.",
+        f"---\nname: {name}\ndescription: Project workflow.\n{requirements}"
+        "---\nUse the Project workflow.",
         encoding="utf-8",
     )
 
@@ -109,12 +110,24 @@ async def test_absolute_file_access_does_not_auto_load_project_context(tmp_path:
 
 def _project_skill_resolver(
     tmp_path: Path,
+    *,
+    requires_env: bool = False,
 ) -> tuple[Any, list[tuple[str | None, str | None]]]:
     """Resolve the Project "vbot" to a pool with an always-allowed "deploy" Skill."""
-    _write_skill(tmp_path / "project-skills", "deploy")
+    _write_skill(
+        tmp_path / "project-skills",
+        "deploy",
+        requirements=(
+            "metadata:\n  vbot:\n    requirements:\n      env: PROJECT_TOKEN\n"
+            if requires_env
+            else ""
+        ),
+    )
     global_skills = SkillRegistry.load(tmp_path / "global-skills", environment={})
     project_skills = SkillRegistry.load(
-        tmp_path / "project-skills", environment={}, always_allowed=frozenset({"deploy"})
+        tmp_path / "project-skills",
+        environment={"PROJECT_TOKEN": "test-owned"} if requires_env else {},
+        always_allowed=frozenset({"deploy"}),
     )
     resolutions: list[tuple[str | None, str | None]] = []
 
@@ -154,10 +167,12 @@ def _loaded_skills(runtime: Any, session_id: str) -> list[tuple[str, str]]:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("programmatic", [False, True])
 async def test_project_tool_grants_project_skill_in_current_run_without_prompt_change(
     tmp_path: Path,
+    programmatic: bool,
 ) -> None:
-    resolve_skills, resolutions = _project_skill_resolver(tmp_path)
+    resolve_skills, resolutions = _project_skill_resolver(tmp_path, requires_env=programmatic)
     tools = ToolRegistry()
     tools.register(
         "project",
@@ -172,21 +187,50 @@ async def test_project_tool_grants_project_skill_in_current_run_without_prompt_c
             {
                 "status": "loaded",
                 "project_id": arguments["project_id"],
+                "project_path": "/explicit/project",
+                "content": "Project-only instructions.",
                 "skills": [{"name": "deploy"}],
             }
         ),
     )
     register_skill_tool(tools, resolve_skills, lambda: None)
+    observed: list[ToolContext] = []
+
+    async def program(context: ToolContext, _arguments: ToolJsonObject) -> ToolJsonObject:
+        project = await context.call_tool("project", {"project_id": "vbot"})
+        assert project["ok"], project
+        skill = await context.call_tool("skill", {"name": "deploy"})
+        assert skill["ok"], skill
+        # These context effects must survive a restart before the outer result.
+        persisted = runtime.chat_sessions.get(session_address("coder", "s1")).load()
+        assert any(is_skill_context_note(message) for message in persisted)
+        assert any(
+            message.role == "note" and "Project-only instructions." in str(message.content)
+            for message in persisted
+        )
+        await context.call_tool("probe", {})
+        return tool_success({"output": "Only final summary."})
+
+    def probe(context: ToolContext, _arguments: ToolJsonObject) -> ToolJsonObject:
+        observed.append(context)
+        return tool_success({"content": "private intermediate marker"})
+
+    tools.register("program", "test-sentinel", {"type": "object"}, program)
+    tools.register("probe", "test-sentinel", {"type": "object"}, probe)
+    responses = (
+        [_call("call-program", "program", {})]
+        if programmatic
+        else [
+            _call("call-project", "project", {"project_id": "vbot"}),
+            _call("call-skill", "skill", {"name": "deploy"}),
+        ]
+    )
     runtime, adapter = _skill_runtime(
         tmp_path,
         tools,
-        [
-            _call("call-project", "project", {"project_id": "vbot"}),
-            _call("call-skill", "skill", {"name": "deploy"}),
-            {"content": "Done", "tool_calls": None},
-        ],
+        [*responses, {"content": "Done", "tool_calls": None}],
         resolve_skills,
-        ["project", "skill"],
+        ["project", "skill", "program", "probe"],
     )
     runtime.chat_sessions.create("coder", session_id="s1")
 
@@ -197,7 +241,16 @@ async def test_project_tool_grants_project_skill_in_current_run_without_prompt_c
     assert "Use the Project workflow." in body
     assert ("vbot", "coder") in resolutions
     system_prompts = [str(request["messages"][0]["content"]) for request in adapter.requests]
-    assert system_prompts[0] == system_prompts[1] == system_prompts[2]
+    assert len(set(system_prompts)) == 1
+    if programmatic:
+        assert len(observed) == 1
+        assert observed[0].skill_project_id == "vbot"
+        assert tuple(observed[0].skill_env_keys) == ("PROJECT_TOKEN",)
+        request_text = str(adapter.requests[-1]["messages"])
+        assert request_text.count("Project-only instructions.") == 1
+        assert "/explicit/project" in request_text
+        assert "Use the Project workflow." in request_text
+        assert "private intermediate marker" not in request_text
 
 
 @pytest.mark.asyncio

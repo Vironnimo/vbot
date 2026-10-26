@@ -168,7 +168,7 @@ async def test_revoke_prevents_reading_a_saved_remote_result(context_service, ho
     assert result["error"]["message"] == MCP_MESSAGES["access_denied"]
 
 
-async def _call_returning(payload, context_service, host, monkeypatch):
+async def _call_returning(payload, context_service, host, monkeypatch, *, programmatic=False):
     """Call the remote Tool through the connection Tool; the server answers *payload*."""
     service, registry, runner, calls = context_service
 
@@ -177,21 +177,57 @@ async def _call_returning(payload, context_service, host, monkeypatch):
 
     target = await tool_target(registry, host)
     monkeypatch.setattr(runner, "invoke", answer)
-    return await dispatch(
-        registry, host, {"action": "call", "target": target, "arguments": {"value": "x"}}
+    return await registry.dispatch(
+        replace(context(host), programmatic=programmatic),
+        {"action": "call", "target": target, "arguments": {"value": "x"}},
+        allowed_tools=["mcp_example"],
     )
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("row_count", [1, 1500])
+async def test_programmatic_call_keeps_complete_structured_content(
+    context_service, host, monkeypatch, row_count
+):
+    structured = {
+        "rows": [{"id": index, "value": "test-owned-value"} for index in range(row_count)]
+    }
+    payload = {
+        "content": [{"type": "text", "text": json.dumps(structured)}],
+        "structuredContent": structured,
+        "isError": False,
+        "_meta": {"io.modelcontextprotocol/serverInfo": {"name": "test"}, "vendor": True},
+    }
+
+    result = await _call_returning(payload, context_service, host, monkeypatch, programmatic=True)
+
+    # Neither repeated structured content nor values past the Model view limit
+    # disappear before a program can filter them.
+    assert result["ok"]
+    assert result["data"] == payload
+    assert len(result["data"]["structuredContent"]["rows"]) == row_count
+    assert payloads(host).rows == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("programmatic", [False, True])
 async def test_large_error_keeps_full_payload_and_bounded_receipt(
-    context_service, host, monkeypatch
+    context_service, host, monkeypatch, programmatic
 ):
     service, registry, runner, calls = context_service
     report = "start " + "failure " * 3000 + "NameError: final line"
     payload = {"isError": True, "content": [{"type": "text", "text": report}]}
 
-    result = await _call_returning(payload, context_service, host, monkeypatch)
+    result = await _call_returning(
+        payload, context_service, host, monkeypatch, programmatic=programmatic
+    )
     message = result["error"]["message"]
+    if programmatic:
+        assert not result["ok"]
+        assert result["error"]["code"] == "mcp_tool_error"
+        assert report in message
+        assert payloads(host).rows == {}
+        return
     identifier = payload_id(message)
     saved = await service.content.load_result(identifier, context(host), "example")
     page = await dispatch(
@@ -359,7 +395,8 @@ async def test_string_pages_shrink_until_escaped_text_fits(host):
 
 
 @pytest.mark.asyncio
-async def test_unknown_metadata_and_media_are_preserved(host):
+@pytest.mark.parametrize("programmatic", [False, True])
+async def test_unknown_metadata_and_media_are_preserved(host, programmatic):
     payload = {
         "content": [
             {
@@ -372,11 +409,18 @@ async def test_unknown_metadata_and_media_are_preserved(host):
         "structuredContent": {"answer": 42},
         "_meta": {"vendor": {"future": True}},
     }
-    result, artifacts = await ContentStore(host).preserve(payload)
+    store = ContentStore(host)
+    result, artifacts = (
+        await store.present(payload, replace(context(host), programmatic=True), "example")
+        if programmatic
+        else await store.preserve(payload)
+    )
     assert result["_meta"] == payload["_meta"]
     assert result["structuredContent"] == payload["structuredContent"]
     assert result["content"][0]["_meta"] == {"detail": "original"}
     assert result["content"][0]["size_bytes"] == len(b"image-bytes")
+    assert "data" not in result["content"][0]
+    assert result["content"][0]["attachment_id"] == "blob"
     assert len(artifacts) == 1
     assert "data" in payload["content"][0]
 

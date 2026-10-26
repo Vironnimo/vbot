@@ -182,6 +182,7 @@ ToolResultPayloadHook = Callable[[str, str, Any], str]
 # What a Tool does with a path it resolves; see ``ToolContext.resolve_path``.
 type PathResolveAccess = Literal["read", "write", "start_dir", "display"]
 ToolHandler = Callable[["ToolContext", JsonObject], JsonObject | Awaitable[JsonObject]]
+ToolCallHook = Callable[["ToolContext", str, JsonObject], Awaitable[JsonObject]]
 
 
 @dataclass(frozen=True)
@@ -248,6 +249,9 @@ class ToolContext:
     # The Session is linked to a Parent Agent (a Sub-Agent Session): it uses only
     # the Secrets bound to or passed into it, none granted to its Agent.
     subagent_session: bool = False
+    # A program consumes the structured result instead of its bounded Model view.
+    programmatic: bool = False
+    tool_call_hook: ToolCallHook | None = field(default=None, repr=False, compare=False)
     # The admitted Run's reply destination, unaffected by another chat using the
     # same Session. Runtime-only; never supplied by Model arguments.
     reply_surface: ReplySurface | None = None
@@ -652,6 +656,17 @@ class ToolContext:
 
         return self.skill_activation_hook(name, content, package)
 
+    @property
+    def tool_calls_available(self) -> bool:
+        """Whether this call can dispatch other Tools in its owning Run."""
+        return self.tool_call_hook is not None
+
+    async def call_tool(self, name: str, arguments: JsonObject) -> JsonObject:
+        """Dispatch a Tool through the owning Run and return its result envelope."""
+        if self.tool_call_hook is None:
+            raise RuntimeError("Programmatic Tool calls are unavailable outside an active Run")
+        return await self.tool_call_hook(self, name, arguments)
+
     def after_result_persisted(self, callback: ToolResultPersistedCallback) -> None:
         """Run *callback* only after this Tool Result enters Session history."""
         if self.result_persisted_hook is None:
@@ -790,6 +805,8 @@ class ToolExecutionConfig:
     run_kind: RunKind | None = None
     # See ``ToolContext.subagent_session``.
     subagent_session: bool = False
+    programmatic: bool = False
+    tool_call_hook: ToolCallHook | None = field(default=None, repr=False, compare=False)
     reply_surface: ReplySurface | None = None
     allowed_tools: Sequence[str] | None = None
     emit_hook: ToolEmitHook | None = None

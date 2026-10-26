@@ -73,6 +73,8 @@ def visible_contract(items: list[JsonObject]) -> list[JsonObject]:
         "reasoningSummary",
         "durationMs",
         "toolCallId",
+        "parentToolCallId",
+        "programmatic",
         "arguments",
         "result",
         "display",
@@ -180,6 +182,128 @@ def test_history_keeps_reused_tool_ids_separate_and_matches_live_child_ids() -> 
     assert history_tool_call(messages, "unknown") is None
 
 
+@pytest.mark.parametrize("parent_first", [False, True])
+def test_programmatic_calls_keep_parent_grouping_and_identity_after_reload(
+    parent_first: bool,
+) -> None:
+    timeline = RunTimeline("run")
+    records: list[JsonObject] = []
+    for step in ("one", "two"):
+        # Providers may reuse their ids in a later step. Programmatic ids are
+        # generated per call, and its declaration can persist before either
+        # the parent declaration or its sibling's result.
+        parent_call = {"id": "parent", "name": "execute_code", "arguments": {"code": step}}
+        sibling_call = {"id": "sibling", "name": "read", "arguments": {"path": step}}
+        child_call = {"id": f"pcall-{step}", "name": "read", "arguments": {"path": step}}
+        parent = message(
+            f"parent-{step}",
+            "assistant",
+            content=f"Inspecting {step}",
+            tool_calls=[parent_call, sibling_call],
+        )
+        nested = [
+            message(
+                f"child-{step}",
+                "assistant",
+                programmatic=True,
+                parent_tool_call_id="parent",
+                tool_calls=[child_call],
+            ),
+            message(
+                f"child-result-{step}",
+                "tool",
+                programmatic=True,
+                parent_tool_call_id="parent",
+                tool_call_id=child_call["id"],
+                name="read",
+                content={"ok": True, "data": {"content": step}},
+            ),
+        ]
+        results = [
+            message(
+                f"parent-result-{step}",
+                "tool",
+                tool_call_id="parent",
+                name="execute_code",
+                content={"ok": True},
+            ),
+            message(
+                f"sibling-result-{step}",
+                "tool",
+                tool_call_id="sibling",
+                name="read",
+                content={"ok": True},
+            ),
+        ]
+        timeline.apply(
+            {"type": "assistant_output_delta", "payload": {"content_delta": parent["content"]}}
+        )
+        for call in (parent_call, sibling_call):
+            timeline.apply(
+                {
+                    "type": "tool_call_started",
+                    "payload": {"assistant_message_id": parent["id"], "tool_call": call},
+                }
+            )
+        for item in nested:
+            kind = "assistant_output" if item["role"] == "assistant" else "tool_call_result"
+            payload: JsonObject = {"message": item}
+            if item["role"] == "tool":
+                payload["tool_call"] = child_call
+            timeline.apply({"type": kind, "payload": payload})
+        # Internal declarations do not finalize the Model's streamed output.
+        assert run_block(timeline.snapshot())["items"][-4]["content"] == parent["content"]
+        timeline.apply({"type": "assistant_output", "payload": {"message": parent}})
+        for result, call in zip(results, (parent_call, sibling_call), strict=True):
+            timeline.apply(
+                {"type": "tool_call_result", "payload": {"message": result, "tool_call": call}}
+            )
+        records.extend([parent, *nested, *results] if parent_first else [*nested, parent, *results])
+        if step == "one":
+            # A later streaming retry recounts normal row slots without
+            # treating a generated programmatic call id as an ordinal.
+            timeline.apply({"type": "stream_attempt_restarted", "payload": {}})
+    terminal = message("summary", "run_summary", status="completed")
+    records.append(terminal)
+    timeline.apply({"type": "run_completed", "payload": terminal})
+    history = history_timeline(records)
+    assert visible_contract(history) == visible_contract(timeline.snapshot())
+    children = run_block(history)["items"]
+    assert [item.get("toolCallId") for item in children] == [
+        None,
+        "parent",
+        "pcall-one",
+        "sibling",
+        None,
+        "parent",
+        "pcall-two",
+        "sibling",
+    ]
+    for child in children:
+        if child.get("programmatic"):
+            assert child["parentToolCallId"] == "parent"
+            raw = history_tool_call(records, child["id"])
+            assert raw is not None and raw["arguments"] == child["arguments"]
+
+
+def test_cancelled_history_keeps_programmatic_calls_without_parent_declaration() -> None:
+    records = [
+        message(
+            "child",
+            "assistant",
+            programmatic=True,
+            parent_tool_call_id="absent",
+            tool_calls=[{"id": "pcall", "name": "read", "arguments": {"path": "file"}}],
+        ),
+        message("summary", "run_summary", status="cancelled"),
+    ]
+    run = run_block(history_timeline(records))
+    assert len(run["items"]) == 1
+    assert run["items"][0]["type"] == "tool_call"
+    assert run["items"][0]["parentToolCallId"] == "absent"
+    assert run["items"][0]["status"] == "cancelled"
+
+
 @pytest.mark.parametrize(
     "status,unfinished",
     [
@@ -219,6 +343,9 @@ def test_durable_summary_settles_pending_calls_without_changing_completed_result
         ("bash", {"ok": False, "error": {"code": "cancelled_by_user"}}, None, "cancelled"),
         ("bash", {"ok": True, "data": {"status": "stopped"}}, None, "cancelled"),
         ("terminal", {"ok": True, "data": {"status": "stopped"}}, None, "success"),
+        ("execute_code", {"ok": True, "data": {"status": "completed"}}, None, "success"),
+        ("execute_code", {"ok": True, "data": {"status": "failed"}}, None, "failed"),
+        ("execute_code", {"ok": True, "data": {"status": "timed_out"}}, None, "failed"),
         ("read", {"ok": False, "error": {"code": "missing"}}, None, "failed"),
         ("read", {"ok": False, "error": {"code": "permission_denied"}}, None, "refused"),
         (
@@ -244,9 +371,10 @@ def test_tool_outcomes_survive_reload_without_failing_completed_run(
         ),
         message("summary", "run_summary", run_id="run", status="completed"),
     ]
-    block = run_block(history_timeline(messages))
-    assert block["status"] == "completed"
-    assert block["items"][0]["status"] == expected
+    for projection in (history_timeline(messages), project_live(messages)):
+        block = run_block(projection)
+        assert block["status"] == "completed"
+        assert block["items"][0]["status"] == expected
 
 
 def test_takeover_boundary_and_hidden_records_preserve_distinct_runs() -> None:

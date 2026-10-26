@@ -291,6 +291,8 @@ def model_facing_request(
 
     projected: list[JsonObject] = []
     for message in messages:
+        if message.get("programmatic"):
+            continue
         role = message.get("role")
         changes: JsonObject = {}
         if role == "user":
@@ -646,6 +648,8 @@ def _history_request_parts(
     run_error_sent = False
 
     for message in messages:
+        if message.programmatic:
+            continue
         if message.role == "note":
             pending_notes.append(message)
             continue

@@ -66,6 +66,12 @@ class RunTimeline:
         # The complete arguments and result of each Tool row, which the row
         # itself only previews; read through `raw_tool_call`.
         self._raw_calls: dict[str, JsonObject] = {}
+        # A script's calls stay ordinary Tool rows, grouped under the call
+        # that dispatched them. History can supply them before their parent
+        # Assistant declaration; unfinished parents disambiguate reused ids.
+        self._programmatic_parents: dict[str, str] = {}
+        self._pending_programmatic: dict[str, list[str]] = {}
+        self._parent_tools: dict[str, JsonObject] = {}
         # Lookups scan the rows, which makes folding a long Run quadratic.
         # These sets hold every value a row ever had, never fewer: a value
         # outside them matches no row, so the scan is skipped; one inside
@@ -94,7 +100,7 @@ class RunTimeline:
             for child in self.run["items"]:
                 self._join_parts(child)
             row = {key: value for key, value in self.run.items() if key != "items"}
-            row["items"] = list(self.run["items"])
+            row["items"] = self._ordered_children(self.run["items"])
             return [*self.before, row, *self.after]
         if self._snapshot is None:
             children = []
@@ -107,9 +113,28 @@ class RunTimeline:
             self._child_snapshots = {child["id"]: child for child in children}
             self._dirty_children.clear()
             row = copy.deepcopy({key: value for key, value in self.run.items() if key != "items"})
-            row["items"] = children
+            row["items"] = self._ordered_children(children)
             self._snapshot = [*copy.deepcopy(self.before), row, *copy.deepcopy(self.after)]
         return self._snapshot
+
+    def _ordered_children(self, children: list[JsonObject]) -> list[JsonObject]:
+        """Keep linked calls together without changing event lookup order."""
+        if not self._programmatic_parents:
+            return list(children)
+        by_parent: dict[str, list[JsonObject]] = {}
+        present = {child["id"] for child in children}
+        linked = set()
+        for child in children:
+            parent = self._programmatic_parents.get(child["id"])
+            if parent is not None and parent in present:
+                by_parent.setdefault(parent, []).append(child)
+                linked.add(child["id"])
+        ordered = []
+        for child in children:
+            if child["id"] not in linked:
+                ordered.append(child)
+                ordered.extend(by_parent.get(child["id"], ()))
+        return ordered
 
     def _join_parts(self, child: JsonObject) -> None:
         """Move a row's pending streamed text into it."""
@@ -193,7 +218,7 @@ class RunTimeline:
             )
             self._text(child_type, text, event, streaming=True)
         elif kind in {"reasoning", "assistant_output"}:
-            if message:
+            if message and not message.get("programmatic"):
                 self._finalize_text(message, event)
             if kind == "assistant_output":
                 if message.get("interrupted"):
@@ -210,6 +235,11 @@ class RunTimeline:
                             "payload": {
                                 "assistant_message_id": message.get("id"),
                                 "tool_call": {"index": index, **call},
+                                **{
+                                    key: message[key]
+                                    for key in ("programmatic", "parent_tool_call_id")
+                                    if key in message
+                                },
                             },
                         }
                     )
@@ -436,6 +466,9 @@ class RunTimeline:
         kind = event["type"]
         payload = event.get("payload") or {}
         call = payload.get("tool_call") or {}
+        message = payload.get("message") or {}
+        programmatic = payload.get("programmatic", message.get("programmatic", False))
+        parent_call_id = payload.get("parent_tool_call_id", message.get("parent_tool_call_id"))
         call_id = call.get("id") or payload.get("tool_call_id") or payload.get("id")
         assistant_id = payload.get("assistant_message_id")
         key = f"id-{call_id}" if call_id else f"index-{call.get('index', 0)}"
@@ -458,7 +491,14 @@ class RunTimeline:
         )
         if child is None:
             child = {
-                "id": self._new_id("tool_call"),
+                # Programmatic ids are generated per call, unlike Provider
+                # ids. They must not consume the normal Tool ordinal: their
+                # durable declaration can precede the parent's declaration.
+                "id": (
+                    f"{self.run['id']}-programmatic-tool-{call_id}"
+                    if programmatic and call_id
+                    else self._new_id("tool_call")
+                ),
                 "identityKey": key,
                 "type": "tool_call",
                 "key": key,
@@ -487,6 +527,15 @@ class RunTimeline:
         child["identityKey"] = key
         if assistant_id:
             child["assistantMessageId"] = assistant_id
+        if programmatic:
+            child["programmatic"] = True
+            if parent_call_id:
+                child["parentToolCallId"] = parent_call_id
+                self._link_programmatic(child, str(parent_call_id))
+        elif call_id and not child.get("programmatic"):
+            self._parent_tools[str(call_id)] = child
+            for child_id in self._pending_programmatic.pop(str(call_id), ()):
+                self._programmatic_parents[child_id] = child["id"]
         if kind == "tool_call_delta":
             self._argument_parts.setdefault(child["id"], []).append(
                 payload.get("arguments_delta", "")
@@ -542,6 +591,17 @@ class RunTimeline:
             child["speechPlayback"] = payload.get("url")
         if kind in {"tool_call_started", "tool_call_result"} or call:
             self._present_tool(child, raw)
+
+    def _link_programmatic(self, child: JsonObject, parent_call_id: str) -> None:
+        if child["id"] in self._programmatic_parents:
+            return
+        parent = self._parent_tools.get(parent_call_id)
+        if parent is not None and not parent.get("finished"):
+            self._programmatic_parents[child["id"]] = parent["id"]
+        else:
+            pending = self._pending_programmatic.setdefault(parent_call_id, [])
+            if child["id"] not in pending:
+                pending.append(child["id"])
 
     def _present_tool(self, child: JsonObject, raw: JsonObject) -> None:
         """Rebuild what the row shows of its call from the complete values."""
@@ -749,6 +809,9 @@ class RunTimeline:
     def _forget_dropped_calls(self) -> None:
         retained = {item["id"] for item in self.run["items"]}
         self._raw_calls = {key: value for key, value in self._raw_calls.items() if key in retained}
+        self._parent_tools = {
+            key: value for key, value in self._parent_tools.items() if value["id"] in retained
+        }
 
     def _recount_text_slots(self) -> None:
         for kind in ("reasoning", "assistant_output", "tool_call"):
@@ -758,7 +821,7 @@ class RunTimeline:
                 (
                     int(item["id"].rsplit("-", 1)[1])
                     for item in self.run["items"]
-                    if item["type"] == kind
+                    if item["type"] == kind and not item.get("programmatic")
                 ),
                 default=-1,
             )
@@ -819,6 +882,12 @@ def _tool_status(result: Any, name: str, display: Any, error: Any) -> str:
         and result_data.get("status") == "stopped"
     ):
         return "cancelled"
+    if (
+        name == "execute_code"
+        and isinstance(result_data, dict)
+        and result_data.get("status") in {"failed", "timed_out"}
+    ):
+        return "failed"
     if (
         error
         or failure

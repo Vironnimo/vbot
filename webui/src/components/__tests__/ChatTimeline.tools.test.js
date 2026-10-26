@@ -40,6 +40,51 @@ const noData = () => t('chat.toolNoData');
 describe('ChatTimeline Tools', () => {
   const timeline = setupChatTimelineSuite();
 
+  it.each(['normal', 'compact'])(
+    'keeps programmatic calls visible and clickable as their parent arrives in %s mode',
+    (chatWorkingMode) => {
+      const child = toolItem({
+        id: 'programmatic-read',
+        name: 'read',
+        arguments: { path: 'notes.md' },
+        programmatic: true,
+        parentToolCallId: 'execute-code',
+        result: { ok: true, data: { content: 'Nested contents' } },
+      });
+      const state = sessionWithTool([child]);
+      const session = fromStore(writable(state));
+      timeline.mount({
+        get sessionState() {
+          return session.current;
+        },
+        chatWorkingMode,
+      });
+      const nested = () => document.querySelector('.programmatic-tool');
+      expect(nested().dataset.parentToolCallId).toBe('execute-code');
+      openDisclosures('.programmatic-tool .tool-event');
+      expect(nested().textContent).toContain('Nested contents');
+
+      // The server resolves an early child to its parent's position. The
+      // update keeps the child's ordinary disclosure and its full result.
+      const parent = toolItem({ id: 'execute-code', name: 'execute_code' });
+      session.current = {
+        ...state,
+        timelineItems: [assistantRun('run-tool', [parent, child])],
+      };
+      flushSync();
+      openDisclosures('.working-block');
+      expect(
+        [...document.querySelectorAll('.tool-event-line .te-fn')].map(
+          (name) => name.textContent,
+        ),
+      ).toEqual(['execute_code', 'read']);
+      expect(document.querySelectorAll('.programmatic-tool')).toHaveLength(1);
+      expect(document.querySelectorAll('.msg.assistant')).toHaveLength(1);
+      expect(nested().querySelector('.tool-event').open).toBe(true);
+      expect(nested().textContent).toContain('Nested contents');
+    },
+  );
+
   describe('summary line', () => {
     // Each case: Tool name, arguments, started payload, and the texts the
     // summary line `shows` and `hides`; `args` checks the Args detail.

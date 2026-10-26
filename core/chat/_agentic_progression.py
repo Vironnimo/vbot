@@ -906,7 +906,10 @@ class AgenticProgression:
                             tool_dispatch_context.delivery_receipts,
                             tuple(
                                 message.tool_call_id
-                                for message in tool_messages
+                                for message in [
+                                    *tool_dispatch_context.programmatic_results,
+                                    *tool_messages,
+                                ]
                                 if message.tool_call_id is not None
                             ),
                             tool_dispatch_context.turn_end_requested,

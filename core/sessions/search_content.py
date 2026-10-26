@@ -78,6 +78,7 @@ def message_is_searchable(message: Any) -> bool:
     """Test canonical eligibility without materializing Content Block text."""
     return (
         getattr(message, "role", "") in SESSION_RECALL_CONVERSATION_ROLES
+        and not getattr(message, "programmatic", False)
         and not is_recall_artifact_message(message)
         and bool(getattr(message, "content", None))
     )

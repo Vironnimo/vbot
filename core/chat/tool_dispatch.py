@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
 
+from core.chat._programmatic_tools import ProgrammaticTools
 from core.chat._skill_activation import _active_skill_env_keys
 from core.chat._tool_context import (
     ToolDispatchContext as ToolDispatchContext,
@@ -38,6 +39,7 @@ from core.sessions.history import skill_tool_activation_name
 from core.skills.policy import SkillPackageRef
 from core.tools import ToolCall as ScheduledToolCall
 from core.tools import (
+    ToolContext,
     ToolExecutionConfig,
     ToolExecutor,
     tool_failure,
@@ -83,6 +85,7 @@ class ToolRound:
         self._rejections: dict[int, ToolCallRejection] = {}
         self._notes: list[str] = []
         self._skill_packages: dict[str, SkillPackageRef] = {}
+        self._programmatic: dict[str, ProgrammaticTools] = {}
         self._registry = _EmittingToolRegistry(
             context.registry,
             run,
@@ -160,7 +163,9 @@ class ToolRound:
             tool_load_registrar=context.record_tool_load,
             worked_paths_registrar=context.record_worked_paths,
             change_tracker=context.change_tracker,
+            tool_call_hook=self._call_tool,
         )
+        self._config = config
         # Calls run in the context the round was opened in, never in the
         # Model request's scope (its retry ownership belongs to that request).
         self._batch = ToolExecutor(self._registry).start_batch(
@@ -220,6 +225,13 @@ class ToolRound:
             self._skill_packages[tool_call_id] = package
         return activated
 
+    async def _call_tool(self, parent: ToolContext, name: str, arguments: JsonObject) -> JsonObject:
+        calls = self._programmatic.get(parent.tool_call_id)
+        if calls is None:
+            calls = ProgrammaticTools(self._context, self._config, parent)
+            self._programmatic[parent.tool_call_id] = calls
+        return await calls.call(name, arguments)
+
     def _tool_results(
         self, completed: list[tuple[ToolCall, JsonObject]]
     ) -> tuple[list[ChatMessage], list[JsonObject]]:
@@ -255,6 +267,8 @@ class ToolRound:
     async def aclose(self) -> None:
         """Cancel every call that has not finished and wait until all settled."""
         await self._batch.aclose()
+        for calls in self._programmatic.values():
+            await calls.aclose()
 
 
 async def _fail_tool_calls_without_dispatch(
