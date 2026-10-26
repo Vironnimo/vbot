@@ -1,11 +1,15 @@
-"""Operator computer discovery; native capability execution has its own link."""
+"""Operator computer discovery and removal; native capability execution has its own link."""
 
 from __future__ import annotations
 
 from typing import Any
 
+from server.access import ACCESS_DENIED, current_principal
+from server.events import RESOURCE_KIND_COMPUTERS
 from server.rpc.dispatcher import RpcMethodHandler
+from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
+from server.rpc.event_bridge import publish_resource_changed
 
 
 def _list(state: Any, params: dict[str, Any]) -> dict[str, Any]:
@@ -14,5 +18,21 @@ def _list(state: Any, params: dict[str, Any]) -> dict[str, Any]:
     return {"computers": [item.describe() for item in state.runtime.computers.list()]}
 
 
+async def _remove(state: Any, params: dict[str, Any]) -> dict[str, Any]:
+    computer_id = params.get("id")
+    if set(params) != {"id"} or not isinstance(computer_id, str) or not computer_id:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "computers.remove needs only the computer id")
+    # Like Device management, only an operator request may remove a computer;
+    # in-process Agent or Live dispatch has no principal.
+    if current_principal() is None:
+        raise RpcError(ACCESS_DENIED, "Removing a computer needs a request from a signed-in client")
+    try:
+        await state.runtime.computers.forget(computer_id)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    publish_resource_changed(state, RESOURCE_KIND_COMPUTERS)
+    return {"removed": computer_id}
+
+
 def method_handlers() -> dict[str, RpcMethodHandler]:
-    return {"computers.list": _list}
+    return {"computers.list": _list, "computers.remove": _remove}

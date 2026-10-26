@@ -99,7 +99,7 @@ async def _connected(
     registry: ComputerRegistry, computer_id: str = "pc_laptop"
 ) -> AsyncIterator[tuple[_Socket, asyncio.Task[None]]]:
     socket = _Socket()
-    socket.receive(_hello(computer_id))
+    socket.receive(_hello(computer_id, name=f"Laptop {computer_id}"))
     serving = asyncio.create_task(serve_computer_socket(socket, registry))
     try:
         welcome = await _output(socket, serving)
