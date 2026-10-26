@@ -1,21 +1,26 @@
 import { formatDurationMs, timestampToMs } from './time.js';
 import { t } from '$lib/i18n.js';
-import { toolDurationMs, toolStartedTimestamp } from './toolFacts.js';
+import {
+  toolDurationMs,
+  toolNameForRunTool,
+  toolStartedTimestamp,
+} from './toolFacts.js';
 import { visibleRunChildren } from './activity.js';
 import { isShowWidgetTool } from './widgets.js';
 import { isPortalTool } from './portals.js';
 
-// `show_widget` and `portal` rows are output for the user, like an Agent
-// message: they end a span, so their widget or Portal card stays visible in
-// compact mode.
+// Speech, widgets and Portal cards are output for the user, like an Agent
+// message. Keep their rows outside Working from the start of the call so
+// arriving media never moves or remounts a player inside a folded group.
 const isWorkingChild = (child) =>
   child.type === 'reasoning' ||
   (child.type === 'tool_call' &&
+    toolNameForRunTool(child) !== 'generate_speech' &&
     !isShowWidgetTool(child) &&
     !isPortalTool(child));
 
 // Compact Work details fold each contiguous span of at least two Thinking or
-// Tool rows into one Working line; Assistant output, widgets, Portal cards,
+// Tool rows into one Working line; Assistant output, speech, widgets, Portal cards,
 // user messages and every other row stay in place, and a single Thinking or
 // Tool row stays inline.
 export function groupRunChildren(children, workingMode) {

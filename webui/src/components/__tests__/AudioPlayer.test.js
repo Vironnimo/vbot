@@ -395,8 +395,119 @@ it('keeps a requested automatic start when autoplay is withdrawn before the audi
   expect(control('audio.pause')).toBeTruthy();
 });
 
+it('keeps successive speech players visible and independent as compact Working groups grow', async () => {
+  const streams = [];
+  vi.spyOn(speechPlayback, 'createSpeechPlayback').mockImplementation(
+    ({ onState }) => {
+      const state = {
+        paused: true,
+        loading: false,
+        currentTime: 0,
+        duration: 0,
+      };
+      const report = (patch) => onState(Object.assign(state, patch));
+      const stream = {
+        report,
+        play: vi.fn(() => report({ paused: false })),
+        pause: vi.fn(() => report({ paused: true })),
+        setVolume: vi.fn(),
+        stop: vi.fn(),
+      };
+      streams.push(stream);
+      return stream;
+    },
+  );
+  const work = (id) => [
+    reasoningItem('Prepare speech.', { id: `thinking-${id}` }),
+    toolItem({ id: `read-${id}`, result: { ok: true, data: {} } }),
+  ];
+  const speech = (id, fields = {}) =>
+    toolItem({ id, name: 'generate_speech', ...fields });
+  const props = reactiveProps({
+    item: assistantRun('run-speech', [...work('first'), speech('first')]),
+    chatWorkingMode: 'compact',
+  });
+  render(props, ChatAssistantRun);
+  // The call is outside Working even before its playback URL arrives.
+  const firstRow = document.querySelector('.tool-event');
+  expect(firstRow).not.toBeNull();
+  expect(firstRow.closest('.working-block')).toBeNull();
+
+  const first = speech('first', {
+    speechPlayback: '/api/speech/playback/first',
+  });
+  props.item = assistantRun('run-speech', [...work('first'), first]);
+  await flush();
+  expect(document.querySelector('.tool-event')).toBe(firstRow);
+  const firstPlayer = document.querySelector('.audio-player');
+  const firstAudio = firstPlayer.querySelector('audio');
+  streams[0].report({ currentTime: 2 });
+  await flush();
+
+  const second = speech('second', {
+    speechPlayback: '/api/speech/playback/second',
+  });
+  props.item = assistantRun('run-speech', [
+    ...work('first'),
+    first,
+    ...work('second'),
+    second,
+  ]);
+  await flush();
+  const players = [...document.querySelectorAll('.audio-player')];
+  expect(players).toHaveLength(2);
+  expect(players[0]).toBe(firstPlayer);
+  expect(players[0].querySelector('audio')).toBe(firstAudio);
+  for (const player of players) expect(player.closest('details')).toBeNull();
+  expect(control('audio.play', players[0])).toBeTruthy();
+  expect(control('audio.pause', players[1])).toBeTruthy();
+  streams[1].report({ currentTime: 4 });
+  await flush();
+  expect(
+    players.map(
+      (player) => player.querySelector('.audio-player__time span').textContent,
+    ),
+  ).toEqual(['0:02', '0:04']);
+
+  const completed = [first, second].map((tool, index) => {
+    streams[index].report({
+      paused: true,
+      ended: true,
+      currentTime: 6,
+      duration: 6,
+    });
+    return speech(tool.id, {
+      status: 'success',
+      result: {
+        ok: true,
+        data: {
+          artifact: { kind: 'speech', url: `/api/speech/artifacts/${tool.id}` },
+        },
+      },
+    });
+  });
+  props.item = assistantRun('run-speech', [
+    ...work('first'),
+    completed[0],
+    ...work('second'),
+    completed[1],
+    ...work('after'),
+  ]);
+  await flush();
+  expect([...document.querySelectorAll('.audio-player')]).toEqual(players);
+  for (const [index, player] of players.entries()) {
+    expect(player.closest('details')).toBeNull();
+    expect(player.querySelector('audio').getAttribute('src')).toBe(
+      `/api/speech/artifacts/${completed[index].id}`,
+    );
+    expect(control('audio.seek', player).disabled).toBe(false);
+    expect(streams[index].play).toHaveBeenCalledOnce();
+    expect(streams[index].stop).not.toHaveBeenCalled();
+  }
+});
+
 it.each([false, true])(
-  'keeps speech in a closed Working group through History handoff (early streaming: %s)',
+  'keeps speech visible beside closed Working groups through History handoff (early streaming: %s)',
   async (early) => {
     const stream = {
       play: vi.fn(),
@@ -462,7 +573,12 @@ it.each([false, true])(
       messageItem(messages[0], { runId: 'run-speech' }),
       assistantRun(
         'run-speech',
-        [reasoningItem(messages[1].reasoning), speech, ...outputs],
+        [
+          reasoningItem(messages[1].reasoning),
+          toolItem({ id: 'call-read', result: { ok: true, data: {} } }),
+          speech,
+          ...outputs,
+        ],
         options,
       ),
     ];
@@ -484,6 +600,7 @@ it.each([false, true])(
     expect(working.open).toBe(false);
     expect(working.querySelector('.reasoning-block')).toBeNull();
     const audio = document.querySelector('audio');
+    expect(audio.closest('details')).toBeNull();
     if (!early) {
       expect(audio?.getAttribute('src')).toBe(url);
       ready(audio);
@@ -497,6 +614,7 @@ it.each([false, true])(
       working.dispatchEvent(new Event('toggle'));
       await flush();
       expect(document.querySelector('audio')).toBe(audio);
+      expect(audio.closest('details')).toBeNull();
     }
 
     if (early) {
@@ -557,6 +675,7 @@ it.each([false, true])(
     expect(sessionState.runEvents).toEqual([]);
     expect(document.querySelector('audio')).toBe(audio);
     expect(audio.getAttribute('src')).toBe(url);
+    expect(audio.closest('details')).toBeNull();
     expect(pause.mock.calls.length).toBe(pausesWhilePlaying);
     expect(play).toHaveBeenCalledTimes(early ? 0 : 1);
     if (early) {
