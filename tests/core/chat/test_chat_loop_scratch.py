@@ -255,8 +255,16 @@ async def test_scratch_is_only_announced_for_ordinary_file_capable_runs(
         RunKind.LIBRARIAN,
         RunKind.LIVE,
     }
-    assert bool(_notes(tmp_path, session.load())) is (kind not in excluded)
+    notes = _notes(tmp_path, session.load())
+    assert bool(notes) is (kind not in excluded)
     assert bool(runtime.scratch_areas.calls) is (kind not in excluded)
+    if notes:
+        [note] = notes
+        assert isinstance(note.content, str)
+        assert any(
+            note.content in str(message.get("content", ""))
+            for message in runtime.adapter.requests[0]["messages"]
+        )
 
 
 @pytest.mark.asyncio

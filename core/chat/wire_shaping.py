@@ -467,6 +467,15 @@ _SENDER_TAG_UNSAFE_CHARACTERS = str.maketrans("", "", "[]|\r\n")
 
 
 def _apply_sender_attribution(data: JsonObject, sender: MessageSender) -> None:
+    if sender.kind == "session":
+        data["content"] = RequestContextText(
+            "Message from another Session, not from the user. "
+            "The JSON identifies the sending Agent and the Session to address for a reply.\n"
+            + _quote_external_json(
+                {"session": sender.id, "agent": sender.display_name, "content": data.get("content")}
+            )
+        )
+        return
     tag = _sender_attribution_tag(sender)
     content = data.get("content")
     if isinstance(content, str):

@@ -15,6 +15,7 @@ from core.chat.errors import ChatError
 from core.chat.messages import (
     ChatMessage,
     InputOrigin,
+    MessageSender,
     ReplySurface,
     _display_content_preview,
     queue_content_is_editable,
@@ -28,6 +29,7 @@ from core.sessions import (
     SessionAddress,
     WorkingProjectChoice,
 )
+from core.sessions.errors import SessionNotFoundError
 from core.utils.ids import new_id
 from core.utils.workers import settle_before_cancelling
 
@@ -97,6 +99,11 @@ class AccessorInputs:
         reply_surface: ReplySurface | None = None,
         project_id: str | None = None,
         context_note: str | ChatMessage | None = None,
+        sender: MessageSender | None = None,
+        expected_generation_id: str | None = None,
+        expected_working_project_id: str | None = None,
+        source: SessionAddress | None = None,
+        expected_source_generation_id: str | None = None,
     ) -> AccessorChatSubmission:
         await self.restore()
         # Once mutation begins, cancellation waits for both durable acceptance
@@ -119,6 +126,11 @@ class AccessorInputs:
                     reply_surface=reply_surface,
                     project_id=project_id,
                     context_note=context_note,
+                    sender=sender,
+                    expected_generation_id=expected_generation_id,
+                    expected_working_project_id=expected_working_project_id,
+                    source=source,
+                    expected_source_generation_id=expected_source_generation_id,
                 )
             )
 
@@ -140,6 +152,11 @@ class AccessorInputs:
         reply_surface: ReplySurface | None,
         project_id: str | None,
         context_note: str | ChatMessage | None,
+        sender: MessageSender | None,
+        expected_generation_id: str | None,
+        expected_working_project_id: str | None,
+        source: SessionAddress | None,
+        expected_source_generation_id: str | None,
     ) -> AccessorChatSubmission:
         from core.chat.chat import _NewSession, _reject_live_input, _stored_working_project
 
@@ -171,6 +188,11 @@ class AccessorInputs:
             session = await self.loop._get_session_async(
                 agent_id, session_id, create_missing=False, project_id=project_id
             )
+            if (
+                expected_generation_id is not None
+                and session.generation_id != expected_generation_id
+            ):
+                raise SessionNotFoundError("Session generation changed before input acceptance")
             await self.loop._reject_owner_managed_session(project_id, agent_id, session_id)
             agent = await resolver.resolve_agent_async(project_id, agent_id, session_id=session_id)
             working = await resolver.resolve_working_project_async(
@@ -183,7 +205,10 @@ class AccessorInputs:
             working = await resolver.resolve_working_project_async(
                 project_id, agent, requested=new.working_project_id
             )
-        _reject_live_input(agent, RunKind.USER)
+        if expected_working_project_id is not None and working != expected_working_project_id:
+            raise ChatError("The receiving Session is not in the same Working Project.")
+        run_kind = RunKind.SESSION_MESSAGE if sender and sender.kind == "session" else RunKind.USER
+        _reject_live_input(agent, run_kind)
         provider_id, _ = _resolve_agent_connection(deps, agent)
         _ensure_provider_exists(deps.providers, provider_id)
         content = masked_content(content, deps.secret_masker)
@@ -195,6 +220,7 @@ class AccessorInputs:
             )
         request = _RunRequest(
             content=content,
+            sender=sender,
             input_origin=input_origin,
             reply_surface=reply_surface,
             context_note=context_note,
@@ -224,6 +250,9 @@ class AccessorInputs:
                 attachment_ids=_attachment_ids(payload),
                 fallback_input=ChatMessage.from_dict(payload["message"]),
                 fallback_notes=_fallback_notes(payload),
+                source=source,
+                expected_source_generation_id=expected_source_generation_id,
+                expected_working_project_id=expected_working_project_id,
             )
 
         try:
@@ -231,9 +260,11 @@ class AccessorInputs:
                 session.address,
                 QueuedChatInput(self.loop, request),
                 display_content=_display_content_preview(content),
-                editable=queue_content_is_editable(content),
+                editable=not request.session_message and queue_content_is_editable(content),
                 steerable=request.supports_steering,
+                steering=request.session_message,
                 admission=RunAdmission(
+                    run_kind=run_kind,
                     working_project_id=working,
                     expected_session_generation_id=session.generation_id,
                     accessor_input_id=input_id,
@@ -282,10 +313,14 @@ class AccessorInputs:
                         executor=QueuedChatInput(self.loop, request),
                         internal=False,
                         future=event_loop.create_future(),
-                        editable=queue_content_is_editable(request.content),
+                        editable=not request.session_message
+                        and queue_content_is_editable(request.content),
                         steerable=request.supports_steering,
                         steering=bool(record.payload.get("steering")),
                         admission=RunAdmission(
+                            run_kind=RunKind.SESSION_MESSAGE
+                            if request.session_message
+                            else RunKind.USER,
                             working_project_id=record.payload.get("working_project_id"),
                             expected_session_generation_id=record.generation_id,
                             accessor_input_id=record.input_id,
@@ -412,11 +447,13 @@ def _payload(request: _RunRequest, working_project_id: str | None) -> dict[str, 
     note = request.context_note
     return {
         "format_version": 1,
-        "message": ChatMessage.user(request.content, input_origin=request.input_origin).to_dict(),
+        "message": ChatMessage.user(
+            request.content, input_origin=request.input_origin, sender=request.sender
+        ).to_dict(),
         "reply_surface": request.reply_surface.kind if request.reply_surface is not None else None,
         "context_note": note.to_dict() if isinstance(note, ChatMessage) else note,
         "working_project_id": working_project_id,
-        "steering": False,
+        "steering": request.session_message,
     }
 
 
@@ -432,6 +469,7 @@ def _request(payload: dict[str, Any]) -> _RunRequest:
     note = payload.get("context_note")
     return _RunRequest(
         content=message.content,
+        sender=message.sender,
         input_origin=message.input_origin,
         reply_surface=ReplySurface(kind=surface) if surface is not None else None,
         context_note=ChatMessage.from_dict(note) if isinstance(note, dict) else note,

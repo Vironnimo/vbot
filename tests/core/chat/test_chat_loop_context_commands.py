@@ -167,22 +167,49 @@ async def test_the_first_run_of_a_session_gets_one_note_with_every_output(
 
 
 @pytest.mark.asyncio
-async def test_a_session_in_a_project_runs_only_the_projects_commands(tmp_path: Path) -> None:
+@pytest.mark.parametrize("peer_message", [False, True])
+async def test_a_session_in_a_project_runs_only_the_projects_commands(
+    tmp_path: Path, peer_message: bool
+) -> None:
     runner = _Runner({"git status": (0, "clean"), "agent command": (0, "")})
     runtime = _runtime(tmp_path, runner, agent_commands=["agent command"])
     loop = build_chat_loop(runtime)
+    source = runtime.chat_sessions.create("coder", session_id="sender", project_id=PROJECT)
+
+    async def send(session_id: str) -> None:
+        if not peer_message:
+            await loop.send("coder", "Hi", session_id=session_id, project_id=PROJECT)
+            return
+        target = runtime.chat_sessions.create("coder", session_id=session_id, project_id=PROJECT)
+        accepted = await loop.submit_session_message(
+            source=source.address,
+            source_ref="ses_sender",
+            expected_source_generation_id=source.generation_id,
+            target=target.address,
+            expected_generation_id=target.generation_id,
+            expected_working_project_id=PROJECT,
+            content="Hi",
+            input_id=f"peer-{session_id}",
+            request_hash=f"peer-{session_id}",
+        )
+        assert accepted.run is not None
+        await accepted.run.wait()
 
     # Without commands of its own, the Project runs none, not the Agent's.
-    await loop.send("coder", "Hi", session_id="empty", project_id=PROJECT)
+    await send("empty")
     assert runner.calls == []
 
     runtime.projects.update(PROJECT, context_commands=["git status"])
-    await loop.send("coder", "Hi", session_id="session-one", project_id=PROJECT)
+    await send("session-one")
     assert runner.calls == [("git status", (tmp_path / "repo").resolve())]
     session = runtime.chat_sessions.get(session_address("coder", "session-one", PROJECT))
     [note] = _context_notes(session.load_active())
     assert isinstance(note.content, str)
     assert "for new Sessions in this Project" in note.content
+    assert any(
+        note.content in str(message.get("content", ""))
+        for message in runtime.adapter.requests[-1]["messages"]
+    )
 
 
 @pytest.mark.asyncio

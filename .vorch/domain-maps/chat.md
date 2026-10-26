@@ -14,7 +14,7 @@ Chat is the execution seam between Sessions and Runs: it loads canonical Session
 - `ChatMessage` is the canonical conversation/read projection; Tool results and Run footers are reconstructed from their owning SQLite entities. Every role carries `id`, UTC-offset `timestamp`, and `role`; constructors and `from_dict` enforce role-specific fields.
 - Provider-visible conversation roles are `system`, `user`, `assistant`, and `tool`. Only `user` may carry `list[ContentBlock]`; Assistant messages may carry readable `reasoning`, opaque `reasoning_meta`, semantic `phase`, Usage and Tool Calls. Presentation-only and internal fields (`tool_display`, `output_files`, `reasoning_summary`, `reasoning_timing`, `reasoning_scope`, `interrupted`, the Sub-Agent reply target) persist for History but never reach a Provider request (`chat/request-building.md` -> Canonical message fields).
 - Kernel/history roles are `note`, `compaction_checkpoint`, `error`, `run_summary`, `agent_takeover`, and `history_edit`. Their Provider/public visibility differs intentionally: notes and edit controls are internal, checkpoints contribute through their Projection, errors are conditionally Model-visible, takeover annotations never enter Provider requests, and a run summary enters only as the interruption notice of a Run that stopped unfinished.
-- `MessageSender` (user messages only) persists stable `id`, informational `display_name`, and immutable `admin`/`member` ingress `role`. `ReplySurface` identifies the submitting accessor: WebUI/Desktop, terminal TUI, or one configured Channel (`direct` or `group`); only a delivered Steer changes the active Run's reply context. Channel ingress can include runtime-only target/thread facts, passed unchanged to Tool dispatch and never persisted or shown to the Model.
+- `MessageSender` (user messages only) identifies a human or peer Session; its source fields and framing belong to `chat/request-building.md`. `ReplySurface` identifies the submitting accessor: WebUI/Desktop, terminal TUI, or one configured Channel (`direct` or `group`); only a delivered Steer changes the active Run's reply context. Channel ingress can include runtime-only target/thread facts, passed unchanged to Tool dispatch and never persisted or shown to the Model.
 
 ## Interfaces and source ownership
 
@@ -65,6 +65,7 @@ This domain owns the context-command note, the Compaction checkpoint guidance, t
 Read these only when your task matches - not by default.
 
 - Choosing how a producer informs the Model (notes, System Reminders, announcements, prompt blocks, Tool Results) or adding a kernel-to-Model channel -> `model-communication.md`
+- Session peer coordination (`session_peers.py`) -> `tools/session.md`
 - Changing the shared semantic conversation projection, complete-Run paging or timeline snapshots/patches -> `chat/timeline.md`
 - Exact completed-Run lookup for voice announcements (`chat.run_result`) -> `model_tasks/live-operator.md`
 - Changing canonical message fields, request history, notes, Skill activation/catalog stability, the prompt-epoch Tool list or Tool-change announcements, reasoning replay, Assistant output-file references, Content Blocks, file mentions, attachment routing, or Tool-cycle repair -> `chat/request-building.md`

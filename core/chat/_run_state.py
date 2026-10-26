@@ -249,7 +249,12 @@ def has_open_goal(sessions: ChatSessionManager, address: SessionAddress) -> bool
 
 def subagent_input_reply_target(context: _RunExecutionContext, request: _RunRequest) -> str | None:
     """Destination selected by this input; internal continuations keep the current one."""
-    if not context.subagent_session or request.internal or request.input_already_persisted:
+    if (
+        not context.subagent_session
+        or request.internal
+        or request.input_already_persisted
+        or request.session_message
+    ):
         return None
     return "parent" if request.parent_agent_input else "user"
 
@@ -304,11 +309,16 @@ class _RunRequest:
     context_note: str | ChatMessage | None = None
 
     @property
+    def session_message(self) -> bool:
+        """Peer input keeps the recipient's authority and answer destination."""
+        return self.sender is not None and self.sender.kind == "session"
+
+    @property
     def supports_steering(self) -> bool:
         """Only ordinary user input can share the current execution policy."""
         return (
             not self.internal
-            and self.sender is None
+            and (self.sender is None or self.session_message)
             and (self.reply_surface is None or self.reply_surface.kind in {"webui", "tui"})
             and self.tool_restriction is None
             and self.tool_denial_resolver is None

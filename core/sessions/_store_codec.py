@@ -310,9 +310,15 @@ def insert_entry(
 def _insert_user(connection: sqlite3.Connection, entry_key: int, message: ChatMessage) -> None:
     if message.sender is not None:
         connection.execute(
-            "INSERT INTO user_entry_senders (entry_key, sender_id, display_name, sender_role) "
-            "VALUES (?, ?, ?, ?)",
-            (entry_key, message.sender.id, message.sender.display_name, message.sender.role),
+            "INSERT INTO user_entry_senders "
+            "(entry_key, sender_id, display_name, sender_role, source_kind) VALUES (?, ?, ?, ?, ?)",
+            (
+                entry_key,
+                message.sender.id,
+                message.sender.display_name,
+                message.sender.role,
+                message.sender.kind,
+            ),
         )
     if message.input_origin is not None:
         connection.execute(
@@ -617,6 +623,8 @@ class EntryBatch:
                             "display_name": sender["display_name"],
                             "role": sender["sender_role"],
                         }
+                        if sender["source_kind"] != "user":
+                            data["sender"]["kind"] = sender["source_kind"]
                     origin = self.origins.get(key)
                     if origin is not None:
                         data["input_origin"] = str(origin["input_origin"])
@@ -927,7 +935,8 @@ def select_batch(connection: sqlite3.Connection, rows: Sequence[sqlite3.Row]) ->
     )
     batch.senders = _rows_by_key(
         connection,
-        "SELECT entry_key, sender_id, display_name, sender_role FROM user_entry_senders "
+        "SELECT entry_key, sender_id, display_name, sender_role, source_kind "
+        "FROM user_entry_senders "
         f"WHERE entry_key {_KEYS}",
         by_role.get("user", []),
     )

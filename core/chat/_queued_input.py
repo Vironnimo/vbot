@@ -96,17 +96,19 @@ async def persist_steering_input(
     _append_input_origin_note(session, request.input_origin)
     if reply_to_user:
         session.add_note(SUBAGENT_REPLY_TO_USER_SYSTEM_REMINDER)
-    session.add_note(
-        PARENT_AGENT_STEERING_SYSTEM_REMINDER
-        if request.parent_agent_input
-        else STEERING_SYSTEM_REMINDER
-    )
+    if not request.session_message:
+        session.add_note(
+            PARENT_AGENT_STEERING_SYSTEM_REMINDER
+            if request.parent_agent_input
+            else STEERING_SYSTEM_REMINDER
+        )
     message = ChatMessage.user(
         _assign_session_image_references(
             masked_content(content, dependencies.secret_masker),
             context.session_snapshot.active_messages,
         ),
         input_origin=request.input_origin,
+        sender=request.sender,
     )
     # The answer destination commits with the input, even if cancellation races.
     await session.append_many_async(
@@ -143,7 +145,11 @@ async def rebuild_after_steering(
         for message in reversed(context.session_snapshot.active_messages):
             if message.role == "assistant":
                 break
-            if message.role == "user" and isinstance(message.content, str):
+            if (
+                message.role == "user"
+                and isinstance(message.content, str)
+                and (message.sender is None or message.sender.kind != "session")
+            ):
                 await _CHAT_TRANSFORM_WORKERS.run(
                     _activate_triggered_skills,
                     context.agent,

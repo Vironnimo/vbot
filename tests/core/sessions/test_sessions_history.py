@@ -232,6 +232,13 @@ def test_edit_targets_only_an_own_plain_text_user_message_after_the_latest_takeo
     with pytest.raises(ChatSessionError, match="plain-text"):
         editable_session_message_index([structured], structured.id)
 
+    peer = ChatMessage.user(
+        "message from a peer",
+        sender=MessageSender(id="ses_peer", display_name="coder", kind="session"),
+    )
+    with pytest.raises(ChatSessionError):
+        editable_session_message_index([peer], peer.id)
+
     takeover = ChatMessage.agent_takeover(from_address="alpha", to_address="beta")
     with pytest.raises(ChatSessionError, match="takeover"):
         editable_session_message_index([first, takeover], first.id)

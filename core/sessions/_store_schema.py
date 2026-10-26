@@ -102,6 +102,8 @@ def session_database_spec(
             ),
             # Older readers would send internal script activity to the Model.
             Migration("sessions.0010_programmatic_tool_activity", breaks_older=True),
+            # Older request builders would attribute a peer's input to the user.
+            Migration("sessions.0011_session_messages", breaks_older=True),
         ),
         after_open=_store_fts._ensure_fts_schema,
         snapshot_facts=_SNAPSHOT_FACTS,

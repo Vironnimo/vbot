@@ -252,5 +252,6 @@ def register_execute_code_tool(
         execution_slot_required=False,
         open_input_schema=True,
         argument_normalizer=_arguments,
+        result_schema={"type": "object"},
         display=ToolDisplay(detail_builder=_details),
     )

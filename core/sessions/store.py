@@ -17,6 +17,7 @@ from core.sessions import (
     _store_accessor_inputs,
     _store_archive,
     _store_attachments,
+    _store_conversation,
     _store_external_notes,
     _store_fts,
     _store_history,
@@ -37,6 +38,7 @@ from core.sessions._store_schema import session_database_spec
 from core.sessions._types import (
     JsonObject,
     SessionChatHistorySnapshot,
+    SessionConversationPage,
     SessionDescriptorSource,
     SessionHistoryRevision,
     SessionSearchResult,
@@ -927,6 +929,31 @@ class SessionStore:
         )
 
     # -- Search -------------------------------------------------------------------------
+
+    def conversation_page(
+        self,
+        address: SessionAddress,
+        *,
+        expected_generation_id: str,
+        limit: int = 8,
+        before_sequence: int | None = None,
+        after_sequence: int | None = None,
+        max_text_chars: int = 2000,
+        include_peer_messages: bool = True,
+    ) -> SessionConversationPage:
+        """Return bounded current User/Assistant text with generation checks."""
+        return self._read(
+            lambda connection: _store_conversation.conversation_page(
+                connection,
+                address,
+                expected_generation_id=expected_generation_id,
+                limit=limit,
+                before_sequence=before_sequence,
+                after_sequence=after_sequence,
+                max_text_chars=max_text_chars,
+                include_peer_messages=include_peer_messages,
+            )
+        )
 
     def fts_health(self) -> FtsHealth:
         """Return operator-facing FTS state with explicit canonical coverage checks."""

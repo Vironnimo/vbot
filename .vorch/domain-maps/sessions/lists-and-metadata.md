@@ -37,7 +37,7 @@ Task-gated detail for `sessions.md`: Session creation and lookup APIs, Session l
 
 ## Recall visibility
 
-Recall visibility (`SessionRecallVisibility`) is classified in SQL from the visibility mask column, so callers never classify metadata in Python: reflection, `librarian` and `live` Run kinds and the Ephemeral flag make a Session `hidden`; otherwise a Sub-Agent flag or Run kind makes it `subagent`; otherwise a Session without recognized Run kinds or with a user-facing Run kind (`user`, `channel`, `cron`, `calendar`) is `conversation`; anything else (system-only, memory, Skill) is `hidden`. `recall_visibilities(include_subagents=...)` names the admitted values. Message search (`search_messages`) applies it to the eligible Sessions before any candidate is checked.
+Recall visibility (`SessionRecallVisibility`) is classified in SQL from the visibility mask column, so callers never classify metadata in Python: reflection, `librarian` and `live` Run kinds and the Ephemeral flag make a Session `hidden`; otherwise a Sub-Agent flag or Run kind makes it `subagent`; otherwise a Session without recognized Run kinds or with a user-facing Run kind (`user`, `channel`, `cron`, `calendar`, `session_message`) is `conversation`; anything else (system-only, memory, Skill) is `hidden`. `recall_visibilities(include_subagents=...)` names the admitted values. Message search (`search_messages`) applies it to the eligible Sessions before any candidate is checked.
 
 ## Ephemeral Sessions
 

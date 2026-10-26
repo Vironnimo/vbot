@@ -448,6 +448,7 @@ class RunExecution:
                 )
             if (
                 not internal
+                and not request.session_message
                 and request.temporary_binding is None
                 and request.temporary_parent_binding is None
                 and run.execution_owner is None

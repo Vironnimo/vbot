@@ -95,6 +95,51 @@ describe('ChatTimeline messages', () => {
     expect(link.getAttribute('rel')).toBe('noopener noreferrer');
   });
 
+  it.each([false, true])(
+    'identifies a message from another Session, including steered: %s',
+    (steered) => {
+      const peer = userMessage('Please wait before merging.', {
+        id: 'peer-message',
+        sender: {
+          id: 'source-ref',
+          display_name: 'Builder',
+          role: 'member',
+          kind: 'session',
+        },
+      });
+      timeline.render(
+        sessionWithItems([
+          messageItem(userMessage('My request')),
+          ...(steered
+            ? [
+                assistantRun('run-peer', [
+                  outputItem('Working'),
+                  {
+                    id: 'steered-peer',
+                    type: 'user_message',
+                    content: peer.content,
+                    message: peer,
+                  },
+                ]),
+              ]
+            : [messageItem(peer)]),
+        ]),
+      );
+
+      const messages = document.querySelectorAll('.msg.user');
+      expect(messages).toHaveLength(2);
+      expect(messages[0].querySelector('.msg-author')).toBeNull();
+      expect(messages[1].querySelector('.msg-author').textContent).toBe(
+        t('chat.role.sessionSender', { name: 'Builder' }).toUpperCase(),
+      );
+      expect(
+        messages[1].querySelector('.msg-user-text').textContent.trim(),
+      ).toBe(peer.content);
+      expect(messages[1].querySelector('.message-edit')).toBeNull();
+      expect(messages[1].textContent).not.toContain('source-ref');
+    },
+  );
+
   it('clamps only a very long user text and expands it on request', () => {
     // jsdom has no layout: a 24 px line (the fallback) makes 2000 px of text
     // far longer than the collapsible bound, 300 px shorter.

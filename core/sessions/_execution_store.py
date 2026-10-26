@@ -69,6 +69,9 @@ class SessionExecutionStore:
         attachment_ids: Sequence[str],
         fallback_input: ChatMessage | None,
         fallback_notes: Sequence[ChatMessage],
+        source: SessionAddress | None = None,
+        expected_source_generation_id: str | None = None,
+        expected_working_project_id: str | None = None,
     ) -> tuple[AccessorInputRecord, bool]:
         row, created = self._store._execute_write(
             lambda connection: _store_accessor_inputs.accept(
@@ -82,6 +85,9 @@ class SessionExecutionStore:
                 attachment_ids=attachment_ids,
                 fallback_input=fallback_input,
                 fallback_notes=fallback_notes,
+                source=source,
+                expected_source_generation_id=expected_source_generation_id,
+                expected_working_project_id=expected_working_project_id,
             )
         )
         return _store_accessor_inputs.decode(row), created

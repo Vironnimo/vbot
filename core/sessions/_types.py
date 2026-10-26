@@ -476,6 +476,37 @@ class SessionDescriptorSource:
 
 
 @dataclass(frozen=True)
+class SessionConversationMessage:
+    """Bounded public conversation text, without Tool payloads or Reasoning."""
+
+    sequence: int
+    message_id: str
+    role: str
+    timestamp: str
+    text: str
+    truncated: bool
+    sender_kind: str | None = None
+    sender_id: str | None = None
+
+
+@dataclass(frozen=True)
+class SessionConversationPage:
+    """A generation-checked current-view page and its latest task/completion."""
+
+    generation_id: str
+    history_revision: int
+    next_sequence: int
+    cursor_floor_sequence: int
+    messages: tuple[SessionConversationMessage, ...]
+    latest_user: SessionConversationMessage | None
+    latest_message_sequence: int | None
+    latest_response_sequence: int | None
+    latest_completion_sequence: int | None
+    latest_completion_status: str | None
+    has_more: bool
+
+
+@dataclass(frozen=True)
 class SessionHistoryRevision:
     """Canonical history version and Recall visibility of one live Session.
 

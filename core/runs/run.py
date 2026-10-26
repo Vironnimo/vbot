@@ -121,6 +121,7 @@ class RunKind(StrEnum):
     # answers to the requests the voice Model hands on.
     LIVE = "live"
     SUBAGENT = "subagent"
+    SESSION_MESSAGE = "session_message"
     SYSTEM = "system"
 
 

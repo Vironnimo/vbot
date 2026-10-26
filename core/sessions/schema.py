@@ -447,7 +447,8 @@ CREATE TABLE user_entry_senders (
   entry_key INTEGER PRIMARY KEY REFERENCES entries (entry_key) ON DELETE CASCADE,
   sender_id TEXT NOT NULL,
   display_name TEXT NOT NULL,
-  sender_role TEXT NOT NULL
+  sender_role TEXT NOT NULL,
+  source_kind TEXT NOT NULL DEFAULT 'user'
 ) STRICT;
 
 -- How a User entry was entered (dictated, or passed on by Live voice).

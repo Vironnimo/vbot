@@ -13,7 +13,7 @@ Read when changing the commands a Session starts with: which Runs run them, wher
 `core/chat/_context_commands.py` decides and formats; `core/chat/_run_execution.py` (`_start_context_commands`, `_persist_context_commands`) wires them into a Run.
 
 - Only until the note exists: the Run's prior history has no assistant message and the Session metadata has no `context_commands_ran` marker. A first Run stopped before its note therefore leaves the commands to the next Run, whose note follows its own input. Forks carry their source's answers, so they never run them.
-- Run kinds `user`, `channel`, `cron`, `calendar`, `subagent` and `system`; never reflection, Librarian or other internal Runs, Runs of temporary bindings (Extension Sessions), owned Runs (`execution_owner`), message edits, or Runs whose input was persisted before.
+- Run kinds `user`, `session_message`, `channel`, `cron`, `calendar`, `subagent` and `system`; never reflection, Librarian or other internal Runs, Runs of temporary bindings (Extension Sessions), owned Runs (`execution_owner`), message edits, or Runs whose input was persisted before.
 - The commands of the Run's Working Project when it has one (run in the Project folder; the Agent's own list is ignored), else the Identity Agent's (run in its Workspace).
 - All commands start in parallel while the Run persists its input; the Run awaits them before its first Model request. A Stop or failure ends the commands still running (their processes end with them) and saves no note. A failure to plan or persist logs WARNING and the Run goes on without the note.
 

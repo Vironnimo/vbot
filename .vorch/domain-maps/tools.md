@@ -61,6 +61,8 @@ This domain owns the shared dispatch texts (unknown-Tool, validation and executi
 
 Read these only when your task matches - not by default.
 
+- Project-scoped Session discovery, peer messages, bounded reads and waiting -> `tools/session.md`
+
 - Changing how a call is read: called-name resolution, unknown-Tool errors, argument and JSON quote repair, unknown fields, validation messages, `argument_normalizer`/`call_syntax.py`, `tool_lab` replay -> `tools/call-repair.md`
 - Recording or rendering Tool display: detail blocks, media, file diffs, the rich-media artifact -> `tools/display.md`
 - Changing policy resolution, followers, opt-in, `fixed`/`live_call`, readiness filtering, visibility flags or listing -> `tools/access-policy.md`

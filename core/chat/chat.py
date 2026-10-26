@@ -204,6 +204,43 @@ class ChatLoop:
         """Recover accepted, unstarted inputs before the server admits clients."""
         await self._accessor_inputs.restore()
 
+    async def submit_session_message(
+        self,
+        *,
+        source: SessionAddress,
+        source_ref: str,
+        expected_source_generation_id: str,
+        target: SessionAddress,
+        expected_generation_id: str,
+        expected_working_project_id: str,
+        content: str,
+        input_id: str,
+        request_hash: str,
+    ) -> AccessorChatSubmission:
+        """Durably accept attributed peer input into the existing Session Queue.
+
+        The caller authorizes the source and destination before this seam.
+        Target generation and Working Project are rechecked before acceptance;
+        the accepted message steers a busy Run and starts a Run when idle.
+        """
+        if source == target:
+            raise ChatError("A Session cannot send a peer message to itself.")
+        if not content.strip() or not source_ref:
+            raise ChatError("A Session message needs content and a source reference.")
+        return await self._accessor_inputs.submit(
+            target.agent_id,
+            content,
+            input_id=input_id,
+            request_hash=request_hash,
+            session_id=target.session_id,
+            project_id=target.project_id,
+            sender=MessageSender(id=source_ref, display_name=source.agent_id, kind="session"),
+            expected_generation_id=expected_generation_id,
+            expected_working_project_id=expected_working_project_id,
+            source=source,
+            expected_source_generation_id=expected_source_generation_id,
+        )
+
     def prepare_accessor_inputs(self, records: Sequence[AccessorInputRecord]) -> None:
         """Install startup input projections before bootstrap yields to producers."""
         self._accessor_inputs.prepare(records)
