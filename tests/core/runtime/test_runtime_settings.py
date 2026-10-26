@@ -226,13 +226,15 @@ def _extensions(*disabled: str, config: dict[str, Any] | None = None) -> dict[st
     ],
 )
 def test_settings_changes_refresh_only_their_live_services(
-    shared_runtime: Runtime,
     monkeypatch: pytest.MonkeyPatch,
     previous: dict[str, Any],
     current: dict[str, Any],
     refresh_sections: tuple[str, ...],
     expected: dict[str, Any],
 ) -> None:
+    # This decision table replaces every live service below. Exercise the public
+    # coordinator against that wiring without starting unrelated databases.
+    shared_runtime = Mock(spec=Runtime)
     extension_reload = AsyncMock()
     disabled_change = AsyncMock()
     skills_reload = AsyncMock()
@@ -257,7 +259,9 @@ def test_settings_changes_refresh_only_their_live_services(
     monkeypatch.setattr(shared_runtime.archive, "retention_changed", retention_change)
 
     effects = asyncio.run(
-        shared_runtime.apply_settings_change(previous, current, refresh_sections=refresh_sections)
+        Runtime.apply_settings_change(
+            shared_runtime, previous, current, refresh_sections=refresh_sections
+        )
     )
 
     assert {
