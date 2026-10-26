@@ -155,6 +155,7 @@ class _Api:
     enum_proc: Any
     monitor_proc: Any
     window_proc: Any
+    event_proc: Any
 
 
 _HANDLE, _INT, _UINT32 = ct.c_void_p, ct.c_int, ct.c_uint32
@@ -187,6 +188,7 @@ _SIGNATURES: dict[str, dict[str, tuple[list[Any], Any]]] = {
         "GetAncestor": ([_HANDLE, ct.c_uint], _HANDLE),
         "GetLastActivePopup": ([_HANDLE], _HANDLE),
         "GetForegroundWindow": ([], _HANDLE),
+        "GetDesktopWindow": ([], _HANDLE),
         "WindowFromPoint": ([Point], _HANDLE),
         "SendInput": ([ct.c_uint, _HANDLE, _INT], ct.c_uint),
         "GetKeyboardLayout": ([_UINT32], _HANDLE),
@@ -228,6 +230,12 @@ _SIGNATURES: dict[str, dict[str, tuple[list[Any], Any]]] = {
         ),
         "DisplayConfigGetDeviceInfo": ([_HANDLE], ct.c_long),
         "RegisterClassExW": ([_HANDLE], ct.c_uint16),
+        "UnregisterClassW": ([ct.c_wchar_p, _HANDLE], _INT),
+        "SetWinEventHook": (
+            [_UINT32, _UINT32, _HANDLE, _HANDLE, _UINT32, _UINT32, _UINT32],
+            _HANDLE,
+        ),
+        "UnhookWinEvent": ([_HANDLE], _INT),
         "CreateWindowExW": (
             [_UINT32, ct.c_wchar_p, ct.c_wchar_p, _UINT32, *[_INT] * 4, *[_HANDLE] * 4],
             _HANDLE,
@@ -318,6 +326,9 @@ def api() -> _Api:
     )
     bound.window_proc = ct.WINFUNCTYPE(
         ct.c_ssize_t, ct.c_void_p, ct.c_uint, ct.c_size_t, ct.c_ssize_t
+    )
+    bound.event_proc = ct.WINFUNCTYPE(
+        None, _HANDLE, _UINT32, _HANDLE, ct.c_int32, ct.c_int32, _UINT32, _UINT32
     )
     return bound
 

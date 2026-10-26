@@ -33,7 +33,6 @@ _TEXT, _TEXT_DIM = (241, 237, 230), (179, 170, 158)  # --text-hi, --text-med
 _LINE_ALPHA, _GLOW_ALPHA = 230, 120  # the edge line, and where the glow starts
 _PILL_TOP = 10  # pixels between the display's top edge and the pill, at 100 % scale
 _FADE_SECONDS, _FADE_STEP = 0.15, 1 / 60
-_START_WAIT = 2.0
 _CLASS, _TITLE = "vBotActivityOverlay", "vBot activity"
 _WS_POPUP, _WS_EX_TOPMOST = 0x80000000, 0x8
 _EX_STYLE = (
@@ -49,8 +48,10 @@ _SWP_RAISE = 0x1 | 0x2 | 0x10 | 0x200  # NOSIZE | NOMOVE | NOACTIVATE | NOOWNERZ
 _WDA_EXCLUDEFROMCAPTURE = 0x11
 _WM_QUIT, _WM_MOUSEACTIVATE, _WM_DISPLAYCHANGE, _WM_DPICHANGED = 0x12, 0x21, 0x7E, 0x2E0
 _MA_NOACTIVATE = 3
-_WM_SYNC = 0x8001  # WM_APP + 1: follow the latest show or hide
-_ERROR_CLASS_ALREADY_EXISTS = 1410
+_WM_SYNC, _WM_RESTACK = 0x8001, 0x8002
+# Window activation, show/reorder and move/resize (including maximize/fullscreen).
+_EVENT_RANGES = ((0x3, 0x3), (0x8002, 0x8004), (0x800B, 0x800B))
+_WINEVENT_SKIPOWNTHREAD = 0x1  # out of context; never react to our own restacking
 
 
 class _Message(ct.Structure):
@@ -87,8 +88,8 @@ class ActivityOverlay:
 
     ``show`` and ``hide`` are idempotent and thread-safe, and return at once: they
     record the wanted state and wake the overlay thread, which starts with the first
-    ``show`` and fades in or out. Each ``show`` lays the frame out again for the
-    current displays and puts it back above other topmost windows.
+    ``show`` and fades in or out. While visible, native window events keep the frame
+    above newly shown, activated or maximized windows without repainting it.
     """
 
     def __init__(self) -> None:
@@ -97,9 +98,13 @@ class ActivityOverlay:
         self._closed = False
         self._thread: threading.Thread | None = None
         self._thread_id = 0
-        self._ready = threading.Event()
         self._exclude_from_capture = True  # off only to look at the frame while tuning it
         # Owned by the overlay thread.
+        self._class_name = f"{_CLASS}_{id(self):x}"
+        self._procedure: Any = None
+        self._event_procedure: Any = None
+        self._hooks: list[int] = []
+        self._restack_pending = False
         self._windows: list[int] = []
         self._layout: tuple[_win32.Monitor, ...] = ()
         self._opacity = 0.0  # fade progress, 0 hidden to 1 shown
@@ -121,23 +126,25 @@ class ActivityOverlay:
             thread = self._thread
         if thread is None:
             return
-        self._ready.wait(_START_WAIT)
         self._post(_WM_QUIT)
         thread.join(timeout=2)
+        if thread.is_alive():
+            _LOGGER.warning("Computer Use activity overlay is still closing")
 
     def _request(self, wanted: bool) -> None:
         if sys.platform != "win32":
             return
         with self._lock:
-            if self._closed or (self._thread is None and not wanted):
+            if self._closed:
                 return
             self._wanted = wanted
-            if self._thread is None:
+            if self._thread is None or not self._thread.is_alive():
+                if not wanted:
+                    return
                 self._thread = threading.Thread(
                     target=self._run, name="computer-use-overlay", daemon=True
                 )
                 self._thread.start()
-        self._ready.wait(_START_WAIT)
         self._post(_WM_SYNC)
 
     def _post(self, message: int) -> None:
@@ -155,26 +162,32 @@ class ActivityOverlay:
         try:
             bound = _win32.api()
             _win32.enter_thread()
-            _register_class()
             # The first peek creates the thread's queue, so posted wake-ups arrive.
             bound.user32.PeekMessageW(ct.byref(message), None, 0, 0, 0)
             self._thread_id = int(bound.kernel32.GetCurrentThreadId())
-        except (TargetError, OSError) as error:
-            _LOGGER.warning("Computer Use activity overlay unavailable: %s", error)
-            return
-        finally:
-            self._ready.set()
-        try:
             self._sync()  # a wake-up posted before the queue existed is lost
-            while bound.user32.GetMessageW(ct.byref(message), None, 0, 0) > 0:
+            while not self._closed:
+                result = bound.user32.GetMessageW(ct.byref(message), None, 0, 0)
+                if result == -1:
+                    raise TargetError("Windows refused the activity overlay's message loop.")
+                if result == 0:
+                    break
                 if not message.hwnd and message.message == _WM_SYNC:
                     self._sync()
+                elif not message.hwnd and message.message == _WM_RESTACK:
+                    self._restack_pending = False
+                    if self._showing():
+                        self._raise_if_covered()
                 else:
                     bound.user32.DispatchMessageW(ct.byref(message))
+        except (TargetError, OSError) as error:
+            _LOGGER.warning("Computer Use activity overlay unavailable: %s", error)
         except Exception:
             _LOGGER.exception("Computer Use activity overlay failed")
         finally:
             self._destroy()
+            self._thread_id = 0
+            self._opacity = 0.0
 
     def _sync(self) -> None:
         """Follow the latest request: lay out and raise the frame when shown, then fade."""
@@ -183,12 +196,14 @@ class ActivityOverlay:
             if layout != self._layout or not self._windows:
                 self._destroy()
                 self._build(layout)
-            # Topmost windows such as the taskbar rise above the frame when used.
-            for handle in self._windows:  # the pill comes last and ends on top
-                _win32.api().user32.SetWindowPos(handle, _HWND_TOPMOST, 0, 0, 0, 0, _SWP_RAISE)
+            self._watch()
+            self._raise_if_covered()
+        else:
+            self._unwatch()
         self._fade()
 
     def _build(self, layout: tuple[_win32.Monitor, ...]) -> None:
+        self._register_class()
         self._layout = layout
         for monitor in layout:
             width, height = monitor.right - monitor.left, monitor.bottom - monitor.top
@@ -206,7 +221,7 @@ class ActivityOverlay:
         handle = int(
             bound.user32.CreateWindowExW(
                 _EX_STYLE,
-                _CLASS,
+                self._class_name,
                 _TITLE,
                 _WS_POPUP,
                 left,
@@ -258,10 +273,104 @@ class ActivityOverlay:
         return round(255 * progress * progress * (3 - 2 * progress))  # smoothstep
 
     def _destroy(self) -> None:
+        self._unwatch()
         for handle in self._windows:
-            _win32.api().user32.DestroyWindow(handle)
+            if not _win32.api().user32.DestroyWindow(handle):
+                self._warn("destroy", "Windows refused to remove an activity overlay (error %d)")
         self._windows.clear()
         self._layout = ()
+        if self._procedure is not None:
+            bound = _win32.api()
+            if bound.user32.UnregisterClassW(
+                self._class_name, bound.kernel32.GetModuleHandleW(None)
+            ):
+                self._procedure = None
+            else:
+                self._warn("class", "Windows refused to release the overlay class (error %d)")
+
+    def _register_class(self) -> None:
+        """Own the class and its callback together, including across Extension Reloads."""
+        if self._procedure is not None:
+            return
+        bound = _win32.api()
+        procedure = bound.window_proc(_window_procedure)
+        info = _WindowClass(
+            size=ct.sizeof(_WindowClass),
+            procedure=ct.cast(procedure, ct.c_void_p).value,
+            instance=bound.kernel32.GetModuleHandleW(None),
+            class_name=self._class_name,
+        )
+        if not bound.user32.RegisterClassExW(ct.byref(info)):
+            raise TargetError("Windows refused the activity overlay's window class.")
+        self._procedure = procedure
+
+    def _watch(self) -> None:
+        if self._hooks:
+            return
+        bound = _win32.api()
+        self._event_procedure = bound.event_proc(self._window_event)
+        for first, last in _EVENT_RANGES:
+            hook = bound.user32.SetWinEventHook(
+                first, last, None, self._event_procedure, 0, 0, _WINEVENT_SKIPOWNTHREAD
+            )
+            if hook:
+                self._hooks.append(int(hook))
+            else:
+                raise TargetError("Windows refused the activity overlay's window events.")
+
+    def _unwatch(self) -> None:
+        for hook in self._hooks:
+            if not _win32.api().user32.UnhookWinEvent(hook):
+                self._warn("unhook", "Windows refused to release an overlay event hook (error %d)")
+        self._hooks.clear()
+        self._event_procedure = None
+        self._restack_pending = False
+
+    def _window_event(
+        self,
+        _hook: int,
+        event: int,
+        handle: int,
+        object_id: int,
+        child_id: int,
+        _thread: int,
+        _time: int,
+    ) -> None:
+        # Z-order changes arrive on the desktop's client object, not the window
+        # being raised. Otherwise only whole windows, never carets or controls.
+        desktop_reorder = (
+            event == 0x8004 and object_id == -4 and handle == _win32.api().user32.GetDesktopWindow()
+        )
+        if (
+            not handle
+            or (object_id != 0 and not desktop_reorder)
+            or child_id != 0
+            or handle in self._windows
+            or not self._showing()
+            or self._restack_pending
+        ):
+            return
+        # Coalesce a burst and leave native callbacks before touching the z-order.
+        self._restack_pending = bool(
+            _win32.api().user32.PostThreadMessageW(self._thread_id, _WM_RESTACK, 0, 0)
+        )
+
+    def _raise_if_covered(self) -> None:
+        remaining = set(self._windows)
+        if not remaining:
+            return
+        for handle in _win32.top_level_windows():
+            remaining.discard(handle)
+            if not remaining:
+                return  # already on top: no native mutation or repaint
+            if handle in self._windows or not _win32.is_visible(handle):
+                continue
+            if _win32.is_cloaked(handle) or _win32.window_class(handle).startswith(_CLASS):
+                continue  # another vBot instance's frame must not cause a raising loop
+            for own in self._windows:  # the pill comes last and ends on top
+                if not _win32.api().user32.SetWindowPos(own, _HWND_TOPMOST, 0, 0, 0, 0, _SWP_RAISE):
+                    self._warn("raise", "Windows refused to raise the activity overlay (error %d)")
+            return
 
     def _warn(self, key: str, message: str) -> None:
         if key not in self._warned:
@@ -375,34 +484,6 @@ def _bgra(image: Image.Image) -> bytes:
     """Premultiplied BGRA rows of an RGBA image, as layered windows take them."""
     red, green, blue, alpha = image.convert("RGBa").split()
     return Image.merge("RGBA", (blue, green, red, alpha)).tobytes()
-
-
-# The window class
-
-
-_PROCEDURE: list[Any] = []  # the registered window procedure, kept alive with its class
-_CLASS_LOCK = threading.Lock()
-
-
-def _register_class() -> None:
-    """Register the overlay window class once per process."""
-    with _CLASS_LOCK:
-        if _PROCEDURE:
-            return
-        bound = _win32.api()
-        procedure = bound.window_proc(_window_procedure)
-        info = _WindowClass(
-            size=ct.sizeof(_WindowClass),
-            procedure=ct.cast(procedure, ct.c_void_p).value,
-            instance=bound.kernel32.GetModuleHandleW(None),
-            class_name=_CLASS,
-        )
-        if (
-            not bound.user32.RegisterClassExW(ct.byref(info))
-            and _win32.last_error() != _ERROR_CLASS_ALREADY_EXISTS
-        ):
-            raise TargetError("Windows refused the activity overlay's window class.")
-        _PROCEDURE.append(procedure)
 
 
 def _window_procedure(handle: int | None, message: int, wparam: int, lparam: int) -> int:
