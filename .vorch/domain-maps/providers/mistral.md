@@ -10,6 +10,7 @@ OpenAI-style runtime Provider with Mistral-specific catalog normalization and wi
 - Adapter class: `MistralAdapter`
 - Runtime endpoint: `POST /chat/completions`
 - Catalog endpoint: `GET /models`
+- Speech endpoints: `POST /audio/transcriptions`, `POST /audio/speech` (the configured `/v1` base); preset voices: `GET /v2/audio/voices`
 - Credential key: `MISTRAL_API_KEY`
 
 ## Reasoning
@@ -22,11 +23,47 @@ OpenAI-style runtime Provider with Mistral-specific catalog normalization and wi
 
 ## Catalog Normalization
 
-- Keeps active (not archived) chat models where `capabilities.completion_chat == true`, plus non-chat `*-embed` ids (`mistral-embed`, `codestral-embed`), which become text embedding Models because the catalog has no embedding capability flag. Other entries raise `CatalogEntrySkipped` for discovery to ignore.
-- Maps vision from `capabilities.vision`, tools from `capabilities.function_calling`, reasoning from `capabilities.reasoning`, and audio transcription from `capabilities.audio_transcription`.
-- Persists normalized input/output modalities, supported parameters, and task types (chat-oriented, or only `text_embedding` for embedding Models).
+- Keeps active (not archived) chat Models where `capabilities.completion_chat == true`, offline speech Models advertised by `audio_transcription` or `audio_speech`, and non-chat `*-embed` ids (`mistral-embed`, `codestral-embed`), which become text embedding Models because the catalog has no embedding capability flag. Speech details with explicit `modes` must include `offline`; realtime-only speech, OCR and moderation remain excluded. Other entries raise `CatalogEntrySkipped` for discovery to ignore.
+- Maps vision from `capabilities.vision`, Tools from `capabilities.function_calling`, reasoning from `capabilities.reasoning`, and chat audio input from `capabilities.audio` or `audio_transcription`. Audio chat alone does not advertise the separate `speech_to_text` task.
+- Dedicated STT has audio input and transcription output; TTS has text input and speech output. Neither advertises chat, Tools, JSON mode or reasoning. `audio_transcription_capabilities` and `audio_speech_capabilities` supply per-Model language, timestamp, diarization, context, format and instruction choices through `task_options`; missing optional capabilities stay unoffered.
+- `discover_task_models` enriches TTS with paginated public preset slugs from `/v2/audio/voices?type=preset`, excluding Account-owned voices. The reported `billing_model_name` identifies aliases of `voxtral-mini-tts-2603`, which cannot use the newer `voice_*` presets. Voice discovery failure leaves the Models usable with free-text voice input and the shared `gb_jane_neutral` default.
 - `context_window` comes from `max_context_length`.
 - `/models` does not provide per-model max output limits, so normalized `max_output_tokens` stays `null`; runtime requests still use provider defaults such as `max_tokens: 8192`.
+
+## Speech
+
+`ProviderSpeechClient` owns speech execution and uses the common task client for
+auth, retries and Model Usage; it does not route speech through the chat Adapter.
+See `../model_tasks/speech.md` for preparation, streaming, artifacts and errors.
+STT uses native multipart fields, including repeated context terms and timestamp
+granularities. Diarization requires exactly segment timestamps, so enabling it
+overrides the timestamp choice. TTS uses `voice_id` and returns Base64 `audio_data`
+in JSON or `speech.audio.delta` SSE events followed by `speech.audio.done`.
+The shared decoder supplies early PCM playback and retains the encoded artifact.
+
+Official contracts read 2026-10-26: [transcriptions](https://docs.mistral.ai/api/endpoint/audio/transcriptions),
+[file transcription](https://docs.mistral.ai/studio/audio/speech-to-text/transcribe-files),
+[speech](https://docs.mistral.ai/api/endpoint/audio/speech),
+[streaming](https://docs.mistral.ai/studio/audio/text-to-speech/stream-speech),
+[voices](https://docs.mistral.ai/studio/audio/text-to-speech/voices), and
+[Voxtral migration](https://docs.mistral.ai/studio/audio/migrate-from-voxtral-2).
+The Voxtral 3 generation is currently documented as public preview.
+
+Live evidence on 2026-10-26, `mistral:api-key`, synthetic English audio/text only:
+
+| Models | Endpoint and shape | Result |
+| --- | --- | --- |
+| `voxtral-mini-2602`, `voxtral-mini-latest`, `voxtral-mini-transcribe-3-0`, `voxtral-mini-transcribe-3`, `voxtral-small-transcribe-3-0`, `voxtral-small-transcribe-3` | `/v1/audio/transcriptions`, multipart WAV through the vBot upload route | All six selectable and executable; correct transcript. Old Mini accepts word timestamps; both 3.0 families return segment timestamps with speaker labels. |
+| `voxtral-mini-2602`, `voxtral-mini-transcribe-3-0`, `voxtral-small-transcribe-3-0` | Raw HTTP and vBot STT; language, repeated context terms, diarization/segment timestamps; vBot FLAC with automatic language | Correct transcripts, segments and usage. WebM/Opus upload also succeeds through vBot conversion on Mini 3.0. |
+| `voxtral-mini-tts-2603`, `voxtral-mini-tts-latest`, `voxtral-mini-tts-3-0`, `voxtral-mini-tts-3` | `/v1/audio/speech`, vBot MP3 SSE with the default preset | All four selectable and executable; playback announced before the result, decodable PCM playback and final artifacts. Raw HTTP buffered WAV and MP3 SSE also succeeded on both exact versions. |
+| `voxtral-mini-tts-2603`, `voxtral-mini-tts-3-0` | vBot buffered PCM, WAV, FLAC and Opus | All decode successfully. PCM is mono PCM16 at 24 kHz and vBot wraps it in WAV; MP3 playback preserves its reported 22.05 kHz rate. |
+| `voxtral-mini-tts-2603`, `voxtral-mini-tts-3-0` | `voice_481` versus `gb_jane_neutral`; public voice listing | Old TTS rejects `voice_481` with HTTP 400; 3.0 accepts it. Both accept `gb_jane_neutral`. Discovery exposes 30 compatible presets on old TTS and 66 on 3.0; other individual voices were not exhaustively exercised. |
+
+Raw STT also rejects diarization with word timestamps, including on the old Mini;
+repeated multipart context fields were confirmed in the API's validation response.
+These checks establish transport and integration, not transcription quality or
+every language/voice combination. Realtime speech, OCR and moderation were not
+implemented or verified by this change.
 
 ## Response Normalization
 

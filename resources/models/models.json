@@ -1,11 +1,37 @@
 {
   "models": {
+    "abacusai/dracarys-llama-3.1-70b-instruct": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "context_window": 131072,
+      "family": "llama",
+      "last_updated": "2024-08-14",
+      "max_output_tokens": 131072,
+      "name": "Dracarys Llama 3.1 70B Instruct",
+      "release_date": "2024-08-14",
+      "temperature": true
+    },
     "ai21/jamba-large": {
       "capabilities": {
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -21,7 +47,7 @@
       "context_window": 256000,
       "family": "jamba",
       "knowledge": "2024-08-22",
-      "last_updated": "2025-07-01",
+      "last_updated": "2025-07-03",
       "max_output_tokens": 4096,
       "name": "Jamba Large",
       "pricing": {
@@ -31,7 +57,7 @@
         },
         "source": "models.dev:ai21/jamba-large"
       },
-      "release_date": "2025-07-01",
+      "release_date": "2025-07-03",
       "temperature": true
     },
     "ai21/jamba-mini": {
@@ -39,7 +65,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -55,7 +81,7 @@
       "context_window": 256000,
       "family": "jamba",
       "knowledge": "2024-08-22",
-      "last_updated": "2026-01-01",
+      "last_updated": "2026-01-08",
       "max_output_tokens": 4096,
       "name": "Jamba Mini",
       "pricing": {
@@ -65,7 +91,7 @@
         },
         "source": "models.dev:ai21/jamba-mini"
       },
-      "release_date": "2026-01-01",
+      "release_date": "2026-01-08",
       "temperature": true
     },
     "aion-labs/aion-2.0": {
@@ -87,10 +113,10 @@
         "vision": false
       },
       "context_window": 131072,
-      "last_updated": "2026-02-23",
+      "last_updated": "2025-12-21",
       "max_output_tokens": 32768,
       "name": "Aion-2.0",
-      "release_date": "2026-02-23",
+      "release_date": "2025-12-21",
       "temperature": true
     },
     "aion-labs/aion-3.0": {
@@ -112,10 +138,10 @@
         "vision": false
       },
       "context_window": 131072,
-      "last_updated": "2026-07-07",
+      "last_updated": "2026-05-05",
       "max_output_tokens": 32768,
       "name": "Aion-3.0",
-      "release_date": "2026-07-07",
+      "release_date": "2026-05-05",
       "temperature": true
     },
     "aion-labs/aion-3.0-mini": {
@@ -137,10 +163,10 @@
         "vision": false
       },
       "context_window": 131072,
-      "last_updated": "2026-07-07",
+      "last_updated": "2026-05-14",
       "max_output_tokens": 32768,
       "name": "Aion-3.0-Mini",
-      "release_date": "2026-07-07",
+      "release_date": "2026-05-14",
       "temperature": true
     },
     "aion-labs/aion-rp-llama-3.1-8b": {
@@ -173,7 +199,8 @@
     "aisingapore/gemma-sea-lion-v4-27b-it": {
       "capabilities": {
         "input_modalities": [
-          "text"
+          "text",
+          "image"
         ],
         "json_mode": false,
         "output_modalities": [
@@ -186,7 +213,7 @@
           "temperature"
         ],
         "tools": false,
-        "vision": false
+        "vision": true
       },
       "context_window": 128000,
       "family": "gemma",
@@ -194,6 +221,32 @@
       "max_output_tokens": 128000,
       "name": "Gemma-SEA-LION-v4-27B-IT",
       "release_date": "2025-09-23",
+      "temperature": true
+    },
+    "aleph-alpha/kolibri-1": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 1048576,
+      "knowledge": "2026-06-18",
+      "last_updated": "2026-10-03",
+      "max_output_tokens": null,
+      "name": "Kolibri 1",
+      "release_date": "2026-10-03",
       "temperature": true
     },
     "alibaba/qwen-flash": {
@@ -223,8 +276,22 @@
       "name": "Qwen Flash",
       "pricing": {
         "rates": {
+          "cache_read": 0.01,
+          "cache_write": 0.0625,
           "input": 0.05,
-          "output": 0.4
+          "output": 0.4,
+          "tiers": [
+            {
+              "cache_read": 0.05,
+              "cache_write": 0.3125,
+              "input": 0.25,
+              "output": 2.0,
+              "tier": {
+                "size": 256000,
+                "type": "context"
+              }
+            }
+          ]
         },
         "source": "models.dev:alibaba/qwen-flash"
       },
@@ -244,9 +311,6 @@
         "reasoning": {
           "supported": false
         },
-        "supported_parameters": [
-          "temperature"
-        ],
         "tools": false,
         "vision": true
       },
@@ -256,7 +320,7 @@
       "max_output_tokens": 0,
       "name": "Qwen-Image-2.1",
       "release_date": "2026-09-14",
-      "temperature": true
+      "temperature": false
     },
     "alibaba/qwen-max": {
       "capabilities": {
@@ -390,9 +454,24 @@
       "name": "Qwen Plus",
       "pricing": {
         "rates": {
+          "cache_read": 0.08,
+          "cache_write": 0.5,
           "input": 0.4,
           "output": 1.2,
-          "reasoning": 4.0
+          "reasoning": 4.0,
+          "tiers": [
+            {
+              "cache_read": 0.24,
+              "cache_write": 1.5,
+              "input": 1.2,
+              "output": 3.6,
+              "reasoning": 12.0,
+              "tier": {
+                "size": 256000,
+                "type": "context"
+              }
+            }
+          ]
         },
         "source": "models.dev:alibaba/qwen-plus"
       },
@@ -527,17 +606,36 @@
       "context_window": 131072,
       "family": "qwen",
       "knowledge": "2024-04",
-      "last_updated": "2024-09",
+      "last_updated": "2025-01-26",
       "max_output_tokens": 8192,
       "name": "Qwen2.5-VL 72B Instruct",
-      "pricing": {
-        "rates": {
-          "input": 2.8,
-          "output": 8.4
+      "release_date": "2025-01-26",
+      "temperature": true
+    },
+    "alibaba/qwen2.5-7b-instruct": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
         },
-        "source": "models.dev:alibaba/qwen2-5-vl-72b-instruct"
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
       },
-      "release_date": "2024-09",
+      "context_window": 131072,
+      "family": "qwen",
+      "last_updated": "2024-09-19",
+      "max_output_tokens": 8192,
+      "name": "Qwen2.5 7B Instruct",
+      "release_date": "2024-09-19",
       "temperature": true
     },
     "alibaba/qwen2.5-coder-0.5b": {
@@ -614,7 +712,7 @@
       "context_window": 131072,
       "family": "qwen",
       "knowledge": "2025-04",
-      "last_updated": "2025-04",
+      "last_updated": "2025-04-28",
       "max_output_tokens": 16384,
       "name": "Qwen3 235B-A22B",
       "pricing": {
@@ -625,7 +723,7 @@
         },
         "source": "models.dev:alibaba/qwen3-235b-a22b"
       },
-      "release_date": "2025-04",
+      "release_date": "2025-04-28",
       "temperature": true
     },
     "alibaba/qwen3-235b-a22b-instruct-2507": {
@@ -654,6 +752,32 @@
       "release_date": "2025-07-21",
       "temperature": true
     },
+    "alibaba/qwen3-235b-a22b-thinking-2507": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 262144,
+      "family": "qwen",
+      "last_updated": "2025-07-25",
+      "max_output_tokens": 81920,
+      "name": "Qwen3 235B-A22B Thinking 2507",
+      "release_date": "2025-07-25",
+      "temperature": true
+    },
     "alibaba/qwen3-30b-a3b": {
       "capabilities": {
         "input_modalities": [
@@ -680,6 +804,32 @@
       "release_date": "2025-04-28",
       "temperature": true
     },
+    "alibaba/qwen3-30b-a3b-instruct-2507": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 262144,
+      "family": "qwen",
+      "last_updated": "2025-07-28",
+      "max_output_tokens": 16384,
+      "name": "Qwen3 30B-A3B Instruct 2507",
+      "release_date": "2025-07-28",
+      "temperature": true
+    },
     "alibaba/qwen3-32b": {
       "capabilities": {
         "input_modalities": [
@@ -702,7 +852,7 @@
       "context_window": 131072,
       "family": "qwen",
       "knowledge": "2025-04",
-      "last_updated": "2025-04",
+      "last_updated": "2025-04-28",
       "max_output_tokens": 16384,
       "name": "Qwen3 32B",
       "pricing": {
@@ -713,7 +863,42 @@
         },
         "source": "models.dev:alibaba/qwen3-32b"
       },
-      "release_date": "2025-04",
+      "release_date": "2025-04-28",
+      "temperature": true
+    },
+    "alibaba/qwen3-8b": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "budget",
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 32768,
+      "family": "qwen",
+      "last_updated": "2025-04-29",
+      "max_output_tokens": 32768,
+      "name": "Qwen3 8B",
+      "pricing": {
+        "rates": {
+          "input": 0.18,
+          "output": 0.7,
+          "reasoning": 2.1
+        },
+        "source": "models.dev:alibaba/qwen3-8b"
+      },
+      "release_date": "2025-04-29",
       "temperature": true
     },
     "alibaba/qwen3-coder-30b-a3b-instruct": {
@@ -737,7 +922,7 @@
       "context_window": 262144,
       "family": "qwen",
       "knowledge": "2025-04",
-      "last_updated": "2025-04",
+      "last_updated": "2025-07-31",
       "max_output_tokens": 65536,
       "name": "Qwen3-Coder 30B-A3B Instruct",
       "pricing": {
@@ -765,7 +950,7 @@
         },
         "source": "models.dev:alibaba/qwen3-coder-30b-a3b-instruct"
       },
-      "release_date": "2025-04",
+      "release_date": "2025-07-31",
       "temperature": true
     },
     "alibaba/qwen3-coder-480b-a35b-instruct": {
@@ -789,7 +974,7 @@
       "context_window": 262144,
       "family": "qwen",
       "knowledge": "2025-04",
-      "last_updated": "2025-04",
+      "last_updated": "2025-07-22",
       "max_output_tokens": 65536,
       "name": "Qwen3-Coder 480B-A35B Instruct",
       "pricing": {
@@ -817,7 +1002,7 @@
         },
         "source": "models.dev:alibaba/qwen3-coder-480b-a35b-instruct"
       },
-      "release_date": "2025-04",
+      "release_date": "2025-07-22",
       "temperature": true
     },
     "alibaba/qwen3-coder-flash": {
@@ -846,8 +1031,42 @@
       "name": "Qwen3 Coder Flash",
       "pricing": {
         "rates": {
+          "cache_read": 0.06,
+          "cache_write": 0.375,
           "input": 0.3,
-          "output": 1.5
+          "output": 1.5,
+          "tiers": [
+            {
+              "cache_read": 0.1,
+              "cache_write": 0.625,
+              "input": 0.5,
+              "output": 2.5,
+              "tier": {
+                "size": 32000,
+                "type": "context"
+              }
+            },
+            {
+              "cache_read": 0.16,
+              "cache_write": 1.0,
+              "input": 0.8,
+              "output": 4.0,
+              "tier": {
+                "size": 128000,
+                "type": "context"
+              }
+            },
+            {
+              "cache_read": 0.32,
+              "cache_write": 2.0,
+              "input": 1.6,
+              "output": 9.6,
+              "tier": {
+                "size": 256000,
+                "type": "context"
+              }
+            }
+          ]
         },
         "source": "models.dev:alibaba/qwen3-coder-flash"
       },
@@ -859,7 +1078,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -1017,7 +1236,7 @@
         "tools": true,
         "vision": false
       },
-      "context_window": 131072,
+      "context_window": 262144,
       "family": "qwen",
       "knowledge": "2025-04",
       "last_updated": "2025-09",
@@ -1052,7 +1271,7 @@
         "tools": true,
         "vision": false
       },
-      "context_window": 131072,
+      "context_window": 262144,
       "family": "qwen",
       "knowledge": "2025-04",
       "last_updated": "2025-09",
@@ -1126,7 +1345,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -1154,7 +1373,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -1258,13 +1477,64 @@
       "name": "Qwen3-VL Plus",
       "pricing": {
         "rates": {
+          "cache_read": 0.04,
+          "cache_write": 0.25,
           "input": 0.2,
           "output": 1.6,
-          "reasoning": 4.8
+          "tiers": [
+            {
+              "cache_read": 0.06,
+              "cache_write": 0.375,
+              "input": 0.3,
+              "output": 2.4,
+              "tier": {
+                "size": 32000,
+                "type": "context"
+              }
+            },
+            {
+              "cache_read": 0.12,
+              "cache_write": 0.75,
+              "input": 0.6,
+              "output": 4.8,
+              "tier": {
+                "size": 128000,
+                "type": "context"
+              }
+            }
+          ]
         },
         "source": "models.dev:alibaba/qwen3-vl-plus"
       },
       "release_date": "2025-09-23",
+      "temperature": true
+    },
+    "alibaba/qwen3.5-0.8b": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 262144,
+      "family": "qwen",
+      "last_updated": "2026-03-02",
+      "max_output_tokens": 81920,
+      "name": "Qwen3.5 0.8B",
+      "release_date": "2026-03-02",
       "temperature": true
     },
     "alibaba/qwen3.5-122b-a10b": {
@@ -1272,10 +1542,9 @@
         "input_modalities": [
           "text",
           "image",
-          "video",
-          "audio"
+          "video"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -1309,10 +1578,9 @@
         "input_modalities": [
           "text",
           "image",
-          "video",
-          "audio"
+          "video"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -1341,15 +1609,42 @@
       "release_date": "2026-02-23",
       "temperature": true
     },
+    "alibaba/qwen3.5-2b": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 262144,
+      "family": "qwen",
+      "last_updated": "2026-03-02",
+      "max_output_tokens": 81920,
+      "name": "Qwen3.5 2B",
+      "release_date": "2026-03-02",
+      "temperature": true
+    },
     "alibaba/qwen3.5-35b-a3b": {
       "capabilities": {
         "input_modalities": [
           "text",
           "image",
-          "video",
-          "audio"
+          "video"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -1378,15 +1673,42 @@
       "release_date": "2026-02-23",
       "temperature": true
     },
+    "alibaba/qwen3.5-35b-a3b-base": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 262144,
+      "family": "qwen",
+      "last_updated": "2026-02-24",
+      "max_output_tokens": 65536,
+      "name": "Qwen3.5 35B-A3B Base",
+      "release_date": "2026-02-24",
+      "temperature": true
+    },
     "alibaba/qwen3.5-397b-a17b": {
       "capabilities": {
         "input_modalities": [
           "text",
           "image",
-          "video",
-          "audio"
+          "video"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -1415,6 +1737,34 @@
       "release_date": "2026-02-15",
       "temperature": true
     },
+    "alibaba/qwen3.5-4b": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 262144,
+      "family": "qwen",
+      "last_updated": "2026-03-02",
+      "max_output_tokens": 81920,
+      "name": "Qwen3.5 4B",
+      "release_date": "2026-03-02",
+      "temperature": true
+    },
     "alibaba/qwen3.5-9b": {
       "capabilities": {
         "input_modalities": [
@@ -1422,7 +1772,7 @@
           "image",
           "video"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -1443,6 +1793,34 @@
       "release_date": "2026-02-23",
       "temperature": true
     },
+    "alibaba/qwen3.5-9b-base": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 262144,
+      "family": "qwen",
+      "last_updated": "2026-02-26",
+      "max_output_tokens": 65536,
+      "name": "Qwen3.5 9B Base",
+      "release_date": "2026-02-26",
+      "temperature": true
+    },
     "alibaba/qwen3.5-flash": {
       "capabilities": {
         "input_modalities": [
@@ -1450,7 +1828,7 @@
           "image",
           "video"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -1513,7 +1891,18 @@
         "rates": {
           "input": 0.4,
           "output": 2.4,
-          "reasoning": 2.4
+          "reasoning": 2.4,
+          "tiers": [
+            {
+              "input": 0.5,
+              "output": 3.0,
+              "reasoning": 2.4,
+              "tier": {
+                "size": 256000,
+                "type": "context"
+              }
+            }
+          ]
         },
         "source": "models.dev:alibaba/qwen3.5-plus"
       },
@@ -1525,10 +1914,9 @@
         "input_modalities": [
           "text",
           "image",
-          "video",
-          "audio"
+          "video"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -1562,10 +1950,9 @@
         "input_modalities": [
           "text",
           "image",
-          "video",
-          "audio"
+          "video"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -1586,8 +1973,8 @@
       "name": "Qwen3.6 35B-A3B",
       "pricing": {
         "rates": {
-          "input": 0.248,
-          "output": 1.485
+          "input": 0.375,
+          "output": 2.25
         },
         "source": "models.dev:alibaba/qwen3.6-35b-a3b"
       },
@@ -1601,7 +1988,7 @@
           "image",
           "video"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -1622,9 +2009,22 @@
       "name": "Qwen3.6 Flash",
       "pricing": {
         "rates": {
-          "cache_write": 0.234375,
-          "input": 0.1875,
-          "output": 1.125
+          "cache_read": 0.025,
+          "cache_write": 0.3125,
+          "input": 0.25,
+          "output": 1.5,
+          "tiers": [
+            {
+              "cache_read": 0.1,
+              "cache_write": 1.25,
+              "input": 1.0,
+              "output": 4.0,
+              "tier": {
+                "size": 256000,
+                "type": "context"
+              }
+            }
+          ]
         },
         "source": "models.dev:alibaba/qwen3.6-flash"
       },
@@ -1726,7 +2126,7 @@
           "image",
           "video"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -1748,13 +2148,13 @@
       "name": "Qwen3.7 Flash",
       "pricing": {
         "rates": {
-          "cache_read": 0.003,
+          "cache_read": 0.006,
           "cache_write": 0.0375,
           "input": 0.03,
           "output": 0.13,
           "tiers": [
             {
-              "cache_read": 0.01,
+              "cache_read": 0.02,
               "cache_write": 0.125,
               "input": 0.1,
               "output": 0.4,
@@ -1764,7 +2164,7 @@
               }
             },
             {
-              "cache_read": 0.02,
+              "cache_read": 0.04,
               "cache_write": 0.25,
               "input": 0.2,
               "output": 0.8,
@@ -1802,7 +2202,7 @@
       "context_window": 1000000,
       "family": "qwen",
       "last_updated": "2026-05-21",
-      "max_output_tokens": 65536,
+      "max_output_tokens": 131072,
       "name": "Qwen3.7 Max",
       "pricing": {
         "rates": {
@@ -1845,13 +2245,13 @@
       "name": "Qwen3.7 Plus",
       "pricing": {
         "rates": {
-          "cache_read": 0.04,
+          "cache_read": 0.08,
           "cache_write": 0.5,
           "input": 0.4,
           "output": 1.6,
           "tiers": [
             {
-              "cache_read": 0.12,
+              "cache_read": 0.24,
               "cache_write": 1.5,
               "input": 1.2,
               "output": 4.8,
@@ -1872,7 +2272,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -1900,7 +2300,7 @@
           "image",
           "video"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -1928,7 +2328,7 @@
           "image",
           "video"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -1941,6 +2341,9 @@
           ],
           "supported": true
         },
+        "supported_parameters": [
+          "temperature"
+        ],
         "tools": true,
         "vision": true
       },
@@ -1958,7 +2361,8 @@
         },
         "source": "models.dev:alibaba/qwen3.8-flash"
       },
-      "release_date": "2026-08-26"
+      "release_date": "2026-08-26",
+      "temperature": true
     },
     "alibaba/qwen3.8-flash-next": {
       "capabilities": {
@@ -1967,7 +2371,7 @@
           "image",
           "video"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -2096,7 +2500,7 @@
           "image",
           "video"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -2125,7 +2529,7 @@
           "audio",
           "video"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -2139,6 +2543,9 @@
           ],
           "supported": true
         },
+        "supported_parameters": [
+          "temperature"
+        ],
         "tools": true,
         "vision": true
       },
@@ -2155,7 +2562,8 @@
         },
         "source": "models.dev:alibaba/qwen3.8-omni-flash"
       },
-      "release_date": "2026-09-17"
+      "release_date": "2026-09-17",
+      "temperature": true
     },
     "alibaba/qwq-32b": {
       "capabilities": {
@@ -2271,6 +2679,7 @@
       },
       "context_window": 1000000,
       "family": "nova",
+      "knowledge": "2025-10",
       "last_updated": "2025-12-02",
       "max_output_tokens": 65535,
       "name": "Nova 2 Lite",
@@ -2482,7 +2891,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -2864,6 +3273,32 @@
       "release_date": "2026-06-09",
       "temperature": false
     },
+    "anthropic/claude-mythos-5-1": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1000000,
+      "family": "claude-mythos",
+      "knowledge": "2026-06",
+      "last_updated": "2026-09-01",
+      "max_output_tokens": 128000,
+      "name": "Claude Mythos 5.1",
+      "release_date": "2026-09-01",
+      "temperature": false
+    },
     "anthropic/claude-opus-4-0": {
       "capabilities": {
         "input_modalities": [
@@ -3053,7 +3488,7 @@
       "context_window": 200000,
       "family": "claude-opus",
       "knowledge": "2025-05",
-      "last_updated": "2025-11-01",
+      "last_updated": "2025-11-24",
       "max_output_tokens": 64000,
       "name": "Claude Opus 4.5",
       "pricing": {
@@ -3065,7 +3500,7 @@
         },
         "source": "models.dev:anthropic/claude-opus-4-5-20251101"
       },
-      "release_date": "2025-11-01",
+      "release_date": "2025-11-24",
       "temperature": true
     },
     "anthropic/claude-opus-4-6": {
@@ -3704,6 +4139,29 @@
       "release_date": "2024-01-30",
       "temperature": false
     },
+    "baai/bge-multilingual-gemma2": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "tools": false,
+        "vision": false
+      },
+      "context_window": 8192,
+      "family": "bge",
+      "last_updated": "2024-07-25",
+      "max_output_tokens": 0,
+      "name": "BGE Multilingual Gemma2",
+      "release_date": "2024-07-25",
+      "temperature": false
+    },
     "baai/bge-reranker-v2-m3": {
       "capabilities": {
         "input_modalities": [
@@ -3804,6 +4262,32 @@
       "release_date": "2025-06-30",
       "temperature": true
     },
+    "baidu/ernie-4.5-300b-a47b": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 131072,
+      "family": "ernie",
+      "last_updated": "2025-06-30",
+      "max_output_tokens": 12000,
+      "name": "ERNIE 4.5 300B A47B",
+      "release_date": "2025-06-30",
+      "temperature": true
+    },
     "baidu/ernie-4.5-vl-424b-a47b": {
       "capabilities": {
         "input_modalities": [
@@ -3832,12 +4316,84 @@
       "release_date": "2025-06-30",
       "temperature": true
     },
-    "bytedance-seed/seed-1-6": {
+    "black-forest-labs/flux-1-dev": {
       "capabilities": {
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "tools": false,
+        "vision": false
+      },
+      "context_window": 0,
+      "family": "flux",
+      "last_updated": "2024-08-01",
+      "max_output_tokens": 0,
+      "name": "FLUX.1 [dev]",
+      "release_date": "2024-08-01",
+      "temperature": false
+    },
+    "black-forest-labs/flux-1-kontext-dev": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 0,
+      "family": "flux",
+      "last_updated": "2025-05-29",
+      "max_output_tokens": 0,
+      "name": "FLUX.1 Kontext [dev]",
+      "release_date": "2025-05-29",
+      "temperature": false
+    },
+    "black-forest-labs/flux-1-schnell": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "tools": false,
+        "vision": false
+      },
+      "context_window": 0,
+      "family": "flux",
+      "last_updated": "2024-08-01",
+      "max_output_tokens": 0,
+      "name": "FLUX.1 [schnell]",
+      "release_date": "2024-08-01",
+      "temperature": false
+    },
+    "bytedance-seed/seed-1-6": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -3848,7 +4404,7 @@
           "temperature"
         ],
         "tools": true,
-        "vision": false
+        "vision": true
       },
       "context_window": 256000,
       "family": "seed",
@@ -3862,9 +4418,10 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image"
+          "image",
+          "video"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -3891,7 +4448,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -3918,7 +4475,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -3946,7 +4503,7 @@
           "image",
           "video"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -3974,7 +4531,7 @@
           "image",
           "video"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -4002,7 +4559,7 @@
           "image",
           "video"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -4030,16 +4587,13 @@
           "image",
           "video"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
         "reasoning": {
           "supported": true
         },
-        "supported_parameters": [
-          "temperature"
-        ],
         "tools": true,
         "vision": true
       },
@@ -4049,7 +4603,7 @@
       "max_output_tokens": 128000,
       "name": "Seed 2.0 Pro",
       "release_date": "2026-02-14",
-      "temperature": true
+      "temperature": false
     },
     "bytedance-seed/seed-2.1-pro": {
       "capabilities": {
@@ -4058,7 +4612,7 @@
           "image",
           "video"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -4086,7 +4640,7 @@
           "image",
           "video"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -4114,7 +4668,7 @@
           "image",
           "video"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -4142,7 +4696,7 @@
           "image",
           "video"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -4161,6 +4715,33 @@
       "max_output_tokens": 256000,
       "name": "Seed Evolving",
       "release_date": "2026-06-23",
+      "temperature": true
+    },
+    "bytedance-seed/seed-oss-36b-instruct": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 524288,
+      "family": "seed",
+      "knowledge": "2024-07",
+      "last_updated": "2025-08-20",
+      "max_output_tokens": 524288,
+      "name": "Seed-OSS-36B-Instruct",
+      "release_date": "2025-08-20",
       "temperature": true
     },
     "bytedance-seed/seedance-2.0": {
@@ -4187,7 +4768,8 @@
       "last_updated": "2026-10-04",
       "max_output_tokens": 0,
       "name": "Seedance 2.0",
-      "release_date": "2026-02-12"
+      "release_date": "2026-02-12",
+      "temperature": false
     },
     "bytedance-seed/seedance-2.5": {
       "capabilities": {
@@ -4213,7 +4795,54 @@
       "last_updated": "2026-10-04",
       "max_output_tokens": 0,
       "name": "Seedance 2.5",
-      "release_date": "2026-07-31"
+      "release_date": "2026-07-31",
+      "temperature": false
+    },
+    "canopylabs/orpheus-arabic-saudi": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "audio"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "tools": false,
+        "vision": false
+      },
+      "context_window": 4000,
+      "family": "canopylabs",
+      "last_updated": "2025-12-16",
+      "max_output_tokens": 50000,
+      "name": "Orpheus Arabic Saudi",
+      "release_date": "2025-12-16",
+      "temperature": false
+    },
+    "canopylabs/orpheus-v1-english": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "audio"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "tools": false,
+        "vision": false
+      },
+      "context_window": 4000,
+      "family": "canopylabs",
+      "last_updated": "2025-12-19",
+      "max_output_tokens": 50000,
+      "name": "Orpheus V1 English",
+      "release_date": "2025-12-19",
+      "temperature": false
     },
     "cognitivecomputations/dolphin-mistral-24b-venice-edition": {
       "capabilities": {
@@ -4264,6 +4893,13 @@
       "last_updated": "2024-10-24",
       "max_output_tokens": 4000,
       "name": "Aya Expanse 32B",
+      "pricing": {
+        "rates": {
+          "input": 0.5,
+          "output": 1.5
+        },
+        "source": "models.dev:cohere/c4ai-aya-expanse-32b"
+      },
       "release_date": "2024-10-24",
       "temperature": true
     },
@@ -4349,7 +4985,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -4359,7 +4995,7 @@
         "supported_parameters": [
           "temperature"
         ],
-        "tools": false,
+        "tools": true,
         "vision": false
       },
       "context_window": 256000,
@@ -4411,7 +5047,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -4634,7 +5270,7 @@
       "context_window": 128000,
       "family": "command-r",
       "knowledge": "2024-06-01",
-      "last_updated": "2024-12-02",
+      "last_updated": "2024-12-13",
       "max_output_tokens": 4000,
       "name": "Command R7B",
       "pricing": {
@@ -4644,7 +5280,7 @@
         },
         "source": "models.dev:cohere/command-r7b-12-2024"
       },
-      "release_date": "2024-12-02",
+      "release_date": "2024-12-13",
       "temperature": true
     },
     "cohere/command-r7b-arabic-02-2025": {
@@ -4686,7 +5322,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -4960,7 +5596,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -5013,7 +5649,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -5040,7 +5676,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -5075,6 +5711,9 @@
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "temperature"
+        ],
         "tools": false,
         "vision": true
       },
@@ -5082,7 +5721,8 @@
       "last_updated": "2026-01-27",
       "max_output_tokens": 8192,
       "name": "DeepSeek OCR 2",
-      "release_date": "2026-01-27"
+      "release_date": "2026-01-27",
+      "temperature": true
     },
     "deepseek/deepseek-r1": {
       "capabilities": {
@@ -5116,7 +5756,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -5299,7 +5939,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -5326,7 +5966,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -5368,7 +6008,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -5395,7 +6035,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -5423,7 +6063,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -5464,7 +6104,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -5506,7 +6146,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -5533,7 +6173,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -5551,7 +6191,7 @@
       "last_updated": "2026-08-22",
       "max_output_tokens": 384000,
       "name": "DeepSeek V4 Pro 0813",
-      "release_date": "2026-08-12",
+      "release_date": "2026-08-13",
       "temperature": true
     },
     "deepseek/deepseek-v4.1-flash": {
@@ -5560,7 +6200,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -5588,7 +6228,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -5610,6 +6250,32 @@
       "release_date": "2026-10-17",
       "temperature": true
     },
+    "essentialai/rnj-1-instruct": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 32768,
+      "family": "rnj",
+      "last_updated": "2025-12-04",
+      "max_output_tokens": 32768,
+      "name": "Rnj-1 Instruct",
+      "release_date": "2025-12-04",
+      "temperature": true
+    },
     "fireworks/ember-1": {
       "capabilities": {
         "input_modalities": [
@@ -5623,6 +6289,9 @@
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [
+          "temperature"
+        ],
         "tools": true,
         "vision": true
       },
@@ -5630,7 +6299,8 @@
       "last_updated": "2026-09-22",
       "max_output_tokens": 131072,
       "name": "Ember-1",
-      "release_date": "2026-09-22"
+      "release_date": "2026-09-22",
+      "temperature": true
     },
     "google/deep-research-max-preview-04-2026": {
       "capabilities": {
@@ -5765,7 +6435,7 @@
           "video",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -5796,7 +6466,7 @@
           "video",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -5872,7 +6542,7 @@
           "video",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -5916,7 +6586,7 @@
           "image"
         ],
         "reasoning": {
-          "supported": true
+          "supported": false
         },
         "supported_parameters": [
           "temperature"
@@ -5950,7 +6620,7 @@
           "video",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -5980,6 +6650,99 @@
         "source": "models.dev:google/gemini-2.5-flash-lite"
       },
       "release_date": "2025-06-17",
+      "temperature": true
+    },
+    "google/gemini-2.5-flash-lite-preview-06-17": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "audio",
+          "video",
+          "pdf"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1048576,
+      "family": "gemini-flash-lite",
+      "knowledge": "2025-01",
+      "last_updated": "2025-06-17",
+      "max_output_tokens": 65536,
+      "name": "Gemini 2.5 Flash-Lite Preview 06-17",
+      "release_date": "2025-06-17",
+      "temperature": true
+    },
+    "google/gemini-2.5-flash-lite-preview-09-2025": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "audio",
+          "video",
+          "pdf"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1048576,
+      "family": "gemini-flash-lite",
+      "knowledge": "2025-01",
+      "last_updated": "2025-09-25",
+      "max_output_tokens": 65536,
+      "name": "Gemini 2.5 Flash-Lite Preview 09-2025",
+      "release_date": "2025-09-25",
+      "temperature": true
+    },
+    "google/gemini-2.5-flash-preview-05-20": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "audio",
+          "video",
+          "pdf"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1048576,
+      "family": "gemini-flash",
+      "knowledge": "2025-01",
+      "last_updated": "2025-05-20",
+      "max_output_tokens": 65536,
+      "name": "Gemini 2.5 Flash Preview 05-20",
+      "release_date": "2025-05-20",
       "temperature": true
     },
     "google/gemini-2.5-flash-tts": {
@@ -6018,7 +6781,7 @@
           "video",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -6069,7 +6832,7 @@
           "text",
           "audio"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -6124,7 +6887,7 @@
           "audio",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -6247,7 +7010,7 @@
           "audio",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -6363,7 +7126,7 @@
           "audio",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -6450,7 +7213,7 @@
           "audio",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -6575,7 +7338,7 @@
           "audio",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -6631,7 +7394,7 @@
           "audio",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -6687,7 +7450,7 @@
           "audio",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -6733,7 +7496,7 @@
           "audio",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -6814,6 +7577,9 @@
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "temperature"
+        ],
         "tools": false,
         "vision": false
       },
@@ -6822,7 +7588,8 @@
       "last_updated": "2026-08-26",
       "max_output_tokens": 0,
       "name": "Gemini 3.5 Transcribe Live",
-      "release_date": "2026-08-26"
+      "release_date": "2026-08-26",
+      "temperature": true
     },
     "google/gemini-3.6-flash": {
       "capabilities": {
@@ -6833,7 +7600,7 @@
           "audio",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -6879,7 +7646,7 @@
           "audio",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -6924,7 +7691,7 @@
           "audio",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -6968,7 +7735,7 @@
           "audio",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -7076,7 +7843,7 @@
           "audio",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -7121,7 +7888,7 @@
           "audio",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -7238,7 +8005,8 @@
         },
         "source": "models.dev:google/gemini-omni-flash-preview"
       },
-      "release_date": "2026-06-30"
+      "release_date": "2026-06-30",
+      "temperature": false
     },
     "google/gemini-robotics-er-1.6-preview": {
       "capabilities": {
@@ -7248,7 +8016,7 @@
           "video",
           "audio"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -7275,7 +8043,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -7295,6 +8063,32 @@
       "max_output_tokens": 2048,
       "name": "Gemma 2 27B",
       "release_date": "2024-07-13",
+      "temperature": true
+    },
+    "google/gemma-2-2b-it": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "context_window": 8192,
+      "family": "gemma",
+      "last_updated": "2024-07-31",
+      "max_output_tokens": 8192,
+      "name": "Gemma 2 2B IT",
+      "release_date": "2024-07-31",
       "temperature": true
     },
     "google/gemma-3-12b-it": {
@@ -7381,13 +8175,71 @@
       "release_date": "2025-03-12",
       "temperature": true
     },
+    "google/gemma-3n-e2b-it": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "audio"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 32768,
+      "family": "gemma",
+      "knowledge": "2024-06",
+      "last_updated": "2025-06-26",
+      "max_output_tokens": 32768,
+      "name": "Gemma 3n E2B IT",
+      "release_date": "2025-06-26",
+      "temperature": true
+    },
+    "google/gemma-3n-e4b-it": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "audio"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 32768,
+      "family": "gemma",
+      "knowledge": "2024-06",
+      "last_updated": "2025-06-26",
+      "max_output_tokens": 32768,
+      "name": "Gemma 3n E4B IT",
+      "release_date": "2025-06-26",
+      "temperature": true
+    },
     "google/gemma-4-12b-it": {
       "capabilities": {
         "input_modalities": [
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -7414,7 +8266,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -7442,7 +8294,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -7458,6 +8310,7 @@
       },
       "context_window": 262144,
       "family": "gemma",
+      "knowledge": "2025-01",
       "last_updated": "2026-04-02",
       "max_output_tokens": 32768,
       "name": "Gemma 4 31B IT",
@@ -7471,7 +8324,7 @@
           "image",
           "audio"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -7499,7 +8352,7 @@
           "image",
           "audio"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -7693,7 +8546,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -7719,7 +8572,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -7745,7 +8598,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -7760,10 +8613,10 @@
       },
       "context_window": 131072,
       "family": "granite",
-      "last_updated": "2026-08-31",
+      "last_updated": "2026-08-25",
       "max_output_tokens": 117964,
       "name": "Granite 4.2 8B",
-      "release_date": "2026-08-31",
+      "release_date": "2026-08-25",
       "temperature": true
     },
     "inception/mercury-2": {
@@ -7771,7 +8624,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -7792,7 +8645,7 @@
       },
       "context_window": 128000,
       "family": "mercury",
-      "last_updated": "2026-03-04",
+      "last_updated": "2026-02-24",
       "max_output_tokens": 50000,
       "name": "Mercury 2",
       "pricing": {
@@ -7803,7 +8656,7 @@
         },
         "source": "models.dev:inception/mercury-2"
       },
-      "release_date": "2026-03-04",
+      "release_date": "2026-02-24",
       "temperature": true
     },
     "inception/mercury-2.5": {
@@ -7811,7 +8664,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -7837,13 +8690,87 @@
       "name": "Mercury 2.5",
       "pricing": {
         "rates": {
-          "cache_read": 0.004,
-          "input": 0.04,
-          "output": 0.15
+          "cache_read": 0.02,
+          "input": 0.2,
+          "output": 0.75
         },
         "source": "models.dev:inception/mercury-2.5"
       },
       "release_date": "2026-09-08",
+      "temperature": true
+    },
+    "inception/mercury-3": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 1000000,
+      "family": "mercury",
+      "last_updated": "2026-10-20",
+      "max_output_tokens": 131072,
+      "name": "Mercury 3",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.01,
+          "input": 0.1,
+          "output": 0.35
+        },
+        "source": "models.dev:inception/mercury-3"
+      },
+      "release_date": "2026-10-16",
+      "temperature": true
+    },
+    "inception/mercury-edit-2": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "context_window": 32000,
+      "family": "mercury",
+      "last_updated": "2026-03-30",
+      "max_output_tokens": 8192,
+      "name": "Mercury Edit 2",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.025,
+          "input": 0.25,
+          "output": 0.75
+        },
+        "source": "models.dev:inception/mercury-edit-2"
+      },
+      "release_date": "2026-03-30",
       "temperature": true
     },
     "inclusionai/ling-3.0-flash": {
@@ -7884,6 +8811,9 @@
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [
+          "temperature"
+        ],
         "tools": true,
         "vision": false
       },
@@ -7892,7 +8822,8 @@
       "last_updated": "2026-09-03",
       "max_output_tokens": 32768,
       "name": "Ling 3.0 Flash Fin",
-      "release_date": "2026-08-27"
+      "release_date": "2026-08-27",
+      "temperature": true
     },
     "inclusionai/ling-3.0-flash-sante": {
       "capabilities": {
@@ -7960,6 +8891,9 @@
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [
+          "temperature"
+        ],
         "tools": true,
         "vision": false
       },
@@ -7968,14 +8902,15 @@
       "last_updated": "2026-09-29",
       "max_output_tokens": 32768,
       "name": "Ling 3.1 Flash",
-      "release_date": "2026-09-29"
+      "release_date": "2026-09-29",
+      "temperature": true
     },
     "inference-net/schematron-v2-small": {
       "capabilities": {
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -7989,10 +8924,10 @@
         "vision": false
       },
       "context_window": 128000,
-      "last_updated": "2026-09-12",
+      "last_updated": "2026-04-16",
       "max_output_tokens": 4096,
       "name": "Schematron V2 Small",
-      "release_date": "2026-09-12",
+      "release_date": "2026-04-16",
       "temperature": true
     },
     "inference-net/schematron-v2-turbo": {
@@ -8000,7 +8935,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -8014,10 +8949,62 @@
         "vision": false
       },
       "context_window": 128000,
-      "last_updated": "2026-09-12",
+      "last_updated": "2026-04-16",
       "max_output_tokens": 8192,
       "name": "Schematron V2 Turbo",
-      "release_date": "2026-09-12",
+      "release_date": "2026-04-16",
+      "temperature": true
+    },
+    "lightonai/lightonocr-3-0.8b": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 262144,
+      "last_updated": "2026-10-14",
+      "max_output_tokens": 16384,
+      "name": "LightOnOCR-3 0.8B",
+      "release_date": "2026-10-08",
+      "temperature": true
+    },
+    "liquid/lfm2-24b-a2b": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 32768,
+      "family": "liquid",
+      "last_updated": "2026-02-24",
+      "max_output_tokens": 32768,
+      "name": "LFM2 24B A2B",
+      "release_date": "2026-02-24",
       "temperature": true
     },
     "mancer/weaver": {
@@ -8086,9 +9073,6 @@
         "reasoning": {
           "supported": true
         },
-        "supported_parameters": [
-          "temperature"
-        ],
         "tools": true,
         "vision": true
       },
@@ -8098,7 +9082,7 @@
       "max_output_tokens": 131072,
       "name": "LongCat-2.5-Preview",
       "release_date": "2026-09-25",
-      "temperature": true
+      "temperature": false
     },
     "meta/llama-3.1-70b-instruct": {
       "capabilities": {
@@ -8229,6 +9213,7 @@
       },
       "context_window": 131072,
       "family": "llama",
+      "knowledge": "2023-12",
       "last_updated": "2024-09-25",
       "max_output_tokens": 32000,
       "name": "Llama 3.2 1B Instruct",
@@ -8259,6 +9244,61 @@
       "last_updated": "2024-09-25",
       "max_output_tokens": 8192,
       "name": "Llama-3.2-3B",
+      "release_date": "2024-09-25",
+      "temperature": true
+    },
+    "meta/llama-3.2-3b-instruct": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 131072,
+      "family": "llama",
+      "knowledge": "2023-12",
+      "last_updated": "2024-09-25",
+      "max_output_tokens": 131072,
+      "name": "Llama 3.2 3B Instruct",
+      "release_date": "2024-09-25",
+      "temperature": true
+    },
+    "meta/llama-3.2-90b-vision-instruct": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 128000,
+      "family": "llama",
+      "knowledge": "2023-12",
+      "last_updated": "2024-09-25",
+      "max_output_tokens": 4096,
+      "name": "Llama-3.2-90B-Vision-Instruct",
       "release_date": "2024-09-25",
       "temperature": true
     },
@@ -8372,13 +9412,86 @@
       "release_date": "2024-07-23",
       "temperature": true
     },
+    "meta/llama-guard-4-12b": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 163840,
+      "family": "llama",
+      "last_updated": "2025-04-29",
+      "max_output_tokens": 163840,
+      "name": "Llama Guard 4 12B",
+      "release_date": "2025-04-29",
+      "temperature": true
+    },
+    "meta/llama-prompt-guard-2-22m": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "tools": false,
+        "vision": false
+      },
+      "context_window": 512,
+      "family": "llama",
+      "last_updated": "2025-04-29",
+      "max_output_tokens": 512,
+      "name": "Llama Prompt Guard 2 22M",
+      "release_date": "2025-04-29",
+      "temperature": false
+    },
+    "meta/llama-prompt-guard-2-86m": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "tools": false,
+        "vision": false
+      },
+      "context_window": 512,
+      "family": "llama",
+      "last_updated": "2025-04-29",
+      "max_output_tokens": 512,
+      "name": "Llama Prompt Guard 2 86M",
+      "release_date": "2025-04-29",
+      "temperature": false
+    },
     "meta/muse-glimmer-30b": {
       "capabilities": {
         "input_modalities": [
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -8408,7 +9521,7 @@
           "pdf",
           "video"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -8454,7 +9567,7 @@
           "pdf",
           "audio"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -8500,7 +9613,7 @@
           "pdf",
           "audio"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -8546,7 +9659,7 @@
           "video",
           "audio"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -8577,7 +9690,7 @@
           "pdf",
           "audio"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -8630,6 +9743,9 @@
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [
+          "temperature"
+        ],
         "tools": true,
         "vision": true
       },
@@ -8638,14 +9754,15 @@
       "last_updated": "2026-10-12",
       "max_output_tokens": null,
       "name": "Muse Wonder Full",
-      "release_date": "2026-10-12"
+      "release_date": "2026-10-12",
+      "temperature": true
     },
     "microsoft/mai-code-1-flash": {
       "capabilities": {
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -8673,7 +9790,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -8688,7 +9805,8 @@
       "last_updated": "2026-08-11",
       "max_output_tokens": 128000,
       "name": "MAI-Code-1.1-Flash",
-      "release_date": "2026-08-11"
+      "release_date": "2026-08-11",
+      "temperature": false
     },
     "microsoft/phi-4-mini": {
       "capabilities": {
@@ -8710,11 +9828,40 @@
       },
       "context_window": 128000,
       "family": "phi",
-      "knowledge": "2023-10",
-      "last_updated": "2024-12-11",
+      "knowledge": "2024-06",
+      "last_updated": "2025-02-26",
       "max_output_tokens": 4096,
       "name": "Phi-4-mini",
-      "release_date": "2024-12-11",
+      "release_date": "2025-02-26",
+      "temperature": true
+    },
+    "microsoft/phi-4-multimodal-instruct": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "audio"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 131072,
+      "family": "phi",
+      "knowledge": "2024-06",
+      "last_updated": "2025-02-26",
+      "max_output_tokens": 131072,
+      "name": "Phi-4-multimodal-instruct",
+      "release_date": "2025-02-26",
       "temperature": true
     },
     "microsoft/wizardlm-2-8x22b": {
@@ -8745,7 +9892,8 @@
     "mindlab/macaron-v1-tall": {
       "capabilities": {
         "input_modalities": [
-          "text"
+          "text",
+          "image"
         ],
         "json_mode": false,
         "output_modalities": [
@@ -8758,7 +9906,7 @@
           "temperature"
         ],
         "tools": true,
-        "vision": false
+        "vision": true
       },
       "context_window": 262144,
       "last_updated": "2026-07-21",
@@ -8816,7 +9964,8 @@
       "last_updated": "2026-10-04",
       "max_output_tokens": 0,
       "name": "MiniMax H3",
-      "release_date": "2026-07-31"
+      "release_date": "2026-07-31",
+      "temperature": false
     },
     "minimax/MiniMax-M2": {
       "capabilities": {
@@ -9122,6 +10271,9 @@
           ],
           "supported": true
         },
+        "supported_parameters": [
+          "temperature"
+        ],
         "tools": true,
         "vision": true
       },
@@ -9139,7 +10291,7 @@
         "source": "models.dev:minimax/MiniMax-M3.1-Flash"
       },
       "release_date": "2026-10-19",
-      "temperature": false
+      "temperature": true
     },
     "minimax/MiniMax-M3.1-Flash-Preview": {
       "capabilities": {
@@ -9179,7 +10331,7 @@
           "text"
         ],
         "reasoning": {
-          "supported": true
+          "supported": false
         },
         "supported_parameters": [
           "temperature"
@@ -9276,7 +10428,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -9398,13 +10550,6 @@
       "last_updated": "2025-07-10",
       "max_output_tokens": 128000,
       "name": "Devstral Medium",
-      "pricing": {
-        "rates": {
-          "input": 0.4,
-          "output": 2.0
-        },
-        "source": "models.dev:mistral/devstral-medium-2507"
-      },
       "release_date": "2025-07-10",
       "temperature": true
     },
@@ -9494,13 +10639,6 @@
       "last_updated": "2025-07-10",
       "max_output_tokens": 128000,
       "name": "Devstral Small",
-      "pricing": {
-        "rates": {
-          "input": 0.1,
-          "output": 0.3
-        },
-        "source": "models.dev:mistral/devstral-small-2507"
-      },
       "release_date": "2025-07-10",
       "temperature": true
     },
@@ -9629,7 +10767,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -9664,7 +10802,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -9691,7 +10829,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -9718,7 +10856,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -9772,7 +10910,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -9807,7 +10945,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -9862,6 +11000,32 @@
       "release_date": "2024-10-16",
       "temperature": true
     },
+    "mistral/mistral-7b-instruct-v0.3": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 32768,
+      "family": "mistral",
+      "last_updated": "2024-05-22",
+      "max_output_tokens": 32768,
+      "name": "Mistral 7B Instruct v0.3",
+      "release_date": "2024-05-22",
+      "temperature": true
+    },
     "mistral/mistral-embed": {
       "capabilities": {
         "input_modalities": [
@@ -9898,7 +11062,7 @@
           "text",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -9926,7 +11090,7 @@
           "text",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -9942,10 +11106,10 @@
       "context_window": 131072,
       "family": "mistral-large",
       "knowledge": "2024-03-31",
-      "last_updated": "2024-11-19",
+      "last_updated": "2024-07-24",
       "max_output_tokens": 104857,
       "name": "Mistral Large 2407",
-      "release_date": "2024-11-19",
+      "release_date": "2024-07-24",
       "temperature": true
     },
     "mistral/mistral-large-2411": {
@@ -9972,13 +11136,6 @@
       "last_updated": "2024-11-18",
       "max_output_tokens": 16384,
       "name": "Mistral Large 2.1",
-      "pricing": {
-        "rates": {
-          "input": 2.0,
-          "output": 6.0
-        },
-        "source": "models.dev:mistral/mistral-large-2411"
-      },
       "release_date": "2024-11-18",
       "temperature": true
     },
@@ -10024,7 +11181,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -10049,9 +11206,9 @@
       "name": "Mistral Large 4",
       "pricing": {
         "rates": {
-          "cache_read": 0.07,
-          "input": 0.68,
-          "output": 2.09
+          "cache_read": 0.14,
+          "input": 1.36,
+          "output": 4.18
         },
         "source": "models.dev:mistral/mistral-large-4"
       },
@@ -10135,7 +11292,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -10176,7 +11333,7 @@
           "image",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -10205,7 +11362,7 @@
           "image",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -10233,7 +11390,7 @@
           "image",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -10249,10 +11406,10 @@
       "context_window": 131072,
       "family": "mistral-medium",
       "knowledge": "2025-06-30",
-      "last_updated": "2025-08-13",
+      "last_updated": "2025-08-12",
       "max_output_tokens": 104857,
       "name": "Mistral Medium 3.1",
-      "release_date": "2025-08-13",
+      "release_date": "2025-08-12",
       "temperature": true
     },
     "mistral/mistral-medium-latest": {
@@ -10261,7 +11418,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -10316,17 +11473,10 @@
       "context_window": 128000,
       "family": "mistral-nemo",
       "knowledge": "2024-07",
-      "last_updated": "2024-07-01",
+      "last_updated": "2024-07-18",
       "max_output_tokens": 128000,
       "name": "Mistral Nemo",
-      "pricing": {
-        "rates": {
-          "input": 0.15,
-          "output": 0.15
-        },
-        "source": "models.dev:mistral/mistral-nemo"
-      },
-      "release_date": "2024-07-01",
+      "release_date": "2024-07-18",
       "temperature": true
     },
     "mistral/mistral-saba": {
@@ -10335,7 +11485,7 @@
           "text",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -10362,7 +11512,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -10466,7 +11616,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -10522,7 +11672,7 @@
           "image",
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -10591,7 +11741,7 @@
           "text",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -10611,6 +11761,32 @@
       "max_output_tokens": 52428,
       "name": "Mixtral 8x22B Instruct",
       "release_date": "2024-04-17",
+      "temperature": true
+    },
+    "mistral/mixtral-8x7b-instruct-v0.1": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "context_window": 32768,
+      "family": "mistral",
+      "last_updated": "2023-12-11",
+      "max_output_tokens": 32768,
+      "name": "Mixtral 8x7B Instruct v0.1",
+      "release_date": "2023-12-11",
       "temperature": true
     },
     "mistral/pixtral-12b": {
@@ -10635,7 +11811,7 @@
       "context_window": 128000,
       "family": "pixtral",
       "knowledge": "2024-09",
-      "last_updated": "2024-09-01",
+      "last_updated": "2024-09-11",
       "max_output_tokens": 128000,
       "name": "Pixtral 12B",
       "pricing": {
@@ -10645,7 +11821,7 @@
         },
         "source": "models.dev:mistral/pixtral-12b"
       },
-      "release_date": "2024-09-01",
+      "release_date": "2024-09-11",
       "temperature": true
     },
     "mistral/pixtral-large-2502": {
@@ -10700,13 +11876,6 @@
       "last_updated": "2024-11-04",
       "max_output_tokens": 128000,
       "name": "Pixtral Large (latest)",
-      "pricing": {
-        "rates": {
-          "input": 2.0,
-          "output": 6.0
-        },
-        "source": "models.dev:mistral/pixtral-large-latest"
-      },
       "release_date": "2024-11-01",
       "temperature": true
     },
@@ -10791,7 +11960,7 @@
       "pricing": {
         "rates": {
           "input": 0.1,
-          "output": 0.3
+          "output": 0.4
         },
         "source": "models.dev:mistral/voxtral-small-latest"
       },
@@ -10810,6 +11979,9 @@
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "temperature"
+        ],
         "tools": true,
         "vision": false
       },
@@ -10817,7 +11989,8 @@
       "last_updated": "2026-08-13",
       "max_output_tokens": 4000,
       "name": "Toast 1",
-      "release_date": "2026-08-13"
+      "release_date": "2026-08-13",
+      "temperature": true
     },
     "moonshotai/kimi-k2": {
       "capabilities": {
@@ -10959,7 +12132,7 @@
           "image",
           "video"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -10972,10 +12145,10 @@
       "context_window": 262144,
       "family": "kimi-k2",
       "knowledge": "2025-01",
-      "last_updated": "2026-01",
+      "last_updated": "2026-01-27",
       "max_output_tokens": 262144,
       "name": "Kimi K2.5",
-      "release_date": "2026-01",
+      "release_date": "2026-01-27",
       "temperature": false
     },
     "moonshotai/kimi-k2.6": {
@@ -10985,7 +12158,7 @@
           "image",
           "video"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -11002,7 +12175,7 @@
       "context_window": 262144,
       "family": "kimi-k2",
       "knowledge": "2025-01",
-      "last_updated": "2026-04-21",
+      "last_updated": "2026-04-20",
       "max_output_tokens": 262144,
       "name": "Kimi K2.6",
       "pricing": {
@@ -11013,7 +12186,7 @@
         },
         "source": "models.dev:moonshotai/kimi-k2.6"
       },
-      "release_date": "2026-04-21",
+      "release_date": "2026-04-20",
       "temperature": true
     },
     "moonshotai/kimi-k2.7-code": {
@@ -11023,7 +12196,7 @@
           "image",
           "video"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -11057,7 +12230,7 @@
           "image",
           "video"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -11106,7 +12279,8 @@
       "last_updated": "2026-09-11",
       "max_output_tokens": null,
       "name": "Kimi K2.8 Preview",
-      "release_date": "2026-09-11"
+      "release_date": "2026-09-11",
+      "temperature": false
     },
     "moonshotai/kimi-k3": {
       "capabilities": {
@@ -11115,7 +12289,7 @@
           "image",
           "video"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -11148,6 +12322,46 @@
       "release_date": "2026-07-16",
       "temperature": false
     },
+    "moonshotai/kimi-k3.1-pro": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ],
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1048576,
+      "family": "kimi-k3",
+      "last_updated": "2026-10-23",
+      "max_output_tokens": 131072,
+      "name": "Kimi K3.1 Pro",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.2,
+          "cache_write": 2.0,
+          "input": 2.0,
+          "output": 10.0
+        },
+        "source": "models.dev:moonshotai/kimi-k3.1-pro"
+      },
+      "release_date": "2026-10-23",
+      "temperature": false
+    },
     "morph/morph-v3-fast": {
       "capabilities": {
         "input_modalities": [
@@ -11166,10 +12380,10 @@
         "tools": false,
         "vision": false
       },
-      "context_window": 81920,
+      "context_window": 262144,
       "family": "morph",
       "last_updated": "2025-07-07",
-      "max_output_tokens": 38000,
+      "max_output_tokens": 131072,
       "name": "Morph V3 Fast",
       "pricing": {
         "rates": {
@@ -11186,7 +12400,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -11246,7 +12460,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -11271,7 +12485,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -11285,6 +12499,7 @@
         "vision": false
       },
       "context_window": 8192,
+      "family": "hermes",
       "last_updated": "2024-04-30",
       "max_output_tokens": 8192,
       "name": "Hermes 2 Pro Llama 3 8B",
@@ -11296,7 +12511,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -11323,7 +12538,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -11360,7 +12575,7 @@
         "supported_parameters": [
           "temperature"
         ],
-        "tools": false,
+        "tools": true,
         "vision": false
       },
       "context_window": 131072,
@@ -11467,10 +12682,10 @@
       },
       "context_window": 131072,
       "family": "nemotron",
-      "last_updated": "2025-04-07",
+      "last_updated": "2025-03-18",
       "max_output_tokens": 131072,
       "name": "Llama 3.3 Nemotron Super 49B v1",
-      "release_date": "2025-04-07",
+      "release_date": "2025-03-18",
       "temperature": true
     },
     "nvidia/llama-3.3-nemotron-super-49b-v1.5": {
@@ -11538,12 +12753,12 @@
         "tools": false,
         "vision": true
       },
-      "context_window": 32768,
+      "context_window": 10240,
       "family": "nemotron",
-      "last_updated": "2026-02-10",
+      "last_updated": "2025-12-18",
       "max_output_tokens": 2048,
       "name": "Llama Nemotron Embed VL 1B v2",
-      "release_date": "2026-02-10",
+      "release_date": "2025-12-18",
       "temperature": false
     },
     "nvidia/llama-nemotron-rerank-vl-1b-v2": {
@@ -11562,12 +12777,12 @@
         "tools": false,
         "vision": true
       },
-      "context_window": 128000,
+      "context_window": 10240,
       "family": "nemotron",
-      "last_updated": "2026-03-31",
+      "last_updated": "2025-12-18",
       "max_output_tokens": 4096,
       "name": "Llama Nemotron Rerank VL 1B v2",
-      "release_date": "2026-03-31",
+      "release_date": "2025-12-18",
       "temperature": false
     },
     "nvidia/mistral-nemotron": {
@@ -11613,10 +12828,10 @@
       },
       "context_window": 128000,
       "family": "nemotron",
-      "last_updated": "2026-04-16",
+      "last_updated": "2026-03-16",
       "max_output_tokens": 4096,
       "name": "Nemotron 3 Content Safety",
-      "release_date": "2026-04-16",
+      "release_date": "2026-03-16",
       "temperature": false
     },
     "nvidia/nemotron-3-nano-30b-a3b": {
@@ -11639,6 +12854,7 @@
       },
       "context_window": 262144,
       "family": "nemotron",
+      "knowledge": "2025-06-25",
       "last_updated": "2025-12-15",
       "max_output_tokens": 262144,
       "name": "Nemotron 3 Nano 30B A3B",
@@ -11694,6 +12910,7 @@
       },
       "context_window": 262144,
       "family": "nemotron",
+      "knowledge": "2025-06",
       "last_updated": "2026-03-11",
       "max_output_tokens": 262144,
       "name": "Nemotron 3 Super 120B A12B",
@@ -11720,6 +12937,7 @@
       },
       "context_window": 1000000,
       "family": "nemotron",
+      "knowledge": "2025-09",
       "last_updated": "2026-06-04",
       "max_output_tokens": 128000,
       "name": "Nemotron 3 Ultra 550B A55B",
@@ -11747,10 +12965,10 @@
       },
       "context_window": 128000,
       "family": "nemotron",
-      "last_updated": "2026-06-04",
+      "last_updated": "2026-06-02",
       "max_output_tokens": 8192,
       "name": "Nemotron 3.5 Content Safety",
-      "release_date": "2026-06-04",
+      "release_date": "2026-06-02",
       "temperature": true
     },
     "nvidia/nemotron-3.5-lightning": {
@@ -11758,7 +12976,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -11773,10 +12991,37 @@
       },
       "context_window": 262144,
       "family": "nemotron",
+      "knowledge": "2025-09",
       "last_updated": "2026-08-11",
       "max_output_tokens": 262144,
       "name": "Nemotron 3.5 Lightning 30B A3B",
       "release_date": "2026-08-11",
+      "temperature": true
+    },
+    "nvidia/nemotron-3.5-super-120b-a12b": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 1048576,
+      "family": "nemotron",
+      "last_updated": "2026-10-15",
+      "max_output_tokens": 131072,
+      "name": "Nemotron 3.5 Super 120B A12B",
+      "release_date": "2026-10-15",
       "temperature": true
     },
     "nvidia/nemotron-3.5-super-vl-120b-a12b": {
@@ -11830,7 +13075,7 @@
       "last_updated": "2026-04-09",
       "max_output_tokens": 32768,
       "name": "Nemotron Cascade 2 30B A3B",
-      "release_date": "2026-03-24",
+      "release_date": "2026-03-19",
       "temperature": true
     },
     "nvidia/nemotron-content-safety-reasoning-4b": {
@@ -11930,6 +13175,7 @@
       },
       "context_window": 131072,
       "family": "nemotron",
+      "knowledge": "2024-09",
       "last_updated": "2025-08-18",
       "max_output_tokens": 131072,
       "name": "Nemotron Nano 9B v2",
@@ -12074,7 +13320,7 @@
           "image",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -12111,7 +13357,7 @@
           "image",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -12147,7 +13393,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -12184,7 +13430,7 @@
           "image",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -12220,7 +13466,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -12255,7 +13501,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -12291,7 +13537,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -12328,7 +13574,7 @@
           "image",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -12364,7 +13610,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -12404,7 +13650,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -12415,7 +13661,7 @@
         "vision": true
       },
       "context_window": 400000,
-      "family": "gpt-codex",
+      "family": "gpt",
       "knowledge": "2024-09-30",
       "last_updated": "2025-08-07",
       "max_output_tokens": 128000,
@@ -12429,7 +13675,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -12455,7 +13701,7 @@
           "text",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "image",
           "text"
@@ -12485,7 +13731,7 @@
           "image",
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "image",
           "text"
@@ -12513,7 +13759,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -12553,7 +13799,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -12593,7 +13839,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -12629,7 +13875,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -12672,7 +13918,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -12683,7 +13929,7 @@
         "vision": true
       },
       "context_window": 128000,
-      "family": "gpt-codex",
+      "family": "gpt",
       "knowledge": "2024-09-30",
       "last_updated": "2025-11-13",
       "max_output_tokens": 16384,
@@ -12697,7 +13943,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -12722,7 +13968,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -12747,7 +13993,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -12772,7 +14018,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -12816,34 +14062,22 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
         "reasoning": {
-          "control": "levels",
-          "levels": [
-            "medium"
-          ],
           "supported": true
         },
         "tools": true,
         "vision": true
       },
       "context_window": 128000,
-      "family": "gpt-codex",
+      "family": "gpt",
       "knowledge": "2025-08-31",
       "last_updated": "2025-12-11",
       "max_output_tokens": 16384,
       "name": "GPT-5.2 Chat",
-      "pricing": {
-        "rates": {
-          "cache_read": 0.175,
-          "input": 1.75,
-          "output": 14.0
-        },
-        "source": "models.dev:openai/gpt-5.2-chat-latest"
-      },
       "release_date": "2025-12-11",
       "temperature": false
     },
@@ -12854,7 +14088,7 @@
           "image",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -12917,7 +14151,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -12936,14 +14170,6 @@
       "last_updated": "2026-03-03",
       "max_output_tokens": 16384,
       "name": "GPT-5.3 Chat (latest)",
-      "pricing": {
-        "rates": {
-          "cache_read": 0.175,
-          "input": 1.75,
-          "output": 14.0
-        },
-        "source": "models.dev:openai/gpt-5.3-chat-latest"
-      },
       "release_date": "2026-03-03",
       "temperature": true
     },
@@ -12954,7 +14180,7 @@
           "image",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -12999,7 +14225,7 @@
           "image",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -13041,7 +14267,7 @@
           "image",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -13097,7 +14323,7 @@
           "text",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "image",
           "text"
@@ -13122,7 +14348,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -13166,7 +14392,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -13259,7 +14485,7 @@
           "image",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -13312,7 +14538,7 @@
           "image",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -13340,7 +14566,7 @@
           "image",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -13388,7 +14614,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -13414,7 +14640,7 @@
           "image",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -13470,7 +14696,7 @@
           "image",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -13526,7 +14752,7 @@
           "image",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -13582,7 +14808,7 @@
           "image",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -13637,7 +14863,7 @@
           "image",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -13662,7 +14888,7 @@
           "image",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -13718,7 +14944,7 @@
           "image",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -13774,7 +15000,7 @@
           "image",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -13956,7 +15182,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -13971,6 +15197,7 @@
       },
       "context_window": 131072,
       "family": "gpt-oss",
+      "knowledge": "2024-06",
       "last_updated": "2025-08-05",
       "max_output_tokens": 32768,
       "name": "GPT OSS 120B",
@@ -13982,7 +15209,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -13997,6 +15224,7 @@
       },
       "context_window": 131072,
       "family": "gpt-oss",
+      "knowledge": "2024-06",
       "last_updated": "2025-08-05",
       "max_output_tokens": 32768,
       "name": "GPT OSS 20B",
@@ -14008,7 +15236,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -14034,7 +15262,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -14131,7 +15359,7 @@
           "image",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -14170,7 +15398,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -14209,7 +15437,7 @@
           "image",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -14261,10 +15489,10 @@
       "context_window": 200000,
       "family": "o",
       "knowledge": "2024-05",
-      "last_updated": "2024-06-26",
+      "last_updated": "2025-06-26",
       "max_output_tokens": 100000,
       "name": "o3-deep-research",
-      "release_date": "2024-06-26",
+      "release_date": "2025-06-26",
       "temperature": false
     },
     "openai/o3-mini": {
@@ -14272,7 +15500,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -14311,7 +15539,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -14349,7 +15577,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -14401,10 +15629,10 @@
       "context_window": 200000,
       "family": "o-mini",
       "knowledge": "2024-05",
-      "last_updated": "2024-06-26",
+      "last_updated": "2025-06-26",
       "max_output_tokens": 100000,
       "name": "o4-mini-deep-research",
-      "release_date": "2024-06-26",
+      "release_date": "2025-06-26",
       "temperature": false
     },
     "openai/whisper-large-v3": {
@@ -14419,15 +15647,19 @@
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "temperature"
+        ],
         "tools": false,
         "vision": false
       },
       "context_window": 448,
       "family": "whisper",
-      "last_updated": "2024-10-01",
+      "last_updated": "2023-11-06",
       "max_output_tokens": 4096,
       "name": "Whisper 3 Large",
-      "release_date": "2024-10-01"
+      "release_date": "2023-11-06",
+      "temperature": true
     },
     "openai/whisper-large-v3-turbo": {
       "capabilities": {
@@ -14441,6 +15673,9 @@
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "temperature"
+        ],
         "tools": false,
         "vision": false
       },
@@ -14449,7 +15684,62 @@
       "last_updated": "2024-10-01",
       "max_output_tokens": 448,
       "name": "Whisper Large v3 Turbo",
-      "release_date": "2024-10-01"
+      "release_date": "2024-10-01",
+      "temperature": true
+    },
+    "openbmb/minicpm-v-4.7-1b": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 262144,
+      "last_updated": "2026-10-06",
+      "max_output_tokens": 262144,
+      "name": "MiniCPM-V 4.7 1B",
+      "release_date": "2026-10-06",
+      "temperature": true
+    },
+    "openbmb/minicpm-v-4.7-35b-a3b": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 262144,
+      "last_updated": "2026-10-07",
+      "max_output_tokens": 262144,
+      "name": "MiniCPM-V 4.7 35B-A3B",
+      "release_date": "2026-10-07",
+      "temperature": true
     },
     "openbmb/minicpm5-1b": {
       "capabilities": {
@@ -14534,7 +15824,7 @@
           "image",
           "video"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -14552,6 +15842,34 @@
       "max_output_tokens": 8192,
       "name": "Perceptron Mk1",
       "release_date": "2026-05-12",
+      "temperature": true
+    },
+    "perceptron/perceptron-mk1.5": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 36864,
+      "last_updated": "2026-09-25",
+      "max_output_tokens": 8192,
+      "name": "Perceptron Mk1.5",
+      "release_date": "2026-09-25",
       "temperature": true
     },
     "perplexity/sonar": {
@@ -14822,6 +16140,9 @@
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [
+          "temperature"
+        ],
         "tools": true,
         "vision": true
       },
@@ -14829,7 +16150,8 @@
       "last_updated": "2026-09-16",
       "max_output_tokens": 65536,
       "name": "Arrow 2",
-      "release_date": "2026-09-16"
+      "release_date": "2026-09-16",
+      "temperature": true
     },
     "quiverai/arrow-2-telos": {
       "capabilities": {
@@ -14852,14 +16174,42 @@
       "last_updated": "2026-09-16",
       "max_output_tokens": 65536,
       "name": "Arrow 2 Telos",
-      "release_date": "2026-09-16"
+      "release_date": "2026-09-16",
+      "temperature": false
+    },
+    "recursive/flint": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 262144,
+      "family": "flint",
+      "knowledge": "2026-06",
+      "last_updated": "2026-10-21",
+      "max_output_tokens": 262144,
+      "name": "Flint",
+      "release_date": "2026-10-21",
+      "temperature": true
     },
     "reflection/beam-1.0-501b-a23b": {
       "capabilities": {
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -14888,7 +16238,7 @@
           "text",
           "video"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -14903,10 +16253,10 @@
       },
       "context_window": 16384,
       "family": "reka",
-      "last_updated": "2026-03-20",
+      "last_updated": "2026-03-11",
       "max_output_tokens": 14745,
       "name": "Reka Edge",
-      "release_date": "2026-03-20",
+      "release_date": "2026-03-11",
       "temperature": true
     },
     "rekaai/reka-flash-3": {
@@ -14914,7 +16264,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -14930,10 +16280,10 @@
       "context_window": 65536,
       "family": "reka",
       "knowledge": "2025-01-31",
-      "last_updated": "2025-03-12",
+      "last_updated": "2025-03-10",
       "max_output_tokens": 58982,
       "name": "Reka Flash 3",
-      "release_date": "2025-03-12",
+      "release_date": "2025-03-10",
       "temperature": true
     },
     "relace/relace-apply-3": {
@@ -14989,7 +16339,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -15019,7 +16369,7 @@
           "image",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -15043,7 +16393,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -15092,7 +16442,7 @@
           "image",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -15118,7 +16468,7 @@
           "image",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -15153,7 +16503,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -15180,7 +16530,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -15207,7 +16557,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -15255,10 +16605,18 @@
       },
       "context_window": 131072,
       "family": "sarvam",
-      "last_updated": "2025-09-01",
+      "last_updated": "2026-02-18",
       "max_output_tokens": 131072,
       "name": "Sarvam 105B",
-      "release_date": "2025-09-01",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.05263423,
+          "input": 0.15790269,
+          "output": 0.63161075
+        },
+        "source": "models.dev:sarvam/sarvam-105b"
+      },
+      "release_date": "2026-02-18",
       "temperature": true
     },
     "sarvam/sarvam-30b": {
@@ -15291,6 +16649,32 @@
       "max_output_tokens": 128000,
       "name": "Sarvam 30B",
       "release_date": "2026-02-18",
+      "temperature": true
+    },
+    "sarvam/sarvam-m": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "context_window": 32768,
+      "family": "sarvam",
+      "last_updated": "2025-05-20",
+      "max_output_tokens": 32768,
+      "name": "Sarvam-M",
+      "release_date": "2025-05-20",
       "temperature": true
     },
     "sdaia/allam-2-7b": {
@@ -15342,15 +16726,16 @@
         "vision": false
       },
       "context_window": 256000,
+      "family": "step",
       "knowledge": "2025-01",
       "last_updated": "2026-02-13",
       "max_output_tokens": 256000,
       "name": "Step 3.5 Flash",
       "pricing": {
         "rates": {
-          "cache_read": 0.02,
-          "input": 0.1,
-          "output": 0.3
+          "cache_read": 0.02092,
+          "input": 0.10461,
+          "output": 0.31384
         },
         "source": "models.dev:stepfun/step-3.5-flash"
       },
@@ -15381,15 +16766,16 @@
         "vision": false
       },
       "context_window": 256000,
+      "family": "step",
       "knowledge": "2025-01",
       "last_updated": "2026-04-02",
       "max_output_tokens": 256000,
       "name": "Step 3.5 Flash 2603",
       "pricing": {
         "rates": {
-          "cache_read": 0.02,
-          "input": 0.1,
-          "output": 0.3
+          "cache_read": 0.02092,
+          "input": 0.10461,
+          "output": 0.31384
         },
         "source": "models.dev:stepfun/step-3.5-flash-2603"
       },
@@ -15429,9 +16815,9 @@
       "name": "Step 3.7 Flash",
       "pricing": {
         "rates": {
-          "cache_read": 0.037,
-          "input": 0.185,
-          "output": 1.11
+          "cache_read": 0.04035,
+          "input": 0.20175,
+          "output": 1.21052
         },
         "source": "models.dev:stepfun/step-3.7-flash"
       },
@@ -15445,7 +16831,7 @@
           "image",
           "video"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -15458,6 +16844,9 @@
           ],
           "supported": true
         },
+        "supported_parameters": [
+          "temperature"
+        ],
         "tools": true,
         "vision": true
       },
@@ -15467,13 +16856,14 @@
       "name": "Step 5 Preview",
       "pricing": {
         "rates": {
-          "cache_read": 0.048,
-          "input": 0.959,
-          "output": 2.741
+          "cache_read": 0.10461,
+          "input": 1.04613,
+          "output": 2.98895
         },
         "source": "models.dev:stepfun/step-5-preview"
       },
-      "release_date": "2026-09-16"
+      "release_date": "2026-09-16",
+      "temperature": true
     },
     "swiss-ai/apertus-70b": {
       "capabilities": {
@@ -15547,10 +16937,10 @@
       },
       "context_window": 8192,
       "family": "Hy",
-      "last_updated": "2026-08-20",
+      "last_updated": "2026-05-21",
       "max_output_tokens": 4096,
       "name": "Hy-MT2-1.8B",
-      "release_date": "2026-08-20",
+      "release_date": "2026-05-21",
       "temperature": true
     },
     "tencent/hy-mt2-30b-a3b": {
@@ -15558,7 +16948,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -15573,10 +16963,10 @@
       },
       "context_window": 8192,
       "family": "Hy",
-      "last_updated": "2026-08-20",
+      "last_updated": "2026-05-21",
       "max_output_tokens": 4096,
       "name": "Hy-MT2-30B-A3B",
-      "release_date": "2026-08-20",
+      "release_date": "2026-05-21",
       "temperature": true
     },
     "tencent/hy-mt2-7b": {
@@ -15584,7 +16974,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -15599,10 +16989,10 @@
       },
       "context_window": 8192,
       "family": "Hy",
-      "last_updated": "2026-08-19",
+      "last_updated": "2026-05-21",
       "max_output_tokens": 4096,
       "name": "Hy-MT2-7B",
-      "release_date": "2026-08-19",
+      "release_date": "2026-05-21",
       "temperature": true
     },
     "tencent/hy3": {
@@ -15688,7 +17078,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -15714,7 +17104,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -15740,7 +17130,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -15875,7 +17265,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -15896,12 +17286,38 @@
       "release_date": "2023-07-22",
       "temperature": true
     },
+    "upstage/solar-10.7b-instruct-v1.0": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "context_window": 4096,
+      "family": "solar",
+      "last_updated": "2023-12-12",
+      "max_output_tokens": 4096,
+      "name": "SOLAR 10.7B Instruct v1.0",
+      "release_date": "2023-12-12",
+      "temperature": true
+    },
     "upstage/solar-mini4": {
       "capabilities": {
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -16006,8 +17422,8 @@
       },
       "context_window": 131072,
       "family": "solar-pro",
-      "knowledge": "2025-03",
-      "last_updated": "2026-01",
+      "knowledge": "2025-07",
+      "last_updated": "2026-03-23",
       "max_output_tokens": 8192,
       "name": "Solar Pro 3",
       "pricing": {
@@ -16017,7 +17433,7 @@
         },
         "source": "models.dev:upstage/solar-pro3"
       },
-      "release_date": "2026-01",
+      "release_date": "2026-01-26",
       "temperature": true
     },
     "upstage/solar-pro4": {
@@ -16025,7 +17441,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -16074,7 +17490,7 @@
           "video",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -16103,7 +17519,7 @@
           "video",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -16132,7 +17548,7 @@
           "video",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -16158,7 +17574,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -16265,6 +17681,7 @@
         "vision": true
       },
       "context_window": 2000000,
+      "family": "grok",
       "last_updated": "2025-12-18",
       "max_output_tokens": 2000000,
       "name": "X-Ai/Grok-4-Fast-Non-Reasoning",
@@ -16293,6 +17710,7 @@
         "vision": true
       },
       "context_window": 2000000,
+      "family": "grok",
       "last_updated": "2025-12-18",
       "max_output_tokens": 2000000,
       "name": "X-Ai/Grok-4-Fast-Reasoning",
@@ -16305,7 +17723,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -16332,7 +17750,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -16360,7 +17778,7 @@
           "image",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -16407,7 +17825,7 @@
           "image",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -16454,7 +17872,7 @@
           "image",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -16464,7 +17882,8 @@
             "none",
             "low",
             "medium",
-            "high"
+            "high",
+            "xhigh"
           ],
           "supported": true
         },
@@ -16507,7 +17926,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -16516,7 +17935,8 @@
           "levels": [
             "low",
             "medium",
-            "high"
+            "high",
+            "xhigh"
           ],
           "supported": true
         },
@@ -16559,7 +17979,7 @@
           "text",
           "image"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -16614,7 +18034,7 @@
           "image",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -16669,7 +18089,7 @@
           "image",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -16728,6 +18148,7 @@
         "vision": false
       },
       "context_window": 256000,
+      "family": "grok",
       "last_updated": "2025-09-02",
       "max_output_tokens": 10000,
       "name": "x-AI/Grok-Code-Fast 1",
@@ -16738,13 +18159,11 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image",
-          "pdf"
+          "image"
         ],
         "json_mode": false,
         "output_modalities": [
-          "image",
-          "pdf"
+          "image"
         ],
         "reasoning": {
           "supported": false
@@ -16776,7 +18195,7 @@
         "tools": false,
         "vision": true
       },
-      "context_window": 8000,
+      "context_window": 64000,
       "family": "grok",
       "last_updated": "2026-08-07",
       "max_output_tokens": 0,
@@ -16813,7 +18232,7 @@
         "input_modalities": [
           "text",
           "image",
-          "video"
+          "audio"
         ],
         "json_mode": false,
         "output_modalities": [
@@ -16857,14 +18276,14 @@
       "release_date": "2026-10-01",
       "temperature": false
     },
-    "xai/grok-voice-stt-1.0": {
+    "xai/grok-tts": {
       "capabilities": {
         "input_modalities": [
-          "audio"
+          "text"
         ],
         "json_mode": false,
         "output_modalities": [
-          "text"
+          "audio"
         ],
         "reasoning": {
           "supported": false
@@ -16873,20 +18292,20 @@
         "vision": false
       },
       "context_window": 15000,
-      "last_updated": "2026-08-04",
+      "last_updated": "2026-03-16",
       "max_output_tokens": 15000,
-      "name": "Grok Voice STT 1.0",
-      "release_date": "2026-08-04",
+      "name": "Grok TTS",
+      "release_date": "2026-03-16",
       "temperature": false
     },
-    "xai/grok-voice-tts-1.0": {
+    "xai/grok-voice-transcribe-2.0": {
       "capabilities": {
         "input_modalities": [
-          "text"
+          "audio"
         ],
         "json_mode": false,
         "output_modalities": [
-          "audio"
+          "text"
         ],
         "reasoning": {
           "supported": false
@@ -16894,11 +18313,12 @@
         "tools": false,
         "vision": false
       },
-      "context_window": 15000,
-      "last_updated": "2026-07-31",
-      "max_output_tokens": 15000,
-      "name": "Grok Voice TTS 1.0",
-      "release_date": "2026-07-31",
+      "context_window": 0,
+      "family": "grok",
+      "last_updated": "2026-09-17",
+      "max_output_tokens": 0,
+      "name": "Grok Voice Transcribe 2.0",
+      "release_date": "2026-09-17",
       "temperature": false
     },
     "xiaomi/mimo-v2-flash": {
@@ -16911,7 +18331,6 @@
           "text"
         ],
         "reasoning": {
-          "control": "on_off",
           "supported": true
         },
         "supported_parameters": [
@@ -16926,14 +18345,6 @@
       "last_updated": "2026-02-04",
       "max_output_tokens": 65536,
       "name": "MiMo-V2-Flash",
-      "pricing": {
-        "rates": {
-          "cache_read": 0.0028,
-          "input": 0.14,
-          "output": 0.28
-        },
-        "source": "models.dev:xiaomi/mimo-v2-flash"
-      },
       "release_date": "2025-12-16",
       "temperature": true
     },
@@ -16951,7 +18362,6 @@
           "text"
         ],
         "reasoning": {
-          "control": "on_off",
           "supported": true
         },
         "supported_parameters": [
@@ -16966,14 +18376,6 @@
       "last_updated": "2026-03-18",
       "max_output_tokens": 131072,
       "name": "MiMo-V2-Omni",
-      "pricing": {
-        "rates": {
-          "cache_read": 0.0028,
-          "input": 0.14,
-          "output": 0.28
-        },
-        "source": "models.dev:xiaomi/mimo-v2-omni"
-      },
       "release_date": "2026-03-18",
       "temperature": true
     },
@@ -16987,7 +18389,6 @@
           "text"
         ],
         "reasoning": {
-          "control": "on_off",
           "supported": true
         },
         "supported_parameters": [
@@ -17002,16 +18403,31 @@
       "last_updated": "2026-03-18",
       "max_output_tokens": 131072,
       "name": "MiMo-V2-Pro",
-      "pricing": {
-        "rates": {
-          "cache_read": 0.0036,
-          "input": 0.435,
-          "output": 0.87
-        },
-        "source": "models.dev:xiaomi/mimo-v2-pro"
-      },
       "release_date": "2026-03-18",
       "temperature": true
+    },
+    "xiaomi/mimo-v2-tts": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "audio"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "tools": false,
+        "vision": false
+      },
+      "context_window": 8192,
+      "family": "mimo",
+      "last_updated": "2026-03-18",
+      "max_output_tokens": 8192,
+      "name": "MiMo-V2-TTS",
+      "release_date": "2026-03-18",
+      "temperature": false
     },
     "xiaomi/mimo-v2.5": {
       "capabilities": {
@@ -17123,6 +18539,75 @@
       },
       "release_date": "2026-06-08",
       "temperature": true
+    },
+    "xiaomi/mimo-v2.5-tts": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "audio"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "tools": false,
+        "vision": false
+      },
+      "context_window": 8192,
+      "family": "mimo",
+      "last_updated": "2026-04-22",
+      "max_output_tokens": 8192,
+      "name": "MiMo-V2.5-TTS",
+      "release_date": "2026-04-22",
+      "temperature": false
+    },
+    "xiaomi/mimo-v2.5-tts-voiceclone": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "audio"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "tools": false,
+        "vision": false
+      },
+      "context_window": 8192,
+      "family": "mimo",
+      "last_updated": "2026-04-22",
+      "max_output_tokens": 8192,
+      "name": "MiMo-V2.5-TTS-VoiceClone",
+      "release_date": "2026-04-22",
+      "temperature": false
+    },
+    "xiaomi/mimo-v2.5-tts-voicedesign": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "audio"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "tools": false,
+        "vision": false
+      },
+      "context_window": 8192,
+      "family": "mimo",
+      "last_updated": "2026-04-22",
+      "max_output_tokens": 8192,
+      "name": "MiMo-V2.5-TTS-VoiceDesign",
+      "release_date": "2026-04-22",
+      "temperature": false
     },
     "xiaomi/mimo-v2.6-flash": {
       "capabilities": {
@@ -17329,10 +18814,22 @@
       "name": "GLM-4.5-Air",
       "pricing": {
         "rates": {
-          "cache_read": 0.03,
+          "cache_read": 0.0239,
           "cache_write": 0.0,
-          "input": 0.2,
-          "output": 1.1
+          "input": 0.11952,
+          "output": 0.89637,
+          "tiers": [
+            {
+              "cache_read": 0.03585,
+              "cache_write": 0.0,
+              "input": 0.17927,
+              "output": 1.19516,
+              "tier": {
+                "size": 32000,
+                "type": "context"
+              }
+            }
+          ]
         },
         "source": "models.dev:zhipuai/glm-4.5-air"
       },
@@ -17405,9 +18902,22 @@
       "name": "GLM-4.5V",
       "pricing": {
         "rates": {
-          "cache_read": 0.11,
-          "input": 0.6,
-          "output": 1.8
+          "cache_read": 0.05976,
+          "cache_write": 0.0,
+          "input": 0.29879,
+          "output": 0.89637,
+          "tiers": [
+            {
+              "cache_read": 0.11952,
+              "cache_write": 0.0,
+              "input": 0.59758,
+              "output": 1.79274,
+              "tier": {
+                "size": 32000,
+                "type": "context"
+              }
+            }
+          ]
         },
         "source": "models.dev:zhipuai/glm-4.5v"
       },
@@ -17480,9 +18990,22 @@
       "name": "GLM-4.6V",
       "pricing": {
         "rates": {
-          "cache_read": 0.05,
-          "input": 0.3,
-          "output": 0.9
+          "cache_read": 0.02988,
+          "cache_write": 0.0,
+          "input": 0.1494,
+          "output": 0.44819,
+          "tiers": [
+            {
+              "cache_read": 0.05976,
+              "cache_write": 0.0,
+              "input": 0.29879,
+              "output": 0.89637,
+              "tier": {
+                "size": 32000,
+                "type": "context"
+              }
+            }
+          ]
         },
         "source": "models.dev:zhipuai/glm-4.6v"
       },
@@ -17554,10 +19077,22 @@
       "name": "GLM-4.7",
       "pricing": {
         "rates": {
-          "cache_read": 0.11,
+          "cache_read": 0.08964,
           "cache_write": 0.0,
-          "input": 0.6,
-          "output": 2.2
+          "input": 0.44819,
+          "output": 2.09153,
+          "tiers": [
+            {
+              "cache_read": 0.11952,
+              "cache_write": 0.0,
+              "input": 0.59758,
+              "output": 2.39032,
+              "tier": {
+                "size": 32000,
+                "type": "context"
+              }
+            }
+          ]
         },
         "source": "models.dev:zhipuai/glm-4.7"
       },
@@ -17628,10 +19163,10 @@
       "name": "GLM-4.7-FlashX",
       "pricing": {
         "rates": {
-          "cache_read": 0.01,
+          "cache_read": 0.01494,
           "cache_write": 0.0,
-          "input": 0.07,
-          "output": 0.4
+          "input": 0.0747,
+          "output": 0.44819
         },
         "source": "models.dev:zhipuai/glm-4.7-flashx"
       },
@@ -17664,10 +19199,22 @@
       "name": "GLM-5",
       "pricing": {
         "rates": {
-          "cache_read": 0.2,
+          "cache_read": 0.1494,
           "cache_write": 0.0,
-          "input": 1.0,
-          "output": 3.2
+          "input": 0.59758,
+          "output": 2.68911,
+          "tiers": [
+            {
+              "cache_read": 0.22409,
+              "cache_write": 0.0,
+              "input": 0.89637,
+              "output": 3.28669,
+              "tier": {
+                "size": 32000,
+                "type": "context"
+              }
+            }
+          ]
         },
         "source": "models.dev:zhipuai/glm-5"
       },
@@ -17679,7 +19226,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -17705,7 +19252,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -17726,10 +19273,22 @@
       "name": "GLM-5.1",
       "pricing": {
         "rates": {
-          "cache_read": 0.26,
+          "cache_read": 0.19421,
           "cache_write": 0.0,
-          "input": 1.4,
-          "output": 4.4
+          "input": 0.89637,
+          "output": 3.58548,
+          "tiers": [
+            {
+              "cache_read": 0.29879,
+              "cache_write": 0.0,
+              "input": 1.19516,
+              "output": 4.18306,
+              "tier": {
+                "size": 32000,
+                "type": "context"
+              }
+            }
+          ]
         },
         "source": "models.dev:zhipuai/glm-5.1"
       },
@@ -17741,7 +19300,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -17766,10 +19325,10 @@
       "name": "GLM-5.2",
       "pricing": {
         "rates": {
-          "cache_read": 0.26,
+          "cache_read": 0.29879,
           "cache_write": 0.0,
-          "input": 1.4,
-          "output": 4.4
+          "input": 1.19516,
+          "output": 4.18306
         },
         "source": "models.dev:zhipuai/glm-5.2"
       },
@@ -17781,7 +19340,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -17807,10 +19366,10 @@
       "name": "GLM-5.3",
       "pricing": {
         "rates": {
-          "cache_read": 0.26,
+          "cache_read": 0.29879,
           "cache_write": 0.0,
-          "input": 1.4,
-          "output": 4.4
+          "input": 1.19516,
+          "output": 4.18306
         },
         "source": "models.dev:zhipuai/glm-5.3"
       },
@@ -17825,7 +19384,7 @@
           "video",
           "pdf"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -17851,10 +19410,10 @@
       "name": "GLM-5.3-Flash",
       "pricing": {
         "rates": {
-          "cache_read": 0.03,
+          "cache_read": 0.03436,
           "cache_write": 0.0,
-          "input": 0.15,
-          "output": 0.5
+          "input": 0.11952,
+          "output": 0.41831
         },
         "source": "models.dev:zhipuai/glm-5.3-flash"
       },
@@ -17890,10 +19449,22 @@
       "name": "GLM-5V-Turbo",
       "pricing": {
         "rates": {
-          "cache_read": 1.2,
+          "cache_read": 0.17927,
           "cache_write": 0.0,
-          "input": 5.0,
-          "output": 22.0
+          "input": 0.74698,
+          "output": 3.28669,
+          "tiers": [
+            {
+              "cache_read": 0.26891,
+              "cache_write": 0.0,
+              "input": 1.04577,
+              "output": 3.88427,
+              "tier": {
+                "size": 32000,
+                "type": "context"
+              }
+            }
+          ]
         },
         "source": "models.dev:zhipuai/glm-5v-turbo"
       },
@@ -17917,10 +19488,10 @@
         "vision": true
       },
       "context_window": 10240,
-      "last_updated": "2026-01-19",
+      "last_updated": "2026-01-14",
       "max_output_tokens": 0,
       "name": "GLM-Image",
-      "release_date": "2026-01-19",
+      "release_date": "2026-01-14",
       "temperature": false
     }
   }

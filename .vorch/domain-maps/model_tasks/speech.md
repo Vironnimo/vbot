@@ -6,7 +6,7 @@ Provider-neutral speech-to-text and text-to-speech execution for configured task
 
 `core/model_tasks/` (`speech*.py`) executes file-based STT and TTS. It resolves the configured `speech_to_text` or `text_to_speech` binding through `TaskModelService`, merges stored options with backend schema defaults, parses the target, and routes to either a provider-backed speech HTTP client or an optional local speech executor hook. STT preparation follows the target: local engines decode the original recording directly, while Provider requests preserve a supported original after validation and use `speech.transcription_audio` only when conversion is needed. The service owns input limits for every caller; the HTTP edge also enforces the per-upload limit (Transcription input below).
 
-This domain owns speech wire payloads and runtime artifacts; it does not own task-target discovery, settings validation, chat message persistence, or generic attachments. The first implementation supports OpenAI-compatible audio endpoints and OpenRouter's audio endpoints. Mistral option schemas may be exposed through the generic task-model layer, but Mistral speech execution currently fails through provider execution error handling until a provider runtime contract exists.
+This domain owns speech wire payloads and runtime artifacts; it does not own task-target discovery, settings validation, chat message persistence, or generic attachments. Provider execution supports OpenAI-compatible audio endpoints, OpenRouter's audio endpoints, and Mistral's native file transcription and speech synthesis endpoints.
 
 ## Interfaces
 
@@ -329,7 +329,8 @@ its [speech-to-text guide](https://developers.openai.com/api/docs/guides/speech-
 documents a 25 MB file limit. OpenRouter's common formats follow its
 [STT guide](https://openrouter.ai/docs/guides/overview/multimodal/stt), which notes
 upstream-dependent support and larger JSON uploads on some routes. Unverified
-OpenAI-compatible Providers retain only the existing WAV/FLAC path. A format
+OpenAI-compatible Providers retain the conservative WAV/FLAC path. Mistral uses
+the same policy, with both formats verified live (see its Provider reference). A format
 allowed by preparation is not a guarantee for every routed Model; Provider
 rejection remains an ordinary execution error, without a second format attempt.
 
@@ -355,13 +356,38 @@ the WAV fallback produces:
 
 `language: "auto"` is omitted from the provider request. Numeric `temperature` is forwarded. The OpenRouter path consumes JSON transcription responses and does not expose the unused `response_format` option, even if a catalog advertises it (`test_model_tasks.py`). Provider-specific `provider` options are preserved for OpenRouter when present.
 
-Executable non-OpenRouter STT targets are treated as OpenAI-compatible audio endpoints and send multipart form data to `/audio/transcriptions` with `file`, `model`, and normalized optional fields such as `language`, `prompt`, `response_format`, and `temperature`.
+Other executable STT targets send multipart form data to `/audio/transcriptions`.
+Mistral uses `file`, `model`, `stream: false`, optional language/temperature, repeated
+`context_bias` terms and `timestamp_granularities`, and `diarize`. Automatic language
+is omitted. Diarization forces the required single `segment` granularity; otherwise
+the selected Model's catalog determines the offered timestamps. Other
+OpenAI-compatible targets use normalized optional `language`, `prompt`,
+`response_format` and `temperature` fields.
 
-All speech requests honor the universal `extra_options` escape hatch: for JSON payloads (OpenRouter STT, all TTS) the object adds non-empty fields at the top level (`merge_extra_options` from `core/providers/task_client.py`); for the multipart OpenAI-compatible STT path values are stringified as form fields (booleans as lowercase literals, containers JSON-encoded). Either path rejects a collision with an authored request field locally as a non-retryable Provider error before send, including the multipart `file` upload part.
+All speech requests honor the universal `extra_options` escape hatch: for JSON payloads (OpenRouter STT, all TTS) the object adds non-empty fields at the top level (`merge_extra_options` from `core/providers/task_client.py`); for multipart STT values are stringified as form fields (booleans as lowercase literals, containers JSON-encoded, except Mistral context/timestamp string arrays use repeated fields). Either path rejects a collision with an authored request field locally as a non-retryable Provider error before send, including the multipart `file` upload part. Mistral also reserves `file_id` and `file_url` so extras cannot replace the prepared upload.
 
-Executable TTS targets send JSON to `/audio/speech` and return raw audio bytes. TTS is billed and non-idempotent: connect/connect-timeout/pool-timeout failures and HTTP 429 remain retryable, but ambiguous read/write/remote-protocol failures, every unverified 5xx response (including 502/503/504), and empty/unusable 2xx results stop after one attempt with `ProviderOutcomeUnknownError`. No current TTS endpoint profile sends an idempotency header. `voice` is taken from stored task-model options, populated from `model.capabilities.supported_voices` when the model provides them - OpenRouter models get model-specific voice lists (e.g. Kokoro 54, Gemini TTS 30, Voxtral 30); OpenAI models get the canonical OpenAI voice list; other providers fall back to free-text `voice` input. `response_format` per provider (OpenRouter `mp3`/`pcm`; OpenAI full set `mp3`/`opus`/`aac`/`flac`/`wav`/`pcm`). Numeric `speed` stays top-level for all providers. OpenRouter receives only OpenAI speaking instructions nested under `provider.options.openai.instructions` when `instructions` is set (gated on `model.capabilities.supported_parameters`); other OpenAI-compatible providers receive `instructions` at the top level. If the provider omits `content-type`, `SpeechSynthesisResult.media_type` is derived from `response_format`; an empty success body is rejected as an unknown outcome rather than persisted as an empty artifact.
+Executable TTS targets send JSON to `/audio/speech`. TTS is billed and non-idempotent: connect/connect-timeout/pool-timeout failures and HTTP 429 remain retryable, but ambiguous read/write/remote-protocol failures, every unverified 5xx response (including 502/503/504), and empty/unusable 2xx results stop after one attempt with `ProviderOutcomeUnknownError`. No current TTS endpoint profile sends an idempotency header. `voice` is taken from stored task-model options, populated from `model.capabilities.supported_voices` when the model provides them - OpenRouter models get model-specific voice lists (e.g. Kokoro 54, Gemini TTS 30, Voxtral 30); OpenAI models get the canonical OpenAI voice list; other providers fall back to free-text `voice` input.
 
-With `on_audio`, the same speech POST is consumed as an HTTP byte stream through
+OpenAI-compatible TTS returns raw audio bytes. `response_format` is Provider-specific
+(OpenRouter `mp3`/`pcm`; OpenAI `mp3`/`opus`/`aac`/`flac`/`wav`/`pcm`). Numeric `speed`
+stays top-level. OpenRouter receives only OpenAI speaking instructions nested under
+`provider.options.openai.instructions` when `instructions` is set (gated on
+`model.capabilities.supported_parameters`); other OpenAI-compatible Providers receive
+`instructions` at the top level. If the Provider omits `content-type`,
+`SpeechSynthesisResult.media_type` is derived from `response_format`; an empty success
+body is rejected as an unknown outcome rather than persisted as an empty artifact.
+
+Mistral sends `voice_id`, `response_format` and `stream`, consuming Base64 `audio_data`
+from JSON, or `speech.audio.delta` SSE events with a required `speech.audio.done`
+terminal event. Terminal usage is retained through the common usage observer.
+Invalid Base64, missing audio and incomplete/error streams fail without replay.
+Formats and voices come from Model catalog facts; the fallback is MP3 and
+`gb_jane_neutral`, with no unsupported speed or speaking instructions offered.
+Mistral's PCM is mono PCM16 at 24 kHz and is wrapped in WAV. See
+`../providers/mistral.md` for exact Model/format checks and official sources.
+
+With `on_audio`, the same speech POST is consumed as an HTTP byte stream (Mistral:
+decoded SSE audio chunks) through
 `ProviderTaskClient.post_and_parse(consume=...)`; endpoint payloads, authentication, Usage and retry
 policy stay shared. `speech_audio.py` demuxes the selected format with PyAV on a
 worker, feeds the callback mono PCM16 at the source sample rate, and retains the

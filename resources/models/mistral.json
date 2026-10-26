@@ -1,11 +1,12 @@
 {
-  "fetched_at": "2026-10-19T17:27:27.598216+00:00",
+  "fetched_at": "2026-10-26T09:18:39.772171+00:00",
   "models": {
     "codestral-2508": {
       "canonical": "mistral/codestral-2508",
       "capabilities": {
         "input_modalities": [
-          "text"
+          "text",
+          "pdf"
         ],
         "json_mode": true,
         "output_modalities": [
@@ -100,7 +101,8 @@
       "canonical": "mistral/codestral-latest",
       "capabilities": {
         "input_modalities": [
-          "text"
+          "text",
+          "pdf"
         ],
         "json_mode": true,
         "output_modalities": [
@@ -301,7 +303,8 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image"
+          "image",
+          "pdf"
         ],
         "json_mode": true,
         "output_modalities": [
@@ -379,7 +382,8 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image"
+          "image",
+          "pdf"
         ],
         "json_mode": true,
         "output_modalities": [
@@ -422,7 +426,8 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image"
+          "image",
+          "pdf"
         ],
         "json_mode": true,
         "output_modalities": [
@@ -454,8 +459,9 @@
       "name": "ministral-3b-2512",
       "pricing": {
         "rates": {
-          "input": 0.04,
-          "output": 0.04
+          "cache_read": 0.01,
+          "input": 0.1,
+          "output": 0.1
         },
         "source": "models.dev:mistral/ministral-3b-latest"
       }
@@ -465,7 +471,8 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image"
+          "image",
+          "pdf"
         ],
         "json_mode": true,
         "output_modalities": [
@@ -508,7 +515,8 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image"
+          "image",
+          "pdf"
         ],
         "json_mode": true,
         "output_modalities": [
@@ -540,8 +548,9 @@
       "name": "ministral-8b-2512",
       "pricing": {
         "rates": {
-          "input": 0.1,
-          "output": 0.1
+          "cache_read": 0.015,
+          "input": 0.15,
+          "output": 0.15
         },
         "source": "models.dev:mistral/ministral-8b-latest"
       }
@@ -711,7 +720,8 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image"
+          "image",
+          "pdf"
         ],
         "json_mode": true,
         "output_modalities": [
@@ -890,7 +900,8 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image"
+          "image",
+          "pdf"
         ],
         "json_mode": true,
         "output_modalities": [
@@ -932,7 +943,8 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image"
+          "image",
+          "pdf"
         ],
         "json_mode": true,
         "output_modalities": [
@@ -974,7 +986,8 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image"
+          "image",
+          "pdf"
         ],
         "json_mode": true,
         "output_modalities": [
@@ -1116,11 +1129,870 @@
       "max_output_tokens": null,
       "name": "mistral-medium-latest"
     },
+    "voxtral-mini-2602": {
+      "capabilities": {
+        "input_modalities": [
+          "audio"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "transcription"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "context_bias",
+          "diarize",
+          "language",
+          "temperature",
+          "timestamp_granularities"
+        ],
+        "supported_voices": [],
+        "task_options": {
+          "speech_to_text": {
+            "parameters": {
+              "context_bias": {
+                "type": "string"
+              },
+              "diarize": {
+                "default": false,
+                "type": "boolean"
+              },
+              "language": {
+                "default": "auto",
+                "type": "enum",
+                "values": [
+                  "auto",
+                  "ar",
+                  "en",
+                  "de",
+                  "es",
+                  "fr",
+                  "hi",
+                  "it",
+                  "nl",
+                  "pt",
+                  "zh",
+                  "ru",
+                  "ko",
+                  "ja"
+                ]
+              },
+              "temperature": {
+                "default": 0,
+                "max": 1,
+                "min": 0,
+                "type": "range"
+              },
+              "timestamp_granularities": {
+                "type": "enum",
+                "values": [
+                  "segment",
+                  "word"
+                ]
+              }
+            }
+          }
+        },
+        "task_types": [
+          "text_output",
+          "audio_input",
+          "speech_to_text"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 16384,
+      "max_output_tokens": null,
+      "metadata": {
+        "mistral": {
+          "billing_model_name": "voxtral-mini-2602"
+        }
+      },
+      "name": "Voxtral Mini Transcribe"
+    },
+    "voxtral-mini-latest": {
+      "capabilities": {
+        "input_modalities": [
+          "audio"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "transcription"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "context_bias",
+          "diarize",
+          "language",
+          "temperature",
+          "timestamp_granularities"
+        ],
+        "supported_voices": [],
+        "task_options": {
+          "speech_to_text": {
+            "parameters": {
+              "context_bias": {
+                "type": "string"
+              },
+              "diarize": {
+                "default": false,
+                "type": "boolean"
+              },
+              "language": {
+                "default": "auto",
+                "type": "enum",
+                "values": [
+                  "auto",
+                  "ar",
+                  "en",
+                  "de",
+                  "es",
+                  "fr",
+                  "hi",
+                  "it",
+                  "nl",
+                  "pt",
+                  "zh",
+                  "ru",
+                  "ko",
+                  "ja"
+                ]
+              },
+              "temperature": {
+                "default": 0,
+                "max": 1,
+                "min": 0,
+                "type": "range"
+              },
+              "timestamp_granularities": {
+                "type": "enum",
+                "values": [
+                  "segment",
+                  "word"
+                ]
+              }
+            }
+          }
+        },
+        "task_types": [
+          "text_output",
+          "audio_input",
+          "speech_to_text"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 16384,
+      "family": "voxtral",
+      "max_output_tokens": 0,
+      "metadata": {
+        "mistral": {
+          "billing_model_name": "voxtral-mini-2602"
+        }
+      },
+      "name": "Voxtral Mini Transcribe"
+    },
+    "voxtral-mini-transcribe-3": {
+      "capabilities": {
+        "input_modalities": [
+          "audio"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "transcription"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "context_bias",
+          "diarize",
+          "language",
+          "temperature",
+          "timestamp_granularities"
+        ],
+        "supported_voices": [],
+        "task_options": {
+          "speech_to_text": {
+            "parameters": {
+              "context_bias": {
+                "type": "string"
+              },
+              "diarize": {
+                "default": false,
+                "type": "boolean"
+              },
+              "language": {
+                "default": "auto",
+                "type": "enum",
+                "values": [
+                  "auto",
+                  "ar",
+                  "en",
+                  "de",
+                  "es",
+                  "fr",
+                  "hi",
+                  "it",
+                  "nl",
+                  "pt",
+                  "zh",
+                  "ru",
+                  "ko",
+                  "ja",
+                  "id",
+                  "tr",
+                  "vi",
+                  "sv",
+                  "pl",
+                  "th",
+                  "tl",
+                  "no",
+                  "da",
+                  "hu",
+                  "cs",
+                  "uk",
+                  "ro",
+                  "ms",
+                  "ca",
+                  "el",
+                  "sk",
+                  "fi",
+                  "lv",
+                  "km",
+                  "pa",
+                  "ta",
+                  "my",
+                  "bg",
+                  "mr",
+                  "ur",
+                  "et",
+                  "te",
+                  "gu",
+                  "kn",
+                  "fa",
+                  "sl",
+                  "ml",
+                  "is",
+                  "bn",
+                  "hr",
+                  "mk",
+                  "eu",
+                  "sr",
+                  "ps",
+                  "lb",
+                  "ga",
+                  "or",
+                  "lt",
+                  "mt"
+                ]
+              },
+              "temperature": {
+                "default": 0,
+                "max": 1,
+                "min": 0,
+                "type": "range"
+              },
+              "timestamp_granularities": {
+                "type": "enum",
+                "values": [
+                  "segment"
+                ]
+              }
+            }
+          }
+        },
+        "task_types": [
+          "text_output",
+          "audio_input",
+          "speech_to_text"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 65536,
+      "max_output_tokens": null,
+      "metadata": {
+        "mistral": {
+          "billing_model_name": "voxtral-mini-transcribe-3"
+        }
+      },
+      "name": "Voxtral Mini Transcribe 3.0"
+    },
+    "voxtral-mini-transcribe-3-0": {
+      "capabilities": {
+        "input_modalities": [
+          "audio"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "transcription"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "context_bias",
+          "diarize",
+          "language",
+          "temperature",
+          "timestamp_granularities"
+        ],
+        "supported_voices": [],
+        "task_options": {
+          "speech_to_text": {
+            "parameters": {
+              "context_bias": {
+                "type": "string"
+              },
+              "diarize": {
+                "default": false,
+                "type": "boolean"
+              },
+              "language": {
+                "default": "auto",
+                "type": "enum",
+                "values": [
+                  "auto",
+                  "ar",
+                  "en",
+                  "de",
+                  "es",
+                  "fr",
+                  "hi",
+                  "it",
+                  "nl",
+                  "pt",
+                  "zh",
+                  "ru",
+                  "ko",
+                  "ja",
+                  "id",
+                  "tr",
+                  "vi",
+                  "sv",
+                  "pl",
+                  "th",
+                  "tl",
+                  "no",
+                  "da",
+                  "hu",
+                  "cs",
+                  "uk",
+                  "ro",
+                  "ms",
+                  "ca",
+                  "el",
+                  "sk",
+                  "fi",
+                  "lv",
+                  "km",
+                  "pa",
+                  "ta",
+                  "my",
+                  "bg",
+                  "mr",
+                  "ur",
+                  "et",
+                  "te",
+                  "gu",
+                  "kn",
+                  "fa",
+                  "sl",
+                  "ml",
+                  "is",
+                  "bn",
+                  "hr",
+                  "mk",
+                  "eu",
+                  "sr",
+                  "ps",
+                  "lb",
+                  "ga",
+                  "or",
+                  "lt",
+                  "mt"
+                ]
+              },
+              "temperature": {
+                "default": 0,
+                "max": 1,
+                "min": 0,
+                "type": "range"
+              },
+              "timestamp_granularities": {
+                "type": "enum",
+                "values": [
+                  "segment"
+                ]
+              }
+            }
+          }
+        },
+        "task_types": [
+          "text_output",
+          "audio_input",
+          "speech_to_text"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 65536,
+      "max_output_tokens": null,
+      "metadata": {
+        "mistral": {
+          "billing_model_name": "voxtral-mini-transcribe-3"
+        }
+      },
+      "name": "Voxtral Mini Transcribe 3.0"
+    },
+    "voxtral-mini-tts-2603": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "speech"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "response_format",
+          "voice"
+        ],
+        "supported_voices": [
+          "en_paul_angry",
+          "en_paul_cheerful",
+          "en_paul_confident",
+          "en_paul_excited",
+          "en_paul_frustrated",
+          "en_paul_happy",
+          "en_paul_neutral",
+          "en_paul_sad",
+          "fr_marie_angry",
+          "fr_marie_curious",
+          "fr_marie_excited",
+          "fr_marie_happy",
+          "fr_marie_neutral",
+          "fr_marie_sad",
+          "gb_jane_confident",
+          "gb_jane_confused",
+          "gb_jane_curious",
+          "gb_jane_frustrated",
+          "gb_jane_jealousy",
+          "gb_jane_neutral",
+          "gb_jane_sad",
+          "gb_jane_sarcasm",
+          "gb_jane_shameful",
+          "gb_oliver_angry",
+          "gb_oliver_cheerful",
+          "gb_oliver_confident",
+          "gb_oliver_curious",
+          "gb_oliver_excited",
+          "gb_oliver_neutral",
+          "gb_oliver_sad"
+        ],
+        "task_options": {
+          "text_to_speech": {
+            "parameters": {
+              "response_format": {
+                "default": "mp3",
+                "type": "enum",
+                "values": [
+                  "pcm",
+                  "wav",
+                  "mp3",
+                  "flac",
+                  "opus"
+                ]
+              },
+              "voice": {
+                "default": "gb_jane_neutral",
+                "type": "string"
+              }
+            }
+          }
+        },
+        "task_types": [
+          "audio_generation",
+          "text_to_speech"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 4096,
+      "max_output_tokens": null,
+      "metadata": {
+        "mistral": {
+          "billing_model_name": "voxtral-mini-tts-2603"
+        }
+      },
+      "name": "Voxtral Mini TTS"
+    },
+    "voxtral-mini-tts-3": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "speech"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "response_format",
+          "voice"
+        ],
+        "supported_voices": [
+          "en_paul_angry",
+          "en_paul_cheerful",
+          "en_paul_confident",
+          "en_paul_excited",
+          "en_paul_frustrated",
+          "en_paul_happy",
+          "en_paul_neutral",
+          "en_paul_sad",
+          "fr_marie_angry",
+          "fr_marie_curious",
+          "fr_marie_excited",
+          "fr_marie_happy",
+          "fr_marie_neutral",
+          "fr_marie_sad",
+          "gb_jane_confident",
+          "gb_jane_confused",
+          "gb_jane_curious",
+          "gb_jane_frustrated",
+          "gb_jane_jealousy",
+          "gb_jane_neutral",
+          "gb_jane_sad",
+          "gb_jane_sarcasm",
+          "gb_jane_shameful",
+          "gb_oliver_angry",
+          "gb_oliver_cheerful",
+          "gb_oliver_confident",
+          "gb_oliver_curious",
+          "gb_oliver_excited",
+          "gb_oliver_neutral",
+          "gb_oliver_sad",
+          "voice_1786",
+          "voice_1787",
+          "voice_1788",
+          "voice_3132",
+          "voice_3133",
+          "voice_3134",
+          "voice_3135",
+          "voice_3136",
+          "voice_3137",
+          "voice_3138",
+          "voice_3139",
+          "voice_3140",
+          "voice_3141",
+          "voice_3142",
+          "voice_3143",
+          "voice_3144",
+          "voice_3145",
+          "voice_3146",
+          "voice_3147",
+          "voice_3149",
+          "voice_3150",
+          "voice_3153",
+          "voice_3154",
+          "voice_3155",
+          "voice_447",
+          "voice_478",
+          "voice_479",
+          "voice_480",
+          "voice_481",
+          "voice_482",
+          "voice_483",
+          "voice_485",
+          "voice_589",
+          "voice_590",
+          "voice_591",
+          "voice_592"
+        ],
+        "task_options": {
+          "text_to_speech": {
+            "parameters": {
+              "response_format": {
+                "default": "mp3",
+                "type": "enum",
+                "values": [
+                  "pcm",
+                  "wav",
+                  "mp3",
+                  "flac",
+                  "opus"
+                ]
+              },
+              "voice": {
+                "default": "gb_jane_neutral",
+                "type": "string"
+              }
+            }
+          }
+        },
+        "task_types": [
+          "audio_generation",
+          "text_to_speech"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 4096,
+      "max_output_tokens": null,
+      "metadata": {
+        "mistral": {
+          "billing_model_name": "voxtral-mini-tts-3-0"
+        }
+      },
+      "name": "Voxtral Mini TTS 3.0"
+    },
+    "voxtral-mini-tts-3-0": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "speech"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "response_format",
+          "voice"
+        ],
+        "supported_voices": [
+          "en_paul_angry",
+          "en_paul_cheerful",
+          "en_paul_confident",
+          "en_paul_excited",
+          "en_paul_frustrated",
+          "en_paul_happy",
+          "en_paul_neutral",
+          "en_paul_sad",
+          "fr_marie_angry",
+          "fr_marie_curious",
+          "fr_marie_excited",
+          "fr_marie_happy",
+          "fr_marie_neutral",
+          "fr_marie_sad",
+          "gb_jane_confident",
+          "gb_jane_confused",
+          "gb_jane_curious",
+          "gb_jane_frustrated",
+          "gb_jane_jealousy",
+          "gb_jane_neutral",
+          "gb_jane_sad",
+          "gb_jane_sarcasm",
+          "gb_jane_shameful",
+          "gb_oliver_angry",
+          "gb_oliver_cheerful",
+          "gb_oliver_confident",
+          "gb_oliver_curious",
+          "gb_oliver_excited",
+          "gb_oliver_neutral",
+          "gb_oliver_sad",
+          "voice_1786",
+          "voice_1787",
+          "voice_1788",
+          "voice_3132",
+          "voice_3133",
+          "voice_3134",
+          "voice_3135",
+          "voice_3136",
+          "voice_3137",
+          "voice_3138",
+          "voice_3139",
+          "voice_3140",
+          "voice_3141",
+          "voice_3142",
+          "voice_3143",
+          "voice_3144",
+          "voice_3145",
+          "voice_3146",
+          "voice_3147",
+          "voice_3149",
+          "voice_3150",
+          "voice_3153",
+          "voice_3154",
+          "voice_3155",
+          "voice_447",
+          "voice_478",
+          "voice_479",
+          "voice_480",
+          "voice_481",
+          "voice_482",
+          "voice_483",
+          "voice_485",
+          "voice_589",
+          "voice_590",
+          "voice_591",
+          "voice_592"
+        ],
+        "task_options": {
+          "text_to_speech": {
+            "parameters": {
+              "response_format": {
+                "default": "mp3",
+                "type": "enum",
+                "values": [
+                  "pcm",
+                  "wav",
+                  "mp3",
+                  "flac",
+                  "opus"
+                ]
+              },
+              "voice": {
+                "default": "gb_jane_neutral",
+                "type": "string"
+              }
+            }
+          }
+        },
+        "task_types": [
+          "audio_generation",
+          "text_to_speech"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 4096,
+      "max_output_tokens": null,
+      "metadata": {
+        "mistral": {
+          "billing_model_name": "voxtral-mini-tts-3-0"
+        }
+      },
+      "name": "Voxtral Mini TTS 3.0"
+    },
+    "voxtral-mini-tts-latest": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "speech"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "response_format",
+          "voice"
+        ],
+        "supported_voices": [
+          "en_paul_angry",
+          "en_paul_cheerful",
+          "en_paul_confident",
+          "en_paul_excited",
+          "en_paul_frustrated",
+          "en_paul_happy",
+          "en_paul_neutral",
+          "en_paul_sad",
+          "fr_marie_angry",
+          "fr_marie_curious",
+          "fr_marie_excited",
+          "fr_marie_happy",
+          "fr_marie_neutral",
+          "fr_marie_sad",
+          "gb_jane_confident",
+          "gb_jane_confused",
+          "gb_jane_curious",
+          "gb_jane_frustrated",
+          "gb_jane_jealousy",
+          "gb_jane_neutral",
+          "gb_jane_sad",
+          "gb_jane_sarcasm",
+          "gb_jane_shameful",
+          "gb_oliver_angry",
+          "gb_oliver_cheerful",
+          "gb_oliver_confident",
+          "gb_oliver_curious",
+          "gb_oliver_excited",
+          "gb_oliver_neutral",
+          "gb_oliver_sad"
+        ],
+        "task_options": {
+          "text_to_speech": {
+            "parameters": {
+              "response_format": {
+                "default": "mp3",
+                "type": "enum",
+                "values": [
+                  "pcm",
+                  "wav",
+                  "mp3",
+                  "flac",
+                  "opus"
+                ]
+              },
+              "voice": {
+                "default": "gb_jane_neutral",
+                "type": "string"
+              }
+            }
+          }
+        },
+        "task_types": [
+          "audio_generation",
+          "text_to_speech"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 4096,
+      "family": "voxtral",
+      "max_output_tokens": 0,
+      "metadata": {
+        "mistral": {
+          "billing_model_name": "voxtral-mini-tts-2603"
+        }
+      },
+      "name": "Voxtral Mini TTS"
+    },
     "voxtral-small-2507": {
       "capabilities": {
         "input_modalities": [
           "text",
-          "audio"
+          "audio",
+          "pdf"
         ],
         "json_mode": true,
         "output_modalities": [
@@ -1136,7 +2008,8 @@
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "audio_input"
         ],
         "tools": true,
         "vision": false
@@ -1161,7 +2034,8 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "audio"
+          "audio",
+          "pdf"
         ],
         "json_mode": true,
         "output_modalities": [
@@ -1177,7 +2051,8 @@
         "supported_voices": [],
         "task_types": [
           "chat",
-          "text_output"
+          "text_output",
+          "audio_input"
         ],
         "tools": true,
         "vision": false
@@ -1192,10 +2067,270 @@
       "pricing": {
         "rates": {
           "input": 0.1,
-          "output": 0.3
+          "output": 0.4
         },
         "source": "models.dev:mistral/voxtral-small-latest"
       }
+    },
+    "voxtral-small-transcribe-3": {
+      "capabilities": {
+        "input_modalities": [
+          "audio"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "transcription"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "context_bias",
+          "diarize",
+          "language",
+          "temperature",
+          "timestamp_granularities"
+        ],
+        "supported_voices": [],
+        "task_options": {
+          "speech_to_text": {
+            "parameters": {
+              "context_bias": {
+                "type": "string"
+              },
+              "diarize": {
+                "default": false,
+                "type": "boolean"
+              },
+              "language": {
+                "default": "auto",
+                "type": "enum",
+                "values": [
+                  "auto",
+                  "ar",
+                  "en",
+                  "de",
+                  "es",
+                  "fr",
+                  "hi",
+                  "it",
+                  "nl",
+                  "pt",
+                  "zh",
+                  "ru",
+                  "ko",
+                  "ja",
+                  "id",
+                  "tr",
+                  "vi",
+                  "sv",
+                  "pl",
+                  "th",
+                  "tl",
+                  "no",
+                  "da",
+                  "hu",
+                  "cs",
+                  "uk",
+                  "ro",
+                  "ms",
+                  "ca",
+                  "el",
+                  "sk",
+                  "fi",
+                  "lv",
+                  "km",
+                  "pa",
+                  "ta",
+                  "my",
+                  "bg",
+                  "mr",
+                  "ur",
+                  "et",
+                  "te",
+                  "gu",
+                  "kn",
+                  "fa",
+                  "sl",
+                  "ml",
+                  "is",
+                  "bn",
+                  "hr",
+                  "mk",
+                  "eu",
+                  "sr",
+                  "ps",
+                  "lb",
+                  "ga",
+                  "or",
+                  "lt",
+                  "mt"
+                ]
+              },
+              "temperature": {
+                "default": 0,
+                "max": 1,
+                "min": 0,
+                "type": "range"
+              },
+              "timestamp_granularities": {
+                "type": "enum",
+                "values": [
+                  "segment"
+                ]
+              }
+            }
+          }
+        },
+        "task_types": [
+          "text_output",
+          "audio_input",
+          "speech_to_text"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 65536,
+      "max_output_tokens": null,
+      "metadata": {
+        "mistral": {
+          "billing_model_name": "voxtral-small-transcribe-3"
+        }
+      },
+      "name": "Voxtral Small Transcribe 3.0"
+    },
+    "voxtral-small-transcribe-3-0": {
+      "capabilities": {
+        "input_modalities": [
+          "audio"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "transcription"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "context_bias",
+          "diarize",
+          "language",
+          "temperature",
+          "timestamp_granularities"
+        ],
+        "supported_voices": [],
+        "task_options": {
+          "speech_to_text": {
+            "parameters": {
+              "context_bias": {
+                "type": "string"
+              },
+              "diarize": {
+                "default": false,
+                "type": "boolean"
+              },
+              "language": {
+                "default": "auto",
+                "type": "enum",
+                "values": [
+                  "auto",
+                  "ar",
+                  "en",
+                  "de",
+                  "es",
+                  "fr",
+                  "hi",
+                  "it",
+                  "nl",
+                  "pt",
+                  "zh",
+                  "ru",
+                  "ko",
+                  "ja",
+                  "id",
+                  "tr",
+                  "vi",
+                  "sv",
+                  "pl",
+                  "th",
+                  "tl",
+                  "no",
+                  "da",
+                  "hu",
+                  "cs",
+                  "uk",
+                  "ro",
+                  "ms",
+                  "ca",
+                  "el",
+                  "sk",
+                  "fi",
+                  "lv",
+                  "km",
+                  "pa",
+                  "ta",
+                  "my",
+                  "bg",
+                  "mr",
+                  "ur",
+                  "et",
+                  "te",
+                  "gu",
+                  "kn",
+                  "fa",
+                  "sl",
+                  "ml",
+                  "is",
+                  "bn",
+                  "hr",
+                  "mk",
+                  "eu",
+                  "sr",
+                  "ps",
+                  "lb",
+                  "ga",
+                  "or",
+                  "lt",
+                  "mt"
+                ]
+              },
+              "temperature": {
+                "default": 0,
+                "max": 1,
+                "min": 0,
+                "type": "range"
+              },
+              "timestamp_granularities": {
+                "type": "enum",
+                "values": [
+                  "segment"
+                ]
+              }
+            }
+          }
+        },
+        "task_types": [
+          "text_output",
+          "audio_input",
+          "speech_to_text"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 65536,
+      "max_output_tokens": null,
+      "metadata": {
+        "mistral": {
+          "billing_model_name": "voxtral-small-transcribe-3"
+        }
+      },
+      "name": "Voxtral Small Transcribe 3.0"
     }
   },
   "provider_id": "mistral",
