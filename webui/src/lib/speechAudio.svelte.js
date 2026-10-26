@@ -5,6 +5,7 @@ import { speechArtifactFromResult } from './chatTimelinePresentation/messages.js
 import { formatAgentAddress } from './agentAddress.js';
 
 const CONTEXT_KEY = Symbol('speech-audio');
+const ORIGIN_KEY = Symbol('speech-origin');
 const MAX_IDLE = 128;
 const MAX_SEEN = 2000;
 
@@ -36,8 +37,16 @@ export function createSpeechAudio({
     }
   }
 
+  // Paused by the user part of the way: a fresh speech takes over, and the
+  // paused one stays resumable from its own player.
+  function pausedPartway(entry) {
+    const { paused, loading, currentTime } = entry.resource.state;
+    return paused && !loading && currentTime > 0;
+  }
+
   function advance() {
-    if (destroyed || active) return;
+    if (destroyed || (active && !pausedPartway(active))) return;
+    if (active && !queue.length) return;
     active = queue.shift() ?? null;
     pending = queue.length;
     if (active) void active.resource.play(true);
@@ -125,9 +134,15 @@ export function createSpeechAudio({
     get pending() {
       return pending;
     },
-    acquire(key) {
+    // origin: the shown Session ({agentId, sessionId}) of the player, for a
+    // speech replayed from history that no live event announced.
+    acquire(key, origin = null) {
       const entry = entryFor(key);
       entry.views += 1;
+      if (origin?.sessionId && !entry.sessionId) {
+        entry.agentId = origin.agentId;
+        entry.sessionId = origin.sessionId;
+      }
       return entry.resource;
     },
     release(key) {
@@ -196,6 +211,14 @@ export function createSpeechAudio({
       reset();
     },
   };
+}
+
+// The Session a Chat area shows, so its players can name their speech's origin.
+export function provideSpeechOrigin(shownSession) {
+  setContext(ORIGIN_KEY, shownSession);
+}
+export function speechOriginContext() {
+  return getContext(ORIGIN_KEY) ?? null;
 }
 
 export function provideSpeechAudio(owner) {

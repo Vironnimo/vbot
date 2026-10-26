@@ -211,6 +211,34 @@ it('keeps historical speech paused and stops all background speech from the shar
   expect(play).not.toHaveBeenCalled();
 });
 
+it('names the shown Session as the origin of speech replayed from history', async () => {
+  component = mount(Host, {
+    target: document.body,
+    props: {
+      owner,
+      visible: true,
+      src: '/api/speech/artifacts/one',
+      origin: { agentId: 'agent-one', sessionId: 'session-one' },
+    },
+  });
+  await flush();
+  document.querySelector(`[aria-label="${t('audio.play')}"]`).click();
+  await flush();
+  expect(owner.active.agentId).toBe('agent-one');
+  expect(owner.active.sessionId).toBe('session-one');
+});
+
+it('lets a fresh speech take over from one the user paused part of the way', async () => {
+  owner.handleServerEvent(speechEvent('one'));
+  streams[0].report({ paused: true, currentTime: 2, duration: 5 });
+  owner.handleServerEvent(speechEvent('two'));
+  await flush();
+  expect(owner.active.sessionId).toBe('session-two');
+  expect(owner.pending).toBe(0);
+  expect(streams[1].play).toHaveBeenCalledOnce();
+  expect(streams[0].stop).not.toHaveBeenCalled();
+});
+
 it('releases speech on a server replacement and on App teardown', () => {
   owner.handleServerEvent({ type: 'connection_ready', epoch: 'first' });
   owner.handleServerEvent(speechEvent());

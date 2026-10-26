@@ -7,7 +7,10 @@
   import { mountHold } from '$lib/mountHold.js';
   import { tooltip } from '$lib/tooltip.js';
   import { createAudioPlayback } from '$lib/audioPlayback.svelte.js';
-  import { speechAudioContext } from '$lib/speechAudio.svelte.js';
+  import {
+    speechAudioContext,
+    speechOriginContext,
+  } from '$lib/speechAudio.svelte.js';
 
   let {
     src = '',
@@ -20,6 +23,7 @@
     class: className = '',
   } = $props();
   const speechOwner = speechAudioContext();
+  const shownSession = speechOriginContext();
   let media = $state.raw(null);
   let root = $state();
   let shared = $derived(Boolean(resource || (speechKey && speechOwner)));
@@ -51,7 +55,11 @@
     const key = speechKey;
     const owner = key && speechOwner;
     const current = untrack(
-      () => supplied ?? (owner ? owner.acquire(key) : createAudioPlayback()),
+      () =>
+        supplied ??
+        (owner
+          ? owner.acquire(key, shownSession?.() ?? null)
+          : createAudioPlayback()),
     );
     media = current;
     return () => {

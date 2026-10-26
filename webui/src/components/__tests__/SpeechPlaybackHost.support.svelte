@@ -1,6 +1,9 @@
 <script>
   import { untrack } from 'svelte';
-  import { provideSpeechAudio } from '../../lib/speechAudio.svelte.js';
+  import {
+    provideSpeechAudio,
+    provideSpeechOrigin,
+  } from '../../lib/speechAudio.svelte.js';
   import AudioPlayer from '../ui/AudioPlayer.svelte';
   import SpeechPlaybackBar from '../SpeechPlaybackBar.svelte';
   let {
@@ -9,8 +12,10 @@
     speechKey = 'run-one:call-one',
     src = '',
     onOpenSession = () => {},
+    origin = null,
   } = $props();
   provideSpeechAudio(untrack(() => owner));
+  provideSpeechOrigin(() => origin);
 </script>
 
 {#if visible}

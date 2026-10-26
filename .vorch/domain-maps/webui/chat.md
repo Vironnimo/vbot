@@ -176,8 +176,11 @@ App creates `lib/speechAudio.svelte.js` once and forwards connection and Run
 events through `appController.js`. Fresh `speech_playback` notifications and
 successful `generate_speech` results from the app-wide WebSocket enqueue speech
 by Run id and Tool call id, including Sessions with no mounted Chat. One output
-plays at a time; waiting speech uses its durable artifact once available. Chat
-controls acquire the same resource by that key, so navigation, virtualization,
+plays at a time; waiting speech uses its durable artifact once available. A
+fresh speech takes over from one the user paused part of the way, which stays
+resumable from its own player. Chat
+controls acquire the same resource by that key, naming their area's shown
+Session as its origin when no live event did (replay from History), so navigation, virtualization,
 and the live-to-History handoff preserve progress and Pause without restarting.
 History alone never enqueues audio, and reconnect replay does not enqueue a call
 twice. Starting another player manually pauses the previous one. Later `canplay`
@@ -186,7 +189,8 @@ events must not undo Pause. Identity Agent rename updates the origin address.
 When the speaking Session is not selected in Chat, `SpeechPlaybackBar.svelte`
 shows the shared controls, origin link and waiting count above the current view;
 Stop clears the active output and waiting list. Tool failure and Run cancellation,
-failure or interruption remove that Run's playback. Run completion lets audio
+failure or interruption remove that Run's playback; its durable artifact stays
+playable by hand from History. Run completion lets audio
 finish. App teardown, access loss and a changed server epoch release resources;
 ordinary view changes do not. Failed playback remains available for manual retry
 or Stop. Idle resources and event deduplication are bounded.
