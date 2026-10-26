@@ -189,6 +189,7 @@ class DesktopBridge:
         zoom: DesktopZoom | None = None,
         permissions: PagePermissions | None = None,
         computer_sharing: ComputerSharing | None = None,
+        confirm: Callable[[str, str], bool] | None = None,
     ) -> None:
         self._voice = voice
         # Without a way to ask, another server's page is refused what needs asking.
@@ -203,6 +204,8 @@ class DesktopBridge:
         self._restart = restart
         self._zoom = zoom
         self._computer_sharing = computer_sharing
+        # The native dialog for choices that stop local work.
+        self._confirm = confirm
         # Remote HTTP origins WebView2 treats as secure for this process. A
         # server added later needs a Desktop restart before its microphone works.
         self._secure_origins = tuple(secure_origins)
@@ -254,7 +257,9 @@ class DesktopBridge:
             and not status["capabilities"][name]
         ]
         self._permissions.computer_sharing(server_url, enabled)
-        return self._computer_sharing.update(changes, expected_server=server_url)
+        return self._computer_sharing.update(
+            changes, expected_server=server_url, confirm=self._confirm
+        )
 
     def setClipboardText(self, text: Any) -> dict[str, bool]:  # noqa: N802
         """Replace the host clipboard with validated plain text."""

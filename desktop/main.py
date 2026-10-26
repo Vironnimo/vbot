@@ -353,6 +353,7 @@ def _run_desktop(
         zoom=zoom,
         permissions=permissions,
         computer_sharing=computer_sharing,
+        confirm=confirm,
     )
 
     # Voice and dictation follow the window: every successful in-window connect

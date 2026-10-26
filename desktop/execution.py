@@ -278,8 +278,18 @@ class ComputerSharing:
         with self._lock:
             self._quiescing = False
 
-    def update(self, changes: Any, *, expected_server: str) -> dict[str, Any]:
-        """Apply the native-approved settings only to the unchanged selected server."""
+    def update(
+        self,
+        changes: Any,
+        *,
+        expected_server: str,
+        confirm: Callable[[str, str], bool] | None = None,
+    ) -> dict[str, Any]:
+        """Apply the native-approved settings only to the unchanged selected server.
+
+        Turning Terminal off stops its running programs, so like quitting it
+        asks first through ``confirm``; without one it refuses (``declined``).
+        """
         if not isinstance(changes, dict) or set(changes) - {"name", *CAPABILITIES}:
             raise SharingError("computer_sharing_invalid", "Invalid computer sharing settings")
         normalized: dict[str, Any] = {}
@@ -306,6 +316,31 @@ class ComputerSharing:
                     "computer_name_invalid", "Use a computer name of 1 to 80 printable characters"
                 )
             normalized["name"] = name.strip()
+        with self._lock:
+            if not self._origin or expected_server != self._server_url or self._closed:
+                raise SharingError(
+                    "computer_server_changed",
+                    "The selected server changed; open the settings again",
+                )
+            origin = self._origin
+            stopping = (
+                normalized.get("terminal") is False and _grants(self._settings, origin)["terminal"]
+            )
+        count = self.active_terminals if stopping else 0
+        if count:
+            try:
+                allowed = confirm is not None and confirm(
+                    "Stop sharing Terminal?",
+                    f"{count} local terminal(s) are still running. Turning off Terminal "
+                    "sharing stops their programs. Turn it off?",
+                )
+            except Exception:
+                logger.warning(
+                    "The Desktop could not confirm stopping local terminals", exc_info=True
+                )
+                allowed = False
+            if not allowed:
+                raise SharingError("declined", "Terminal sharing stays on")
         with self._lock:
             if not self._origin or expected_server != self._server_url or self._closed:
                 raise SharingError(

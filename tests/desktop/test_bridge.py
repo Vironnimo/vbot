@@ -693,7 +693,7 @@ def test_computer_grants_need_native_consent_for_the_unchanged_selected_server(
         "capabilities": {"terminal": False, "computer_use": False},
     }
 
-    def update(changes: Any, *, expected_server: str) -> dict[str, Any]:
+    def update(changes: Any, *, expected_server: str, confirm: Any = None) -> dict[str, Any]:
         applied.append((changes, expected_server))
         return status
 
