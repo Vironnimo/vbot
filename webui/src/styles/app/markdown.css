@@ -7,7 +7,7 @@
      stay barely above prose size (1.07em from h3 down) and bind to the text
      they introduce; bold text keeps a lighter weight (500) than headings
      (600), so a bold lead-in never reads as one. Spacing has three steps
-     (close 1.4 lines, a 0.75em block gap that grows to 1em after a list, so
+     (close 1.5 lines, a 0.75em block gap that grows to 1em after a list, so
      its lead-in binds to it and the following text sets off, and the largest
      gap above a heading); prose is dimmed one step so headings and bold
      stand out.
@@ -26,7 +26,7 @@
   --md-text: var(--text-body);
   --md-emphasis: var(--text-hi);
   --md-font-size: var(--fs-chat-prose);
-  --md-line-height: 1.4;
+  --md-line-height: 1.5;
   --md-strong-weight: 500;
   --md-paragraph-margin: 0 0 0.75em;
   --md-heading-margin: 1.4em 0 0.15em;
@@ -260,7 +260,7 @@
 
 /* Inline code is a tinted chip without a border or vertical padding, sized
    relative to the prose: Geist Mono's own content area already frames the
-   glyphs, and the chip stays clearly shorter than a 1.4 line, so chips on
+   glyphs, and the chip stays clearly shorter than a 1.5 line, so chips on
    adjacent lines never touch. */
 .msg-markdown code {
   border-radius: var(--r-sm);
