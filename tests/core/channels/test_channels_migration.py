@@ -51,13 +51,16 @@ async def test_chat_id_migration_swaps_the_allowlist_entry_and_moves_group_acces
         await asyncio.to_thread(service.record_chat_id_migration, config.id, "-500", "-100500")
 
         assert storage.get(config.id).allowed_chat_ids == migrated
-        assert service._state.role_for(config.id, "-500", "owner") == "member"
+        # Already admitted work using the old id follows the migrated role.
+        assert service._state.role_for(config.id, "-500", "owner") == "admin"
         assert service._state.role_for(config.id, "-100500", "owner") == "admin"
 
         # Idempotent: once the old id is gone, a repeat changes nothing.
         await asyncio.to_thread(service.record_chat_id_migration, config.id, "-500", "-100999")
         assert storage.get(config.id).allowed_chat_ids == migrated
+        assert service._state.role_for(config.id, "-500", "owner") == "admin"
         assert service._state.role_for(config.id, "-100500", "owner") == "admin"
+        assert service._state.role_for(config.id, "-100999", "owner") == "member"
         # Telegram chat ids stay in the allowlist; the log names only the channel.
         assert not any("500" in record.getMessage() for record in caplog.records)
     finally:
@@ -233,7 +236,7 @@ async def test_adapter_replacement_drains_migration_before_loading_current_confi
             assert saved.allowed_chat_ids == ["-100500"]
             assert saved.response_mode == config.response_mode
             if replacement == "cancelled-platform-change":
-                assert service._state.role_for(config.id, "-500", "owner") == "member"
+                assert service._state.role_for(config.id, "-500", "owner") == "admin"
                 assert service._state.role_for(config.id, "-100500", "owner") == "admin"
         elif change_platform:
             assert saved.platform == "discord"

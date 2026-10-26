@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -11,6 +13,7 @@ import pytest
 from core.chat import MessageSender
 from core.runs import RunKind
 from core.sessions import SessionAddress
+from core.tools.availability import ToolAccess
 
 from .engine_test_support import (
     CHANNEL_GROUP_REPLY_SURFACE,
@@ -27,10 +30,6 @@ from .engine_test_support import (
     make_engine,
 )
 
-MEMBER_TOOL_DENIAL = (
-    "Tool access denied: the current sender is a group member. "
-    "Group members may use only web_search and web_fetch."
-)
 _ADDRESS = SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
 
 
@@ -69,11 +68,10 @@ async def test_member_runs_carry_the_sender_and_keep_member_tool_access(tmp_path
     )
     assert resolver("web_search") is None
     assert resolver("web_fetch") is None
-    assert resolver("bash") == MEMBER_TOOL_DENIAL
-    assert "Do not retry" not in MEMBER_TOOL_DENIAL
+    assert resolver("bash") is not None
     # A grant after ingress does not upgrade the admitted Run.
     access.admin_user_ids.add("50")
-    assert resolver("bash") == MEMBER_TOOL_DENIAL
+    assert resolver("bash") is not None
     await engine.stop()
 
 
@@ -110,7 +108,7 @@ async def test_revoke_before_next_tool_call_limits_active_admin_run(
 
     access.admin_user_ids.remove("50")
 
-    assert resolver("bash") == MEMBER_TOOL_DENIAL
+    assert resolver("bash") is not None
     assert resolver("web_search") is None
     await engine.stop()
 
@@ -351,3 +349,104 @@ async def test_group_commands_require_an_admin_sender(
         assert transport.sent == []
         assert not chat_sessions.exists(_ADDRESS)
     await engine.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["none", "selected", "all"])
+async def test_member_tool_policy_freezes_at_ingress_and_rechecks_live(
+    tmp_path: Path, mode: str
+) -> None:
+    access = MemoryChannelAccessRegistry()
+    access.member_tools["12345"] = ToolAccess(
+        mode=mode, allowed=("read",) if mode == "selected" else ()
+    )
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def complete(*args: Any, **kwargs: Any) -> Any:
+        if not entered.is_set():
+            entered.set()
+            await release.wait()
+        return make_completed_run(output_text="ok")
+
+    trigger = AsyncMock(side_effect=complete)
+    catalog = [
+        SimpleNamespace(name="read", activation="configurable"),
+        SimpleNamespace(name="read_more", activation="follows", activation_source="read"),
+    ]
+    engine, _sessions, _trigger, _transport = make_engine(
+        tmp_path,
+        response_mode="all",
+        access_registry=access,
+        trigger_run=trigger,
+        tool_catalog=lambda: catalog,
+    )
+    try:
+        await engine.handle_inbound_text(make_conversation(kind="group"), "first")
+        await entered.wait()
+        await engine.handle_inbound_text(make_conversation(kind="group"), "queued")
+        # Expanding policy after ingress cannot upgrade waiting work.
+        access.member_tools["12345"] = ToolAccess(mode="all")
+        release.set()
+        await drain(engine, 12345)
+        assert trigger.await_count == 2
+        for admitted in trigger.await_args_list:
+            kwargs = admitted.kwargs
+            deny = kwargs["tool_denial_resolver"]
+            assert (deny("read") is None) == (mode != "none")
+            assert (deny("read_more") is None) == (mode != "none")
+            assert (deny("write") is None) == (mode == "all")
+            if mode == "none":
+                assert kwargs["tool_restriction"] == ()
+            elif mode == "selected":
+                assert set(kwargs["tool_restriction"]) == {"read", "read_more", "load_tools"}
+            else:
+                assert "tool_restriction" not in kwargs
+        access.member_tools["12345"] = ToolAccess(mode="none")
+        for admitted in trigger.await_args_list:
+            deny = admitted.kwargs["tool_denial_resolver"]
+            assert deny("read") is not None
+            assert deny("load_tools") is not None
+        # A grant after admission also cannot turn member work into admin work.
+        access.admin_user_ids.add("50")
+        deny = trigger.await_args_list[-1].kwargs["tool_denial_resolver"]
+        assert (deny("write") is None) == (mode == "all")
+    finally:
+        release.set()
+        await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_admitted_group_work_follows_revocations_after_scope_migration(
+    tmp_path: Path,
+) -> None:
+    state = channel_state(tmp_path)
+    await state.set_member_tools("tg-assistant", {"mode": "all"})
+    await state.set_member_tools("tg-assistant", {"mode": "all"}, "12345")
+    trigger = AsyncMock(return_value=make_completed_run(output_text="ok"))
+    engine, _sessions, _trigger, _transport = make_engine(
+        tmp_path,
+        response_mode="all",
+        access_registry=state,
+        trigger_run=trigger,
+    )
+    try:
+        await engine.handle_inbound_text(make_conversation(kind="group"), "hello")
+        await drain(engine, 12345)
+        assert trigger.await_args is not None
+        deny = trigger.await_args.kwargs["tool_denial_resolver"]
+        assert deny("bash") is None
+        state.migrate_group_access("tg-assistant", "12345", "67890")
+        await state.set_member_tools("tg-assistant", {"mode": "none"}, "67890")
+        assert deny("bash") is not None
+        assert deny("web_fetch") is not None
+        # Another migration keeps the oldest admitted scope attached too.
+        state.migrate_group_access("tg-assistant", "67890", "99999")
+        assert deny("bash") is not None
+        await state.set_member_tools(
+            "tg-assistant", {"mode": "selected", "allowed": ["read"]}, "99999"
+        )
+        assert deny("read") is None
+        assert deny("bash") is not None
+    finally:
+        await engine.stop()

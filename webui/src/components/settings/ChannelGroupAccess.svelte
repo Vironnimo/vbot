@@ -1,9 +1,18 @@
 <script>
+  import MemberToolsEditor from './channels/MemberToolsEditor.svelte';
   import { t } from '$lib/i18n.js';
   import Button from '../ui/Button.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
-  let { channel, rowBusy, setOwnIdentity, toggleParticipantRole } = $props();
+  let {
+    channel,
+    rowBusy,
+    setOwnIdentity,
+    toggleParticipantRole,
+    tools = [],
+    saveMemberTools,
+    onError,
+  } = $props();
 </script>
 
 <div class="s-channel-access">
@@ -23,6 +32,17 @@
     {/if}
   </div>
 
+  {#if channel.access?.loaded}
+    <p class="s-row-desc">{t('settings.channels.memberTools.help')}</p>
+    <MemberToolsEditor
+      channelId={channel.id}
+      value={channel.access.member_tools}
+      {tools}
+      onSave={saveMemberTools}
+      {onError}
+    />
+  {/if}
+
   {#if !channel.access?.groups?.length}
     <div class="s-row-desc">
       {t('settings.channels.access.empty')}
@@ -33,6 +53,18 @@
         <div class="s-channel-access-group-title">
           {t('settings.channels.access.group')} · ID {group.access_scope_id}
         </div>
+
+        {#if channel.access?.loaded}
+          <MemberToolsEditor
+            channelId={channel.id}
+            scopeId={group.access_scope_id}
+            value={group.member_tools}
+            inherited={channel.access.member_tools}
+            {tools}
+            onSave={saveMemberTools}
+            {onError}
+          />
+        {/if}
 
         {#if group.participants.length === 0}
           <div class="s-row-desc">

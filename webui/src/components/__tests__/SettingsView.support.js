@@ -572,6 +572,21 @@ export function createSettingsRpcMock(options = {}) {
       return deepClone(access);
     }
 
+    if (method === 'channel.member_tools.set') {
+      const access = channelAccess.get(params.id);
+      if (!access) throw new Error(`Unknown channel access id: ${params.id}`);
+      if (params.access_scope_id) {
+        const group = access.groups.find(
+          (item) => item.access_scope_id === params.access_scope_id,
+        );
+        group.member_tools = params.policy;
+      } else access.member_tools = params.policy;
+      for (const group of access.groups)
+        group.effective_member_tools =
+          group.member_tools ?? access.member_tools;
+      return deepClone(access);
+    }
+
     if (method === 'channel.identity.set') {
       const access = channelAccess.get(params.id);
       if (!access) {

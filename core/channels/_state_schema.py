@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from core.database import APPLICATION_IDS, CANONICAL, DatabaseSpec, SnapshotFacts
+from core.database import APPLICATION_IDS, CANONICAL, DatabaseSpec, Migration, SnapshotFacts
 
 CHANNEL_DATABASE_NAME = "channels"
 DATABASE_NAME = CHANNEL_DATABASE_NAME
@@ -34,6 +34,25 @@ CREATE TABLE channels (
   channel_id TEXT PRIMARY KEY,
   platform TEXT CHECK (platform IS NULL OR length(platform) > 0),
   self_user_id TEXT CHECK (self_user_id IS NULL OR length(self_user_id) > 0)
+) STRICT, WITHOUT ROWID;
+
+-- Empty access_scope_id denotes the Channel default; non-empty scopes are
+-- explicit group overrides. An absent default retains the historical web Tools.
+CREATE TABLE channel_member_tool_policies (
+  channel_id TEXT NOT NULL,
+  access_scope_id TEXT NOT NULL,
+  mode TEXT NOT NULL,
+  PRIMARY KEY (channel_id, access_scope_id),
+  FOREIGN KEY (channel_id) REFERENCES channels (channel_id) ON DELETE CASCADE
+) STRICT, WITHOUT ROWID;
+
+CREATE TABLE channel_member_tools (
+  channel_id TEXT NOT NULL,
+  access_scope_id TEXT NOT NULL,
+  tool_name TEXT NOT NULL,
+  PRIMARY KEY (channel_id, access_scope_id, tool_name),
+  FOREIGN KEY (channel_id, access_scope_id)
+    REFERENCES channel_member_tool_policies (channel_id, access_scope_id) ON DELETE CASCADE
 ) STRICT, WITHOUT ROWID;
 
 CREATE TABLE channel_admins (
@@ -179,5 +198,6 @@ def channel_database_spec(path: Path) -> DatabaseSpec:
         application_id=APPLICATION_ID,
         format_generation=FORMAT_GENERATION,
         schema_sql=SCHEMA_SQL,
+        migrations=(Migration("channels.0001_member_tool_policies", breaks_older=True),),
         snapshot_facts=_SNAPSHOT_FACTS,
     )

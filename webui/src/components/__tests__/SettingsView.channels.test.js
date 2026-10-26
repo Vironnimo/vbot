@@ -190,6 +190,235 @@ describe('SettingsView Channels', () => {
     });
   });
 
+  it('edits the Channel member default and group overrides with inheritance', async () => {
+    await openChannels({
+      channels: [channelConfig('tg-assistant')],
+      tools: [
+        { name: 'web_search', activation: 'configurable' },
+        { name: 'web_fetch', activation: 'configurable' },
+        { name: 'read', activation: 'configurable' },
+      ],
+      channelAccess: {
+        'tg-assistant': {
+          channel_id: 'tg-assistant',
+          self_user_id: null,
+          member_tools: {
+            mode: 'selected',
+            allowed: ['web_search', 'web_fetch'],
+          },
+          groups: [
+            {
+              access_scope_id: '-100',
+              participants: [],
+              admin_user_ids: [],
+              member_tools: null,
+            },
+          ],
+        },
+      },
+    });
+    buttonByAriaLabel('Edit channel tg-assistant').click();
+    const editor = (scope) =>
+      document.querySelector(`[data-member-tools-scope="${scope}"]`);
+    await waitForCondition(() => editor('-100'));
+    expect(editor('-100').textContent).toContain(
+      t('settings.channels.memberTools.inherited'),
+    );
+    expect(editor('-100').textContent).toContain('web_search');
+    const choose = (scope, label) => {
+      const id = editor(scope).querySelector(
+        'button[aria-haspopup="listbox"]',
+      ).id;
+      openSimpleDropdown(id);
+      selectSimpleOption(id, label);
+    };
+    choose('-100', t('settings.channels.memberTools.none'));
+    await waitForCondition(
+      () => callsTo('channel.member_tools.set').length === 1,
+    );
+    expect(callsTo('channel.member_tools.set')[0][1]).toEqual({
+      id: 'tg-assistant',
+      access_scope_id: '-100',
+      policy: { mode: 'none' },
+    });
+    choose('default', t('settings.channels.memberTools.all'));
+    await waitForCondition(
+      () => callsTo('channel.member_tools.set').length === 2,
+    );
+    expect(callsTo('channel.member_tools.set')[1][1]).toEqual({
+      id: 'tg-assistant',
+      policy: { mode: 'all' },
+    });
+    expect(editor('-100').textContent).not.toContain(
+      t('settings.channels.memberTools.all'),
+    );
+    choose('-100', t('settings.channels.memberTools.inherit'));
+    await waitForCondition(
+      () => callsTo('channel.member_tools.set').length === 3,
+    );
+    expect(callsTo('channel.member_tools.set')[2][1].policy).toBeNull();
+    await waitForCondition(() =>
+      editor('-100').textContent.includes(
+        t('settings.channels.memberTools.all'),
+      ),
+    );
+    choose('-100', t('settings.channels.memberTools.selected'));
+    await waitForCondition(() =>
+      editor('-100').querySelector('[data-tool-name="read"]'),
+    );
+    editor('-100').querySelector('[data-tool-name="read"]').click();
+    await waitForCondition(() =>
+      callsTo('channel.member_tools.set').some(([, params]) =>
+        params.policy?.allowed?.includes('read'),
+      ),
+    );
+    expect(editor('-100').textContent).toContain(
+      t('settings.channels.memberTools.custom'),
+    );
+    expect(callsTo('channel.update')).toHaveLength(0);
+  });
+
+  it('keeps newer member Tool choices during a slow save and retains failed edits for retry', async () => {
+    const backend = createSettingsRpcMock({
+      channels: [channelConfig('tg-assistant')],
+      channelAccess: {
+        'tg-assistant': {
+          channel_id: 'tg-assistant',
+          self_user_id: null,
+          member_tools: {
+            mode: 'selected',
+            allowed: ['web_search', 'web_fetch'],
+          },
+          groups: [],
+        },
+      },
+    });
+    let finish;
+    let delay = true;
+    let failure = false;
+    rpcMock.mockImplementation(async (method, params) => {
+      if (method === 'channel.member_tools.set') {
+        if (delay) {
+          delay = false;
+          await new Promise((resolve) => {
+            finish = resolve;
+          });
+        }
+        if (failure) throw new Error('save refused');
+      }
+      return backend(method, params);
+    });
+    mountedComponent = mount(SettingsView, { target: document.body });
+    flushSync();
+    await openChannelsPanel();
+    buttonByAriaLabel('Edit channel tg-assistant').click();
+    const editor = () =>
+      document.querySelector('[data-member-tools-scope="default"]');
+    await waitForCondition(editor);
+    const choose = (label) => {
+      const id = editor().querySelector('button[aria-haspopup="listbox"]').id;
+      openSimpleDropdown(id);
+      selectSimpleOption(id, label);
+    };
+    choose(t('settings.channels.memberTools.none'));
+    await waitForCondition(() => finish);
+    choose(t('settings.channels.memberTools.all'));
+    finish();
+    await waitForCondition(
+      () => callsTo('channel.member_tools.set').length === 2,
+    );
+    expect(
+      callsTo('channel.member_tools.set').map(
+        ([, params]) => params.policy.mode,
+      ),
+    ).toEqual(['none', 'all']);
+    await waitForCondition(() =>
+      editor().textContent.includes(t('settings.channels.memberTools.all')),
+    );
+    failure = true;
+    choose(t('settings.channels.memberTools.none'));
+    await waitForCondition(() => editor().querySelector('.save-status button'));
+    expect(editor().textContent).toContain(
+      t('settings.channels.memberTools.none'),
+    );
+    failure = false;
+    editor().querySelector('.save-status button').click();
+    await waitForCondition(
+      () => callsTo('channel.member_tools.set').length === 4,
+    );
+    await waitForCondition(
+      () => !editor().querySelector('.save-status button'),
+    );
+  });
+
+  it('keeps independent scope saves when their replies arrive out of order', async () => {
+    const backend = createSettingsRpcMock({
+      channels: [channelConfig('tg-assistant')],
+      channelAccess: {
+        'tg-assistant': {
+          channel_id: 'tg-assistant',
+          self_user_id: null,
+          member_tools: {
+            mode: 'selected',
+            allowed: ['web_search', 'web_fetch'],
+          },
+          groups: [
+            {
+              access_scope_id: '-100',
+              participants: [],
+              admin_user_ids: [],
+              member_tools: null,
+            },
+          ],
+        },
+      },
+    });
+    let finishDefault;
+    rpcMock.mockImplementation(async (method, params) => {
+      const result = await backend(method, params);
+      if (method === 'channel.member_tools.set' && !params.access_scope_id) {
+        await new Promise((resolve) => {
+          finishDefault = resolve;
+        });
+      }
+      return result;
+    });
+    mountedComponent = mount(SettingsView, { target: document.body });
+    flushSync();
+    await openChannelsPanel();
+    buttonByAriaLabel('Edit channel tg-assistant').click();
+    const editor = (scope) =>
+      document.querySelector(`[data-member-tools-scope="${scope}"]`);
+    await waitForCondition(() => editor('-100'));
+    const choose = (scope, label) => {
+      const id = editor(scope).querySelector(
+        'button[aria-haspopup="listbox"]',
+      ).id;
+      openSimpleDropdown(id);
+      selectSimpleOption(id, label);
+    };
+    choose('default', t('settings.channels.memberTools.none'));
+    await waitForCondition(() => finishDefault);
+    choose('-100', t('settings.channels.memberTools.all'));
+    await waitForCondition(
+      () => callsTo('channel.member_tools.set').length === 2,
+    );
+    await waitForCondition(() =>
+      editor('-100').textContent.includes(t('common.saved')),
+    );
+    finishDefault();
+    await waitForCondition(() =>
+      editor('default').textContent.includes(t('common.saved')),
+    );
+    expect(editor('-100').textContent).toContain(
+      t('settings.channels.memberTools.all'),
+    );
+    expect(editor('-100').textContent).toContain(
+      t('settings.channels.memberTools.custom'),
+    );
+    expect(callsTo('channel.member_tools.set')).toHaveLength(2);
+  });
+
   it('defers an external channel reload while a new channel form is open, not for an open row', async () => {
     const props = reactiveProps({ channelsRefreshToken: 0 });
     await openChannels(

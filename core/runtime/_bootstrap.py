@@ -838,6 +838,7 @@ def bootstrap(runtime: Runtime) -> None:
             attachment_store=runtime._attachment_store,
             command_dispatcher=runtime._command_dispatcher,
             interaction_dispatcher=runtime._dispatch_channel_interaction,
+            tool_catalog=lambda: runtime.tools.list_tools(include_session_scoped=True),
         )
         runtime._trigger_service.set_completion_run_relay(
             runtime._channel_service.relay_completion_run

@@ -269,6 +269,9 @@
             {rowBusy}
             setOwnIdentity={channels.setOwnIdentity}
             toggleParticipantRole={channels.toggleParticipantRole}
+            tools={channels.channelTools}
+            saveMemberTools={channels.saveChannelMemberTools}
+            {onError}
           />
 
           <div class="s-channel-details-footer">

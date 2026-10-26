@@ -414,6 +414,22 @@ async def _channel_access_get(state: Any, params: JsonObject) -> JsonObject:
         raise _map_expected_error(exc) from exc
 
 
+async def _channel_member_tools_set(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"id", "access_scope_id", "policy"}, "channel.member_tools.set")
+    channel_id = _required_string(params, "id")
+    scope_id = _required_string(params, "access_scope_id") if "access_scope_id" in params else None
+    if "policy" not in params:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "policy is required; null restores inheritance")
+    try:
+        result = await state.runtime.channel_service.set_channel_member_tools(
+            channel_id, params["policy"], scope_id
+        )
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    publish_resource_changed(state, RESOURCE_KIND_CHANNELS)
+    return cast(JsonObject, result)
+
+
 async def _channel_identity_set(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"id", "user_id"}, "channel.identity.set")
     channel_id = _required_string(params, "id")
@@ -680,6 +696,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         ),
         "channel.status": _channel_status,
         "channel.access.get": _channel_access_get,
+        "channel.member_tools.set": _channel_member_tools_set,
         "channel.identity.set": _channel_identity_set,
         "channel.admin.grant": _channel_admin_grant,
         "channel.admin.revoke": _channel_admin_revoke,

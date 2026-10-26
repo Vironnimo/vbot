@@ -12,6 +12,7 @@ from core.channels.config import ChannelError
 from core.chat.content_blocks import ContentBlock, FileBlock, MediaBlock
 from core.chat.messages import GroupRole
 from core.extensions import InteractionButton
+from core.tools.availability import ToolAccess
 
 if TYPE_CHECKING:
     from core.attachments import AttachmentRecord
@@ -105,17 +106,19 @@ class UpdateOffsetStore(Protocol):
 class ChannelAccessRegistry(Protocol):
     """Live, platform-neutral group access seam used by the Channel engine.
 
-    ``snapshot_participant_role`` records a sender at ingress and runs off the
-    Event Loop; ``role_for`` answers per Tool dispatch without storage I/O.
+    ``snapshot_participant_access`` records a sender and freezes its role and
+    member ceiling at ingress. Live role/ceiling reads perform no storage I/O.
     """
 
-    async def snapshot_participant_role(
+    async def snapshot_participant_access(
         self,
         channel_id: str,
         access_scope_id: str,
         user_id: str,
         display_name: str,
-    ) -> GroupRole: ...
+    ) -> tuple[GroupRole, ToolAccess]: ...
+
+    def member_tools_for(self, channel_id: str, access_scope_id: str) -> ToolAccess: ...
 
     def role_for(
         self,
@@ -254,6 +257,7 @@ class ConversationFacts:
     access_scope_id: str | None = None
     # Immutable role snapshot added by the engine when the event enters its Queue.
     sender_role: GroupRole | None = None
+    member_tools: ToolAccess | None = None
     thread_id: str | None = None
     # The adapter classifies the conversation; the engine derives session ids from it.
     # A group conversation routes to a shared session keyed by chat id, ignoring dm_scope.

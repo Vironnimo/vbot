@@ -59,7 +59,7 @@ Channels carry the neutral interaction contract of `core/extensions/interactions
 
 ## Agent-facing text
 
-This domain owns the Run note of a Run-button tap or checklist submission (`_format_interaction_note` in `_conversation_content.py`). Before you change, add or delete a sentence of them, read `channels/agent-facing-text.md`: it records why each sentence exists. Update its row for every sentence you change and add one for every sentence you add.
+This domain owns interaction Run notes (`_format_interaction_note` in `_conversation_content.py`) and group Tool-access refusals (`_conversation_access.py`). Before you change, add or delete a sentence of them, read `channels/agent-facing-text.md`: it records why each sentence exists. Update its row for every sentence you change and add one for every sentence you add.
 
 ## References
 

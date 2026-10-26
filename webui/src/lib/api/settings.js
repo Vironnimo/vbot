@@ -567,6 +567,23 @@ export function disableChannel(id, options = {}) {
   return rpc('channel.disable', { id }, options);
 }
 
+export function setChannelMemberTools(id, accessScopeId, policy, options = {}) {
+  requireNonEmptyString(
+    id,
+    'Channel id must be a non-empty string',
+    'channel.member_tools.set',
+  );
+  return rpc(
+    'channel.member_tools.set',
+    {
+      id,
+      ...(accessScopeId === null ? {} : { access_scope_id: accessScopeId }),
+      policy,
+    },
+    options,
+  );
+}
+
 export function setChannelIdentity(id, userId, options = {}) {
   requireNonEmptyString(
     id,

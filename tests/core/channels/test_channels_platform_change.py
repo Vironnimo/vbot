@@ -111,6 +111,7 @@ async def _assert_reset(service: ChannelService) -> None:
     assert await service.channel_access(_CHANNEL) == {
         "channel_id": _CHANNEL,
         "self_user_id": None,
+        "member_tools": {"mode": "selected", "allowed": ["web_search", "web_fetch"]},
         "groups": [],
     }
     assert service._state.role_for(_CHANNEL, "-100", "51") == "member"

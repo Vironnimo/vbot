@@ -563,6 +563,18 @@ async def test_channel_status_reports_health_and_denied_chats(
     [
         ("channel.access.get", {"id": "tg-assistant"}, "channel_access", ("tg-assistant",)),
         (
+            "channel.member_tools.set",
+            {"id": "tg-assistant", "policy": {"mode": "none"}},
+            "set_channel_member_tools",
+            ("tg-assistant", {"mode": "none"}, None),
+        ),
+        (
+            "channel.member_tools.set",
+            {"id": "tg-assistant", "access_scope_id": "-100", "policy": None},
+            "set_channel_member_tools",
+            ("tg-assistant", None, "-100"),
+        ),
+        (
             "channel.identity.set",
             {"id": "tg-assistant", "user_id": "50"},
             "set_channel_self_user_id",
@@ -586,7 +598,7 @@ async def test_channel_access_methods_return_saved_state_without_runtime_reload(
     method: str,
     params: JsonObject,
     service_method: str,
-    service_args: tuple[str, ...],
+    service_args: tuple[Any, ...],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     caplog.set_level(logging.DEBUG)

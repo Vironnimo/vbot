@@ -35,7 +35,8 @@ Read `channel list` for the saved configuration and `channel status <channel-id>
 ## Groups
 
 - `--response-mode mention` answers group messages addressed to the bot, `all` every allowed message. `--mention-pattern <pattern>...` replaces the list of extra wake words; the flag without values clears it. `--observe-unaddressed true` lets the Agent read group messages it does not answer.
-- Group members are `admin` or `member`. Members can use only `web_search` and `web_fetch`; admins keep the Agent's full Tool access, and only admins can use group Commands and Run buttons. A grant applies to new messages; a revoke blocks other Tools before the next Tool call of a running admin Run.
+- Group members are `admin` or `member`. Members use the Channel’s member Tool selection unless their group overrides it. Every selection is limited by the Agent’s own Tool access. Configure these selections under Settings > Integrations > Channels > Group access: None, Selected Tools or All Agent Tools; the initial default is `web_search` and `web_fetch`. Removing a group override restores the Channel default.
+- Admins keep the Agent's full Tool access; group Commands and Run buttons require an admin. Added access applies to new messages; removed access applies before the next Tool call of queued or active Runs.
 - `channel identity <channel-id> --user <user-id>` names the user's own account on the platform, from a participant vBot has seen; it is an admin in every group and cannot be demoted. `channel access` lists one group's participants and roles. `admin grant` and `admin revoke` change one user without restarting the Channel.
 
 ```bash

@@ -27,11 +27,21 @@ import json
 import sqlite3
 import threading
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from core.channels._access_state import (
+    _NO_ACCESS_ROLES,
+    _access_projection,
+    _AccessRoles,
+    _load_all_roles,
+    _load_channel_roles,
+    _load_member_tools,
+    _registered_self_user_id,
+)
+from core.channels._member_tools import DEFAULT_MEMBER_TOOLS, normalize_member_tools
 from core.channels._state_schema import DATABASE_NAME, channel_database_spec
 from core.channels.adapter import (
     TELEGRAM_UPDATE_OFFSET_TTL_SECONDS,
@@ -45,12 +55,12 @@ from core.channels.adapter import (
 from core.channels.config import (
     ChannelConfigError,
     ChannelError,
-    ChannelNotFoundError,
     _normalize_channel_id,
 )
 from core.chat.messages import GroupRole
 from core.config_validation import JsonObject
 from core.database import Database, canonical_database_path, open_database
+from core.tools.availability import ToolAccess
 from core.utils.timestamps import (
     format_canonical_timestamp,
     parse_canonical_timestamp,
@@ -69,22 +79,6 @@ RUN_BUTTON_RETENTION = timedelta(days=30)
 RUN_BUTTON_PRUNE_BATCH_SIZE = 256
 
 _CONVERSATION_KINDS = frozenset({"direct", "group"})
-
-
-@dataclass(frozen=True)
-class _AccessRoles:
-    """One Channel's own identity and additional admins, as ``role_for`` reads them."""
-
-    self_user_id: str | None
-    admins: frozenset[tuple[str, str]]
-
-    def role_for(self, access_scope_id: str, user_id: str) -> GroupRole:
-        if user_id == self.self_user_id or (access_scope_id, user_id) in self.admins:
-            return "admin"
-        return "member"
-
-
-_NO_ACCESS_ROLES = _AccessRoles(self_user_id=None, admins=frozenset())
 
 
 class ChannelStateStore:
@@ -180,7 +174,7 @@ class ChannelStateStore:
 
         with self._access_lock:
             self._database.write(reset)
-            self._install_roles(normalized_id, _NO_ACCESS_ROLES)
+            self._install_roles(normalized_id, _NO_ACCESS_ROLES, preserve_redirects=False)
 
     def bind_platform(self, channel_id: str, platform: str) -> bool:
         """Record that a registered Channel's state now belongs to ``platform``.
@@ -203,7 +197,12 @@ class ChannelStateStore:
         with self._access_lock:
             reset = self._database.write(bind)
             if reset:
-                self._install_roles(normalized_id, _NO_ACCESS_ROLES)
+                with self._database.read() as connection:
+                    self._install_roles(
+                        normalized_id,
+                        _load_channel_roles(connection, normalized_id),
+                        preserve_redirects=False,
+                    )
         return reset
 
     def clear_agent_routes(self, channel_id: str) -> None:
@@ -246,7 +245,16 @@ class ChannelStateStore:
         user_id: str,
         display_name: str,
     ) -> GroupRole:
-        """Record one seen participant and return its role from the same transaction."""
+        """Record one seen participant and return its role."""
+        role, _policy = await self.snapshot_participant_access(
+            channel_id, access_scope_id, user_id, display_name
+        )
+        return role
+
+    async def snapshot_participant_access(
+        self, channel_id: str, access_scope_id: str, user_id: str, display_name: str
+    ) -> tuple[GroupRole, ToolAccess]:
+        """Freeze sender role and effective member ceiling in one admission transaction."""
         normalized_id = _normalize_channel_id(channel_id)
         scope_id = _normalize_platform_access_id(access_scope_id, "access_scope_id")
         normalized_user_id = _normalize_platform_access_id(user_id, "user_id")
@@ -255,7 +263,10 @@ class ChannelStateStore:
         ) or normalized_user_id
         seen_at = utc_now_timestamp()
 
-        def snapshot(connection: sqlite3.Connection) -> GroupRole:
+        def snapshot(connection: sqlite3.Connection) -> tuple[GroupRole, ToolAccess]:
+            current_scope_id = self._roles.get(normalized_id, _NO_ACCESS_ROLES).current_scope(
+                scope_id
+            )
             self_user_id = _registered_self_user_id(connection, normalized_id)
             connection.execute(
                 "INSERT INTO channel_participants "
@@ -263,26 +274,84 @@ class ChannelStateStore:
                 "VALUES (?, ?, ?, ?, ?) "
                 "ON CONFLICT (channel_id, access_scope_id, user_id) DO UPDATE SET "
                 "display_name = excluded.display_name, last_seen_at = excluded.last_seen_at",
-                (normalized_id, scope_id, normalized_user_id, normalized_display_name, seen_at),
+                (
+                    normalized_id,
+                    current_scope_id,
+                    normalized_user_id,
+                    normalized_display_name,
+                    seen_at,
+                ),
             )
+            policies = _load_member_tools(connection, normalized_id, current_scope_id)
+            policy = policies.get(current_scope_id, policies.get("", DEFAULT_MEMBER_TOOLS))
             if normalized_user_id == self_user_id:
-                return "admin"
+                return "admin", policy
             admin = connection.execute(
                 "SELECT 1 FROM channel_admins "
                 "WHERE channel_id = ? AND access_scope_id = ? AND user_id = ?",
-                (normalized_id, scope_id, normalized_user_id),
+                (normalized_id, current_scope_id, normalized_user_id),
             ).fetchone()
-            return "admin" if admin is not None else "member"
+            return ("admin" if admin is not None else "member"), policy
 
-        return await self._database.write_async(snapshot)
+        def record() -> tuple[GroupRole, ToolAccess]:
+            with self._access_lock:
+                return self._database.write(snapshot)
+
+        return await self._database.run_async(record)
 
     def role_for(self, channel_id: str, access_scope_id: str, user_id: str) -> GroupRole:
         """Resolve the current role from the in-memory index without storage I/O."""
-        roles = self._roles.get(_normalize_channel_id(channel_id), _NO_ACCESS_ROLES)
+        normalized_id = _normalize_channel_id(channel_id)
+        roles = self._roles.get(normalized_id, _NO_ACCESS_ROLES)
         return roles.role_for(
             _normalize_platform_access_id(access_scope_id, "access_scope_id"),
             _normalize_platform_access_id(user_id, "user_id"),
         )
+
+    def member_tools_for(self, channel_id: str, access_scope_id: str) -> ToolAccess:
+        """Read the effective member ceiling without storage I/O."""
+        normalized_id = _normalize_channel_id(channel_id)
+        roles = self._roles.get(normalized_id, _NO_ACCESS_ROLES)
+        return roles.tools_for(access_scope_id)
+
+    async def set_member_tools(
+        self, channel_id: str, policy: Any, access_scope_id: str | None = None
+    ) -> JsonObject:
+        """Replace the Channel default or a group override; null restores inheritance."""
+        normalized_id = _normalize_channel_id(channel_id)
+        scope_id = (
+            ""
+            if access_scope_id is None
+            else _normalize_platform_access_id(access_scope_id, "access_scope_id")
+        )
+        value = None if policy is None else normalize_member_tools(policy)
+
+        def update(connection: sqlite3.Connection) -> None:
+            _registered_self_user_id(connection, normalized_id)
+            if value is None:
+                connection.execute(
+                    "DELETE FROM channel_member_tool_policies "
+                    "WHERE channel_id = ? AND access_scope_id = ?",
+                    (normalized_id, scope_id),
+                )
+            else:
+                connection.execute(
+                    "INSERT INTO channel_member_tool_policies (channel_id, access_scope_id, mode) "
+                    "VALUES (?, ?, ?) ON CONFLICT (channel_id, access_scope_id) "
+                    "DO UPDATE SET mode = excluded.mode",
+                    (normalized_id, scope_id, value.mode),
+                )
+                connection.execute(
+                    "DELETE FROM channel_member_tools WHERE channel_id = ? AND access_scope_id = ?",
+                    (normalized_id, scope_id),
+                )
+                connection.executemany(
+                    "INSERT INTO channel_member_tools (channel_id, access_scope_id, tool_name) "
+                    "VALUES (?, ?, ?)",
+                    [(normalized_id, scope_id, name) for name in value.allowed],
+                )
+
+        return await self._database.run_async(self._mutate_access, normalized_id, update)
 
     async def access_state(self, channel_id: str) -> JsonObject:
         """Return the own identity and every group's admins and seen participants."""
@@ -357,7 +426,8 @@ class ChannelStateStore:
         """Merge a group's admins and participants into its new scope after a platform move.
 
         Admins are united; for a participant seen in both scopes the newer
-        sighting wins. The old scope keeps no state afterwards.
+        sighting wins. The old scope keeps no durable state afterwards; admitted
+        work follows the new scope through the in-memory access index.
         """
         normalized_id = _normalize_channel_id(channel_id)
         old_scope_id = _normalize_platform_access_id(old_access_scope_id, "old_access_scope_id")
@@ -365,7 +435,7 @@ class ChannelStateStore:
         if old_scope_id == new_scope_id:
             return
 
-        def migrate(connection: sqlite3.Connection) -> None:
+        def migrate(connection: sqlite3.Connection) -> _AccessRoles | None:
             connection.execute(
                 "INSERT OR IGNORE INTO channel_admins (channel_id, access_scope_id, user_id) "
                 "SELECT channel_id, ?, user_id FROM channel_admins "
@@ -382,16 +452,47 @@ class ChannelStateStore:
                 "WHERE excluded.last_seen_at > channel_participants.last_seen_at",
                 (new_scope_id, normalized_id, old_scope_id),
             )
-            for table in ("channel_admins", "channel_participants"):
+            # A destination override wins intact if both scopes already have one.
+            target = connection.execute(
+                "SELECT 1 FROM channel_member_tool_policies "
+                "WHERE channel_id = ? AND access_scope_id = ?",
+                (normalized_id, new_scope_id),
+            ).fetchone()
+            if target is None:
+                connection.execute(
+                    "INSERT INTO channel_member_tool_policies (channel_id, access_scope_id, mode) "
+                    "SELECT channel_id, ?, mode FROM channel_member_tool_policies "
+                    "WHERE channel_id = ? AND access_scope_id = ?",
+                    (new_scope_id, normalized_id, old_scope_id),
+                )
+                connection.execute(
+                    "INSERT INTO channel_member_tools (channel_id, access_scope_id, tool_name) "
+                    "SELECT channel_id, ?, tool_name FROM channel_member_tools "
+                    "WHERE channel_id = ? AND access_scope_id = ?",
+                    (new_scope_id, normalized_id, old_scope_id),
+                )
+            for table in ("channel_admins", "channel_participants", "channel_member_tool_policies"):
                 connection.execute(
                     f"DELETE FROM {table} WHERE channel_id = ? AND access_scope_id = ?",
                     (normalized_id, old_scope_id),
                 )
+            return _load_channel_roles(connection, normalized_id)
 
         with self._access_lock:
-            self._database.write(migrate)
-            with self._database.read() as connection:
-                self._install_roles(normalized_id, _load_channel_roles(connection, normalized_id))
+            previous = self._roles.get(normalized_id, _NO_ACCESS_ROLES)
+            if old_scope_id in previous.scope_redirects:
+                return
+            roles = self._database.write(migrate)
+            redirects = {
+                key: new_scope_id if target == old_scope_id else target
+                for key, target in previous.scope_redirects.items()
+                if key != new_scope_id
+            }
+            redirects[old_scope_id] = new_scope_id
+            if roles is not None:
+                roles = replace(roles, scope_redirects=redirects)
+            # Publish redirects and policy/role facts as one immutable snapshot.
+            self._install_roles(normalized_id, roles, preserve_redirects=False)
 
     def _mutate_access(
         self,
@@ -407,11 +508,17 @@ class ChannelStateStore:
             self._install_roles(channel_id, roles)
         return projection
 
-    def _install_roles(self, channel_id: str, roles: _AccessRoles | None) -> None:
+    def _install_roles(
+        self, channel_id: str, roles: _AccessRoles | None, *, preserve_redirects: bool = True
+    ) -> None:
         updated = dict(self._roles)
         if roles is None:
             updated.pop(channel_id, None)
         else:
+            if preserve_redirects:
+                roles = replace(
+                    roles, scope_redirects=updated.get(channel_id, _NO_ACCESS_ROLES).scope_redirects
+                )
             updated[channel_id] = roles
         self._roles = updated
 
@@ -895,10 +1002,30 @@ def _bind_platform(connection: sqlite3.Connection, channel_id: str, platform: st
         "FROM channel_conversations WHERE channel_id = ? AND conversation_id = ?",
         (channel_id, main_conversation_id(channel_id)),
     ).fetchall()
+    default_policy = connection.execute(
+        "SELECT mode FROM channel_member_tool_policies "
+        "WHERE channel_id = ? AND access_scope_id = ''",
+        (channel_id,),
+    ).fetchone()
+    default_tools = connection.execute(
+        "SELECT tool_name FROM channel_member_tools WHERE channel_id = ? AND access_scope_id = ''",
+        (channel_id,),
+    ).fetchall()
     connection.execute("DELETE FROM channels WHERE channel_id = ?", (channel_id,))
     connection.execute(
         "INSERT INTO channels (channel_id, platform) VALUES (?, ?)", (channel_id, platform)
     )
+    if default_policy is not None:
+        connection.execute(
+            "INSERT INTO channel_member_tool_policies (channel_id, access_scope_id, mode) "
+            "VALUES (?, '', ?)",
+            (channel_id, default_policy[0]),
+        )
+        connection.executemany(
+            "INSERT INTO channel_member_tools (channel_id, access_scope_id, tool_name) "
+            "VALUES (?, '', ?)",
+            [(channel_id, row[0]) for row in default_tools],
+        )
     connection.executemany(
         "INSERT INTO channel_conversations "
         "(channel_id, conversation_id, conversation_kind, active_session_id, updated_at) "
@@ -906,106 +1033,6 @@ def _bind_platform(connection: sqlite3.Connection, channel_id: str, platform: st
         [(channel_id, *row) for row in kept],
     )
     return True
-
-
-def _registered_self_user_id(connection: sqlite3.Connection, channel_id: str) -> str | None:
-    row = connection.execute(
-        "SELECT self_user_id FROM channels WHERE channel_id = ?", (channel_id,)
-    ).fetchone()
-    if row is None:
-        raise ChannelNotFoundError(f"Channel not found: {channel_id}")
-    return None if row[0] is None else str(row[0])
-
-
-def _load_all_roles(connection: sqlite3.Connection) -> dict[str, _AccessRoles]:
-    self_ids = {
-        str(channel_id): self_user_id
-        for channel_id, self_user_id in connection.execute(
-            "SELECT channel_id, self_user_id FROM channels"
-        )
-    }
-    admins: dict[str, set[tuple[str, str]]] = {channel_id: set() for channel_id in self_ids}
-    for channel_id, access_scope_id, user_id in connection.execute(
-        "SELECT channel_id, access_scope_id, user_id FROM channel_admins"
-    ):
-        admins.setdefault(str(channel_id), set()).add((str(access_scope_id), str(user_id)))
-    return {
-        channel_id: _AccessRoles(
-            self_user_id=self_ids.get(channel_id), admins=frozenset(admins[channel_id])
-        )
-        for channel_id in admins
-    }
-
-
-def _load_channel_roles(connection: sqlite3.Connection, channel_id: str) -> _AccessRoles | None:
-    row = connection.execute(
-        "SELECT self_user_id FROM channels WHERE channel_id = ?", (channel_id,)
-    ).fetchone()
-    if row is None:
-        return None
-    admins = frozenset(
-        (str(access_scope_id), str(user_id))
-        for access_scope_id, user_id in connection.execute(
-            "SELECT access_scope_id, user_id FROM channel_admins WHERE channel_id = ?",
-            (channel_id,),
-        )
-    )
-    return _AccessRoles(self_user_id=row[0], admins=admins)
-
-
-def _access_projection(
-    connection: sqlite3.Connection, channel_id: str
-) -> tuple[JsonObject, _AccessRoles]:
-    self_user_id = _registered_self_user_id(connection, channel_id)
-    admins: dict[str, set[str]] = {}
-    for access_scope_id, user_id in connection.execute(
-        "SELECT access_scope_id, user_id FROM channel_admins WHERE channel_id = ?",
-        (channel_id,),
-    ):
-        admins.setdefault(str(access_scope_id), set()).add(str(user_id))
-    participants: dict[str, list[tuple[str, str, str]]] = {}
-    for access_scope_id, user_id, display_name, last_seen_at in connection.execute(
-        "SELECT access_scope_id, user_id, display_name, last_seen_at "
-        "FROM channel_participants WHERE channel_id = ? ORDER BY access_scope_id, user_id",
-        (channel_id,),
-    ):
-        participants.setdefault(str(access_scope_id), []).append(
-            (str(user_id), str(display_name), str(last_seen_at))
-        )
-    roles = _AccessRoles(
-        self_user_id=self_user_id,
-        admins=frozenset(
-            (access_scope_id, user_id)
-            for access_scope_id, user_ids in admins.items()
-            for user_id in user_ids
-        ),
-    )
-    groups: list[JsonObject] = []
-    for access_scope_id in sorted(set(admins) | set(participants)):
-        admin_ids = set(admins.get(access_scope_id, ()))
-        if self_user_id is not None:
-            admin_ids.add(self_user_id)
-        groups.append(
-            {
-                "access_scope_id": access_scope_id,
-                "admin_user_ids": sorted(admin_ids),
-                "participants": [
-                    {
-                        "user_id": user_id,
-                        "display_name": display_name,
-                        "last_seen_at": last_seen_at,
-                        "role": roles.role_for(access_scope_id, user_id),
-                    }
-                    for user_id, display_name, last_seen_at in participants.get(access_scope_id, ())
-                ],
-            }
-        )
-    projection: JsonObject = {
-        "channel_id": channel_id,
-        "self_user_id": self_user_id,
-        "groups": groups,
-    }
-    return projection, roles
 
 
 def _run_button_binding(
