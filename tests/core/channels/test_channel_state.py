@@ -22,6 +22,8 @@ from core.utils.timestamps import format_canonical_timestamp, utc_now_timestamp
 
 _STATE_TABLES = (
     "channel_admins",
+    "channel_member_tool_policies",
+    "channel_member_tools",
     "channel_participants",
     "channel_conversations",
     "channel_run_buttons",
@@ -99,6 +101,7 @@ def _row_counts(state: ChannelStateStore, channel_id: str) -> dict[str, int]:
 async def _fill(state: ChannelStateStore, channel_id: str) -> None:
     await state.snapshot_participant_role(channel_id, "-100", "50", "Alice")
     await state.grant_group_admin(channel_id, "-100", "50")
+    await state.set_member_tools(channel_id, {"mode": "selected", "allowed": ["read"]}, "-100")
     await state.record_received(channel_id, "-100:1")
     state.point_conversation(channel_id, f"ch-{channel_id}--100", "group", "ses_next")
     state.save_run_button_binding(channel_id, _binding())
@@ -168,6 +171,7 @@ async def test_reset_gives_a_reused_channel_id_empty_state(store: ChannelStateSt
     assert await store.access_state("tg") == {
         "channel_id": "tg",
         "self_user_id": None,
+        "member_tools": {"mode": "selected", "allowed": ["web_search", "web_fetch"]},
         "groups": [],
     }
     assert store.role_for("tg", "-100", "50") == "member"
@@ -200,6 +204,7 @@ async def test_a_platform_change_resets_state_but_keeps_the_main_conversation(
     assert await store.access_state("tg") == {
         "channel_id": "tg",
         "self_user_id": None,
+        "member_tools": {"mode": "selected", "allowed": ["web_search", "web_fetch"]},
         "groups": [],
     }
     assert store.role_for("tg", "-100", "50") == "member"
@@ -285,12 +290,17 @@ async def test_group_access_is_durable_and_scoped_per_group(tmp_path: Path) -> N
     assert state.role_for("tg", "-100", "50") == "admin"
     assert state.role_for("tg", "-100", "51") == "admin"
     assert state.role_for("tg", "-200", "51") == "member"
+    await state.set_member_tools("tg", {"mode": "all"})
+    await state.set_member_tools("tg", {"mode": "none"}, "-100")
     state.close()
 
     reloaded = _open(tmp_path)
     try:
         access = await reloaded.access_state("tg")
         assert access["self_user_id"] == "50"
+        assert access["member_tools"] == {"mode": "all"}
+        assert reloaded.member_tools_for("tg", "-100").mode == "none"
+        assert reloaded.member_tools_for("tg", "-200").mode == "all"
         groups = {group["access_scope_id"]: group for group in access["groups"]}
         assert groups["-100"]["admin_user_ids"] == ["50", "51"]
         assert groups["-200"]["admin_user_ids"] == ["50"]
@@ -309,6 +319,13 @@ async def test_group_access_is_durable_and_scoped_per_group(tmp_path: Path) -> N
             assert datetime.strptime(item["last_seen_at"], "%Y-%m-%dT%H:%M:%S.%fZ")
         assert reloaded.role_for("tg", "-100", "51") == "admin"
 
+        assert groups["-100"]["member_tools"] == {"mode": "none"}
+        assert groups["-200"]["member_tools"] is None
+        assert groups["-200"]["effective_member_tools"] == {"mode": "all"}
+        await reloaded.set_member_tools("tg", None, "-100")
+        assert reloaded.member_tools_for("tg", "-100").mode == "all"
+        await reloaded.set_member_tools("tg", {"mode": "selected", "allowed": ["future_tool"]})
+        assert reloaded.member_tools_for("tg", "-100").allowed == ("future_tool",)
         await reloaded.revoke_group_admin("tg", "-100", "51")
         assert reloaded.role_for("tg", "-100", "51") == "member"
     finally:
@@ -378,6 +395,8 @@ async def test_group_access_migration_merges_groups_and_removes_old_scope(
     await store.snapshot_participant_role("tg", "-100", "50", "Alice")
     await store.grant_group_admin("tg", "-100", "50")
     await store.grant_group_admin("tg", "-200", "51")
+    await store.set_member_tools("tg", {"mode": "selected", "allowed": ["read"]}, "-100")
+    await store.set_member_tools("tg", {"mode": "selected", "allowed": ["web_fetch"]}, "-200")
 
     store.migrate_group_access("tg", "-100", "-200")
 
@@ -385,15 +404,21 @@ async def test_group_access_migration_merges_groups_and_removes_old_scope(
     assert [group["access_scope_id"] for group in access["groups"]] == ["-200"]
     group = access["groups"][0]
     assert group["admin_user_ids"] == ["50", "51"]
+    assert group["member_tools"] == {"mode": "selected", "allowed": ["web_fetch"]}
     assert [
         (participant["user_id"], participant["display_name"])
         for participant in group["participants"]
     ] == [("50", "Alice"), ("51", "Bob")]
     assert store.role_for("tg", "-200", "50") == "admin"
-    assert store.role_for("tg", "-100", "50") == "member"
+    # Previously admitted work follows the moved group's current role.
+    assert store.role_for("tg", "-100", "50") == "admin"
 
     store.migrate_group_access("tg", "-100", "-200")
     assert await store.access_state("tg") == access
+    store.migrate_group_access("tg", "-200", "-300")
+    assert store.member_tools_for("tg", "-300").allowed == ("web_fetch",)
+    assert store.member_tools_for("tg", "-200").allowed == ("web_fetch",)
+    assert store.member_tools_for("tg", "-100").allowed == ("web_fetch",)
 
 
 def test_conversation_pointers_restore_only_their_own_navigation(
@@ -743,3 +768,41 @@ def test_polling_watermark_survives_reopening_the_store(tmp_path: Path) -> None:
         assert reopened.load_update_offset("tg", _BOT) == 42
     finally:
         reopened.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "policy",
+    [
+        {},
+        {"mode": "unknown"},
+        {"mode": "selected"},
+        {"mode": "selected", "allowed": ["*"]},
+        {"mode": "all", "allowed": []},
+        {"mode": "all", "granted": ["read"]},
+    ],
+)
+async def test_invalid_member_tool_policy_preserves_saved_access(
+    store: ChannelStateStore, policy: object
+) -> None:
+    await store.set_member_tools("tg", {"mode": "none"})
+    before = await store.access_state("tg")
+    with pytest.raises(ChannelConfigError):
+        await store.set_member_tools("tg", policy)
+    assert await store.access_state("tg") == before
+    assert store.member_tools_for("tg", "-100").mode == "none"
+
+
+@pytest.mark.asyncio
+async def test_channel_member_default_survives_platform_change_but_group_overrides_do_not(
+    store: ChannelStateStore,
+) -> None:
+    await store.set_member_tools("tg", {"mode": "none"})
+    await store.set_member_tools("tg", {"mode": "all"}, "-100")
+    role, admitted = await store.snapshot_participant_access("tg", "-100", "50", "Alice")
+    assert role == "member" and admitted.mode == "all"
+    assert store.bind_platform("tg", "discord")
+    access = await store.access_state("tg")
+    assert access["member_tools"] == {"mode": "none"}
+    assert access["groups"] == []
+    assert store.member_tools_for("tg", "-100").mode == "none"

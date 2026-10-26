@@ -284,6 +284,12 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
     listChannels: () => call('channel.list'),
     getChannelStatus: (id) => call('channel.status', { id }),
     getChannelAccess: (id) => call('channel.access.get', { id }),
+    setChannelMemberTools: (id, accessScopeId, policy) =>
+      call('channel.member_tools.set', {
+        id,
+        ...(accessScopeId === null ? {} : { access_scope_id: accessScopeId }),
+        policy,
+      }),
     setChannelIdentity: (id, userId) =>
       call('channel.identity.set', { id, user_id: userId }),
     grantChannelAdmin: (id, accessScopeId, userId) =>

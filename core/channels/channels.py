@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterator, Sequence
 from contextlib import contextmanager, nullcontext
 from dataclasses import replace
 from pathlib import Path
@@ -69,6 +69,7 @@ class ChannelService:
         data_root: str | Path,
         credential_resolver: Callable[[str], str],
         attachment_store: AttachmentStore | None = None,
+        tool_catalog: Callable[[], Sequence[Any]] = tuple,
         command_dispatcher: CommandDispatcher,
         interaction_dispatcher: (
             Callable[[InteractionEvent, InteractionResponder], Awaitable[bool]] | None
@@ -79,6 +80,7 @@ class ChannelService:
         self._agent_store = agent_store
         self._credential_resolver = credential_resolver
         self._attachment_store = attachment_store
+        self._tool_catalog = tool_catalog
         self._command_dispatcher = command_dispatcher
         self._interaction_dispatcher = interaction_dispatcher
         self._storage = ChannelStorage(Path(data_root))
@@ -375,6 +377,18 @@ class ChannelService:
         """Return one Channel's durable identity and per-group access state."""
         return await self._state.access_state(channel_id)
 
+    async def set_channel_member_tools(
+        self, channel_id: str, policy: Any, access_scope_id: str | None = None
+    ) -> JsonObject:
+        """Replace one member Tool ceiling without disturbing the connection."""
+        result = await self._state.set_member_tools(channel_id, policy, access_scope_id)
+        _LOGGER.info(
+            "Channel member Tools updated (channel=%s scope=%s)",
+            channel_id,
+            "channel" if access_scope_id is None else "group",
+        )
+        return result
+
     async def set_channel_self_user_id(self, channel_id: str, user_id: str) -> JsonObject:
         """Set and return one Channel account's own platform identity."""
         return await self._state.set_self_user_id(channel_id, user_id)
@@ -658,6 +672,7 @@ class ChannelService:
             previous_observations=tuple(self._observation_tasks),
             run_button_binding_registry=self._state if config.platform == "telegram" else None,
             access_registry=self._state,
+            tool_catalog=self._tool_catalog,
         )
 
     def _create_adapter(self, config: ChannelConfig) -> ChannelAdapter:

@@ -106,6 +106,7 @@ export {
   enableChannel,
   disableChannel,
   setChannelIdentity,
+  setChannelMemberTools,
   grantChannelAdmin,
   revokeChannelAdmin,
   listExtensions,

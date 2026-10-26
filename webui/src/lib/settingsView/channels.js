@@ -123,6 +123,8 @@ function normalizeChannelAccess(value) {
     : [];
   return {
     self_user_id: selfUserId,
+    loaded: isPlainObject(value?.member_tools),
+    member_tools: value?.member_tools ?? null,
     groups,
   };
 }
@@ -160,6 +162,8 @@ function normalizeChannelAccessGroup(value) {
     : [];
   return {
     access_scope_id: value.access_scope_id,
+    member_tools: value.member_tools ?? null,
+    effective_member_tools: value.effective_member_tools ?? null,
     admin_user_ids: Array.isArray(value.admin_user_ids)
       ? value.admin_user_ids.filter(
           (userId) => typeof userId === 'string' && userId.length > 0,

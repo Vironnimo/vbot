@@ -24,6 +24,7 @@ from core.database import write_bootstrap_marker
 from core.extensions import InteractionEvent, InteractionResponder
 from core.runs import ChatRunManager
 from core.sessions import ChatSessionManager
+from core.tools.availability import ToolAccess
 
 from .engine_test_support import (
     QUEUE_DRAIN_TIMEOUT_SECONDS,
@@ -108,9 +109,9 @@ class GatedAccessRegistry(MemoryChannelAccessRegistry):
         self._error = error
 
     @override
-    async def snapshot_participant_role(
+    async def snapshot_participant_access(
         self, channel_id: str, access_scope_id: str, user_id: str, display_name: str
-    ) -> GroupRole:
+    ) -> tuple[GroupRole, ToolAccess]:
         if self._error is not None:
             raise self._error
         if not self.entered.is_set():
@@ -120,7 +121,7 @@ class GatedAccessRegistry(MemoryChannelAccessRegistry):
             except asyncio.CancelledError:
                 self.cancelled.set()
                 raise
-        return await super().snapshot_participant_role(
+        return await super().snapshot_participant_access(
             channel_id, access_scope_id, user_id, display_name
         )
 

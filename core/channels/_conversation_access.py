@@ -5,34 +5,32 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+from core.channels._member_tools import DEFAULT_MEMBER_TOOLS, member_tool_names
 from core.channels.adapter import (
     ChannelAccessRegistry,
     ConversationFacts,
 )
-from core.chat.messages import GroupRole, MessageSender
+from core.chat.messages import MessageSender
+from core.tools.model_names import model_tool_name
 
 if TYPE_CHECKING:
     from core.channels.config import ChannelConfig
-
-_MEMBER_TOOL_NAMES = ("web_search", "web_fetch")
-
-
-_MEMBER_TOOL_DENIAL = (
-    "Tool access denied: the current sender is a group member. "
-    "Group members may use only web_search and web_fetch."
-)
 
 
 class ChannelAccessPolicy:
     """Resolve response eligibility and group sender authority at admission/dispatch."""
 
     def __init__(
-        self, config: ChannelConfig, access_registry: ChannelAccessRegistry | None
+        self,
+        config: ChannelConfig,
+        access_registry: ChannelAccessRegistry | None,
+        tool_catalog: Callable[[], Sequence[Any]] = tuple,
     ) -> None:
         self._config = config
         self._access_registry = access_registry
+        self._tool_catalog = tool_catalog
         self._mention_patterns = tuple(
             re.compile(pattern, re.IGNORECASE) for pattern in config.mention_patterns
         )
@@ -89,20 +87,21 @@ class ChannelAccessPolicy:
             return conversation
         access_scope_id = conversation.access_scope_id or conversation.chat_id
         registry = self._access_registry
-        role: GroupRole = (
-            await registry.snapshot_participant_role(
+        role, policy = (
+            await registry.snapshot_participant_access(
                 self._config.id,
                 access_scope_id,
                 conversation.user_id,
                 conversation.user_display_name or conversation.user_id,
             )
             if registry is not None
-            else "member"
+            else ("member", DEFAULT_MEMBER_TOOLS)
         )
         return replace(
             conversation,
             access_scope_id=access_scope_id,
             sender_role=role,
+            member_tools=policy,
         )
 
     def _tool_access_for(
@@ -117,19 +116,45 @@ class ChannelAccessPolicy:
         user_id = conversation.user_id
         registry = self._access_registry
 
+        admitted_policy = conversation.member_tools or DEFAULT_MEMBER_TOOLS
+        admitted_names = (
+            member_tool_names(admitted_policy, self._tool_catalog())
+            if admitted_role == "member"
+            else None
+        )
+
         def denial_resolver(tool_name: str) -> str | None:
-            if tool_name in _MEMBER_TOOL_NAMES:
-                return None
             current_role = (
                 registry.role_for(self._config.id, access_scope_id, user_id)
                 if registry is not None
                 else admitted_role
             )
-            if admitted_role != "admin" or current_role != "admin":
-                return _MEMBER_TOOL_DENIAL
-            return None
+            current_policy = (
+                registry.member_tools_for(self._config.id, access_scope_id)
+                if registry is not None
+                else admitted_policy
+            )
+            current_names = (
+                member_tool_names(current_policy, self._tool_catalog())
+                if current_role == "member"
+                else None
+            )
+            allowed = admitted_names
+            if current_names is not None:
+                allowed = (
+                    current_names
+                    if allowed is None
+                    else tuple(name for name in allowed if name in current_names)
+                )
+            if allowed is None or tool_name in allowed:
+                return None
+            choices = ", ".join(
+                model_tool_name(name) for name in sorted(allowed) if name != "load_tools"
+            )
+            return "Tool access denied for this group request. " + (
+                f"Allowed by group access: {choices}."
+                if choices
+                else "No Tools are allowed by group access."
+            )
 
-        restriction: Sequence[str] | None = (
-            _MEMBER_TOOL_NAMES if admitted_role == "member" else None
-        )
-        return restriction, denial_resolver
+        return admitted_names, denial_resolver

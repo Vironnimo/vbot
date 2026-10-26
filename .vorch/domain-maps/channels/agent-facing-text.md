@@ -1,6 +1,6 @@
 # Channels Agent-facing text
 
-Why each sentence of the Agent-facing text the Channels domain owns exists: the Run note of a Run-button tap or checklist submission (`_format_interaction_note` in `_conversation_content.py`). Rules for this file: `.vorch/workflows/domain-map-workflow.md` -> Agent-facing text.
+Why each sentence of the Agent-facing text the Channels domain owns exists: the Run note of a Run-button tap or checklist submission (`_format_interaction_note` in `_conversation_content.py`) and the group Tool-access refusal (`_conversation_access.py`). Rules for this file: `.vorch/workflows/domain-map-workflow.md` -> Agent-facing text.
 
 The Run note of a reserved Run-button tap (`_format_interaction_note` in `_conversation_content.py`) reaches the Agent as the internal prompt of that Run. Button labels/data and checklist labels/ids are JSON-quoted with escaped angle brackets; quotes, line breaks and tags stay inside the data record. Group taps retain the ingress sender's attributed role. Coverage: `tests/core/channels/test_engine_interactions.py`.
 
@@ -15,3 +15,11 @@ The Run note of a reserved Run-button tap (`_format_interaction_note` in `_conve
 | `No checklist item changed since you sent it (<n> items).` | Says that nothing needs saving, so the Agent does not rewrite every item. |
 | `Act on these changes, then confirm in this chat.` / `Confirm in this chat.` | On checklist submission, apply only its changes and confirm in the chat; without it Agents save silently or ask whether to save. |
 | `Other buttons on the message:` | Keeps the Agent's own extra buttons visible as quoted label/data records when the checklist hides its item and done buttons. |
+
+## Group Tool-access refusal
+
+| Text | Reason |
+|---|---|
+| `Tool access denied for this group request.` | Identifies the request's group authority as the refusal, including a revoked admin and a policy changed after ingress; calling every refusal a current member role was inaccurate after a role grant. |
+| `Allowed by group access: <Tool names>.` | Names the intersection of admitted and live group ceilings so the Agent can choose permitted work; the former fixed web-only list becomes false with configurable member access. Agent permissions still apply. Discovery is omitted from the suggested task Tools. |
+| `No Tools are allowed by group access.` | Makes an empty intersection explicit instead of suggesting a different Tool call when the request has no permitted task Tools. |

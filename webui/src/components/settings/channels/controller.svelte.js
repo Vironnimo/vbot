@@ -8,6 +8,8 @@ import {
   grantChannelAdmin,
   listAgents,
   listChannels,
+  listTools,
+  setChannelMemberTools,
   revokeChannelAdmin,
   setChannelIdentity,
   updateChannel,
@@ -49,6 +51,7 @@ export function channelPlatformLabel(platformId) {
 export function createChannelsSettings(context) {
   let channelPanelState = $state(createChannelPanelState());
   let channelAgents = $state([]);
+  let channelTools = $state([]);
   let channelFormVisible = $state(false);
   let channelFormMode = $state(CHANNEL_FORM_MODE_CREATE);
   let channelFormValues = $state(createChannelFormValues());
@@ -384,8 +387,12 @@ export function createChannelsSettings(context) {
   async function loadChannelAccess(channelId) {
     const request = ++accessRevision;
     try {
-      const access = await getChannelAccess(channelId);
+      const [access, catalog] = await Promise.all([
+        getChannelAccess(channelId),
+        listTools(),
+      ]);
       if (request !== accessRevision) return;
+      channelTools = catalog.tools;
       const channel = channelPanelState.channels.find(
         (entry) => entry.id === channelId && isEditingChannel(entry),
       );
@@ -396,9 +403,50 @@ export function createChannelsSettings(context) {
           { ...channel, access },
         ]),
       };
-    } catch {
-      // A failed access read does not prevent editing the Channel config.
+    } catch (error) {
+      if (request === accessRevision)
+        context.onError(`${t('settings.loadError')} ${error.message}`);
     }
+  }
+
+  async function saveChannelMemberTools(channelId, scopeId, policy) {
+    ++accessRevision;
+    const access = await setChannelMemberTools(channelId, scopeId, policy);
+    ++accessRevision;
+    const channel = channelPanelState.channels.find(
+      (entry) => entry.id === channelId,
+    );
+    if (channel) {
+      // Editors for different scopes save independently. A response contains a
+      // whole projection from its own commit, so publish only its edited leaf.
+      const current = channel.access;
+      const memberTools =
+        scopeId === null ? access.member_tools : current.member_tools;
+      const savedGroup = access.groups.find(
+        (group) => group.access_scope_id === scopeId,
+      );
+      const groups = current.groups.map((group) => {
+        const policy =
+          group.access_scope_id === scopeId
+            ? (savedGroup?.member_tools ?? null)
+            : group.member_tools;
+        return {
+          ...group,
+          member_tools: policy,
+          effective_member_tools: policy ?? memberTools,
+        };
+      });
+      channelPanelState = {
+        ...channelPanelState,
+        channels: mergeChannelStatuses(channelPanelState.channels, [
+          {
+            ...channel,
+            access: { ...current, member_tools: memberTools, groups },
+          },
+        ]),
+      };
+    }
+    return access;
   }
 
   async function reloadChannelAgents() {
@@ -554,8 +602,8 @@ export function createChannelsSettings(context) {
       entry.kind === 'group'
         ? t('settings.channels.denied.group')
         : t('settings.channels.denied.direct');
-    const namePart = entry.display_name ? `${entry.display_name} · ` : '';
-    return `${namePart}${kindLabel} · ID ${entry.chat_id}`;
+    const namePart = entry.display_name ? `${entry.display_name} Â· ` : '';
+    return `${namePart}${kindLabel} Â· ID ${entry.chat_id}`;
   }
 
   function deleteChannel(channel) {
@@ -605,6 +653,10 @@ export function createChannelsSettings(context) {
     get channelPanelState() {
       return channelPanelState;
     },
+    get channelTools() {
+      return channelTools;
+    },
+    saveChannelMemberTools,
     get channelAgents() {
       return channelAgents;
     },

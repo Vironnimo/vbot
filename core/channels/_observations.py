@@ -78,7 +78,13 @@ class ChannelObservationInbox:
                     config.id,
                     utc_now_timestamp(),
                     json.dumps(config.to_dict()),
-                    json.dumps(asdict(observed.conversation)),
+                    json.dumps(
+                        {
+                            key: value
+                            for key, value in asdict(observed.conversation).items()
+                            if key != "member_tools"
+                        }
+                    ),
                     json.dumps([observed.note, *observed.following_notes]),
                     session.generation_id,
                     route.session_id,

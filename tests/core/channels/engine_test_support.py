@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import ExitStack
 from itertools import count
 from pathlib import Path
@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, Mock
 from weakref import WeakValueDictionary
 
 from core.channels import ChannelConfig
+from core.channels._member_tools import DEFAULT_MEMBER_TOOLS
 from core.channels._observations import ChannelObservationInbox
 from core.channels.adapter import (
     ChannelAccessRegistry,
@@ -45,6 +46,7 @@ from core.runs import (
     WaitingWorkAdmission,
 )
 from core.sessions import ChatSessionManager
+from core.tools.availability import ToolAccess
 
 # Generous Channel queue drain deadline: under xdist load the queue worker can
 # need several seconds for lazy imports and durable Session setup before the
@@ -109,19 +111,27 @@ class MemoryChannelAccessRegistry(ChannelAccessRegistry):
 
     def __init__(self, admin_user_ids: list[str] | None = None) -> None:
         self.admin_user_ids = set(admin_user_ids or [])
+        self.member_tools: dict[str, ToolAccess] = {}
         self.participants: dict[str, dict[str, str]] = {}
 
     @override
-    async def snapshot_participant_role(
+    async def snapshot_participant_access(
         self,
         channel_id: str,
         access_scope_id: str,
         user_id: str,
         display_name: str,
-    ) -> GroupRole:
+    ) -> tuple[GroupRole, ToolAccess]:
         del channel_id
         self.participants.setdefault(access_scope_id, {})[user_id] = display_name
-        return self.role_for("", access_scope_id, user_id)
+        return self.role_for("", access_scope_id, user_id), self.member_tools_for(
+            "", access_scope_id
+        )
+
+    @override
+    def member_tools_for(self, channel_id: str, access_scope_id: str) -> ToolAccess:
+        del channel_id
+        return self.member_tools.get(access_scope_id, DEFAULT_MEMBER_TOOLS)
 
     @override
     def role_for(self, channel_id: str, access_scope_id: str, user_id: str) -> GroupRole:
@@ -400,6 +410,7 @@ def make_channel_engine(
     command_dispatcher: object | None = None,
     run_button_binding_registry: RunButtonBindingRegistry | None = None,
     access_registry: ChannelAccessRegistry | None = None,
+    tool_catalog: Callable[[], Sequence[Any]] = tuple,
 ) -> ChannelConversationEngine:
     """Build a Channel's engine on the data directory's Channel state, as the service does."""
     state = channel_state(data_dir, config.id)
@@ -412,6 +423,7 @@ def make_channel_engine(
         pending_replies=state,
         observation_inbox=ChannelObservationInbox(state, chat_sessions),
         run_button_binding_registry=run_button_binding_registry,
+        tool_catalog=tool_catalog,
         access_registry=access_registry
         or cast(ChannelAccessRegistry, MemoryChannelAccessRegistry([])),
     )
@@ -458,6 +470,7 @@ def make_engine(
     waiting_work_manager: ChatRunManager | None = None,
     run_button_binding_registry: RunButtonBindingRegistry | None = None,
     access_registry: ChannelAccessRegistry | None = None,
+    tool_catalog: Callable[[], Sequence[Any]] = tuple,
     running_run: Run | None = None,
 ) -> tuple[ChannelConversationEngine, ChatSessionManager, AsyncMock, FakeTransport]:
     """Build an engine on real Sessions and the data directory's Channel state.
@@ -487,6 +500,7 @@ def make_engine(
         chat_sessions,
         command_dispatcher=command_dispatcher,
         run_button_binding_registry=run_button_binding_registry,
+        tool_catalog=tool_catalog,
         access_registry=access_registry
         or cast(
             ChannelAccessRegistry,
@@ -572,7 +586,7 @@ def assert_member_trigger(
     kwargs = dict(awaited_args.kwargs)
     assert kwargs.pop("sender") == sender
     assert kwargs.pop("reply_surface") == reply_surface
-    assert kwargs.pop("tool_restriction") == ("web_search", "web_fetch")
+    assert kwargs.pop("tool_restriction") == ("load_tools", "web_fetch", "web_search")
     assert kwargs.pop("run_kind") is RunKind.CHANNEL
     resolver = kwargs.pop("tool_denial_resolver")
     assert callable(resolver)

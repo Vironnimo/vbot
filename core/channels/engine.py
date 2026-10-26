@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import OrderedDict, deque
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
@@ -132,6 +132,7 @@ class ChannelConversationEngine:
         previous_observations: tuple[asyncio.Task[None], ...] = (),
         run_button_binding_registry: RunButtonBindingRegistry | None = None,
         access_registry: ChannelAccessRegistry | None = None,
+        tool_catalog: Callable[[], Sequence[Any]] = tuple,
     ) -> None:
         self._config = config
         self._trigger_service = trigger_service
@@ -152,7 +153,7 @@ class ChannelConversationEngine:
         # lets them finish instead of cancelling either write.
         self._command_dispatcher = command_dispatcher
         self._run_button_binding_registry = run_button_binding_registry
-        self._access = ChannelAccessPolicy(config, access_registry)
+        self._access = ChannelAccessPolicy(config, access_registry, tool_catalog)
         self._conversation_pointers = conversation_pointers
         self._routing = ChannelSessionRouting(config, chat_sessions, conversation_pointers)
         self._replies = ChannelReplies(
