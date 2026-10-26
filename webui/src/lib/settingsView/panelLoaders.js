@@ -34,6 +34,8 @@ const loadSettingsGeneralPanel = () =>
   import('../../components/settings/SettingsGeneralPanel.svelte');
 const loadSettingsAccessPanel = () =>
   import('../../components/settings/SettingsAccessPanel.svelte');
+const loadSettingsComputersPanel = () =>
+  import('../../components/settings/SettingsComputersPanel.svelte');
 const loadSettingsLibrarianPanel = () =>
   import('../../components/settings/SettingsLibrarianPanel.svelte');
 const loadSettingsLiveVoicePanel = () =>
@@ -85,6 +87,7 @@ export const settingsPanelLoaders = {
   debug_traces: loadDebugView,
   server: loadSettingsGeneralPanel,
   access: loadSettingsAccessPanel,
+  computers: loadSettingsComputersPanel,
   desktop_connection: loadDesktopConnectionSettings,
   computer_sharing: loadDesktopComputerSharing,
   live_voice_shortcut: loadDesktopLiveVoiceShortcut,

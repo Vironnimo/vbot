@@ -168,21 +168,45 @@ it('plays simultaneous Session outputs in order and uses durable audio after wai
   );
 });
 
-it.each(['run_cancelled', 'run_failed', 'run_interrupted'])(
-  'removes active and waiting speech on %s and ignores replay after cancellation',
+it('removes active and waiting speech on cancellation and ignores replay after it', async () => {
+  owner.handleServerEvent(speechEvent());
+  const second = speechEvent('two');
+  second.payload.run_id = 'run-one';
+  owner.handleServerEvent(second);
+  owner.handleServerEvent({
+    type: 'run_cancelled',
+    payload: { run_id: 'run-one' },
+  });
+  owner.handleServerEvent(speechEvent('one', 'tool_call_result'));
+  await flush();
+  expect(owner.active).toBeNull();
+  expect(owner.pending).toBe(0);
+  expect(streams[0].stop).toHaveBeenCalledOnce();
+  expect(streams[1].stop).toHaveBeenCalledOnce();
+  expect(play).not.toHaveBeenCalled();
+});
+
+it.each(['run_failed', 'run_interrupted'])(
+  'plays active and waiting speech to the end after %s',
   async (type) => {
     owner.handleServerEvent(speechEvent());
     const second = speechEvent('two');
     second.payload.run_id = 'run-one';
     owner.handleServerEvent(second);
     owner.handleServerEvent({ type, payload: { run_id: 'run-one' } });
-    owner.handleServerEvent(speechEvent('one', 'tool_call_result'));
     await flush();
-    expect(owner.active).toBeNull();
+    expect(streams[0].stop).not.toHaveBeenCalled();
+    expect(owner.pending).toBe(1);
+    streams[0].report({
+      ended: true,
+      paused: true,
+      currentTime: 5,
+      duration: 5,
+    });
+    await flush();
+    expect(owner.active.key).toBe('run-one:call-two');
     expect(owner.pending).toBe(0);
-    expect(streams[0].stop).toHaveBeenCalledOnce();
-    expect(streams[1].stop).toHaveBeenCalledOnce();
-    expect(play).not.toHaveBeenCalled();
+    expect(streams[1].play).toHaveBeenCalled();
   },
 );
 

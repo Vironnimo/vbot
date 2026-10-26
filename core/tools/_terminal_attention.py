@@ -16,6 +16,7 @@ from core.utils.logging import get_logger
 from ._terminal_notices import (
     _attention_body,
     _seen_through,
+    revoked_computer_notice,
     screen_behind_note,
     unseen_lines_note,
 )
@@ -63,6 +64,8 @@ class TerminalNotices:
         self.acknowledged_revision = 0
         self.task: asyncio.Task[None] | None = None
         self.exit_acknowledged = False
+        # The attached Session lost this terminal's computer and was told once.
+        self.revocation_delivered = False
 
     def set(
         self,
@@ -154,6 +157,17 @@ class TerminalNotices:
         origin_run_id, execution_owner = self._origin()
         if trigger_service is None or attachment is None or origin_run_id is None:
             return
+        info = self._info()
+        granted = self._services.granted(attachment, info.computer_id)
+        if not granted:
+            # Its screen and end stay with the operator; the Agent learns once why.
+            if self.revocation_delivered:
+                return
+            body = revoked_computer_notice(
+                self.terminal_id, self._notice_label(), info.computer_name
+            )
+        else:
+            self.revocation_delivered = False
         delivery = trigger_service.submit_completion(
             attachment.address,
             notice_id=attention.notice_id,
@@ -171,6 +185,9 @@ class TerminalNotices:
                 self.terminal_id,
                 attention.revision,
             )
+            return
+        if not granted:
+            self.revocation_delivered = True
             return
         # The Agent received it: a wait ends only at a later attention.
         self.acknowledged_revision = max(self.acknowledged_revision, attention.revision)

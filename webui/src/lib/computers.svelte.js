@@ -4,17 +4,17 @@ import { t } from './i18n.js';
 
 const COMPUTERS_CONTEXT = Symbol('computers');
 
+// Mirrors the server: only an absent grant list allows just the default. A
+// stored list can omit the default, for example a Sub-Agent whose Parent
+// revoked it; the default then stays pinned but is not allowed.
 export function normalizeExecution(value) {
   const computerId =
     typeof value?.computer_id === 'string' && value.computer_id
       ? value.computer_id
       : 'server';
-  const ids = [
-    computerId,
-    ...(Array.isArray(value?.allowed_computer_ids)
-      ? value.allowed_computer_ids.filter((id) => typeof id === 'string' && id)
-      : []),
-  ];
+  const ids = Array.isArray(value?.allowed_computer_ids)
+    ? value.allowed_computer_ids.filter((id) => typeof id === 'string' && id)
+    : [computerId];
   return {
     computer_id: computerId,
     allowed_computer_ids: ids.filter((id, index) => ids.indexOf(id) === index),

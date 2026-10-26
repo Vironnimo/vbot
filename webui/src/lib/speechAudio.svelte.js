@@ -165,9 +165,9 @@ export function createSpeechAudio({
       const payload = event.payload ?? {};
       const runId = payload.run_id;
       if (!runId) return;
-      if (
-        ['run_cancelled', 'run_failed', 'run_interrupted'].includes(event.type)
-      ) {
+      // Only the user's cancellation silences a Run's speech; after a failure
+      // or interruption its generated speech still plays to the end.
+      if (event.type === 'run_cancelled') {
         cancelRun(runId);
         return;
       }

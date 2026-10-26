@@ -25,7 +25,7 @@ The public status push `vbot-desktop-computer-sharing` is a single coalesced sna
 
 ## Closing and updating
 
-Closing first fences new mutations, then warns if native Terminals are running or starting. Terminal reads and status remain available during the dialog. A declined warning lifts the fence. Accepted close shuts down the native handlers before the Desktop exits. Disabling a capability closes its handler. No change silently redirects operations to the server computer.
+Closing first fences new mutations, then warns if native Terminals are running or starting. Terminal reads and status remain available during the dialog. A declined warning lifts the fence. Accepted close shuts down the native handlers before the Desktop exits. Turning Terminal sharing off while native Terminals run or start asks a native warning first (the bridge's `confirm`, user decision 2026-10-26); a declined or unavailable warning answers `declined` and keeps it shared. Disabling a capability closes its handler. No change silently redirects operations to the server computer.
 
 Automatic package restarts wait indefinitely for local Terminals. Every admitted restart also fences native requests before the successor starts, so a new Terminal cannot slip between the idle check and the handoff. Explicit restart refuses while Terminals remain; the user can stop them first. A failed handoff lifts the fence so the existing app remains usable (`desktop/update-restart.md`).
 

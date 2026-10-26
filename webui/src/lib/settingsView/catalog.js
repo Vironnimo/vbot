@@ -94,6 +94,7 @@ const sections = [
   },
   { id: 'server', label: () => t('settings.sections.server') },
   { id: 'access', label: () => t('settings.sections.access') },
+  { id: 'computers', label: () => t('computers.settingsTitle') },
   {
     id: 'desktop_connection',
     label: () => t('settings.desktop.connection.title'),
@@ -205,6 +206,7 @@ export function settingsPages(desktopCapabilities) {
       sections: [
         'server',
         'access',
+        'computers',
         ...(desktopCapabilities?.serverSelection ? ['desktop_connection'] : []),
         ...(desktopCapabilities?.computerSharing ? ['computer_sharing'] : []),
       ],

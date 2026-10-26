@@ -356,7 +356,7 @@ describe('SettingsView', () => {
         integrations: ['channels', 'extensions', 'credentials'],
         secrets: ['agent_secrets'],
         archive: ['archive_retention', 'archive_entries'],
-        system: ['server', 'access'],
+        system: ['server', 'access', 'computers'],
         debug: ['debug_capture', 'debug_traces'],
       };
       for (const [pageId, sectionIds] of Object.entries(expectedSections)) {

@@ -25,9 +25,24 @@ export default {
   'computers.sessionHint':
     'Choose where Terminal and Computer Use run for this conversation.',
   'computers.selectedOffline': '{name} · Offline',
+  'computers.selectedRevoked': '{name} · Not allowed',
+  'computers.defaultRevoked':
+    'This conversation may no longer use this computer. Choose another default.',
   'computers.terminalUnavailable': 'Terminal is unavailable on this computer.',
   'computers.remoteWorkdir': 'Working directory on the selected computer',
   'computers.stopControl': 'Stop computer control on {name}',
+  'computers.settingsTitle': 'Computers',
+  'computers.settingsEmpty':
+    'No Desktop computers are registered. A computer appears here once its Desktop app shares Terminal or Computer Use with this server.',
+  'computers.online': 'Connected',
+  'computers.remove.button': 'Remove',
+  'computers.remove.aria': 'Remove {name}',
+  'computers.remove.title': 'Remove {name}?',
+  'computers.remove.body':
+    'Its remaining terminals end, and conversations cannot reach it until its Desktop app shares with this server again.',
+  'computers.remove.confirm': 'Remove computer',
+  'computers.remove.done': '{name} was removed',
+  'computers.remove.failed': 'The computer could not be removed.',
   'computers.sharingTitle': 'Share this computer',
   'computers.sharingHelp':
     'Share Terminal and Computer Use with the server connected in this Desktop app. They are available while the app is running, including when minimized.',

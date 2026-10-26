@@ -211,8 +211,9 @@ _ALTERNATE_SCREEN_NOTE = (
     "history; to see earlier content, use the program's own scrolling or paging."
 )
 # Launch facts: status shows them; other results do not repeat them, except
-# that start names the log.
+# that start names the log and the computer it started on.
 _LAUNCH_FIELDS = ("program", "title", "workdir", "log")
+_COMPUTER_FIELDS = ("computer_id", "computer_name", "computer_online")
 # Results that follow the program: their history holds only lines the Agent
 # has not seen, and they offer no pages (user decision D1).
 _FOLLOWING_VIEWS = frozenset({"start", "input", "wait", "resize"})
@@ -282,6 +283,9 @@ def _screen_result(
     if view != "status":
         for key in _LAUNCH_FIELDS:
             if not (view == "start" and key == "log"):
+                projected.pop(key, None)
+        if view != "start":
+            for key in _COMPUTER_FIELDS:
                 projected.pop(key, None)
     screen = projected.pop("screen", None)
     page = dict(projected.pop("scrollback", None) or {})

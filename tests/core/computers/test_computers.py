@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from core.computers import ComputerError, ComputerRegistry, normalize_execution
-from core.computers._store import COMPUTERS_PATH, validate_computers_file
+from core.computers._store import COMPUTERS_PATH, MAX_COMPUTERS, validate_computers_file
 from core.permissions import PermissionBoundary
 from core.tools.tools import ToolContext
 
@@ -81,15 +81,10 @@ async def test_selection_requires_exact_identity_grant_capability_and_connection
     with pytest.raises(ComputerError) as refused:
         registry.resolve(selected, None, "files")
     assert refused.value.code == "computer_capability_unavailable"
-    other = await registry.connect(hello("pc_other"), actor="host")
-    with pytest.raises(ComputerError) as refused:
-        registry.resolve(selected, "Laptop", "terminal")
-    assert refused.value.code == "computer_not_found"
     registry.disconnect(connection)
     with pytest.raises(ComputerError) as refused:
         registry.resolve(selected, None, "terminal")
     assert refused.value.code == "computer_offline"
-    registry.disconnect(other)
     registry.close()
 
 
@@ -108,13 +103,22 @@ async def test_registration_ownership_survives_restart_and_preserves_future_fiel
     path.write_text(json.dumps(saved))
     restarted = ComputerRegistry(tmp_path)
     assert not restarted.get("pc_laptop").online
-    for candidate, actor in (
-        (hello(key="different-secret-with-at-least-32-characters"), "dev_owner"),
-        (hello(), "dev_other"),
+    for candidate, actor, code in (
+        (
+            hello(key="different-secret-with-at-least-32-characters"),
+            "dev_owner",
+            "computer_identity_conflict",
+        ),
+        # The key proves the installation, but a connection without a sign-in
+        # cannot take over one registered with a sign-in.
+        (hello(), "open", "computer_sign_in_required"),
     ):
         with pytest.raises(ComputerError) as refused:
             await restarted.connect(candidate, actor=actor)
-        assert refused.value.code == "computer_identity_conflict"
+        assert refused.value.code == code
+    # A changed sign-in with the installation's key takes the registration over.
+    await restarted.connect(hello(), actor="host")
+    assert json.loads(path.read_text())["computers"][0]["actor"] == "host"
     await restarted.connect(hello(name="Renamed"), actor="dev_owner")
     rewritten = json.loads(path.read_text())
     assert rewritten["future_root"] == 1
@@ -130,6 +134,46 @@ async def test_registration_ownership_survives_restart_and_preserves_future_fiel
     assert refused.value.code == "computer_store_unavailable"
     assert path.read_text() == original
     unavailable.close()
+
+
+@pytest.mark.asyncio
+async def test_registration_needs_a_free_name_and_room_and_offline_computers_can_be_removed(
+    tmp_path: Path,
+) -> None:
+    registry = ComputerRegistry(tmp_path)
+    laptop = await registry.connect(hello(), actor="host")
+    for name, code in (
+        ("SERVER", "computer_name_reserved"),
+        ("  laptop ", "computer_name_taken"),
+    ):
+        with pytest.raises(ComputerError) as refused:
+            await registry.connect(hello("pc_other", name=name), actor="host")
+        assert refused.value.code == code
+    for index in range(MAX_COMPUTERS - 1):
+        await registry.connect(hello(f"pc_{index}", name=f"PC {index}"), actor="host")
+    with pytest.raises(ComputerError) as refused:
+        await registry.connect(hello("pc_extra", name="Extra"), actor="host")
+    assert refused.value.code == "computer_limit_reached"
+    # A registered computer still reconnects at the limit.
+    laptop = await registry.connect(hello(), actor="host")
+
+    for computer_id, code in (
+        ("server", "computer_not_removable"),
+        ("pc_laptop", "computer_online"),
+        ("pc_missing", "computer_not_found"),
+    ):
+        with pytest.raises(ComputerError) as refused:
+            await registry.forget(computer_id)
+        assert refused.value.code == code
+    registry.disconnect(laptop)
+    await registry.forget("pc_laptop")
+    assert "pc_laptop" not in json.dumps(json.loads((tmp_path / COMPUTERS_PATH).read_text()))
+    with pytest.raises(ComputerError) as refused:
+        registry.get("pc_laptop")
+    assert refused.value.code == "computer_not_found"
+    # Its name and its place are free again.
+    await registry.connect(hello("pc_extra", name="Laptop"), actor="host")
+    registry.close()
 
 
 @pytest.mark.asyncio

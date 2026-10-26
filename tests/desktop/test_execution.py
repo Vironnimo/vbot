@@ -198,6 +198,20 @@ async def test_calls_are_scoped_deduplicated_and_shutdown_stops_native_programs(
         duplicate = await socket.call("call-one", "start")
         assert duplicate["error"]["code"] == "computer_duplicate_call"
         assert len(handlers[0].calls) == 1
+        # Turning Terminal off would stop the running program: it asks first,
+        # and without an answer or with a refusal Terminal stays shared.
+        asked: list[str] = []
+
+        def refuse(_title: str, message: str) -> bool:
+            asked.append(message)
+            return False
+
+        for confirm in (None, refuse):
+            with pytest.raises(SharingError) as declined:
+                sharing.update({"terminal": False}, expected_server=url, confirm=confirm)
+            assert declined.value.error_code == "declined"
+        assert asked and asked[0].startswith("1 local terminal(s) are still running")
+        assert sharing.status()["capabilities"]["terminal"] is True
         assert sharing.prepare_restart() is False
         assert sharing.allow_close(lambda _title, _message: False) is False
         assert (await socket.call("call-three", "status"))["ok"] is True

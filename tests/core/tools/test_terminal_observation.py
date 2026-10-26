@@ -74,6 +74,9 @@ async def test_list_shows_every_terminal_with_its_title_and_attachment(
     assert terminals == [
         {
             "terminal_id": terminal_id,
+            "computer_id": "server",
+            "computer_name": "Server",
+            "computer_online": True,
             "call_name": "Anna",
             "program": "fake-tui",
             "state": "running",

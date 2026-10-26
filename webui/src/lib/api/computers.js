@@ -4,6 +4,15 @@ export function listComputers(options = {}) {
   return rpc('computers.list', {}, options);
 }
 
+export function removeComputer(computerId, options = {}) {
+  requireNonEmptyString(
+    computerId,
+    'Computer id must be a non-empty string',
+    'computers.remove',
+  );
+  return rpc('computers.remove', { id: computerId }, options);
+}
+
 export function setSessionExecution(
   agentId,
   sessionId,

@@ -32,12 +32,19 @@
   const selected = $derived(
     computers.find((computer) => computer.id === policy?.computer_id),
   );
+  const revoked = $derived(
+    Boolean(
+      policy && !policy.allowed_computer_ids.includes(policy.computer_id),
+    ),
+  );
   const label = $derived(
     !policy
       ? t('computers.sessionUnknown')
-      : selected?.known && !selected.online
-        ? t('computers.selectedOffline', { name: computerName(selected) })
-        : computerName(selected),
+      : revoked
+        ? t('computers.selectedRevoked', { name: computerName(selected) })
+        : selected?.known && !selected.online
+          ? t('computers.selectedOffline', { name: computerName(selected) })
+          : computerName(selected),
   );
   const options = $derived(
     computerOptions(
@@ -50,9 +57,12 @@
     onChange(
       normalizeExecution({
         computer_id: computerId,
-        allowed_computer_ids: policy.allowed_computer_ids.filter(
-          (id) => id !== policy.computer_id,
-        ),
+        allowed_computer_ids: [
+          computerId,
+          ...policy.allowed_computer_ids.filter(
+            (id) => id !== policy.computer_id,
+          ),
+        ],
       }),
     );
   }
@@ -129,7 +139,9 @@
               onValueChange={changeDefault}
             />
             <span class="computer-settings-detail"
-              >{computerDescription(selected)}</span
+              >{revoked
+                ? t('computers.defaultRevoked')
+                : computerDescription(selected)}</span
             >
           </div>
           <p class="computer-settings-label">{t('computers.additional')}</p>

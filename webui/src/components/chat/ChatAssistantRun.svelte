@@ -699,13 +699,9 @@
                 speechKey={`${item.runId ?? item.id}:${child.toolCallId ?? child.id}`}
                 src={speechArtifact?.url ?? ''}
                 {playback}
-                cancelled={['cancelled', 'interrupted', 'failed'].includes(
-                  item.status,
-                )}
+                cancelled={item.status === 'cancelled'}
                 autoplay={item.source === 'live' &&
-                  !['cancelled', 'interrupted', 'failed'].includes(
-                    item.status,
-                  ) &&
+                  item.status !== 'cancelled' &&
                   viewState.claimAutoplay(
                     `${item.runId ?? item.id}:${child.toolCallId ?? child.id}`,
                   )}

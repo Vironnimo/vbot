@@ -129,7 +129,7 @@ A finished review row with an `outcome` adds one quiet line (user requirement: b
 
 ## Composer and inputs
 
-The composer footer's `SessionComputerSettings.svelte` chooses the default computer for Terminal and Computer Use and explicitly grants additional computers. File and shell Tools remain server-side. `sessionSettings.svelte.js` retains a draft's policy independently of Agent defaults and sends it as `new_session.execution`; existing Sessions read `session.execution` and save through `session.set_execution` using the same keyed Autosave participant as other Session settings. A successfully read legacy Session without execution metadata means server only; an unread or failed Session row keeps access unknown and locked, with an explicit Retry action. Changing the default removes the old default from the allowed set while retaining other explicit grants; the default itself always belongs to that set. Active Runs or queued work lock the controls. Offline and missing computers remain selected and show availability, without fallback. New drafts reset to server; moving a draft to another Agent retains its explicit computer choice. Coverage: `ChatView.computers.test.js`.
+The composer footer's `SessionComputerSettings.svelte` chooses the default computer for Terminal and Computer Use and explicitly grants additional computers. File and shell Tools remain server-side. `sessionSettings.svelte.js` retains a draft's policy independently of Agent defaults and sends it as `new_session.execution`; existing Sessions read `session.execution` and save through `session.set_execution` using the same keyed Autosave participant as other Session settings. A successfully read legacy Session without execution metadata means server only; an unread or failed Session row keeps access unknown and locked, with an explicit Retry action. Changing the default removes the old default from the allowed set while retaining other explicit grants and adds the new default to it. A stored set can omit the default (a Sub-Agent whose Parent revoked it, `subagents/delegation.md`): the view shows it as not allowed and other grant changes keep it out. Active Runs or queued work lock the controls. Offline and missing computers remain selected and show availability, without fallback. New drafts reset to server; moving a draft to another Agent retains its explicit computer choice. Coverage: `ChatView.computers.test.js`.
 
 The existing global Computer Use Stop control keeps the control-id-based operation; for remote activity its visible and accessible label names `computer_name` (falling back to `computer_id`), so the user can identify where Stop acts (`ComputerUseControl.test.js`).
 
@@ -189,10 +189,10 @@ events must not undo Pause. Identity Agent rename updates the origin address.
 
 When the speaking Session is not selected in Chat, `SpeechPlaybackBar.svelte`
 shows the shared controls, origin link and waiting count above the current view;
-Stop clears the active output and waiting list. Tool failure and Run cancellation,
-failure or interruption remove that Run's playback; its durable artifact stays
-playable by hand from History. Run completion lets audio
-finish. App teardown, access loss and a changed server epoch release resources;
+Stop clears the active output and waiting list. Tool failure and Run cancellation
+remove that Run's playback; its durable artifact stays playable by hand from History.
+Run completion, failure or interruption lets its generated audio, active and waiting,
+finish (user decision 2026-10-26: only the user's cancel silences speech). App teardown, access loss and a changed server epoch release resources;
 ordinary view changes do not. Failed playback remains available for manual retry
 or Stop. Idle resources and event deduplication are bounded.
 

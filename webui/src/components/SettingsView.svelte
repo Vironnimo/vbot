@@ -497,6 +497,8 @@
     />
   {:else if panelId === 'access'}
     <Panel {devicesRefreshToken} {onToast} />
+  {:else if panelId === 'computers'}
+    <Panel {onToast} />
   {:else if panelId === 'desktop_connection'}
     <Panel {onToast} />
   {:else if panelId === 'computer_sharing'}

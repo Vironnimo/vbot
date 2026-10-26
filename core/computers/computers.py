@@ -15,7 +15,7 @@ from core.utils.ids import is_safe_id, new_id
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
 
-from ._store import COMPUTERS_PATH, ComputerStore, validate_description
+from ._store import COMPUTERS_PATH, ComputerClaimError, ComputerStore, validate_description
 from .policy import normalize_execution
 
 if TYPE_CHECKING:
@@ -203,6 +203,8 @@ class ComputerRegistry:
                     "computer_identity_conflict",
                     "Computer identity belongs to another installation.",
                 ) from error
+            except ComputerClaimError as error:
+                raise ComputerError(error.code, error.message) from error
             except (OSError, ValueError) as error:
                 raise ComputerError(
                     "computer_registration_failed", "Computer registration could not be saved."
@@ -235,6 +237,34 @@ class ComputerRegistry:
             )
             _LOGGER.info("Computer connected (computer=%s)", computer_id)
             return connection
+
+    async def forget(self, computer_id: str) -> None:
+        """Remove an offline Desktop registration; Sessions keep its id, which stops resolving."""
+        async with self._registration_lock:
+            info = self.get(computer_id)
+            if info.id == "server":
+                raise ComputerError(
+                    "computer_not_removable", "The server's own computer cannot be removed."
+                )
+            if info.online:
+                raise ComputerError(
+                    "computer_online",
+                    f"Computer {info.name!r} is connected. Turn off its sharing or quit its "
+                    "Desktop app, then remove it.",
+                )
+            if self._store is None:
+                raise ComputerError(
+                    "computer_store_unavailable", "Computer registrations are unavailable."
+                )
+            try:
+                await _STORE_WORKER.run(self._store.forget, computer_id)
+            except (OSError, ValueError) as error:
+                raise ComputerError(
+                    "computer_registration_failed", "Computer registration could not be saved."
+                ) from error
+            del self._infos[computer_id]
+            self._emit(computer_id, "removed", {})
+            _LOGGER.info("Computer removed (computer=%s)", computer_id)
 
     def disconnect(self, connection: ComputerConnection) -> None:
         if connection.closed:
@@ -290,7 +320,7 @@ class ComputerRegistry:
             )
             if (
                 isinstance(event, str)
-                and event not in {"connected", "disconnected"}
+                and event not in {"connected", "disconnected", "removed"}
                 and capability in connection.info.capabilities
                 and isinstance(data, dict)
             ):
