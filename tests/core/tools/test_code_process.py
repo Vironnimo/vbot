@@ -250,7 +250,8 @@ tools.hold(pids=[os.getpid(), child.pid])
         with pytest.raises(asyncio.CancelledError):
             await task
         assert cancelled.is_set()
-        assert all(not process.is_running() for process in processes)
+        for process in processes:
+            await asyncio.to_thread(process.wait, timeout=1)
     finally:
         if not task.done():
             task.cancel()
@@ -308,7 +309,8 @@ while True: pass
             output_path=tmp_path / "output.txt",
         )
     assert log_closed
-    assert len(processes) == 1 and not processes[0].is_running()
+    assert len(processes) == 1
+    await asyncio.to_thread(processes[0].wait, timeout=1)
 
 
 @pytest.mark.asyncio
@@ -336,4 +338,5 @@ async def test_refused_termination_closes_the_job_before_waiting_for_pipes(
             environment=os.environ,
             invoke=invoke,
         )
-    assert len(processes) == 1 and not processes[0].is_running()
+    assert len(processes) == 1
+    await asyncio.to_thread(processes[0].wait, timeout=1)

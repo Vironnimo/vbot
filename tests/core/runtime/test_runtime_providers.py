@@ -229,7 +229,7 @@ def test_runtime_loads_xai_model_overrides(shared_runtime: Runtime) -> None:
     grok_multi = shared_runtime.models.get("xai", "grok-4.20-multi-agent-0309")
 
     assert grok_45.connections == ("api-key", "subscription")
-    assert grok_45.capabilities.reasoning.levels == ("low", "medium", "high")
+    assert grok_45.capabilities.reasoning.levels == ("low", "medium", "high", "xhigh")
     assert grok_fixed.capabilities.input_modalities == ("text", "image")
     assert grok_fixed.capabilities.reasoning.levels == ()
     assert grok_multi.capabilities.reasoning.levels == ("low", "medium", "high", "xhigh")

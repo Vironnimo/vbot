@@ -107,6 +107,7 @@ AREA_HELP = {
     "desktop": "Open the desktop window pointed at a local or remote server",
     "home": "Show the application and data directories",
     "update": "Update this installation and inspect or activate a prepared update",
+    "rollback": "Return to the previous installation, keeping current data",
     "application": "Inspect and manage the packaged local vBot application",
     "uninstall": "Remove the application, its data, or both with explicit confirmation",
     "autostart": "Enable, disable, or inspect starting this installation at logon or boot",
