@@ -213,6 +213,85 @@ describe('ChatView Runs', () => {
       expect(document.querySelectorAll('.assistant-run')).toHaveLength(1);
     });
 
+    it('loads a live Bash raw result in a new Session before its first History read', async () => {
+      const fullResult = {
+        ok: true,
+        data: { output: 'Complete Bash output from the raw call' },
+      };
+      const fallback = createChatRpcMock({
+        streamResponse: {
+          ...runningRun('run-bash'),
+          session_id: 'created-alpha',
+        },
+      });
+      rpcMock.mockImplementation((method, params) =>
+        method === 'chat.tool_call'
+          ? { arguments: { command: 'cat big.log' }, result: fullResult }
+          : fallback(method, params),
+      );
+      const parent = createChatViewParentHarness();
+      await chat.mountChat(parent.props(['navigation']));
+      findNewSessionButton().click();
+      await settle();
+      sendComposerMessage('Read the log');
+      await waitForCondition(
+        () => subscribeRunEventsMock.mock.calls.length === 1,
+      );
+
+      const source = runEventSource('run-bash');
+      source.emit('timeline_snapshot', {
+        history_generation: 'created-generation',
+        items: [
+          assistantRun('run-bash', [
+            toolItem({
+              id: 'call-bash',
+              name: 'bash',
+              arguments: { command: 'cat big.log' },
+              result: { ok: true, data: { output: 'Preview...' } },
+              rawTruncated: true,
+              display: {
+                version: 1,
+                hidden_argument_keys: [],
+                primary: [],
+                facts: [],
+                details: [
+                  { type: 'text', label: 'output', text: 'Preview...' },
+                ],
+              },
+            }),
+          ]),
+        ],
+        state: { status: 'running' },
+      });
+      // Later patches carry no generation; the initial snapshot owns it.
+      source.emit('timeline_update', {
+        run: { id: 'assistant-run-run-bash', iterationCount: 2 },
+      });
+      flushSync();
+      for (const selector of [
+        '.working-block',
+        '.tool-event',
+        '.tool-raw-call',
+      ]) {
+        for (const disclosure of document.querySelectorAll(selector)) {
+          disclosure.open = true;
+          disclosure.dispatchEvent(new Event('toggle'));
+        }
+        flushSync();
+      }
+      await waitForText(fullResult.data.output);
+      expect(rpcCalls('chat.tool_call')).toEqual([
+        {
+          agent_id: 'alpha',
+          session_id: 'created-alpha',
+          run_id: 'run-bash',
+          tool_id: 'call-bash',
+          history_generation: 'created-generation',
+        },
+      ]);
+      expect(historyReads('created-alpha')).toBe(0);
+    });
+
     it('forwards a live bash row background action to the Run control RPC', async () => {
       rpcMock.mockImplementation(
         createChatRpcMock({ streamResponse: runningRun('run-bash') }),

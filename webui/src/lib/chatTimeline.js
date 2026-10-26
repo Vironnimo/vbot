@@ -234,6 +234,13 @@ export function applyTimelineEvent(sessionState, type, data) {
   const previous = sessionState.timelineItems ?? [];
   if (type === 'timeline_snapshot') {
     if (!Array.isArray(data.items)) return false;
+    const generation = data.history_generation;
+    if (
+      generation &&
+      sessionState.historyGeneration &&
+      generation !== sessionState.historyGeneration
+    )
+      return false;
     const known = new Map(previous.map((item) => [item.id, item]));
     const replacement = data.items.map((item) =>
       reuse(
@@ -242,6 +249,9 @@ export function applyTimelineEvent(sessionState, type, data) {
       ),
     );
     sessionState.timelineItems = replaceRunItems(previous, runId, replacement);
+    // A new Session can stream before its first History read. Its rows need
+    // this generation for raw Tool calls and earlier Run children as well.
+    if (generation) sessionState.historyGeneration = generation;
   } else if (type === 'timeline_update') {
     if (data.sequence === sequences[runId]) return false;
     if (data.base_sequence !== sequences[runId]) return false;

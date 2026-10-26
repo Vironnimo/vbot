@@ -18,6 +18,7 @@ import {
 const snapshot = (items, sequence = 10, runId = 'one') => ({
   run_id: runId,
   sequence,
+  history_generation: 'g',
   items,
 });
 const update = (fields, sequence = 11, baseSequence = 10) => ({
@@ -38,7 +39,7 @@ describe('server Timeline projection', () => {
       before: `step-${before}`,
       position: -1,
     });
-    const session = { ...state(), historyGeneration: 'g' };
+    const session = { ...state(), historyGeneration: '' };
     applyTimelineEvent(
       session,
       'timeline_snapshot',
@@ -233,6 +234,14 @@ describe('server Timeline projection', () => {
     expect(
       applyTimelineEvent(session, 'timeline_snapshot', snapshot([], 9)),
     ).toBe(false);
+    expect(
+      applyTimelineEvent(session, 'timeline_snapshot', {
+        ...snapshot([], 12),
+        history_generation: 'other',
+      }),
+    ).toBe(false);
+    expect(session.historyGeneration).toBe('g');
+    expect(session.timelineSequences.one).toBe(11);
     expect(session.timelineItems[0]).toBe(run);
   });
 
