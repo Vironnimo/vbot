@@ -281,6 +281,9 @@ async def test_remote_io_recovers_safe_reads_and_does_not_replay_unconfirmed_inp
     link.fail_next["release"] = "computer_connection_lost"
     factory.adapters[0].finish(0)
     await eventually(lambda: manager.list_for_operator()[0]["finished_at"] is not None)
+    # The final state is published before the worker sends its release. Reconnect
+    # only after the controlled failure, or the first release can fail on the new link.
+    await eventually(lambda: "release" not in link.fail_next)
     assert link.native._processes  # the failed release did not abort the server's exit state
     await link.connect()
     await eventually(lambda: not link.native._processes)
