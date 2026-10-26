@@ -292,6 +292,7 @@ export {
   denyPairing,
 } from './api/access.js';
 export { reportClientMetrics } from './api/performance.js';
+export { listComputers, setSessionExecution } from './api/computers.js';
 export {
   answerSecretRequest,
   createAgentSecret,

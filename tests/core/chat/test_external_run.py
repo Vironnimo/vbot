@@ -183,6 +183,11 @@ async def test_external_run_tool_calls_work_in_the_project_inside_the_agents_rul
         "coder", model="voice-model", title="Live call"
     )
 
+    address = session_address("coder", external.session_id)
+    execution = {"computer_id": "laptop", "allowed_computer_ids": ["laptop", "server"]}
+    runtime.chat_sessions.mutate_metadata(
+        address, lambda metadata: metadata.update(execution=execution)
+    )
     await external.run_tool("call_1", "lookup", {})
     # The user tightens the rules while the call runs, as vBot saves the edit.
     runtime.agents._agent = replace(
@@ -190,6 +195,10 @@ async def test_external_run_tool_calls_work_in_the_project_inside_the_agents_rul
     )
     with document_change(tmp_path / "data" / "agents" / "coder" / "agent.json"):
         pass
+    narrowed = {"computer_id": "laptop", "allowed_computer_ids": []}
+    runtime.chat_sessions.mutate_metadata(
+        address, lambda metadata: metadata.update(execution=narrowed)
+    )
     await external.run_tool("call_2", "lookup", {})
     await external.finish()
 
@@ -205,6 +214,7 @@ async def test_external_run_tool_calls_work_in_the_project_inside_the_agents_rul
     # The edit reaches the next call.
     refused = second.permissions.check_path(repo / "notes.md", "write")
     assert refused is not None and refused.reason == "not_permitted"
+    assert [first.execution, second.execution] == [execution, narrowed]
 
 
 @pytest.mark.asyncio

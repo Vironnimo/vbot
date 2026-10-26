@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from core.agents.agents import AgentStore
     from core.automation.references import AutomationReferences
     from core.chat import ChatLoop
+    from core.computers import ComputerRegistry
     from core.extensions import ExtensionRegistry
     from core.models.models import ModelRegistry
     from core.projects import AgentResolver, ProjectStore
@@ -223,6 +224,11 @@ class RuntimeServices(Protocol):
     @property
     def system_prompts(self) -> SystemPromptManager:
         """System prompt assembly."""
+        ...
+
+    @property
+    def computers(self) -> ComputerRegistry:
+        """Connected computers and capability request routing."""
         ...
 
     @property

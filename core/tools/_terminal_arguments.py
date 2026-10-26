@@ -15,9 +15,7 @@ refuses it with the ``background_tasks`` call that serves it.
 from __future__ import annotations
 
 import json
-import os
 import re
-import shlex
 from functools import cache
 from typing import Any
 
@@ -29,6 +27,7 @@ from core.tools.call_syntax import (
     spelling,
 )
 from core.tools.contracts import ToolContract, compile_tool_contract
+from core.tools.terminal_backend import command_words as command_words
 from core.tools.terminal_manager import TERMINAL_INPUT_KEY_SEQUENCES
 
 TERMINAL_KEY_SUMMARY = (
@@ -41,6 +40,7 @@ _FIELD_ALIASES = SpellingAliases(
     {
         "terminal_id": ("session_id", "terminal", "term_id", "terminal_session_id", "id"),
         "command": ("cmd", "program", "executable"),
+        "computer_id": ("computer", "machine", "host"),
         "workdir": ("cwd", "dir", "directory", "working_directory", "working_dir"),
         "text": ("input",),
         "data": ("chars", "raw"),
@@ -176,6 +176,7 @@ _ACCEPTED_FIELDS = {
         {
             "terminal_id",
             "command",
+            "computer_id",
             "args",
             "text",
             "data",
@@ -241,7 +242,15 @@ def normalize_terminal_arguments(arguments: Any) -> Any:
         field_aliases=_FIELD_ALIASES,
         enum_fields=("action",),
         field_normalizers={"action": _action_value, "key": terminal_key_name},
-        empty_as_omitted=("terminal_id", "command", "workdir", "name", "group", "key"),
+        empty_as_omitted=(
+            "terminal_id",
+            "command",
+            "computer_id",
+            "workdir",
+            "name",
+            "group",
+            "key",
+        ),
     )
     if not isinstance(normalized, dict):
         return normalized
@@ -312,21 +321,6 @@ def terminal_key_name(value: Any) -> Any:
     if control is not None:
         return f"ctrl_{control.group(1)}"
     return value
-
-
-def command_words(command: str) -> list[str]:
-    """Split a command line into words the way the host's own shell groups them.
-
-    Windows keeps backslashes, which are path separators there; quotes group
-    words on both hosts.
-    """
-    if os.name != "nt":
-        return shlex.split(command)
-    lexer = shlex.shlex(command, posix=True)
-    lexer.whitespace_split = True
-    lexer.escape = ""
-    lexer.commenters = ""
-    return list(lexer)
 
 
 def _action_value(value: Any) -> Any:

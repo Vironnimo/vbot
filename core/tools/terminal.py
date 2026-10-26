@@ -10,6 +10,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from core.computers import ComputerError
 from core.permissions import CommandChecker, PermissionDenied
 from core.projects import ProjectStore
 from core.sessions import SessionAddress
@@ -120,6 +121,12 @@ from ._terminal_results import (
     _wait_seconds,
     _with_notes,
 )
+from ._terminal_target import (
+    allowed_computers,
+    check_terminal_target,
+    optional_string_array,
+    start_remote,
+)
 
 _LOGGER = get_logger("tools.terminal")
 
@@ -186,7 +193,7 @@ async def _handle_terminal(
         return tool_failure(
             "invalid_arguments",
             f"terminal was not run: {action} needs terminal_id. "
-            f"{_terminals_text(terminal_manager, owner)}",
+            f"{_terminals_text(terminal_manager, owner, allowed=allowed_computers(context))}",
             retryable=False,
         )
     if isinstance(terminal_id, str):
@@ -195,6 +202,9 @@ async def _handle_terminal(
             return tool_failure("not_a_terminal", refusal, retryable=False)
 
     try:
+        if action not in {"start", "list"}:
+            info = _terminal_info(terminal_manager, str(terminal_id))
+            check_terminal_target(terminal_manager, context, info, arguments)
         if action == "start":
             return await _handle_start(
                 terminal_manager, projects, context, arguments, scratch_areas, command_checker
@@ -217,7 +227,9 @@ async def _handle_terminal(
     except TerminalNotFoundError:
         return tool_failure(
             "terminal_not_found",
-            _not_found_message(terminal_manager, owner, str(terminal_id)),
+            _not_found_message(
+                terminal_manager, owner, str(terminal_id), allowed=allowed_computers(context)
+            ),
             retryable=False,
         )
     except TerminalAlreadyAttachedError:
@@ -283,6 +295,8 @@ async def _handle_terminal(
         )
     except ToolContractError as error:
         return tool_failure("invalid_arguments", str(error), retryable=False)
+    except ComputerError as error:
+        return tool_failure(error.code, error.message, retryable=False)
     except TerminalManagerError as error:
         message = str(error).rstrip(". ") + "."
         if isinstance(terminal_id, str) and terminal_id:
@@ -303,6 +317,16 @@ async def _handle_start(
     scratch_areas: ScratchAreas | None,
     command_checker: CommandChecker | None,
 ) -> JsonObject:
+    requested_computer = optional_string(arguments.get("computer_id"), field_name="computer_id")
+    if terminal_manager.computers is not None:
+        computer = terminal_manager.computers.resolve(context, requested_computer, "terminal")
+        if computer.id != "server":
+            started = await start_remote(terminal_manager, context, arguments, computer)
+            return await _started_result(terminal_manager, context, arguments, started, [])
+    elif requested_computer not in (None, "server") or "server" not in allowed_computers(context):
+        raise ComputerError(
+            "computer_not_found", "No connected Desktop computer is available. Nothing was started."
+        )
     notes: list[str] = []
     requested_id = arguments.get("terminal_id")
     if isinstance(requested_id, str) and requested_id.strip():
@@ -319,7 +343,7 @@ async def _handle_start(
     else:
         requested_id = None
     raw_command = arguments.get("command")
-    args = _optional_string_array(arguments.get("args"), field_name="args")
+    args = optional_string_array(arguments.get("args"), field_name="args")
     environment = await asyncio.to_thread(terminal_environment)
     if raw_command in (None, ""):
         if args:
@@ -352,7 +376,6 @@ async def _handle_start(
         maximum=TERMINAL_MAX_ROWS,
     )
     # start sends no input: the program gets it once it is ready for it.
-    unsent = _UnsentStartInput.of(arguments)
     raw_workdir = arguments.get("workdir")
     workdir_value = optional_string(raw_workdir, field_name="workdir")
     if raw_workdir == "":
@@ -408,7 +431,18 @@ async def _handle_start(
         if isinstance(cause, UnpassableArgumentError) and cause.index is not None:
             raise ToolContractError(_unpassable_argument_message(argv[0], cause.value)) from error
         raise
+    return await _started_result(terminal_manager, context, arguments, started, notes)
+
+
+async def _started_result(
+    terminal_manager: TerminalManager,
+    context: ToolContext,
+    arguments: JsonObject,
+    started: TerminalInfo,
+    notes: list[str],
+) -> JsonObject:
     terminal_id = started.terminal_id
+    owner = _owner(context)
     # An empty screen that is out of date does not show that nothing was printed.
     shown_nothing = False
     try:
@@ -424,9 +458,12 @@ async def _handle_start(
         data = _screen_result(snapshot, view="start", unseen_from=_unseen_from(snapshot))
         shown_nothing = data.get("screen") == "" and not snapshot.get("screen_behind")
     running = data["state"] == "running"
-    unsent_note = unsent.note(terminal_id, running=running)
+    if launch_note := _terminal_info(terminal_manager, terminal_id).launch_note:
+        notes.append(launch_note)
+    unsent_note = _UnsentStartInput.of(arguments).note(terminal_id, running=running)
     if unsent_note is not None:
         notes.append(unsent_note)
+    requested_id = arguments.get("terminal_id")
     if requested_id is not None:
         notes.append(f"start assigns the terminal_id: use {terminal_id}, not {requested_id}.")
     data = _with_notes(data, notes)
@@ -443,12 +480,16 @@ async def _handle_list(
     context: ToolContext,
 ) -> JsonObject:
     owner = _owner(context)
-    terminals = terminal_manager.list_terminals()
+    allowed = allowed_computers(context)
+    terminals = [info for info in terminal_manager.list_terminals() if info.computer_id in allowed]
     holders = await _subagent_holders(subagents, owner, terminals)
     rows: list[JsonObject] = []
     for info in terminals:
         row: JsonObject = {
             "terminal_id": info.terminal_id,
+            "computer_id": info.computer_id,
+            "computer_name": info.computer_name,
+            "computer_online": info.computer_online,
             "call_name": info.call_name,
             "program": _short_program(info.program),
             "state": _agent_state(info),
@@ -456,7 +497,20 @@ async def _handle_list(
             **_attachment_fields(info, owner, holders),
         }
         rows.append({key: value for key, value in row.items() if value not in (None, "")})
-    return tool_success({"terminals": rows})
+    data: JsonObject = {"terminals": rows}
+    if terminal_manager.computers is not None:
+        data["computers"] = [
+            {
+                "computer_id": item.id,
+                "name": item.name,
+                "platform": item.platform,
+                "online": item.online,
+                "terminal": "terminal" in item.capabilities,
+            }
+            for item in terminal_manager.computers.list()
+            if item.id in allowed
+        ]
+    return tool_success(data)
 
 
 async def _subagent_holders(
@@ -904,18 +958,6 @@ def _acknowledge_after_persistence(
     context.after_result_persisted(acknowledge)
 
 
-def _optional_string_array(value: object, *, field_name: str) -> list[str]:
-    if value is None:
-        return []
-    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise ToolContractError(f"terminal was not run: {field_name} must be an array of strings.")
-    if any("\x00" in item for item in value):
-        raise ToolContractError(
-            f"terminal was not run: {field_name} must not contain NUL characters."
-        )
-    return list(value)
-
-
 def _resolve_workdir(
     projects: ProjectStore,
     context: ToolContext,
@@ -964,6 +1006,7 @@ def register_terminal_tool(
         open_input_schema=True,
         unadvertised_parameters=TERMINAL_UNADVERTISED_PARAMETERS,
         argument_normalizer=normalize_terminal_arguments,
+        announce_changes=("description", "parameters.computer_id", "parameters.workdir"),
         # Answers password prompts; the length limit applies to the real value.
         secret_sinks={"text": "terminal", "data": "terminal"},
         result_schema={"type": "object"},

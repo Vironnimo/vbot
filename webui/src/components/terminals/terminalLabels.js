@@ -159,6 +159,11 @@ export function terminalDetails(item, { nowMs = Date.now() } = {}) {
     title: terminalTitle(item),
     rows: [
       {
+        label: t('computers.label'),
+        value:
+          item?.computer_name || item?.computer_id || t('computers.server'),
+      },
+      {
         label: t('terminals.details.attached'),
         value: agentAddress(item?.attachment),
       },

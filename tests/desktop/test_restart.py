@@ -163,6 +163,7 @@ class Harness:
         self.now = 1000.0
         # Voice records or calibrates until then.
         self.busy_until = 0.0
+        self.local_work = False
         self.closed = threading.Event()
         self.spawned: list[tuple[str, ...]] = []
         self.process = FakeProcess()
@@ -176,6 +177,8 @@ class Harness:
             placement=lambda: WindowPlacement("normal", 1200, 800, 10, 20),
             shell_busy=lambda: self.now < self.busy_until,
             close_window=self.closed.set,
+            automatic_hold=lambda: self.local_work,
+            prepare_restart=lambda: not self.local_work,
             spawn=self._spawn,
             clock=lambda: self.now,
             wall_clock=lambda: 5000.0,
@@ -359,4 +362,24 @@ def test_voice_in_use_delays_the_restart_only_until_it_ends_or_the_grace_runs_ou
     harness.now += 1
     harness.restart.check()
 
+    assert harness.page.restart_requests == 1
+
+
+def test_local_terminal_work_holds_updates_until_the_programs_finish(
+    harnesses: Callable[..., Harness],
+) -> None:
+    harness = harnesses()
+    harness.local_work = True
+    harness.activate("v2")
+    harness.restart.check()
+    harness.now += 3600
+    harness.restart.check()
+    assert harness.restart.status()["pending"] is True
+    assert harness.page.restart_requests == 0
+    assert harness.spawned == []
+    with pytest.raises(RestartError) as raised:
+        harness.restart.restart()
+    assert raised.value.error_code == "computer_terminals_running"
+    harness.local_work = False
+    harness.restart.check()
     assert harness.page.restart_requests == 1

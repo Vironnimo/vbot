@@ -277,6 +277,11 @@ class TerminalInfo:
     # As in ``TerminalLaunch``.
     permission_scope: frozenset[str] | None = None
     shell: ShellKind | None = None
+    computer_id: str = "server"
+    computer_name: str = "Server"
+    computer_online: bool = True
+    launch_pending: bool = False
+    launch_note: str = ""
 
     @property
     def finished(self) -> bool:
@@ -382,6 +387,9 @@ class TerminalLaunch:
     permission_scope: frozenset[str] | None = None
     # The command language of a shell started with vBot's shell integration.
     shell: ShellKind | None = None
+    computer_id: str = "server"
+    computer_name: str = "Server"
+    computer_instance_id: str | None = None
 
 
 def _log_task_failure(task: asyncio.Task[Any], message: str) -> None:

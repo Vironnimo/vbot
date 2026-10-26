@@ -16,6 +16,7 @@ from core.agents import BUILTIN_AGENT_IDS
 from core.archive import ArchiveSubjectInUseError
 from core.channels import ChannelConfigError
 from core.compaction import COMPACTION_POLICY_META_KEY, effective_compaction_policy
+from core.computers import normalize_execution
 from core.projects import (
     AGENT_OVERRIDE_FIELDS,
     AgentOverrides,
@@ -41,6 +42,7 @@ from server.events import (
     RESOURCE_KIND_AGENTS,
     RESOURCE_KIND_PROJECTS,
 )
+from server.rpc._session_execution import optional_execution, set_session_execution
 from server.rpc.agent_refs import _agent_reference_lock, _guard_agent_lifecycle
 from server.rpc.archive_methods import not_purged, purge_permanently
 from server.rpc.dispatcher import RpcMethodHandler
@@ -94,6 +96,7 @@ async def _create_session(state: Any, params: JsonObject) -> JsonObject:
             "Omit it to create a Session for the Project Agent. Nothing was changed.",
         )
     overrides = _optional_agent_overrides(params, allow_clear=False)
+    execution = optional_execution(state, params)
     requested_project = _optional_working_project(params, project_id)
     chat_sessions = state.runtime.chat_sessions
     resolver = state.runtime.agent_resolver
@@ -106,7 +109,10 @@ async def _create_session(state: Any, params: JsonObject) -> JsonObject:
             project_id=project_id,
             actor="rpc",
             working_project_id=working_project_id if project_id is None else None,
-            metadata=AgentOverrides(**(overrides or {})).capture(agent).session_metadata(),
+            metadata={
+                **AgentOverrides(**(overrides or {})).capture(agent).session_metadata(),
+                **({"execution": execution} if execution is not None else {}),
+            },
         )
         if make_current and project_id is None:
             state.runtime.agents.update(agent_id, current_session_id=created.id)
@@ -142,6 +148,8 @@ async def _create_session(state: Any, params: JsonObject) -> JsonObject:
         "working_project_id": working_project_id,
     }
     response["agent_overrides"] = AgentOverrides(**(overrides or {})).capture(agent).as_dict()
+    if execution is not None:
+        response["execution"] = execution
     return response
 
 
@@ -601,6 +609,11 @@ async def _get_session(state: Any, params: JsonObject) -> JsonObject:
     try:
         chat_sessions = state.runtime.chat_sessions
         summary = await chat_sessions.run_async(chat_sessions.summary, address)
+        execution = (
+            normalize_execution(await chat_sessions.metadata_value_async(address, "execution"))
+            if summary is not None
+            else None
+        )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     if summary is None:
@@ -610,6 +623,7 @@ async def _get_session(state: Any, params: JsonObject) -> JsonObject:
     session.pop("project_id", None)
     session.pop(COMPACTION_POLICY_META_KEY, None)
     session["agent_address"] = format_agent_address(address.agent_id, address.project_id)
+    session["execution"] = execution
     return {"session": session}
 
 
@@ -1054,5 +1068,6 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "session.set_compaction_policy": _set_session_compaction_policy,
         "session.set_agent_overrides": _set_session_agent_overrides,
         "session.set_fast_mode": _set_session_fast_mode,
+        "session.set_execution": set_session_execution,
         "session.link_channel": _link_session_to_channel,
     }

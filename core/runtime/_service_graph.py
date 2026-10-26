@@ -26,6 +26,7 @@ from core.automation import (
 from core.calendar import CalendarService
 from core.channels import ChannelService
 from core.chat import ChatLoop, CommandDispatcher
+from core.computers import ComputerRegistry
 from core.database import Database, SnapshotBarrier
 from core.extensions import (
     ExtensionRegistry,
@@ -146,6 +147,7 @@ class RuntimeServiceGraph:
         self._file_state: FileReadState | None = None
         self._update_handoffs: UpdateHandoffs | None = None
         self._terminal_manager: TerminalManager | None = None
+        self._computers: ComputerRegistry | None = None
         self._command_manager: CommandManager | None = None
         self._command_checker: CommandChecker | None = None
         # Runs Cron watch checks and context commands; created after the Chat Loop.
@@ -281,6 +283,10 @@ class RuntimeServiceGraph:
 
     update_handoffs: _StartedService[UpdateHandoffs] = _StartedService(
         lambda runtime: runtime._update_handoffs, "Update handoff service not available"
+    )
+
+    computers: _StartedService[ComputerRegistry] = _StartedService(
+        lambda runtime: runtime._computers, "Computer registry not available"
     )
 
     terminal_manager: _StartedService[TerminalManager] = _StartedService(

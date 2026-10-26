@@ -67,11 +67,11 @@ _SHELL_NAME = model_tool_name(BASH_TOOL_NAME)
 def _terminal_description(*, shell: str | None) -> str:
     """The description for one request: the shell Tool's name when offered."""
     sentences = [
-        "Start and operate interactive programs you drive by typing, such as REPLs, TUIs and "
+        "Start and operate interactive programs on the selected computer, such as REPLs, TUIs and "
         "coding-agent CLIs."
     ]
     if shell:
-        sentences.append(f"Run all other commands, servers included, with {shell}.")
+        sentences.append(f"On the server, run all other commands, servers included, with {shell}.")
     sentences.append("A program keeps running after your turn ends, until it exits or is stopped.")
     sentences.append(
         "In screens, ⟦ and ⟧ mark reverse-video text, such as a selection or a drawn cursor, "
@@ -102,6 +102,13 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
             "type": "string",
             "description": ("From start or list; required except for start and list."),
         },
+        "computer_id": {
+            "type": "string",
+            "description": (
+                "For start, a computer id or exact name from list. Omit to use the Session's "
+                "selected computer. Existing terminals stay on their original computer."
+            ),
+        },
         "command": {
             "type": "string",
             "description": (
@@ -116,8 +123,8 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
         "workdir": {
             "type": "string",
             "description": (
-                "Directory to start in, absolute or relative to the working directory. Omit to "
-                "use the working directory."
+                "Directory on the selected computer. On the server, relative paths and omission "
+                "use the working directory; on a Desktop, they use that computer's home directory."
             ),
         },
         "text": {

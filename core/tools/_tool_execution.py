@@ -10,6 +10,7 @@ from contextlib import nullcontext
 from functools import partial
 from typing import TYPE_CHECKING, ClassVar
 
+from core.computers import normalize_execution
 from core.tools._tool_context import (
     ToolCall,
     ToolCancelCallback,
@@ -125,6 +126,7 @@ class ToolExecutor:
                 run_kind=config.run_kind,
                 subagent_session=config.subagent_session,
                 permissions=config.permissions,
+                execution=normalize_execution(config.execution),
                 reply_surface=config.reply_surface,
                 emit_hook=config.emit_hook,
                 cancellation_hook=config.cancellation_hook,

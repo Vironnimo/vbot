@@ -100,6 +100,7 @@
     handleVisibilityChange,
   } from '$lib/connectionState.js';
   import { createScheduleActivity } from './app/scheduleActivity.svelte.js';
+  import { createComputers, provideComputers } from '$lib/computers.svelte.js';
   import {
     createAppController,
     createAppControllerState,
@@ -136,6 +137,8 @@
 
   const navigationItems = NAVIGATION_ITEMS;
   const selection = createAppSelection();
+  const computers = provideComputers(createComputers());
+  onDestroy(() => computers.destroy());
   const speechAudio = provideSpeechAudio(createSpeechAudio());
   onDestroy(() => speechAudio.destroy());
   const setup = createAppSetup({
@@ -488,6 +491,7 @@
     onPortalsChanged: invalidatePortals,
     onCheckWebuiBuild: checkWebuiBuild,
     onSpeechEvent: speechAudio.handleServerEvent,
+    onComputersChanged: computers.refresh,
   });
   const runEvents = appController.runEvents;
   navigator.start();

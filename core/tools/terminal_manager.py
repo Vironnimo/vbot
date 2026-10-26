@@ -21,7 +21,7 @@ from dataclasses import replace
 from datetime import timedelta
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from core.runs import RunExecutionOwner
 from core.sessions import SessionAddress
@@ -107,6 +107,9 @@ from .process_tree import ProcessTreeTracker, observe_process_tree
 
 _LOGGER = get_logger("tools.terminal_manager")
 
+if TYPE_CHECKING:
+    from core.computers import ComputerInfo, ComputerRegistry
+
 
 class TerminalManager:
     """Own Agent and manually started interactive terminal processes.
@@ -139,6 +142,7 @@ class TerminalManager:
         session_view: SessionViewResolver | None = None,
         reserved_call_names: Callable[[], Iterable[str]] | None = None,
         credential_names: Callable[[], Container[str]] = frozenset,
+        computers: ComputerRegistry | None = None,
     ) -> None:
         """*process_observer* watches a program's process tree for work its output
         does not show; without it, only output and declared signals show work.
@@ -164,6 +168,7 @@ class TerminalManager:
             groups_path=groups_path,
             data_dir=data_dir,
         )
+        self.computers = computers
         # A host passed in belongs to the caller, which closes it.
         self._owns_render_host = render_host is None
         self._render_host = render_host or TerminalRenderHost()
@@ -197,6 +202,7 @@ class TerminalManager:
             process_observer=process_observer,
             validate_pin=self._catalog.validate_pin,
             credential_names=credential_names,
+            computers=computers,
         )
         self._credential_names = credential_names
         self._services = TerminalSessionServices(
@@ -280,16 +286,18 @@ class TerminalManager:
         so the Terminal's state alone cannot tell.
         """
         checks = [
-            (session.terminal_id, session.pid, program)
+            (session.terminal_id, session, program)
             for session in self._sessions.values()
             if not session.finished and (program := _launch_program(session.launch.launch_command))
         ]
         if not checks:
             return {}
-        probe = self._program_probe
 
         def run_checks() -> dict[str, bool]:
-            return {terminal_id: probe(pid, program) for terminal_id, pid, program in checks}
+            return {
+                terminal_id: session.program_runs(program)
+                for terminal_id, session, program in checks
+            }
 
         return await asyncio.to_thread(run_checks)
 
@@ -403,6 +411,7 @@ class TerminalManager:
         group_id: str | None = None,
         columns: int = TERMINAL_DEFAULT_COLUMNS,
         rows: int = TERMINAL_DEFAULT_ROWS,
+        computer_id: str | None = None,
     ) -> dict[str, Any]:
         """Start one manual Terminal Session that behaves like a normal terminal.
 
@@ -411,6 +420,29 @@ class TerminalManager:
         shell's own start options: the shell loads its profile, runs the
         program, and keeps its prompt after the program ends or is interrupted.
         """
+        if computer_id not in (None, "", "server"):
+            if self.computers is None:
+                raise ValueError("No Desktop computers are available")
+            computer = self.computers.get(computer_id)
+            session = await self._spawn_remote(
+                None,
+                computer,
+                command=command,
+                arguments=arguments,
+                workdir=launch_workdir if launch_workdir is not None else str(cwd) if cwd else None,
+                columns=columns,
+                rows=rows,
+                origin_run_id=None,
+                group_id=group_id,
+                operator=True,
+            )
+            self._operator_store.remember_launch(
+                command=command,
+                arguments=tuple(arguments),
+                workdir=launch_workdir,
+                computer_id=computer.id,
+            )
+            return self._catalog.summary(session.info())
         environment = await asyncio.to_thread(terminal_environment)
         shell_argv = default_terminal_argv(environment)
         workdir = cwd or Path.home()
@@ -462,6 +494,80 @@ class TerminalManager:
             workdir=remembered_workdir,
         )
         return self._catalog.summary(session.info())
+
+    async def spawn_remote(
+        self,
+        owner: TerminalOwner,
+        computer: ComputerInfo,
+        *,
+        command: str | None,
+        arguments: Sequence[str],
+        workdir: str | None,
+        columns: int,
+        rows: int,
+        origin_run_id: str,
+        execution_owner: RunExecutionOwner | None = None,
+    ) -> TerminalInfo:
+        """Start an Agent program on an explicitly resolved Desktop computer."""
+        _validate_owner(owner)
+        session = await self._spawn_remote(
+            owner,
+            computer,
+            command=command,
+            arguments=arguments,
+            workdir=workdir,
+            columns=columns,
+            rows=rows,
+            origin_run_id=origin_run_id,
+            execution_owner=execution_owner,
+        )
+        return session.info()
+
+    async def _spawn_remote(
+        self,
+        owner: TerminalOwner | None,
+        computer: ComputerInfo,
+        *,
+        command: str | None,
+        arguments: Sequence[str],
+        workdir: str | None,
+        columns: int,
+        rows: int,
+        origin_run_id: str | None,
+        execution_owner: RunExecutionOwner | None = None,
+        group_id: str | None = None,
+        operator: bool = False,
+    ) -> TerminalSession:
+        if computer.id == "server":
+            raise ValueError("A Desktop computer is required for remote terminal execution")
+        if not computer.online or "terminal" not in computer.capabilities:
+            raise ValueError("The selected computer is not offering Terminal right now")
+        return await self._spawn(
+            owner,
+            [command or "default shell", *arguments],
+            launch=TerminalLaunch(
+                command=command or "default shell",
+                arguments=tuple(arguments),
+                cwd=Path(workdir or "~"),
+                launch_command=command if operator else None,
+                launch_arguments=tuple(arguments) if operator else (),
+                computer_id=computer.id,
+                computer_name=computer.name,
+                computer_instance_id=computer.instance_id,
+            ),
+            env=None,
+            columns=columns,
+            rows=rows,
+            origin_run_id=origin_run_id,
+            execution_owner=execution_owner,
+            group_id=group_id,
+            remote={
+                "command": command,
+                "args": list(arguments),
+                "workdir": workdir,
+                "operator": operator,
+            },
+        )
 
     async def _spawn(
         self,

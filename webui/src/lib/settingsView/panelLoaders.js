@@ -7,6 +7,8 @@ const loadArchiveEntriesPanel = () =>
   import('../../components/archive/ArchiveEntriesPanel.svelte');
 const loadDesktopConnectionSettings = () =>
   import('../../components/settings/DesktopConnectionSettings.svelte');
+const loadDesktopComputerSharing = () =>
+  import('../../components/settings/DesktopComputerSharing.svelte');
 const loadDesktopLiveVoiceShortcut = () =>
   import('../../components/settings/DesktopLiveVoiceShortcut.svelte');
 const loadDesktopMicrophoneSettings = () =>
@@ -84,6 +86,7 @@ export const settingsPanelLoaders = {
   server: loadSettingsGeneralPanel,
   access: loadSettingsAccessPanel,
   desktop_connection: loadDesktopConnectionSettings,
+  computer_sharing: loadDesktopComputerSharing,
   live_voice_shortcut: loadDesktopLiveVoiceShortcut,
   microphone: loadDesktopMicrophoneSettings,
   desktop_dictation: loadDesktopDictationSettings,

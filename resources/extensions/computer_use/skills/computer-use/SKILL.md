@@ -1,11 +1,11 @@
 ---
 name: computer-use
-description: "Operate desktop apps on the vBot server's Windows desktop with computer, computer_batch and computer_apps: find apps, look, click, type and verify."
+description: "Operate desktop apps on a selected Windows computer. Use when working through screenshots, mouse and keyboard with computer, computer_batch and computer_apps."
 ---
 
 # Computer Use
 
-computer moves the user's real mouse and keyboard on the desktop of the computer the vBot server runs on. For web pages, prefer the playwright-cli Skill if you have it; it is faster and more reliable than clicking through a browser.
+computer moves the user's real mouse and keyboard on the selected computer's desktop. For web pages, prefer the playwright-cli Skill when it can operate the intended browser; it is faster and more reliable than clicking through a browser.
 
 ## Workflow
 

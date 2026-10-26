@@ -63,6 +63,7 @@ OPEN_SESSION_EVENT = "vbot-desktop-open-session"
 UPDATE_EVENT = "vbot-desktop-update"
 RESTART_REQUEST_EVENT = "vbot-desktop-restart"
 DICTATION_EVENT = "vbot-desktop-dictation"
+COMPUTER_SHARING_EVENT = "vbot-desktop-computer-sharing"
 LIVE_REQUEST_ACTIONS = frozenset({"start", "toggle"})
 LIVE_REQUEST_SOURCES = frozenset({"wakeword", "hotkey"})
 MAX_PENDING_LIVE_REQUESTS = 4
@@ -131,6 +132,14 @@ def dictation_push_script(recording: bool) -> str:
     )
 
 
+def computer_sharing_push_script(status: Mapping[str, Any]) -> str:
+    """Dispatch this Desktop's public sharing state to its settings surface."""
+    return (
+        f"window.dispatchEvent(new CustomEvent({json.dumps(COMPUTER_SHARING_EVENT)}, "
+        f"{{detail: {json.dumps(dict(status))}}}))"
+    )
+
+
 @dataclass
 class _LiveRequest:
     action: str
@@ -146,6 +155,11 @@ class _OpenSession:
 
 @dataclass
 class _UpdatePush:
+    status: dict[str, Any]
+
+
+@dataclass
+class _ComputerSharingPush:
     status: dict[str, Any]
 
 
@@ -168,7 +182,15 @@ class _VoicePush:
         return self.detail.get("type") == "status"
 
 
-_Push = _LiveRequest | _VoicePush | _OpenSession | _UpdatePush | _DictationPush | _RestartRequest
+_Push = (
+    _LiveRequest
+    | _VoicePush
+    | _OpenSession
+    | _UpdatePush
+    | _DictationPush
+    | _RestartRequest
+    | _ComputerSharingPush
+)
 
 
 class PageEventDispatcher:
@@ -187,6 +209,7 @@ class PageEventDispatcher:
         self._pending_status: _VoicePush | None = None
         self._pending_open: _OpenSession | None = None
         self._pending_update: _UpdatePush | None = None
+        self._pending_computer_sharing: _ComputerSharingPush | None = None
         self._pending_dictation: _DictationPush | None = None
         self._pending_restart: _RestartRequest | None = None
         self._live_count = 0
@@ -258,6 +281,18 @@ class PageEventDispatcher:
             self._pending_dictation = push
             self._enqueue_locked(push)
 
+    def publish_computer_sharing(self, status: Mapping[str, Any]) -> None:
+        """Publish the latest local sharing state, retaining at most one waiting push."""
+        with self._condition:
+            if self._closed:
+                return
+            if self._pending_computer_sharing is not None:
+                self._pending_computer_sharing.status = dict(status)
+                return
+            push = _ComputerSharingPush(dict(status))
+            self._pending_computer_sharing = push
+            self._enqueue_locked(push)
+
     def request_restart(self, on_result: Callable[[bool], None]) -> None:
         """Ask the page to restart; ``on_result`` learns whether the page took it.
 
@@ -311,6 +346,7 @@ class PageEventDispatcher:
             self._pending_status = None
             self._pending_open = None
             self._pending_update = None
+            self._pending_computer_sharing = None
             self._pending_dictation = None
             self._pending_restart = None
             self._condition.notify_all()
@@ -341,6 +377,8 @@ class PageEventDispatcher:
                     self._pending_open = None
                 elif isinstance(item, _UpdatePush):
                     self._pending_update = None
+                elif isinstance(item, _ComputerSharingPush):
+                    self._pending_computer_sharing = None
                 elif isinstance(item, _DictationPush):
                     self._pending_dictation = None
                 elif isinstance(item, _RestartRequest):
@@ -350,7 +388,11 @@ class PageEventDispatcher:
                 else:
                     self._event_count -= 1
                 detail = dict(item.detail) if isinstance(item, _VoicePush) else None
-                status = dict(item.status) if isinstance(item, _UpdatePush) else {}
+                status = (
+                    dict(item.status)
+                    if isinstance(item, _UpdatePush | _ComputerSharingPush)
+                    else {}
+                )
                 recording = item.recording if isinstance(item, _DictationPush) else False
             if isinstance(item, _LiveRequest):
                 self._deliver_live(window, item)
@@ -362,6 +404,9 @@ class PageEventDispatcher:
             elif isinstance(item, _DictationPush):
                 if window is not None:
                     self._evaluate(window, dictation_push_script(recording))
+            elif isinstance(item, _ComputerSharingPush):
+                if window is not None:
+                    self._evaluate(window, computer_sharing_push_script(status))
             elif isinstance(item, _RestartRequest):
                 self._deliver_restart(window, item)
             elif detail is not None:

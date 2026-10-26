@@ -6,7 +6,7 @@ import copy
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from jsonschema import Draft202012Validator
 
@@ -16,6 +16,9 @@ from core.tools.availability import activation_sources
 from core.tools.tools import Tool, ToolContext, ToolRegistry
 
 JsonObject = dict[str, Any]
+
+if TYPE_CHECKING:
+    from core.computers import ComputerRegistry
 
 # The ``resource`` of the change an Extension that declares
 # ``ExtensionOperations.pending_inputs`` publishes through its owner-bound
@@ -68,6 +71,8 @@ class ExtensionHost:
     # (project id, Agent id) works under, for a Tool call an Extension makes as
     # that Agent outside any Session (MCP management ``invoke``).
     resolve_permissions: Callable[[str | None, str], Awaitable[PermissionBoundary]] | None = None
+    # API v21: shared native capability routing; no Runtime or transport access.
+    computers: ComputerRegistry | None = None
 
 
 @dataclass(frozen=True)

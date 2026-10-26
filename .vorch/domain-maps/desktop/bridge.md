@@ -13,6 +13,7 @@ Read when adding or changing a Desktop bridge method, a capability, the page pol
 - Dictation: `getDictation` / `setDictation` (`desktop/dictation.md` -> Bridge and status).
 - Window zoom: `getZoom()` / `setZoom(percent)`, both answering `{supported, percent, levels, default}`; a value that is no level rejects as `zoom_invalid` (`desktop/window.md` -> Window zoom).
 - Update restart: `getDesktopUpdate()` (`{pending, restarting, failed}`), `restartDesktop()` (`{accepted: true}`; rejects `no_update_pending`, `restart_unavailable`) - `desktop/update-restart.md`.
+- Computer sharing: `getComputerSharing` / `setComputerSharing`, capability `computerSharing`; public local status and per-server grants (`desktop/computer-sharing.md`). Enabling a remote server's capability needs native consent for its still-loaded page, and no registration key reaches this bridge.
 
 ## Error contract
 
@@ -29,6 +30,8 @@ Read when adding or changing a Desktop bridge method, a capability, the page pol
 - Open to every page on purpose: writing the clipboard and `openExternalUrl` (what any web page can do), `restartDesktop` (only restarts into a version already installed, which the Desktop also does by itself), `cancelPairing`, and the Voice, microphone, dictation, shortcut and zoom settings. The microphone is granted without a prompt only to the window's server (`_windows.allow_server_microphone`), and only the user puts a server there: on the connection screen, on the command line, or through one of these confirmations.
 
 ## Page pushes
+
+Computer sharing adds `vbot-desktop-computer-sharing`, carrying one coalesced public status snapshot (`desktop/computer-sharing.md`). It does not carry commands or own the native connection.
 
 `desktop/page_events.py` (`PageEventDispatcher`) dispatches window events through `Window.evaluate_js`: `vbot-desktop-live` (cancelable Live voice requests, `desktop/live-voice.md`), `vbot-desktop-voice` (Voice status snapshots and events, `desktop/voice.md` -> Events and push), `vbot-desktop-dictation` (`detail` `{recording}`: whether a dictation records, so the page holds a Live voice call, `desktop/dictation.md`), `vbot-desktop-open-session` (cancelable, `detail` `{agent, session}`: open that Session, from a handed-over `--open-session`; the WebUI acknowledges with `preventDefault()`, see `webui/app-shell.md` -> Startup and availability), `vbot-desktop-update` (update restart status) and `vbot-desktop-restart` (cancelable restart request after an update; the result reaches the restart as handled or not) - both `desktop/update-restart.md`. One daemon thread (`vbot-desktop-page-events`, started with the first push) delivers every push in order; producers never block, and the queue is bounded (at most 4 Live requests, one waiting Voice status, one waiting dictation state, and one waiting update status, one waiting Session request replaced by a newer one, one waiting restart request, 64 events). Pushes before `attach_window` are dropped. Delivery failures log one warning per failure streak; `close()` discards waiting pushes. A page without handlers (the connection screen) ignores the events.
 

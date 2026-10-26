@@ -14,6 +14,7 @@ import pytest
 from desktop.page_events import (
     MAX_PENDING_VOICE_EVENTS,
     PageEventDispatcher,
+    computer_sharing_push_script,
     dictation_push_script,
     live_request_script,
     open_session_script,
@@ -377,8 +378,9 @@ UPDATE_STATES = [
     [
         ("publish_update", UPDATE_STATES, update_push_script),
         ("publish_dictation", [True, True, False], dictation_push_script),
+        ("publish_computer_sharing", UPDATE_STATES, computer_sharing_push_script),
     ],
-    ids=["update", "dictation"],
+    ids=["update", "dictation", "computer-sharing"],
 )
 def test_a_state_push_keeps_only_the_newest_waiting_value(
     dispatchers: Any, publish: str, values: list[Any], script: Callable[[Any], str]

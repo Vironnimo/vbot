@@ -41,6 +41,7 @@ import secrets
 import threading
 import time
 from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -56,6 +57,7 @@ from desktop.connection_screen import (
     STATUS_PAIRING_EXPIRED,
     STATUS_PAIRING_REQUIRED,
     STATUS_SIGN_IN_FAILED,
+    STATUS_SWITCH_CANCELLED,
     PairingOffer,
     PairingView,
     build_connection_html,
@@ -131,6 +133,7 @@ class ConnectionController:
         # voice worker follows the window's active server (wired to the bridge in
         # the launcher — the controller stays decoupled from the voice stack).
         self._active_server_listener: Callable[[str], None] | None = None
+        self._server_change_guard: Callable[[str], AbstractContextManager[bool]] | None = None
         # What the window was last sent to. Read from the GUI thread (WebView2
         # permission requests) and the ``loaded`` event, so it has its own short
         # lock, never held while the window is driven.
@@ -185,6 +188,10 @@ class ConnectionController:
 
         with self._window_lock:
             return self._active_address.url if self._active_address is not None else None
+
+    def set_server_change_guard(self, guard: Callable[[str], AbstractContextManager[bool]]) -> None:
+        """Guard the actual activation, after probing and sign-in have succeeded."""
+        self._server_change_guard = guard
 
     def active_target(self) -> tuple[str, int] | None:
         """Return the ``(host, port)`` of the last successfully prepared connection.
@@ -755,12 +762,6 @@ class ConnectionController:
         ticket_url = (
             None if attempt.ticket_path is None else f"{base}{attempt.ticket_path}{fragment}"
         )
-        logger.info(
-            "Desktop connecting to %s%s%s",
-            address.display,
-            " (signing in)" if ticket_url is not None else "",
-            waited_note,
-        )
         landing = (
             None
             if ticket_url is None
@@ -768,7 +769,14 @@ class ConnectionController:
                 address, ticket_url, app_url, self._clock() + SIGN_IN_LANDING_SECONDS
             )
         )
-        self._activate(address, landing)
+        if not self._activate(address, landing):
+            return state._failed(result, STATUS_SWITCH_CANCELLED)
+        logger.info(
+            "Desktop connecting to %s%s%s",
+            address.display,
+            " (signing in)" if ticket_url is not None else "",
+            waited_note,
+        )
         if ticket_url is None:
             return state.PreparedConnection(result=result, navigation_url=app_url)
         return state.PreparedConnection(
@@ -789,15 +797,26 @@ class ConnectionController:
             label = next((entry.label for entry in self.list_servers() if entry.key == key), None)
         self.add_server(address.bridge_host, address.port, label)
 
-    def _activate(self, address: ServerAddress, landing: state._Landing | None) -> None:
+    def _activate(self, address: ServerAddress, landing: state._Landing | None) -> bool:
         """Make ``address`` the window's server: last-used, active, and announced."""
 
-        servers.select_server(address.bridge_host, address.port, settings_file=self._settings_file)
-        with self._window_lock:
-            self._active_address = address
-            self._landing = landing
-            self._lost_handled = False
-        self._notify_active_server(address.url)
+        guard = (
+            self._server_change_guard(address.url)
+            if self._server_change_guard is not None
+            else nullcontext(True)
+        )
+        with guard as allowed:
+            if not allowed:
+                return False
+            servers.select_server(
+                address.bridge_host, address.port, settings_file=self._settings_file
+            )
+            with self._window_lock:
+                self._active_address = address
+                self._landing = landing
+                self._lost_handled = False
+            self._notify_active_server(address.url)
+            return True
 
     def _sign_in_lost(self, address: ServerAddress) -> None:
         """A server refused this Desktop's stored sign-in: sign the window in again, once.

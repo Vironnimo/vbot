@@ -36,6 +36,7 @@ from collections.abc import Callable
 from typing import Any
 
 from desktop._windows import url_origin
+from desktop.server_address import parse_server_address
 
 logger = logging.getLogger("vbot.desktop.page_permissions")
 
@@ -127,6 +128,30 @@ class PagePermissions:
             "what the microphone hears. Install it?",
             server=_shown(filename),
         )
+
+    def computer_sharing(self, server_url: str, capabilities: list[str]) -> None:
+        """Approve this server's native capabilities, never an intervening page's."""
+        expected = parse_server_address(server_url.rstrip("/"), None).origin
+        if self._page_origin() != expected:
+            raise PageActionDeclined(
+                "The selected server changed", error_code="computer_server_changed"
+            )
+        if capabilities:
+            names = ", ".join(
+                "Terminal" if name == "terminal" else "Computer Use" for name in capabilities
+            )
+            self._ask(
+                "Share this computer",
+                "{page} asks to use {server} on this computer while vBot Desktop is open. "
+                "Terminal can run local programs; Computer Use can see and control your desktop. "
+                "Allow this?",
+                server=names,
+                origin=expected,
+            )
+        if self._page_origin() != expected:
+            raise PageActionDeclined(
+                "The selected server changed", error_code="computer_server_changed"
+            )
 
     def _page_origin(self) -> str | None:
         """The calling page's origin; ``None`` when the window is between two pages."""

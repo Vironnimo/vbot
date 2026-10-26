@@ -107,3 +107,4 @@ Read these only when your task matches - not by default.
 - Changing the guard's peer, forwarding-header, Host, credential, exempt-route or response-header rules, or the refusal reasons (`_rules.py`, `_guard.py`, `AccessService.authenticate`) -> `access/request-pipeline.md`
 - Changing how a server resolves or records its Access Mode at start (`_resolve_access`, the access records, `vbot application access`), reverse-proxy setup, or direct TLS (`tls.py`) -> `access/server-setup.md`
 - Changing Devices, pairing claims, login tickets, rate limits, revocation, ticket browsers, Device names or expiry (`DeviceStore`, `_pairing.py`, `_limits.py`) -> `access/devices-and-pairing.md`
+- Changing Computer registration, its principal/key ownership or native connection admission -> `computers.md`

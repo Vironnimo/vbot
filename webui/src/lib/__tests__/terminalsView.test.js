@@ -542,6 +542,17 @@ describe('terminal input', () => {
     expect(streams[1].sent).toEqual([{ type: 'input', data: 'abc' }]);
   });
 
+  it('refuses input on an offline computer without replaying it when the computer returns', async () => {
+    const { streams, controller } = await startTerminals();
+    streams[0].emit(readyEvent('term-1', 1, '', { computer_online: false }));
+    controller.queueInput('do not replay', { immediate: true });
+    expect(streams[0].sent).toEqual([]);
+
+    streams[0].emit(readyEvent('term-1', 2, '', { computer_online: true }));
+    controller.queueInput('new input', { immediate: true });
+    expect(streams[0].sent).toEqual([{ type: 'input', data: 'new input' }]);
+  });
+
   it('shows a failed input of the selected terminal and drops input once the terminal ends', async () => {
     vi.useFakeTimers();
     const { state, streams, controller } = await startTerminals();
@@ -724,12 +735,15 @@ describe('terminal resize', () => {
     expect(resizes(streams[1])).toEqual([[100, 30]]);
   });
 
-  it('does not resize a finished terminal', async () => {
-    const { streams, controller } = await startTerminals();
-    streams[0].emit(readyEvent('term-1', 1, '', { state: 'exited' }));
+  it.each([{ state: 'exited' }, { computer_online: false }])(
+    'does not resize an unavailable terminal (%j)',
+    async (changes) => {
+      const { streams, controller } = await startTerminals();
+      streams[0].emit(readyEvent('term-1', 1, '', changes));
 
-    controller.resize(100, 30, 'term-1', true);
+      controller.resize(100, 30, 'term-1', true);
 
-    expect(resizes(streams[0])).toEqual([]);
-  });
+      expect(resizes(streams[0])).toEqual([]);
+    },
+  );
 });

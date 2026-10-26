@@ -33,13 +33,23 @@ def test_remember_launch_round_trips_through_the_file(tmp_path: Path) -> None:
 
     store.remember_launch(command="pwsh", arguments=["-NoLogo"], workdir="C:/repo")
     store.remember_launch(command="nvim", arguments=(), workdir=None)
+    store.remember_launch(command="nvim", arguments=(), workdir=None, computer_id="pc_laptop")
 
     reloaded = TerminalOperatorStore(
         launch_history_path=history_path, groups_path=None, data_dir=tmp_path
     )
-    assert [entry.command for entry in reloaded.launch_history] == ["nvim", "pwsh"]
-    assert reloaded.launch_history[1].arguments == ("-NoLogo",)
-    assert reloaded.launch_history[1].workdir == "C:/repo"
+    assert [entry.command for entry in reloaded.launch_history] == ["nvim", "nvim", "pwsh"]
+    assert [entry.computer_id for entry in reloaded.launch_history] == [
+        "pc_laptop",
+        "server",
+        "server",
+    ]
+    assert reloaded.launch_history[2].arguments == ("-NoLogo",)
+    assert reloaded.launch_history[2].workdir == "C:/repo"
+    entries = json.loads(history_path.read_text(encoding="utf-8"))["entries"]
+    assert entries[0]["computer_id"] == "pc_laptop"
+    assert "computer_id" not in entries[1]
+    assert entries[0]["id"] != entries[1]["id"]
 
 
 def test_identical_configuration_moves_to_front_instead_of_duplicating(tmp_path: Path) -> None:

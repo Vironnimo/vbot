@@ -260,6 +260,7 @@ class ModelStepBoundary:
             reply_surface=context.request.reply_surface,
             subagent_session=context.subagent_session,
             permissions=context.permissions,
+            execution=context.execution,
             tool_restriction=context.request.tool_restriction,
             tool_denial_resolver=context.request.tool_denial_resolver,
             base_allowed_tools=state.allowed_tool_names,

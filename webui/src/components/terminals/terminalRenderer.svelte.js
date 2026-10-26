@@ -123,8 +123,11 @@ export function createTerminalRenderer({
     ) {
       return;
     }
+    const item = findTerminal(terminalId);
     const interactive =
-      !terminalIsFinished(findTerminal(terminalId)) && !isUnavailable();
+      !terminalIsFinished(item) &&
+      item?.computer_online !== false &&
+      !isUnavailable();
     const xtermInstance = new Terminal({
       allowTransparency: false,
       convertEol: false,
@@ -504,7 +507,10 @@ export function createTerminalRenderer({
     for (const item of items) {
       const tile = tileRegistry.get(item.terminal_id);
       if (!tile?.xterm) continue;
-      const interactive = !terminalIsFinished(item) && !isUnavailable();
+      const interactive =
+        !terminalIsFinished(item) &&
+        item.computer_online !== false &&
+        !isUnavailable();
       tile.xterm.options.disableStdin = !interactive;
       tile.xterm.options.cursorBlink = interactive;
     }

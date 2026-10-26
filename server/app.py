@@ -53,6 +53,7 @@ from server._app_lifecycle import (
     _unregister_terminal_change_bridge,
 )
 from server._bind import ServerBindState, _resolve_server_bind, _runtime_config
+from server._computer_socket import serve_computer_socket
 from server._cron_webhooks import register_webhook_routes, webhook_base_url
 from server._http_dependencies import (
     _FASTAPI_IMPORT_ERROR,
@@ -790,6 +791,13 @@ def create_app(
             return
         finally:
             await _close_log_stream(stream)
+
+    @app.websocket("/ws/computers")
+    async def websocket_computer(websocket: WebSocket) -> None:
+        try:
+            await serve_computer_socket(websocket, websocket.app.state.runtime.computers)
+        except WebSocketDisconnect:
+            return
 
     @app.websocket("/ws/terminals/{terminal_id}")
     async def websocket_terminal(websocket: WebSocket, terminal_id: str) -> None:

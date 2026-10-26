@@ -196,6 +196,8 @@ def _steps(runtime: Runtime) -> Iterator[_Step]:
         yield _Step("command_processes", commands.close, commands.aclose)
     if (terminals := runtime._terminal_manager) is not None:
         yield _Step("terminals", terminals.stop, terminals.aclose)
+    if (computers := runtime._computers) is not None:
+        yield _Step("computers", computers.close, computers.aclose)
     if (checker := runtime._command_checker) is not None:
         # The PowerShell analysis helper ends with the server's Job on a
         # synchronous stop; an asynchronous one stops it after the last check.

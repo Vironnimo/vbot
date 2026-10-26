@@ -122,6 +122,15 @@ def _unread_screen_result(
         "terminal_id": terminal_id,
         "state": _agent_state(info) if info is not None else "running",
     }
+    if info is not None:
+        data.update(
+            computer_id=info.computer_id,
+            computer_name=info.computer_name,
+            computer_online=info.computer_online,
+        )
+        if info.launch_pending:
+            data["launch_pending"] = True
+            done = "The launch remains unconfirmed"
     if info is not None and info.finished and info.exit_code is not None:
         data["exit_code"] = info.exit_code
     data["note"] = (
@@ -414,6 +423,9 @@ def _attachment(info: TerminalInfo, owner: TerminalOwner) -> str:
 def _terminal_facts(info: TerminalInfo, owner: TerminalOwner) -> JsonObject:
     facts: JsonObject = {
         "terminal_id": info.terminal_id,
+        "computer_id": info.computer_id,
+        "computer_name": info.computer_name,
+        "computer_online": info.computer_online,
         "call_name": info.call_name,
         "program": _short_program(info.program),
         "state": _agent_state(info),
@@ -525,9 +537,13 @@ def _attached_terminals(
     )
 
 
-def _terminals_text(terminal_manager: TerminalManager, owner: TerminalOwner) -> str:
+def _terminals_text(
+    terminal_manager: TerminalManager, owner: TerminalOwner, *, allowed: set[str] | None = None
+) -> str:
     """Name the terminals attached to this Session, running ones first, newest first."""
     attached = _attached_terminals(terminal_manager, owner)
+    if allowed is not None:
+        attached = [info for info in attached if info.computer_id in allowed]
     if not attached:
         if terminal_manager.list_terminals():
             return (
@@ -558,9 +574,15 @@ def _terminals_text(terminal_manager: TerminalManager, owner: TerminalOwner) -> 
 
 
 def _not_found_message(
-    terminal_manager: TerminalManager, owner: TerminalOwner, terminal_id: str
+    terminal_manager: TerminalManager,
+    owner: TerminalOwner,
+    terminal_id: str,
+    *,
+    allowed: set[str] | None = None,
 ) -> str:
     attached = _attached_terminals(terminal_manager, owner)
+    if allowed is not None:
+        attached = [info for info in attached if info.computer_id in allowed]
     named = (
         " Terminals attached to this Session: "
         + "; ".join(

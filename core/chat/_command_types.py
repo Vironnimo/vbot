@@ -168,6 +168,7 @@ class NewSessionCommandContext:
     reply_surface: ReplySurface
     agent_overrides: AgentOverrides = field(default_factory=AgentOverrides)
     fast_mode: bool = False
+    execution: dict[str, Any] | None = None
     working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT
     on_change: CommandChangeObserver | None = None
     session_id: str | None = None

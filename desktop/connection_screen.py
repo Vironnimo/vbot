@@ -49,8 +49,13 @@ STATUS_RATE_LIMITED = "rate_limited"
 STATUS_DEVICES_UNAVAILABLE = "devices_unavailable"
 STATUS_SIGN_IN_FAILED = "sign_in_failed"
 STATUS_HTTPS_REQUIRED = "https_required"
+STATUS_SWITCH_CANCELLED = "server_switch_cancelled"
 
 _ERROR_COPY = {
+    STATUS_SWITCH_CANCELLED: (
+        "Server switch cancelled",
+        "Your current server and local terminals remain active.",
+    ),
     PROBE_SERVER_UNREACHABLE: (
         "Server unreachable",
         "vBot Desktop could not reach that server. Check the server is running and the "

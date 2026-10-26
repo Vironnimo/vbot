@@ -35,6 +35,7 @@ from desktop.server_address import (
     validate_port,
 )
 from desktop.settings import (
+    SETTINGS_FILE_NAME,
     config_dir,
     read_window_size,
     write_window_size,
@@ -240,6 +241,7 @@ def _run_desktop(
     from desktop.connection import ConnectionController
     from desktop.credentials import DEVICE_TOKENS_FILE_NAME, DeviceTokenStore
     from desktop.dictation.controller import DictationController
+    from desktop.execution import ComputerSharing
     from desktop.hotkey import LIVE_VOICE_HOTKEY, HotkeyController, HotkeyHandlers
     from desktop.page_events import PageEventDispatcher
     from desktop.page_permissions import PagePermissions
@@ -254,8 +256,9 @@ def _run_desktop(
     # Signs the window and the native requests in to servers in the access mode
     # ``authenticated``: the installation's own server with its local access
     # token, any other with the device token stored when this Desktop paired.
+    identities = DeviceTokenStore(desktop_config_directory / DEVICE_TOKENS_FILE_NAME)
     access = ServerAccess(
-        store=DeviceTokenStore(desktop_config_directory / DEVICE_TOKENS_FILE_NAME),
+        store=identities,
         server_data_dir=args.server_data_dir,
     )
     controller = ConnectionController(settings_file=settings_file, probe=probe, access=access)
@@ -287,6 +290,24 @@ def _run_desktop(
     )
     window_holder: list[Any] = []
     window_state = desktop_window.WindowState()
+
+    def terminal_capability(_emit: Any) -> Any:
+        from desktop.terminal_execution import TerminalCapability
+
+        return TerminalCapability()
+
+    def computer_capability(emit: Any) -> Any:
+        from desktop.computer_execution import ComputerExecution
+
+        return ComputerExecution(emit=emit)
+
+    computer_sharing = ComputerSharing(
+        settings_path=settings_file or desktop_config_directory / SETTINGS_FILE_NAME,
+        identities=identities,
+        authorization=access,
+        factories={"terminal": terminal_capability, "computer_use": computer_capability},
+        publish=page_events.publish_computer_sharing,
+    )
     desktop_restart = (
         restart.DesktopRestart(
             contract,
@@ -299,6 +320,9 @@ def _run_desktop(
             ),
             shell_busy=lambda: voice.is_busy() or dictation.is_busy(),
             close_window=lambda: window_holder[0].destroy(),
+            automatic_hold=lambda: computer_sharing.active_terminals > 0,
+            prepare_restart=computer_sharing.prepare_restart,
+            restart_failed=computer_sharing.resume,
         )
         if contract is not None
         else None
@@ -328,16 +352,19 @@ def _run_desktop(
         restart=desktop_restart,
         zoom=zoom,
         permissions=permissions,
+        computer_sharing=computer_sharing,
     )
 
     # Voice and dictation follow the window: every successful in-window connect
     # retargets them, so first-run connect and runtime server switches never
     # leave them pointed at the launch-time (or empty) server.
     def follow_server(url: str) -> None:
+        computer_sharing.set_server_url(url)
         voice.set_server_url(url)
         dictation.set_server_url(url)
 
     controller.set_active_server_listener(follow_server)
+    controller.set_server_change_guard(lambda url: computer_sharing.changing_server(url, confirm))
 
     # The window must be created with initial content before the GUI loop; the
     # connection screen is a safe neutral page that the post-loop entry callable
@@ -433,6 +460,7 @@ def _run_desktop(
         # optional ML/audio initialization. Connect first so Voice follows the
         # window's resolved target; Voice starts listening only when enabled.
         connection_entry()
+        computer_sharing.start()
         voice.start()
         live_hotkey.start()
         dictation.start()
@@ -449,6 +477,7 @@ def _run_desktop(
         except AttributeError, OSError, RuntimeError, ValueError:
             logger.warning("Desktop window size could not be persisted", exc_info=True)
 
+    window.events.closing += lambda: computer_sharing.allow_close(confirm)
     window.events.closing += persist_window_size
 
     # WebView2 reads its browser arguments when webview.start creates it.
@@ -458,6 +487,7 @@ def _run_desktop(
     finally:
         # First, so a launch connect still waiting never retargets a closed Voice.
         controller.close()
+        computer_sharing.close()
         if desktop_restart is not None:
             desktop_restart.close()
         live_hotkey.stop()

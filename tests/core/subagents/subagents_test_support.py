@@ -23,6 +23,7 @@ import pytest_asyncio
 from core.agents import AgentNotFoundError
 from core.chat import ChatMessage, ChatSessionManager
 from core.chat.messages import SubAgentMessage
+from core.computers import normalize_execution
 from core.database import write_bootstrap_marker
 from core.permissions import PermissionBoundary, PermissionCeiling
 from core.projects import (
@@ -327,6 +328,7 @@ class SubAgentHarness:
         agent_model: str | None = None,
         agent_thinking_effort: str | None = None,
         permissions: PermissionBoundary = PermissionBoundary.UNRESTRICTED,
+        execution: JsonObject | None = None,
     ) -> ToolContext:
         session = session or self.parent
         # Chat grants message_parent to Sub-Agent Sessions; the Tool itself checks the link.
@@ -347,6 +349,7 @@ class SubAgentHarness:
             agent_model=agent_model,
             agent_thinking_effort=agent_thinking_effort,
             permissions=permissions,
+            execution=normalize_execution(execution),
             session_tool_grants=grants,
             emit_hook=self._record_event,
             cancellation_hook=cancellation_hook,

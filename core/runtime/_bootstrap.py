@@ -32,6 +32,7 @@ from core.channels import ChannelService
 from core.chat import ChatLoop, ChatLoopDependencies, ChatMessage, CommandDispatcher
 from core.chat.block_resolver import ContentBlockResolver
 from core.compaction import CompactionService
+from core.computers import ComputerRegistry
 from core.database import (
     DatabaseError,
     canonical_database_path,
@@ -756,6 +757,7 @@ def bootstrap(runtime: Runtime) -> None:
         runtime._trigger_service.set_owned_completion_validator(runtime._validate_owned_completion)
         # Analyzes restricted Sessions' commands; its analyzer starts on first use.
         runtime._command_checker = CommandChecker(_command_analyzer)
+        runtime._computers = ComputerRegistry(runtime._storage.data_dir)
         runtime._terminal_manager = _build_terminal_manager(runtime)
         if runtime._operational_producers == "enabled":
             runtime._start_terminal_manager()

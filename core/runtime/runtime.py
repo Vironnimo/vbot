@@ -174,6 +174,7 @@ class Runtime(RuntimeServiceGraph):
                     resolve_cwd=self._extension_cwd,
                     resolve_permissions=self._extension_permissions,
                     oauth_redirects=self.oauth_redirects,
+                    computers=self.computers,
                 ),
                 ensure_started=self._ensure_started,
                 agent_resolver=self.agent_resolver,

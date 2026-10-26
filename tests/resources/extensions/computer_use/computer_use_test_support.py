@@ -23,6 +23,7 @@ import pytest
 import pytest_asyncio
 from PIL import Image, ImageDraw
 
+from core.computers import ComputerRegistry
 from core.extensions.extensions import ExtensionAPI, ExtensionDeclarations
 from core.extensions.operations import ExtensionHost
 from core.permissions import PermissionBoundary
@@ -257,6 +258,7 @@ class Harness:
     context: ToolContext
     published: list[tuple[str, list[str], int]]
     sleeps: list[float]
+    computers: ComputerRegistry
 
     @property
     def hotkey(self) -> FakeHotkey:
@@ -380,12 +382,18 @@ async def computer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIter
         workspace=str(tmp_path),
     )
     published: list[tuple[str, list[str], int]] = []
+    computers = ComputerRegistry()
+    # The injected native target is a working Windows desktop on every test host.
+    computers._infos["server"] = replace(
+        computers.get("server"), capabilities=("terminal", "computer_use")
+    )
     host = SimpleNamespace(
         data_dir=tmp_path,
         resolve_tool_agent=lambda context: agent,
         publish_change=lambda resource, ids, revision: published.append(
             (resource, list(ids), revision)
         ),
+        computers=computers,
     )
     context = ToolContext(
         agent_id="agent",
@@ -400,5 +408,8 @@ async def computer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIter
         permissions=PermissionBoundary.UNRESTRICTED,
     )
     await service.start(cast(ExtensionHost, host))
-    yield Harness(service, api, registry, target, hotkeys, agent, context, published, sleeps)
+    yield Harness(
+        service, api, registry, target, hotkeys, agent, context, published, sleeps, computers
+    )
     await service.close()
+    computers.close()

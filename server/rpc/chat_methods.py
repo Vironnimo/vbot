@@ -120,7 +120,7 @@ async def _submit_chat(
         method,
     )
     agent_id, project_id = _required_agent_address(params, "agent_id")
-    target = _chat_target(params, agent_id, project_id)
+    target = _chat_target(params, agent_id, project_id, state=state)
     content = _parse_chat_content(params, "content")
     input_origin = _optional_chat_input_origin(params)
     reply_surface = _chat_reply_surface(params)
@@ -282,6 +282,7 @@ async def _start_chat_in_new_session(
             working_project_id=target.working_project_id,
             ephemeral=target.ephemeral,
             fast_mode=target.fast_mode,
+            execution=target.execution,
             input_origin=input_origin,
             reply_surface=reply_surface,
             project_id=project_id,

@@ -18,14 +18,14 @@ core/          <- Kernel (async). No HTTP, no UI.
 server/        <- FastAPI + WS + SSE. Imports core/. RPC dispatch lives in server/rpc/.
 webui/         <- Svelte frontend. Own package.json. Talks HTTP/WS/SSE only.
 cli/           <- CLI accessor, including the full-screen `vbot tui`. Server lifecycle locally; conversation and management through server contracts.
-desktop/       <- pywebview shell. Imports nothing from the project - HTTP only.
+desktop/       <- pywebview shell and app-lifetime native execution. Server services through HTTP/WS; imports only shared native primitives, never Runtime.
 ```
 
 Bare map references resolve under `.vorch/domain-maps/`. Each `core/<module>/` folder's main file is its public API (soft limit: 1000 lines/file); exceptions: `core/debug` uses an `__init__.py` facade (`debug.md`), and independent utilities in `core/utils` use leaf imports. Keep imports cheap: a package `__init__.py` that re-exports a large stack loads its exports on first access (`_EXPORT_MODULES` plus a module `__getattr__`), and a heavy third-party package that only one operation needs is imported where that operation first runs, so server import and `Runtime.start` pay for neither (why and the current cases: `performance.md` -> Import cost).
 
 Split an oversized source file into focused internal units behind the owning module and its public contract: a large file costs context on every inspection and edit, and cohesion alone does not justify a multi-thousand-line file. Avoid arbitrary chunks, method-binding tables or compressed formatting that merely obscure the same context.
 
-**Transport:** Commands use `POST /api/rpc`, never WebSockets; the one exception is a Terminal's live operator input and resize, which travel over its terminal socket, ordered with its output (`tools/terminal.md`). `/ws` carries app-wide server-push events, SSE streams each Run, logs and terminals use dedicated sockets, and binary transfers dedicated HTTP endpoints (`server.md`). The server runs in one Access Mode chosen by the host at start, enforced by one access guard in front of every route (`access.md`): `local` (this computer only, the default), `lan` (home network without login) or `authenticated` (login from the internet through paired Devices).
+**Transport:** Accessor commands use `POST /api/rpc`; a Terminal's live operator input and resize travel over its terminal socket, ordered with its output (`tools/terminal.md`). The native `/ws/computers` connection carries server-issued execution requests to a running Desktop app and its results/events (`computers.md`). `/ws` remains app-wide server-push only, SSE streams each Run, logs and terminals use dedicated sockets, and binary transfers dedicated HTTP endpoints (`server.md`). The server runs in one Access Mode chosen by the host at start, enforced by one access guard in front of every route (`access.md`): `local` (this computer only, the default), `lan` (home network without login) or `authenticated` (login from the internet through paired Devices).
 
 **Flow:** Accessors -> HTTP/WS/SSE -> server RPC handlers -> core (Providers, Models, Tools, Agents) -> external APIs. Agentic-only; one Chat loop, and every Model request streams (Chat, Compaction, Session titles, image analysis, Extension sampling). A completed `ProviderAdapter.send()` response is the emergency path, allowed only after the Provider refuses to stream (`providers.md` -> Interfaces).
 
@@ -33,7 +33,7 @@ Split an oversized source file into focused internal units behind the owning mod
 
 **Tools:** Execute a call whose intended effect is clear even when it does not match the schema; refuse only genuinely ambiguous calls, before side effects, with the corrected call. Similarity alone is not intent for a mutation or an explicit target. Schemas, argument normalization/validation, concurrency: `tools.md`. Agent-facing design and review: the `vbot-agent-tools` Skill.
 
-**Extensions:** API 20 (`core/extensions/_declarations.API_VERSION`; what each version added: `extensions/management.md` -> API versions). Canonical Sessions own binding, receipt and Run identity; Extension databases own domain state. The app provides a generic page bridge; Extensions own domain UI (`extensions.md`).
+**Extensions:** API 21 (`core/extensions/_declarations.API_VERSION`; what each version added: `extensions/management.md` -> API versions). Canonical Sessions own binding, receipt and Run identity; Extension databases own domain state. The app provides a generic page bridge; Extensions own domain UI (`extensions.md`).
 
 **Configuration:** Data directory `~/.vbot` owns `settings.json` and `secrets.json`, the encrypted Secret Store for data-directory credentials, OAuth tokens and Cron webhook secrets (`secrets.md`). Process environment takes precedence; vBot never rewrites `os.environ`. Owning domains validate every user-editable JSON file before runtime use; public accessors configure Settings only through cataloged paths (`settings.md`, `storage.md`; Custom Provider credentials: `providers/connections.md`).
 
@@ -67,6 +67,7 @@ How to read the maps: `AGENTS.md` -> Load context for the task.
 | projects.md | `core/projects/` | Project boundary, anchor/ceiling invariants |
 | subagents.md | `core/subagents/` | Sub-Agent tree, answer forwarding, tree control, reply targets |
 | tools.md | `core/tools/` | Tool contracts and policy; index to per-tool maps |
+| computers.md | `core/computers/` | Computer identity, availability, Session selection and native capability routing |
 | permissions.md | `core/permissions/` | Permission Rules: rule language, Permission Boundary decisions, path normalization, protected locations, refusals |
 | storage.md | `core/storage/` | Data-directory layout, temp-file lifecycle, persistence |
 | secrets.md | `core/secrets/` | Secret Store, key protection, plaintext conversion, Agent Secrets |
@@ -187,3 +188,4 @@ Only strategic decisions or global constraints an Agent might otherwise misread 
 - **Platforms:** vBot targets Windows and Linux, with Windows currently prioritized. Keep shared components portable and platform integration isolated; server and accessors may run on separate hosts. The commit hook and CI type-check for both platforms on any host: use Windows-only standard-library names (`stat.IO_REPARSE_TAG_*`, `os.stat_result.st_reparse_tag`, `subprocess.CREATE_*`, `ctypes.WinDLL`, `winreg`, ...) only behind a `sys.platform == "win32"` check that mypy understands (an `if` statement or an early exit; not `os.name`, a conditional expression or a function-level `assert`), and check the other platform's view with `python -m mypy --platform linux` (or `win32`).
 - **New Model defaults:** listed chat Models remain selectable with inferred Provider/Connection/family defaults; lack of per-version verification and free-Model naming are not exclusion reasons. Exact catalog facts and concrete corrective exceptions take precedence (`providers.md` -> Defaults and concrete exceptions; user decision 2026-10-15).
 - **Kernel-to-Model notifications:** Only sanctioned channels from `model-communication.md`: persisted notes rendered as System Reminders, System Prompt blocks, Tool definitions/results. Every domain (including Extensions, Channels, Tools, automation) must use these; never invent a channel.
+- **Execution computers:** Agents and shared state stay on the server; a running Desktop app can explicitly share native capabilities for Session-selected Computers. Selection, identity and no-fallback routing belong to `computers.md`; Desktop owns consent and native lifetime.

@@ -21,6 +21,7 @@ from core.archive import (
 )
 from core.channels import ChannelConfigError, ChannelNotFoundError
 from core.chat import ChatError, ChatSessionError
+from core.computers import ComputerError
 from core.database import DatabaseError, IncidentConflictError
 from core.extensions.extensions import SessionCapabilityExpiredError
 from core.model_tasks import TaskModelError, TaskModelValidationError
@@ -142,6 +143,8 @@ def _map_archive_error(error: ArchiveEntryError) -> RpcError:
 def _map_expected_error(error: Exception) -> RpcError:
     if isinstance(error, RpcError):
         return error
+    if isinstance(error, ComputerError):
+        return RpcError(error.code, error.message)
     if isinstance(error, AccessorInputConflictError):
         return RpcError(RPC_ERROR_INPUT_CONFLICT, str(error))
     if isinstance(error, ArchiveEntryError):

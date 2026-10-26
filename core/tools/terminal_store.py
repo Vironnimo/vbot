@@ -49,7 +49,9 @@ TERMINAL_GROUP_NAME_MAX_CHARS = 80
 # The operator's own terminals: started by the operator and held by no Agent.
 TERMINAL_MANUAL_GROUP_ID = "auto:manual"
 
-_LAUNCH_HISTORY_ENTRY_FIELDS = frozenset(("id", "command", "args", "workdir", "used_at"))
+_LAUNCH_HISTORY_ENTRY_FIELDS = frozenset(
+    ("id", "command", "args", "workdir", "used_at", "computer_id")
+)
 _GROUP_FIELDS = frozenset(("id", "name", "order", "created_at"))
 LAUNCH_HISTORY_ENTRY_SHAPE = json_object(_LAUNCH_HISTORY_ENTRY_FIELDS)
 GROUP_SHAPE = json_object(_GROUP_FIELDS)
@@ -76,6 +78,7 @@ class TerminalLaunchHistoryEntry:
     arguments: tuple[str, ...]
     workdir: str | None
     used_at: datetime
+    computer_id: str = "server"
 
 
 @dataclass(slots=True)
@@ -111,6 +114,7 @@ def launch_history_document(entries: Sequence[TerminalLaunchHistoryEntry]) -> li
             "args": list(entry.arguments),
             "workdir": entry.workdir,
             "used_at": entry.used_at.isoformat(),
+            **({"computer_id": entry.computer_id} if entry.computer_id != "server" else {}),
         }
         for entry in entries
     ]
@@ -120,10 +124,16 @@ def launch_history_id(
     command: str | None,
     arguments: Sequence[str],
     workdir: str | None,
+    computer_id: str = "server",
 ) -> str:
     """Return the stable content id that deduplicates identical launches."""
     encoded = json.dumps(
-        {"command": command, "args": list(arguments), "workdir": workdir},
+        {
+            "command": command,
+            "args": list(arguments),
+            "workdir": workdir,
+            **({"computer_id": computer_id} if computer_id != "server" else {}),
+        },
         ensure_ascii=False,
         separators=(",", ":"),
         sort_keys=True,
@@ -193,12 +203,15 @@ def _parse_launch_history_entry(raw_entry: Any) -> TerminalLaunchHistoryEntry:
     if not isinstance(raw_entry, dict):
         raise ValueError("Terminal launch history entry must be an object")
     modeled = strip_unknown_fields(raw_entry, LAUNCH_HISTORY_ENTRY_SHAPE)
-    if set(modeled) != _LAUNCH_HISTORY_ENTRY_FIELDS:
+    if set(modeled) - {"computer_id"} != _LAUNCH_HISTORY_ENTRY_FIELDS - {"computer_id"}:
         raise ValueError("Terminal launch history entry shape is invalid")
     entry_id = modeled["id"]
     command = modeled["command"]
     arguments = modeled["args"]
     workdir = modeled["workdir"]
+    computer_id = modeled.get("computer_id", "server")
+    if not isinstance(computer_id, str) or not computer_id:
+        raise ValueError("Terminal launch history computer is invalid")
     if not isinstance(entry_id, str) or not entry_id:
         raise ValueError("Terminal launch history id is invalid")
     if command is not None and (not isinstance(command, str) or not command):
@@ -207,7 +220,7 @@ def _parse_launch_history_entry(raw_entry: Any) -> TerminalLaunchHistoryEntry:
         raise ValueError("Terminal launch history arguments are invalid")
     if workdir is not None and (not isinstance(workdir, str) or not workdir):
         raise ValueError("Terminal launch history workdir is invalid")
-    if entry_id != launch_history_id(command, arguments, workdir):
+    if entry_id != launch_history_id(command, arguments, workdir, computer_id):
         raise ValueError("Terminal launch history id does not match its configuration")
     return TerminalLaunchHistoryEntry(
         id=entry_id,
@@ -215,6 +228,7 @@ def _parse_launch_history_entry(raw_entry: Any) -> TerminalLaunchHistoryEntry:
         arguments=tuple(arguments),
         workdir=workdir,
         used_at=_parse_utc_timestamp(modeled["used_at"], what="launch history"),
+        computer_id=computer_id,
     )
 
 
@@ -407,13 +421,15 @@ class TerminalOperatorStore:
         command: str | None,
         arguments: Sequence[str],
         workdir: str | None,
+        computer_id: str = "server",
     ) -> None:
         """Record one manual launch at the front, deduplicated and capped."""
         entry = TerminalLaunchHistoryEntry(
-            id=launch_history_id(command, arguments, workdir),
+            id=launch_history_id(command, arguments, workdir, computer_id),
             command=command,
             arguments=tuple(arguments),
             workdir=workdir,
+            computer_id=computer_id,
             used_at=datetime.now(UTC),
         )
         self.launch_history = [

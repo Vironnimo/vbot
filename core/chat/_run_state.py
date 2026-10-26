@@ -37,6 +37,7 @@ from core.chat.wire_shaping import (
     notes_missing_from_request,
     request_tail_notes,
 )
+from core.computers import normalize_execution
 from core.permissions import PermissionBoundary
 from core.projects import (
     FolderInstructions,
@@ -371,6 +372,7 @@ class _RunExecutionContext:
     session_snapshot: _SessionSnapshot
     # Every Tool Call of this Run checks its accesses against this boundary.
     permissions: PermissionBoundary
+    execution: JsonObject = field(default_factory=lambda: normalize_execution(None))
     # The Session is linked to a Parent Agent (a Sub-Agent Session).
     subagent_session: bool = False
     # The Session leaves ``subagent`` out of its Tool list for this Run (a
@@ -847,6 +849,12 @@ async def refresh_run_permissions(
     Calls; the ``core:permissions`` block follows at the next Run as a
     ``[prompt-block-change]`` note. A rebuild that fails ends the Run.
     """
+    # A Parent's send can narrow a Sub-Agent's grants while its Run is active.
+    # The operator setter excludes active/queued Runs, so it cannot retarget a
+    # running conversation underneath an admitted Tool batch.
+    context.execution = normalize_execution(
+        await dependencies.sessions.metadata_value_async(context.session.address, "execution")
+    )
     current = context.permission_sources
     if current is None or not (force or await current.changed()):
         return
@@ -1098,6 +1106,9 @@ async def create_run_execution_context(
             subagent_tool_withheld=subagent_tool_withheld,
             goal_session=goal_session,
             permissions=permissions.boundary,
+            execution=normalize_execution(
+                await dependencies.sessions.metadata_value_async(session_address, "execution")
+            ),
             permission_sources=permissions,
             folder_instructions=folder_instructions,
             # The Session's newest measurement still anchors this Run's Context.

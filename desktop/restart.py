@@ -367,6 +367,9 @@ class DesktopRestart:
         placement: Callable[[], WindowPlacement | None],
         shell_busy: Callable[[], bool],
         close_window: Callable[[], None],
+        automatic_hold: Callable[[], bool] = lambda: False,
+        prepare_restart: Callable[[], bool] = lambda: True,
+        restart_failed: Callable[[], None] = lambda: None,
         spawn: Callable[[tuple[str, ...]], RelaunchProcess] = _spawn,
         clock: Callable[[], float] = time.monotonic,
         wall_clock: Callable[[], float] = time.time,
@@ -380,6 +383,9 @@ class DesktopRestart:
         self._placement = placement
         self._shell_busy = shell_busy
         self._close_window = close_window
+        self._automatic_hold = automatic_hold
+        self._prepare_restart = prepare_restart
+        self._restart_failed = restart_failed
         self._spawn = spawn
         self._clock = clock
         self._wall_clock = wall_clock
@@ -449,6 +455,10 @@ class DesktopRestart:
         """Run one watcher step: the version file, then a due automatic restart."""
 
         self._check_version()
+        if self._automatic_hold():
+            with self._lock:
+                self._due_since, self._page_deadline = None, None
+            return
         now = self._clock()
         with self._lock:
             if not self._pending or self._restarting or now < self._next_automatic:
@@ -491,6 +501,8 @@ class DesktopRestart:
         self._begin_automatic("update")
 
     def _begin_automatic(self, reason: str) -> None:
+        if self._automatic_hold():
+            return
         try:
             self._begin(reason)
         except RestartError:
@@ -553,6 +565,11 @@ class DesktopRestart:
                 )
             if self._restarting:
                 return
+            if not self._prepare_restart():
+                raise RestartError(
+                    "Stop this Desktop's local terminals before restarting it",
+                    error_code="computer_terminals_running",
+                )
             self._restarting, self._failed = True, False
             self._nonce = secrets.token_hex(16)
             nonce = self._nonce
@@ -615,6 +632,7 @@ class DesktopRestart:
             retry = min(FAILED_RETRY_SECONDS * 2 ** (self._failures - 1), FAILED_RETRY_MAX_SECONDS)
             self._next_automatic = self._clock() + retry
             status = self._status_locked()
+        self._restart_failed()
         logger.warning(
             "Desktop restart failed: %s; the window stays open (retry_in=%ds)", reason, retry
         )

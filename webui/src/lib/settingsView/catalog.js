@@ -98,6 +98,7 @@ const sections = [
     id: 'desktop_connection',
     label: () => t('settings.desktop.connection.title'),
   },
+  { id: 'computer_sharing', label: () => t('computers.sharingTitle') },
   {
     id: 'archive_retention',
     label: () => t('settings.archive.retentionTitle'),
@@ -205,6 +206,7 @@ export function settingsPages(desktopCapabilities) {
         'server',
         'access',
         ...(desktopCapabilities?.serverSelection ? ['desktop_connection'] : []),
+        ...(desktopCapabilities?.computerSharing ? ['computer_sharing'] : []),
       ],
     },
     {

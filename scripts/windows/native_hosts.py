@@ -45,8 +45,9 @@ def compile_host(source: Path, output: Path, *, role: str, version: str) -> None
     ).resolve()
     numeric, display = _version_resource_values(version)
     # CREATE_NO_WINDOW only gives console applications an invisible console.
-    # A GUI server makes pywinpty allocate and then hide a visible one on start.
-    subsystem = "CONSOLE" if role in {"python", "host", "server"} else "WINDOWS"
+    # Server and Desktop both host PTYs; a GUI host makes pywinpty allocate and
+    # then hide a visible console. Their managed launchers use CREATE_NO_WINDOW.
+    subsystem = "CONSOLE" if role in {"python", "host", "server", "desktop"} else "WINDOWS"
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="vbot-native-") as temporary:
         resource = Path(temporary) / "launcher.res"

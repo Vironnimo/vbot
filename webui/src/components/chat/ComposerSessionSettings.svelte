@@ -37,6 +37,7 @@
   import SearchableDropdown from '../SearchableDropdown.svelte';
   import SaveStatus from '../ui/SaveStatus.svelte';
   import SessionPermissionsBadge from '../permissions/SessionPermissionsBadge.svelte';
+  import SessionComputerSettings from './SessionComputerSettings.svelte';
 
   const noop = () => {};
 
@@ -53,6 +54,7 @@
     onSelectModel = noop,
     onSelectFastMode = noop,
     onSelectThinkingEffort = noop,
+    onSelectExecution = noop,
     onModelPickerOpen = noop,
   } = $props();
 
@@ -466,6 +468,12 @@
       workingProjectId={view.kind === 'draft' && !view.project.team
         ? (view.project.value ?? null)
         : undefined}
+    />
+    <SessionComputerSettings
+      value={view.execution}
+      disabled={view.executionLocked}
+      onChange={onSelectExecution}
+      onRetry={view.retryExecution}
     />
     {#if speedLabel || latencyLabel}
       <span class="session-settings__field session-settings__field--icon">

@@ -34,6 +34,7 @@ from core.chat.messages import (
     _new_message_id,
 )
 from core.chat.tool_dispatch import ToolDispatchContext, ToolRound
+from core.computers import normalize_execution
 from core.permissions import PermissionBoundary
 from core.projects import resolve_skill_scope
 from core.providers.adapter import normalize_tool_call_candidate
@@ -208,7 +209,12 @@ class ExternalRun:
         )
         self._iteration += 1
         assistant_id = _new_message_id()
-        dispatch_context = self._dispatch_context(run, permissions)
+        execution = normalize_execution(
+            await self._dependencies.sessions.metadata_value_async(
+                self._session.address, "execution"
+            )
+        )
+        dispatch_context = self._dispatch_context(run, permissions, execution)
         tool_round = ToolRound(
             dispatch_context,
             assistant_message_id=assistant_id,
@@ -398,7 +404,9 @@ class ExternalRun:
                 return False
         return True
 
-    def _dispatch_context(self, run: Run, permissions: PermissionBoundary) -> ToolDispatchContext:
+    def _dispatch_context(
+        self, run: Run, permissions: PermissionBoundary, execution: JsonObject
+    ) -> ToolDispatchContext:
         dependencies = self._dependencies
         return ToolDispatchContext(
             registry=dependencies.tools,
@@ -409,6 +417,7 @@ class ExternalRun:
             vbot_root=Path(dependencies.get_system_prompts().vbot_root),
             data_root=Path(dependencies.storage.data_dir),
             permissions=permissions,
+            execution=execution,
             project_cwd=self._project_cwd,
             skill_project_id=self._skill_project_id,
             skill_registry=self._skill_registry,

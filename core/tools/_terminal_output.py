@@ -167,6 +167,9 @@ class TerminalOutput:
         observation = await self.screen.observe()
         data: dict[str, Any] = {
             "terminal_id": self.terminal_id,
+            "computer_id": info.computer_id,
+            "computer_name": info.computer_name,
+            "computer_online": info.computer_online,
             "state": info.state,
             "command": info.command,
             "title": info.title,
@@ -213,6 +216,13 @@ class TerminalOutput:
                 ),
             }
         data["call_name"] = info.call_name
+        if info.launch_pending:
+            data["launch_pending"] = True
+            data["note"] = (
+                "The Desktop has not confirmed this terminal's launch. Reconnect if needed; "
+                "this terminal will recover "
+                "by checking the same process, without starting another one."
+            )
         data["program"] = info.program
         data["stopped"] = info.stopped
         return data

@@ -1,6 +1,6 @@
 # Desktop
 
-pywebview-based desktop accessor that embeds the normal WebUI and talks only to the vBot server over HTTP.
+pywebview-based desktop accessor that embeds the normal WebUI and connects to the vBot server over HTTP and native WebSockets.
 
 ## Overview
 
@@ -15,6 +15,8 @@ A server in the Access Mode `authenticated` needs a sign-in (`desktop/access.py`
 pywebview disables its renderer's default right-click menu outside Debug Mode, so the connected WebUI supplies a capability-gated Desktop context menu (`webui/app-shell.md` -> Desktop context menu) instead of enabling the whole debug surface; `desktop/system_actions.py` owns the thread-safe native clipboard and default-browser boundary.
 
 Desktop Voice (`desktop/wakeword/`) and Desktop dictation (`desktop/dictation/`) share the speech core (`desktop/speech/`); the active server transcribes. Live voice (`model_tasks/live.md`) runs in the loaded WebUI page; the Desktop supports it without owning the call.
+
+The running app can share local Terminal and Computer Use capabilities with its selected server (`desktop/execution.py`), including while minimized. This is app-owned native execution, not a background installation: it ends with the app. Reusable OS/process primitives and id utilities are narrow allowed imports from `core`; Runtime, Agent and server services stay server-owned. Grants, connection lifetime, shutdown and extension seams: `desktop/computer-sharing.md`.
 
 ## Terms
 
@@ -62,7 +64,7 @@ One `DesktopBridge` instance (`desktop/bridge.py`) is pywebview's `js_api` and s
 
 ## External Dependencies
 
-All ship in the `[desktop]` optional group: pywebview (window and Connection screen host) plus the audio and ML packages of Voice and the speech core (`desktop/voice.md` -> Dependencies). They import lazily, so the backend test gate never needs the GUI/audio stack.
+All ship in the `[desktop]` optional group: pywebview, the audio and ML packages (`desktop/voice.md` -> Dependencies), and Pillow, psutil, websockets and Windows pywinpty for native execution. Capability handlers and native dependencies load only when shared.
 
 ## Constraints & Gotchas
 
@@ -76,9 +78,15 @@ All ship in the `[desktop]` optional group: pywebview (window and Connection scr
 - Never hand a login ticket or token to page JavaScript, and never navigate the window because of what the WebUI shows: a page-started connect gets `about:blank` and the controller opens the ticket natively; a lost sign-in is handled once per connect (`desktop/sign-in.md`).
 - Every sounddevice/PortAudio query, open, close, and refresh goes through `AUDIO_BACKEND_LOCK` (`desktop/speech/_microphones.py`); a PortAudio refresh invalidates open streams, so it is skipped while any capture stream (Voice or dictation) is open, and the echo stage closes its loopback before a refresh.
 
+## Agent-facing text
+
+Native execution refusals can reach Tool results. Their reasons live in `desktop/computer-sharing.md` -> Agent-facing text; capability-specific texts remain with Terminal and Computer Use.
+
 ## References
 
 Read these only when your task matches - not by default.
+
+- Sharing this computer, adding a native capability, transport reconnects, local grants or app-owned execution cleanup -> `desktop/computer-sharing.md`
 
 - Launch target and wait, probing and its outcomes, the Connection screen, `ConnectionController`, remembered servers, server switches -> `desktop/connection.md`
 - Window startup order, single instance and launch request handoff, size, zoom, DPI, native clipboard/browser actions, icons, settings store mechanics, the Desktop's log files -> `desktop/window.md`

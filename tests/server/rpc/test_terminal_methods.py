@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from core.computers import ComputerError
 from core.tools.terminal_manager import TerminalNotFoundError
 from server.rpc.errors import RpcError
 from server.rpc.methods import build_method_handlers
@@ -71,6 +72,13 @@ async def test_input_for_a_program_that_is_not_running_has_its_own_error_code():
         )
     assert raised.value.code == "terminal_program_not_running"
     assert "codex is not running" in raised.value.message
+    manager.send_operator_input.side_effect = ComputerError(
+        "computer_connection_lost", "The input outcome is unknown; inspect the screen first."
+    )
+    with pytest.raises(RpcError) as disconnected:
+        await _terminal_input(state, {"terminal_id": "t", "data": "go"})
+    assert disconnected.value.code == "computer_connection_lost"
+    assert "unknown" in disconnected.value.message
 
 
 class FakeTerminalManager:
@@ -189,11 +197,16 @@ async def test_terminal_operator_handlers_project_list_input_and_kill() -> None:
             "arguments": ["--profile", "work space"],
             "cwd": Path("~/repo").expanduser(),
             "launch_workdir": "~/repo",
+            "computer_id": None,
             "group_id": None,
             "columns": 100,
             "rows": 30,
         }
     ]
+    await _terminal_start(state, {"computer_id": "pc_laptop", "workdir": "~/repo"})
+    assert manager.starts[-1]["computer_id"] == "pc_laptop"
+    assert manager.starts[-1]["cwd"] is None
+    assert manager.starts[-1]["launch_workdir"] == "~/repo"
 
 
 @pytest.mark.asyncio

@@ -1,6 +1,6 @@
 # Extension Owner-bound Host
 
-The capabilities an Extension reaches through its owner-bound host and owned execution: temporary execution groups and private Session Tools, prompt inspection, group titles, owner-managed Session lifetime, deferred Tool outcomes, Tool result payloads and OAuth browser redirects. Source: the `ExtensionHost` fields in `core/extensions/operations.py`, bound per owner by `core/runtime/_extension_host.py::ExtensionHostFactory`; Extension databases have their own file (`extensions/databases.md`); owned-Session storage and authority belong to `sessions/owned-execution.md`, temporary Agents to `agent.md`.
+The capabilities an Extension reaches through its owner-bound host and owned execution: temporary execution groups and private Session Tools, prompt inspection, group titles, owner-managed Session lifetime, deferred Tool outcomes, Tool result payloads, OAuth browser redirects and Computer routing. Source: the `ExtensionHost` fields in `core/extensions/operations.py`, bound per owner by `core/runtime/_extension_host.py::ExtensionHostFactory`; Extension databases have their own file (`extensions/databases.md`); owned-Session storage and authority belong to `sessions/owned-execution.md`, temporary Agents to `agent.md`.
 
 ## Temporary execution groups
 
@@ -31,3 +31,7 @@ API 8: an Extension Tool running in a Session keeps JSON data beside its Tool Re
 ## OAuth browser redirects
 
 API 11: `host.oauth_redirects` is the Runtime's `OAuthRedirects` (`core/extensions/oauth_redirects.py`), or `None` without a Runtime. An Extension that sends the user's browser to an authorization server uses `callback_url` as its redirect URI when it is not `None`, awaits `expect(state)` for the redirect query and calls `discard(state)` when it stops waiting. The server binds `callback_url` at startup and passes `GET /api/oauth/callback` queries to `deliver` (`server/browser-capabilities.md` -> OAuth callback); only a pending, unexpired `state` (`DEFAULT_TTL_SECONDS`, 600 s) matches, each one once, so a stray or replayed request completes nothing and cancels nothing. `callback_url` is `None` when the server listens only on an address that is not this machine's loopback or wildcard address; the Extension then needs another way back, such as the user pasting the redirected address (MCP: `extensions/mcp.md`). Evidence: `tests/core/extensions/test_oauth_redirects.py`, `tests/server/test_app_http.py`.
+
+## Computer routing
+
+API 21: `host.computers` is the Runtime's shared `ComputerRegistry`, or `None` without that service. Extensions resolve a Tool context's selected Computer with `resolve(context, requested_id, capability)` before execution. Local `server` execution stays with the capability owner; remote operations use `call`, or `call_sync` from a native worker, with instance fencing for retained process or desktop state. The host supplies no additional Computer grant: exact Session policy, durable identity, availability and no mutation replay remain the registry's contract (`computers.md`). The bundled Computer Use Extension consumes this service without importing Runtime or transport code (`extensions/computer-use.md`).

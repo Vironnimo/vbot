@@ -135,6 +135,7 @@ def test_allowed_resource_kinds_lock_the_documented_wire_contract() -> None:
     # rename of a kind is caught.
     assert {
         "models",
+        "statistics",
         "queue",
         "sessions",
         "agents",
@@ -147,6 +148,7 @@ def test_allowed_resource_kinds_lock_the_documented_wire_contract() -> None:
         "calendar",
         "commands",
         "terminals",
+        "computers",
         "portals",
         "memories",
         "skills",

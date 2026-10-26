@@ -82,6 +82,7 @@ from core.subagents._delegation import (
     _emit,
     _event_data,
     _load_subagent_settings,
+    _narrow_session_execution,
     _nesting_limit_reached,
     _open_subagent_session,
     _parse_session_overrides,
@@ -842,6 +843,9 @@ class SubAgentCoordinator:
                     await sessions.run_async(
                         runtime.agent_resolver.join_session_ceiling, address, ceiling
                     )
+                await sessions.run_async(
+                    _narrow_session_execution, runtime, address, context.execution
+                )
                 # Queued input cannot be steered before its settings commit;
                 # an idle or drained Run waits at the executor gate instead.
                 if not item.future.cancelled() and not item.withdrawn and not item.steering:

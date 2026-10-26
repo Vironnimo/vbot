@@ -92,6 +92,7 @@ class AccessorInputs:
         working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT,
         ephemeral: bool = False,
         fast_mode: bool = False,
+        execution: dict[str, Any] | None = None,
         input_origin: InputOrigin | None = None,
         reply_surface: ReplySurface | None = None,
         project_id: str | None = None,
@@ -113,6 +114,7 @@ class AccessorInputs:
                     working_project_id=working_project_id,
                     ephemeral=ephemeral,
                     fast_mode=fast_mode,
+                    execution=execution,
                     input_origin=input_origin,
                     reply_surface=reply_surface,
                     project_id=project_id,
@@ -133,6 +135,7 @@ class AccessorInputs:
         working_project_id: WorkingProjectChoice,
         ephemeral: bool,
         fast_mode: bool,
+        execution: dict[str, Any] | None,
         input_origin: InputOrigin | None,
         reply_surface: ReplySurface | None,
         project_id: str | None,
@@ -154,12 +157,15 @@ class AccessorInputs:
                 working_project_id=working_project_id,
                 ephemeral=ephemeral,
                 fast_mode=fast_mode,
+                execution=execution,
                 actor="rpc",
             )
             if new_session
             else None
         )
         if new is None:
+            if execution is not None:
+                raise ChatError("Computer selection can accompany only a new Session.")
             if session_id is None:
                 raise ChatError("ordinary input requires an existing or explicitly new Session")
             session = await self.loop._get_session_async(

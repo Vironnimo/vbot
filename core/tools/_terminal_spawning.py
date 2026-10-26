@@ -13,8 +13,9 @@ from collections.abc import (
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
-from typing import BinaryIO
+from typing import TYPE_CHECKING, Any, BinaryIO, cast
 
+from core.computers import ComputerError
 from core.runs import RunExecutionOwner
 from core.storage.temp_files import TemporaryFileLease, TemporaryFileManager, artifact_owner
 from core.tools import terminal_backend
@@ -27,6 +28,7 @@ from core.utils.logging import get_logger
 from core.utils.paths import model_path
 
 from ._terminal_launch import ShellLaunch, integrated_shell_kind, interactive_shell
+from ._terminal_remote import RemoteTerminalAdapter, RemoteTerminalTree
 from ._terminal_render_host import TerminalRenderHost, TerminalScreen
 from ._terminal_session import (
     TerminalLaunch,
@@ -44,6 +46,10 @@ from .process_tree import ProcessTree, ProcessTreeTracker
 
 _LOGGER = get_logger("tools.terminal_manager")
 
+if TYPE_CHECKING:
+    from core.computers import ComputerRegistry
+    from core.permissions.commands.commands import ShellKind
+
 
 class TerminalSessionFactory:
     """Own process preparation and unwind every partially prepared Terminal launch."""
@@ -58,6 +64,7 @@ class TerminalSessionFactory:
         process_observer: ProcessTreeTracker | None,
         validate_pin: Callable[[str | None], None],
         credential_names: Callable[[], Container[str]] = frozenset,
+        computers: ComputerRegistry | None = None,
     ) -> None:
         """*credential_names*: what a confined Terminal's environment withholds."""
         self._temporary_files = temporary_files
@@ -67,6 +74,7 @@ class TerminalSessionFactory:
         self._process_observer = process_observer
         self._validate_pin = validate_pin
         self._credential_names = credential_names
+        self._computers = computers
 
     async def start(
         self,
@@ -87,6 +95,7 @@ class TerminalSessionFactory:
         command_line: str | None = None,
         cleanup: Callable[[], None] | None = None,
         integrate_shell: bool = False,
+        remote: dict[str, Any] | None = None,
     ) -> TerminalSession:
         """Start one process behind PTY/ConPTY and its Terminal Session.
 
@@ -94,7 +103,7 @@ class TerminalSessionFactory:
         """
         _validate_dimensions(columns, rows)
         cwd = launch.cwd
-        if not cwd.is_dir():
+        if remote is None and not cwd.is_dir():
             raise ValueError(f"Terminal workdir is not a directory: {model_path(cwd)}")
         self._validate_pin(group_id)
 
@@ -108,35 +117,47 @@ class TerminalSessionFactory:
         try:
             screen = await self.open_screen(columns, rows)
             log_path, log_handle, log_lease = await asyncio.to_thread(self._open_raw_log, owner)
-            confined = launch.permission_scope is not None
-            process_env = await asyncio.to_thread(
-                partial(
-                    terminal_environment,
-                    env,
-                    confined=confined,
-                    credential_names=self._credential_names() if confined else frozenset(),
-                )
-            )
-            if integrate_shell:
-                kind = integrated_shell_kind(argv)
-                integration = await asyncio.to_thread(
-                    interactive_shell, argv, environment=process_env
-                )
-                if integration is not None:
-                    launch = replace(launch, shell=kind)
-                    argv = integration.argv
-                    command_line = integration.command_line
-                    process_env.update(integration.environment)
-                    if integration.scratch is not None:
-                        cleanup = integration.remove_scratch
             if not can_start():
                 raise TerminalClosedError("Terminal Session is no longer running")
-            adapter = await self._start_process(argv, cwd, process_env, rows, columns, command_line)
-            observer = await self._observe(adapter.pid)
+            if remote is not None:
+                adapter, launch = await self._start_remote(launch, remote, rows, columns)
+                observer = RemoteTerminalTree(adapter)
+                services = replace(services, program_probe=adapter.program_runs)
+            else:
+                confined = launch.permission_scope is not None
+                process_env = await asyncio.to_thread(
+                    partial(
+                        terminal_environment,
+                        env,
+                        confined=confined,
+                        credential_names=self._credential_names() if confined else frozenset(),
+                    )
+                )
+                if integrate_shell:
+                    kind = integrated_shell_kind(argv)
+                    integration = await asyncio.to_thread(
+                        interactive_shell, argv, environment=process_env
+                    )
+                    if integration is not None:
+                        launch = replace(launch, shell=kind)
+                        argv = integration.argv
+                        command_line = integration.command_line
+                        process_env.update(integration.environment)
+                        if integration.scratch is not None:
+                            cleanup = integration.remove_scratch
+                if not can_start():
+                    raise TerminalClosedError("Terminal Session is no longer running")
+                adapter = await self._start_process(
+                    argv, cwd, process_env, rows, columns, command_line
+                )
+                observer = await self._observe(adapter.pid)
         except Exception as error:
             if adapter is not None:
                 with contextlib.suppress(OSError, ProcessLookupError):
-                    await asyncio.to_thread(terminal_backend.terminate_process_tree, adapter)
+                    if isinstance(adapter, RemoteTerminalAdapter):
+                        await asyncio.to_thread(adapter.terminate)
+                    else:
+                        await asyncio.to_thread(terminal_backend.terminate_process_tree, adapter)
                 with contextlib.suppress(OSError):
                     await asyncio.to_thread(adapter.close)
             if observer is not None:
@@ -150,7 +171,7 @@ class TerminalSessionFactory:
                 log_handle.close()
             if log_lease is not None:
                 log_lease.finish()
-            if isinstance(error, TerminalClosedError):
+            if isinstance(error, (TerminalClosedError, ComputerError)):
                 raise
             raise TerminalLaunchError(f"Terminal process could not be started: {error}") from error
 
@@ -173,6 +194,47 @@ class TerminalSessionFactory:
             observer=observer,
         )
         return session
+
+    async def _start_remote(
+        self, launch: TerminalLaunch, request: dict[str, Any], rows: int, columns: int
+    ) -> tuple[RemoteTerminalAdapter, TerminalLaunch]:
+        from core.utils.ids import new_id
+
+        computers = self._computers
+        if computers is None or launch.computer_instance_id is None:
+            raise ValueError("No Desktop connection is available for this terminal")
+        process_id = new_id("pty")
+        params = {**request, "rows": rows, "columns": columns, "process_id": process_id}
+        try:
+            result = await computers.call(
+                launch.computer_id,
+                "terminal",
+                "start",
+                params,
+                instance_id=launch.computer_instance_id,
+            )
+        except ComputerError as error:
+            if error.code not in {
+                "computer_connection_lost",
+                "computer_timeout",
+                "computer_execution_error",
+            }:
+                raise
+            # The start could have happened. Retain its known process id and
+            # recover by reads after reconnect; never repeat the start.
+            result = {"process_id": process_id, "pid": 0, "launch_pending": True}
+        adapter = RemoteTerminalAdapter(
+            computers, launch.computer_id, launch.computer_instance_id, result
+        )
+        shell = result.get("shell")
+        launch = replace(
+            launch,
+            command=str(result.get("command", launch.command)),
+            arguments=tuple(result.get("args", launch.arguments)),
+            cwd=Path(str(result.get("workdir", launch.cwd))),
+            shell=cast("ShellKind", shell) if shell in {"powershell", "bash", "cmd"} else None,
+        )
+        return adapter, launch
 
     async def _observe(self, pid: int) -> ProcessTree | None:
         """Observe a program's process tree; None when that failed."""

@@ -55,6 +55,7 @@ const DISABLED_CAPABILITIES = {
   dictation: false,
   zoom: false,
   restart: false,
+  computerSharing: false,
   secureOrigins: [],
 };
 
@@ -193,6 +194,7 @@ describe('getDesktopCapabilities', () => {
       dictation: 1,
       zoom: 1,
       restart: true,
+      computerSharing: true,
       secureOrigins: ['http://pi.lan:8420', 42, null],
     }));
     desktopWindow({ getDesktopCapabilities: reportCapabilities });
@@ -208,6 +210,7 @@ describe('getDesktopCapabilities', () => {
       dictation: true,
       zoom: true,
       restart: true,
+      computerSharing: true,
       secureOrigins: ['http://pi.lan:8420'],
     });
     expect(await getDesktopCapabilities()).toBe(capabilities);

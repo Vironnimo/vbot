@@ -19,6 +19,11 @@
   let refreshing = false;
   let refreshQueued = false;
   let rediscover = false;
+  const computerName = $derived(
+    status?.computer_id && status.computer_id !== 'server'
+      ? status.computer_name || status.computer_id
+      : '',
+  );
 
   const control = (action) =>
     extensionOperation(EXTENSION, 'control', {
@@ -113,9 +118,11 @@
 {#if status?.active || stopping}
   <Button
     variant="danger"
-    icon
+    icon={!computerName}
     disabled={stopping || status?.stopping}
-    ariaLabel={t('computerControl.stop')}
+    ariaLabel={computerName
+      ? t('computers.stopControl', { name: computerName })
+      : t('computerControl.stop')}
     tooltip={error ||
       (stopping || status?.stopping
         ? t('computerControl.stopping')
@@ -128,5 +135,6 @@
       <rect x="1.5" y="2" width="13" height="9" rx="1" />
       <path d="M5 14h6M8 11v3M6 4.5l4 4M10 4.5l-4 4" />
     </svg>
+    {#if computerName}<span>{computerName}</span>{/if}
   </Button>
 {/if}

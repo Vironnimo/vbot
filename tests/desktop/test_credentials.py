@@ -31,6 +31,26 @@ def test_a_stored_sign_in_survives_a_restart(tmp_path: Path) -> None:
     assert stored is not None
     assert (stored.token, stored.device_id) == (TOKEN, DEVICE_ID)
     assert TOKEN not in repr(stored)
+
+
+def test_computer_registration_is_private_and_bound_to_one_pairing(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.save_device(ORIGIN, TOKEN, DEVICE_ID)
+    identity = store.computer_identity(ORIGIN, create=True)
+    assert identity is not None
+    assert identity.key not in repr(identity)
+    assert _store(tmp_path).computer_identity(ORIGIN) == identity
+    if sys.platform == "win32":
+        assert identity.key not in (tmp_path / DEVICE_TOKENS_FILE_NAME).read_text(encoding="utf-8")
+    store.save_device(ORIGIN, TOKEN, DEVICE_ID)
+    assert store.computer_identity(ORIGIN, create=True) == identity
+    store.save_device(ORIGIN, f"vbt_{OTHER_DEVICE_ID}_{'N' * 43}", OTHER_DEVICE_ID)
+    replacement = store.computer_identity(ORIGIN, create=True)
+    assert replacement is not None and replacement.computer_id != identity.computer_id
+    store.remove(ORIGIN)
+    assert store.computer_identity(ORIGIN) is None
+    later = store.computer_identity(ORIGIN, create=True)
+    assert later is not None and later.computer_id != replacement.computer_id
     assert _store(tmp_path).get(OTHER_ORIGIN) is None
 
 
