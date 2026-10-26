@@ -870,9 +870,7 @@
           <div class="working-block__body collapse-host">
             <CollapseRail />
             {#each group.children as child (child.id)}
-              {#if groupOpen || revealedWorkingGroups[group.id] || isTextToSpeechTool(child)}
-                <!-- Fresh speech starts even in a never-opened Working group.
-                     Its keyed row stays mounted when that group opens. -->
+              {#if groupOpen || revealedWorkingGroups[group.id]}
                 {@render runChild(child)}
               {/if}
             {/each}
