@@ -162,7 +162,7 @@ def _fill(context: ReportContext, participants: dict[int, _Activity]) -> None:
             target.statuses[status] = target.statuses.get(status, 0) + count
     for session_key, calls in context.query(
         f"""
-        SELECT t.session_key, SUM(t.calls) FROM agg_tools t
+        SELECT t.session_key, SUM(t.calls) FROM {context.aggregate("agg_tools")} t
         WHERE t.origin = 'extension' AND {context.hour_condition("t")}
         GROUP BY t.session_key
         """
@@ -178,7 +178,8 @@ def _fill(context: ReportContext, participants: dict[int, _Activity]) -> None:
     for address, *measures in context.query(
         f"""
         SELECT u.address, {totals_sql()}
-        FROM agg_usage a JOIN {context.units_table} u ON u.unit_key = a.unit_key
+        FROM {context.aggregate("agg_usage")} a
+        JOIN {context.units_table} u ON u.unit_key = a.unit_key
         WHERE {context.hour_condition("a")} AND u.actor LIKE ?
         GROUP BY u.address
         """,

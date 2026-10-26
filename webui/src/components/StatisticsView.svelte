@@ -1,12 +1,17 @@
 <script>
   // The Statistics view: header, tabs and the range toolbar render at once;
   // each tab then requests only its own report sections. Answers stay cached
-  // per (sections, range, time zone) for the page's lifetime
+  // per (sections, range, time zone, measurement start) for the page's lifetime
   // (lib/statisticsReports.svelte.js), so a revisited tab shows its last
   // numbers immediately while a fresh request updates them. Limits reads
   // live provider usage instead and keeps its own controls; the Overview
   // shows the same live usage as a compact strip.
-  import { untrack } from 'svelte';
+  import { onDestroy, untrack } from 'svelte';
+  import {
+    getStatisticsPeriod,
+    startStatisticsPeriod,
+    clearStatisticsPeriod,
+  } from '$lib/api.js';
   import { createStandaloneNavigation } from '$lib/navigation.svelte.js';
   import { dateTimePrefs } from '$lib/dateTimePrefs.svelte.js';
   import { t, activeLocaleTag } from '$lib/i18n.js';
@@ -45,12 +50,25 @@
   let {
     // The place is the shown tab; an empty place shows the Overview.
     navigation = createStandaloneNavigation(),
+    refreshToken = 0,
   } = $props();
 
   const RANGE_STORAGE_KEY = 'vbot.statistics.range';
+  const PERIOD_STORAGE_KEY = 'vbot.statistics.period';
 
   let activeTab = $state('overview');
   let range = $state(readStoredRange());
+  let periodStartedAt = $state(null);
+  let periodLoaded = $state(false);
+  let periodBusy = $state(false);
+  let periodError = $state(null);
+  let periodRetry = $state(loadPeriod);
+  let periodRequest = 0;
+  let disposed = false;
+  onDestroy(() => {
+    disposed = true;
+    periodRequest += 1;
+  });
   let limitsOpened = $state(false);
   // Representation choices shared by the tabs; they are not places.
   let usageDimension = $state('agent');
@@ -64,16 +82,30 @@
   const timeZone = $derived(dateTimePrefs.timeZone);
   const reportTab = $derived(activeTab === 'limits' ? null : activeTab);
   const query = $derived(
-    reportTab ? new StatisticsReportQuery(reportTab, range, timeZone) : null,
+    periodLoaded && reportTab
+      ? new StatisticsReportQuery(reportTab, range, timeZone, periodStartedAt)
+      : null,
   );
   const entry = $derived(query ? statisticsReport(query.key) : null);
   const extensionsQuery = $derived(
-    new StatisticsReportQuery('extensions', range, timeZone),
+    periodLoaded
+      ? new StatisticsReportQuery(
+          'extensions',
+          range,
+          timeZone,
+          periodStartedAt,
+        )
+      : null,
   );
-  // The Overview's activity hero covers all time, whatever the range.
+  // The activity hero covers all time except in the explicit measurement period.
   const activityQuery = $derived(
-    activeTab === 'overview'
-      ? new StatisticsReportQuery('activity', 'all', timeZone)
+    periodLoaded && activeTab === 'overview'
+      ? new StatisticsReportQuery(
+          'activity',
+          range === 'period' ? 'period' : 'all',
+          timeZone,
+          periodStartedAt,
+        )
       : null,
   );
   const activityEntry = $derived(
@@ -86,8 +118,12 @@
     ).map((id) => ({ id, label: statisticsTabLabel(id) })),
   );
 
-  // Place -> shown tab. An empty, unknown or retired place shows the tab
-  // that holds its content and corrects the entry to it.
+  // Reload the shared start after another device changes it or reconnect replay has a gap.
+  $effect(() => {
+    void refreshToken;
+    untrack(loadPeriod);
+  });
+
   $effect(() => {
     const requested = navigation.place[0] ?? '';
     untrack(() => {
@@ -117,6 +153,7 @@
   // answer, so it never delays that tab; until a range has its answer, the
   // previous range's answer decides.
   $effect(() => {
+    if (!extensionsQuery) return;
     const settled = !entry || !entry.loading;
     const extensions = statisticsReport(extensionsQuery.key);
     if (extensions.report) {
@@ -130,6 +167,7 @@
   });
 
   function refresh() {
+    loadPeriod();
     if (query) requestStatisticsReport(query, { force: true });
     if (activityQuery) {
       requestStatisticsReport(activityQuery, { force: true });
@@ -167,6 +205,58 @@
     }
   }
 
+  function applyPeriod(result, select = false) {
+    const startedAt = result?.started_at ?? null;
+    let seen = periodStartedAt;
+    try {
+      if (!periodLoaded) seen = localStorage.getItem(PERIOD_STORAGE_KEY);
+      localStorage.setItem(PERIOD_STORAGE_KEY, startedAt ?? '');
+    } catch {
+      // The shared server state still works when browser storage is unavailable.
+    }
+    periodStartedAt = startedAt;
+    if (startedAt && (select || seen !== startedAt)) chooseRange('period');
+    if (!startedAt && range === 'period') chooseRange('all');
+    periodLoaded = true;
+  }
+
+  async function loadPeriod() {
+    if (periodBusy || disposed) return;
+    const request = ++periodRequest;
+    try {
+      const result = await getStatisticsPeriod();
+      if (disposed || request !== periodRequest) return;
+      applyPeriod(result);
+      periodError = null;
+    } catch (error) {
+      if (disposed || request !== periodRequest) return;
+      periodError = error;
+      periodRetry = loadPeriod;
+    }
+  }
+
+  async function changePeriod(start) {
+    if (periodBusy) return;
+    periodBusy = true;
+    periodError = null;
+    periodRequest += 1;
+    try {
+      const result = await (start
+        ? startStatisticsPeriod()
+        : clearStatisticsPeriod());
+      if (disposed) return;
+      applyPeriod(result, start);
+    } catch (error) {
+      if (!disposed) {
+        periodError = error;
+        periodRetry = () => changePeriod(start);
+      }
+    } finally {
+      periodBusy = false;
+      if (!disposed && !periodError) loadPeriod();
+    }
+  }
+
   function errorText(error) {
     if (typeof error?.message === 'string' && error.message.trim()) {
       return error.message.trim();
@@ -198,6 +288,51 @@
     />
   </div>
 
+  {#if activeTab !== 'limits'}
+    <div class="stats-period view-toolbar">
+      <div class="stats-toolbar__range">
+        {#if periodStartedAt}
+          <span class="stats-note">
+            {t('statistics.period.since', {
+              time: formatDateTime(periodStartedAt, locale),
+            })}
+          </span>
+        {:else}
+          <span class="stats-toolbar__label"
+            >{t('statistics.period.label')}</span
+          >
+        {/if}
+        <InfoHint text={t('statistics.period.help')} />
+      </div>
+      <div class="view-toolbar__actions">
+        {#if periodStartedAt}
+          <Button
+            variant="tertiary"
+            disabled={periodBusy}
+            onClick={() => changePeriod(false)}
+          >
+            {t('statistics.period.clear')}
+          </Button>
+        {/if}
+        <Button
+          variant="secondary"
+          disabled={!periodLoaded || periodBusy}
+          onClick={() => changePeriod(true)}
+        >
+          {t('statistics.period.start')}
+        </Button>
+      </div>
+    </div>
+    {#if periodError}
+      <Banner variant="error" aria-live="polite">
+        <span>{errorText(periodError)}</span>
+        <Button variant="secondary" disabled={periodBusy} onClick={periodRetry}
+          >{t('common.retry')}</Button
+        >
+      </Banner>
+    {/if}
+  {/if}
+
   {#if activeTab === 'overview'}
     <LimitsStrip onOpenLimits={() => showTab('limits')} />
   {/if}
@@ -206,6 +341,7 @@
     {#if activityEntry.report?.activity}
       <ActivityPanel
         section={activityEntry.report.activity}
+        measurementPeriod={range === 'period'}
         bind:metric={activityMetric}
       />
     {:else if activityEntry.error}
@@ -235,7 +371,7 @@
           role="group"
           aria-labelledby="stats-range-label"
         >
-          {#each STATISTICS_RANGES as id (id)}
+          {#each STATISTICS_RANGES.filter((id) => id !== 'period' || periodStartedAt) as id (id)}
             <button
               type="button"
               class="stats-toggle__option"
@@ -247,7 +383,11 @@
             >
           {/each}
         </div>
-        <InfoHint text={t('statistics.range.hint', { timezone: timeZone })} />
+        <InfoHint
+          text={range === 'period'
+            ? t('statistics.period.activeHelp')
+            : t('statistics.range.hint', { timezone: timeZone })}
+        />
       </div>
       <div class="stats-toolbar__status view-toolbar__actions">
         <span class="stats-toolbar__meta view-toolbar__meta" role="status">
@@ -276,7 +416,8 @@
     role="tabpanel"
     id={`statistics-subviews-panel-${activeTab}`}
     aria-labelledby={`statistics-subviews-tab-${activeTab}`}
-    aria-busy={Boolean(entry?.loading)}
+    aria-busy={activeTab !== 'limits' &&
+      (!periodLoaded || Boolean(entry?.loading))}
   >
     {#if limitsOpened}
       <ProviderLimits active={activeTab === 'limits'} />
@@ -299,6 +440,7 @@
         {#if activeTab === 'overview'}
           {#if report.overview}
             <OverviewPanel
+              measurementPeriod={range === 'period'}
               section={report.overview}
               bucket={report.window?.bucket}
               bind:granularity
@@ -349,6 +491,8 @@
       {:else if !entry.error}
         <StatisticsSkeleton tab={activeTab} />
       {/if}
+    {:else if !periodLoaded && activeTab !== 'limits'}
+      <StatisticsSkeleton tab={activeTab} />
     {/if}
   </div>
 </section>

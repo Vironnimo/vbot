@@ -54,7 +54,7 @@ How to read the maps: `AGENTS.md` -> Load context for the task.
 | sessions.md | `core/sessions/` | Canonical SQLite Session persistence, metadata, and lifecycle |
 | database.md | `core/database/` | SQLite kernel, format evolution, data-store marker, data snapshots, configuration backups, recovery |
 | recall.md | `core/recall/` | Recall backends, Passage index (FTS and vectors), semantic indexing |
-| statistics.md | `core/statistics/` | Disposable SQLite projection, report RPC |
+| statistics.md | `core/statistics/` | Disposable SQLite projection, report RPC, shared measurement period |
 | usage.md | `core/usage/` | Durable Model request accounting, historical Usage import |
 | memory.md | `core/memory/` | Pinned Memory, personal and shared Project scopes |
 | settings.md | `core/settings/` | Settings schemas, validation, update sections |

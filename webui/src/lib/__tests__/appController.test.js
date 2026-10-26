@@ -86,6 +86,8 @@ describe('App controller', () => {
       agentId: 'alpha',
       sessionId: 'session-one',
     });
+    await controller.handleServerEvent(resourceChanged('statistics'));
+    expect(state.statisticsRefreshToken).toBe(1);
   });
 
   it('records each sessions invalidation scope without a full refresh', async () => {

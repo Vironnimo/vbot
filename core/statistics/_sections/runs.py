@@ -210,7 +210,7 @@ def _errors(context: ReportContext) -> JsonObject:
     for hour, count in hourly.items():
         daily[buckets.key(hour)] += count
     failed = context.scalar(
-        f"SELECT COALESCE(SUM({failed_calls_sql()}), 0) FROM agg_usage a "
+        f"SELECT COALESCE(SUM({failed_calls_sql()}), 0) FROM {context.aggregate('agg_usage')} a "
         f"WHERE {context.hour_condition('a')}"
     )
     return {

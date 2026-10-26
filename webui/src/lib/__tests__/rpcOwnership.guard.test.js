@@ -7,10 +7,6 @@ import { describe, expect, it } from 'vitest';
 const SRC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const API_FILE = join(SRC_DIR, 'lib', 'api.js');
 const API_DIR = join(SRC_DIR, 'lib', 'api');
-const METHOD_LITERAL_EXCLUSIONS = new Set([
-  'lib/i18n.js',
-  'lib/i18n/insights.js',
-]);
 
 function collectProductionSources(directory) {
   const files = [];
@@ -63,12 +59,16 @@ describe('RPC ownership guard', () => {
     for (const filePath of collectProductionSources(SRC_DIR)) {
       if (
         isApiSource(filePath) ||
-        METHOD_LITERAL_EXCLUSIONS.has(sourceLabel(filePath))
+        sourceLabel(filePath) === 'lib/i18n.js' ||
+        sourceLabel(filePath).startsWith('lib/i18n/')
       ) {
         continue;
       }
       const source = readFileSync(filePath, 'utf8');
       for (const literal of source.matchAll(/['"]([^'"\r\n]+)['"]/g)) {
+        // Translation keys may legitimately share an RPC's spelling. They
+        // resolve product text; the raw-transport guard above still applies.
+        if (/\bt(?:Or)?\(\s*$/.test(source.slice(0, literal.index))) continue;
         if (serverMethods.has(literal[1])) {
           violations.push(`${sourceLabel(filePath)}: ${literal[1]}`);
         }

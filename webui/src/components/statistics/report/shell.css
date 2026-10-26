@@ -76,11 +76,30 @@
   gap: var(--space-sm) var(--space-md);
 }
 
+.stats-view .stats-period {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm) var(--space-md);
+}
+
+.stats-view .stats-period .view-toolbar__actions {
+  min-width: 0;
+  max-width: 100%;
+}
+
 .stats-view .stats-toolbar__range {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  min-width: 0;
+  max-width: 100%;
   gap: var(--space-sm);
+}
+
+.stats-view .stats-toolbar .stats-toggle {
+  flex-wrap: wrap;
 }
 
 .stats-view .stats-toolbar__label {
@@ -117,7 +136,7 @@
   align-items: center;
   gap: 2px;
   max-width: 100%;
-  overflow: hidden;
+  overflow-x: auto;
   padding: 2px;
   border: 1px solid var(--border);
   border-radius: var(--r-sm);

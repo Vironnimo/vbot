@@ -106,7 +106,8 @@ def _breakdown(context: ReportContext, key_sql: str, runs: Counter[str]) -> list
         for row in context.query(
             f"""
             SELECT {key_sql} AS key, COUNT(DISTINCT u.address), {totals_sql()}
-            FROM agg_usage a JOIN {context.units_table} u ON u.unit_key = a.unit_key
+            FROM {context.aggregate("agg_usage")} a
+            JOIN {context.units_table} u ON u.unit_key = a.unit_key
             WHERE {context.hour_condition("a")}
             GROUP BY key
             """
@@ -144,7 +145,8 @@ def _first_token_percentiles(context: ReportContext, key_sql: str) -> dict[str, 
             f"""
             WITH frequencies AS (
                 SELECT {key_sql} AS key, a.first_token_ms, SUM(a.calls) AS calls
-                FROM agg_first_token a JOIN {context.units_table} u ON u.unit_key = a.unit_key
+                FROM {context.aggregate("agg_first_token")} a
+                JOIN {context.units_table} u ON u.unit_key = a.unit_key
                 WHERE {context.hour_condition("a")}
                 GROUP BY key, a.first_token_ms
             ), ranked AS (

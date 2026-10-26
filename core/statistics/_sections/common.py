@@ -19,6 +19,7 @@ from core.projects.address import format_agent_address
 from core.sessions import SessionAddress
 from core.statistics._extensions import ExtensionSliceKey, extension_actor_key
 from core.statistics._measurements import SPEED_BASES, _nearest_rank_index
+from core.statistics._period_aggregates import period_aggregate
 from core.statistics._projection import MICROSECONDS_PER_HOUR
 from core.statistics._rollups import USAGE_MEASURES
 from core.statistics._sections.window import (
@@ -290,6 +291,20 @@ class ReportContext:
         self.addresses: dict[int, tuple[str, str, str | None]] = {}
         # Listed Session key -> its address id.
         self.session_addresses: dict[int, int] = {}
+        self._period_tables: dict[str, str] = {}
+
+    def aggregate(self, table: str) -> str:
+        """An hourly cube, with only the partial measurement-start hour replaced."""
+        since = self.window.instants[0]
+        if (
+            not self.window.measurement_period
+            or self.window.since is None
+            or since % MICROSECONDS_PER_HOUR == 0
+        ):
+            return table
+        if table not in self._period_tables:
+            self._period_tables[table] = period_aggregate(self.connection, table, since)
+        return self._period_tables[table]
 
     def query(self, sql: str, params: Sequence[Any] | Mapping[str, Any] = ()) -> list[Any]:
         return self.connection.execute(sql, params).fetchall()
@@ -490,7 +505,8 @@ def usage_totals(context: ReportContext, window: ReportWindow | None = None) -> 
     """The usage cube's Totals over ``window`` (default: the report window)."""
     return Totals(
         context.query(
-            f"SELECT {totals_sql()} FROM agg_usage a WHERE {context.hour_condition('a', window)}"
+            f"SELECT {totals_sql()} FROM {context.aggregate('agg_usage')} a "
+            f"WHERE {context.hour_condition('a', window)}"
         )[0]
     )
 
@@ -500,7 +516,8 @@ def grouped_totals(context: ReportContext, key_sql: str, joins: str = "") -> dic
     return {
         row[0]: Totals(row[1:])
         for row in context.query(
-            f"SELECT {key_sql} AS key, {totals_sql()} FROM agg_usage a {joins} "
+            f"SELECT {key_sql} AS key, {totals_sql()} "
+            f"FROM {context.aggregate('agg_usage')} a {joins} "
             f"WHERE {context.hour_condition('a')} GROUP BY key"
         )
     }

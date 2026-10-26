@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { t } from '../../lib/i18n.js';
 import { setApplicationTimeZone } from '../../lib/dateTimePrefs.svelte.js';
 import { createStandaloneNavigation } from '../../lib/navigation.svelte.js';
+import { reactiveProps } from './reactiveProps.support.svelte.js';
 import {
   flushSync,
   mount,
@@ -64,6 +65,7 @@ describe('StatisticsView', () => {
     ).toBe('true');
     expect(panel().querySelector('.stats-skeleton')).toBeTruthy();
     expect(panel().getAttribute('aria-busy')).toBe('true');
+    await waitForCondition(() => overviewCalls().length === 1);
     // Local midnight in Berlin, 30 calendar days including today.
     // The activity hero covers all time, whatever the range.
     expect(reportCalls()).toEqual([
@@ -270,6 +272,7 @@ describe('StatisticsView', () => {
     );
     suite.mountedComponent = mount(StatisticsView, { target: document.body });
     flushSync();
+    await waitForCondition(() => answers.length === 1);
     answers[0].resolve(makeReport(['overview']));
     await waitForOverview();
 
@@ -330,6 +333,7 @@ describe('StatisticsView', () => {
     expect(
       buttonNamed('statistics.range.7d').getAttribute('aria-pressed'),
     ).toBe('true');
+    await waitForCondition(() => overviewCalls().length === 1);
     expect(overviewCalls()[0].since).toBe('2026-06-07T00:00:00.000Z');
 
     buttonNamed('statistics.range.all').click();
@@ -338,6 +342,99 @@ describe('StatisticsView', () => {
       timezone: 'UTC',
       sections: ['overview'],
     });
+  });
+
+  it('starts a shared period, switches all sections, reloads other devices and retains all time', async () => {
+    let startedAt = null;
+    let fail = false;
+    const first = '2026-06-13T10:37:12.123456Z';
+    const next = '2026-06-13T11:14:00.000000Z';
+    const routed = routedRpc();
+    rpcMock.mockImplementation((method, params) => {
+      if (method === 'statistics.period')
+        return Promise.resolve({ started_at: startedAt });
+      if (method === 'statistics.period.start') {
+        if (fail) return Promise.reject(new Error('period write sentinel'));
+        startedAt = first;
+        return Promise.resolve({ started_at: startedAt });
+      }
+      if (method === 'statistics.period.clear') {
+        startedAt = null;
+        return Promise.resolve({ started_at: null });
+      }
+      return routed(method, params);
+    });
+    const props = reactiveProps({ refreshToken: 0 });
+    suite.mountedComponent = mount(StatisticsView, {
+      target: document.body,
+      props,
+    });
+    await waitForOverview();
+    expect(buttonNamed('statistics.range.period')).toBeUndefined();
+    buttonNamed('statistics.period.start').click();
+    await waitForCondition(() => overviewCalls().at(-1)?.period === true);
+    expect(
+      buttonNamed('statistics.range.period').getAttribute('aria-pressed'),
+    ).toBe('true');
+    expect(localStorage.getItem('vbot.statistics.period')).toBe(first);
+    expect(document.body.textContent).not.toContain(
+      'statistics.change.noComparison',
+    );
+    expect(document.body.textContent).not.toContain(
+      'statistics.activity.tokensAllTime',
+    );
+    expect(
+      reportCalls()
+        .filter((p) => p.sections.includes('activity'))
+        .at(-1).period,
+    ).toBe(true);
+    buttonNamed('statistics.subview.usage').click();
+    await waitForCondition(() =>
+      reportCalls().at(-1)?.sections.includes('usage'),
+    );
+    expect(reportCalls().at(-1).period).toBe(true);
+    buttonNamed('statistics.range.all').click();
+    await waitForCondition(() => !reportCalls().at(-1)?.period);
+    expect(reportCalls().at(-1)).not.toHaveProperty('since');
+
+    // A new start from another device overrides the old local range. Its
+    // timestamp is part of the cache key, so older period totals cannot flash.
+    const before = reportCalls().length;
+    startedAt = next;
+    // Another tab may have written shared localStorage before this view's event.
+    localStorage.setItem('vbot.statistics.period', next);
+    props.refreshToken += 1;
+    await waitForCondition(
+      () =>
+        reportCalls().length > before &&
+        buttonNamed('statistics.range.period')?.getAttribute('aria-pressed') ===
+          'true' &&
+        reportCalls().at(-1).period === true,
+    );
+    expect(
+      buttonNamed('statistics.range.period').getAttribute('aria-pressed'),
+    ).toBe('true');
+    expect(reportCalls().at(-1).period).toBe(true);
+
+    fail = true;
+    buttonNamed('statistics.period.start').click();
+    await waitForCondition(() =>
+      document.body.textContent.includes('period write sentinel'),
+    );
+    expect(localStorage.getItem('vbot.statistics.period')).toBe(next);
+    fail = false;
+    buttonNamed('common.retry').click();
+    await waitForCondition(
+      () => localStorage.getItem('vbot.statistics.period') === first,
+    );
+    expect(document.body.textContent).not.toContain('period write sentinel');
+    buttonNamed('statistics.period.clear').click();
+    await waitForCondition(() => !buttonNamed('statistics.range.period'));
+    expect(
+      buttonNamed('statistics.range.all').getAttribute('aria-pressed'),
+    ).toBe('true');
+    expect(reportCalls().at(-1)).not.toHaveProperty('period');
+    expect(buttonNamed('statistics.period.clear')).toBeUndefined();
   });
 
   it('keeps the shown numbers under an error banner and retries on request', async () => {

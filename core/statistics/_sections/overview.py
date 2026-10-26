@@ -169,7 +169,7 @@ def _active_agents(context: ReportContext) -> int:
                 JOIN {context.sessions_table} s ON s.session_key = r.session_key
                 WHERE {context.instant_condition("r.start_instant")}
                 UNION
-                SELECT u.actor FROM agg_usage a
+                SELECT u.actor FROM {context.aggregate("agg_usage")} a
                 JOIN {context.units_table} u ON u.unit_key = a.unit_key
                 WHERE {context.hour_condition("a")}
             ) WHERE actor <> '' AND actor NOT LIKE ?
@@ -189,7 +189,7 @@ def _active_sessions(context: ReportContext) -> int:
                 JOIN {context.sessions_table} s ON s.session_key = r.session_key
                 WHERE {context.instant_condition("r.start_instant")}
                 UNION
-                SELECT u.address FROM agg_usage a
+                SELECT u.address FROM {context.aggregate("agg_usage")} a
                 JOIN {context.units_table} u ON u.unit_key = a.unit_key
                 WHERE {context.hour_condition("a")} AND u.address IS NOT NULL
             )
@@ -330,7 +330,7 @@ def _insights(
             emit("top_runs_share", {"share": share, "runs": top}, severity="info")
     burst = context.query(
         f"""
-        SELECT a.hour, SUM({failed_calls_sql()}) AS failed FROM agg_usage a
+        SELECT a.hour, SUM({failed_calls_sql()}) AS failed FROM {context.aggregate("agg_usage")} a
         WHERE {context.hour_condition("a")}
         GROUP BY a.hour HAVING failed >= {FAILED_ATTEMPT_BURST}
         ORDER BY failed DESC, a.hour DESC LIMIT 1
@@ -340,7 +340,8 @@ def _insights(
         hour, failed = burst[0]
         model = context.query(
             f"""
-            SELECT a.model_key, SUM({failed_calls_sql()}) AS failed FROM agg_usage a
+            SELECT a.model_key, SUM({failed_calls_sql()}) AS failed
+            FROM {context.aggregate("agg_usage")} a
             WHERE a.hour = ? GROUP BY a.model_key ORDER BY failed DESC, a.model_key LIMIT 1
             """,
             (hour,),
@@ -356,7 +357,8 @@ def _insights(
         (rejected / calls, calls, name)
         for name, calls, rejected in context.query(
             f"""
-            SELECT t.name, SUM(t.calls) AS calls, SUM(t.rejected) FROM agg_tools t
+            SELECT t.name, SUM(t.calls) AS calls, SUM(t.rejected)
+            FROM {context.aggregate("agg_tools")} t
             WHERE {context.hour_condition("t")}
             GROUP BY t.name HAVING calls >= {TOOL_FAILURE_MIN_CALLS}
             """

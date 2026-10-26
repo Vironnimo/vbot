@@ -1,6 +1,6 @@
 # Statistics
 
-Incrementally indexed Model consumption and retained Session activity for the WebUI Statistics tab.
+Incrementally indexed Model consumption, retained Session activity and the shared measurement period for Statistics.
 
 ## Overview
 
@@ -10,13 +10,15 @@ Each read reconciles and aggregates in one write transaction on the kernel write
 
 `StatisticsService` is constructor-injected; Runtime shares its index and Usage recorder with the RPC and Extension group-usage services. Without a recorder, standalone constructions retain Session-only accounting; without an index, the service owns a private one. Identity and Project Session scopes remain distinct (Project display addresses use `agent@projekt`); Extension participants appear under `extension:<owner>`, never their synthetic Agent ids (`statistics/group-usage.md` -> Extension activity). Durable calls can outlive those scopes or have no Session. Current Session titles override stored title snapshots only for the same proven generation, including after a move; reused addresses never supply labels or merge Usage groups across generations. Accounting Agent and Project attribution stays unchanged. The injected exact Model price lookup supports retrospective estimates without network access. Model fallback events (Session notes stored in `note_model_fallbacks`, `sessions/storage.md` -> Tables) are not ingested, and there is no per-Session sub-tab.
 
+The optional instance-wide measurement start is durable operator state in `statistics/period.json`, owned by `StatisticsService` (`_period.py`), validated by `doctor config` and included in data snapshots. It never belongs in the disposable index. Starting or clearing it changes no Session or Usage record; exact-window and RPC behavior: `statistics/report-sections.md` -> Measurement period.
+
 ## Report sections
 
 `StatisticsService.report(since, until, timezone, sections)` (and `report_async`) reconciles once, then builds only the requested sections from `core/statistics/_sections/`, one module per section (`overview`, `activity`, `usage`, `runs`, `tools`, `skills`, `extensions`, `diagnostics`). The result is `{generated_at, window: {since, until, timezone, bucket}, <section>: {...}}` with sections in that order. The WebUI and the CLI (`cli/system-commands.md`) read these fields, so renaming one breaks both. Contract tests: `test_statistics_report.py` (every section), `test_statistics_usage.py` (usage, cache), `test_statistics_extensions.py`, `test_statistics_skills.py`. Public imports remain under `core.statistics`.
 
 Every read (report sections, group usage, Session tree usage, Run activity) works on the aggregate tier. The index's fact tables hold only aggregation-consumed fields - raw text, Reasoning, arguments/result payloads, Skill content never enter it.
 
-Report-wide invariants: windows are half-open and hour-aligned (`since` floored, `until` ceiled to a UTC hour) and every section of one report covers the same window; series count by local dates of the requested IANA `timezone`, or by UTC hours in a window of at most 48 hours; money is summed as integer nano-USD and `null` means unknown, never 0. Exact rules, shared shapes (`Totals`, RunRow) and every section's fields are in `statistics/report-sections.md`.
+Report-wide invariants: windows are half-open and hour-aligned, except the exact start of a measurement period; every section of one report covers the same window; series count by local dates of the requested IANA `timezone`, or by UTC hours in a window of at most 48 hours; money is summed as integer nano-USD and `null` means unknown, never 0. Exact rules, shared shapes (`Totals`, RunRow) and every section's fields are in `statistics/report-sections.md`.
 
 ## Interfaces
 
@@ -24,7 +26,7 @@ Both report RPCs (`report_async`, `run_activity_async`), group usage, Session tr
 
 Before each read, the recorder's resumable Session-history import catches up retained legacy facts (`usage.md` -> Interfaces, `import_session_history`). The canonical recorder remains the accounting write owner.
 
-- `statistics.report {since?, until?, timezone?, sections?}` (`server/rpc/statistics_methods.py`) validates strictly and answers `invalid_request` otherwise: ISO-8601 bounds with `since` not after `until`; an IANA `timezone` (`validate_timezone_name`; default the Settings effective zone, `runtime.timezone_name()`); `sections` a non-empty list of known names (default all; duplicates collapse, the result keeps section order). The service caches on RPC state over the Runtime's shared index and offloads reconciliation so filesystem/SQLite work never blocks the loop. A busy or locked index, or one another read holds beyond that patience, raises `StatisticsUnavailableError` (a `VBotError`, so RPC returns `domain_error` "Statistics are busy; retry shortly") and never discards the index. Startup warmup (`server/_app_lifecycle.py`) runs at every server start outside safe startup mode; it reconciles the index without building a report.
+- `statistics.report {since?, until?, timezone?, sections?, period?}` (`server/rpc/statistics_methods.py`) validates the request and reads selected sections through the cached service over Runtime's shared index. Validation, window rules and the shared period RPCs: `statistics/report-sections.md`. A busy index returns `domain_error` ("Statistics are busy; retry shortly"). Startup warmup (`server/_app_lifecycle.py`) reconciles without a report at every server start outside safe startup mode.
 - `statistics.run_activity {since, until}` returns the listed Sessions' Runs, Extension participant Runs included, that overlap the requested interval (newest start first, cap 200, plus the overlap count) from `agg_runs`, for temporal correlation with usage changes - explicitly not causality attribution. A Run still running has no end, overlaps every interval ending after its start and reports null `completed_at` and `duration_ms`. Token totals and the Model list are the Run's request totals (`statistics/reconcile-and-aggregates.md` -> Run requests) across the whole Run rather than only the selected interval (`test_statistics_accounting.py`).
 - `statistics.session_usage {agent_id, session_id}` sums one live Session's own Runs and its Sub-Agents' Runs at every depth, and `group_usage` (`temporary_agents.usage`) one Extension owner group: `statistics/group-usage.md`.
 - `skill_package_usage[_async]` serves the Librarian and the Skill manager without a window: `statistics/skill-usage.md`.
@@ -65,7 +67,7 @@ A finite non-negative `reported_cost_usd` takes precedence, including zero. Othe
 
 Read these only when your task matches - not by default.
 
-- Adding, changing or reading a report section's fields, insights, caps, thresholds or diagnostics heuristics (cache breaks, error attribution, `open_runs`), the shared `Totals`/RunRow shapes, or which WebUI tab asks which section (WebUI Statistics panels, `vbot statistics` output) -> `statistics/report-sections.md`
+- Changing measurement periods or adding, changing or reading a report section's fields, insights, caps, thresholds or diagnostics heuristics (cache breaks, error attribution, `open_runs`), the shared `Totals`/RunRow shapes, or which WebUI tab asks which section (WebUI Statistics panels, `vbot statistics` output) -> `statistics/report-sections.md`
 - Adding or changing a fact or aggregate table, incremental maintenance, origin classification, Run request totals or scope discovery and stored flags -> `statistics/reconcile-and-aggregates.md`
 - Changing cost accounting: call sources, reported vs estimated, repricing (`stat_pricing`), legacy pricing, archive/purge effects -> `statistics/cost-accounting.md`
 - Changing Extension activity (`extension:<owner>` actors, participant slices), `group_usage` (owned-Run selection, takeover attribution, response shape, the Swarm Usage page) or `statistics.session_usage` -> `statistics/group-usage.md`

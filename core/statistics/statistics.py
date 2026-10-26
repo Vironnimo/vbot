@@ -18,6 +18,7 @@ from core.sessions import (
 )
 from core.statistics._extensions import ExtensionSliceKey, extension_actor_key
 from core.statistics._group_usage import OwnedRun, group_usage
+from core.statistics._period import read_period, write_period
 from core.statistics._run_activity import load_run_activity
 from core.statistics._sections import (
     SECTION_NAMES,
@@ -57,7 +58,8 @@ from core.statistics.skills import (
     offered_skill_names,
     resolve_inventory,
 )
-from core.utils.timestamps import format_canonical_timestamp
+from core.utils.logging import get_logger
+from core.utils.timestamps import format_canonical_timestamp, parse_canonical_timestamp
 
 if TYPE_CHECKING:
     from core.usage import UsageRecorder
@@ -75,6 +77,7 @@ MAX_RUN_ACTIVITY = 200
 
 # The sections of ``StatisticsService.report``, in report order.
 REPORT_SECTIONS = SECTION_NAMES
+_LOGGER = get_logger("statistics")
 
 
 def _utc_now() -> datetime:
@@ -124,6 +127,34 @@ class StatisticsService:
         self._index = index if index is not None else StatisticsIndex(Path(chat_sessions.data_dir))
         self._usage_recorder = usage_recorder
         self._clock = clock
+        self._period_path = Path(chat_sessions.data_dir) / "statistics" / "period.json"
+
+    def measurement_period(self) -> JsonObject:
+        """The saved instance-wide start; reading never creates a document."""
+        return {"started_at": read_period(self._period_path)}
+
+    async def measurement_period_async(self) -> JsonObject:
+        return await self._index.run_async(self.measurement_period)
+
+    def start_measurement_period(self) -> JsonObject:
+        """Start counting at the server clock without changing any source facts."""
+        started_at = format_canonical_timestamp(self._clock())
+        write_period(self._period_path, started_at)
+        _LOGGER.info("Statistics measurement period started")
+        return {"started_at": started_at}
+
+    async def start_measurement_period_async(self) -> JsonObject:
+        return await self._index.run_async(self.start_measurement_period)
+
+    def clear_measurement_period(self) -> JsonObject:
+        """Remove only the measurement start, retaining the complete history."""
+        if read_period(self._period_path) is not None:
+            write_period(self._period_path, None)
+            _LOGGER.info("Statistics measurement period cleared")
+        return {"started_at": None}
+
+    async def clear_measurement_period_async(self) -> JsonObject:
+        return await self._index.run_async(self.clear_measurement_period)
 
     def warm_index(self) -> None:
         """Reconcile the disposable index without building a report."""
@@ -148,10 +179,16 @@ class StatisticsService:
         until: datetime | None = None,
         timezone: str = "UTC",
         sections: Iterable[str] | None = None,
+        period: bool = False,
     ) -> JsonObject:
         """``report`` on the index database's worker pool."""
         return await self._index.run_async(
-            self.report, since=since, until=until, timezone=timezone, sections=sections
+            self.report,
+            since=since,
+            until=until,
+            timezone=timezone,
+            sections=sections,
+            period=period,
         )
 
     async def run_activity_async(self, *, since: datetime, until: datetime) -> RunActivityReport:
@@ -165,19 +202,29 @@ class StatisticsService:
         until: datetime | None = None,
         timezone: str = "UTC",
         sections: Iterable[str] | None = None,
+        period: bool = False,
     ) -> JsonObject:
         """Reconcile all Session scopes once and return the requested report sections.
 
         ``since`` is floored and ``until`` ceiled to whole UTC hours; day
-        series use calendar days of the IANA ``timezone``. ``sections`` names
+        series use calendar days of the IANA ``timezone``. ``period=True`` uses
+        the shared exact measurement start instead of explicit bounds and adds
+        ``measurement_period: {started_at}`` to the result. ``sections`` names
         sections from ``REPORT_SECTIONS`` (default: all). The result is
         ``{generated_at, window: {since, until, timezone}, <section>: {...}}``.
         Unknown sections, an unknown zone or ``since`` after ``until`` raise
         ``ValueError``.
         """
         names = report_sections(sections)
+        if period and (since is not None or until is not None):
+            raise ValueError("period cannot be combined with since or until")
+        started_at = read_period(self._period_path) if period else None
+        if started_at is not None:
+            since = parse_canonical_timestamp(started_at)
         now = self._clock()
-        window = ReportWindow.create(since=since, until=until, timezone=timezone, now=now)
+        window = ReportWindow.create(
+            since=since, until=until, timezone=timezone, now=now, measurement_period=period
+        )
         self._import_session_usage()
         scopes = self._statistics_scopes()
         extension_sessions = self._extension_sessions()
@@ -202,6 +249,7 @@ class StatisticsService:
         return {
             "generated_at": format_canonical_timestamp(now),
             "window": window.echo(),
+            **({"measurement_period": {"started_at": started_at}} if period else {}),
             **built,
         }
 

@@ -63,6 +63,7 @@ FORMAT_VERSION_FIELD = "format_version"
 DURABLE_DOCUMENTS: Mapping[str, str] = MappingProxyType(
     {
         "settings": "settings.json",
+        "statistics_period": "statistics/period.json",
         "agent": "agents/*/agent.json",
         "agent_order": "agents/order.json",
         "agent_rename": "agents/rename-pending.json",

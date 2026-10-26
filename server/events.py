@@ -68,6 +68,7 @@ ALLOWED_SERVER_EVENT_TYPES = frozenset(
 # adding it here and pointing one more consumer at it. Agent CRUD rides this
 # channel too (kind "agents") rather than a parallel set of agent.* events.
 RESOURCE_KIND_MODELS = "models"
+RESOURCE_KIND_STATISTICS = "statistics"
 RESOURCE_KIND_QUEUE = "queue"
 RESOURCE_KIND_SESSIONS = "sessions"
 RESOURCE_KIND_AGENTS = "agents"
@@ -94,6 +95,7 @@ RESOURCE_KIND_AGENT_SECRETS = "agent_secrets"
 ALLOWED_RESOURCE_KINDS = frozenset(
     {
         RESOURCE_KIND_MODELS,
+        RESOURCE_KIND_STATISTICS,
         RESOURCE_KIND_QUEUE,
         RESOURCE_KIND_SESSIONS,
         RESOURCE_KIND_AGENTS,

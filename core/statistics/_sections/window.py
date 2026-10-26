@@ -1,7 +1,8 @@
-"""Report windows: hour-aligned bounds, the previous window and series buckets.
+"""Report windows: bounds, the previous window and series buckets.
 
 A window is half-open: ``since`` (floored to the hour) is inside it and
-``until`` (ceiled to the next hour) is not. Aggregates keyed by UTC hour and
+``until`` (ceiled to the next hour) is not. A measurement period preserves its
+exact start instead. Aggregates keyed by UTC hour and
 facts keyed by instant select with the same bounds, so every section of one
 report covers exactly the same time. Calendar days are local to an IANA zone;
 hours fold into the local date of their start, so a zone with a half-hour
@@ -66,12 +67,13 @@ def instant_timestamp(instant: int) -> str:
 
 @dataclass(frozen=True)
 class ReportWindow:
-    """One report's hour-aligned window, its calendar zone and the report clock."""
+    """One report's window, its calendar zone and the report clock."""
 
     since: datetime | None
     until: datetime | None
     zone: ZoneInfo
     now: datetime
+    measurement_period: bool = False
 
     @classmethod
     def create(
@@ -81,15 +83,17 @@ class ReportWindow:
         until: datetime | None,
         timezone: str,
         now: datetime,
+        measurement_period: bool = False,
     ) -> ReportWindow:
         """Align requested bounds to hours; ``since`` after ``until`` raises ``ValueError``."""
         if since is not None and until is not None and since > until:
             raise ValueError("since must not be after until")
         return cls(
-            since=None if since is None else floor_hour(since),
+            since=since if measurement_period or since is None else floor_hour(since),
             until=None if until is None else ceil_hour(until),
             zone=zone_for(timezone),
             now=now,
+            measurement_period=measurement_period,
         )
 
     @property
@@ -133,7 +137,7 @@ class ReportWindow:
     def previous(self) -> ReportWindow | None:
         """The window of equal length that ends at ``since``; ``None`` without ``since``."""
         length = self.length
-        if self.since is None or length is None:
+        if self.measurement_period or self.since is None or length is None:
             return None
         return ReportWindow(self.since - length, self.since, self.zone, self.now)
 

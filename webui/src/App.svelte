@@ -895,7 +895,10 @@
       {:else if activeViewId === 'statistics'}
         <LazyContent load={loadStatisticsView}>
           {#snippet children(Component)}
-            <Component navigation={navigator.view('statistics')} />
+            <Component
+              navigation={navigator.view('statistics')}
+              refreshToken={appControllerState.statisticsRefreshToken}
+            />
           {/snippet}
         </LazyContent>
       {/if}

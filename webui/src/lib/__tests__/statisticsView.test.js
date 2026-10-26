@@ -112,6 +112,25 @@ describe('statisticsView tabs and windows', () => {
     expect(new StatisticsReportQuery('tools', '7d', 'UTC').key).not.toBe(
       query.key,
     );
+    const period = new StatisticsReportQuery(
+      'tools',
+      'period',
+      'UTC',
+      '2026-06-01T12:37:00Z',
+    );
+    expect(period.params(now)).toEqual({
+      period: true,
+      timezone: 'UTC',
+      sections: ['tools', 'skills'],
+    });
+    expect(period.key).not.toBe(
+      new StatisticsReportQuery(
+        'tools',
+        'period',
+        'UTC',
+        '2026-06-02T12:00:00Z',
+      ).key,
+    );
   });
 });
 

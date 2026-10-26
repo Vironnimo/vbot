@@ -295,6 +295,7 @@ def validate_data_dir_config(data_dir: str | Path) -> tuple[JsonValidationReport
     from core.projects import validate_project_file, validate_project_order_file
     from core.secrets import credential_file_reports, validate_secret_store_file
     from core.skills import validate_skill_policy_file
+    from core.statistics._period import validate_statistics_period_file
     from core.storage.prompt_blocks import validate_prompt_layout_file
     from core.tools.terminal_store import (
         validate_terminal_groups_file,
@@ -304,6 +305,7 @@ def validate_data_dir_config(data_dir: str | Path) -> tuple[JsonValidationReport
     # One owner validator per kind of ``DURABLE_DOCUMENTS``, which owns the locations.
     validators: dict[str, Callable[[Path], JsonValidationReport]] = {
         "settings": validate_settings_file,
+        "statistics_period": validate_statistics_period_file,
         "agent": validate_agent_file,
         "agent_order": validate_agent_order_file,
         "agent_rename": validate_agent_rename_file,

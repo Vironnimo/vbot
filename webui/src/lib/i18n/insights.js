@@ -159,6 +159,16 @@ export default Object.freeze({
   'statistics.range.30d': 'Last 30 days',
   'statistics.range.90d': 'Last 90 days',
   'statistics.range.all': 'All time',
+  'statistics.range.period': 'Since restart',
+  'statistics.range.short.period': 'Since restart',
+  'statistics.period.label': 'Measurement period',
+  'statistics.period.start': 'Start new measurement period',
+  'statistics.period.clear': 'Remove start point',
+  'statistics.period.since': 'Measurement period started {time}',
+  'statistics.period.help':
+    'Count from now across this vBot instance and all its devices. Sessions and statistics history are kept. Select All time to see the full history.',
+  'statistics.period.activeHelp':
+    'Counts activity from this exact start time, including new activity in existing Sessions. Model requests and Runs belong to the period in which they started. Provider limits keep their own reset schedule.',
   'statistics.range.hint':
     'Days start at midnight in {timezone}, the time zone set in Settings; today counts so far. “Last 24 hours” is rolling. Changes compare with the period of the same length just before.',
   'statistics.chart.data': 'View chart data',
@@ -476,6 +486,9 @@ export default Object.freeze({
   'statistics.limits.noHistoryToDelete': 'No stored snapshots to delete.',
   'statistics.activity.title': 'Your activity',
   'statistics.activity.dayWithVbot': 'Day {day} with vBot · since {date}',
+  'statistics.activity.periodSince': 'Activity in this period since {date}',
+  'statistics.activity.periodEmpty':
+    'No activity since this measurement period started.',
   'statistics.activity.empty':
     'Your days with vBot show up here once you start working with your Agents.',
   'statistics.activity.metricLabel': 'Color days by',
@@ -513,6 +526,7 @@ export default Object.freeze({
     'in {runs} Runs across {sessions} Sessions',
   'statistics.activity.longestRun': 'Longest Run',
   'statistics.activity.tokensAllTime': 'Tokens all time',
+  'statistics.activity.tokensPeriod': 'Tokens since restart',
   'statistics.activity.books.one': 'about one War and Peace',
   'statistics.activity.books.many': 'about {count}× War and Peace',
   'statistics.activity.toolCalls': '{value} Tool calls',
