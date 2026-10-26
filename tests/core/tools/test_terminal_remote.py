@@ -341,6 +341,72 @@ async def test_terminal_ends_when_its_desktop_stops_sharing_terminals(
     assert factory.adapters[0].alive
 
 
+class _Delivered:
+    """Completion delivery that the Agent receives at once."""
+
+    def __init__(self) -> None:
+        self.bodies: list[str] = []
+
+    def submit_completion(self, _address: Any, *, body: str, **_kwargs: Any) -> Any:
+        self.bodies.append(body)
+        future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        future.set_result(None)
+        return future
+
+    def cancel_completion(self, _address: Any, *, notice_id: str) -> bool:
+        return False
+
+
+@pytest.mark.asyncio
+async def test_a_session_that_loses_the_computer_is_told_once_and_sees_no_more_output(
+    remote: tuple[TerminalManager, Link, AdapterFactory],
+    tmp_path: Path,
+) -> None:
+    _, link, factory = remote
+    sink = _Delivered()
+    granted = {"computer_id": "pc_laptop", "allowed_computer_ids": ["pc_laptop"]}
+    execution = dict(granted)
+    manager = TerminalManager(
+        sink,
+        computers=link.registry,
+        render_host=TerminalRenderHost.in_process(),
+        activity_quiet_seconds=0.01,
+        idle_seconds=0.02,
+        start_wait_seconds=0.05,
+        session_execution=lambda _address: execution,
+    )
+    try:
+        started = await call(manager, _context(tmp_path), {"action": "start", "command": "editor"})
+        assert started["ok"], started
+        adapter = factory.adapters[0]
+
+        async def next_attention(text: str) -> None:
+            revision = manager.list_for_operator()[0]["attention"]
+            adapter.emit(text)
+            await eventually(lambda: manager.list_for_operator()[0]["attention"] != revision)
+
+        def notices() -> list[str]:
+            return [body for body in sink.bodies if "no longer enabled for this Session" in body]
+
+        await next_attention("first screen\r\n")
+        await eventually(lambda: len(sink.bodies) >= 1)
+        assert not notices()
+        execution.update(computer_id="pc_laptop", allowed_computer_ids=["server"])
+        await next_attention("secret one\r\n")
+        await eventually(lambda: len(notices()) == 1)
+        await next_attention("secret two\r\n")
+        await asyncio.sleep(0.05)
+        assert len(notices()) == 1
+        assert notices()[0].endswith("view and stop the terminal in Terminals.")
+        assert not any("secret" in body for body in sink.bodies)
+        assert adapter.alive
+        execution.update(granted)
+        await next_attention("shared again\r\n")
+        await eventually(lambda: any("shared again" in body for body in sink.bodies))
+    finally:
+        await manager.aclose()
+
+
 @pytest.mark.asyncio
 async def test_a_refused_native_spawn_is_a_definite_start_failure(
     remote: tuple[TerminalManager, Link, AdapterFactory],

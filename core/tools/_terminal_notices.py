@@ -123,6 +123,16 @@ def _compose_attention(
     return "\n".join(lines)
 
 
+def revoked_computer_notice(terminal_id: str, label: str, computer: str) -> str:
+    """Told once when the attached Session lost the computer a terminal runs on."""
+    return (
+        f"Terminal {terminal_id} ({label}) runs on {computer}, which is no longer enabled "
+        "for this Session. Its screen and its end are no longer shown to you; its programs "
+        "keep running there. The user can enable that computer again in the Session's "
+        "computer settings, or view and stop the terminal in Terminals."
+    )
+
+
 def screen_behind_note(error: str, log: str | None, *, complete: bool) -> str:
     """The screen misses output: drawing it failed."""
     note = (

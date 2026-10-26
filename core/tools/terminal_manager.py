@@ -23,8 +23,10 @@ from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from core.computers import normalize_execution
 from core.runs import RunExecutionOwner
 from core.sessions import SessionAddress
+from core.sessions.errors import SessionNotFoundError
 from core.storage.temp_files import TemporaryFileManager
 from core.tools.shell_environment import terminal_environment
 from core.tools.terminal_backend import (
@@ -143,6 +145,7 @@ class TerminalManager:
         reserved_call_names: Callable[[], Iterable[str]] | None = None,
         credential_names: Callable[[], Container[str]] = frozenset,
         computers: ComputerRegistry | None = None,
+        session_execution: Callable[[SessionAddress], Any] | None = None,
     ) -> None:
         """*process_observer* watches a program's process tree for work its output
         does not show; without it, only output and declared signals show work.
@@ -150,7 +153,10 @@ class TerminalManager:
         Session belongs to, so its Terminals show together; *reserved_call_names*
         are names a Terminal's call name must not take, such as Agent names.
         *credential_names* are the names vBot knows as credentials, which the
-        environment of a Terminal under Permission Rules withholds."""
+        environment of a Terminal under Permission Rules withholds.
+        *session_execution* reads a Session's stored ``execution`` metadata, so a
+        Terminal stops reporting to a Session that lost its computer; without it
+        every computer stays granted."""
         if scrollback_lines < 1:
             raise ValueError("Terminal scrollback cap must be positive")
         if finished_session_ttl <= timedelta(0):
@@ -216,6 +222,7 @@ class TerminalManager:
             operator_summary=self._catalog.summary,
             changed=self._catalog.notify_changed,
             open_screen=self._factory.open_screen,
+            granted=partial(_session_grants_computer, session_execution),
         )
         self._sweeper_task: asyncio.Task[None] | None = None
 
@@ -1103,3 +1110,21 @@ __all__ = [
     "screen_behind_note",
     "unseen_lines_note",
 ]
+
+
+def _session_grants_computer(
+    session_execution: Callable[[SessionAddress], Any] | None,
+    owner: TerminalOwner,
+    computer_id: str,
+) -> bool:
+    """Whether *owner* may still use *computer_id*; unreadable policy grants nothing."""
+    if session_execution is None:
+        return True
+    try:
+        policy = normalize_execution(session_execution(owner.address))
+    except SessionNotFoundError:
+        return False
+    except Exception:
+        _LOGGER.warning("Terminal Session computer grants are unreadable", exc_info=True)
+        return False
+    return computer_id in policy["allowed_computer_ids"]

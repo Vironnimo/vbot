@@ -352,6 +352,9 @@ class TerminalSessionServices:
     changed: Callable[[str], None]
     # A new screen of this size, for one drawn anew from the log.
     open_screen: Callable[[int, int], Awaitable[TerminalScreen]]
+    # Whether the attached Session may still use this computer id; output of a
+    # computer it lost stays with the operator.
+    granted: Callable[[TerminalOwner, str], bool]
 
 
 @dataclass(frozen=True, slots=True)
