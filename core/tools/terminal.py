@@ -100,6 +100,7 @@ from ._terminal_results import (
     _capacity_message,
     _capped_wait_note,
     _closed_message,
+    _find,
     _first_screen_pending_text,
     _not_attached_text,
     _not_found_message,
@@ -202,9 +203,10 @@ async def _handle_terminal(
             return tool_failure("not_a_terminal", refusal, retryable=False)
 
     try:
-        if action not in {"start", "list"}:
-            info = _terminal_info(terminal_manager, str(terminal_id))
-            check_terminal_target(terminal_manager, context, info, arguments)
+        # An unknown id is reported by the action, after its argument checks.
+        known = None if action in {"start", "list"} else _find(terminal_manager, str(terminal_id))
+        if known is not None:
+            check_terminal_target(terminal_manager, context, known, arguments)
         if action == "start":
             return await _handle_start(
                 terminal_manager, projects, context, arguments, scratch_areas, command_checker

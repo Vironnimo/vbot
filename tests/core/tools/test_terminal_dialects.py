@@ -857,7 +857,17 @@ async def test_follow_up_results_show_the_screen_without_repeating_launch_facts(
 ) -> None:
     started = await terminal({"action": "start", "command": "fake-tui", "args": ["-q"]})
     # An empty screen has no cursor, and the first screen is still to come.
-    assert list(started["data"]) == ["terminal_id", "call_name", "state", "log", "screen", "next"]
+    assert list(started["data"]) == [
+        "terminal_id",
+        "call_name",
+        "state",
+        "computer_id",
+        "computer_name",
+        "computer_online",
+        "log",
+        "screen",
+        "next",
+    ]
     assert started["data"]["next"].startswith("It has shown nothing yet.")
     terminal_id = started["data"]["terminal_id"]
     manager[1].adapters[0].emit("".join(f"line-{index}\r\n" for index in range(30)) + "ready> ")
