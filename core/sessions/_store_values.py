@@ -141,6 +141,7 @@ _SESSION_LIST_BACKGROUND_KINDS = (
 )
 _RECALL_VALID_RUN_KINDS = (
     "user",
+    "session_message",
     "channel",
     "calendar",
     "cron",
@@ -160,7 +161,7 @@ _RECALL_REFLECTION_RUN_KINDS = (
 _REFLECTION_RUN_KINDS_SQL = (
     "(" + ", ".join(f"'{kind}'" for kind in _RECALL_REFLECTION_RUN_KINDS) + ")"
 )
-_RECALL_USER_FACING_RUN_KINDS = ("user", "channel", "cron", "calendar")
+_RECALL_USER_FACING_RUN_KINDS = ("user", "session_message", "channel", "cron", "calendar")
 # Summary values a Session list may add on request, by name.
 _SUMMARY_METADATA_COLUMNS = {
     "seen_skills": (

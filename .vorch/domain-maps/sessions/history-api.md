@@ -23,6 +23,12 @@ Appends are transactional: `append_messages` writes the entries at `next_seq`, t
 - `status_snapshot` reports the current view's first entry time, User count and latest Assistant Usage, the Session's own spend, and the Context projection inputs (`context_messages`, the same `context_batch` entries the timeline snapshot carries).
 - The Chat History snapshot also selects independent `output_speed` and `output_latency` measurements from the full current view, with their answering Model and Assistant message id. Narrow Usage-extra queries find the newest measured rate and newest measured first-token latency independently of page bounds; fork lineage and history edits use the same visibility rules as the transcript. Chat's `output_measurements` defines their public projection (`chat/usage.md`).
 
+## Bounded conversation projection
+
+`ChatSessionManager.conversation_page` and `SessionStore.conversation_page` expose bounded User/Assistant text from the current lineage for peer coordination (`tools/session.md`), without hydrating Tool output, Reasoning or full Messages. The caller supplies an expected generation; a replacement Session returns no page. `before_sequence` reads older entries and `after_sequence` reads the next entries in ascending order, with an explicit `has_more`. SQL bounds each text before materialization. Sender kind and sender id preserve peer attribution; `include_peer_messages=False` removes received peer input from progress and response detection.
+
+`SessionConversationPage` also carries current cursor floors and independent latest human task, conversation/response sequence and terminal Run-summary markers. Those facts cover the whole current view, not only its returned page; incoming peer messages never replace the human task or count as the recipient's response. Source: `_store_conversation.py`; contracts: `tests/core/sessions/test_conversation_page.py`.
+
 ## Compaction commit
 
 `commit_compaction(checkpoint, *, since, epoch: PromptEpoch)` appends a `compaction_checkpoint` only while `since` still names the newest entry (same generation, at or above the cursor floor, same `next_seq` and last entry id); otherwise it writes nothing and returns `None`. In the same transaction it replaces the named prompt pins (`epoch.pins`; `None` removes a slot), replaces the seen Skills when `epoch.seen_skills` is given, and leaves the prompt-cache affinity id unchanged; it returns the delta after `since` as a `SessionReadBatch`.

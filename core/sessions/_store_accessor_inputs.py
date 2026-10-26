@@ -12,9 +12,13 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 from core.chat.errors import ChatSessionError
-from core.sessions import _store_values
+from core.sessions import _store_queries, _store_values
 from core.sessions._types import AccessorInputRecord, JsonObject, SessionAddress
-from core.sessions.errors import AccessorInputConflictError, SessionStoreCorruptError
+from core.sessions.errors import (
+    AccessorInputConflictError,
+    SessionNotFoundError,
+    SessionStoreCorruptError,
+)
 from core.utils.ids import is_safe_id
 from core.utils.surrogates import without_lone_surrogates
 from core.utils.timestamps import utc_now_timestamp
@@ -101,6 +105,9 @@ def accept(
     attachment_ids: Sequence[str],
     fallback_input: ChatMessage | None,
     fallback_notes: Sequence[ChatMessage],
+    source: SessionAddress | None = None,
+    expected_source_generation_id: str | None = None,
+    expected_working_project_id: str | None = None,
 ) -> tuple[sqlite3.Row, bool]:
     _identifier(input_id, "Accessor input id")
     _identifier(request_hash, "Accessor request hash")
@@ -112,6 +119,21 @@ def accept(
     state = _store_values._require_live(connection, address)
     if expected_generation_id is not None and state["generation_id"] != expected_generation_id:
         raise ChatSessionError("Session generation changed before Accessor input acceptance")
+    if source is not None:
+        # Both addresses are checked in the acceptance transaction. A Tool can
+        # already hold its caller's write lease, so taking the peer's async lock
+        # here would deadlock simultaneous opposite-direction sends.
+        source_state = _store_values._require_live(connection, source)
+        if source_state["generation_id"] != expected_source_generation_id:
+            raise SessionNotFoundError(
+                "The sending Session generation changed before input acceptance"
+            )
+        if not expected_working_project_id:
+            raise ChatSessionError("A Session message requires a Working Project")
+        for peer in (source, address):
+            working = _store_queries.working_project(connection, peer)
+            if working.archived or working.project_id != expected_working_project_id:
+                raise ChatSessionError("The Sessions are not in the same live Working Project")
     cursor = connection.execute(
         "INSERT INTO session_accessor_inputs "
         "(input_id, session_key, queue_id, request_hash, state, created_at) "

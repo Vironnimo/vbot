@@ -83,9 +83,12 @@ def test_tool_call_round_trips_rejections_and_argument_sequences() -> None:
 def test_message_sender_round_trips_and_reads_a_legacy_sender_as_member() -> None:
     member = MessageSender(id="50", display_name="Alice")
     admin = MessageSender(id="50", display_name="Alice", role="admin")
+    peer = MessageSender(id="ses_peer", display_name="coder", kind="session")
 
     assert member.to_dict() == {"id": "50", "display_name": "Alice", "role": "member"}
     assert MessageSender.from_dict(admin.to_dict()) == admin
+    assert MessageSender.from_dict(peer.to_dict()) == peer
+    assert peer.to_dict()["kind"] == "session"
     assert MessageSender.from_dict({"id": "50", "display_name": "Alice"}) == member
     with pytest.raises(FrozenInstanceError):
         member.display_name = "changed"  # type: ignore[misc]
@@ -100,8 +103,9 @@ def test_message_sender_round_trips_and_reads_a_legacy_sender_as_member() -> Non
         {"id": 50, "display_name": "Alice"},
         {"id": "50", "display_name": ""},
         {"id": "50", "display_name": ["Alice"]},
+        {"id": "50", "display_name": "Alice", "kind": "unknown"},
     ],
-    ids=["unknown-role", "no-id", "empty-id", "int-id", "empty-name", "list-name"],
+    ids=["unknown-role", "no-id", "empty-id", "int-id", "empty-name", "list-name", "unknown-kind"],
 )
 def test_message_sender_rejects_invalid_fields(payload: dict[str, Any]) -> None:
     with pytest.raises(ChatMessageValidationError):

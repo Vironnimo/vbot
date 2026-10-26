@@ -31,6 +31,7 @@ from core.calendar import CalendarService
 from core.channels import ChannelService
 from core.chat import ChatLoop, ChatLoopDependencies, ChatMessage, CommandDispatcher
 from core.chat.block_resolver import ContentBlockResolver
+from core.chat.session_peers import SessionPeers
 from core.compaction import CompactionService
 from core.computers import ComputerRegistry
 from core.database import (
@@ -154,6 +155,7 @@ from core.tools.load_tools import register_load_tools_tool
 from core.tools.portal import register_portal_tool
 from core.tools.portal_registry import PortalRegistry
 from core.tools.secrets import register_secrets_tool
+from core.tools.session import register_session_tool
 from core.tools.shell import powershell_executable
 from core.tools.shell_environment import inherited_value
 from core.tools.show_widget import register_show_widget_tool
@@ -909,6 +911,13 @@ def bootstrap(runtime: Runtime) -> None:
             commands=runtime._command_manager,
             completions=runtime._trigger_service,
             subagents=runtime._subagent_coordinator,
+        )
+        register_session_tool(
+            runtime._tools,
+            SessionPeers(
+                runtime._chat_sessions, runtime._session_activity, runtime._chat_run_manager
+            ),
+            runtime._chat_loop,
         )
         register_subagent_tools(
             runtime._tools,

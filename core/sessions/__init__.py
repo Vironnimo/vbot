@@ -72,6 +72,8 @@ if TYPE_CHECKING:
         SeenSkillsUpdate,
         SessionAddress,
         SessionChatHistorySnapshot,
+        SessionConversationMessage,
+        SessionConversationPage,
         SessionDescriptorSource,
         SessionHistoryRevision,
         SessionIdentityReferenceUpdate,
@@ -134,6 +136,8 @@ if TYPE_CHECKING:
 
 
 _EXPORT_MODULES = {
+    "SessionConversationMessage": "core.sessions._types",
+    "SessionConversationPage": "core.sessions._types",
     "AccessorInputRecord": "core.sessions._types",
     "session_database_spec": "core.sessions._store_schema",
     "AGENT_DEFAULT_PROJECT": "core.sessions._types",
@@ -337,6 +341,8 @@ __all__ = [
     "SeenSkillsUpdate",
     "SessionAddress",
     "SessionChatHistorySnapshot",
+    "SessionConversationMessage",
+    "SessionConversationPage",
     "SessionDescriptorSource",
     "SessionHistoryRevision",
     "current_skill_activation_contents",

@@ -53,8 +53,8 @@ def _session_address(project_id: str | None, agent_id: str, session_id: str) -> 
     return SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
 
 
-def _subscribe(
-    callbacks: list[Callable[[Run], None]], callback: Callable[[Run], None]
+def _subscribe[T](
+    callbacks: list[Callable[[T], None]], callback: Callable[[T], None]
 ) -> Callable[[], None]:
     callbacks.append(callback)
 
@@ -65,7 +65,7 @@ def _subscribe(
     return remove_callback
 
 
-def _notify(callbacks: list[Callable[[Run], None]], run: Run, failure: str) -> None:
+def _notify[T](callbacks: list[Callable[[T], None]], run: T, failure: str) -> None:
     for callback in list(callbacks):
         try:
             callback(run)
@@ -136,6 +136,7 @@ class ChatRunManager:
         self._runs: dict[str, Run] = {}
         self._run_started_callbacks: list[Callable[[Run], None]] = []
         self._run_finished_callbacks: list[Callable[[Run], None]] = []
+        self._input_queued_callbacks: list[Callable[[SessionAddress], None]] = []
         self._completed_run_retention_limit = completed_run_retention_limit
         self._run_event_retention_limit = run_event_retention_limit
         self._waiting_work_limit = waiting_work_limit
@@ -212,6 +213,16 @@ class ChatRunManager:
         the next queued item, if any, has started. Returns the unsubscribe function.
         """
         return _subscribe(self._run_finished_callbacks, callback)
+
+    def add_input_queued_callback(
+        self, callback: Callable[[SessionAddress], None]
+    ) -> Callable[[], None]:
+        """Observe accepted input queued behind a Run, after durable admission.
+
+        Waiting Tools use this to release the Run so it can receive its input.
+        The callback is synchronous and does not change queue ownership.
+        """
+        return _subscribe(self._input_queued_callbacks, callback)
 
     @asynccontextmanager
     async def session_admission_guard(
@@ -406,6 +417,7 @@ class ChatRunManager:
                 await persist_input()
             queue = self._queues.setdefault(address, deque())
             queue.append(item)
+            _notify(self._input_queued_callbacks, address, "Queued input callback failed")
             _LOGGER.debug(
                 "Run queued for busy session (agent=%s session=%s queue_depth=%d)",
                 address.agent_id,

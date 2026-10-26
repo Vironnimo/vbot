@@ -128,6 +128,18 @@ describe('message presentation', () => {
     ['no sender', undefined, {}, ''],
     ['a blank sender name', { id: '50', display_name: '   ' }, {}, ''],
     [
+      'another Session',
+      { id: 'source-ref', display_name: 'Builder', kind: 'session' },
+      {},
+      t('chat.role.sessionSender', { name: 'Builder' }).toUpperCase(),
+    ],
+    [
+      'an unnamed Session',
+      { id: 'source-ref', display_name: ' ', kind: 'session' },
+      {},
+      t('chat.role.session').toUpperCase(),
+    ],
+    [
       'the Live voice origin',
       undefined,
       { input_origin: 'live_voice' },

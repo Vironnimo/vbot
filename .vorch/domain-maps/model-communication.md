@@ -27,6 +27,8 @@ These ten channels describe canonical vBot Agent/Chat communication. A Live voic
 
 Deliberately **not** a reminder channel: Channel-observed group chatter persists as attributed `[channel-message]` text and renders as explicitly untrusted JSON-quoted background context (`channels/groups.md` -> Observed and quoted context). Never route untrusted third-party content through reminder framing.
 
+Peer Session messages use the same ordinary attributed external-content channel: `sender.kind = "session"` identifies their authenticated origin, and Chat JSON-quotes their source and body in the Provider request. They are visible messages, not System Reminders or human instructions (`chat/run-execution.md` -> Session messages).
+
 Other specialized notes keep their existing request forms: `[skill-context]` becomes a chronological `<skill_content>` user message (`chat/request-building.md` -> Canonical roles and request visibility); `[effort-change]` steers Provider configuration through request-only effort updates or request-level effort, without a Model-facing reminder (`chat/request-building.md` -> Thinking effort per prompt epoch). Neither is rendered as ordinary reminder text.
 
 ## Decision rules

@@ -29,6 +29,7 @@ from core.sessions._types import (
     OwnedSessionSummary,
     SeenSkillsUpdate,
     SessionAddress,
+    SessionConversationPage,
     SessionDescriptorSource,
     SessionHistoryRevision,
     SessionIdentityReferenceUpdate,
@@ -400,6 +401,9 @@ class ChatSessionManager:
         attachment_ids: Sequence[str] = (),
         fallback_input: ChatMessage | None = None,
         fallback_notes: Sequence[ChatMessage] = (),
+        source: SessionAddress | None = None,
+        expected_source_generation_id: str | None = None,
+        expected_working_project_id: str | None = None,
     ) -> tuple[AccessorInputRecord, bool]:
         """Commit ordinary input acceptance; exact retries return its original receipt."""
         return await self._store.run_async(
@@ -413,6 +417,9 @@ class ChatSessionManager:
             attachment_ids=attachment_ids,
             fallback_input=fallback_input,
             fallback_notes=fallback_notes,
+            source=source,
+            expected_source_generation_id=expected_source_generation_id,
+            expected_working_project_id=expected_working_project_id,
         )
 
     async def lookup_accessor_input_async(
@@ -731,6 +738,28 @@ class ChatSessionManager:
     ) -> dict[SessionAddress, tuple[str, int]]:
         """Batched generation/revision lookup for derived-projection freshness."""
         return self._store.list_history_versions(addresses)
+
+    def conversation_page(
+        self,
+        address: SessionAddress,
+        *,
+        expected_generation_id: str,
+        limit: int = 8,
+        before_sequence: int | None = None,
+        after_sequence: int | None = None,
+        max_text_chars: int = 2000,
+        include_peer_messages: bool = True,
+    ) -> SessionConversationPage:
+        """Read bounded current conversation text without hydrating Tool history."""
+        return self._store.conversation_page(
+            address,
+            expected_generation_id=expected_generation_id,
+            limit=limit,
+            before_sequence=before_sequence,
+            after_sequence=after_sequence,
+            max_text_chars=max_text_chars,
+            include_peer_messages=include_peer_messages,
+        )
 
     def create_bound_temporary_session(
         self,

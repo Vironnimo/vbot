@@ -207,20 +207,24 @@ class ToolCall:
 
 @dataclass(frozen=True)
 class MessageSender:
-    """Platform identity of the human who sent a user message.
+    """Trusted ingress identity of a human or another Session.
 
-    Captured from platform metadata, never from message text. The request prefix
-    uses this identity; look-alike tags in the message body do not change it or
+    Captured from platform metadata or an authenticated Session, never message
+    text. The request prefix uses this identity; look-alike tags do not change it or
     the sender role used for authorization.
     """
 
     id: str
     display_name: str
     role: GroupRole = "member"
+    kind: Literal["user", "session"] = "user"
 
     def to_dict(self) -> JsonObject:
         """Return a JSON-serializable sender dictionary."""
-        return {"id": self.id, "display_name": self.display_name, "role": self.role}
+        result = {"id": self.id, "display_name": self.display_name, "role": self.role}
+        if self.kind != "user":
+            result["kind"] = self.kind
+        return result
 
     @classmethod
     def from_dict(cls, data: JsonObject) -> MessageSender:
@@ -234,7 +238,15 @@ class MessageSender:
         role = data.get("role", "member")
         if role not in ("admin", "member"):
             raise ChatMessageValidationError("sender role must be admin or member")
-        return cls(id=sender_id, display_name=display_name, role=cast(GroupRole, role))
+        kind = data.get("kind", "user")
+        if kind not in ("user", "session"):
+            raise ChatMessageValidationError("sender kind must be user or session")
+        return cls(
+            id=sender_id,
+            display_name=display_name,
+            role=cast(GroupRole, role),
+            kind=cast(Literal["user", "session"], kind),
+        )
 
 
 @dataclass(frozen=True)

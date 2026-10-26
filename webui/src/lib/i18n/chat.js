@@ -145,6 +145,8 @@ export default Object.freeze({
   'chat.noModel.action': 'Choose a model',
   'chat.role.user': 'You',
   'chat.role.userViaLive': '{name} · via Live',
+  'chat.role.session': 'Session',
+  'chat.role.sessionSender': 'Session · {name}',
   'chat.role.assistant': 'Assistant',
   'chat.role.system': 'System',
   'chat.role.error': 'Error',

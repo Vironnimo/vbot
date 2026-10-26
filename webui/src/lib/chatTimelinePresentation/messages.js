@@ -43,15 +43,22 @@ export const shouldRenderMessage = (message) =>
   Boolean(textFromMessage(message)) ||
   hasReadableReasoning(message);
 
-// Channel group messages carry a platform sender; the display name is data,
+// Channel and Session messages carry a sender; the display name is data,
 // not a translatable UI string.
 const senderDisplayName = (message) =>
   trimmedString(message?.sender?.display_name);
 
-// A User message names its sender and whether Live voice passed it on; the
-// user's own typed message needs no label.
+// A User-role message identifies another Session or a Channel sender and
+// whether Live voice passed it on; the user's own typed message needs no label.
 const userLabel = (message) => {
   const sender = senderDisplayName(message);
+  if (message?.sender?.kind === 'session') {
+    return (
+      sender
+        ? t('chat.role.sessionSender', { name: sender })
+        : t('chat.role.session')
+    ).toUpperCase();
+  }
   if (message?.input_origin === 'live_voice') {
     return t('chat.role.userViaLive', {
       name: sender || t('chat.role.user'),
