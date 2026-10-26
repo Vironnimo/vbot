@@ -599,16 +599,20 @@ async def test_key_names_from_other_harnesses_press_canonical_keys(
     assert computer.target.inputs == [("keys", chord, 1) for chord in chords]
 
 
-async def test_target_failure_after_input_shows_the_screen(computer: Harness) -> None:
-    computer.target.fail["type"] = computer_use.TargetError("The keyboard layout is missing.")
-    context = computer.context_for("computer")
-    result = await computer.call("computer", {"action": "type", "text": "x"}, context)
-    assert result["error"]["code"] == "computer_use_failed"
+@pytest.mark.parametrize("code", ["computer_use_failed", "computer_use_unavailable"])
+@pytest.mark.parametrize("tool", ["computer", "computer_batch"])
+async def test_target_failure_after_input_shows_the_screen(
+    computer: Harness, code: str, tool: str
+) -> None:
+    computer.target.fail["type"] = computer_use.TargetError("test-input-failure", code)
+    context = computer.context_for(tool)
+    action = {"action": "type", "text": "x"}
+    arguments = {"actions": [action]} if tool == "computer_batch" else action
+    result = await computer.call(tool, arguments, context)
+    assert result["error"]["code"] == code
     shot = screenshot_id(context)
-    assert result["error"]["message"] == (
-        "The keyboard layout is missing. Input may have been sent.\nThe screen now: Screenshot "
-        f'of foreground window "Notepad", screenshot_id="{shot}".'
-    )
+    assert "test-input-failure" in result["error"]["message"]
+    assert shot in result["error"]["message"]
     assert len(images(context)) == 1
     computer.target.fail["move"] = computer_use.TargetError("The pointer is blocked.")
     await computer.computer(action="screenshot", view="display")

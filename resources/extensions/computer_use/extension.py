@@ -197,6 +197,8 @@ class ComputerUseService:
             self.api.logger.info("Computer Use is not ready: %s", reason)
 
     async def close(self) -> None:
+        if self._closed:
+            return
         self._closed = True
         self.interrupt(source="shutdown")
         self.access.cancel_all()
@@ -482,13 +484,23 @@ class ComputerUseService:
     async def _active_call(self, context: ToolContext) -> AsyncIterator[None]:
         """Hold the desktop for one call under desktop control, interruptible."""
         async with self._lock:
+            if self._closed:
+                raise TargetError("Computer Use has stopped.", "computer_use_unavailable")
             owner = new_id("call")
             run_id = context.run_id or ""
             self._loop = asyncio.get_running_loop()
             if self._hotkey is None:
                 # The global keyboard hook starts with the first call that needs it.
                 hotkey = _new_hotkey(lambda armed: self.stop(armed, source="double_escape"))
-                await asyncio.to_thread(hotkey.start)
+                try:
+                    await self._on_worker(hotkey.start)
+                    if self._closed:
+                        raise TargetError("Computer Use has stopped.", "computer_use_unavailable")
+                except BaseException:
+                    # The native start must settle before cleanup: cancellation
+                    # cannot abandon a global hook before it has an owner.
+                    await settle_before_cancelling(asyncio.to_thread(hotkey.close))
+                    raise
                 self._hotkey = hotkey
             with self._control_lock:
                 stopped_by = self._stopped_runs.get(run_id)
