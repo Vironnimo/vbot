@@ -247,6 +247,50 @@ describe('ChatView computer selection', () => {
     });
   });
 
+  it('shows a revoked default as not allowed and keeps it ungranted when other grants change', async () => {
+    let stored = { computer_id: 'pc_laptop', allowed_computer_ids: [] };
+    getSessionMock.mockImplementation(async () => ({
+      session: { id: 'session-1', execution: stored },
+    }));
+    const base = createChatRpcMock();
+    rpcMock.mockImplementation((method, params) => {
+      if (method === 'session.set_execution') {
+        stored = params.execution;
+        return { execution: stored };
+      }
+      return base(method, params);
+    });
+    chat.mount(
+      {
+        target: document.body,
+        props: {
+          component: ChatView,
+          readComputers: async () => ({ computers }),
+        },
+      },
+      ComputerContextHost,
+    );
+    flushSync();
+    await waitForCondition(() =>
+      document
+        .querySelector('button[aria-label="Computers for this conversation"]')
+        ?.textContent.includes('Work laptop · Not allowed'),
+    );
+    openComputers();
+    expect(document.querySelector('.modal-body').textContent).toContain(
+      'may no longer use this computer',
+    );
+    document.querySelector('[role="checkbox"][aria-label="Office PC"]').click();
+    flushSync();
+    await waitForCondition(
+      () => rpcCalls('session.set_execution').length === 1,
+    );
+    expect(rpcCalls('session.set_execution')[0].execution).toEqual({
+      computer_id: 'pc_laptop',
+      allowed_computer_ids: ['pc_office'],
+    });
+  });
+
   it('shows the selected computer but locks access changes during an active Run', async () => {
     getSessionMock.mockResolvedValue({
       session: { id: 'session-1', execution },

@@ -25,6 +25,9 @@ export default {
   'computers.sessionHint':
     'Choose where Terminal and Computer Use run for this conversation.',
   'computers.selectedOffline': '{name} · Offline',
+  'computers.selectedRevoked': '{name} · Not allowed',
+  'computers.defaultRevoked':
+    'This conversation may no longer use this computer. Choose another default.',
   'computers.terminalUnavailable': 'Terminal is unavailable on this computer.',
   'computers.remoteWorkdir': 'Working directory on the selected computer',
   'computers.stopControl': 'Stop computer control on {name}',
