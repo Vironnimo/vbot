@@ -332,7 +332,9 @@ class WindowsInput:
                 self._press(f"button:{button}", mouse_event(press), mouse_event(release))
                 self._pause(0.01)
                 self._release(f"button:{button}", strict=True)
+            self._release_keys(keys, strict=True)
         finally:
+            self._release(f"button:{button}")
             self._release_keys(keys)
 
     def drag(self, path: list[tuple[int, int]], seconds: float, modifiers: list[str]) -> None:
@@ -352,6 +354,7 @@ class WindowsInput:
                 self._move(x, y)
             self._pause(0.05)  # let the drop target notice the hover before release
             self._release("button:left", strict=True)
+            self._release_keys(keys, strict=True)
         finally:
             self._release("button:left")
             self._release_keys(keys)
@@ -368,6 +371,7 @@ class WindowsInput:
                 if tick:
                     self._pause(0.02)
                 self._send([mouse_event(flags, data=delta)])
+            self._release_keys(keys, strict=True)
         finally:
             self._release_keys(keys)
 
@@ -385,6 +389,7 @@ class WindowsInput:
         try:
             self._press_keys(keys)
             self._pause(seconds)
+            self._release_keys(keys, strict=True)
         finally:
             self._release_keys(keys)
 
@@ -409,6 +414,8 @@ class WindowsInput:
                     down = key_event(0, code, _UNICODE)
                     self._press(name, down, key_event(0, code, _UNICODE | _KEYUP))
                 self._pause(_KEY_HOLD)
+                for name in reversed(names):
+                    self._release(name, strict=True)
             finally:
                 for name in reversed(names):
                     self._release(name)
@@ -425,7 +432,7 @@ class WindowsInput:
         shows its key tips), which swallows the next click and turns letters into
         shortcuts.
         """
-        self._send([key_event(_VK_F24, 0, 0), key_event(_VK_F24, 0, _KEYUP)])
+        self._tap([_Key(_VK_F24, 0, False)])
 
     # Mechanics
 
@@ -461,11 +468,14 @@ class WindowsInput:
     def _release(self, name: str, *, strict: bool = False) -> None:
         """Release one held key or button; never checks stop, releasing is always due."""
         with self._lock:
-            up = self._held.pop(name, None)
-            if up is None or self._send_events([up]) == 1:
+            up = self._held.get(name)
+            if up is None:
                 return
-            self._held[name] = up
+            if self._send_events([up]) == 1:
+                del self._held[name]
+                return
             if strict:
+                self.release_all()
                 raise TargetError(_BLOCKED, "computer_use_unavailable")
 
     def _tap(self, keys: list[_Key]) -> None:
@@ -473,6 +483,7 @@ class WindowsInput:
         try:
             self._press_keys(keys)
             self._pause(_KEY_HOLD)
+            self._release_keys(keys, strict=True)
         finally:
             self._release_keys(keys)
         self._pause(_KEY_GAP)
@@ -481,9 +492,9 @@ class WindowsInput:
         for key in keys:
             self._press(f"key:{key.vk}", key.event(False), key.event(True))
 
-    def _release_keys(self, keys: list[_Key]) -> None:
+    def _release_keys(self, keys: list[_Key], *, strict: bool = False) -> None:
         for key in reversed(keys):
-            self._release(f"key:{key.vk}")
+            self._release(f"key:{key.vk}", strict=strict)
 
     def _plan(self, names: list[str]) -> list[_Key]:
         """Resolve a chord before any input: modifiers first, then the other keys."""

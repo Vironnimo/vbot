@@ -77,7 +77,7 @@ def _with_screen(message: str, desktop: Desktop | None) -> str:
 
 def _target_text(error: TargetError, desktop: Desktop | None) -> str:
     message = str(error).rstrip()
-    if error.code == "computer_use_failed":
+    if error.code in {"computer_use_failed", "computer_use_unavailable"}:
         return f"{message} {_sent_text(desktop)}"
     return message
 
@@ -113,7 +113,10 @@ def _batch_error(
         )
         return TargetError(message, "computer_use_interrupted")
     detail = str(error).rstrip()
-    if isinstance(error, TargetError) and error.code == "computer_use_failed":
+    if isinstance(error, TargetError) and error.code in {
+        "computer_use_failed",
+        "computer_use_unavailable",
+    }:
         detail += " Input may have been sent." if action.sends_input else " No input was sent."
     message = f"Action {number} of {len(actions)} ({action.name}) failed: {detail}{skipped}\n{ran}"
     if isinstance(error, CallRefusedError):

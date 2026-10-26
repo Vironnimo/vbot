@@ -1,20 +1,23 @@
-"""The emergency stop: two physical Esc presses end the active Computer Use call.
+"""The emergency stop: two physical Esc presses end active desktop control.
 
 A low-level keyboard hook observes Esc globally on its own thread. Two physical
 presses within 600 ms, with a key-up between them, request a stop; auto-repeat
 and injected input (the Agent's own keystrokes) never count, and every event
 passes through to the foreground app unchanged. The hotkey is armed only for
-the active invocation: its owner token travels with the request to a separate
-dispatch worker, so a callback that runs late cannot stop a later call, and a
+active desktop control: its owner token travels with the request to a separate
+dispatch worker, so a callback that runs late cannot stop later desktop control, and a
 slow callback never blocks the hook.
 """
 
 from __future__ import annotations
 
+import logging
 import sys
 import threading
 import time
 from collections.abc import Callable
+
+_LOGGER = logging.getLogger("vbot.extensions.computer_use")
 
 _ESCAPE = 0x1B
 _DOUBLE_PRESS_SECONDS = 0.6
@@ -43,7 +46,7 @@ class EmergencyHotkey:
         self._first_press: float | None = None
 
     def set_armed(self, owner: object | None) -> None:
-        """Arm for *owner* (the active invocation), or disarm with ``None``."""
+        """Arm for *owner* (the current desktop control), or disarm with ``None``."""
         with self._state_lock:
             if owner is not self._owner:
                 self._owner = owner
@@ -91,6 +94,8 @@ class EmergencyHotkey:
             try:
                 if owner is not None:
                     self.callback(owner)
+            except Exception:
+                _LOGGER.exception("Computer Use emergency stop callback failed")
             finally:
                 with self._state_lock:
                     # A later call may have received its own double-Esc while the

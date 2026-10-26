@@ -432,6 +432,64 @@ async def test_cancellation_after_mouse_down_completes_releases_the_button(
     assert computer.target.released >= 1
 
 
+@pytest.mark.parametrize("failure", ["cancel", "start_error", "shutdown"])
+async def test_unfinished_hotkey_start_never_leaves_an_unowned_hook(
+    computer: Harness, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    entered = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+    new_hotkey = computer_use._new_hotkey
+
+    def delayed_hotkey(callback):
+        hotkey = new_hotkey(callback)
+        start = hotkey.start
+
+        def delayed_start():
+            start()
+            loop.call_soon_threadsafe(entered.set)
+            assert release.wait(1)
+            if failure == "start_error":
+                raise OSError("test hook setup failure")
+
+        monkeypatch.setattr(hotkey, "start", delayed_start)
+        return hotkey
+
+    monkeypatch.setattr(computer_use, "_new_hotkey", delayed_hotkey)
+    call = asyncio.create_task(computer.computer(action="screenshot"))
+    closing = None
+    try:
+        await entered.wait()
+        first = computer.hotkey
+        if failure == "cancel":
+            call.cancel()
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            assert not call.done() and computer.service._lock.locked()
+        elif failure == "shutdown":
+            closing = asyncio.create_task(computer.service.close())
+            await asyncio.sleep(0)
+            assert computer.service._closed
+    finally:
+        release.set()
+    if failure == "cancel":
+        with pytest.raises(asyncio.CancelledError):
+            await call
+    else:
+        result = await call
+        expected = "computer_use_unavailable" if closing else "computer_use_failed"
+        assert result["error"]["code"] == expected
+    if closing:
+        await closing
+    assert first.closed and computer.service._hotkey is None
+    assert not computer.service._lock.locked()
+    assert computer.target.activity == [] and computer.target.inputs == []
+    if not closing:
+        monkeypatch.setattr(computer_use, "_new_hotkey", new_hotkey)
+        assert (await computer.computer(action="screenshot"))["ok"]
+        assert len(computer.hotkeys) == 2 and not computer.hotkeys[1].closed
+
+
 async def test_run_end_releases_a_mouse_button_the_run_left_pressed(computer: Harness) -> None:
     computer.target.pointer = (200, 150)
     assert (await computer.computer(action="left_mouse_down"))["ok"]

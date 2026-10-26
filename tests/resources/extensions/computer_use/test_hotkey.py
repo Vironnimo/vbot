@@ -81,3 +81,31 @@ def test_emergency_stop_dispatch_never_blocks_keyboard_listener():
         release.set()
         hotkey.close()
     assert not hotkey._worker.is_alive()
+
+
+def test_emergency_stop_dispatch_survives_a_failed_stop_callback(caplog):
+    first, second = object(), object()
+    attempted, stopped = threading.Event(), threading.Event()
+
+    def stop(owner):
+        if owner is first:
+            attempted.set()
+            raise RuntimeError("test stop failure")
+        assert owner is second
+        stopped.set()
+
+    hotkey = EmergencyHotkey(stop)
+    hotkey._worker = threading.Thread(target=hotkey._dispatch)
+    hotkey._worker.start()
+    try:
+        for owner, event in ((first, attempted), (second, stopped)):
+            hotkey.set_armed(owner)
+            hotkey._key_event(ESCAPE, True, 0)
+            hotkey._key_event(ESCAPE, False, 0)
+            hotkey._key_event(ESCAPE, True, 0)
+            assert event.wait(1)
+        assert hotkey._worker.is_alive()
+    finally:
+        hotkey.close()
+    assert not hotkey._worker.is_alive()
+    assert any(record.exc_info for record in caplog.records)
