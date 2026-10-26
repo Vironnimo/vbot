@@ -157,6 +157,40 @@
   {/if}
 {/snippet}
 
+{#snippet commandContent(task)}
+  <span class="chat-activity__task-copy">
+    <span
+      class="chat-activity__task-title"
+      class:chat-activity__task-command={!task.description}
+    >
+      {task.label}
+    </span>
+    <span class="chat-activity__task-meta">
+      <span
+        class="chat-activity__task-state"
+        use:tooltip={() => statusDetails(task)}
+      >
+        <ActivityStatus dotStatus={task.dotStatus} />
+        <span class="chat-activity__task-kind"
+          >{t('chat.activity.kind.command')}</span
+        >
+        {#if task.timeLabel}
+          <span class="chat-activity__task-time">· {task.timeLabel}</span>
+        {/if}
+      </span>
+    </span>
+  </span>
+  <CopyableValueCard
+    value={task.fullCommand}
+    title={task.description}
+    mono
+    copyLabel={t('chat.copyCommand')}
+    copiedLabel={t('chat.commandCopied')}
+    whenTruncated={!task.description && task.command === task.fullCommand}
+    placement="left"
+  />
+{/snippet}
+
 <!-- Every row reads as two lines: what the work is about, then a quiet line
      with its state symbol, its kind and how long it ran. -->
 {#snippet taskRow(task)}
@@ -165,49 +199,32 @@
       class="chat-activity__task-row chat-activity__task-row--bash"
       aria-label={taskLabel(task)}
     >
-      <span class="chat-activity__task-copy">
-        <!-- The command must receive focus so its complete text and Copy
-             action reach keyboard users. A description stands in for the
-             command, which its card then always shows. -->
+      {#if onLoadCommandOutput}
+        <Button
+          variant="tertiary"
+          class="chat-activity__task-link"
+          ariaLabel={t('chat.activity.commandOutput.aria', {
+            command: task.label,
+          })}
+          aria-expanded={state.expandedOutputs.has(task.id)}
+          aria-controls={state.expandedOutputs.has(task.id)
+            ? outputId(task)
+            : undefined}
+          onClick={() => toggleOutput(task)}
+        >
+          {@render commandContent(task)}
+        </Button>
+      {:else}
+        <!-- Keep the complete command and Copy reachable by keyboard even
+             when this view cannot load output. -->
         <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
         <span
-          class="chat-activity__task-title"
-          class:chat-activity__task-command={!task.description}
+          class="chat-activity__task-copy"
           tabindex={task.fullCommand ? 0 : undefined}
         >
-          {task.label}
-          <CopyableValueCard
-            value={task.fullCommand}
-            title={task.description}
-            mono
-            copyLabel={t('chat.copyCommand')}
-            copiedLabel={t('chat.commandCopied')}
-            whenTruncated={!task.description &&
-              task.command === task.fullCommand}
-            placement="left"
-          />
+          {@render commandContent(task)}
         </span>
-        <span class="chat-activity__task-meta">
-          <span
-            class="chat-activity__task-state"
-            use:tooltip={() => statusDetails(task)}
-          >
-            <ActivityStatus dotStatus={task.dotStatus} />
-            <span class="chat-activity__task-kind"
-              >{t('chat.activity.kind.command')}</span
-            >
-            {#if task.timeLabel}
-              <span class="chat-activity__task-time">· {task.timeLabel}</span>
-            {/if}
-          </span>
-          {#if onLoadCommandOutput}
-            <span class="chat-activity__task-separator" aria-hidden="true"
-              >·</span
-            >
-            {@render outputToggle(task)}
-          {/if}
-        </span>
-      </span>
+      {/if}
       {@render cancelButton(task)}
     </div>
     {#if onLoadCommandOutput && state.expandedOutputs.has(task.id)}
@@ -357,28 +374,6 @@
       </li>
     {/each}
   </ul>
-{/snippet}
-
-<!-- Opens the command's newest output under its row. -->
-{#snippet outputToggle(task)}
-  {@const expanded = state.expandedOutputs.has(task.id)}
-  <Button
-    variant="tertiary"
-    class="chat-activity__outcome chat-activity__outcome-toggle"
-    ariaLabel={t('chat.activity.commandOutput.aria', { command: task.label })}
-    aria-expanded={expanded}
-    aria-controls={expanded ? outputId(task) : undefined}
-    onClick={() => toggleOutput(task)}
-  >
-    {t('chat.activity.commandOutput.title')}
-    <svg
-      class="chat-activity__disclosure"
-      viewBox="0 0 16 16"
-      width="10"
-      height="10"
-      aria-hidden="true"><path d="m6 4 4 4-4 4" /></svg
-    >
-  </Button>
 {/snippet}
 
 {@render taskRow(task)}

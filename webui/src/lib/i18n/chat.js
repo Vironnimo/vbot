@@ -450,7 +450,6 @@ export default Object.freeze({
   'chat.activity.status.stillRunning': 'Processes still running',
   'chat.activity.status.commandsRunning': 'Commands still running',
   'chat.activity.status.unknown': 'Unknown',
-  'chat.activity.commandOutput.title': 'Output',
   'chat.activity.commandOutput.aria': 'Output of {command}',
   'chat.activity.commandOutput.loading': 'Loading the output…',
   'chat.activity.commandOutput.empty': 'No output',

@@ -356,9 +356,11 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.chat-activity__task-time,
-.chat-activity__task-separator {
+.chat-activity__task-time {
   flex: 0 0 auto;
+}
+.chat-activity__task-state .chat-activity__task-time {
+  flex-shrink: 1;
 }
 .chat-activity__cancel.btn-danger.btn-icon {
   width: 24px;
