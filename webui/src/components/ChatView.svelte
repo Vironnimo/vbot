@@ -27,6 +27,7 @@
   import { untrack } from 'svelte';
   import { listConnections, listModels } from '$lib/api.js';
   import { getDraft } from '$lib/composerMemory.js';
+  import { provideSpeechOrigin } from '$lib/speechAudio.svelte.js';
   import { agentNeedsModel } from '$lib/onboarding.js';
   import { parseAgentAddress } from '$lib/agentAddress.js';
   import { SESSION_WAITING } from '$lib/sessionActivity.js';
@@ -263,6 +264,8 @@
       return actions;
     },
   });
+  // Players of this area name its Session as the origin of speech they replay.
+  provideSpeechOrigin(() => navigation.shownSession());
   const actions = createChatViewActions({
     get chatState() {
       return chatState;

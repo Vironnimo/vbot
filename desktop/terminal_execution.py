@@ -38,6 +38,8 @@ _MAX_PROCESSES = 32
 _MAX_RETAINED_PROCESSES = 128
 _MAX_OUTPUT_BYTES = 64 * 1024 * 1024
 _MAX_READ_BYTES = 64 * 1024
+# One server input at its maximum, with the paste brackets it may carry.
+_MAX_WRITE_CHARS = 2 * 64 * 1024
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -206,6 +208,13 @@ class TerminalCapability:
             raise TerminalExecutionError(
                 "terminal_command_not_found", f"No terminal was started: {error}"
             ) from error
+        except OSError as error:
+            if operation != "start":
+                raise
+            # A failed native spawn leaves no process behind: a definite start failure.
+            raise TerminalExecutionError(
+                "terminal_start_failed", f"No terminal was started: {error}"
+            ) from error
 
     async def _execute(self, operation: str, params: dict[str, Any]) -> dict[str, Any]:
         if self._closed and operation not in {"read", "status", "release", "kill"}:
@@ -266,8 +275,10 @@ class TerminalCapability:
             return {**await asyncio.to_thread(process.status), "process": process.metadata}
         if operation == "write":
             data = params.get("data")
-            if not isinstance(data, str) or len(data) > 64 * 1024:
-                raise ValueError("Terminal input must be text of at most 65536 characters")
+            if not isinstance(data, str) or len(data) > _MAX_WRITE_CHARS:
+                raise ValueError(
+                    f"Terminal input must be text of at most {_MAX_WRITE_CHARS} characters"
+                )
             await asyncio.to_thread(process.adapter.write, data)
             return {"written": len(data)}
         if operation == "resize":

@@ -308,80 +308,85 @@ it.each(['run', 'event'])(
   },
 );
 
-it('restores a paused player for a speech result read back from Session history', async () => {
-  // The server projects the persisted Tool result into a completed Run.
-  const url = '/api/speech/artifacts/aud_history';
-  const envelope = {
-    ok: true,
-    error: null,
-    data: { artifact: { id: 'aud_history', kind: 'speech', url } },
-    artifacts: [{ id: 'aud_history', kind: 'speech', url }],
-  };
-  const sessionState = ensureSessionState(
-    createChatState(),
-    'alpha',
-    'session-speech',
-  );
-  loadHistory(
-    sessionState,
-    [
-      { id: 'user-one', role: 'user', content: 'Read it aloud' },
-      {
-        id: 'assistant-one',
-        role: 'assistant',
-        tool_calls: [
-          {
-            id: 'call-speech',
-            name: 'generate_speech',
-            arguments: { text: 'test-owned speech' },
-          },
-        ],
-      },
-      {
-        id: 'tool-one',
-        role: 'tool',
-        tool_call_id: 'call-speech',
-        name: 'generate_speech',
-        content: JSON.stringify(envelope),
-      },
-      { id: 'assistant-two', role: 'assistant', content: 'Spoken.' },
-    ].map((message, index) => ({
-      ...message,
-      history_run_id: 'run-speech',
-      history_sequence: index + 1,
-    })),
-    {
-      items: [
-        assistantRun(
-          'run-speech',
-          [
-            toolItem({
+it.each(['completed', 'failed'])(
+  'restores a paused, playable player for speech read back from a %s Run',
+  async (status) => {
+    // The server projects the persisted Tool result into a completed Run.
+    const url = '/api/speech/artifacts/aud_history';
+    const envelope = {
+      ok: true,
+      error: null,
+      data: { artifact: { id: 'aud_history', kind: 'speech', url } },
+      artifacts: [{ id: 'aud_history', kind: 'speech', url }],
+    };
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-speech',
+    );
+    loadHistory(
+      sessionState,
+      [
+        { id: 'user-one', role: 'user', content: 'Read it aloud' },
+        {
+          id: 'assistant-one',
+          role: 'assistant',
+          tool_calls: [
+            {
               id: 'call-speech',
               name: 'generate_speech',
               arguments: { text: 'test-owned speech' },
-              result: envelope,
-            }),
-            outputItem('Spoken.'),
+            },
           ],
-          { status: 'completed', source: 'history' },
-        ),
-      ],
-    },
-  );
-  const item = visibleTimelineItemsForRender(sessionState).find(
-    (entry) => entry.type === 'assistant_run',
-  );
-  render({ item }, ChatAssistantRun);
-  const player = document.querySelector(
-    `[role="group"][aria-label="${t('audio.label')}"]`,
-  );
-  const audio = player?.querySelector('audio');
-  expect(audio?.getAttribute('src')).toBe(url);
-  ready(audio);
-  await flush();
-  expect(play).not.toHaveBeenCalled();
-  expect(control('audio.play', player)).toBeTruthy();
-});
+        },
+        {
+          id: 'tool-one',
+          role: 'tool',
+          tool_call_id: 'call-speech',
+          name: 'generate_speech',
+          content: JSON.stringify(envelope),
+        },
+        { id: 'assistant-two', role: 'assistant', content: 'Spoken.' },
+      ].map((message, index) => ({
+        ...message,
+        history_run_id: 'run-speech',
+        history_sequence: index + 1,
+      })),
+      {
+        items: [
+          assistantRun(
+            'run-speech',
+            [
+              toolItem({
+                id: 'call-speech',
+                name: 'generate_speech',
+                arguments: { text: 'test-owned speech' },
+                result: envelope,
+              }),
+              outputItem('Spoken.'),
+            ],
+            { status, source: 'history' },
+          ),
+        ],
+      },
+    );
+    const item = visibleTimelineItemsForRender(sessionState).find(
+      (entry) => entry.type === 'assistant_run',
+    );
+    render({ item }, ChatAssistantRun);
+    const player = document.querySelector(
+      `[role="group"][aria-label="${t('audio.label')}"]`,
+    );
+    const audio = player?.querySelector('audio');
+    expect(audio?.getAttribute('src')).toBe(url);
+    ready(audio);
+    await flush();
+    expect(play).not.toHaveBeenCalled();
+    control('audio.play', player).click();
+    await flush();
+    expect(play).toHaveBeenCalledOnce();
+  },
+);
 
 it('keeps a requested automatic start when autoplay is withdrawn before the audio can play', async () => {
   const props = reactiveProps({ src: '/test.wav', autoplay: true });

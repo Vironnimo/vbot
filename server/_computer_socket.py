@@ -62,6 +62,9 @@ async def serve_computer_socket(websocket: Any, computers: ComputerRegistry) -> 
                 computers.receive(connection, incoming.result())
             finally:
                 await cancel_and_wait(incoming)
+        if connection.closed:
+            # A newer link of the same installation replaced this one.
+            await websocket.close(code=1000, reason="Computer connection replaced")
     except ComputerError as error:
         await websocket.send_json(
             {"type": "error", "error": {"code": error.code, "message": error.message}}

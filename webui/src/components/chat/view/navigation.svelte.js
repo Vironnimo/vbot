@@ -944,6 +944,7 @@ export function createChatViewNavigation(context) {
   };
   return {
     beginSessionDeletion,
+    shownSession,
     get viewingSessionId() {
       return viewingSessionId;
     },

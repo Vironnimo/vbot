@@ -284,3 +284,19 @@ async def test_wrong_registration_key_cannot_replace_an_existing_computer_link()
             assert registry.get("pc_laptop").online
     finally:
         registry.close()
+
+
+@pytest.mark.asyncio
+async def test_a_reconnect_of_the_same_installation_closes_the_replaced_link() -> None:
+    registry = ComputerRegistry()
+    try:
+        async with (
+            _connected(registry) as (old, old_serving),
+            _connected(registry) as (new, _),
+        ):
+            await old_serving
+            assert old.close_codes == [1000]
+            assert new.close_codes == []
+            assert registry.get("pc_laptop").online
+    finally:
+        registry.close()

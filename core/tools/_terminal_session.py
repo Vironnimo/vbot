@@ -13,7 +13,7 @@ from typing import Any, BinaryIO
 from core.runs import RunExecutionOwner
 from core.storage.temp_files import TemporaryFileLease
 from core.tools import terminal_backend
-from core.tools._terminal_remote import RemoteTerminalAdapter
+from core.tools._terminal_remote import RemoteStopError, RemoteTerminalAdapter
 from core.tools.terminal_backend import TerminalAdapter
 from core.tools.terminal_emulator import (
     EmulatorUpdate,
@@ -251,6 +251,10 @@ class TerminalSession:
             self._termination_pending = True
             try:
                 await asyncio.to_thread(self._kill_tree)
+            except RemoteStopError as error:
+                raise TerminalManagerError(
+                    f"Could not stop terminal {self.terminal_id}: {error}."
+                ) from error
             except OSError as error:
                 raise TerminalManagerError(
                     f"Could not stop terminal {self.terminal_id}: the operating system did not "
@@ -884,9 +888,13 @@ class TerminalSession:
         that missed output is drawn anew from the log first; one that still
         misses output says so.
         """
-        # A root process EOF cannot confirm that captured descendants exited.
+        # A root process EOF cannot confirm that captured descendants exited,
+        # unless the Desktop that owned a remote terminal confirmed its end.
         if self._termination_pending:
-            return
+            if not (isinstance(self._adapter, RemoteTerminalAdapter) and self._adapter.ended):
+                return
+            self._termination_pending = False
+            self._tree_killed.set()
         self._cancel_task(self._settle_task)
         self._cancel_task(self._sample_task)
         if self._output.failure is not None and self._output.redrawable() and not self.finished:

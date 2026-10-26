@@ -31,6 +31,7 @@ export function createAudioPlayback({
   let autoplayAttempted = false;
   let generation = 0;
   let playPending = false;
+  let cancelledRun = false;
   let destroyed = false;
 
   function announcePlay() {
@@ -182,9 +183,14 @@ export function createAudioPlayback({
     if (destroyed) return;
     state.src = src;
     if (cancelled) {
-      cancel();
-      return;
+      // A cancelled Run stops its live speech once, but its durable speech
+      // stays playable from history.
+      if (!cancelledRun) cancel();
+      playback = '';
+      autoplay = false;
     }
+    cancelledRun = cancelled;
+    if (!src && cancelled) return;
     if (src === attached && (!playback || playback === attachedPlayback))
       return;
     // Attach the durable artifact without restarting the transient audio.
