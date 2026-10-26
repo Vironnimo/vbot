@@ -11,20 +11,37 @@ import sqlite3
 
 from core.statistics._projection import MICROSECONDS_PER_HOUR
 from core.statistics._rollups import (
+    _FIRST_TOKEN_COLUMNS,
+    _USAGE_COLUMNS,
     _usage_select,
     judged_cache_turns_sql,
     run_origin_sql,
     session_origin_sql,
 )
 
+_COLUMNS = {
+    "agg_usage": _USAGE_COLUMNS,
+    "agg_first_token": _FIRST_TOKEN_COLUMNS,
+    "agg_tools": "hour, session_key, origin, name, calls, accepted, rejected, unknown, "
+    "duration_calls, duration_ms, max_ms",
+    "agg_tool_latency": "hour, session_key, origin, name, bucket, count",
+    "agg_records": "hour, session_key, role, records, visible_steps",
+    "agg_cache": "hour, session_key, turns, input_tokens, cache_read_tokens, "
+    "cache_write_tokens, evaluated_turns, suspected_turns, last_instant",
+}
+
 
 def period_aggregate(connection: sqlite3.Connection, table: str, since: int) -> str:
     hour = since // MICROSECONDS_PER_HOUR
     end = (hour + 1) * MICROSECONDS_PER_HOUR
     target = "report_period_" + table.removeprefix("agg_")
-    connection.execute(f"CREATE TEMP TABLE {target} AS SELECT * FROM {table} WHERE 0")
-    connection.execute(f"INSERT INTO temp.{target} " + _edge_select(table, since, end))
-    return f"(SELECT * FROM {table} WHERE hour > {hour} UNION ALL SELECT * FROM temp.{target})"
+    columns = _COLUMNS[table]
+    connection.execute(f"CREATE TEMP TABLE {target} AS SELECT {columns} FROM {table} WHERE 0")
+    connection.execute(f"INSERT INTO temp.{target} ({columns}) " + _edge_select(table, since, end))
+    return (
+        f"(SELECT {columns} FROM {table} WHERE hour > {hour} "
+        f"UNION ALL SELECT {columns} FROM temp.{target})"
+    )
 
 
 def _edge_select(table: str, since: int, end: int) -> str:
