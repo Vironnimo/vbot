@@ -876,7 +876,7 @@ def _tool_status(result: Any, name: str, display: Any, error: Any) -> str:
         return "refused"
     result_data = result.get("data")
     if (
-        name == "bash"
+        name in {"bash", "execute_code"}
         and result.get("ok") is True
         and isinstance(result_data, dict)
         and result_data.get("status") == "stopped"
