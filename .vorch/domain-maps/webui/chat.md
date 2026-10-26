@@ -188,10 +188,10 @@ events must not undo Pause. Identity Agent rename updates the origin address.
 
 When the speaking Session is not selected in Chat, `SpeechPlaybackBar.svelte`
 shows the shared controls, origin link and waiting count above the current view;
-Stop clears the active output and waiting list. Tool failure and Run cancellation,
-failure or interruption remove that Run's playback; its durable artifact stays
-playable by hand from History. Run completion lets audio
-finish. App teardown, access loss and a changed server epoch release resources;
+Stop clears the active output and waiting list. Tool failure and Run cancellation
+remove that Run's playback; its durable artifact stays playable by hand from History.
+Run completion, failure or interruption lets its generated audio, active and waiting,
+finish (user decision 2026-10-26: only the user's cancel silences speech). App teardown, access loss and a changed server epoch release resources;
 ordinary view changes do not. Failed playback remains available for manual retry
 or Stop. Idle resources and event deduplication are bounded.
 
