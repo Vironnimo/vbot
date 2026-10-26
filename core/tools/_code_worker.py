@@ -16,7 +16,7 @@ import sys
 import threading
 import traceback
 import types
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 _MAX_RESPONSE_BYTES = 32 * 1024 * 1024
@@ -39,12 +39,15 @@ class ToolError(Exception):
 ToolError.__module__ = "vbot_tools"
 
 
-class _ResultData(dict[str, Any]):
+class ToolData(dict[str, Any]):
     """Decoded Tool data; a missing key names the keys the result has."""
 
     def __missing__(self, key: Any) -> Any:
         keys = ", ".join(map(str, self)) or "none"
         raise KeyError(f"{key!r} is not in this Tool result. Its keys: {keys}")
+
+
+ToolData.__module__ = "vbot_tools"
 
 
 class _Tools:
@@ -94,14 +97,20 @@ class _Tools:
                 answer = incoming.readline(_MAX_RESPONSE_BYTES + 1)
         if not answer.endswith(b"\n") or len(answer) > _MAX_RESPONSE_BYTES:
             raise OSError("The Tool bridge returned no complete response.")
-        result = json.loads(answer, object_hook=_ResultData)
+        result = json.loads(answer, object_hook=ToolData)
         if not isinstance(result, dict):
             raise OSError("The Tool bridge returned no result object.")
         return result
 
-    def call(self, name: str, arguments: dict[str, Any] | None = None, /, **kwargs: Any) -> Any:
+    def call(self, name: str, /, *arguments: Any, **kwargs: Any) -> Any:
         """Call a Tool by name, with its ordinary named arguments."""
-        inputs = dict(arguments or {})
+        if len(arguments) > 1 or (arguments and not isinstance(arguments[0], Mapping)):
+            # Tools have named parameters only; a bare value names none of them.
+            raise TypeError(
+                f"Nothing was sent: pass the arguments of {name} by name, such as "
+                f"tools.{name}(<parameter>=<value>), or as one dictionary."
+            )
+        inputs = dict(arguments[0] if arguments else {})
         if inputs.keys() & kwargs.keys():
             raise TypeError("Pass each Tool argument once, in the dictionary or as a keyword.")
         inputs.update(kwargs)
@@ -130,8 +139,8 @@ class _Tools:
         if name.startswith("_"):
             raise AttributeError(name)
 
-        def invoke(arguments: dict[str, Any] | None = None, /, **kwargs: Any) -> Any:
-            return self.call(name, arguments, **kwargs)
+        def invoke(*arguments: Any, **kwargs: Any) -> Any:
+            return self.call(name, *arguments, **kwargs)
 
         invoke.__name__ = name
         return invoke

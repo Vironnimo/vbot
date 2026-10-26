@@ -142,13 +142,26 @@ for value in [float('nan'), {1, 2}, 'x' * (2 * 1024 * 1024)]:
         tools.echo(value=value)
     except ToolError as error:
         print(error.code, error.message.split(':')[0])
+# Tools take named arguments only; a bare value names no parameter.
+for positional in [
+    lambda: tools.read('notes.txt'),
+    lambda: tools.write('notes.txt', 'text'),
+    lambda: tools.call('read', 'notes.txt'),
+]:
+    try:
+        positional()
+    except TypeError as error:
+        print('positional', str(error).split(':')[0])
 """,
         cwd=tmp_path,
         environment=os.environ,
         invoke=invoke,
     )
     assert result.status == "completed" and result.tool_calls == 0
-    assert result.output.splitlines() == ["invalid_arguments Nothing was sent"] * 3
+    assert (
+        result.output.splitlines()
+        == ["invalid_arguments Nothing was sent"] * 3 + ["positional Nothing was sent"] * 3
+    )
 
 
 @pytest.mark.asyncio
