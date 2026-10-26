@@ -288,6 +288,11 @@ async def test_terminal_events_project_only_their_completion_facts(
             id="compaction-completed",
         ),
         pytest.param(COMPACTION_ABORTED_EVENT, {"reason": "failed"}, id="compaction-aborted"),
+        pytest.param(
+            "speech_playback",
+            {"tool_call_id": "call-speech", "url": "/api/speech/playback/speech-one"},
+            id="speech-playback",
+        ),
         # Provider retry progress reaches observers without becoming a failure.
         pytest.param(
             PROVIDER_REQUEST_STATUS_EVENT,

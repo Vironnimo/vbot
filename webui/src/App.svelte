@@ -89,7 +89,12 @@
   import ToastStack from './components/ToastStack.svelte';
   import Modal from './components/ui/Modal.svelte';
   import ConfirmDialog from './components/ui/ConfirmDialog.svelte';
-  import { onMount, tick } from 'svelte';
+  import { onDestroy, onMount, tick } from 'svelte';
+  import {
+    createSpeechAudio,
+    provideSpeechAudio,
+  } from '$lib/speechAudio.svelte.js';
+  import SpeechPlaybackBar from './components/SpeechPlaybackBar.svelte';
   import {
     CONNECTION_STATUS_DISCONNECTED,
     handleVisibilityChange,
@@ -131,6 +136,8 @@
 
   const navigationItems = NAVIGATION_ITEMS;
   const selection = createAppSelection();
+  const speechAudio = provideSpeechAudio(createSpeechAudio());
+  onDestroy(() => speechAudio.destroy());
   const setup = createAppSetup({
     get modelsRefreshToken() {
       return modelsRefreshToken;
@@ -469,6 +476,7 @@
     onAgentIdChanged: (oldAgentId, newAgentId) => {
       renameComposerAgent(oldAgentId, newAgentId);
       renameWidgetStatesAgent(oldAgentId, newAgentId);
+      speechAudio.renameAgent(oldAgentId, newAgentId);
       // Chat areas re-key their Sessions here; the place Chat's first area
       // reported follows, so the remapped place reads as already shown.
       selection.remapIdentityAgentId(oldAgentId, newAgentId);
@@ -479,6 +487,7 @@
     onExtensionChange: extensions.publishChange,
     onPortalsChanged: invalidatePortals,
     onCheckWebuiBuild: checkWebuiBuild,
+    onSpeechEvent: speechAudio.handleServerEvent,
   });
   const runEvents = appController.runEvents;
   navigator.start();
@@ -614,6 +623,12 @@
   <ExtensionRequests
     subscribeInvalidations={extensions.subscribeInvalidations}
   />
+  {#if speechAudio.active && (activeViewId !== 'chat' || chatNavigation.shownSession?.agentId !== speechAudio.active.agentId || chatNavigation.shownSession?.sessionId !== speechAudio.active.sessionId)}
+    <SpeechPlaybackBar
+      owner={speechAudio}
+      onOpenSession={(entry) => chatNavigation.openSessionLink(entry)}
+    />
+  {/if}
   {#snippet sidebarFooter()}
     <LiveVoice
       configured={Boolean(setup.settings?.model_tasks?.live_voice?.target)}

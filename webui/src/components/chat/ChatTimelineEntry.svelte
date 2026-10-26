@@ -577,6 +577,9 @@
           {#if speechArtifact}
             <AudioPlayer
               class="speech-audio-player"
+              speechKey={item.event?.run_id && toolCallFromEvent(item.event)?.id
+                ? `${item.event.run_id}:${toolCallFromEvent(item.event).id}`
+                : ''}
               src={speechArtifact.url}
               autoplay={viewState.claimAutoplay(speechArtifact.url)}
             />

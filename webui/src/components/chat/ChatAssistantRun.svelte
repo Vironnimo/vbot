@@ -678,12 +678,11 @@
               ? child.speechPlayback
               : ''}
             {#if speechArtifact || playback}
-              <!-- Only a live Run starts its fresh speech, once per source: a
-                   player first mounted for a Run rebuilt from Session history,
-                   or mounted again after scrolling away, stays paused, while
-                   one kept through the handoff keeps playing. -->
+              <!-- App owns speech across navigation. The autoplay claim is a
+                   fallback for this renderer without an App speech context. -->
               <AudioPlayer
                 class="speech-audio-player"
+                speechKey={`${item.runId ?? item.id}:${child.toolCallId ?? child.id}`}
                 src={speechArtifact?.url ?? ''}
                 {playback}
                 cancelled={['cancelled', 'interrupted', 'failed'].includes(
