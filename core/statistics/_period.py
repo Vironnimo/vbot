@@ -61,7 +61,7 @@ def read_period(path: Path) -> str | None:
         data = load_validated_json_file(path, _validate, missing_ok=True, missing_default={})
     except (JsonConfigValidationError, OSError) as error:
         raise StatisticsPeriodError(
-            "The Statistics measurement period could not be read"
+            f"The Statistics measurement period could not be read: {error}"
         ) from error
     value: str | None = data.get("started_at")
     return value
@@ -72,5 +72,5 @@ def write_period(path: Path, started_at: str | None) -> None:
         write_json_document(path, {"started_at": started_at}, _FORMAT)
     except (JsonConfigValidationError, OSError) as error:
         raise StatisticsPeriodError(
-            "The Statistics measurement period could not be saved"
+            f"The Statistics measurement period could not be saved: {error}"
         ) from error

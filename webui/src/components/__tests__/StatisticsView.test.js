@@ -437,6 +437,29 @@ describe('StatisticsView', () => {
     expect(buttonNamed('statistics.period.clear')).toBeUndefined();
   });
 
+  it('shows the reports in their ordinary ranges when the period cannot be read', async () => {
+    let fail = true;
+    const routed = routedRpc();
+    rpcMock.mockImplementation((method, params) => {
+      if (method === 'statistics.period')
+        return fail
+          ? Promise.reject(new Error('period read sentinel'))
+          : Promise.resolve({ started_at: null });
+      return routed(method, params);
+    });
+    suite.mountedComponent = mount(StatisticsView, { target: document.body });
+
+    await waitForOverview();
+    expect(document.body.textContent).toContain('period read sentinel');
+    expect(overviewCalls().at(-1)).not.toHaveProperty('period');
+
+    fail = false;
+    buttonNamed('common.retry').click();
+    await waitForCondition(
+      () => !document.body.textContent.includes('period read sentinel'),
+    );
+  });
+
   it('keeps the shown numbers under an error banner and retries on request', async () => {
     let fail = true;
     rpcMock.mockImplementation(

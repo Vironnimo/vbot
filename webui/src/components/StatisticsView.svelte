@@ -232,6 +232,8 @@
       if (disposed || request !== periodRequest) return;
       periodError = error;
       periodRetry = loadPeriod;
+      // An unreadable start leaves the reports on their ordinary ranges.
+      periodLoaded = true;
     }
   }
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from core.statistics._period import StatisticsPeriodError
 from core.statistics._sources import (
     AgentDirectory,
     ProjectDirectory,
@@ -22,6 +23,7 @@ __all__ = [
     "SkillInventorySource",
     "SkillUse",
     "StatisticsIndex",
+    "StatisticsPeriodError",
     "StatisticsService",
     "StatisticsUnavailableError",
     "counts_as_skill_use",

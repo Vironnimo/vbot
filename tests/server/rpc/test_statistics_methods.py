@@ -341,6 +341,30 @@ async def test_period_changes_publish_shared_state_and_keep_all_time_usage(
     ]
 
 
+@pytest.mark.asyncio
+async def test_an_unreadable_period_is_a_domain_error_that_keeps_the_document(
+    tmp_path: Path,
+) -> None:
+    state, manager = _state(tmp_path, ["main"])
+    state.event_bus = ServerEventBus()
+    path = Path(manager.data_dir) / "statistics" / "period.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    invalid = '{"format_version": 1, "started_at": "2026-06-01T12:00:00"}'
+    path.write_text(invalid)
+    for method, params in (
+        ("statistics.period", {}),
+        ("statistics.period.start", {}),
+        ("statistics.period.clear", {}),
+        ("statistics.report", {"period": True, "sections": ["usage"]}),
+    ):
+        response = await dispatch_rpc(state, {"method": method, "params": params})
+        assert response["error"]["code"] == "domain_error", method
+        assert "$.started_at" in response["error"]["message"], method
+    assert path.read_text() == invalid
+    assert await _result(state, "statistics.report", {"sections": ["usage"]})
+    assert state.event_bus.events == []
+
+
 def test_runtime_skill_inventory_reads_global_agent_and_project_scopes(tmp_path: Path) -> None:
     write_bootstrap_marker(tmp_path)
     manager = ChatSessionManager(tmp_path)

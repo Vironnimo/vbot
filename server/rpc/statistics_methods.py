@@ -53,26 +53,38 @@ async def _statistics_report(state: Any, params: JsonObject) -> JsonObject:
 
     timezone = _report_timezone(state, params)
     sections = _report_sections(params)
-    return await statistics_service(state).report_async(
-        since=since, until=until, timezone=timezone, sections=sections, period=period
-    )
+    try:
+        return await statistics_service(state).report_async(
+            since=since, until=until, timezone=timezone, sections=sections, period=period
+        )
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
 
 
 async def _statistics_period(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, set(), "statistics.period")
-    return await statistics_service(state).measurement_period_async()
+    try:
+        return await statistics_service(state).measurement_period_async()
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
 
 
 async def _statistics_period_start(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, set(), "statistics.period.start")
-    result = await statistics_service(state).start_measurement_period_async()
+    try:
+        result = await statistics_service(state).start_measurement_period_async()
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
     publish_resource_changed(state, "statistics")
     return result
 
 
 async def _statistics_period_clear(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, set(), "statistics.period.clear")
-    result = await statistics_service(state).clear_measurement_period_async()
+    try:
+        result = await statistics_service(state).clear_measurement_period_async()
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
     publish_resource_changed(state, "statistics")
     return result
 
@@ -115,7 +127,10 @@ async def _statistics_run_activity(state: Any, params: JsonObject) -> JsonObject
     until = _required_utc_timestamp(params, "until")
     if since > until:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.since must not be after params.until")
-    report = await statistics_service(state).run_activity_async(since=since, until=until)
+    try:
+        report = await statistics_service(state).run_activity_async(since=since, until=until)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
     return report.to_dict()
 
 
