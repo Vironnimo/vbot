@@ -19,10 +19,10 @@ Built-in `generate_speech` Tool for creating speech artifacts through the centra
 
 Runtime registers the tool at startup with the runtime-owned `SpeechService`. The tool uses `SpeechService.synthesize_artifact()` and never calls providers directly.
 
-The service's `on_audio` callback publishes playable PCM while inference is still running. The Tool lazily creates a bounded transient playback resource and emits one SSE-only `speech_playback` event `{tool_call_id, url}`; audio bytes never enter the Run or Session history. Cancellation and errors terminate that resource explicitly. The final result still returns the complete durable artifact for replay and delivery. Playback resource framing and lifetime belong to `model_tasks/speech.md`.
+The service's `on_audio` callback publishes playable PCM while inference is still running. The Tool lazily creates a bounded transient playback resource and emits one `speech_playback` event `{tool_call_id, url}`, delivered through SSE and bridged as app-wide WebSocket Run output; audio bytes never enter the Run or Session history or the shared WebSocket. Cancellation and errors terminate that resource explicitly. The final result still returns the complete durable artifact for replay and delivery. Playback resource framing and lifetime belong to `model_tasks/speech.md`.
 
 ## Constraints & Gotchas
 
 - Do not add provider/model/voice fields to the tool schema.
 - The tool should remain a normal user-visible tool, not an internal tool.
-- The Chat UI renders speech in the shared audio player outside the collapsible tool `<details>`; a live Run starts transient playback as soon as audio arrives, then hands replay/download to the completed artifact without replaying it automatically. A Run rebuilt from Session history shows the artifact paused. If no transient resource was available, the final artifact retains automatic playback for the live Run. Full rendering detail lives in `webui/chat.md`.
+- The Chat UI renders speech outside collapsible Tool details and Working groups. App-owned playback starts from fresh Run events even when another Session or view is selected, serializes simultaneous speech outputs, and shares controls with Chat without replaying on navigation. A Run rebuilt from Session history alone stays paused. If no transient resource was available, the final artifact starts automatic playback. Full rendering and lifetime detail lives in `webui/chat.md`.

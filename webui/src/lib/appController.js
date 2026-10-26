@@ -151,6 +151,7 @@ export function createAppController({
   readBackgroundActivity = listBackgroundActivity,
   acknowledgeIncident = acknowledgeDataStoreIncident,
   onCheckWebuiBuild = async () => {},
+  onSpeechEvent = () => {},
   unavailableNoticeDelayMs = SERVER_UNAVAILABLE_NOTICE_DELAY_MS,
   restoredNoticeDurationMs = SERVER_RESTORED_NOTICE_DURATION_MS,
 }) {
@@ -281,6 +282,7 @@ export function createAppController({
       return;
     }
     if (event.type === CONNECTION_READY_EVENT_TYPE) {
+      onSpeechEvent(event);
       invalidateCatalogReads();
       state.connectionSnapshot = event;
       runEvents.resetActiveRuns(event.active_runs);
@@ -325,6 +327,7 @@ export function createAppController({
       return;
     }
     if (isRunServerEvent(event.type)) {
+      onSpeechEvent(event);
       runEvents.append(event);
       return;
     }

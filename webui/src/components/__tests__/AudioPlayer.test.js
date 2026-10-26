@@ -256,9 +256,8 @@ it('pauses the previous player and releases its media and listener on unmount', 
   expect(pause.mock.calls.length).toBeGreaterThan(previousPauses);
   expect(audios[0].hasAttribute('src')).toBe(false);
   expect(removeListener).toHaveBeenCalledWith(
-    'play',
+    'vbot-audio-play',
     expect.any(Function),
-    true,
   );
 });
 

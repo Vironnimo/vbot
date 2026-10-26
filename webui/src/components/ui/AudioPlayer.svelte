@@ -1,11 +1,13 @@
 <script>
+  import { untrack } from 'svelte';
   import Button from './Button.svelte';
   import Banner from './Banner.svelte';
   import Dropdown from '../Dropdown.svelte';
   import { t } from '$lib/i18n.js';
   import { mountHold } from '$lib/mountHold.js';
   import { tooltip } from '$lib/tooltip.js';
-  import { createSpeechPlayback } from '$lib/speechPlayback.js';
+  import { createAudioPlayback } from '$lib/audioPlayback.svelte.js';
+  import { speechAudioContext } from '$lib/speechAudio.svelte.js';
 
   let {
     src = '',
@@ -13,28 +15,24 @@
     cancelled = false,
     ariaLabel = t('audio.label'),
     autoplay = false,
+    speechKey = '',
+    resource = null,
     class: className = '',
   } = $props();
-  let audio;
+  const speechOwner = speechAudioContext();
+  let media = $state.raw(null);
   let root = $state();
-  let paused = $state(true);
-  let loading = $state(true);
-  let duration = $state(0);
-  let currentTime = $state(0);
-  let volume = $state(1);
-  let muted = $state(false);
-  let rate = $state(1);
-  let error = $state('');
-  let streaming = $state(false);
-  let stream;
-  let streamAttached = false;
-  let streamSeek = null;
-  // The automatic start is requested once per attached source: withdrawing
-  // `autoplay` afterwards neither cancels a pending start nor stops playback.
-  let autoplayRequested = false;
-  let autoplayAttempted = false;
-  let generation = 0;
-  let playPending = false;
+  let shared = $derived(Boolean(resource || (speechKey && speechOwner)));
+  let source = $derived(media?.state.src || src);
+  let paused = $derived(media?.state.paused ?? true);
+  let loading = $derived(media?.state.loading ?? true);
+  let duration = $derived(media?.state.duration ?? 0);
+  let currentTime = $derived(media?.state.currentTime ?? 0);
+  let volume = $derived(media?.state.volume ?? 1);
+  let muted = $derived(media?.state.muted ?? false);
+  let rate = $derived(media?.state.rate ?? 1);
+  let error = $derived(media?.state.error ?? '');
+  let streaming = $derived(media?.state.streaming ?? false);
   const speeds = [0.75, 1, 1.25, 1.5, 2].map((value) => ({
     value,
     label: `${value}×`,
@@ -46,23 +44,52 @@
   let playLabel = $derived(paused ? t('audio.play') : t('audio.pause'));
   let muteLabel = $derived(silent ? t('audio.unmute') : t('audio.mute'));
   let volumePercent = $derived(Math.round((muted ? 0 : volume) * 100));
-  // A host that unmounts content scrolled out of view (the Chat timeline)
-  // keeps a playing player mounted, so playback survives scrolling away.
   const holdMounted = mountHold();
 
   $effect(() => {
-    if (paused || !root) return undefined;
-    return holdMounted(root);
+    const supplied = resource;
+    const key = speechKey;
+    const owner = key && speechOwner;
+    const current = untrack(
+      () => supplied ?? (owner ? owner.acquire(key) : createAudioPlayback()),
+    );
+    media = current;
+    return () => {
+      if (supplied) return;
+      if (owner) owner.release(key);
+      else current.destroy();
+    };
   });
 
   $effect(() => {
-    if (!cancelled) return;
-    autoplayAttempted = true;
-    stream?.stop();
-    stream = null;
-    streaming = false;
-    pause();
+    const current = media;
+    // A supplied resource (the app's playback bar) is already configured.
+    if (!current || resource) return;
+    const next = {
+      src,
+      playback,
+      cancelled,
+      autoplay: shared ? false : autoplay,
+    };
+    untrack(() =>
+      current.update({
+        ...next,
+        src: shared ? next.src || current.state.src : next.src,
+      }),
+    );
   });
+
+  $effect(() => {
+    if (shared || paused || !root) return undefined;
+    return holdMounted(root);
+  });
+
+  function attachAudio(node, current) {
+    const attach = (next) =>
+      node.replaceChildren(...(next ? [next.audio] : []));
+    attach(current);
+    return { update: attach, destroy: () => node.replaceChildren() };
+  }
 
   function timeLabel(value) {
     const seconds = Math.floor(Number.isFinite(value) && value > 0 ? value : 0);
@@ -71,237 +98,13 @@
       ? `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`
       : `${minutes}:${String(seconds % 60).padStart(2, '0')}`;
   }
-
-  // The component owns its media resource and pending playback, including a
-  // source replacement. Artifact URLs themselves remain caller/server-owned.
-  function ownMedia(node, source) {
-    audio = node;
-    let attached;
-    let attachedPlayback;
-    function replace({ src: next, playback: nextPlayback }) {
-      // Re-rendering the caller with an equal source keeps the playback.
-      if (
-        next === attached &&
-        (!nextPlayback || nextPlayback === attachedPlayback)
-      )
-        return;
-      // The final artifact takes over download/replay without interrupting
-      // queued PCM or automatically repeating what has already been heard.
-      if (
-        streamAttached &&
-        (!nextPlayback || nextPlayback === attachedPlayback) &&
-        (!attached || next === attached)
-      ) {
-        attached = next;
-        // A blocked automatic start may still be waiting for a browser user
-        // gesture. Once the artifact exists, that gesture should play it
-        // directly instead of depending on an expiring transient URL.
-        if (next && stream && paused && currentTime === 0) {
-          stream.stop();
-          stream = null;
-          streaming = false;
-          loading = false;
-        }
-        if (next) {
-          node.src = next;
-          node.load();
-        }
-        return;
-      }
-      attached = next;
-      attachedPlayback = nextPlayback;
-      generation += 1;
-      playPending = false;
-      stream?.stop();
-      stream = null;
-      // A newly mounted completed row uses its durable artifact. The stream
-      // belongs only to a player that saw the in-progress generation.
-      const transient = nextPlayback && !next;
-      streamAttached = Boolean(transient);
-      streamSeek = null;
-      streaming = Boolean(transient);
-      node.pause();
-      paused = true;
-      loading = true;
-      duration = 0;
-      currentTime = 0;
-      error = '';
-      autoplayRequested = autoplay;
-      autoplayAttempted = false;
-      node.preload = autoplayRequested ? 'auto' : 'metadata';
-      if (next) {
-        node.src = next;
-        node.load();
-      }
-      node.volume = volume;
-      node.muted = muted;
-      node.playbackRate = rate;
-      if (transient) {
-        rate = 1;
-        node.playbackRate = 1;
-        autoplayAttempted = true;
-        const owner = createSpeechPlayback({
-          url: nextPlayback,
-          onState(state) {
-            if (stream !== owner) return;
-            const wasPaused = paused;
-            paused = state.paused;
-            loading = state.loading;
-            currentTime = state.currentTime;
-            duration = state.duration;
-            if (state.error || state.ended) {
-              stream = null;
-              streaming = false;
-              if (state.error) error = t('audio.playFailed');
-            } else if (wasPaused && !paused) {
-              node.dispatchEvent(new Event('play'));
-            }
-          },
-        });
-        stream = owner;
-        owner.setVolume(muted ? 0 : volume);
-        loading = autoplayRequested;
-        if (autoplayRequested) void owner.play();
-      }
-    }
-    function otherPlayback(event) {
-      if (
-        event.target !== node &&
-        event.target.matches?.('.audio-player audio')
-      ) {
-        autoplayAttempted = true;
-        pause();
-      }
-    }
-    document.addEventListener('play', otherPlayback, true);
-    replace(source);
-    return {
-      update: replace,
-      destroy() {
-        document.removeEventListener('play', otherPlayback, true);
-        generation += 1;
-        playPending = false;
-        stream?.stop();
-        stream = null;
-        node.pause();
-        node.removeAttribute('src');
-        node.load();
-        audio = null;
-      },
-    };
-  }
-
-  function syncTime() {
-    if (streamAttached) return;
-    duration =
-      Number.isFinite(audio.duration) && audio.duration > 0
-        ? audio.duration
-        : 0;
-    currentTime = Number.isFinite(audio.currentTime) ? audio.currentTime : 0;
-  }
-
-  function pause() {
-    generation += 1;
-    playPending = false;
-    if (stream) stream.pause();
-    else audio?.pause();
-    paused = true;
-    loading = false;
-  }
-
-  async function play(automatic = false) {
-    if (stream) {
-      error = '';
-      void stream.play();
-      return;
-    }
-    if (!src) return;
-    if (!audio || playPending) return;
-    const media = audio;
-    const request = ++generation;
-    playPending = true;
-    error = '';
-    try {
-      if (media.error) media.load();
-      if (streamAttached) {
-        streamAttached = false;
-        media.currentTime = streamSeek ?? 0;
-        streamSeek = null;
-        syncTime();
-      } else if (media.ended) media.currentTime = 0;
-      await media.play();
-    } catch (failure) {
-      if (request !== generation) return;
-      paused = true;
-      loading = false;
-      // A blocked automatic start leaves an ordinary Play action available.
-      if (
-        failure?.name !== 'AbortError' &&
-        !(automatic && failure?.name === 'NotAllowedError')
-      ) {
-        error = t('audio.playFailed');
-      }
-    } finally {
-      if (request === generation) playPending = false;
-    }
-  }
-
-  function togglePlayback() {
-    autoplayAttempted = true;
-    if (!paused || playPending) pause();
-    else void play();
-  }
-
-  function ready() {
-    if (streamAttached) return;
-    syncTime();
-    loading = false;
-    if (autoplayRequested && !autoplayAttempted) {
-      autoplayAttempted = true;
-      void play(true);
-    }
-  }
-
-  function seek(event) {
-    if (!audio || !duration) return;
-    const position = Math.max(
-      0,
-      Math.min(duration, Number(event.currentTarget.value)),
-    );
-    if (streamAttached) {
-      // The stream can finish before its artifact or metadata arrives. Keep
-      // the user's selection until the first artifact playback takes over.
-      streamSeek = position;
-      currentTime = position;
-      return;
-    }
-    audio.currentTime = position;
-    currentTime = audio.currentTime;
-  }
-
-  function changeVolume(event) {
-    audio.volume = Number(event.currentTarget.value);
-    audio.muted = false;
-    syncVolume();
-  }
-
-  function syncVolume() {
-    volume = audio.volume;
-    muted = audio.muted;
-    stream?.setVolume(muted ? 0 : volume);
-  }
-
-  function toggleMute() {
-    if (silent) {
-      if (audio.volume === 0) audio.volume = 1;
-      audio.muted = false;
-    } else audio.muted = true;
-    syncVolume();
-  }
-
+  const togglePlayback = () => media?.toggle();
+  const seek = (event) => media?.seek(event.currentTarget.value);
+  const changeVolume = (event) => media?.setVolume(event.currentTarget.value);
+  const toggleMute = () => media?.toggleMute();
   function download() {
     const link = document.createElement('a');
-    link.href = src;
+    link.href = source;
     link.download = '';
     link.click();
   }
@@ -313,50 +116,7 @@
   role="group"
   aria-label={ariaLabel}
 >
-  <audio
-    use:ownMedia={{ src, playback }}
-    aria-hidden="true"
-    onloadedmetadata={() => {
-      if (streamAttached) return;
-      syncTime();
-      loading = false;
-    }}
-    ondurationchange={syncTime}
-    ontimeupdate={syncTime}
-    oncanplay={ready}
-    onplay={() => {
-      paused = false;
-    }}
-    onplaying={() => {
-      if (streamAttached) return;
-      paused = false;
-      loading = false;
-    }}
-    onpause={() => {
-      if (streamAttached) return;
-      paused = true;
-      loading = false;
-    }}
-    onended={() => {
-      if (streamAttached) return;
-      paused = true;
-      loading = false;
-      syncTime();
-    }}
-    onwaiting={() => {
-      if (streamAttached) return;
-      loading = true;
-    }}
-    onvolumechange={syncVolume}
-    onratechange={() => {
-      rate = audio.playbackRate;
-    }}
-    onerror={() => {
-      if (streaming) return;
-      pause();
-      error = t('audio.loadFailed');
-    }}
-  ></audio>
+  <div hidden use:attachAudio={shared ? null : media}></div>
   <div class="audio-player__controls">
     <Button
       variant="primary"
@@ -364,7 +124,7 @@
       ariaLabel={playLabel}
       tooltip={playLabel}
       onClick={togglePlayback}
-      disabled={!streaming && !src}
+      disabled={!streaming && !source}
     >
       <svg
         width="16"
@@ -411,8 +171,7 @@
         triggerClass="audio-player__speed"
         disabled={streaming}
         onValueChange={(value) => {
-          audio.playbackRate = Number(value);
-          rate = Number(value);
+          media?.setRate(value);
         }}
       />
       <div class="audio-player__volume">
@@ -462,7 +221,7 @@
         ariaLabel={t('audio.download')}
         tooltip={t('audio.download')}
         onClick={download}
-        disabled={!src}
+        disabled={!source}
       >
         <svg
           width="16"
@@ -492,9 +251,6 @@
     border-radius: var(--r-md);
     background: var(--surface);
     color: var(--text-hi);
-  }
-  audio {
-    display: none;
   }
   .audio-player__controls {
     display: flex;

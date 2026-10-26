@@ -57,7 +57,8 @@ afterEach(() => {
 
 describe('App controller', () => {
   it('projects server events into run state and scoped invalidations', async () => {
-    const { controller, state } = setup();
+    const onSpeechEvent = vi.fn();
+    const { controller, state } = setup({ onSpeechEvent });
     const listed = { run_id: 'run-listed', agent_id: 'alpha' };
     const hello = { type: 'connection_ready', active_runs: [listed] };
     const started = { type: 'run_started', payload: { run_id: 'run-one' } };
@@ -79,6 +80,7 @@ describe('App controller', () => {
       'run-one',
     ]);
     expect(state).not.toHaveProperty('runServerEvents');
+    expect(onSpeechEvent.mock.calls).toEqual([[hello], [started]]);
     expect(state.commandStatuses).toEqual({});
     expect(state.queueInvalidation).toEqual({
       agentId: 'alpha',
