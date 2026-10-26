@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
@@ -682,14 +683,22 @@ class TaskModelService:
                 if task_type == TASK_IMAGE_UNDERSTANDING
                 else ModelQuery(provider_id=provider_id, tasks=(task_type,))
             )
-            for matched_provider_id, model in self._models.query(model_query):
-                if not model_supports_task(model, task_type):
-                    continue
+            models = [
+                (matched_provider_id, model)
+                for matched_provider_id, model in self._models.query(model_query)
+                if model_supports_task(model, task_type)
+                and any(model.allows_connection(connection.id) for connection in usable_connections)
+            ]
+            name_counts = Counter(model.name for _, model in models)
+            for matched_provider_id, model in models:
+                # Providers may give a pinned version and its moving alias the
+                # same name. Their wire ids distinguish the actual choices.
+                model_label = model.model_id if name_counts[model.name] > 1 else model.name
                 for connection in usable_connections:
                     if not model.allows_connection(connection.id):
                         continue
                     connection_label = getattr(connection, "label", connection.id)
-                    label = f"{provider.name} / {model.name}"
+                    label = f"{provider.name} / {model_label}"
                     if multiple_connections:
                         label = f"{label} ({connection_label})"
                     targets.append(

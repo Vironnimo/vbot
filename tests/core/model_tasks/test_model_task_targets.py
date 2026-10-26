@@ -274,6 +274,37 @@ _TRANSCRIBE = "openrouter/openai/gpt-4o-transcribe"
             [(f"{_TRANSCRIBE}::api-key", "OpenRouter / OpenAI GPT-4o Transcribe (API Key)")],
             id="single-usable-connection-is-still-named",
         ),
+        pytest.param(
+            [_provider("mistral", "Mistral AI", [("api-key", "API Key")])],
+            {"mistral:api-key"},
+            [
+                _model(
+                    model_id,
+                    (TASK_SPEECH_TO_TEXT,),
+                    name="Voxtral Mini Transcribe",
+                    provider_id="mistral",
+                )
+                for model_id in ("voxtral-mini-2602", "voxtral-mini-latest")
+            ],
+            [
+                ("mistral/voxtral-mini-2602::api-key", "Mistral AI / voxtral-mini-2602"),
+                ("mistral/voxtral-mini-latest::api-key", "Mistral AI / voxtral-mini-latest"),
+            ],
+            id="same-name-alias-and-pinned-version-stay-distinguishable",
+        ),
+        pytest.param(
+            [_OPENROUTER_TWO_CONNECTIONS],
+            {"openrouter:api-key"},
+            [
+                _model(model_id, (TASK_SPEECH_TO_TEXT,), connections=(connection,))
+                for model_id, connection in (
+                    ("openai/gpt-4o-transcribe", "api-key"),
+                    ("unavailable-alias", "oauth"),
+                )
+            ],
+            [(f"{_TRANSCRIBE}::api-key", "OpenRouter / OpenAI GPT-4o Transcribe (API Key)")],
+            id="hidden-namesake-does-not-change-visible-label",
+        ),
         # A per-model allowlist yields no cross product.
         pytest.param(
             [_OPENAI_TWO_CONNECTIONS],
