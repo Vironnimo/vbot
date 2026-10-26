@@ -99,7 +99,7 @@ def _add_update_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
     )
     rollback = subparsers.add_parser(
         "rollback",
-        help="Return to the previous installation, keeping current data",
+        help=AREA_HELP["rollback"],
         description=(
             "Return to the installation before the last activated version change. "
             "Current data is kept unless --restore-data names its retained snapshot "
