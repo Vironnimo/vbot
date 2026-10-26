@@ -300,6 +300,9 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
     reloadExtensions: () => call('extensions.reload'),
     setExtensionSecret: (params) => call('extensions.set_secret', params),
     getStatisticsReport: (params) => call('statistics.report', params),
+    getStatisticsPeriod: () => call('statistics.period', {}),
+    startStatisticsPeriod: () => call('statistics.period.start', {}),
+    clearStatisticsPeriod: () => call('statistics.period.clear', {}),
     getStatisticsRunActivity: (params) =>
       call('statistics.run_activity', params),
     listProjects: () => call('project.list'),

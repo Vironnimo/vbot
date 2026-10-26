@@ -22,6 +22,7 @@ from core.projects import ProjectStore
 from core.sessions import ChatSession, ChatSessionManager
 from core.statistics import REPORT_SECTIONS, StatisticsIndex
 from core.subagents.links import link_session
+from server.events import ServerEventBus
 from server.rpc.methods import dispatch_rpc
 from server.rpc.statistics_methods import _RuntimeSkillInventory
 from tests.core.sessions.history_fixtures import complete_run
@@ -262,6 +263,19 @@ _INVERTED = {"since": "2026-06-10T00:00:00Z", "until": "2026-06-01T00:00:00Z"}
     ("method", "params", "fragment"),
     [
         pytest.param("statistics.report", {"bogus": 1}, "bogus", id="unknown-field"),
+        pytest.param("statistics.report", {"period": "true"}, "period", id="period-type"),
+        pytest.param(
+            "statistics.report",
+            {"period": True, "since": "2026-06-01T12:00:00Z"},
+            "period",
+            id="period-and-bounds",
+        ),
+        pytest.param(
+            "statistics.period.start",
+            {"since": "2026-06-01T12:00:00Z"},
+            "since",
+            id="server-start-only",
+        ),
         pytest.param("statistics.report", {"since": "not-a-date"}, "since", id="malformed"),
         pytest.param(
             "statistics.report",
@@ -300,6 +314,31 @@ async def test_invalid_statistics_requests_are_rejected(
     assert response["ok"] is False
     assert response["error"]["code"] == "invalid_request"
     assert fragment in response["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_period_changes_publish_shared_state_and_keep_all_time_usage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state, manager = _state(tmp_path, ["main"])
+    state.event_bus = ServerEventBus()
+    _seed_session(manager, "main")
+    assert await _result(state, "statistics.period", {}) == {"started_at": None}
+    monkeypatch.setattr(state.statistics_service, "_clock", lambda: BASE + timedelta(minutes=37))
+    before = await _result(state, "statistics.report", {"sections": ["usage"]})
+    started = await _result(state, "statistics.period.start", {})
+    assert started["started_at"] is not None
+    assert await _result(state, "statistics.period", {}) == started
+    current = await _result(state, "statistics.report", {"period": True, "sections": ["usage"]})
+    assert current["window"]["since"] == started["started_at"]
+    assert current["usage"]["totals"]["calls"] == 0
+    assert await _result(state, "statistics.period.clear", {}) == {"started_at": None}
+    after = await _result(state, "statistics.report", {"sections": ["usage"]})
+    assert after["usage"] == before["usage"]
+    assert [event["payload"] for event in state.event_bus.events] == [
+        {"kind": "statistics"},
+        {"kind": "statistics"},
+    ]
 
 
 def test_runtime_skill_inventory_reads_global_agent_and_project_scopes(tmp_path: Path) -> None:

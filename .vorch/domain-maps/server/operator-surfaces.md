@@ -16,4 +16,4 @@ The operator RPCs for background activity, the data store, the Recall index and 
 
 ## Statistics
 
-- Statistics methods validate windows, cache the service on app state, and offload reconciliation to workers without owning index semantics (`statistics.md`).
+- Statistics methods validate windows, cache the service on app state, and offload reconciliation to workers without owning index semantics. The measurement-period RPCs delegate durable state to that same service and publish Statistics invalidation (`statistics/report-sections.md` -> Measurement period).

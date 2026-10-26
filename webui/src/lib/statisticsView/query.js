@@ -42,6 +42,7 @@ export const STATISTICS_RANGES = Object.freeze([
   '30d',
   '90d',
   'all',
+  'period',
 ]);
 export const DEFAULT_STATISTICS_RANGE = '30d';
 const RANGE_DAYS = Object.freeze({ '7d': 7, '30d': 30, '90d': 90 });
@@ -147,20 +148,24 @@ export function statisticsWindow(range, timeZone = 'UTC', now = Date.now()) {
 /** One report's cache identity and request window. The window is resolved
  * at request time, so a retained query never freezes a rolling range. */
 export class StatisticsReportQuery {
-  constructor(tab, range, timeZone = 'UTC') {
+  constructor(tab, range, timeZone = 'UTC', periodStartedAt = null) {
     this.tab = tab;
     this.range = range;
     this.timeZone = timeZone;
+    this.periodStartedAt = periodStartedAt;
     Object.freeze(this);
   }
 
   get key() {
-    return `${statisticsTabSections(this.tab).join('+')}|${this.range}|${this.timeZone}`;
+    const period = this.range === 'period' ? `|${this.periodStartedAt}` : '';
+    return `${statisticsTabSections(this.tab).join('+')}|${this.range}|${this.timeZone}${period}`;
   }
 
   params(now = Date.now()) {
     return {
-      ...statisticsWindow(this.range, this.timeZone, now),
+      ...(this.range === 'period'
+        ? { period: true }
+        : statisticsWindow(this.range, this.timeZone, now)),
       timezone: this.timeZone,
       sections: [...statisticsTabSections(this.tab)],
     };

@@ -13,6 +13,7 @@
 // session scope the watcher must match, so App routes it directly rather than
 // through a bare counter.
 export const RESOURCE_TOKEN_MODELS = 'models';
+export const RESOURCE_TOKEN_STATISTICS = 'statistics';
 export const RESOURCE_TOKEN_AGENTS = 'agents';
 export const RESOURCE_TOKEN_MEMORIES = 'memories';
 export const RESOURCE_TOKEN_SESSIONS = 'sessions';
@@ -50,6 +51,7 @@ export const RESOURCE_KIND_DATA_STORE = 'data_store';
 // New kinds add their mapping here.
 const KIND_TOKEN_GROUPS = {
   models: [RESOURCE_TOKEN_MODELS],
+  statistics: [RESOURCE_TOKEN_STATISTICS],
   providers: [RESOURCE_TOKEN_MODELS, RESOURCE_TOKEN_CREDENTIALS],
   agents: [RESOURCE_TOKEN_AGENTS],
   memories: [RESOURCE_TOKEN_MEMORIES],

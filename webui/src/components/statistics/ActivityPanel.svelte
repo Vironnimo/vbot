@@ -1,7 +1,7 @@
 <script>
   // The Overview's hero: the user's days with vBot over the last year, their
-  // streaks, and a few personal highlights, from the all-time `activity`
-  // section. It sits above the range toolbar because it ignores the range.
+  // streaks, and a few personal highlights, from the `activity` section.
+  // It covers all time unless the measurement period is selected.
   import { t, activeLocaleTag } from '$lib/i18n.js';
   import { tooltip } from '$lib/tooltip.js';
   import { dateKeyInApplicationZone } from '$lib/dateTimePrefs.svelte.js';
@@ -25,7 +25,11 @@
   import AgentName from './report/AgentName.svelte';
   import ModelName from './report/ModelName.svelte';
 
-  let { section, metric = $bindable('runs') } = $props();
+  let {
+    section,
+    measurementPeriod = false,
+    metric = $bindable('runs'),
+  } = $props();
 
   // War and Peace in tokens; the comparison only needs the order of magnitude.
   const WAR_AND_PEACE_TOKENS = 730_000;
@@ -192,10 +196,14 @@
       </h3>
       {#if hasActivity && dayCount !== null}
         <p class="stats-activity__subtitle">
-          {t('statistics.activity.dayWithVbot', {
-            day: formatInteger(dayCount, locale),
-            date: formatDay(totals.first_active, { dateStyle: 'medium' }),
-          })}
+          {measurementPeriod
+            ? t('statistics.activity.periodSince', {
+                date: formatDay(totals.first_active, { dateStyle: 'medium' }),
+              })
+            : t('statistics.activity.dayWithVbot', {
+                day: formatInteger(dayCount, locale),
+                date: formatDay(totals.first_active, { dateStyle: 'medium' }),
+              })}
         </p>
       {/if}
     </div>
@@ -221,7 +229,9 @@
   {#if !hasActivity}
     <EmptyState
       density="compact"
-      description={t('statistics.activity.empty')}
+      description={measurementPeriod
+        ? t('statistics.activity.periodEmpty')
+        : t('statistics.activity.empty')}
     />
   {:else}
     <div class="stats-activity__body">
@@ -359,7 +369,9 @@
       </li>
       <li class="stats-highlight">
         <span class="stats-highlight__label"
-          >{t('statistics.activity.tokensAllTime')}</span
+          >{measurementPeriod
+            ? t('statistics.activity.tokensPeriod')
+            : t('statistics.activity.tokensAllTime')}</span
         >
         <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users reach the exact count here.) -->
         <span

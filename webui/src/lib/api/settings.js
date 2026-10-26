@@ -652,17 +652,30 @@ export function setExtensionSecret(params = {}, options = {}) {
 // One Statistics report: the requested `sections` (all without them) over
 // `since`/`until`, with calendar days in the IANA `timezone`.
 export function getStatisticsReport(
-  { since, until, timezone, sections } = {},
+  { since, until, timezone, sections, period } = {},
   options = {},
 ) {
   const params = {};
   if (since) params.since = since;
   if (until) params.until = until;
+  if (period !== undefined) params.period = period;
   if (timezone) params.timezone = timezone;
   if (Array.isArray(sections) && sections.length > 0) {
     params.sections = [...sections];
   }
   return rpc('statistics.report', params, options);
+}
+
+export function getStatisticsPeriod(options = {}) {
+  return rpc('statistics.period', {}, options);
+}
+
+export function startStatisticsPeriod(options = {}) {
+  return rpc('statistics.period.start', {}, options);
+}
+
+export function clearStatisticsPeriod(options = {}) {
+  return rpc('statistics.period.clear', {}, options);
 }
 
 // The usage of one Session's own Runs (`session`), of its Sub-Agents' Runs at

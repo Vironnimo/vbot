@@ -36,6 +36,7 @@
 
   let {
     section,
+    measurementPeriod = false,
     granularity = $bindable(null),
     // The report's series bucket: `day`, or `hour` for a short window.
     bucket = 'day',
@@ -266,7 +267,7 @@
       <KpiTile {tile} />
     {/each}
   </div>
-  {#if !previous && !previousRuns}
+  {#if !measurementPeriod && !previous && !previousRuns}
     <p class="stats-note">{t('statistics.change.noComparison')}</p>
   {/if}
 

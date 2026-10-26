@@ -23,14 +23,14 @@ def build(context: ReportContext) -> JsonObject:
         f"""
         SELECT t.name, SUM(t.calls), SUM(t.accepted), SUM(t.rejected), SUM(t.unknown),
             SUM(t.duration_ms), MAX(t.max_ms)
-        FROM agg_tools t WHERE {context.hour_condition("t")}
+        FROM {context.aggregate("agg_tools")} t WHERE {context.hour_condition("t")}
         GROUP BY t.name
         """
     )
     histograms: dict[str, list[tuple[int, int]]] = {}
     for name, bucket, count in context.query(
         f"""
-        SELECT l.name, l.bucket, SUM(l.count) FROM agg_tool_latency l
+        SELECT l.name, l.bucket, SUM(l.count) FROM {context.aggregate("agg_tool_latency")} l
         WHERE {context.hour_condition("l")}
         GROUP BY l.name, l.bucket ORDER BY l.name, l.bucket
         """
@@ -92,7 +92,8 @@ def build(context: ReportContext) -> JsonObject:
             for actor, calls, rejected, tool_ms in context.query(
                 f"""
                 SELECT s.actor, SUM(t.calls) AS calls, SUM(t.rejected), SUM(t.duration_ms)
-                FROM agg_tools t JOIN {context.sessions_table} s ON s.session_key = t.session_key
+                FROM {context.aggregate("agg_tools")} t
+                JOIN {context.sessions_table} s ON s.session_key = t.session_key
                 WHERE {context.hour_condition("t")}
                 GROUP BY s.actor ORDER BY calls DESC, s.actor
                 """

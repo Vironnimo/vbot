@@ -2,7 +2,9 @@
 
 ``statistics.report`` returns the requested report sections (default: all of
 ``REPORT_SECTIONS``) for an optional hour-aligned window, with day series in an
-IANA timezone (default: the Settings timezone). ``statistics.run_activity``
+IANA timezone (default: the Settings timezone). ``period=True`` selects the
+shared exact start managed by ``statistics.period`` and its start/clear methods.
+``statistics.run_activity``
 returns the bounded Run projection overlapping a required time window for
 Provider-limit correlation. ``statistics.session_usage`` sums the usage of one
 Session's own Runs and of its Sub-Agents' Runs at every depth. All run on the
@@ -22,14 +24,16 @@ from core.skills import project_skill_origin, scan_skill_names
 from core.statistics import REPORT_SECTIONS, StatisticsService
 from core.subagents.links import descendants
 from core.utils.timestamps import parse_timestamp
+from server.rpc._mutations import serialized_mutation, serialized_read
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
+from server.rpc.event_bridge import publish_resource_changed
 from server.rpc.validation import _reject_unsupported, _required_agent_address, _required_string
 
 JsonObject = dict[str, Any]
 
-_SUPPORTED_FIELDS = {"since", "until", "timezone", "sections"}
+_SUPPORTED_FIELDS = {"since", "until", "timezone", "sections", "period"}
 _RUN_ACTIVITY_SUPPORTED_FIELDS = {"since", "until"}
 
 
@@ -38,14 +42,39 @@ async def _statistics_report(state: Any, params: JsonObject) -> JsonObject:
 
     since = _optional_utc_timestamp(params, "since")
     until = _optional_utc_timestamp(params, "until")
+    period = params.get("period", False)
+    if not isinstance(period, bool) or (period and (since is not None or until is not None)):
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "params.period must be a boolean and cannot combine with bounds",
+        )
     if since is not None and until is not None and since > until:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.since must not be after params.until")
 
     timezone = _report_timezone(state, params)
     sections = _report_sections(params)
     return await statistics_service(state).report_async(
-        since=since, until=until, timezone=timezone, sections=sections
+        since=since, until=until, timezone=timezone, sections=sections, period=period
     )
+
+
+async def _statistics_period(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, set(), "statistics.period")
+    return await statistics_service(state).measurement_period_async()
+
+
+async def _statistics_period_start(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, set(), "statistics.period.start")
+    result = await statistics_service(state).start_measurement_period_async()
+    publish_resource_changed(state, "statistics")
+    return result
+
+
+async def _statistics_period_clear(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, set(), "statistics.period.clear")
+    result = await statistics_service(state).clear_measurement_period_async()
+    publish_resource_changed(state, "statistics")
+    return result
 
 
 def _report_timezone(state: Any, params: JsonObject) -> str:
@@ -202,6 +231,15 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
 
     return {
         "statistics.report": _statistics_report,
+        "statistics.period": serialized_read(
+            _statistics_period, lock_attribute="_statistics_period_lock"
+        ),
+        "statistics.period.start": serialized_mutation(
+            _statistics_period_start, lock_attribute="_statistics_period_lock"
+        ),
+        "statistics.period.clear": serialized_mutation(
+            _statistics_period_clear, lock_attribute="_statistics_period_lock"
+        ),
         "statistics.run_activity": _statistics_run_activity,
         "statistics.session_usage": _statistics_session_usage,
     }

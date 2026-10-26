@@ -100,7 +100,7 @@ def _cache(context: ReportContext) -> JsonObject:
         SELECT c.session_key, SUM(c.turns), SUM(c.input_tokens), SUM(c.cache_read_tokens),
             SUM(c.cache_write_tokens), SUM(c.evaluated_turns), SUM(c.suspected_turns),
             MAX(c.last_instant)
-        FROM agg_cache c WHERE {context.hour_condition("c")}
+        FROM {context.aggregate("agg_cache")} c WHERE {context.hour_condition("c")}
         GROUP BY c.session_key
         """
     ):
@@ -187,7 +187,7 @@ def _data_quality(context: ReportContext) -> list[JsonObject]:
             SELECT a.model_key, SUM(a.calls) AS calls, SUM(a.unreported_calls),
                 SUM(a.estimated_token_calls), SUM(a.uncached_calls), SUM(a.uncached_nusd),
                 SUM(a.estimated_calls), SUM(a.unpriced_calls), SUM(a.retrospective_calls)
-            FROM agg_usage a WHERE {context.hour_condition("a")}
+            FROM {context.aggregate("agg_usage")} a WHERE {context.hour_condition("a")}
             GROUP BY a.model_key ORDER BY calls DESC, a.model_key
             """
         )
@@ -199,14 +199,15 @@ def _failed_attempts(context: ReportContext) -> JsonObject:
     failed = failed_calls_sql()
     hours = context.query(
         f"""
-        SELECT a.hour, SUM(a.calls), SUM({failed}) AS failed FROM agg_usage a
+        SELECT a.hour, SUM(a.calls), SUM({failed}) AS failed FROM {context.aggregate("agg_usage")} a
         WHERE {context.hour_condition("a")}
         GROUP BY a.hour HAVING failed > 0
         ORDER BY failed DESC, a.hour DESC LIMIT {TOP_FAILED_HOURS}
         """
     )
     total = context.scalar(
-        f"SELECT COALESCE(SUM({failed}), 0) FROM agg_usage a WHERE {context.hour_condition('a')}"
+        f"SELECT COALESCE(SUM({failed}), 0) FROM {context.aggregate('agg_usage')} a "
+        f"WHERE {context.hour_condition('a')}"
     )
     selected = ", ".join(str(row[0]) for row in hours)
     models: dict[int, list[JsonObject]] = {}
@@ -220,7 +221,8 @@ def _failed_attempts(context: ReportContext) -> JsonObject:
         ):
             for hour, key, count in context.query(
                 f"""
-                SELECT a.hour, {key_sql} AS key, SUM({failed}) AS failed FROM agg_usage a {joins}
+                SELECT a.hour, {key_sql} AS key, SUM({failed}) AS failed
+                FROM {context.aggregate("agg_usage")} a {joins}
                 WHERE a.hour IN ({selected})
                 GROUP BY a.hour, key HAVING failed > 0
                 ORDER BY a.hour, failed DESC, key
@@ -252,7 +254,7 @@ def _failure_classes(context: ReportContext) -> list[JsonObject]:
     rows = context.query(
         f"""
         SELECT {key} AS key, SUM(a.calls) AS calls, SUM(a.duration_calls), SUM(a.duration_ms)
-        FROM agg_usage a WHERE {window} AND {failed}
+        FROM {context.aggregate("agg_usage")} a WHERE {window} AND {failed}
         GROUP BY key ORDER BY calls DESC, key
         """
     )
@@ -267,7 +269,8 @@ def _failure_classes(context: ReportContext) -> list[JsonObject]:
         status_filter = " AND a.http_status > 0" if field == "http_statuses" else ""
         for failure, detail, count in context.query(
             f"""
-            SELECT {key} AS key, {detail_sql} AS detail, SUM(a.calls) FROM agg_usage a
+            SELECT {key} AS key, {detail_sql} AS detail, SUM(a.calls)
+            FROM {context.aggregate("agg_usage")} a
             WHERE {window} AND {failed}{status_filter}
             GROUP BY key, detail
             """
@@ -309,7 +312,8 @@ def _roles(context: ReportContext) -> JsonObject:
     records: dict[str, int] = {}
     visible = 0
     for role, count, steps in context.query(
-        f"SELECT r.role, SUM(r.records), SUM(r.visible_steps) FROM agg_records r "
+        f"SELECT r.role, SUM(r.records), SUM(r.visible_steps) "
+        f"FROM {context.aggregate('agg_records')} r "
         f"WHERE {context.hour_condition('r')} GROUP BY r.role"
     ):
         records[role] = count

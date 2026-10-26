@@ -116,8 +116,8 @@ const COMPOSED_KEYS = {
     'agent_description',
   ],
   // statisticsView.js STATISTICS_RANGES
-  'statistics.range.*': ['24h', '7d', '30d', '90d', 'all'],
-  'statistics.range.short.*': ['24h', '7d', '30d', '90d', 'all'],
+  'statistics.range.*': ['24h', '7d', '30d', '90d', 'all', 'period'],
+  'statistics.range.short.*': ['24h', '7d', '30d', '90d', 'all', 'period'],
   // statisticsView.js MODEL_CALL_STATUSES
   'statistics.requestStatus.*': [
     'started',
