@@ -8,6 +8,7 @@ How backend and WebUI tests are written so they stay deterministic and isolated:
 - **Timing:** do not stabilize flaky tests by raising timeouts. Prefer controlled clocks and explicit synchronization. Rewrite or remove a test that needs five seconds or longer.
 - **Draining tracked Tasks:** wait only for unfinished Tasks or remove each settled snapshot explicitly. Awaiting already-completed Tasks with `asyncio.gather` can return without yielding, so waiting for their scheduled discard callbacks in a loop can starve the Event Loop (Run cancellation cleanup: `runs/lifecycle.md` -> Cancellation).
 - **Native process stand-ins:** stdlib-only Python children that model one native process use `getattr(sys, "_base_executable", None) or sys.executable`. On Windows a venv's `python.exe` adds a launcher process that retains pipe handles, changing process counts, direct-child relationships and stdout EOF; such tests must reach the interpreter directly. Children that need the locked environment's packages still use `sys.executable`.
+- **Process termination assertions:** after stopping a real process tree, synchronize with each observed process's exit using a bounded `Process.wait` off the Event Loop. Windows Job termination and pipe EOF can precede the final process-handle signal; an immediate `is_running()` or zero-time wait can still report the terminating child as alive.
 
 ## Event Loop isolation
 
