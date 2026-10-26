@@ -342,6 +342,7 @@ def test_durable_summary_settles_pending_calls_without_changing_completed_result
     [
         ("bash", {"ok": False, "error": {"code": "cancelled_by_user"}}, None, "cancelled"),
         ("bash", {"ok": True, "data": {"status": "stopped"}}, None, "cancelled"),
+        ("execute_code", {"ok": True, "data": {"status": "stopped"}}, None, "cancelled"),
         ("terminal", {"ok": True, "data": {"status": "stopped"}}, None, "success"),
         ("execute_code", {"ok": True, "data": {"status": "completed"}}, None, "success"),
         ("execute_code", {"ok": True, "data": {"status": "failed"}}, None, "failed"),

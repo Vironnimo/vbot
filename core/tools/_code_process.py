@@ -6,8 +6,10 @@ import asyncio
 import contextlib
 import json
 import secrets
+import shutil
 import subprocess
 import sys
+import tempfile
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -36,11 +38,12 @@ MAX_LOG_BYTES = 8 * 1024 * 1024
 MAX_FAILURES = 20
 _CREATE_SUSPENDED = 0x00000004
 type ToolInvoker = Callable[[str, JsonObject], Awaitable[JsonObject]]
+type ExecutionStatus = Literal["completed", "failed", "timed_out", "stopped"]
 
 
 @dataclass(frozen=True)
 class CodeExecutionResult:
-    status: Literal["completed", "failed", "timed_out"]
+    status: ExecutionStatus
     exit_code: int | None
     output: str
     stderr: str
@@ -51,6 +54,8 @@ class CodeExecutionResult:
     stderr_truncated: bool = False
     output_path: Path | None = None
     log_truncated: bool = False
+    # False when Python refused to compile the program, so none of it ran.
+    ran: bool = True
 
 
 @dataclass
@@ -92,6 +97,7 @@ class _Bridge:
         self.failure_count = 0
         self.failures: list[JsonObject] = []
         self.closed = False
+        self.ran = True
 
     def accept(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         task = asyncio.create_task(self._handle(reader, writer), name="code-tool-bridge")
@@ -115,6 +121,7 @@ class _Bridge:
             if request.get("operation") == "finish":
                 code = request.get("exit_code")
                 if isinstance(code, int) and not self.finished.done():
+                    self.ran = request.get("ran") is not False
                     self.finished.set_result(code)
                 result = tool_success({})
             else:
@@ -214,12 +221,15 @@ async def run_python(
     invoke: ToolInvoker,
     timeout_seconds: float = 300,
     output_path: Path | None = None,
+    stop: asyncio.Event | None = None,
 ) -> CodeExecutionResult:
     """Execute a fresh cell; cancelling this await stops and drains everything it owns.
 
     *environment* and *cwd* have already passed the caller's normal process
     permission checks. The optional caller-owned output file receives stdout and
     stderr, capped at 8 MiB; inline captures retain each stream's head and tail.
+    Setting *stop* ends the cell like cancellation but returns its result as
+    ``stopped``, with the output captured until then.
     """
     bridge = _Bridge(invoke)
     stdout, stderr = _Capture(MAX_OUTPUT_BYTES), _Capture(MAX_STDERR_BYTES)
@@ -231,7 +241,9 @@ async def run_python(
     tree: ProcessTree | None = None
     output_tasks: list[asyncio.Task[None]] = []
     exit_task: asyncio.Task[int] | None = None
-    status: Literal["completed", "failed", "timed_out"] = "failed"
+    stop_task: asyncio.Task[Literal[True]] | None = None
+    program_dir: Path | None = None
+    status: ExecutionStatus = "failed"
     exit_code: int | None = None
     server = await asyncio.start_server(bridge.accept, "127.0.0.1", 0, limit=MAX_REQUEST_BYTES + 1)
 
@@ -320,13 +332,16 @@ async def run_python(
             close_pipes()
             if process is not None and process.returncode is not None:
                 cast(Any, process)._transport.close()
-            if exit_task is not None:
-                await cancel_and_wait(exit_task)
+            for task in (exit_task, stop_task):
+                if task is not None:
+                    await cancel_and_wait(task)
             for output_task in output_tasks:
                 output_task.cancel()
             await asyncio.gather(*output_tasks, return_exceptions=True)
             if log is not None:
                 await run_tool_worker(log.close)
+            if program_dir is not None:
+                await run_tool_worker(shutil.rmtree, program_dir, ignore_errors=True)
 
     def close_pipes() -> None:
         if process is None:
@@ -344,6 +359,10 @@ async def run_python(
     try:
         if output_path is not None:
             log = await run_tool_worker(output_path.open, "wb")
+        program_dir = Path(await run_tool_worker(tempfile.mkdtemp, prefix="vbot-code-"))
+        program_path = program_dir / "program.py"
+        # Unchanged source: no newline translation of the program's own text.
+        await run_tool_worker(program_path.write_text, code, encoding="utf-8", newline="")
         async with asyncio.timeout(timeout_seconds):
             # A cancelled launch must still publish its process/tree to cleanup.
             launch_task = asyncio.create_task(launch())
@@ -360,7 +379,7 @@ async def run_python(
             ]
             assert server.sockets is not None
             bootstrap = {
-                "code": code,
+                "path": str(program_path),
                 "port": server.sockets[0].getsockname()[1],
                 "token": bridge.token,
                 "timeout": timeout_seconds,
@@ -370,6 +389,9 @@ async def run_python(
             process.stdin.close()
             exit_task = asyncio.create_task(wait_for_exit(process))
             waiting: set[asyncio.Future[Any]] = {bridge.finished, exit_task, *output_tasks}
+            if stop is not None:
+                stop_task = asyncio.create_task(stop.wait())
+                waiting.add(stop_task)
             while True:
                 done, waiting = await asyncio.wait(waiting, return_when=asyncio.FIRST_COMPLETED)
                 for output_task in output_tasks:
@@ -379,8 +401,11 @@ async def run_python(
                     exit_code = (
                         bridge.finished.result() if bridge.finished in done else exit_task.result()
                     )
+                    status = "completed" if exit_code == 0 else "failed"
                     break
-            status = "completed" if exit_code == 0 else "failed"
+                if stop_task in done:
+                    status = "stopped"
+                    break
     except TimeoutError:
         status = "timed_out"
     finally:
@@ -397,4 +422,5 @@ async def run_python(
         stderr_truncated=stderr.truncated,
         output_path=output_path,
         log_truncated=log_truncated,
+        ran=bridge.ran,
     )

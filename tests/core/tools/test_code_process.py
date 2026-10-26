@@ -49,6 +49,10 @@ try:
 except ToolError as error:
     print(error.code)
 print(json.dumps(results))
+try:
+    results[0]["values"]
+except KeyError as error:
+    print(error.args[0])
 """,
         cwd=tmp_path,
         environment=os.environ,
@@ -62,10 +66,39 @@ print(json.dumps(results))
     assert json.loads(lines[1]) == [
         {"value": value, "nested": {"items": [value, "\u00fc"]}} for value in range(4)
     ]
+    assert lines[2] == "'values' is not in this Tool result. Its keys: value, nested"
     assert result.tool_calls == 5
     assert result.tool_failure_count == 1
     assert result.tool_failures[0]["code"] == "permission_denied"
     assert result.stderr == ""
+
+
+@pytest.mark.asyncio
+async def test_python_runs_like_a_main_script(tmp_path: Path) -> None:
+    async def invoke(_name: str, _arguments: JsonObject) -> JsonObject:
+        raise AssertionError("This program calls no Tools")
+
+    result = await run_python(
+        """import os, pickle, threading, time
+def square(value):
+    return value * value
+# multiprocessing finds functions of a real __main__ script this way.
+assert pickle.loads(pickle.dumps(square)) is square
+print(__name__, os.path.isfile(__file__))
+print(__file__)
+def late():
+    time.sleep(0.2)
+    print("thread finished")
+threading.Thread(target=late).start()
+""",
+        cwd=tmp_path,
+        environment=os.environ,
+        invoke=invoke,
+    )
+    assert result.status == "completed", result.stderr
+    first, path, last = result.output.splitlines()
+    assert (first, last) == ("__main__ True", "thread finished")
+    assert not Path(path).exists()
 
 
 @pytest.mark.asyncio
@@ -197,15 +230,15 @@ except ToolError as error:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("source", "exit_code", "has_traceback"),
+    ("source", "exit_code", "has_traceback", "ran"),
     [
-        ("raise ValueError('test-owned script failure')", 1, True),
-        ("raise SystemExit(4)", 4, False),
-        ("def malformed(\n", 1, True),
+        ("raise ValueError('test-owned script failure')", 1, True, True),
+        ("raise SystemExit(4)", 4, False, True),
+        ("def malformed(\n", 1, True, False),
     ],
 )
 async def test_python_failure_is_not_a_successful_cell(
-    tmp_path: Path, source: str, exit_code: int, has_traceback: bool
+    tmp_path: Path, source: str, exit_code: int, has_traceback: bool, ran: bool
 ) -> None:
     async def invoke(_name: str, _arguments: JsonObject) -> JsonObject:
         raise AssertionError("This program calls no Tools")
@@ -215,13 +248,19 @@ async def test_python_failure_is_not_a_successful_cell(
     assert result.exit_code == exit_code
     assert bool(result.stderr) is has_traceback
     assert result.tool_calls == 0
+    assert result.ran is ran
+    assert "_code_worker" not in result.stderr
 
 
 @pytest.mark.asyncio
-async def test_cancelling_python_stops_descendants_and_drains_tool_calls(tmp_path: Path) -> None:
+@pytest.mark.parametrize("stopped", [False, True])
+async def test_cancelling_python_stops_descendants_and_drains_tool_calls(
+    tmp_path: Path, stopped: bool
+) -> None:
     admitted = asyncio.Event()
     cancelled = asyncio.Event()
     processes: list[psutil.Process] = []
+    stop = asyncio.Event()
 
     async def invoke(_name: str, arguments: JsonObject) -> JsonObject:
         processes.extend(psutil.Process(pid) for pid in arguments["pids"])
@@ -237,18 +276,26 @@ async def test_cancelling_python_stops_descendants_and_drains_tool_calls(tmp_pat
             """import os, subprocess, sys
 from vbot_tools import tools
 child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'])
+print("holding")
 tools.hold(pids=[os.getpid(), child.pid])
 """,
             cwd=tmp_path,
             environment=os.environ,
             invoke=invoke,
+            stop=stop,
         )
     )
     try:
         await asyncio.wait_for(admitted.wait(), 5)
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
+        if stopped:
+            stop.set()
+            result = await task
+            assert (result.status, result.output.splitlines()) == ("stopped", ["holding"])
+            assert result.tool_calls == 1
+        else:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
         assert cancelled.is_set()
         for process in processes:
             await asyncio.to_thread(process.wait, timeout=1)

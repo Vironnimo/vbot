@@ -16,7 +16,7 @@ from typing import Any
 from core.permissions import CommandChecker, PermissionDenied
 from core.sessions import SessionAddress
 from core.tools._argument_repair import load_json_value
-from core.tools._code_process import run_python
+from core.tools._code_process import CodeExecutionResult, run_python
 from core.tools._tool_display import display_notice, display_text
 from core.tools.arguments import required_string
 from core.tools.availability import TOOL_ACTIVATION_FOLLOWS
@@ -42,11 +42,11 @@ EXECUTE_CODE_PARAMETERS: JsonObject = {
             "type": "string",
             "description": (
                 "Python source. Import tools with `from vbot_tools import tools`, then call "
-                '`tools.read(path="file.txt")` or another Tool using its name and keyword '
-                "arguments. Calls return their result data as Python objects; failures raise "
-                "vbot_tools.ToolError. MCP results retain content blocks and structuredContent. "
-                "Each execution starts fresh in the working directory and stops after 300 "
-                "seconds. Print the results you need."
+                "any of your Tools as `tools.<name>(<parameter>=<value>)`. Calls return the "
+                "result's data as Python objects; failures raise vbot_tools.ToolError. For "
+                "local files and commands, use Python's open() and subprocess. MCP results "
+                "retain content blocks and structuredContent. Each execution starts fresh in "
+                "the working directory and stops after 300 seconds. Print the results you need."
             ),
         },
     },
@@ -79,7 +79,7 @@ def _details(arguments: JsonObject, result: JsonObject | None) -> list[JsonObjec
     if result is not None and result.get("ok"):
         data = result.get("data", {})
         if note := data.get("note"):
-            level = "warning" if data.get("status") == "completed" else "error"
+            level = "warning" if data.get("status") in {"completed", "stopped"} else "error"
             blocks.append(display_notice(level, str(note)))
         blocks.append(display_text("output", source="result", path=["data", "output"]))
         if data.get("stderr"):
@@ -134,30 +134,19 @@ class _ExecuteCode:
             raise PermissionDenied(refusal)
         context.record_worked_paths(cwd)
         output_path = await run_tool_worker(_output_path, scratch)
-        current = asyncio.current_task()
-
-        def cancel() -> None:
-            if current is not None and not current.done():
-                current.cancel()
-
-        context.on_cancel(cancel)
+        result: CodeExecutionResult | None = None
         try:
-            if context.is_cancelled() or context.was_cancelled_by_user():
-                raise asyncio.CancelledError
-            result = await run_python(
-                code,
-                cwd=cwd,
-                environment=environment,
-                invoke=context.call_tool,
-                output_path=output_path,
-            )
-        except asyncio.CancelledError:
-            if context.is_cancelled() or not context.was_cancelled_by_user():
-                raise
+            result = await self._run(context, code, cwd, environment, output_path)
+        finally:
+            if output_path is not None and not (
+                result is not None and (result.output_truncated or result.stderr_truncated)
+            ):
+                # Only shortened output names its capture file; drop the others.
+                await run_tool_worker(output_path.unlink, missing_ok=True)
+        if result is None:
             return tool_failure(
                 "cancelled_by_user",
-                "The user stopped this Python execution. Earlier Tool calls and Python "
-                "changes remain applied. Inspect their outcomes before repeating any changes.",
+                "Nothing was run: the user stopped this Python execution before it started.",
             )
         data: JsonObject = {
             "status": result.status,
@@ -186,18 +175,56 @@ class _ExecuteCode:
             data["note"] = str(data.get("note", "")) + (
                 " The captured output file reached its size limit and is incomplete."
             )
-        if result.status != "completed":
-            stopped = (
-                "Python reached its 300-second time limit. "
-                if result.status == "timed_out"
-                else "The Python program failed. "
+        if not result.ran:
+            data["note"] = (
+                "Nothing was run: Python could not compile the program. Fix the error in stderr."
             )
+        elif result.status != "completed":
+            stopped = {
+                "timed_out": "Python reached its 300-second time limit. ",
+                "stopped": "The user stopped this Python execution. ",
+            }.get(result.status, "The Python program failed. ")
             data["note"] = (
                 stopped + "Earlier Tool calls and Python changes "
                 "remain applied. Inspect their outcomes before repeating any changes."
                 + (" " + str(data["note"]) if "note" in data else "")
             )
         return tool_success(data)
+
+    async def _run(
+        self,
+        context: ToolContext,
+        code: str,
+        cwd: Path,
+        environment: dict[str, str],
+        output_path: Path | None,
+    ) -> CodeExecutionResult | None:
+        """Run the program; ``None`` when the user stopped it before it started."""
+        current = asyncio.current_task()
+        stop = asyncio.Event()
+
+        def cancel() -> None:
+            # A user stop ends only the program and still reports its output;
+            # cancelling the Run cancels this call like any other.
+            if context.is_cancelled():
+                if current is not None and not current.done():
+                    current.cancel()
+            else:
+                stop.set()
+
+        context.on_cancel(cancel)
+        if context.is_cancelled():
+            raise asyncio.CancelledError
+        if context.was_cancelled_by_user():
+            return None
+        return await run_python(
+            code,
+            cwd=cwd,
+            environment=environment,
+            invoke=context.call_tool,
+            output_path=output_path,
+            stop=stop,
+        )
 
     def _environment(self, context: ToolContext, scratch: ScratchFolder | None) -> dict[str, str]:
         restricted = context.permissions.restricted
