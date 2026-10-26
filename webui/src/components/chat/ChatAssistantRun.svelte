@@ -278,6 +278,20 @@
   {/if}
   <div class="msg-content assistant-run-content">
     {#snippet runChild(child)}
+      {#if child.type === 'tool_call' && child.parentToolCallId}
+        <div
+          class="programmatic-tool"
+          role="group"
+          aria-label={t('chat.toolCalledFromCode')}
+          data-parent-tool-call-id={child.parentToolCallId}
+        >
+          {@render runChildContent(child)}
+        </div>
+      {:else}
+        {@render runChildContent(child)}
+      {/if}
+    {/snippet}
+    {#snippet runChildContent(child)}
       {#if child.type === 'history_gap'}
         <!-- The timeline's scroll controller loads the omitted steps once
              this marker comes near the visible area. -->

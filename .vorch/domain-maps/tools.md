@@ -71,6 +71,7 @@ Read these only when your task matches - not by default.
 - The replacement dialect (`edit`, `write`), its follower activation, or the edit dialect per Model family -> `tools/edit.md`, `tools/write.md`
 - Changing one concrete built-in Tool -> its per-tool spec (read only the one you change): `tools/read.md`, `tools/file_state.md` (read stamps, mutation locks, atomic replace, `resolve_path`), `tools/change_tracker.md` (run-delta statistics), `tools/search_files.md`, `tools/web_fetch.md`, `tools/web_search.md`, `tools/shell.md` (`bash`/`powershell`, `CommandManager`, `background_tasks`; its Sub-Agent branch: `tools/subagent.md`), `tools/terminal.md` (interactive PTY sessions), `tools/status.md`, `tools/memory.md`, `tools/image.md`, `tools/generated-media.md`, `tools/session_search.md`, `tools/project.md`, `tools/skill.md` (`skill_manage`: `skills/skill-manage.md`), `tools/subagent.md`, `tools/cron.md`, `tools/calendar.md`, `tools/channel_send.md`, `tools/speech.md`, `tools/show_widget.md`, `tools/portal.md`
 - Launching or killing OS child processes -> `tools/os-processes.md`
+- Python programs that call Tools, the `execute_code` client, output or execution lifecycle -> `tools/execute_code.md`
 - Classifying texts through the configured Decision Model (`classify`) -> `tools/classify.md`
 - The `update_goal` Tool of a Session Goal: its grant, results and texts -> `tools/update_goal.md`
 - On-demand Tools: the `load_tools` Tool, which Tools are on demand, loadable-Tool inputs, and the `summary` every loadable Tool must declare -> `tools/load_tools.md`

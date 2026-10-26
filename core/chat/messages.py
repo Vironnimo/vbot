@@ -212,6 +212,9 @@ class ChatMessage:
     subagent_reply_target: str | None = None
     # Actual package loaded by a Skill activation; never sent to the Model.
     skill_package: SkillPackageRef | None = None
+    # Internal Tool activity retained for History, never part of Model Context.
+    programmatic: bool = False
+    parent_tool_call_id: str | None = None
 
     @classmethod
     def system(cls, content: str, model: str, *, timestamp: datetime | None = None) -> ChatMessage:
@@ -547,6 +550,9 @@ class ChatMessage:
             "role": self.role,
         }
         _add_if_not_none(message, "subagent_reply_target", self.subagent_reply_target)
+        if self.programmatic:
+            message["programmatic"] = True
+        _add_if_not_none(message, "parent_tool_call_id", self.parent_tool_call_id)
         if self.skill_package is not None:
             message["skill_package"] = self.skill_package.to_dict()
         _add_if_not_none(message, "model", self.model)
@@ -632,6 +638,9 @@ class ChatMessage:
         interrupted = data.get("interrupted", False)
         if not isinstance(interrupted, bool):
             raise ChatMessageValidationError("interrupted must be a boolean")
+        programmatic = data.get("programmatic", False)
+        if not isinstance(programmatic, bool):
+            raise ChatMessageValidationError("programmatic must be a boolean")
         interruption_cause = _message_validation._optional_string(data, "interruption_cause")
         input_origin = _message_validation._optional_string(data, "input_origin")
         if input_origin is not None and input_origin not in INPUT_ORIGINS:
@@ -706,6 +715,8 @@ class ChatMessage:
             id=_message_validation._require_string(data, "id"),
             timestamp=_message_validation._require_string(data, "timestamp"),
             role=role,
+            programmatic=programmatic,
+            parent_tool_call_id=_message_validation._optional_string(data, "parent_tool_call_id"),
             subagent_reply_target=_message_validation._optional_string(
                 data, "subagent_reply_target"
             ),

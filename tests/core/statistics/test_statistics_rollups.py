@@ -261,7 +261,15 @@ async def test_incremental_maintenance_equals_a_full_rebuild(
     # Pure tails, without admitting another Run: the predecessor can be in an
     # earlier hour, a skipped Assistant, or a reset boundary. None is counted twice.
     alpha.append(ChatMessage.note("note only", timestamp=_at(3598)))
-    check()
+    before_program = check()
+    alpha.append(
+        replace(
+            _assistant(model="chat/m", at=_at(3598), content="script intermediate"),
+            programmatic=True,
+            parent_tool_call_id="call-code",
+        )
+    )
+    assert check() == before_program
     alpha.append(_assistant(model="chat/m", at=_at(3599), usage={"input_tokens": 5000}))
     check()
     alpha.append(
@@ -297,7 +305,11 @@ async def test_incremental_maintenance_equals_a_full_rebuild(
     cancelled = ToolCall(id="cancelled", name="lifecycle", arguments={})
     unstarted = ToolCall(id="unstarted", name="lifecycle", arguments={})
     writer.append(
-        _assistant(model="chat/m", at=_at(7198), tool_calls=[completed, cancelled, unstarted])
+        replace(
+            _assistant(model="chat/m", at=_at(7198), tool_calls=[completed, cancelled, unstarted]),
+            programmatic=True,
+            parent_tool_call_id="call-code",
+        )
     )
     assert not [row for row in check()["agg_tools"] if row["name"] == "lifecycle"]
     invocation_key = await writer.start_tool_invocation_async(
@@ -312,12 +324,16 @@ async def test_incremental_maintenance_equals_a_full_rebuild(
     assert (tool["calls"], tool["accepted"], tool["rejected"], tool["unknown"]) == (2, 0, 0, 2)
     writer.append_many(
         [
-            ChatMessage.tool(
-                tool_call_id=completed.id,
-                name=completed.name,
-                content=json.dumps(tool_failure("denied", "no")),
-                timing=_timing(_at(7199), 2000),
-                timestamp=_at(7201),
+            replace(
+                ChatMessage.tool(
+                    tool_call_id=completed.id,
+                    name=completed.name,
+                    content=json.dumps(tool_failure("denied", "no")),
+                    timing=_timing(_at(7199), 2000),
+                    timestamp=_at(7201),
+                ),
+                programmatic=True,
+                parent_tool_call_id="call-code",
             )
         ],
         tool_results={
@@ -336,6 +352,7 @@ async def test_incremental_maintenance_equals_a_full_rebuild(
     terminal = check()
     assert [row for row in terminal["agg_tools"] if row["name"] == "lifecycle"] == [tool]
     run = _runs(terminal)[("alpha", "tool-lifecycle")]
+    assert (run["model_steps"], run["visible_messages"]) == (0, 0)
     assert (run["status"], run["tool_calls"], run["tool_rejected"], run["tool_ms"]) == (
         "cancelled",
         2,

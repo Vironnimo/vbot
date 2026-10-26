@@ -301,6 +301,8 @@ CREATE TABLE entries (
   skill_package_source TEXT,
   skill_package_name TEXT,
   skill_package_location TEXT,
+  programmatic INTEGER NOT NULL DEFAULT 0 CHECK (programmatic IN (0, 1)),
+  parent_tool_call_id TEXT,
   created_at TEXT NOT NULL,
   run_key INTEGER REFERENCES runs (run_key),
   model TEXT,

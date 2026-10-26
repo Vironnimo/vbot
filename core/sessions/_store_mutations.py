@@ -309,7 +309,9 @@ def append_messages(
             floor = seq + 1
         keys.append(entry_key)
         seq += 1
-    if run_key is not None and any(message.role == "assistant" for message in messages):
+    if run_key is not None and any(
+        message.role == "assistant" and not message.programmatic for message in messages
+    ):
         connection.execute("DELETE FROM run_stream_drafts WHERE run_key = ?", (run_key,))
     last = messages[-1]
     connection.execute(

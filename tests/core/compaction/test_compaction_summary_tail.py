@@ -213,13 +213,23 @@ async def test_user_quote_is_escaped_carried_forward_and_replaced_by_a_newer_use
 
 
 @pytest.mark.asyncio
-async def test_summary_tail_summarizes_old_tool_batch_without_rewriting_retained_steps() -> None:
+@pytest.mark.parametrize("programmatic", [False, True])
+async def test_summary_tail_summarizes_old_tool_batch_without_rewriting_retained_steps(
+    programmatic: bool,
+) -> None:
     adapter = StubAdapter("TOOL SUMMARY")
     old_result_content = "sensitive-output-" * 5_000
     old = tool_step("old", old_result_content, arguments={"path": "old.txt", "query": "Q" * 8_000})
     latest = tool_step("latest", "latest result", name="edit", arguments={"path": "latest.txt"})
     messages = [user("u1", "Keep working until the task is complete"), *old, *latest]
     request = provider_request(messages)
+    if programmatic:
+        messages[4:4] = tool_step(
+            "latest-child", "intermediate " * 5_000, parent_tool_call_id="call-latest"
+        )
+        messages[2:2] = tool_step(
+            "old-child", "intermediate " * 5_000, parent_tool_call_id="call-old"
+        )
     original_snapshot = [item.to_dict() for item in messages]
     service = CompactionService()
 
@@ -238,6 +248,7 @@ async def test_summary_tail_summarizes_old_tool_batch_without_rewriting_retained
     assert compact_request[-1]["role"] == "user"
     assert old_result_content in str(compact_request)
     assert "latest result" not in str(compact_request)
+    assert "intermediate" not in str(compact_request)
     assert [item.to_dict() for item in messages] == original_snapshot
     effective = effective_compaction_messages([*messages, result])
     assert [item for item in effective if item.role in {"user", "assistant", "tool"}] == latest

@@ -176,7 +176,7 @@ def _search_filter(request: SessionSearchRequest) -> _Filter:
         eligible += " AND s.session_id NOT IN (SELECT value FROM json_each(?))"
         eligible_params.append(_store_values._json_list(request.excluded_session_ids))
     eligible += ")"
-    clauses: list[str] = []
+    clauses: list[str] = ["e.searchable = 1"]
     entry_params: list[Any] = []
     if request.roles is not None:
         clauses.append("e.role IN (SELECT value FROM json_each(?))")

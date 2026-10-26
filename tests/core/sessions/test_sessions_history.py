@@ -578,16 +578,28 @@ async def test_lone_surrogates_are_stored_as_replacement_characters(manager, tmp
     assert stored is not None and stored["paths"] == ["/repo/\ufffd.py"]
 
 
-def test_recall_context_is_bounded_and_a_missing_anchor_has_none(manager) -> None:
+@pytest.mark.parametrize("programmatic", [False, True])
+def test_recall_context_is_bounded_and_a_missing_anchor_has_none(manager, programmatic) -> None:
     session = manager.create("coder", session_id="long")
     question = ChatMessage.user("Q" * 10000)
     answer = ChatMessage.assistant(model="test", content="answer")
     session.append_many([question, answer])
+    if programmatic:
+        child = replace(
+            ChatMessage.assistant(model="test", content="intermediate"),
+            programmatic=True,
+            parent_tool_call_id="call-code",
+        )
+        session.append(child)
+        assert manager.recall_context(session.address, child.id) == []
 
     context = manager.recall_context(session.address, answer.id)
 
     assert len(context[0]["text"]) == 800
     assert context[0]["truncated"] is True
+    assert [
+        item["message_id"] for item in manager.recall_context(session.address, question.id)
+    ] == [answer.id]
     # A missing anchor does not borrow a neighbouring block.
     assert manager.recall_context(session.address, "missing") == []
 

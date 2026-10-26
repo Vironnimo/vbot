@@ -10,6 +10,8 @@ Scope discovery reads normalized Session summaries plus only the `seen_skills` s
 
 Tool counts follow canonical dispatch admission, not Result persistence. `ChatSession.tool_invocations_since` supplies changed own-generation records and a revision cursor; starts and terminal changes advance the Session history revision so ordinary discovery notices them even without new Messages. The index retains its separate Tool cursor, reads the invocation batch before Run records, and projects only revised invocations. A persisted Result retains its `ok:true/false` outcome; an invocation without one is `unknown`, including a pending, cancelled or interrupted call. Explicit lifecycle status and error code remain in the fact table. Historical Result evidence is supplied by Sessions; Assistant declarations alone never contribute a call, and inherited or materialized fork history contributes no invocation.
 
+Programmatic Assistant and Tool entries remain in the Session audit but are skipped by the message projection. They add no Model steps, conversation activity, cache boundaries or duplicate Skill activations; their Tool invocations still count through the separate ledger. A script's explicit Skill context note counts as the ordinary activation (`chat/request-building.md` -> Canonical roles and request visibility).
+
 ## Aggregate tables
 
 `_rollups.py` maintains derived aggregates over the fact tables in the reconcile write transaction, after Session reconcile, usage reconcile and repricing (table definitions in `_rollup_schema.py`).

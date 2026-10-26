@@ -73,8 +73,20 @@ from tests.core.compaction.compaction_test_support import (
             ],
             "a1",
         ),
+        (
+            [
+                user("u1", "Keep working"),
+                *tool_step("code", "printed result", name="execute_code"),
+                *tool_step("child", "intermediate " * 5_000, parent_tool_call_id="call-code"),
+            ],
+            "a-code",
+        ),
     ],
-    ids=["latest-user-is-no-anchor", "parallel-tool-cycle-stays-whole"],
+    ids=[
+        "latest-user-is-no-anchor",
+        "parallel-tool-cycle-stays-whole",
+        "programmatic-activity-is-not-a-tail-step",
+    ],
 )
 def test_find_tail_boundary_starts_at_a_whole_step(
     messages: list[ChatMessage], boundary: str

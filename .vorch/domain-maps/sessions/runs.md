@@ -25,7 +25,9 @@ The bounded migration `sessions.0009_tool_invocations` imports only existing lin
 
 ## Stream drafts
 
-Stream draft rows (`sessions.md` -> Terms -> Stream draft) live in `run_stream_drafts` (`run_key`, `model`, `reasoning_delta`, `content_delta`, and `tool_calls_json` for the canonical Tool Calls that started with the chunk; `_store_runs.py`). Chat writes them through `ChatSession.append_stream_draft_async` and deletes them through `discard_stream_draft_async`; both require a running, admitted Run of the Session. Appending an Assistant entry of the Run deletes the draft in the same transaction, `finish_run` deletes what remains, and restart recovery turns a left-over draft into the Run's `interrupted` Assistant entry (concatenated chunks with their started Tool Calls in order, model of the last chunk, cause `process_restart`; those calls settle `interrupted` without Results) before it settles the Run. Chat's write discipline: `chat/run-execution.md` -> Interruption.
+Internal programmatic Assistant declarations do not clear the enclosing Model step's Stream draft. Restart recovery preserves both the completed child activity and the interrupted outer Assistant (`test_programmatic_activity_preserves_outer_stream_draft_on_restart`).
+
+Stream draft rows (`sessions.md` -> Terms -> Stream draft) live in `run_stream_drafts` (`run_key`, `model`, `reasoning_delta`, `content_delta`, and `tool_calls_json` for the canonical Tool Calls that started with the chunk; `_store_runs.py`). Chat writes them through `ChatSession.append_stream_draft_async` and deletes them through `discard_stream_draft_async`; both require a running, admitted Run of the Session. Appending a non-programmatic Assistant entry of the Run deletes the draft in the same transaction, `finish_run` deletes what remains, and restart recovery turns a left-over draft into the Run's `interrupted` Assistant entry (concatenated chunks with their started Tool Calls in order, model of the last chunk, cause `process_restart`; those calls settle `interrupted` without Results) before it settles the Run. Chat's write discipline: `chat/run-execution.md` -> Interruption.
 
 ## Tool result payloads
 

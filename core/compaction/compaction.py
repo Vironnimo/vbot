@@ -239,7 +239,9 @@ class CompactionStrategy(Protocol):
 def find_tail_boundary(messages: list[ChatMessage], tail_tokens: int) -> str:
     """Return the canonical boundary of the bounded chronological Tail suffix."""
 
-    return _plan_working_tail(messages, tail_tokens).boundary_id
+    return _plan_working_tail(
+        [message for message in messages if not message.programmatic], tail_tokens
+    ).boundary_id
 
 
 def _fragment_name_for_trigger(trigger: str) -> str:

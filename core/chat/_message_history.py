@@ -74,7 +74,7 @@ def has_unconsumed_skill_activation(
         (
             index
             for index in range(len(messages) - 1, -1, -1)
-            if messages[index].role == "assistant"
+            if messages[index].role == "assistant" and not messages[index].programmatic
         ),
         None,
     )
@@ -86,12 +86,34 @@ def has_unconsumed_skill_activation(
     pending_call_ids = {call.id for call in assistant_message.tool_calls or []}
     if not pending_call_ids:
         return False
-    return any(
-        message.role == "tool"
-        and message.tool_call_id in pending_call_ids
-        and skill_tool_activation(message) is not None
+    if any(
+        not message.programmatic
+        and (
+            is_skill_context_note(message)
+            or (
+                message.role == "tool"
+                and message.tool_call_id in pending_call_ids
+                and skill_tool_activation(message) is not None
+            )
+        )
         for message in messages[assistant_index + 1 :]
-    )
+    ):
+        return True
+    # A streamed call may finish and persist its Skill note before the parent
+    # Assistant is durable. Its child Result identifies that parent batch. Do
+    # not cross the preceding normal batch: Providers may reuse call ids.
+    for index in range(assistant_index - 1, -1, -1):
+        message = messages[index]
+        if not message.programmatic and message.role in {"assistant", "tool"}:
+            break
+        if (
+            message.programmatic
+            and message.run_id == run_id
+            and message.parent_tool_call_id in pending_call_ids
+            and skill_tool_activation(message) is not None
+        ):
+            return True
+    return False
 
 
 def _add_context_note(session: ChatSession, note: str | _records.ChatMessage | None) -> None:
@@ -249,17 +271,22 @@ def finalize_checkpoint_guidance(
 def effective_compaction_messages(
     messages: list[_records.ChatMessage],
 ) -> list[_records.ChatMessage]:
-    """Return the latest checkpoint projection plus messages appended after it."""
+    """Return Model context, excluding persisted programmatic Tool activity."""
+    messages = [message for message in messages if not message.programmatic]
     checkpoint = latest_compaction_checkpoint(messages)
     if checkpoint is None:
-        return list(messages)
+        return messages
     checkpoint_index = next(
         (index for index, message in enumerate(messages) if message.id == checkpoint.id),
         len(messages),
     )
     if checkpoint.projection is None:
         raise ChatMessageValidationError("compaction checkpoints require a projection")
-    projection = [_records.ChatMessage.from_dict(entry) for entry in checkpoint.projection]
+    projection = [
+        message
+        for entry in checkpoint.projection
+        if not (message := _records.ChatMessage.from_dict(entry)).programmatic
+    ]
     appended = [
         message
         for message in messages[checkpoint_index + 1 :]

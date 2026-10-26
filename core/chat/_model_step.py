@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+import json
+from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -40,6 +42,10 @@ from core.runs import (
 )
 from core.sessions import (
     SessionAddress,
+    SessionReadBatch,
+    SessionReadCursor,
+    ToolResultFacts,
+    project_tool_context_id,
 )
 
 if TYPE_CHECKING:
@@ -271,4 +277,75 @@ class ModelStepBoundary:
             unloadable_tools=state.unloadable_tools,
             change_tracker=self._dependencies.change_tracker,
             allow_owned_effects=context.request.temporary_binding is not None,
+            activity_writer=partial(self._persist_programmatic_activity, context),
+            current_skill_context=lambda: (context.skill_project_id, context.skill_registry),
         )
+
+    async def _persist_programmatic_activity(
+        self,
+        context: _RunExecutionContext,
+        assistant_message_id: str,
+        messages: list[ChatMessage],
+        facts: Mapping[str, ToolResultFacts],
+        receipts: Sequence[tuple[int, str, str, str, str]],
+        media: list[JsonObject],
+    ) -> None:
+        """Keep script activity and receipts durable without admitting a Model turn."""
+        session = context.session
+        messages, _ = await self._requests.media.store_tool_media(messages, media)
+        project_ids: list[str] = []
+        if context.project_id is None:
+            notes: list[ChatMessage] = []
+            for message in messages:
+                project_id = project_tool_context_id(message)
+                if project_id is None:
+                    continue
+                project_ids.append(project_id)
+                data = json.loads(str(message.content))["data"]
+                # Loading Project instructions is itself a context effect. Keep
+                # its existing fields and body visible without replaying the
+                # internal Tool declaration or creating a second instruction text.
+                metadata = {key: value for key, value in data.items() if key != "content"}
+                body = data.get("content")
+                content = json.dumps(metadata, ensure_ascii=False, separators=(",", ":"))
+                if isinstance(body, str) and body:
+                    content += "\n\n" + body
+                notes.append(ChatMessage.note(content))
+            messages = [*messages, *notes]
+        binding = context.request.temporary_binding
+        async with self._dependencies.sessions.write_lock(session.address):
+            if binding is not None and receipts:
+                write = partial(
+                    self._dependencies.sessions.append_messages_with_receipts_async,
+                    binding.address,
+                    generation_id=binding.generation_id,
+                    owner_name=binding.owner_name,
+                    messages=messages,
+                    run_id=context.run.id,
+                    assistant_message_id=assistant_message_id,
+                    tool_results=facts,
+                    receipts=receipts,
+                )
+            else:
+                write = partial(
+                    session.append_many_async,
+                    messages,
+                    assistant_message_id=assistant_message_id,
+                    tool_results=facts,
+                )
+
+            async def write_context(*, since: SessionReadCursor) -> SessionReadBatch | None:
+                committed = await write(since=since)
+                # The snapshot serializes commit and adoption together: a slow
+                # resolver for an earlier Project cannot replace a later load.
+                for project_id in project_ids:
+                    await self._requests._apply_project_skill_context(context, project_id)
+                return committed
+
+            await context.session_snapshot.commit(
+                session,
+                write_context,
+                # Context notes arrive for the next request. The child rows
+                # themselves are internal activity, never delivered to the Model.
+                written=[message for message in messages if message.role != "note"],
+            )

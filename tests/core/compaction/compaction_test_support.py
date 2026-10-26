@@ -80,14 +80,24 @@ def assistant(message_id: str, content: str) -> ChatMessage:
 
 
 def tool_step(
-    step: str, output: str, *, name: str = "read", arguments: dict[str, Any] | None = None
+    step: str,
+    output: str,
+    *,
+    name: str = "read",
+    arguments: dict[str, Any] | None = None,
+    parent_tool_call_id: str | None = None,
 ) -> list[ChatMessage]:
     """One Assistant Tool Call (`a-<step>`) and its correlated Tool Result (`t-<step>`)."""
     call_id = f"call-{step}"
     call = {"id": call_id, "name": name, "arguments": arguments or {"path": step}}
+    activity = (
+        {"programmatic": True, "parent_tool_call_id": parent_tool_call_id}
+        if parent_tool_call_id is not None
+        else {}
+    )
     return [
-        message(f"a-{step}", "assistant", "", model="openai/gpt-5", tool_calls=[call]),
-        message(f"t-{step}", "tool", output, tool_call_id=call_id, name=name),
+        message(f"a-{step}", "assistant", "", model="openai/gpt-5", tool_calls=[call], **activity),
+        message(f"t-{step}", "tool", output, tool_call_id=call_id, name=name, **activity),
     ]
 
 

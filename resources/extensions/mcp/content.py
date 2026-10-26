@@ -5,7 +5,8 @@ verbatim body, other fields compact. A view too large to show at once shows
 its start; the complete payload is attached to its Tool Result as a result
 payload and read selectively through the ``read`` action. Outside a Session
 (management and CLI calls) nothing could read a saved result later, so the
-complete payload is returned inline.
+complete payload is returned inline. Programmatic Tool calls receive the
+complete preserved payload directly, before the Model-facing projection.
 """
 
 from __future__ import annotations
@@ -147,8 +148,10 @@ class ContentStore:
         *,
         source: str | None = None,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-        """Return the Model's view of a payload, or the complete payload outside a Session."""
+        """Project a payload for the Model, a program, or an outside-Session caller."""
         preserved, artifacts = await self.preserve(payload)
+        if context.programmatic:
+            return preserved, artifacts
         if not context.result_payloads_available:
             return {"complete": True, "value": preserved}, artifacts
         view = payload_view(preserved)
@@ -177,7 +180,11 @@ class ContentStore:
         preserved, artifacts = await self.preserve(payload)
         text = error_text(payload_view(preserved))
         shown = ERROR_HEAD_CHARACTERS + ERROR_TAIL_CHARACTERS
-        if not context.result_payloads_available or len(text) <= shown + 200:
+        if (
+            context.programmatic
+            or not context.result_payloads_available
+            or len(text) <= shown + 200
+        ):
             return text, artifacts
         identifier = self.attach(preserved, context, connection, source)
         call: dict[str, Any] = {"action": "read", "result_id": identifier}

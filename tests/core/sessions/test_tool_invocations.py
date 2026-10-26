@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -15,6 +16,51 @@ from core.sessions.errors import SessionNotFoundError
 
 _TIME = "2026-10-25T12:00:00.000000Z"
 _SUCCESS = json.dumps({"ok": True, "error": None, "data": {}, "artifacts": []})
+
+
+@pytest.mark.asyncio
+async def test_programmatic_activity_preserves_outer_stream_draft_on_restart(manager):
+    session = manager.create("coder", session_id="source")
+    writer = session.start_run("run-one")
+    await writer.append_stream_draft_async(
+        model="test",
+        reasoning_delta="",
+        content_delta="outer answer in progress",
+        tool_calls=[ToolCall(id="parent", name="execute_code", arguments={}).to_dict()],
+    )
+    declaration = replace(
+        ChatMessage.assistant(
+            model="test",
+            content=None,
+            tool_calls=[ToolCall(id="child", name="probe", arguments={})],
+        ),
+        programmatic=True,
+        parent_tool_call_id="parent",
+    )
+    writer.append(declaration)
+    key = await writer.start_tool_invocation_async(call_id="child", name="probe", started_at=_TIME)
+    writer.append_many(
+        [
+            replace(
+                ChatMessage.tool(tool_call_id="child", name="probe", content=_SUCCESS),
+                programmatic=True,
+                parent_tool_call_id="parent",
+            )
+        ],
+        assistant_message_id=declaration.id,
+        tool_results={"child": ToolResultFacts("completed", ok=True, invocation_key=key)},
+    )
+    manager._store.execution.recover_interrupted_runs()
+    reloaded = session.load()
+    activity = [message for message in reloaded if message.programmatic]
+    assert [message.role for message in activity] == ["assistant", "tool"]
+    assert all(message.parent_tool_call_id == "parent" for message in activity)
+    outer = next(
+        message for message in reloaded if message.role == "assistant" and not message.programmatic
+    )
+    assert outer.content == "outer answer in progress" and outer.interrupted
+    assert outer.tool_calls[0].id == "parent"
+    assert session.tool_invocations_since().invocations[0].result_ok is True
 
 
 def _finish(writer, status="completed"):

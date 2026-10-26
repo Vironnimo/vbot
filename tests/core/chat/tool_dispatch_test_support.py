@@ -43,6 +43,7 @@ class StubDispatchAgent:
     allowed_skills: list[str] | None = None
     tools: dict[str, object] | None = None
     memory_prompt_mode: str = "agent_user"
+    project_memory_enabled: bool = False
 
     @property
     def tool_access(self) -> ToolAccess:

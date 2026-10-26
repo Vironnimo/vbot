@@ -119,6 +119,7 @@ export default Object.freeze({
   'chat.compactionNotApplied':
     'Compaction was not applied. The Run continues with its current context.',
   'chat.cancelToolCallAria': 'Cancel running tool call',
+  'chat.toolCalledFromCode': 'Tool called from code',
   'chat.cancelSubAgentAria': 'Cancel running sub-agent',
   'chat.historyLoadError': 'Chat history could not be loaded.',
   'chat.activityLoadError':

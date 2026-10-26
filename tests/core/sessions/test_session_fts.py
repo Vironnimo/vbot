@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 from contextlib import closing
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -819,22 +820,41 @@ def test_search_admits_only_recall_visible_sessions(
 
 
 @pytest.mark.parametrize("use_fts", [True, False])
-def test_tool_inclusive_search_skips_persisted_recall_results(
-    tmp_path: Path, use_fts: bool
+@pytest.mark.parametrize(
+    "activity", ["recall-result", "programmatic-tool", "programmatic-assistant"]
+)
+def test_search_skips_persisted_nonconversation_activity(
+    tmp_path: Path, use_fts: bool, activity: str
 ) -> None:
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("agent", session_id="tools")
-    artifact = ChatMessage.tool(
-        tool_call_id="call-search", name="session_search", content='{"items": ["needle"]}'
-    )
-    ordinary = ChatMessage.tool(tool_call_id="call-read", name="read", content="needle in a file")
-    append_tool_fixture(session, artifact)
-    append_tool_fixture(session, ordinary)
+    if activity == "programmatic-assistant":
+        artifact = replace(
+            ChatMessage.assistant(model="test", content="needle intermediate"),
+            programmatic=True,
+            parent_tool_call_id="call-code",
+        )
+        ordinary = ChatMessage.assistant(model="test", content="needle answer")
+        session.append_many([artifact, ordinary])
+    else:
+        artifact = ChatMessage.tool(
+            tool_call_id="call-search", name="session_search", content='{"items": ["needle"]}'
+        )
+        if activity == "programmatic-tool":
+            artifact = replace(
+                artifact, name="read", programmatic=True, parent_tool_call_id="call-code"
+            )
+        ordinary = ChatMessage.tool(
+            tool_call_id="call-read", name="read", content="needle in a file"
+        )
+        append_tool_fixture(session, artifact)
+        append_tool_fixture(session, ordinary)
     try:
         result = sessions.search_messages(
-            "needle", project_id=None, agent_id="agent", roles=("tool",), use_fts=use_fts
+            "needle", project_id=None, agent_id="agent", roles=(ordinary.role,), use_fts=use_fts
         )
         assert [hit.message_id for hit in result.hits] == [ordinary.id]
-        assert result.hits[0].text == "needle in a file"
+        assert result.hits[0].text == ordinary.content
+        assert artifact in session.load()
     finally:
         sessions.close()

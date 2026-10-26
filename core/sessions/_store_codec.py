@@ -30,7 +30,8 @@ if TYPE_CHECKING:
 ENTRY_COLUMNS = (
     "e.entry_key, e.session_key, e.seq, e.role, e.entry_id, e.created_at, e.run_key, "
     "e.model, e.superseded_at_seq, e.subagent_reply_target, "
-    "e.skill_package_source, e.skill_package_name, e.skill_package_location"
+    "e.skill_package_source, e.skill_package_name, e.skill_package_location, "
+    "e.programmatic, e.parent_tool_call_id"
 )
 # Roles a plain append may write. Run footers belong to ``finish_run`` and edit
 # markers to ``apply_edit``, which keep their relations consistent.
@@ -203,7 +204,9 @@ def insert_entry(
     """
     cursor = connection.execute(
         "INSERT INTO entries (session_key, seq, role, entry_id, created_at, run_key, model, "
-        "searchable, superseded_at_seq, subagent_reply_target, skill_package_source, skill_package_name, skill_package_location) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "searchable, superseded_at_seq, subagent_reply_target, skill_package_source, "
+        "skill_package_name, skill_package_location, programmatic, parent_tool_call_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             session_key,
             seq,
@@ -218,6 +221,8 @@ def insert_entry(
             message.skill_package.source if message.skill_package else None,
             message.skill_package.name if message.skill_package else None,
             message.skill_package.location if message.skill_package else None,
+            int(message.programmatic),
+            message.parent_tool_call_id,
         ),
     )
     if cursor.lastrowid is None:
@@ -577,6 +582,10 @@ class EntryBatch:
         try:
             data: JsonObject = {"id": str(row["entry_id"]), "role": role}
             data["timestamp"] = str(row["created_at"])
+            if row["programmatic"]:
+                data["programmatic"] = True
+            if row["parent_tool_call_id"] is not None:
+                data["parent_tool_call_id"] = str(row["parent_tool_call_id"])
             if row["subagent_reply_target"] is not None:
                 data["subagent_reply_target"] = str(row["subagent_reply_target"])
             if row["skill_package_source"] is not None:

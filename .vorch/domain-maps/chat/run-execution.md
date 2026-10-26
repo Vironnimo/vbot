@@ -26,6 +26,12 @@ Session/address ownership and execution context are separate. `run.project_id` i
 
 The Run context reads the Session's `execution` computer policy at creation and again before each Tool round. It travels through `ToolDispatchContext`, `ToolExecutionConfig`, and a fresh `ToolContext.execution` for every call. The default is server-only; explicit empty grants and a revoked default remain intact. Operator edits are idle-only, while delegation may narrow a running Sub-Agent's grants before its next round (`subagents/delegation.md`). Tool arguments can choose only within this context's grants and cannot edit them. Coverage: `test_computer_authority_is_refreshed_before_each_tool_round` and `tests/server/rpc/test_session_methods_execution.py`.
 
+Programmatic Tool calls stay in the existing Run: `ToolRound` supplies `ToolContext.call_tool`, and `core/chat/_programmatic_tools.py` owns nested scheduling and durable child settlement. `ChatMessage.programmatic` and `parent_tool_call_id` mark the internal activity, retained in History with ordinary invocation/result persistence but excluded before Provider Tool-cycle repair and Context estimation. Skill and Project context effects remain explicit; an intermediate `load_tools` result does not mark its schemas as shown to the Model (`chat/request-building.md`).
+
+Before each child dispatch, the current Skill-context callback refreshes the Project Skill scope and active Skill environment grants from the owning Run and Session. A programmatic Project Result adopts its Skill scope within the commit boundary, before Python receives the result. Skill and Project context notes persist atomically with the child Result as deliberate context effects, including when eager execution finishes before the outer Assistant is persisted (`test_chat_project_context.py`; `tools/execute_code.md`).
+
+`_SessionSnapshot` serializes cursor reads, durable writes and delta application with a Run-local mutex. The scope-reentrant Session write lock alone does not serialize concurrent child Tasks; without the snapshot mutex, parallel programmatic Tool calls would apply overlapping deltas more than once (`test_parallel_script_calls_apply_each_durable_history_delta_once`).
+
 Scratch announcements are optional preparation after the first valid request
 is built (`tools/scratch.md`). An unavailable folder leaves that request intact;
 the Scratch owner logs the condition. Failures while persisting or adding the

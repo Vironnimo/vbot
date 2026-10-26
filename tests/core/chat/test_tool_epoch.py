@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -411,6 +412,12 @@ def test_called_tool_names_counts_the_calls_of_the_current_agent_whose_tool_ran(
         *(
             result(name, tool_failure(code, "Not run."))
             for name, code in zip(refused, not_run, strict=True)
+        ),
+        replace(calls("child"), programmatic=True, parent_tool_call_id="call-pending"),
+        replace(
+            result("child", tool_success({})),
+            programmatic=True,
+            parent_tool_call_id="call-pending",
         ),
     ]
 

@@ -124,6 +124,19 @@ def _is_tool_call_object(value: Any) -> _records.JsonObject:
 
 
 def _validate_core_fields(message: _records.ChatMessage) -> None:
+    if not isinstance(message.programmatic, bool):
+        raise ChatMessageValidationError("programmatic must be a boolean")
+    if message.programmatic:
+        if (
+            message.role not in {"assistant", "tool"}
+            or not isinstance(message.parent_tool_call_id, str)
+            or not message.parent_tool_call_id
+        ):
+            raise ChatMessageValidationError(
+                "programmatic activity requires an Assistant or Tool entry and parent_tool_call_id"
+            )
+    elif message.parent_tool_call_id is not None:
+        raise ChatMessageValidationError("parent_tool_call_id requires programmatic activity")
     if not message.id:
         raise ChatMessageValidationError("id must be a non-empty string")
     if not message.timestamp:

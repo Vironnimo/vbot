@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast, override
 
@@ -13,6 +14,7 @@ from core.compaction import CompactionService
 from core.providers.errors import ProviderError
 from core.providers.providers import GLOBAL_CONTEXT_WINDOW_FLOOR, LOCAL_CONTEXT_DEFAULT_CAP
 from core.runs import COMPACTION_STARTED_EVENT, Run
+from core.sessions.history import _skill_context_note_content
 from core.tools import tool_success
 from core.utils.tokens import estimate_request_input_tokens
 from tests.core.chat.chat_loop_compaction_test_support import (
@@ -315,15 +317,48 @@ async def test_checkpoint_records_both_context_sizes_with_the_selected_wire_esti
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("compaction_requested", [False, True], ids=["automatic", "user-request"])
+@pytest.mark.parametrize("activation", ["tool-result", "programmatic-note", "programmatic-eager"])
 async def test_summary_tail_waits_until_this_runs_loaded_skill_result_is_consumed(
-    tmp_path: Path, compaction_requested: bool
+    tmp_path: Path, compaction_requested: bool, activation: str
 ) -> None:
     runtime = compaction_runtime(tmp_path)
     agent = runtime.agents.get("coder")
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.append(ChatMessage.user("Use the document workflow"))
     run_session = session.start_run("run-1")
-    _append_loaded_skill(run_session, agent.model, "Instructions")
+    if activation != "tool-result":
+        if activation == "programmatic-eager":
+            _append_loaded_skill(
+                run_session, agent.model, "Instructions", parent_tool_call_id="call-code"
+            )
+            run_session.add_note_message(
+                ChatMessage.note(_skill_context_note_content("docx", "Instructions"))
+            )
+        parent = ChatMessage.assistant(
+            model=agent.model,
+            content=None,
+            tool_calls=[ToolCall(id="call-code", name="execute_code")],
+        )
+        run_session.append(parent)
+        run_session.assistant_message_id = parent.id
+        run_session.append(
+            ChatMessage.tool(
+                tool_call_id="call-code", name="execute_code", content=json.dumps(tool_success({}))
+            )
+        )
+        if activation == "programmatic-note":
+            run_session.append(
+                replace(
+                    ChatMessage.assistant(model=agent.model, content="intermediate"),
+                    programmatic=True,
+                    parent_tool_call_id="call-code",
+                )
+            )
+            run_session.add_note_message(
+                ChatMessage.note(_skill_context_note_content("docx", "Instructions"))
+            )
+    else:
+        _append_loaded_skill(run_session, agent.model, "Instructions")
     checkpoint = ChatMessage.compaction_checkpoint(
         summary="Compacted after consumption.",
         projection=[ChatMessage.user("Tail")],
@@ -346,17 +381,34 @@ async def test_summary_tail_waits_until_this_runs_loaded_skill_result_is_consume
     await auto_compact(loop, agent, session, usage={"input_tokens": 90})
 
     assert len(service.compact_calls) == 1
+    if activation == "programmatic-eager":
+        # A later Model step may reuse its Provider call id. The earlier
+        # consumed Skill cannot defer this unrelated batch's Compaction.
+        reused = ChatMessage.assistant(
+            model=agent.model,
+            content=None,
+            tool_calls=[ToolCall(id="call-code", name="execute_code")],
+        )
+        run_session.append(reused)
+        run_session.assistant_message_id = reused.id
+        run_session.append(
+            ChatMessage.tool(
+                tool_call_id="call-code", name="execute_code", content=json.dumps(tool_success({}))
+            )
+        )
+        await auto_compact(loop, agent, session, usage={"input_tokens": 90})
+        assert len(service.compact_calls) == 2
 
 
-def _append_loaded_skill(session: Any, model: str, content: str) -> None:
-    session.append(
+def _append_loaded_skill(
+    session: Any, model: str, content: str, *, parent_tool_call_id: str | None = None
+) -> None:
+    messages = [
         ChatMessage.assistant(
             model=model,
             content=None,
             tool_calls=[ToolCall(id="call-skill", name="skill", arguments={"name": "docx"})],
-        )
-    )
-    session.append(
+        ),
         ChatMessage.tool(
             tool_call_id="call-skill",
             name="skill",
@@ -364,8 +416,12 @@ def _append_loaded_skill(session: Any, model: str, content: str) -> None:
                 tool_success({"name": "docx", "status": "loaded", "content": content}),
                 separators=(",", ":"),
             ),
-        )
-    )
+        ),
+    ]
+    for message in messages:
+        if parent_tool_call_id is not None:
+            message = replace(message, programmatic=True, parent_tool_call_id=parent_tool_call_id)
+        session.append(message)
 
 
 class _OverflowingSkillAdapter(RecordingCompactionAdapter):

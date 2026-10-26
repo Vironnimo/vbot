@@ -68,7 +68,7 @@ Read these only when your task matches - not by default.
 - Changing the shared semantic conversation projection, complete-Run paging or timeline snapshots/patches -> `chat/timeline.md`
 - Exact completed-Run lookup for voice announcements (`chat.run_result`) -> `model_tasks/live-operator.md`
 - Changing canonical message fields, request history, notes, Skill activation/catalog stability, the prompt-epoch Tool list or Tool-change announcements, reasoning replay, Assistant output-file references, Content Blocks, file mentions, attachment routing, or Tool-cycle repair -> `chat/request-building.md`
-- Changing Run admission/execution, `ChatLoop` entry points, Queue steering, streaming recovery, cancellation, interruption notices, Stream drafts, Tool progression, Run event payloads, Reasoning/content normalization, temporary or owned Runs, Model/Connection resolution, sampling, fallback, or Compaction boundaries -> `chat/run-execution.md`
+- Changing Run admission or execution, Queue steering, streaming recovery, cancellation, interruption, Stream drafts, Tool dispatch or programmatic calls, Run events, Reasoning/content normalization, temporary or owned Runs, Model/Connection resolution, sampling, fallback, or Compaction boundaries -> `chat/run-execution.md`
 - Changing `start_external_run` or `ExternalRun` (a Live call's conversation) -> `chat/external-run.md`
 - Changing the commands a new Session starts with, or their note -> `chat/context-commands.md`
 - Changing token normalization, estimation, persistence, whole-Session aggregation, Usage events, output speed, or the server-owned token projection -> `chat/usage.md`

@@ -3,6 +3,8 @@ reply-surface state and Session image references."""
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from core.chat import ChatMessage, ReplySurface, ToolCall
@@ -26,13 +28,15 @@ def _checkpoint(
     )
 
 
-def _tool_batch(content: str | None = None) -> tuple[ChatMessage, ChatMessage]:
+def _tool_batch(
+    content: str | None = None, *, call_id: str = "call-read"
+) -> tuple[ChatMessage, ChatMessage]:
     carrier = ChatMessage.assistant(
         model="openai/gpt",
         content=content,
-        tool_calls=[ToolCall(id="call-read", name="read", arguments={"path": "a"})],
+        tool_calls=[ToolCall(id=call_id, name="read", arguments={"path": "a"})],
     )
-    result = ChatMessage.tool(tool_call_id="call-read", name="read", content='{"ok":true}')
+    result = ChatMessage.tool(tool_call_id=call_id, name="read", content='{"ok":true}')
     return carrier, result
 
 
@@ -72,16 +76,34 @@ def test_checkpoint_guidance_is_added_once_before_the_summary_end(summary: str) 
     assert checkpoint.projection != finalized.projection
 
 
-def test_compaction_overlays_a_complete_unconsumed_tool_batch_after_the_projection() -> None:
+@pytest.mark.parametrize("programmatic", [False, True])
+def test_compaction_overlays_a_complete_unconsumed_tool_batch_after_the_projection(
+    programmatic: bool,
+) -> None:
     carrier, result = _tool_batch()
     deferred_note = ChatMessage.note("after the tool batch")
+    children = (
+        [
+            replace(message, programmatic=True, parent_tool_call_id="call-read")
+            for message in _tool_batch("intermediate", call_id="call-child")
+        ]
+        if programmatic
+        else []
+    )
 
     effective = effective_compaction_messages(
-        [carrier, result, deferred_note, _checkpoint(projection=[deferred_note])]
+        [
+            carrier,
+            *children,
+            result,
+            deferred_note,
+            _checkpoint(projection=[deferred_note, *children]),
+        ]
     )
 
     assert [message.id for message in effective[-2:]] == [carrier.id, result.id]
     assert len({message.id for message in effective}) == len(effective)
+    assert not any(message.programmatic for message in effective)
 
 
 @pytest.mark.parametrize("consumed", [True, False], ids=["consumed", "incomplete"])

@@ -268,19 +268,26 @@ async def test_worker_publication_before_dispatch_uses_selected_tool_contract(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("continue_after_batch", "finalization_failure"),
-    [(True, None), (False, "summary"), (False, "callback")],
+    ("continue_after_batch", "finalization_failure", "programmatic"),
+    [
+        (True, None, False),
+        (False, "summary", False),
+        (False, "callback", False),
+        (True, None, True),
+    ],
 )
 async def test_bound_session_capability_delivers_once_and_ends_after_tool_batch(
-    tmp_path, continue_after_batch, finalization_failure, monkeypatch
+    tmp_path, continue_after_batch, finalization_failure, programmatic, monkeypatch
 ):
     tools = ToolRegistry()
     declarations = ExtensionDeclarations()
     api = ExtensionAPI("private", declarations, config={}, logger=None)
     finished: list[str] = []
+    private_call_ids: list[str] = []
 
     async def hidden(context, arguments):
         del arguments
+        private_call_ids.append(context.tool_call_id)
         context.record_delivery_receipt("tool-receipt", "tool-hash", "inbox")
         context.record_delivery_receipt("second-receipt", "second-hash", "inbox")
         context.add_note("deferred-tool-note")
@@ -290,9 +297,21 @@ async def test_bound_session_capability_delivers_once_and_ends_after_tool_batch(
     async def sibling(_context, _arguments):
         return tool_success({"sibling": True})
 
+    async def program(context, _arguments):
+        result = await context.call_tool("private_tool", {})
+        receipt = await runtime.chat_sessions.lookup_delivery_receipt(
+            binding.address, binding.generation_id, binding.owner_name, "tool-receipt"
+        )
+        assert receipt is not None
+        return result
+
     async def reconcile(_context, *, receipts, persisted_call_ids, turn_end_requested):
         assert turn_end_requested
-        assert persisted_call_ids == ("private-call", "sibling-call")
+        assert persisted_call_ids == (
+            (private_call_ids[0], "program-call", "sibling-call")
+            if programmatic
+            else ("private-call", "sibling-call")
+        )
         assert len(receipts) == 2
         return ToolBatchDecision(
             end=not continue_after_batch,
@@ -332,6 +351,8 @@ async def test_bound_session_capability_delivers_once_and_ends_after_tool_batch(
         {"type": "object", "properties": {}},
         sibling,
     )
+    if programmatic:
+        api.register_session_tool("program_tool", "test-sentinel", {"type": "object"}, program)
     api.register_session_runtime(
         before_request=before_request,
         run_finished=run_finished,
@@ -351,7 +372,11 @@ async def test_bound_session_capability_delivers_once_and_ends_after_tool_batch(
             {
                 "content": None,
                 "tool_calls": [
-                    {"id": "private-call", "name": "private_tool", "arguments": {}},
+                    {
+                        "id": "program-call" if programmatic else "private-call",
+                        "name": "program_tool" if programmatic else "private_tool",
+                        "arguments": {},
+                    },
                     {"id": "sibling-call", "name": "sibling_tool", "arguments": {}},
                 ],
             }
@@ -393,7 +418,11 @@ async def test_bound_session_capability_delivers_once_and_ends_after_tool_batch(
         await run.wait()
 
     request = adapter.requests[0]
-    assert {tool["name"] for tool in request["kwargs"]["tools"]} == {"private_tool", "sibling_tool"}
+    assert {tool["name"] for tool in request["kwargs"]["tools"]} == {
+        "private_tool",
+        "sibling_tool",
+        *(["program_tool"] if programmatic else []),
+    }
     assert "test-prompt-sentinel" in request["messages"][0]["content"]
     assert "test-delivery-sentinel" in str(request["messages"])
     assert [
@@ -421,7 +450,8 @@ async def test_bound_session_capability_delivers_once_and_ends_after_tool_batch(
     assert run.status == ("failed" if finalization_failure == "summary" else "completed")
     history = runtime.chat_sessions.get(binding.address).load()
     assert {message.tool_call_id for message in history if message.role == "tool"} == {
-        "private-call",
+        *private_call_ids,
+        *(["program-call"] if programmatic else []),
         "sibling-call",
     }
     receipts = [

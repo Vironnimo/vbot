@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Collection, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from core.agents import default_workspace_dir
-from core.chat.messages import JsonObject, ReplySurface
+from core.chat.messages import ChatMessage, JsonObject, ReplySurface
 from core.computers import normalize_execution
 from core.extensions import ExtensionRegistry
 from core.permissions import PermissionBoundary
@@ -36,6 +36,17 @@ if TYPE_CHECKING:
 
 
 _LOGGER = get_logger("chat")
+
+ActivityWriter = Callable[
+    [
+        str,
+        list[ChatMessage],
+        Mapping[str, ToolResultFacts],
+        Sequence[tuple[int, str, str, str, str]],
+        list[JsonObject],
+    ],
+    Awaitable[None],
+]
 
 
 @dataclass(frozen=True)
@@ -75,6 +86,15 @@ class ToolDispatchContext:
     unloadable_tools: Collection[str] = frozenset()
     change_tracker: ChangeTracker | None = None
     allow_owned_effects: bool = False
+    activity_writer: ActivityWriter | None = field(default=None, repr=False, compare=False)
+    # Sequential script calls can load another Project before their next call.
+    # Read the owning Run's current scope instead of pinning the outer batch's copy.
+    current_skill_context: Callable[[], tuple[str | None, SkillRegistry | None]] | None = field(
+        default=None, repr=False, compare=False
+    )
+    programmatic_results: list[ChatMessage] = field(
+        default_factory=list, init=False, repr=False, compare=False
+    )
     _result_persisted_callbacks: dict[str, list[ToolResultPersistedCallback]] = field(
         default_factory=dict,
         init=False,
@@ -112,6 +132,38 @@ class ToolDispatchContext:
                 call_id=call_id, name=name, started_at=started_at
             )
             self._invocation_keys[call_id] = key
+
+    async def persist_activity(
+        self,
+        assistant_message_id: str,
+        messages: list[ChatMessage],
+        facts: Mapping[str, ToolResultFacts],
+        media: list[JsonObject] | None = None,
+    ) -> None:
+        """Commit internal activity through the Run's normal durable result boundary."""
+        indexes = {
+            message.tool_call_id: index
+            for index, message in enumerate(messages)
+            if message.role == "tool"
+        }
+        receipts = [
+            (indexes[call_id], receipt, content_hash, kind, "tool")
+            for call_id, receipt, content_hash, kind in self.delivery_receipts
+            if call_id in indexes
+        ]
+        if self.activity_writer is not None:
+            await self.activity_writer(assistant_message_id, messages, facts, receipts, media or [])
+        else:
+            if receipts:
+                raise RuntimeError("Owned Tool activity requires a receipt-aware writer")
+            await self.session.append_many_async(
+                messages, tool_results=facts, assistant_message_id=assistant_message_id
+            )
+        for message in messages:
+            if message.role == "tool":
+                assert message.tool_call_id is not None
+                self.programmatic_results.append(message)
+                self.notify_result_persisted(message.tool_call_id)
 
     def register_result_persisted(
         self,

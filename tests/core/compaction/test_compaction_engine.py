@@ -141,6 +141,24 @@ _EMPTY_CHECKPOINT = checkpoint([])
             MIN_AUTO_COMPACTION_RECLAIM_TOKENS,
             True,
         ),
+        (
+            "summary_tail",
+            [
+                _EMPTY_CHECKPOINT,
+                *tool_step("child", "intermediate " * 5_000, parent_tool_call_id="call-code"),
+            ],
+            0,
+            False,
+        ),
+        (
+            "continuation",
+            [
+                _EMPTY_CHECKPOINT,
+                *tool_step("child", "intermediate " * 5_000, parent_tool_call_id="call-code"),
+            ],
+            0,
+            False,
+        ),
     ],
     ids=[
         "summary-tail-advances-inside-a-retained-user-turn",
@@ -150,6 +168,8 @@ _EMPTY_CHECKPOINT = checkpoint([])
         "continuation-small-step",
         "continuation-small-step-below-reclaim-floor",
         "continuation-large-step-above-reclaim-floor",
+        "summary-tail-ignores-programmatic-activity",
+        "continuation-ignores-programmatic-activity",
     ],
 )
 def test_new_compactable_context_decides_whether_a_model_call_is_worth_it(

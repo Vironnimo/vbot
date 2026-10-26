@@ -80,11 +80,15 @@ class _EmittingToolRegistry(ToolRegistry):
         assistant_message_id: str | None = None,
         result_payloads: ToolDispatchContext | None = None,
         removed_tool_names: Collection[str] = frozenset(),
+        parent_tool_call_id: str | None = None,
+        assistant_message_ids: Mapping[str, str] | None = None,
     ) -> None:
         self._registry = registry
         self._removed_tool_names = frozenset(removed_tool_names)
         self._result_payloads = result_payloads
         self._assistant_message_id = assistant_message_id
+        self._assistant_message_ids = assistant_message_ids
+        self._parent_tool_call_id = parent_tool_call_id
         self._run = run
         self._extension_registry = extension_registry
         self._note_hook = note_hook
@@ -535,7 +539,7 @@ class _EmittingToolRegistry(ToolRegistry):
             self._run.emit(
                 TOOL_CALL_STARTED_EVENT,
                 {
-                    "assistant_message_id": self._assistant_message_id,
+                    **self._call_identity(context),
                     "tool_call": {
                         "id": context.tool_call_id,
                         "index": context.tool_call_index,
@@ -567,7 +571,7 @@ class _EmittingToolRegistry(ToolRegistry):
         self._run.emit(
             TOOL_CALL_RESULT_EVENT,
             {
-                "assistant_message_id": self._assistant_message_id,
+                **self._call_identity(context),
                 "tool_call": {
                     "id": context.tool_call_id,
                     "index": context.tool_call_index,
@@ -581,6 +585,17 @@ class _EmittingToolRegistry(ToolRegistry):
             },
         )
         events.finished = True
+
+    def _call_identity(self, context: ToolContext) -> JsonObject:
+        message_id = (
+            self._assistant_message_ids.get(context.tool_call_id)
+            if self._assistant_message_ids is not None
+            else self._assistant_message_id
+        )
+        identity: JsonObject = {"assistant_message_id": message_id}
+        if context.programmatic:
+            identity.update(programmatic=True, parent_tool_call_id=self._parent_tool_call_id)
+        return identity
 
     def take_media_for_call(self, tool_call_id: str, *, tool_message_id: str) -> list[JsonObject]:
         """Transfer in-memory media to the correlated request without retaining a cache."""

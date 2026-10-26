@@ -125,6 +125,8 @@ class ToolExecutor:
                 skill_agent_id=config.skill_agent_id,
                 run_kind=config.run_kind,
                 subagent_session=config.subagent_session,
+                programmatic=config.programmatic,
+                tool_call_hook=config.tool_call_hook,
                 permissions=config.permissions,
                 execution=normalize_execution(config.execution),
                 reply_surface=config.reply_surface,
@@ -240,6 +242,10 @@ class ToolBatch:
             # preserve the original abort for the Run boundary.
             await self.aclose()
             raise
+
+    async def result(self, index: int) -> JsonObject:
+        """Wait for one added call while preserving the batch's scheduling barriers."""
+        return await self._tasks[index]
 
     async def aclose(self) -> None:
         """Cancel every call that has not finished and wait until all settled."""

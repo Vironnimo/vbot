@@ -100,6 +100,8 @@ def session_database_spec(
                 breaks_older=True,
                 apply=_store_tool_invocations.backfill,
             ),
+            # Older readers would send internal script activity to the Model.
+            Migration("sessions.0010_programmatic_tool_activity", breaks_older=True),
         ),
         after_open=_store_fts._ensure_fts_schema,
         snapshot_facts=_SNAPSHOT_FACTS,
