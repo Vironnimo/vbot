@@ -158,29 +158,13 @@ async def test_calls_are_correlated_to_their_connection_and_never_replayed() -> 
     assert refused.value.code == "computer_connection_lost"
     reconnected = await registry.connect(hello(), actor="host")
     assert reconnected.outgoing.empty()
-    await registry.wait_online("pc_laptop", instance_id="inst_one")
+    assert registry.get("pc_laptop").instance_id == "inst_one"
     restarted = await registry.connect(hello(instance_id="inst_two"), actor="host")
     with pytest.raises(ComputerError) as refused:
         await registry.call("pc_laptop", "terminal", "write", {}, instance_id="inst_one")
     assert refused.value.code == "computer_instance_changed"
     assert restarted.outgoing.empty()
     registry.close()
-
-
-@pytest.mark.asyncio
-async def test_same_instance_reconnect_wakes_readers_and_close_releases_waiters() -> None:
-    registry = ComputerRegistry()
-    connection = await registry.connect(hello(), actor="host")
-    registry.disconnect(connection)
-    waiter = asyncio.create_task(registry.wait_online("pc_laptop", instance_id="inst_one"))
-    reconnected = await registry.connect(hello(), actor="host")
-    await waiter
-    registry.disconnect(reconnected)
-    waiter = asyncio.create_task(registry.wait_online("pc_laptop", instance_id="inst_one"))
-    registry.close()
-    with pytest.raises(ComputerError) as refused:
-        await waiter
-    assert refused.value.code == "computers_closed"
 
 
 @pytest.mark.asyncio

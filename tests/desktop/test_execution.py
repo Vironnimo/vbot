@@ -68,8 +68,9 @@ class Capability:
 
 
 class Socket:
-    def __init__(self, server_instance: str = "server-one") -> None:
+    def __init__(self, server_instance: str = "server-one", *, welcome: bool = True) -> None:
         self.server_instance = server_instance
+        self.welcome = welcome
         self.incoming: asyncio.Queue[Any] = asyncio.Queue()
         self.outgoing: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self.closed = False
@@ -77,7 +78,7 @@ class Socket:
     async def send(self, raw: str) -> None:
         message = json.loads(raw)
         await self.outgoing.put(message)
-        if message["type"] == "hello":
+        if message["type"] == "hello" and self.welcome:
             await self.incoming.put(
                 {
                     "type": "welcome",
@@ -127,8 +128,8 @@ class Connections:
         finally:
             await socket.close()
 
-    async def add(self, server_instance: str = "server-one") -> Socket:
-        socket = Socket(server_instance)
+    async def add(self, server_instance: str = "server-one", *, welcome: bool = True) -> Socket:
+        socket = Socket(server_instance, welcome=welcome)
         await self.pending.put(socket)
         return socket
 
@@ -250,6 +251,55 @@ async def test_a_native_lifetime_survives_only_a_reconnect_to_the_same_server(
             assert handlers[0].closed is True
             assert handlers[1].active_count == 0
         assert handlers[0].disconnects >= 1
+    finally:
+        sharing.close()
+        await asyncio.wait_for(running, timeout=2)
+
+
+@pytest.mark.asyncio
+async def test_a_window_reconnect_to_the_same_server_keeps_a_healthy_link(
+    tmp_path: Path,
+) -> None:
+    sharing, connections, _handlers = make_sharing(tmp_path)
+    url = "https://one.example/"
+    sharing.set_server_url(url)
+    sharing.update({"terminal": True}, expected_server=url)
+    first = await connections.add()
+    running = asyncio.create_task(sharing.run())
+    try:
+        await asyncio.wait_for(first.outgoing.get(), timeout=2)
+        assert (await first.call("before", "status"))["ok"] is True
+        sharing.set_server_url(url)
+        for _ in range(20):  # let a wrongly woken loop tear the link down
+            await asyncio.sleep(0)
+        assert not first.closed
+        assert (await first.call("after", "status"))["ok"] is True
+        assert connections.opened.qsize() == 1
+    finally:
+        sharing.close()
+        await asyncio.wait_for(running, timeout=2)
+
+
+@pytest.mark.asyncio
+async def test_a_server_refusal_reports_the_servers_reason(tmp_path: Path) -> None:
+    sharing, connections, _handlers = make_sharing(tmp_path)
+    url = "https://one.example/"
+    sharing.set_server_url(url)
+    sharing.update({"terminal": True}, expected_server=url)
+    refused = await connections.add(welcome=False)
+    await refused.incoming.put(
+        {
+            "type": "error",
+            "error": {"code": "computer_identity_conflict", "message": "Another installation"},
+        }
+    )
+    running = asyncio.create_task(sharing.run())
+    try:
+        for _ in range(200):
+            if sharing.status()["error_code"]:
+                break
+            await asyncio.sleep(0)
+        assert sharing.status()["error_code"] == "computer_identity_conflict"
     finally:
         sharing.close()
         await asyncio.wait_for(running, timeout=2)

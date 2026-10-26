@@ -13,7 +13,7 @@ import pytest
 import pytest_asyncio
 
 from core.computers import ComputerRegistry
-from core.tools.terminal_manager import TerminalManager, TerminalRenderHost
+from core.tools.terminal_manager import TerminalManager, TerminalManagerError, TerminalRenderHost
 from desktop import terminal_execution
 from tests.core.permissions.command_check_support import restricted
 from tests.core.tools.terminal_helpers import call, make_context
@@ -297,6 +297,8 @@ async def test_replacement_desktop_cannot_receive_an_old_terminal_input(
     terminal_id = started["data"]["terminal_id"]
     link.registry.disconnect(link.connection)
     await link.native.close()
+    with pytest.raises(TerminalManagerError, match="offline"):
+        await manager.kill_for_operator(terminal_id)
     link.native = terminal_execution.TerminalCapability()
     link.hello["instance_id"] = "desktop_b"
     await link.connect()
@@ -305,8 +307,55 @@ async def test_replacement_desktop_cannot_receive_an_old_terminal_input(
     )
     assert not result["ok"]
     assert factory.adapters[0].writes == []
+    # The replacement instance confirms the end, also after the unconfirmed stop.
     await eventually(lambda: manager.list_for_operator()[0]["finished_at"] is not None)
     assert link.native.active_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unshared_by", ["server_registration", "desktop_answer"])
+async def test_terminal_ends_when_its_desktop_stops_sharing_terminals(
+    remote: tuple[TerminalManager, Link, AdapterFactory],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    unshared_by: str,
+) -> None:
+    manager, link, factory = remote
+    context = _context(tmp_path)
+    started = await call(manager, context, {"action": "start", "command": "editor"})
+    assert started["ok"], started
+    # The fake PTY keeps running: only the answer may end the Terminal Session.
+    if unshared_by == "server_registration":
+        link.registry.disconnect(link.connection)
+        link.hello["capabilities"] = ["computer_use"]
+        await link.connect()
+    else:
+
+        async def not_shared(_operation: str, _params: dict[str, Any]) -> dict[str, Any]:
+            raise terminal_execution.TerminalExecutionError(
+                "computer_capability_not_shared", "This capability is not shared"
+            )
+
+        monkeypatch.setattr(link.native, "execute", not_shared)
+    await eventually(lambda: manager.list_for_operator()[0]["finished_at"] is not None)
+    assert factory.adapters[0].alive
+
+
+@pytest.mark.asyncio
+async def test_a_refused_native_spawn_is_a_definite_start_failure(
+    remote: tuple[TerminalManager, Link, AdapterFactory],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager, _link, _factory = remote
+
+    def refused(*_args: Any, **_kwargs: Any) -> Any:
+        raise PermissionError("Access is denied")
+
+    monkeypatch.setattr(terminal_execution, "spawn_terminal_adapter", refused)
+    result = await call(manager, _context(tmp_path), {"action": "start", "command": "editor"})
+    assert result["error"]["code"] == "terminal_start_failed", result
+    assert manager.list_for_operator() == []
 
 
 @pytest.mark.asyncio

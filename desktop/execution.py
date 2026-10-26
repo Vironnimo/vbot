@@ -145,6 +145,8 @@ class ComputerSharing:
         self._scope: _Scope | None = None
         self._socket: Socket | None = None
         self._connected = False
+        self._serving_header: str | None = None
+        self._welcomes = 0
         self._error_code: str | None = None
         self._last_status: dict[str, Any] | None = None
         self._capability_errors: dict[str, str] = {}
@@ -163,7 +165,13 @@ class ComputerSharing:
         with self._lock:
             origin = address.origin if address else ""
             if origin == self._origin:
-                self._wake()  # A completed pairing can replace this origin's credential.
+                # A completed pairing can replace this origin's credential; every
+                # other reconnect of the window keeps the healthy native link.
+                if (
+                    not self._connected
+                    or self._authorization.header(self._server_url) != self._serving_header
+                ):
+                    self._wake()
                 return
             self._origin = origin
             self._server_url = address.url if address else ""
@@ -386,6 +394,7 @@ class ComputerSharing:
                     if self._scope is None:
                         self._scope = _Scope(origin, identity)
                     scope = self._scope
+                    welcomes = self._welcomes
                     await self._configure(scope, enabled)
                     serving = asyncio.create_task(
                         self._serve(scope, server_url, _computer_name(settings.get("name")))
@@ -410,6 +419,8 @@ class ComputerSharing:
                     continue
                 except Exception as error:
                     self._set_connection(False, _connection_error(error))
+                    if self._welcomes != welcomes:
+                        retry_seconds = 1.0  # a working link lost later starts a fresh backoff
                 if self._closed or self._changed.is_set():
                     continue
                 try:
@@ -450,6 +461,7 @@ class ComputerSharing:
 
     async def _serve(self, scope: _Scope, server_url: str, name: str) -> None:
         header = self._authorization.header(server_url)
+        self._serving_header = header
         try:
             async with self._connector(server_url, header) as socket:
                 await socket.send(
@@ -467,6 +479,8 @@ class ComputerSharing:
                     )
                 )
                 welcome = _message(await asyncio.wait_for(socket.recv(), timeout=10))
+                if welcome.get("type") == "error":
+                    raise _refusal(welcome)
                 if (
                     welcome.get("type") != "welcome"
                     or welcome.get("protocol") != 1
@@ -482,10 +496,13 @@ class ComputerSharing:
                     raise _ServerRestartedError()
                 scope.server_instance = server_instance
                 scope.connection += 1
+                self._welcomes += 1
                 self._socket = socket
                 self._set_connection(True, None)
                 while True:
                     message = _message(await socket.recv())
+                    if message.get("type") == "error":
+                        raise _refusal(message)
                     if message.get("type") != "call":
                         raise SharingError(
                             "computer_protocol_error", "The server sent an invalid request"
@@ -687,6 +704,19 @@ def _message(raw: str | bytes) -> dict[str, Any]:
     if not isinstance(message, dict):
         raise SharingError("computer_protocol_error", "The server sent an invalid message")
     return message
+
+
+def _refusal(message: dict[str, Any]) -> SharingError:
+    """The server's own reason, such as an identity conflict, instead of a protocol error."""
+    error = message.get("error")
+    code = error.get("code") if isinstance(error, dict) else None
+    wording = error.get("message") if isinstance(error, dict) else None
+    if not isinstance(code, str) or not _ERROR_CODE.fullmatch(code):
+        code = "computer_protocol_error"
+    return SharingError(
+        code,
+        wording if isinstance(wording, str) else "The server refused this computer",
+    )
 
 
 def _grants(settings: dict[str, Any], origin: str) -> dict[str, bool]:

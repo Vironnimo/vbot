@@ -22,6 +22,13 @@ _RECONNECT_ERRORS = {
     "computer_busy",
     "computer_closing",
 }
+# The Desktop no longer shares terminals with this server: closing that
+# capability ended its processes, so these answers are a definite end.
+_ENDED_ERRORS = {"computer_capability_not_shared", "computer_capability_unavailable"}
+
+
+class RemoteStopError(OSError):
+    """A remote stop that did not reach or was not confirmed by the Desktop."""
 
 
 class RemoteTerminalAdapter:
@@ -54,6 +61,11 @@ class RemoteTerminalAdapter:
     @property
     def pid(self) -> int:
         return self._pid
+
+    @property
+    def ended(self) -> bool:
+        """Whether the Desktop confirmed that no process of this terminal runs."""
+        return not self._alive
 
     @property
     def online(self) -> bool:
@@ -95,6 +107,9 @@ class RemoteTerminalAdapter:
         try:
             result = self._call("read", offset=self._offset, size=min(size, 64 * 1024))
         except ComputerError as error:
+            if error.code in _ENDED_ERRORS:
+                self._alive = False
+                raise EOFError from None
             # Reads have no effect and resume at their last received byte offset.
             # Never use this recovery path for a start, write, resize or kill.
             if error.code in _RECONNECT_ERRORS or not self.online:
@@ -145,7 +160,9 @@ class RemoteTerminalAdapter:
         try:
             result = self._call("status")
         except ComputerError as error:
-            if error.code in _RECONNECT_ERRORS:
+            if error.code in _ENDED_ERRORS:
+                self._alive = False
+            if error.code in _RECONNECT_ERRORS | _ENDED_ERRORS:
                 return {"alive": self._alive, "exit_code": self._exit_code}
             raise
         if isinstance(result.get("process"), dict):
@@ -170,8 +187,21 @@ class RemoteTerminalAdapter:
         if not self._same_instance():
             self._alive = False
             return
+        if not self.online:
+            raise RemoteStopError(
+                "its computer is offline, so the stop did not reach it. Its programs can "
+                "still be running there; stop the terminal again once that computer is connected"
+            )
         try:
             result = self._call("kill")
+        except ComputerError as error:
+            if error.code in _ENDED_ERRORS:
+                self._alive = False
+                return
+            raise RemoteStopError(
+                "its computer did not confirm the stop, so its programs can still be running "
+                "there; check the terminal's status before stopping it again"
+            ) from error
         except Exception as error:
             raise OSError("The Desktop did not confirm that its terminal stopped") from error
         if result.get("alive") is not False:

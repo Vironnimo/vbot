@@ -97,7 +97,6 @@ class ComputerRegistry:
         self._connections: dict[str, ComputerConnection] = {}
         self._listeners: list[Callable[[str, str, dict[str, Any]], None]] = []
         self._loop: asyncio.AbstractEventLoop | None = None
-        self._changed = asyncio.Event()
         self._registration_lock = asyncio.Lock()
         self._closed = False
 
@@ -167,8 +166,6 @@ class ComputerRegistry:
         return unsubscribe
 
     def _emit(self, computer_id: str, event: str, data: dict[str, Any]) -> None:
-        changed, self._changed = self._changed, asyncio.Event()
-        changed.set()
         for callback in tuple(self._listeners):
             try:
                 callback(computer_id, event, dict(data))
@@ -399,25 +396,10 @@ class ComputerRegistry:
             future.cancel()
             raise
 
-    async def wait_online(self, computer_id: str, *, instance_id: str | None = None) -> None:
-        while not self._closed:
-            changed = self._changed
-            info = self.get(computer_id)
-            if instance_id is not None and info.instance_id != instance_id:
-                raise ComputerError(
-                    "computer_instance_changed",
-                    "The Desktop app restarted; the earlier process is unavailable.",
-                )
-            if info.online:
-                return
-            await changed.wait()
-        raise ComputerError("computers_closed", "The server's computer connections have closed.")
-
     def close(self) -> None:
         self._closed = True
         for connection in tuple(self._connections.values()):
             self.disconnect(connection)
-        self._changed.set()
         self._listeners.clear()
 
     async def aclose(self) -> None:
