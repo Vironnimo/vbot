@@ -7,7 +7,7 @@ import copy
 from typing import Any, override
 
 import pytest
-from textual.widgets import OptionList, TextArea
+from textual.widgets import TextArea
 
 from cli.tui import actions
 from cli.tui.app import ConversationApp
@@ -84,11 +84,10 @@ class ActionServer(Server):
 async def choose(app: ConversationApp, pilot: Any, value: Any) -> None:
     screen = app.screen
     assert isinstance(screen, Picker)
-    index = next(
-        index for index, (_, candidate) in enumerate(screen.filtered) if candidate == value
-    )
-    screen.query_one(OptionList).highlighted = index
-    await pilot.press("enter")
+    assert any(candidate == value for _, candidate in screen.filtered)
+    # These tests own action outcomes, not Picker key handling. A queued initial
+    # filter event can reset a directly assigned highlight before Enter arrives.
+    await screen.dismiss(value)
     await pilot.pause()
 
 
