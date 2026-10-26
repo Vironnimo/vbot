@@ -15,7 +15,7 @@ from xml.etree import ElementTree
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from cli.application.payload import SHAPES
+from cli.application.payload import APP_DESKTOP_TARGET, SHAPES
 from scripts import build_windows
 from scripts.windows import native_hosts
 
@@ -63,6 +63,10 @@ def _source(tmp_path: Path) -> Path:
         path.mkdir(parents=True)
         (path / "included.txt").write_text(directory, encoding="utf-8")
     (source / "desktop" / "icon.ico").write_bytes(b"icon")
+    for filename in (*APP_DESKTOP_TARGET, "resources/extensions/computer_use/extension.py"):
+        path = source / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# Computer Use module\n", encoding="utf-8")
     (source / "scripts" / "windows").mkdir(parents=True)
     for shape in SHAPES:
         (source / "scripts" / "windows" / f"requirements-{shape}.lock").write_text(
@@ -168,7 +172,22 @@ def test_only_the_root_bootstraps_are_compiled_as_stable_hosts(
             ("desktop/included.txt",),
         ),
         ("server-desktop", ("server", "resources", "webui/dist", "desktop/windows.config"), ()),
-        ("desktop-client", ("desktop/windows.config",), ("server", "resources", "webui")),
+        (
+            "desktop-client",
+            (
+                "desktop/windows.config",
+                "resources/extensions/computer_use/target.py",
+                "resources/extensions/computer_use/windows_target.py",
+                "resources/extensions/computer_use/_remote_wire.py",
+            ),
+            (
+                "server",
+                "webui",
+                "resources/included.txt",
+                "resources/native",
+                "resources/extensions/computer_use/extension.py",
+            ),
+        ),
     ],
 )
 def test_copy_application_respects_shape_and_exclusions(
@@ -547,9 +566,12 @@ def test_compile_host_constructs_msvc_abi_commands(
     assert '/DVBOT_ROLE=L"server"' in commands[1]
     assert "/SUBSYSTEM:CONSOLE" in commands[2]
 
-    commands.clear()
-    native_hosts.compile_host(source, tmp_path / "vBot.Python.exe", role="python", version="2.3.4")
-    assert "/SUBSYSTEM:CONSOLE" in commands[2]
+    for role in ("python", "desktop"):
+        commands.clear()
+        native_hosts.compile_host(
+            source, tmp_path / f"vBot.{role.title()}.exe", role=role, version="2.3.4"
+        )
+        assert "/SUBSYSTEM:CONSOLE" in commands[2]
 
 
 @pytest.mark.skipif(
@@ -557,7 +579,8 @@ def test_compile_host_constructs_msvc_abi_commands(
     reason="Windows native compiler required",
 )
 @pytest.mark.parametrize(
-    "role, stable", [("host", True), ("update", False), ("gui", True), ("server", False)]
+    "role, stable",
+    [("host", True), ("update", False), ("gui", True), ("server", False), ("desktop", False)],
 )
 def test_native_host_reports_a_missing_runtime_and_runs_the_private_one(tmp_path, role, stable):
     # One compiled host per role serves every phase; compiling costs about a second.
@@ -575,8 +598,8 @@ def test_native_host_reports_a_missing_runtime_and_runs_the_private_one(tmp_path
         version="0.4.3",
     )
     # Without its runtime, a host exits with a report instead of waiting on a
-    # dialog; only the GUI companion reports the failure in a dialog.
-    if role != "gui":
+    # dialog; the Desktop and GUI companion report failures in a dialog.
+    if role not in {"gui", "desktop"}:
         process = subprocess.Popen(
             [str(output), "--help"],
             stdout=subprocess.PIPE,
@@ -616,10 +639,10 @@ def test_native_host_reports_a_missing_runtime_and_runs_the_private_one(tmp_path
     assert result.returncode == 0, result.stderr
     assert result.stdout.decode("utf-8").splitlines() == ["1", expected]
 
-    if role in {"gui", "server"}:
+    if role in {"gui", "server", "desktop"}:
         shutil.copytree(python_root / "DLLs", runtime / "DLLs")
-    if role == "server":
-        _assert_native_server_pseudoterminals_are_windowless(output)
+    if role in {"server", "desktop"}:
+        _assert_native_pseudoterminals_are_windowless(output)
 
     if role == "gui":
         import struct
@@ -656,7 +679,7 @@ def test_native_host_reports_a_missing_runtime_and_runs_the_private_one(tmp_path
             assert version in Path(observed["module"]).parts
 
 
-def _assert_native_server_pseudoterminals_are_windowless(executable: Path) -> None:
+def _assert_native_pseudoterminals_are_windowless(executable: Path) -> None:
     if sys.platform != "win32":
         pytest.skip("Windows pseudoterminals")
     import winpty
@@ -676,8 +699,8 @@ def _assert_native_server_pseudoterminals_are_windowless(executable: Path) -> No
         "def assert_windowless_console():\n"
         "    processes = (wintypes.DWORD * 16)()\n"
         "    count = kernel32.GetConsoleProcessList(processes, len(processes))\n"
-        "    assert count > 0, 'Native server must already have an attached console'\n"
-        "    assert not kernel32.GetConsoleWindow(), 'Native server must have no console window'\n"
+        "    assert count > 0, 'Native host must already have an attached console'\n"
+        "    assert not kernel32.GetConsoleWindow(), 'Native host must have no console window'\n"
         # This precondition fails for a GUI-subsystem regression before pywinpty
         # can allocate a visible console on the developer's desktop.
         "assert_windowless_console()\n"

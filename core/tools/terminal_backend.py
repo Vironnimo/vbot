@@ -10,6 +10,7 @@ import ntpath
 import os
 import re
 import select
+import shlex
 import shutil
 import signal
 import struct
@@ -102,6 +103,17 @@ class TerminalAdapterFactory(Protocol):
         *,
         command_line: str | None = None,
     ) -> TerminalAdapter: ...
+
+
+def command_words(command: str) -> list[str]:
+    """Split a command line using this computer's quoting and path spelling."""
+    if os.name != "nt":
+        return shlex.split(command)
+    lexer = shlex.shlex(command, posix=True)
+    lexer.whitespace_split = True
+    lexer.escape = ""
+    lexer.commenters = ""
+    return list(lexer)
 
 
 def default_terminal_argv(env: Mapping[str, str] | None = None) -> list[str]:

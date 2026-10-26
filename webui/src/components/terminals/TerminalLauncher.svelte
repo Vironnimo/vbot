@@ -29,11 +29,13 @@
     pinTargetOf,
   } from '$lib/terminalsView.js';
   import { tooltip } from '$lib/tooltip.js';
+  import { computerOptions, useComputers } from '$lib/computers.svelte.js';
   import SearchableDropdown from '../SearchableDropdown.svelte';
   import Button from '../ui/Button.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
   import Modal from '../ui/Modal.svelte';
   import PathField from '../ui/PathField.svelte';
+  import TextField from '../ui/TextField.svelte';
   import {
     groupKindLabel,
     launchHistoryDetails,
@@ -74,12 +76,36 @@
   const workdirFieldId = `${componentId}-workdir`;
   const optionId = (index) => `${componentId}-setup-${index}`;
   const navigation = useNavigation();
+  const computers = useComputers();
+  let computerId = $state('server');
+  const computerChoices = $derived(
+    computerOptions(computers?.computers ?? [], [computerId], 'terminal'),
+  );
+  const selectedComputer = $derived(
+    computers?.computers.find((computer) => computer.id === computerId),
+  );
+  const computerUnavailable = $derived(
+    selectedComputer?.known
+      ? !selectedComputer.online ||
+          !selectedComputer.capabilities.includes('terminal')
+      : computerId !== 'server',
+  );
+  const launchHistory = $derived(
+    viewState.launchHistory.filter(
+      (entry) => (entry.computer_id ?? 'server') === computerId,
+    ),
+  );
 
   let query = $state('');
   let commandError = $state('');
   // The last used working directory and the shown view.
   let workdir = $state(
-    untrack(() => viewState.launchHistory[0]?.workdir ?? ''),
+    untrack(
+      () =>
+        viewState.launchHistory.find(
+          (entry) => (entry.computer_id ?? 'server') === 'server',
+        )?.workdir ?? '',
+    ),
   );
   let groupId = $state(untrack(() => pinTargetOf(shownView()) ?? ''));
   // -1 is the typed command line; 0.. a recent setup.
@@ -96,7 +122,7 @@
   let panelStyle = $state('');
   let placed = $state(false);
 
-  const rows = $derived(setupRows(viewState.launchHistory, query, workdir));
+  const rows = $derived(setupRows(launchHistory, query, workdir));
   const errorText = $derived(
     commandError ||
       (viewState.startError ? terminalError(viewState.startError) : ''),
@@ -285,11 +311,17 @@
   }
 
   async function start(params) {
-    if (viewState.startingTerminal) return;
+    if (viewState.startingTerminal || computerUnavailable) return;
     commandError = '';
-    const started = await controller.startManualTerminal(params, {
-      groupId: groupId || null,
-    });
+    const started = await controller.startManualTerminal(
+      {
+        ...params,
+        ...(computerId !== 'server' ? { computer_id: computerId } : {}),
+      },
+      {
+        groupId: groupId || null,
+      },
+    );
     if (!started) {
       inputElement?.focus();
       return;
@@ -303,6 +335,16 @@
     const openNewGroup = onNewGroup;
     close({ restoreFocus: true });
     openNewGroup();
+  }
+
+  function selectComputer(id) {
+    computerId = id;
+    workdir =
+      viewState.launchHistory.find(
+        (entry) => (entry.computer_id ?? 'server') === id,
+      )?.workdir ?? '';
+    activeIndex = -1;
+    clearErrors();
   }
 
   async function editWorkdir() {
@@ -410,6 +452,7 @@
   }
 
   onMount(() => {
+    void computers?.refresh();
     viewState.startError = '';
     place();
     void tick().then(() => inputElement?.focus());
@@ -566,19 +609,56 @@
 
 {#snippet optionsRow()}
   <div class="terminal-launcher__options">
+    <SearchableDropdown
+      value={computerId}
+      options={computerChoices}
+      ariaLabel={t('computers.label')}
+      panelMinWidth={280}
+      onValueChange={selectComputer}
+      onOpenChange={(open) => {
+        if (open) void computers?.refresh();
+      }}
+    />
+    {#if computerUnavailable}
+      <span class="terminal-launcher__error" role="status"
+        >{selectedComputer?.online === false
+          ? t('computers.offline')
+          : t('computers.terminalUnavailable')}</span
+      >
+    {/if}
+    {#if computers?.error}
+      <span class="terminal-launcher__error" role="alert"
+        >{computers.error}</span
+      >
+    {/if}
+  </div>
+  <div class="terminal-launcher__options">
     {#if editingWorkdir}
-      <PathField
-        id={workdirFieldId}
-        class="terminal-launcher__path"
-        inputClass="terminal-launcher__path-input"
-        value={workdir}
-        mode="directory"
-        projectShortcuts
-        ariaLabel={t('terminals.workdirLabel')}
-        placeholder={t('terminals.workdirPlaceholder')}
-        onInput={(next) => (workdir = next)}
-        onkeydown={handleWorkdirKeydown}
-      />
+      {#if computerId !== 'server'}
+        <TextField
+          id={workdirFieldId}
+          class="terminal-launcher__path-input"
+          code
+          value={workdir}
+          ariaLabel={t('computers.remoteWorkdir')}
+          placeholder={t('terminals.workdirPlaceholder')}
+          onInput={(next) => (workdir = next)}
+          onkeydown={handleWorkdirKeydown}
+        />
+      {:else}
+        <PathField
+          id={workdirFieldId}
+          class="terminal-launcher__path"
+          inputClass="terminal-launcher__path-input"
+          value={workdir}
+          mode="directory"
+          projectShortcuts
+          ariaLabel={t('terminals.workdirLabel')}
+          placeholder={t('terminals.workdirPlaceholder')}
+          onInput={(next) => (workdir = next)}
+          onkeydown={handleWorkdirKeydown}
+        />
+      {/if}
     {:else}
       <button
         bind:this={workdirChip}
@@ -663,6 +743,7 @@
     variant="primary"
     class="terminal-launcher__start"
     loading={viewState.startingTerminal}
+    disabled={computerUnavailable}
     aria-keyshortcuts="Enter"
     onClick={() => void startActive()}
   >

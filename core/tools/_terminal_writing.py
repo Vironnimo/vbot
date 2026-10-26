@@ -7,6 +7,7 @@ import contextlib
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from typing import Any, Literal
 
+from core.computers import ComputerError
 from core.runs import RunExecutionOwner
 from core.tools.terminal_backend import TerminalAdapter
 from core.tools.terminal_emulator import (
@@ -194,6 +195,14 @@ class TerminalWriting:
                             pasted=bracketed_paste,
                             superseded=superseded,
                         )
+        if isinstance(write_error, ComputerError):
+            if text_sent:
+                raise ComputerError(
+                    write_error.code,
+                    f"The preceding {text_sent} characters were sent. For the following key: "
+                    f"{write_error.message} Do not repeat the whole input; inspect status first.",
+                ) from write_error
+            raise write_error
         failure = await self._write_failure()
         if text_sent:
             return self._input_result(
@@ -365,6 +374,8 @@ class TerminalWriting:
             write_error = await asyncio.shield(writing)
             if write_error is None:
                 return
+        if isinstance(write_error, ComputerError):
+            raise write_error
         raise await self._write_failure() from write_error
 
     async def _write_failure(self) -> TerminalManagerError:

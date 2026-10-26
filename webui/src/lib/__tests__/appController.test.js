@@ -16,6 +16,7 @@ function setup(overrides = {}) {
     onAppError: vi.fn(),
     onLoadProjects: vi.fn(),
     onReloadAgents: vi.fn(),
+    onComputersChanged: vi.fn(),
     readDataStoreStatus: vi.fn().mockResolvedValue({ incidents: [] }),
     readBackgroundActivity: vi.fn().mockResolvedValue({ activities: [] }),
   };
@@ -58,7 +59,7 @@ afterEach(() => {
 describe('App controller', () => {
   it('projects server events into run state and scoped invalidations', async () => {
     const onSpeechEvent = vi.fn();
-    const { controller, state } = setup({ onSpeechEvent });
+    const { actions, controller, state } = setup({ onSpeechEvent });
     const listed = { run_id: 'run-listed', agent_id: 'alpha' };
     const hello = { type: 'connection_ready', active_runs: [listed] };
     const started = { type: 'run_started', payload: { run_id: 'run-one' } };
@@ -81,6 +82,7 @@ describe('App controller', () => {
     ]);
     expect(state).not.toHaveProperty('runServerEvents');
     expect(onSpeechEvent.mock.calls).toEqual([[hello], [started]]);
+    expect(actions.onComputersChanged).toHaveBeenCalledOnce();
     expect(state.commandStatuses).toEqual({});
     expect(state.queueInvalidation).toEqual({
       agentId: 'alpha',
@@ -663,6 +665,7 @@ describe('App controller', () => {
     ['calendar', ['calendar']],
     ['commands', ['commands']],
     ['terminals', ['terminals']],
+    ['computers', ['terminals']],
     ['skills', ['skills', 'commands']],
     ['archive', ['archive']],
     ['agents', []],
@@ -681,6 +684,9 @@ describe('App controller', () => {
     );
     expect(actions.onReloadAgents).toHaveBeenCalledTimes(
       kind === 'agents' ? 1 : 0,
+    );
+    expect(actions.onComputersChanged).toHaveBeenCalledTimes(
+      kind === 'computers' ? 1 : 0,
     );
   });
 

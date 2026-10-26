@@ -154,9 +154,12 @@ def resolve_apps(names: Sequence[str], apps: Sequence[AppInfo]) -> Resolution:
     return Resolution(resolved, problems)
 
 
-def request_message(agent_name: str, apps: Sequence[AppInfo], reason: str | None) -> str:
+def request_message(
+    agent_name: str, apps: Sequence[AppInfo], reason: str | None, *, computer: str | None = None
+) -> str:
     """The text the user reads when deciding about an access request."""
-    lines = [f'Agent "{agent_name}" asks to use these apps on the vBot server\'s desktop:']
+    location = f'computer "{computer}"' if computer is not None else "the vBot server's desktop"
+    lines = [f'Agent "{agent_name}" asks to use these apps on {location}:']
     lines.extend(f"- {app.name}" for app in apps)
     if reason:
         lines.append(f"Reason: {reason.strip()}")

@@ -122,6 +122,7 @@ class ToolRound:
             run_kind=run.run_kind,
             subagent_session=context.subagent_session,
             permissions=context.permissions,
+            execution=context.execution,
             reply_surface=context.reply_surface,
             allowed_tools=_dispatch_allowed_tools(
                 agent,

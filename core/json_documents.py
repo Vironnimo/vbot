@@ -85,6 +85,7 @@ DURABLE_DOCUMENTS: Mapping[str, str] = MappingProxyType(
         "attachment_metadata": "artifacts/attachments/*.json",
         "speech_artifact_metadata": "artifacts/speech/*.json",
         "access_devices": "access/devices.json",
+        "computers": "access/computers.json",
         "access_server": "access/server.json",
     }
 )
@@ -96,7 +97,13 @@ DURABLE_DOCUMENTS: Mapping[str, str] = MappingProxyType(
 #: access configuration must never return through a restore: that would revive
 #: revoked devices or a weaker access mode the host replaced.
 DOCUMENTS_OUTSIDE_SNAPSHOTS: frozenset[str] = frozenset(
-    {"attachment_metadata", "speech_artifact_metadata", "access_devices", "access_server"}
+    {
+        "attachment_metadata",
+        "speech_artifact_metadata",
+        "access_devices",
+        "access_server",
+        "computers",
+    }
 )
 
 #: The JSON document set of a data snapshot: every other durable document.

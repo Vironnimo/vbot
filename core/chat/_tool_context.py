@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from core.agents import default_workspace_dir
 from core.chat.messages import JsonObject, ReplySurface
+from core.computers import normalize_execution
 from core.extensions import ExtensionRegistry
 from core.permissions import PermissionBoundary
 from core.runs import Run
@@ -51,6 +52,7 @@ class ToolDispatchContext:
     # The Run's Permission Boundary, which every Tool Call checks its accesses
     # against. Required: a dispatch that forgets it must not run unrestricted.
     permissions: PermissionBoundary
+    execution: JsonObject = field(default_factory=lambda: normalize_execution(None))
     project_cwd: Path | None = None
     project_id: str | None = None
     skill_project_id: str | None = None

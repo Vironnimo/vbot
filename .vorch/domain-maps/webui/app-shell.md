@@ -10,6 +10,8 @@ Before changing editor-replacing navigation or pending-save handling, read `webu
 
 Domain controllers still own their data. The app shell may request a refresh or route a lifecycle event, but it must not duplicate Chat, Provider, Extension, Project, or Settings rules.
 
+App provides one `lib/computers.svelte.js` catalog through Svelte context. It reads `computers.list` on `connection_ready` and `resource_changed(kind="computers")`; computer changes also refresh Terminal summaries. Concurrent reads coalesce, failed reads retain the last catalog and expose a retryable error, and teardown ignores late replies. Pickers retain selected IDs absent from a read as unavailable choices; a catalog update never changes a Session policy or silently chooses the server.
+
 App also creates the speech playback owner (`lib/speechAudio.svelte.js`) and destroys it on teardown. `appController.js` forwards connection and Run events to it independently of the selected view. The background playback bar shares this owner's media resource with Chat and links to its originating Session (`chat.md` -> Usage and errors).
 
 

@@ -12,6 +12,12 @@ The server side of `session.*`, `agent.*`, `tool.list`, `permissions.*` and `lea
 
 `session.set_fast_mode {agent_id, session_id, enabled}` accepts a Boolean and atomically changes only the Session's `fast_mode` metadata, then publishes a scoped Session invalidation. It never remembers an Agent default; `session.get` and lists expose the preference when true. Chat applies it at the next Model request (`chat/run-execution.md` -> Fast mode).
 
+## Session computer selection
+
+`session.create` accepts optional `execution: {computer_id, allowed_computer_ids}` and stores it with the creating transaction. `session.get` always exposes `session.execution`, defaulting to server-only for older Sessions. `session.set_execution {agent_id, session_id, execution}` returns `{execution}` and publishes the scoped Session invalidation. These explicit grants require an admitted operator request (`current_principal()`); internal Agent RPC calls cannot create or change them. Every id must be a known computer and the default must be included. Offline computers and disabled capabilities remain valid choices; dispatch checks the requested capability when a Tool runs.
+
+The setter holds the Session write lock and Run admission guard through persistence and publication. Active or queued work returns `session_busy`, so changing a default cannot redirect a Run already admitted. When editing a linked Sub-Agent, the requested grants must be a subset of its Parent's stored grants at that edit. Each Session otherwise keeps its own policy: editing the Parent alone does not rewrite existing children; a later delegation `send` intersects their grants (`subagents/delegation.md`). Unknown fields in stored policy survive mutation; unknown input fields are rejected. Coverage: `tests/server/rpc/test_session_methods_execution.py`.
+
 ## Permission Rules
 
 - `agent.create`/`agent.update` accept `permission_rules` (an object normalized by `normalize_permission_rules`, `null` removes it; a malformed set is `invalid_request` naming `params.permission_rules...`). Payload fields: `agent/configuration.md` -> Fields.

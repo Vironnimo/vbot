@@ -290,6 +290,7 @@ def validate_data_dir_config(data_dir: str | Path) -> tuple[JsonValidationReport
     )
     from core.calendar import validate_calendar_events_file
     from core.channels import validate_channel_file
+    from core.computers._store import validate_computers_file
     from core.extensions.config_validation import validate_extension_documents
     from core.model_tasks.artifacts import validate_task_artifact_metadata_file
     from core.projects import validate_project_file, validate_project_order_file
@@ -326,6 +327,7 @@ def validate_data_dir_config(data_dir: str | Path) -> tuple[JsonValidationReport
         "attachment_metadata": validate_attachment_metadata_file,
         "speech_artifact_metadata": validate_task_artifact_metadata_file,
         "access_devices": validate_device_store_file,
+        "computers": validate_computers_file,
         "access_server": validate_server_access_file,
     }
     core_documents = {

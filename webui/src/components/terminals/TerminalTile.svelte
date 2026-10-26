@@ -129,6 +129,12 @@
       <span class="terminals-view__tile-call">{item.call_name}</span>
     {/if}
     <span class="terminals-view__tile-label">{terminalLabel(item)}</span>
+    <span class="terminals-view__tile-state"
+      >{item.computer_name ||
+        (item.computer_id && item.computer_id !== 'server'
+          ? item.computer_id
+          : t('computers.server'))}</span
+    >
     {#if item.pinned}
       <span
         class="terminals-view__tile-pin"
@@ -194,6 +200,7 @@
           aria-pressed={isRecording}
           loading={speechBusy}
           disabled={serverUnavailable ||
+            item.computer_online === false ||
             stream.status !== TERMINAL_STREAM_CONNECTED ||
             (!!viewState.speechTerminalId && !hasSpeech) ||
             !renderer.hasRenderer(item.terminal_id)}
@@ -256,6 +263,13 @@
     </span>
   </div>
   <div class="terminals-view__tile-chrome" role="presentation">
+    {#if item.computer_online === false && !isFinished && !serverUnavailable}
+      <Banner variant="warn" class="terminals-view__tile-feedback">
+        {t('computers.selectedOffline', {
+          name: item.computer_name || item.computer_id,
+        })}
+      </Banner>
+    {/if}
     {#if stream.errorCode === 'gap' && !serverUnavailable}
       <Banner variant="warn" class="terminals-view__tile-feedback">
         <span>

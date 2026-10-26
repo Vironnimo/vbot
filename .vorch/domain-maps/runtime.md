@@ -12,6 +12,8 @@ Blocking in-process work crosses named `BoundedWorkerPool`s, and owners that mus
 
 Construction order other domains rely on: the canonical `UsageRecorder` follows the Model registry and canonical Sessions (its generation/lineage source), imports retained historical Usage before any Agent lifecycle operation, and is injected into Task services, Chat, Compaction, titles and Statistics (`usage.md`); async shutdown drains those producers and the Statistics readers before closing it, and failed-startup cleanup closes it too; `canonical_databases()` and offline declarations include `model-usage.db`. AttachmentStore collects unreferenced Session-owned attachments and expired unused uploads right after Sessions open, before any producer is admitted, and again only after a clean async shutdown drain (`attachments.md`). `ScratchAreas` follows Sessions and the Run manager, which supply its generation lookup and busy snapshot (`tools/scratch.md`).
 
+Runtime builds `ComputerRegistry` before TerminalManager, injects it into TerminalManager and API 21 Extension hosts, and closes it after terminal cleanup (`computers.md`).
+
 ## Bootstrap
 
 `start()` is idempotent and runs dependency-ordered phases (`_bootstrap.py`; every phase and its services: `runtime/lifecycle-steps.md`). Any exception after startup work begins runs the synchronous shutdown steps (Shutdown) for every service built so far (`clean_up_failed_startup`), which clears references and closes logging; a failing step is logged with its step name but never raised, the failure is logged once at ERROR (`Runtime startup failed`), and the startup error is re-raised unchanged. The same Runtime can retry after failure (`tests/core/runtime/test_runtime_lifecycle.py`). Ordering invariants worth knowing before touching bootstrap:
@@ -53,8 +55,7 @@ All service properties raise `RuntimeError` outside a started runtime, **except 
 - `command_dispatcher` - the canonical stable dispatcher; server/accessor code must reuse `runtime.chat_loop` / `runtime.command_dispatcher` - no probing, no fallback construction (stub runtimes must provide them).
 - `build` - the `BuildIdentity` of the running code (`core/utils/version.py`: version, source commit, and release or branch), resolved once at startup because a checkout's HEAD moves on while the process keeps running its startup code. A packaged version reads its `release.json` (`cli/application.md`); a Git checkout, Worktree included, its HEAD files without running Git, where a detached HEAD counts as a release only when the tag `v<version>` points at it. The System Prompt's `{vbot_version}` and `settings.get` `general.build` read it (`tests/core/utils/test_version.py`).
 - `performance` - the process `PerformanceService`; instrumented code records through the module-level `core.performance` functions instead of this property (`performance.md`).
-
-The stateless `DecisionService` (no public accessor, no background work, no shutdown step) is passed to the `classify` Tool registration; future Decision-Model Tools register against the same instance (`model_tasks/decisions.md`). `live_voice` (`LiveVoiceService`) holds no background work itself; the server's call registry ends active Live calls in the lifespan before the Runtime closes (`model_tasks/live.md`).
+- `computers` - the shared `ComputerRegistry` for Computer discovery, Session-policy resolution and native capability requests (`computers.md`).
 
 ### Hot-reload seams
 
@@ -85,3 +86,4 @@ Read these only when your task matches - not by default.
 - Changing Runtime's Extension host side (`ExtensionHostFactory`, temporary execution groups, editor catalogs, `inspect_prompt`, `_prompt_blocks.py`, Extension sampling, `resolve_tool_agent`) -> `runtime/extension-host.md`
 - Changing the Identity Agent rename or `agent_references` -> `runtime/agent-rename.md`
 - Adding, removing or reordering a service in bootstrap or shutdown, or tracing why a phase or step sits where it does -> `runtime/lifecycle-steps.md`
+- Wiring native execution, Computer identity or Desktop capability routing -> `computers.md`

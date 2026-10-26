@@ -1008,6 +1008,7 @@ describe('SettingsView', () => {
         document.querySelector('[data-settings-section="desktop_connection"]'),
       ).toBeNull();
       for (const desktopSection of [
+        'computer_sharing',
         'microphone',
         'live_voice_shortcut',
         'desktop_dictation',
@@ -1123,6 +1124,13 @@ describe('SettingsView', () => {
             },
           ]),
           listWakewordModels: vi.fn().mockResolvedValue([]),
+          getComputerSharing: vi.fn().mockResolvedValue({
+            computer_id: 'pc_laptop',
+            name: 'Work laptop',
+            connected: true,
+            capabilities: { terminal: true, computer_use: false },
+            available: { terminal: true, computer_use: true },
+          }),
         },
       };
 
@@ -1134,6 +1142,7 @@ describe('SettingsView', () => {
             wakeword: true,
             voiceApi: 3,
             serverSelection: true,
+            computerSharing: true,
           },
           desktopVoice: {
             available: true,
@@ -1195,6 +1204,11 @@ describe('SettingsView', () => {
       expect(
         document.querySelector('.desktop-connection-settings'),
       ).toBeTruthy();
+      expect(
+        document
+          .querySelector('[role="switch"][aria-label="Share Terminal"]')
+          ?.getAttribute('aria-checked'),
+      ).toBe('true');
     });
   });
 

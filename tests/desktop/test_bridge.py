@@ -128,6 +128,8 @@ def test_pywebview_sees_only_the_bridge_methods() -> None:
         "forgetSignIn",
         "getDesktopUpdate",
         "restartDesktop",
+        "getComputerSharing",
+        "setComputerSharing",
     }
 
 
@@ -261,6 +263,7 @@ def test_capabilities_announce_the_voice_bridge_version_and_optional_services(
         "secureOrigins": ["http://a.lan:8420", "http://pi.lan:9000"],
         "restart": False,
         "signIn": False,
+        "computerSharing": False,
     }
 
 
@@ -669,6 +672,49 @@ def test_without_a_way_to_ask_another_servers_page_is_refused() -> None:
     for bridge in (asking, unasked):
         with pytest.raises(BridgeError, match="^declined$"):
             bridge.getClipboardText()
+
+
+@pytest.mark.parametrize("outcome", ["allow", "decline", "navigate"])
+def test_computer_grants_need_native_consent_for_the_unchanged_selected_server(
+    outcome: str,
+) -> None:
+    page = ["https://remote.example/"]
+    applied: list[Any] = []
+    questions: list[str] = []
+
+    def confirm(_title: str, message: str) -> bool:
+        questions.append(message)
+        if outcome == "navigate":
+            page[0] = OWN_SERVER
+        return outcome != "decline"
+
+    status = {
+        "server_url": "https://remote.example/",
+        "capabilities": {"terminal": False, "computer_use": False},
+    }
+
+    def update(changes: Any, *, expected_server: str) -> dict[str, Any]:
+        applied.append((changes, expected_server))
+        return status
+
+    sharing = SimpleNamespace(status=lambda: status, update=update)
+    bridge, _ = _bridge(
+        computer_sharing=sharing,
+        permissions=_page_permissions(lambda: page[0], confirm),
+    )
+    assert bridge.getDesktopCapabilities()["computerSharing"] is True
+    assert bridge.getComputerSharing() == status
+    if outcome == "allow":
+        bridge.setComputerSharing({"terminal": True})
+        assert applied == [({"terminal": True}, "https://remote.example/")]
+    else:
+        with pytest.raises(BridgeError) as raised:
+            bridge.setComputerSharing({"terminal": True})
+        assert str(raised.value) == (
+            "declined" if outcome == "decline" else "computer_server_changed"
+        )
+        assert applied == []
+    assert len(questions) == 1
 
 
 def test_servers_are_remembered_listed_with_the_active_one_and_forgotten(

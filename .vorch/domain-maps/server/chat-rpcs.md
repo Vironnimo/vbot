@@ -12,6 +12,8 @@ Live Run and Queue dispositions retain their existing shapes and add `input_id`.
 
 A new Session target may also carry Boolean `fast_mode` (default false), captured before its first Run. Existing Sessions change it through `session.set_fast_mode`; see `chat/run-execution.md` -> Fast mode.
 
+`new_session.execution` optionally supplies the operator's `{computer_id, allowed_computer_ids}` selection. Chat persists it in the Session's creating write before its first Run or Session-creating command; it participates in the ordinary submission fingerprint, so retries retain the original selection. Only an admitted operator request may supply it. An existing-Session send never changes its grants; use `session.set_execution` while idle (`server/session-agent-rpcs.md` -> Session computer selection).
+
 ## Working Project of chat reads
 
 `chat.commands`, `prompt.preview` and `files.list` take an optional `session_id` (that Session's Working Project counts) or, without one, a `working_project_id` validated as for `session.create` (the Project a new Session would work in); naming both is `invalid_request` (`validation.py::_draft_working_project`). For a Session whose Working Project no longer exists, `chat.commands` offers no Skills, while `files.list`, `prompt.preview` and every Run start fail with `domain_error` and the `WORKING_PROJECT_MISSING_MESSAGE` text (`projects/resolution.md` -> Working Project resolution). Tests: `tests/server/rpc/test_catalog_methods.py`, `test_operations_methods.py`, `test_session_methods.py`.

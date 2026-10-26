@@ -1,5 +1,7 @@
 # Chat External Runs
 
+Every external Tool call reads its Session's current `execution` policy and carries it in `ToolContext.execution`, matching native Chat's computer grants. Missing policy remains server-only; an inherited revoked default stays revoked. Coverage: `test_external_run_tool_calls_work_in_the_project_inside_the_agents_rules`.
+
 How `ChatLoop.start_external_run` (`core/chat/_external_run.py`) records a conversation whose turns a Model outside the Agentic Loop produces, today the voice model of a Live call (`model_tasks/live.md` -> Live Agents and Sessions).
 
 - `start_external_run` creates a new Session titled by the caller and one Run in it (default kind `live`, no Agent activity) and returns an `ExternalRun`.

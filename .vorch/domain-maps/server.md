@@ -62,6 +62,7 @@ Agent create/update/rename/delete likewise enter through the reference lock befo
 Read these only when your task matches - not by default.
 
 - Shared `/ws` events, reconnect/epoch replay, presence, `resource_changed`, Run bridging, SSE replay, WebSocket send/receive pumps, log-socket handoff -> `server/events-and-reconnect.md`
+- Native `/ws/computers` command connection -> `computers.md`
 - Changing `server/main.py` startup or shutdown, uvicorn options, the `create_app` hooks, the start or stop line, exit statuses, the control route, record or claim, the restart callback, or `application.update_*` -> `server/process-lifecycle.md`
 - Changing `/api/files/`, Tool media projection, website previews, Extension page routes and streams, the opaque-origin exceptions, or `/api/oauth/callback` -> `server/browser-capabilities.md`
 - Changing `chat.send`/`chat.stream`, `chat.history` paging, `chat.edit`, `chat.timeline`, `chat.queue_update`, `chat.work`, or the Working Project of chat reads -> `server/chat-rpcs.md`

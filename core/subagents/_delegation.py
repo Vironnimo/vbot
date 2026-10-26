@@ -6,6 +6,7 @@ from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, cast
 
 from core.agents import is_builtin_agent
+from core.computers import normalize_execution
 from core.projects import (
     AgentOverrides,
     AgentResolutionError,
@@ -198,6 +199,7 @@ def _open_subagent_session(
     )
     metadata[SESSION_AUTO_TITLE_KEY] = title
     metadata[SESSION_AUTO_TITLE_INITIALIZED_KEY] = True
+    metadata["execution"] = normalize_execution(context.execution)
     # Delegated work of an Ephemeral Session expires with it.
     if sessions.metadata_value(_caller(context), SESSION_EPHEMERAL_META_KEY) is True:
         metadata[SESSION_EPHEMERAL_META_KEY] = True
@@ -211,6 +213,25 @@ def _open_subagent_session(
             else _child_working_project(context, project_id)
         ),
     )
+
+
+def _narrow_session_execution(
+    runtime: RuntimeServices, address: SessionAddress, execution: JsonObject
+) -> None:
+    """Pass a Parent's current computer ceiling without changing the child's target."""
+    permitted = set(normalize_execution(execution)["allowed_computer_ids"])
+
+    def narrow(metadata: JsonObject) -> None:
+        stored = metadata.get("execution")
+        current = normalize_execution(stored)
+        current["allowed_computer_ids"] = [
+            computer_id
+            for computer_id in current["allowed_computer_ids"]
+            if computer_id in permitted
+        ]
+        metadata["execution"] = {**(stored if isinstance(stored, dict) else {}), **current}
+
+    runtime.chat_sessions.mutate_metadata(address, narrow)
 
 
 async def _remove_unstarted_session(

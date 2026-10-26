@@ -61,6 +61,7 @@ def test_definition_follows_flat_action_conventions_within_its_budget(tmp_path: 
     assert list(properties) == [
         "action",
         "terminal_id",
+        "computer_id",
         "command",
         "args",
         "workdir",
@@ -206,6 +207,9 @@ async def test_start_returns_the_first_screen_once_startup_output_settles(
     data = cast(dict[str, Any], result["data"])
     assert data == {
         "terminal_id": data["terminal_id"],
+        "computer_id": "server",
+        "computer_name": "Server",
+        "computer_online": True,
         "call_name": "Anna",
         "state": "running",
         "screen": data["screen"],
@@ -794,6 +798,9 @@ async def test_attach_grants_full_contract_and_detach_only_removes_binding(
     attached = await run({"action": "attach"})
     assert attached["data"] == {
         "terminal_id": terminal_id,
+        "computer_id": "server",
+        "computer_name": "Server",
+        "computer_online": True,
         "call_name": "Anna",
         "program": "host-shell",
         "state": "running",

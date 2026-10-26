@@ -24,6 +24,8 @@ Session/address ownership and execution context are separate. `run.project_id` i
 
 ## Agentic progression and events
 
+The Run context reads the Session's `execution` computer policy at creation and again before each Tool round. It travels through `ToolDispatchContext`, `ToolExecutionConfig`, and a fresh `ToolContext.execution` for every call. The default is server-only; explicit empty grants and a revoked default remain intact. Operator edits are idle-only, while delegation may narrow a running Sub-Agent's grants before its next round (`subagents/delegation.md`). Tool arguments can choose only within this context's grants and cannot edit them. Coverage: `test_computer_authority_is_refreshed_before_each_tool_round` and `tests/server/rpc/test_session_methods_execution.py`.
+
 Scratch announcements are optional preparation after the first valid request
 is built (`tools/scratch.md`). An unavailable folder leaves that request intact;
 the Scratch owner logs the condition. Failures while persisting or adding the

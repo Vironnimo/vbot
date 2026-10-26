@@ -499,6 +499,8 @@
     <Panel {devicesRefreshToken} {onToast} />
   {:else if panelId === 'desktop_connection'}
     <Panel {onToast} />
+  {:else if panelId === 'computer_sharing'}
+    <Panel />
   {:else if panelId === 'live_voice_shortcut'}
     <Panel {onToast} />
   {:else if panelId === 'microphone'}

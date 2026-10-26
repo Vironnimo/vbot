@@ -154,6 +154,7 @@ export function createAppController({
   acknowledgeIncident = acknowledgeDataStoreIncident,
   onCheckWebuiBuild = async () => {},
   onSpeechEvent = () => {},
+  onComputersChanged = async () => {},
   unavailableNoticeDelayMs = SERVER_UNAVAILABLE_NOTICE_DELAY_MS,
   restoredNoticeDurationMs = SERVER_RESTORED_NOTICE_DURATION_MS,
 }) {
@@ -296,6 +297,7 @@ export function createAppController({
         loadBackgroundActivity,
         onReloadExtensionPages,
         onCheckWebuiBuild,
+        onComputersChanged,
       ];
       if (
         event.replay_status === CONNECTION_REPLAY_STATUS_GAP ||
@@ -383,6 +385,10 @@ export function createAppController({
 
     const kind = event.payload?.kind;
     noteInvalidation(kind);
+    if (kind === 'computers') {
+      await onComputersChanged();
+      state.terminalsRefreshToken += 1;
+    }
     if (kind === 'extensions') {
       // An owner-scoped change names data that Extension shows; an unscoped
       // one follows a reload, whose page descriptors may differ.

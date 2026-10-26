@@ -45,7 +45,7 @@ MAX_BATCH_ACTIONS = 60
 MAX_PATH_POINTS = 200
 
 COMPUTER_DESCRIPTION = (
-    "Operate the desktop of the computer the vBot server runs on (Windows) with "
+    "Operate the selected computer's desktop (Windows) with "
     "screenshots, mouse and keyboard. Start with a screenshot; it shows the foreground "
     "window unless you choose a whole display with view. Coordinates are [x, y] pixels of "
     "the latest screenshot, counted from its top-left corner: use the position where you "
@@ -66,14 +66,15 @@ COMPUTER_BATCH_DESCRIPTION = (
     "clicking a field, typing and pressing enter. Actions run in order; the batch stops "
     "at the first one that fails, and the result says which steps ran and, if input was "
     "sent, shows the screen in a fresh screenshot. Each action takes "
-    "the same fields as computer, except display. Coordinates refer to screenshots you "
-    "received before this call: the latest one, or the one named by screenshot_id. Screenshot and "
+    "the same fields as computer, except display and computer_id. Coordinates refer to "
+    "screenshots you received before this call: the latest one, or the one named by "
+    "screenshot_id. Screenshot and "
     "zoom actions return their images after the batch, in order, and a batch that sent "
     "input ends with a fresh screenshot."
 )
 
 COMPUTER_APPS_DESCRIPTION = (
-    "Find apps on the server's desktop and bring them to the front for computer. list "
+    "Find apps on the selected computer's desktop and bring them to the front for computer. list "
     "shows the displays, the running apps and whether the user requires approval per "
     "app; with query it also searches the installed apps. open brings an app to the "
     "front, starting it if needed, and returns a screenshot. request is needed only when "
@@ -189,9 +190,21 @@ _DISPLAY_PROPERTY = {
     ),
 }
 
+_COMPUTER_PROPERTY = {
+    "type": "string",
+    "description": (
+        "Computer id or exact name. Omit to use this Session's default computer; "
+        "choose another only when the user's task calls for it."
+    ),
+}
+
 COMPUTER_PARAMETERS: dict[str, Any] = {
     "type": "object",
-    "properties": {**_ACTION_PROPERTIES, "display": _DISPLAY_PROPERTY},
+    "properties": {
+        **_ACTION_PROPERTIES,
+        "display": _DISPLAY_PROPERTY,
+        "computer_id": _COMPUTER_PROPERTY,
+    },
     "required": ["action"],
 }
 
@@ -204,6 +217,7 @@ _BATCH_ITEM: dict[str, Any] = {
 COMPUTER_BATCH_PARAMETERS: dict[str, Any] = {
     "type": "object",
     "properties": {
+        "computer_id": _COMPUTER_PROPERTY,
         "actions": {
             "type": "array",
             "items": _BATCH_ITEM,
@@ -222,6 +236,7 @@ COMPUTER_BATCH_PARAMETERS: dict[str, Any] = {
 COMPUTER_APPS_PARAMETERS: dict[str, Any] = {
     "type": "object",
     "properties": {
+        "computer_id": _COMPUTER_PROPERTY,
         "action": {"type": "string", "enum": list(APPS_ACTIONS), "description": "What to do."},
         "apps": {
             "type": "array",
@@ -722,7 +737,10 @@ def normalize_batch(arguments: Any) -> Any:
         arguments = {"actions": arguments}
     elif isinstance(arguments, dict) and "action" in arguments and "actions" not in arguments:
         # One action sent on its own is a batch of one.
-        arguments = {"actions": [arguments]}
+        action = dict(arguments)
+        arguments = {"actions": [action]}
+        if "computer_id" in action:
+            arguments["computer_id"] = action.pop("computer_id")
     repaired = normalize_call_arguments(
         _BATCH_CONTRACT,
         arguments,

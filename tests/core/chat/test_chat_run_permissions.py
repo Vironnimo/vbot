@@ -327,6 +327,31 @@ async def test_a_rule_edit_reaches_the_next_tool_round_of_an_active_run(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_computer_authority_is_refreshed_before_each_tool_round(tmp_path: Path) -> None:
+    address = SessionAddress(None, "coder", "s1")
+    initial = {"computer_id": "laptop", "allowed_computer_ids": ["laptop", "server"]}
+    narrowed = {"computer_id": "laptop", "allowed_computer_ids": []}
+
+    def tighten() -> None:
+        if len(seen) == 1:
+            runtime.chat_sessions.mutate_metadata(
+                address, lambda metadata: metadata.update(execution=narrowed)
+            )
+
+    runtime, seen = _runtime(
+        tmp_path,
+        None,
+        turns=[tool_turn(("call_1", "probe")), tool_turn(("call_2", "probe")), final("Done")],
+        on_call=tighten,
+    )
+    runtime.chat_sessions.mutate_metadata(
+        address, lambda metadata: metadata.update(execution=initial)
+    )
+    await build_chat_loop(runtime).send("coder", "Work", session_id="s1")
+    assert [context.execution for context in seen] == [initial, narrowed]
+
+
+@pytest.mark.asyncio
 async def test_the_permissions_block_is_pinned_and_a_change_is_announced_once(
     tmp_path: Path,
 ) -> None:

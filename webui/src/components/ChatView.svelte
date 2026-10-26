@@ -1067,6 +1067,7 @@
                       onSelectModel={sessionSettings.selectModel}
                       onSelectFastMode={sessionSettings.selectFastMode}
                       onSelectThinkingEffort={sessionSettings.selectThinkingEffort}
+                      onSelectExecution={sessionSettings.selectExecution}
                       onModelPickerOpen={() =>
                         void sessionSettings.loadCatalog().catch(() => {})}
                     />

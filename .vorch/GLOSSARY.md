@@ -56,6 +56,9 @@ Which clients a vBot server admits and whether they must sign in: `local`, `lan`
 ## Device
 A paired client installation, such as a browser profile, a Desktop app or a CLI, that the host or another Device approved to sign in to a server in the Access Mode `authenticated`, with its own revocable token (`access.md`). Not an Accessor kind, a Client in the server's presence registry, a Channel, or the computer itself: one computer can hold several Devices.
 
+## Computer
+An execution target for a Session: the server host or a Desktop installation sharing native capabilities such as Terminal and Computer Use (`computers.md`). Not a Device, which grants access to a server, or a second Agent runtime.
+
 ## Streaming
 Incremental output from an executing Run as the server delivers it to Accessors. Same Run and semantics as a normal send, delivered while it happens; not a separate chat system.
 

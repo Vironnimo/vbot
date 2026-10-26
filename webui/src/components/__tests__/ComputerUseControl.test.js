@@ -171,10 +171,14 @@ it('disables Stop while the interrupted call drains and allows the next control'
   operation.mockResolvedValue({
     ...ready,
     control_id: 'test-owned-next-control',
+    computer_id: 'pc_laptop',
+    computer_name: 'Work laptop',
   });
   await invalidate(changed);
-  expect(button('Stop computer control').disabled).toBe(false);
-  button('Stop computer control').click();
+  const stop = button('Stop computer control on Work laptop');
+  expect(stop.disabled).toBe(false);
+  expect(stop.textContent).toContain('Work laptop');
+  stop.click();
   await settle();
   expect(operation).toHaveBeenLastCalledWith('computer_use', 'control', {
     action: 'stop',

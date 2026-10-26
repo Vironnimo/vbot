@@ -352,12 +352,14 @@ def test_snapshot_documents_leave_out_blob_sidecars_and_the_access_documents(
         "artifacts/attachments/*.json",
         "artifacts/speech/*.json",
         "access/devices.json",
+        "access/computers.json",
         "access/server.json",
     }
     # A restore must never revive a revoked device or a weaker access mode: no
     # data snapshot and no configuration backup holds the access documents.
     (tmp_path / "access").mkdir()
     (tmp_path / "access" / "devices.json").write_text('{"format_version": 1, "devices": []}')
+    (tmp_path / "access" / "computers.json").write_text('{"format_version": 1, "computers": []}')
     (tmp_path / "access" / "server.json").write_text('{"format_version": 1}')
     (tmp_path / "settings.json").write_text("{}")
     assert snapshot_document_paths(tmp_path) == ("settings.json",)

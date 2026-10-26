@@ -10,6 +10,8 @@ The window is created before the GUI loop with the connection screen as initial 
 
 ## Single instance
 
+The shown app also owns native computer sharing; closing fences its requests and confirms stopping local Terminals before its shutdown (`desktop/computer-sharing.md`). This lifetime is independent of page navigation.
+
 Windows only, `desktop/_windows.py`: before creating a window, `launch_desktop` claims a named mutex scoped to the Desktop config directory (`Local\vBot.Desktop.<digest>.instance`, digest = the first 16 hex characters of the SHA-256 of the resolved directory). A later launch for the same directory signals the running instance through the named auto-reset event `Local\vBot.Desktop.<digest>.activate` and returns without a window (an explicit `--host/--port` without `--open-session` is logged and ignored); the running instance's daemon listener brings its window to the front, restoring a minimized window (maximized again if it was). Different config directories (tests, portable setups) never collide; a failure to create the guard logs and continues unguarded; other platforms have no guard. A second process would share the WebView2 profile (differing browser arguments leave a blank window) and compete for the microphone and the global shortcut.
 
 ## Request handoff

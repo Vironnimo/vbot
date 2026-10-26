@@ -9,6 +9,24 @@ SHAPES = ("server", "server-desktop", "desktop-client")
 APP_COMMON = ("core", "cli")
 APP_SERVER = ("server", "resources", "webui/dist")
 APP_DESKTOP = ("desktop",)
+# The Desktop Client hosts the native desktop target without loading the
+# Extension or its server-side Tool services. Keep the same source modules in
+# both installation shapes; the containing directories are namespace packages.
+APP_DESKTOP_TARGET = tuple(
+    f"resources/extensions/computer_use/{name}.py"
+    for name in (
+        "__init__",
+        "target",
+        "windows_target",
+        "hotkey",
+        "_win32",
+        "_win_input",
+        "_win_apps",
+        "_win_overlay",
+        "_color_filter",
+        "_remote_wire",
+    )
+)
 APP_FILES = ("pyproject.toml", "LICENSE", "THIRD_PARTY_NOTICES.md")
 IGNORED_NAMES = {"__pycache__", ".git", ".mypy_cache", ".pytest_cache", ".ruff_cache"}
 
@@ -28,6 +46,8 @@ def app_paths(shape: str) -> tuple[str, ...]:
         paths.extend(APP_SERVER)
     if shape != "server":
         paths.extend(APP_DESKTOP)
+    if shape == "desktop-client":
+        paths.extend(APP_DESKTOP_TARGET)
     paths.extend(APP_FILES)
     return tuple(paths)
 

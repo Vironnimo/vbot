@@ -1,4 +1,4 @@
-"""Computer Use: operate the server host's desktop with screenshots, mouse and keyboard.
+"""Computer Use: operate a selected desktop with screenshots, mouse and keyboard.
 
 ``ComputerUseService`` owns the lifecycle, the Agent permission check, the
 access mode with its per-Session approvals and requests, call serialization on
@@ -17,11 +17,11 @@ import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from core.extensions import ExtensionAPI
 from core.extensions.operations import PENDING_INPUTS_RESOURCE, ExtensionHost
-from core.tools import ToolContext, ToolDisplay, tool_failure, tool_success
+from core.tools import ToolContext, tool_failure, tool_success
 from core.tools.availability import resolve_tool_access
 from core.utils.ids import new_id
 from core.utils.workers import settle_before_cancelling
@@ -45,25 +45,16 @@ from ._presentation import (
     _target_text,
     _with_screen,
 )
-from ._tools import (
-    COMPUTER_APPS_DESCRIPTION,
-    COMPUTER_APPS_PARAMETERS,
-    COMPUTER_BATCH_DESCRIPTION,
-    COMPUTER_BATCH_PARAMETERS,
-    COMPUTER_DESCRIPTION,
-    COMPUTER_PARAMETERS,
-    RESULT_SCHEMA,
-    normalize_apps,
-    normalize_batch,
-    normalize_computer,
-)
+from ._registration import register as register
 from .target import DesktopTarget, InputInterrupted, TargetError
 
-UNSUPPORTED = "Computer Use currently supports Windows server hosts."
+if TYPE_CHECKING:
+    from ._routing import ComputerRouting
+
+UNSUPPORTED = "Computer Use requires a Windows desktop on the selected computer."
 READINESS_HINT = (
-    "Computer Use works when the vBot server runs on Windows in a signed-in desktop session."
+    "Computer Use needs a signed-in Windows desktop on the server or a connected Desktop app."
 )
-TOOL_FAMILY = "computer_use"
 # After input, the screen gets this long to react before the result's screenshot.
 SETTLE_SECONDS = 0.5
 # Between two input actions of a batch, so menus and focus can follow.
@@ -81,13 +72,15 @@ _STOPPED_BY = {
     "double_escape": "The user stopped Computer Use by pressing Esc twice",
     "run_cancel": "The Run was cancelled",
     "shutdown": "vBot is shutting down, which stopped Computer Use",
+    "connection_lost": "The computer connection ended, which stopped Computer Use",
 }
 
 
 class Hotkey(Protocol):
     """The global double-Esc stop, armed while an Agent controls the desktop."""
 
-    available: bool
+    @property
+    def available(self) -> bool: ...
 
     def start(self) -> None: ...
 
@@ -122,27 +115,19 @@ def _new_hotkey(callback: Callable[[object], None]) -> Hotkey:
     return hotkey
 
 
-def _summary(arguments: dict[str, Any]) -> str | None:
-    actions = arguments.get("actions")
-    if not isinstance(actions, list):
-        return None
-    words = [str(item.get("action") or "?") for item in actions if isinstance(item, dict)]
-    return f"{len(actions)} actions: " + "; ".join(words)
-
-
-def _apps_summary(arguments: dict[str, Any]) -> str | None:
-    apps = arguments.get("apps")
-    subject = arguments.get("app") or arguments.get("query")
-    if isinstance(apps, list):
-        subject = ", ".join(str(app) for app in apps)
-    action = arguments.get("action")
-    return f"{action} · {subject}" if action and subject else None
-
-
 class ComputerUseService:
     """Desktop access for Agents: permission, approvals, serialization and stop control."""
 
-    def __init__(self, api: ExtensionAPI) -> None:
+    def __init__(
+        self,
+        api: ExtensionAPI,
+        *,
+        target_factory: Callable[[], DesktopTarget] | None = None,
+        hotkey_factory: Callable[[Callable[[object], None]], Hotkey] | None = None,
+        computer_name: str | None = None,
+        on_call_start: Callable[[], None] | None = None,
+        on_interrupt: Callable[[], None] | None = None,
+    ) -> None:
         self.api = api
         self.host: ExtensionHost | None = None
         self.sessions = Sessions()
@@ -175,23 +160,33 @@ class ComputerUseService:
         self._inputs_revision = 0
         # The Run whose left_mouse_down still holds the left button.
         self._held_run: str | None = None
+        self._target_factory = target_factory
+        self._hotkey_factory = hotkey_factory
+        self._computer_name = computer_name
+        self._on_call_start = on_call_start
+        self._on_interrupt = on_interrupt
+        self._routing: ComputerRouting | None = None
 
     # Lifecycle
 
     async def start(self, host: ExtensionHost) -> None:
         self.host = host
         self._loop = asyncio.get_running_loop()
+        if self._computer_name is None:
+            from ._routing import ComputerRouting
+
+            self._routing = ComputerRouting(self, host)
         self._executor = ThreadPoolExecutor(1, thread_name_prefix="computer-use")
         target: DesktopTarget | None = None
         try:
-            target = await self._on_worker(_new_target)
+            target = await self._on_worker(self._target_factory or _new_target)
             await self._on_worker(target.set_stop_event, self._stop)
             reason = await self._on_worker(target.readiness)
         except TargetError as error:
             reason = str(error)
         except Exception:
             self.api.logger.exception("Computer Use could not start its desktop target")
-            target, reason = None, "Computer Use could not start on this host."
+            target, reason = None, "Computer Use could not start on the selected computer."
         self._target, self._unready, self._checked = target, reason, time.monotonic()
         if reason is not None:
             self.api.logger.info("Computer Use is not ready: %s", reason)
@@ -203,6 +198,8 @@ class ComputerUseService:
         self.interrupt(source="shutdown")
         self.access.cancel_all()
         self._end_control()
+        if self._routing is not None:
+            await self._routing.close()
         if self._hotkey is not None:
             self._hotkey.close()
         executor, target = self._executor, self._target
@@ -226,6 +223,8 @@ class ComputerUseService:
 
     async def run_end(self, context: Any, **_: Any) -> None:
         """End the Run's desktop control and release a mouse button it left pressed."""
+        if self._routing is not None:
+            await self._routing.run_end(context)
         run_id = getattr(context, "run_id", None) or ""
         with self._control_lock:
             self._stopped_runs.pop(run_id, None)
@@ -241,6 +240,8 @@ class ComputerUseService:
                     self.api.logger.warning("Computer Use could not release input", exc_info=True)
 
     def ready(self) -> bool:
+        if not self._closed and self._routing is not None and self._routing.ready():
+            return True
         if self._closed or self._target is None:
             return False
         if self._unready is not None:
@@ -348,6 +349,8 @@ class ComputerUseService:
                 return
             self._stop_source = source
             self._stop.set()
+            if self._on_interrupt is not None:
+                self._on_interrupt()
             self._release_input()
             loop, stopped = self._loop, self._stopped
             if loop is not None:
@@ -377,6 +380,10 @@ class ComputerUseService:
         executor.submit(release)
 
     async def control(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        if self._routing is not None:
+            routed = await self._routing.control(arguments)
+            if routed is not None:
+                return routed
         action = arguments.get("action", "status")
         with self._control_lock:
             control_id = arguments.get("control_id")
@@ -414,7 +421,14 @@ class ComputerUseService:
             self.api.logger.debug("Pending input change not published: registration retired")
 
     async def respond(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        if self._routing is not None:
+            routed = await self._routing.respond(arguments)
+            if routed is not None:
+                return routed
         return self.access.respond(arguments.get("request_id"), arguments.get("response"))
+
+    def pending_inputs(self) -> list[dict[str, Any]]:
+        return self.access.list() + (self._routing.pending_inputs() if self._routing else [])
 
     # Desktop control
 
@@ -491,7 +505,8 @@ class ComputerUseService:
             self._loop = asyncio.get_running_loop()
             if self._hotkey is None:
                 # The global keyboard hook starts with the first call that needs it.
-                hotkey = _new_hotkey(lambda armed: self.stop(armed, source="double_escape"))
+                factory = self._hotkey_factory or _new_hotkey
+                hotkey = factory(lambda armed: self.stop(armed, source="double_escape"))
                 try:
                     await self._on_worker(hotkey.start)
                     if self._closed:
@@ -505,14 +520,15 @@ class ComputerUseService:
             with self._control_lock:
                 stopped_by = self._stopped_runs.get(run_id)
                 if stopped_by is not None:
-                    how = {"double_escape": " by pressing Esc twice", "control": ""}
                     raise CallRefusedError(
                         "computer_use_interrupted",
-                        f"The user stopped Computer Use{how.get(stopped_by, '')}. Nothing was "
+                        f"{_STOPPED_BY.get(stopped_by, _STOPPED_BY['control'])}. Nothing was "
                         f"done. {_STOPPED_ADVICE}",
                     )
                 self._active, self._stop_source = owner, None
                 self._stop.clear()
+                if self._on_call_start is not None:
+                    self._on_call_start()
                 self._stopped = asyncio.Event()
                 cancelled = context.is_cancelled() or context.was_cancelled_by_user()
                 if not cancelled:
@@ -641,6 +657,11 @@ class ComputerUseService:
         return self.sessions.use(key), agent
 
     async def computer(self, context: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+        if self._routing is not None:
+            routed = await self._routing.call("computer", context, arguments)
+            if routed is not None:
+                return routed
+
         async def work(access: Access, agent: Any, desktop: Desktop) -> str:
             action = parse_action(arguments)
             async with self._active_call(context):
@@ -710,6 +731,11 @@ class ComputerUseService:
     async def computer_batch(
         self, context: ToolContext, arguments: dict[str, Any]
     ) -> dict[str, Any]:
+        if self._routing is not None:
+            routed = await self._routing.call("computer_batch", context, arguments)
+            if routed is not None:
+                return routed
+
         async def work(access: Access, agent: Any, desktop: Desktop) -> str:
             actions = []
             for number, item in enumerate(arguments["actions"], start=1):
@@ -791,6 +817,11 @@ class ComputerUseService:
     async def computer_apps(
         self, context: ToolContext, arguments: dict[str, Any]
     ) -> dict[str, Any]:
+        if self._routing is not None:
+            routed = await self._routing.call("computer_apps", context, arguments)
+            if routed is not None:
+                return routed
+
         async def work(access: Access, agent: Any, desktop: Desktop) -> str:
             action = arguments.get("action")
             if action == "list":
@@ -825,7 +856,9 @@ class ComputerUseService:
         new = [app for app in resolution.apps if not access.state.granted(app)]
         if not new:
             return f"Already approved in this Session: {access.state.describe()}. {notes}".strip()
-        message = request_message(str(agent.name), new, arguments.get("reason"))
+        message = request_message(
+            str(agent.name), new, arguments.get("reason"), computer=self._computer_name
+        )
         answer = await self._ask(context, message)
         self.api.logger.info(
             "Computer Use access %s (apps=%d)",
@@ -929,103 +962,6 @@ class ComputerUseService:
             'computer {"action":"wait","duration":3} instead of opening it again.\n'
             f"{shot}"
         )
-
-
-def register(api: ExtensionAPI) -> None:
-    service = ComputerUseService(api)
-    api.register_settings(
-        [
-            {
-                "key": ASK_SETTING,
-                "type": "toggle",
-                "label": "Ask before each app",
-                "description": (
-                    "When on, an Agent asks you in the WebUI for each app it wants to use in a "
-                    "Session, and apps you have not approved are hidden from it. When off, every "
-                    "Agent allowed to use Computer Use operates all apps without asking."
-                ),
-                "default": False,
-            }
-        ]
-    )
-    api.operations.startup.append(service.start)
-    api.operations.pending_inputs = service.access.list
-    api.operations.input_response_operation = "respond"
-    api.operations.register(
-        "control",
-        "Inspect Computer Use's desktop control on the server host, or end it as the user.",
-        {
-            "type": "object",
-            "properties": {
-                "action": {"type": "string", "enum": ["status", "stop"]},
-                "control_id": {"type": "string", "minLength": 1},
-            },
-            "allOf": [
-                {
-                    "if": {"properties": {"action": {"const": "stop"}}, "required": ["action"]},
-                    "then": {"required": ["control_id"]},
-                }
-            ],
-            "additionalProperties": False,
-        },
-        service.control,
-    )
-    api.operations.register(
-        "respond",
-        "Answer one pending Computer Use access request with accept, decline or cancel.",
-        {
-            "type": "object",
-            "properties": {"request_id": {"type": "string"}, "response": {"type": "object"}},
-            "required": ["request_id", "response"],
-            "additionalProperties": False,
-        },
-        service.respond,
-        secret=True,
-    )
-    api.on_shutdown(service.close)
-    api.on("run_end", service.run_end)
-    api.register_tool_family(TOOL_FAMILY, "Computer Use")
-    shared: dict[str, Any] = {
-        "requires_opt_in": True,
-        "parallel_safe": False,
-        "open_input_schema": True,
-        "ready": service.ready,
-        "readiness_hint": READINESS_HINT,
-        "result_schema": RESULT_SCHEMA,
-        "family": TOOL_FAMILY,
-    }
-    api.register_tool(
-        "computer",
-        COMPUTER_DESCRIPTION,
-        COMPUTER_PARAMETERS,
-        service.computer,
-        summary="Operate the server's desktop with mouse and keyboard.",
-        display=ToolDisplay(summary_fields=("action",)),
-        argument_normalizer=normalize_computer,
-        secret_sinks={"text": "typing"},
-        **shared,
-    )
-    api.register_tool(
-        "computer_batch",
-        COMPUTER_BATCH_DESCRIPTION,
-        COMPUTER_BATCH_PARAMETERS,
-        service.computer_batch,
-        summary="Run several desktop steps in one call.",
-        display=ToolDisplay(summary_builder=_summary),
-        argument_normalizer=normalize_batch,
-        secret_sinks={"actions": "typing"},
-        **shared,
-    )
-    api.register_tool(
-        "computer_apps",
-        COMPUTER_APPS_DESCRIPTION,
-        COMPUTER_APPS_PARAMETERS,
-        service.computer_apps,
-        summary="Find, focus or approve desktop apps.",
-        display=ToolDisplay(summary_fields=("action",), summary_builder=_apps_summary),
-        argument_normalizer=normalize_apps,
-        **shared,
-    )
 
 
 __all__ = ["ComputerUseService", "register"]

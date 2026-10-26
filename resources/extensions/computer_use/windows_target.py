@@ -67,7 +67,7 @@ def name_displays(monitors: Sequence[_win32.Monitor], names: dict[str, str]) -> 
 
 
 class WindowsTarget(WindowsInput):
-    """``DesktopTarget`` for the interactive Windows desktop vBot runs on."""
+    """``DesktopTarget`` for the interactive Windows desktop of this process."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -83,13 +83,13 @@ class WindowsTarget(WindowsInput):
 
     def readiness(self) -> str | None:
         if sys.platform != "win32":
-            return "Computer Use needs a Windows desktop; this vBot server runs on another system."
+            return "Computer Use requires a Windows desktop on the selected computer."
         try:
             if not _win32.interactive_window_station():
                 return (
-                    "vBot runs without an interactive desktop (for example as a Windows "
-                    "service), so it cannot see or control the screen. Run vBot in the "
-                    "signed-in user's session."
+                    "vBot has no interactive desktop on this computer (for example when "
+                    "running as a Windows service). Run the vBot server or Desktop app "
+                    "in the signed-in user's session."
                 )
         except (TargetError, OSError, AttributeError) as error:  # AttributeError: old Windows
             return f"The Windows desktop is unavailable ({error})."

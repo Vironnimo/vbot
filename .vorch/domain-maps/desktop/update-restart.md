@@ -5,7 +5,7 @@ Read when changing how a packaged Desktop notices a newly activated version, res
 ## Relaunch contract
 
 - Only a packaged launch restarts. `cli/application/desktop.py` (`open_desktop`) passes `VBOT_DESKTOP_RELAUNCH` = JSON `{version_file, version, command}`: the installation's absolute `active-version` path, the version id this Desktop runs, and the command that launches the active version (`[<install>/vBot.GUI.exe, "desktop"]`). `restart.relaunch_contract()` accepts it only when the file and the command's first element are absolute, the version id is safe and the command is non-empty; anything else (and every source run) means no restart support, and the launch never reads a restart request.
-- The relaunch goes through the stable bootstrap, never a versioned path, so the successor always runs whatever version is active at that moment. `desktop/restart.py` spawns it itself (new process group, no window, breakaway from the job when allowed, all std streams to `DEVNULL`) because the Desktop imports no project code.
+- The relaunch goes through the stable bootstrap, never a versioned path, so the successor always runs whatever version is active at that moment. `desktop/restart.py` spawns it itself (new process group, no window, breakaway from the job when allowed, all std streams to `DEVNULL`); Desktop owns its process lifecycle independently of the server.
 
 ## Pending detection and status
 
@@ -13,6 +13,8 @@ Read when changing how a packaged Desktop notices a newly activated version, res
 - Status `{pending, restarting, failed}` reaches the page as `getDesktopUpdate()` and the push `vbot-desktop-update` (one waiting snapshot, replaced by a newer one).
 
 ## Restart triggers
+
+Local Terminals add an unbounded automatic hold, before the ordinary Voice/page grace below. Every restart checks `ComputerSharing.prepare_restart`, which refuses while Terminals run and fences new native calls once admitted. An explicit request then reports `computer_terminals_running`; a failed handoff calls `resume` to release that fence. The app-close warning remains the manual way to end local work (`desktop/computer-sharing.md`).
 
 - **Requested:** `restartDesktop()` starts the handoff and resolves `{accepted: true}` immediately; the outcome arrives as status pushes. It rejects with `no_update_pending` when nothing newer is active and `restart_unavailable` without a relaunch contract. A second request during a handoff is a no-op. The WebUI flushes autosave and the composer before calling it.
 - **Automatic:** every activation comes from an update the user started, so the restart is due as soon as the Desktop is pending and not restarting (after a failure, once its retry delay passed); there is no idle or foreground condition. Voice recording or calibrating (`VoiceController.is_busy`; an error counts as busy) or a running dictation (`DictationController.is_busy`) delays it until that ends, for at most `RESTART_GRACE_SECONDS` (15 s). Then the page is asked once with the cancelable push `vbot-desktop-restart` (`detail` `{reason: "update"}`, at most one waiting). A page that acknowledges with `preventDefault()` saves its edits and calls `restartDesktop()` itself; it cannot decline. Without that call within `RESTART_GRACE_SECONDS` of the request (also when the page never answers, or an older WebUI declines), the Desktop restarts on its own (`reason=page_timeout` in the log). An unhandled push (connection screen, an older remote WebUI without the handler, no window) restarts at once (`reason=update`).

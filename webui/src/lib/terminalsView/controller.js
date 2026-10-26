@@ -341,7 +341,12 @@ export function createTerminalsController({
     const item = state.terminals.find(
       (terminal) => terminal.terminal_id === terminalId,
     );
-    if (!item || terminalIsFinished(item) || serverUnavailable) {
+    if (
+      !item ||
+      terminalIsFinished(item) ||
+      serverUnavailable ||
+      item.computer_online === false
+    ) {
       return;
     }
     connections.get(terminalId)?.queueInput(data, { immediate });
@@ -356,7 +361,12 @@ export function createTerminalsController({
     const item = state.terminals.find(
       (terminal) => terminal.terminal_id === terminalId,
     );
-    if (!item || terminalIsFinished(item) || serverUnavailable) {
+    if (
+      !item ||
+      terminalIsFinished(item) ||
+      serverUnavailable ||
+      item.computer_online === false
+    ) {
       return;
     }
     connections

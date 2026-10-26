@@ -502,6 +502,34 @@ async def test_a_restricted_parent_bounds_every_run_of_its_subagent_session(
     assert len(joined.layers) == 2
 
 
+async def test_a_subagent_inherits_computers_and_later_sends_can_only_narrow_them(
+    harness: SubAgentHarness,
+) -> None:
+    execution = {"computer_id": "laptop", "allowed_computer_ids": ["laptop", "server"]}
+    started = await harness.call(
+        {"description": "Review", "content": "review"}, execution=execution
+    )
+    assert started["ok"], started
+    child = harness.subagent_session(started["data"]["id"])
+    await harness.settle()
+    assert harness.sessions.metadata_value(child, "execution") == execution
+
+    for allowed in (["server", "other"], ["laptop", "other"]):
+        sent = await harness.call(
+            {"action": "send", "id": started["data"]["id"], "content": "Continue"},
+            execution={"computer_id": allowed[0], "allowed_computer_ids": allowed},
+        )
+        assert sent["ok"], sent
+        await harness.settle()
+        policy = harness.sessions.metadata_value(child, "execution")
+        # Revoking the selected computer does not silently retarget its work;
+        # a later grant also cannot restore authority the child already lost.
+        assert policy == {
+            "computer_id": "laptop",
+            "allowed_computer_ids": ["server"] if allowed[0] == "server" else [],
+        }
+
+
 @pytest.mark.parametrize(
     ("arguments", "effort", "expected_model", "expected_effort"),
     [

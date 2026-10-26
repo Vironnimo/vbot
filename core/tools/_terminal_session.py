@@ -13,6 +13,7 @@ from typing import Any, BinaryIO
 from core.runs import RunExecutionOwner
 from core.storage.temp_files import TemporaryFileLease
 from core.tools import terminal_backend
+from core.tools._terminal_remote import RemoteTerminalAdapter
 from core.tools.terminal_backend import TerminalAdapter
 from core.tools.terminal_emulator import (
     EmulatorUpdate,
@@ -190,19 +191,21 @@ class TerminalSession:
         return self._launch
 
     def info(self) -> TerminalInfo:
+        remote = self._adapter if isinstance(self._adapter, RemoteTerminalAdapter) else None
+        metadata = remote.metadata if remote is not None else {}
         return TerminalInfo(
             terminal_id=self.terminal_id,
             owner=self.owner,
             lifecycle_owner=self.lifecycle_owner,
             attachment=self.attachment,
             state=self._activity.state,
-            command=self._launch.command,
-            arguments=self._launch.arguments,
+            command=str(metadata.get("command", self._launch.command)),
+            arguments=tuple(metadata.get("args", self._launch.arguments)),
             launch_command=self._launch.launch_command,
             launch_arguments=self._launch.launch_arguments,
             call_name=self.call_name,
             group_id=self.group_id,
-            cwd=self._launch.cwd,
+            cwd=Path(str(metadata.get("workdir", self._launch.cwd))),
             pid=self._adapter.pid,
             started_at=self.started_at,
             finished_at=self.finished_at,
@@ -219,6 +222,13 @@ class TerminalSession:
             stopped=self._stopped,
             permission_scope=self._launch.permission_scope,
             shell=self._launch.shell,
+            computer_id=self._launch.computer_id,
+            computer_name=self._launch.computer_name,
+            computer_online=(
+                self._adapter.online if isinstance(self._adapter, RemoteTerminalAdapter) else True
+            ),
+            launch_pending=remote.launch_pending if remote is not None else False,
+            launch_note=str(metadata.get("note", "")),
         )
 
     # Lifecycle
@@ -263,6 +273,14 @@ class TerminalSession:
         """Synchronously stop the process for Runtime shutdown; False if the tree survived."""
         self._suppress_exit_attention = True
         self._notices.cancel()
+        if isinstance(self._adapter, RemoteTerminalAdapter):
+            # Runtime shutdown runs synchronously on its own Event Loop. The
+            # Desktop owns these processes and detects a new server instance.
+            self._adapter.detach()
+            for pending in self.pending_tasks():
+                self._cancel_task(pending)
+            self._finish_files()
+            return True
         if self._termination_pending or not self.finished:
             self._termination_pending = True
             try:
@@ -283,7 +301,14 @@ class TerminalSession:
 
     def _kill_tree(self) -> None:
         """Kill the process tree (blocking); OSError when that is not confirmed."""
+        if isinstance(self._adapter, RemoteTerminalAdapter):
+            self._adapter.terminate()
+            return
         terminal_backend.terminate_process_tree(self._adapter, targets=self._termination_targets)
+
+    def program_runs(self, program: str) -> bool:
+        """Probe the program on the computer that owns this Terminal's PTY."""
+        return self._services.program_probe(self.pid, program)
 
     def pending_tasks(self) -> list[asyncio.Task[Any]]:
         """Background tasks to await after ``stop_now``."""

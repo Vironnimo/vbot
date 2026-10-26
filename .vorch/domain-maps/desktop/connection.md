@@ -44,6 +44,8 @@ Remembered-server mutations serialize their complete read-modify-write and last-
 
 Connected-server management lives in `webui/src/components/settings/DesktopConnectionSettings.svelte`, a Desktop-only bridge client applying prepared switches via `window.location.assign` after the Promise resolves. During a live outage AppShell's availability popup opens the same picker in a modal outside the inert content. First run and launch-time failure stay shell-owned - no WebUI exists yet.
 
+After a target answers and sign-in succeeds, activation enters the native computer-sharing guard (`desktop/computer-sharing.md`). A different origin requires confirmation when local Terminals are running or starting. Cancellation returns `server_switch_cancelled`, with the prior active server and local work intact. The guard also covers later pairing completion and always releases its admission fence if activation fails; failed probes and sign-in never enter it. Initial activation and same-origin reconnect need no warning.
+
 ## Tests
 
 `tests/desktop/test_probe.py` (probing), `test_servers.py` (remembered-server identity, CRUD and launch selection), `test_main.py` (launch wiring, `--open-session` on a fresh start), `test_connection.py` (launch connect and its wait, user connects, sign-in flows), `test_connection_screen.py`, `test_server_address.py`, `test_settings.py`; WebUI: `webui/src/components/__tests__/DesktopConnectionSettings.test.js`.

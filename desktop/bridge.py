@@ -50,6 +50,7 @@ from desktop.wakeword.engine import MAX_CUSTOM_WAKEWORD_MODEL_BYTES, WakewordMod
 if TYPE_CHECKING:
     from desktop.connection_types import PreparedConnection
     from desktop.dictation.controller import DictationController
+    from desktop.execution import ComputerSharing
     from desktop.hotkey import HotkeyController
     from desktop.restart import DesktopRestart
     from desktop.servers import ServerEntry
@@ -187,6 +188,7 @@ class DesktopBridge:
         restart: DesktopRestart | None = None,
         zoom: DesktopZoom | None = None,
         permissions: PagePermissions | None = None,
+        computer_sharing: ComputerSharing | None = None,
     ) -> None:
         self._voice = voice
         # Without a way to ask, another server's page is refused what needs asking.
@@ -200,6 +202,7 @@ class DesktopBridge:
         self._dictation = dictation
         self._restart = restart
         self._zoom = zoom
+        self._computer_sharing = computer_sharing
         # Remote HTTP origins WebView2 treats as secure for this process. A
         # server added later needs a Desktop restart before its microphone works.
         self._secure_origins = tuple(secure_origins)
@@ -226,7 +229,32 @@ class DesktopBridge:
             # ``authenticated``: ``selectServer`` opens a login ticket or sends
             # the window to the connection screen's pairing offer.
             "signIn": self._connection is not None,
+            "computerSharing": self._computer_sharing is not None,
         }
+
+    def getComputerSharing(self) -> dict[str, Any]:  # noqa: N802
+        """Describe this Desktop's grants to its selected server, without its keys."""
+        if self._computer_sharing is None:
+            raise BridgeError("computer_sharing_unavailable")
+        return self._computer_sharing.status()
+
+    def setComputerSharing(self, changes: Any) -> dict[str, Any]:  # noqa: N802
+        """Apply native-approved capability grants for the unchanged selected server."""
+        if self._computer_sharing is None:
+            raise BridgeError("computer_sharing_unavailable")
+        status = self._computer_sharing.status()
+        server_url = status["server_url"]
+        if not server_url:
+            raise BridgeError("computer_server_changed")
+        enabled = [
+            name
+            for name in ("terminal", "computer_use")
+            if isinstance(changes, dict)
+            and changes.get(name) is True
+            and not status["capabilities"][name]
+        ]
+        self._permissions.computer_sharing(server_url, enabled)
+        return self._computer_sharing.update(changes, expected_server=server_url)
 
     def setClipboardText(self, text: Any) -> dict[str, bool]:  # noqa: N802
         """Replace the host clipboard with validated plain text."""

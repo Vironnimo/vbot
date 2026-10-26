@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
+from core.computers import normalize_execution
 from core.permissions import PermissionBoundary, PermissionDenied
 from core.runs import RunExecutionOwner, RunKind
 from core.skills.policy import SkillPackageRef
@@ -201,6 +202,9 @@ class ToolContext:
     # a caller that forgets the boundary fails the type check instead of running
     # with full access; a caller outside any Agent passes ``UNRESTRICTED``.
     permissions: PermissionBoundary = field(repr=False, compare=False)
+    # Operator-selected computer authority, captured for this Tool round.
+    # Model arguments can select only within these Session grants.
+    execution: JsonObject = field(default_factory=lambda: normalize_execution(None))
     # Completed Agentic Loop Iteration whose Assistant response requested this
     # Tool Call. Direct callers that do not execute inside Chat leave it at 0.
     iteration_number: int = 0
@@ -761,6 +765,7 @@ class ToolExecutionConfig:
     data_root: Path
     # See ``ToolContext.permissions``.
     permissions: PermissionBoundary = field(repr=False, compare=False)
+    execution: JsonObject = field(default_factory=lambda: normalize_execution(None))
     # Completed Agentic Loop Iteration that produced this execution group.
     iteration_number: int = 0
     agent_model: str | None = None

@@ -39,6 +39,7 @@ from core.chat.model_resolution import (
 )
 from core.chat.request_runner import WireRequestRunner
 from core.compaction.run_coordination import CompactionRunCoordinator
+from core.computers import normalize_execution
 from core.permissions import PermissionCeiling
 from core.projects import AgentOverrides
 from core.runs import (
@@ -90,6 +91,7 @@ class _NewSession:
     working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT
     ephemeral: bool = False
     fast_mode: bool = False
+    execution: JsonObject | None = None
 
     def metadata(self, agent: Any, permission_ceiling: PermissionCeiling | None) -> JsonObject:
         """The metadata the Session is created with."""
@@ -100,6 +102,8 @@ class _NewSession:
             metadata["fast_mode"] = True
         if self.ephemeral:
             metadata[SESSION_EPHEMERAL_META_KEY] = True
+        if self.execution is not None:
+            metadata["execution"] = normalize_execution(self.execution)
         return metadata
 
 
@@ -171,6 +175,7 @@ class ChatLoop:
         working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT,
         ephemeral: bool = False,
         fast_mode: bool = False,
+        execution: JsonObject | None = None,
         input_origin: InputOrigin | None = None,
         reply_surface: ReplySurface | None = None,
         project_id: str | None = None,
@@ -188,6 +193,7 @@ class ChatLoop:
             working_project_id=working_project_id,
             ephemeral=ephemeral,
             fast_mode=fast_mode,
+            execution=execution,
             input_origin=input_origin,
             reply_surface=reply_surface,
             project_id=project_id,
@@ -383,6 +389,7 @@ class ChatLoop:
         agent_overrides: AgentOverrides | None = None,
         working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT,
         ephemeral: bool = False,
+        execution: JsonObject | None = None,
         actor: str | None = None,
         internal: bool = False,
         input_origin: InputOrigin | None = None,
@@ -431,6 +438,7 @@ class ChatLoop:
                 actor=actor,
                 working_project_id=working_project_id,
                 ephemeral=ephemeral,
+                execution=execution,
             ),
             internal=internal,
             input_origin=input_origin,

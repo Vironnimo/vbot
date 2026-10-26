@@ -29,6 +29,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import sys
 import tempfile
 import threading
@@ -38,6 +39,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from core.utils.ids import is_safe_id, new_id
 from desktop import _windows
 
 logger = logging.getLogger("vbot.desktop.credentials")
@@ -65,6 +67,14 @@ class StoredSignIn:
     device_id: str | None
 
 
+@dataclass(frozen=True)
+class StoredComputerIdentity:
+    """A computer's identity for one server; the registration key is private."""
+
+    computer_id: str
+    key: str = field(repr=False)
+
+
 class DeviceTokenStore:
     """Read and write ``device-tokens.json``; safe to share between threads.
 
@@ -88,6 +98,47 @@ class DeviceTokenStore:
             record = self._servers().get(origin)
             return _stored(origin, record) if isinstance(record, dict) else None
 
+    def computer_identity(
+        self, origin: str, *, create: bool = False
+    ) -> StoredComputerIdentity | None:
+        """Read or allocate the computer registration, protected like a sign-in.
+
+        Its id and key belong to this origin. Forgetting that server removes
+        both, so a later registration cannot silently take over the old one.
+        """
+        with self._lock:
+            record = self._servers().get(origin)
+            computer = record.get("computer") if isinstance(record, dict) else None
+            if isinstance(computer, dict):
+                computer_id = computer.get("id")
+                key = _unprotect(computer, f"computer:{origin}")
+                if (
+                    isinstance(computer_id, str)
+                    and computer_id.startswith("pc_")
+                    and is_safe_id(computer_id)
+                    and key is not None
+                    and re.fullmatch(r"[A-Za-z0-9_-]{43}", key)
+                ):
+                    return StoredComputerIdentity(computer_id, key)
+                # An unreadable key must never overwrite the registered identity.
+                if create:
+                    raise CredentialStoreError("The computer registration could not be opened")
+                return None
+            if not create:
+                return None
+            key = secrets.token_urlsafe(32)
+            computer_id = new_id("pc")
+            document = copy.deepcopy(self._loaded(for_write=True))
+            servers = document.setdefault(_SERVERS_KEY, {})
+            if not isinstance(servers, dict):
+                raise CredentialStoreError("The stored sign-ins could not be read")
+            target = servers.setdefault(origin, {})
+            if not isinstance(target, dict):
+                raise CredentialStoreError("The stored sign-in could not be read")
+            target["computer"] = {"id": computer_id, **_protect(key, f"computer:{origin}")}
+            self._write(document)
+            return StoredComputerIdentity(computer_id, key)
+
     def save_device(self, origin: str, token: str, device_id: str) -> None:
         """Store a newly paired device token for ``origin`` (replacing an earlier one)."""
         match = DEVICE_TOKEN_PATTERN.fullmatch(token)
@@ -96,6 +147,10 @@ class DeviceTokenStore:
         protected = _protect(token, origin)
 
         def change(record: dict[str, Any]) -> None:
+            if record.get(_DEVICE_ID_KEY) != device_id:
+                # The server binds a computer to its admitting Device. A new
+                # pairing is new authority, never a takeover of the old target.
+                record.pop("computer", None)
             record.pop(_TOKEN_KEY, None)
             record.pop(_DPAPI_TOKEN_KEY, None)
             record.update(protected)

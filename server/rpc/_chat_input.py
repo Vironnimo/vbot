@@ -30,6 +30,7 @@ from core.sessions.errors import SessionNotFoundError
 from core.utils.logging import get_logger
 from server.events import RESOURCE_KIND_AGENTS
 from server.rpc._chat_reads import _CHAT_RPC_WORKERS
+from server.rpc._session_execution import optional_execution
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import (
     RPC_ERROR_INVALID_REQUEST,
@@ -168,6 +169,7 @@ class _NewSessionTarget:
     session_id: str | None = None
     ephemeral: bool = False
     fast_mode: bool = False
+    execution: JsonObject | None = None
 
 
 async def _execute_new_session_chat_command(
@@ -198,6 +200,7 @@ async def _execute_new_session_chat_command(
                 reply_surface=reply_surface,
                 agent_overrides=target.agent_overrides,
                 fast_mode=target.fast_mode,
+                execution=target.execution,
                 working_project_id=target.working_project_id,
                 on_change=on_change,
                 session_id=target.session_id,
@@ -332,7 +335,7 @@ async def session_is_ephemeral(state: Any, address: SessionAddress) -> bool:
 
 
 def _chat_target(
-    params: JsonObject, agent_id: str, project_id: str | None
+    params: JsonObject, agent_id: str, project_id: str | None, *, state: Any = None
 ) -> SessionAddress | _NewSessionTarget:
     """Read where a chat submission goes: exactly one of two fields.
 
@@ -357,7 +360,14 @@ def _chat_target(
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.new_session must be an object")
     _reject_unsupported(
         new_session,
-        {"session_id", "agent_overrides", "working_project_id", "ephemeral", "fast_mode"},
+        {
+            "session_id",
+            "agent_overrides",
+            "working_project_id",
+            "ephemeral",
+            "fast_mode",
+            "execution",
+        },
         "params.new_session",
     )
     requested_id = new_session.get("session_id")
@@ -388,4 +398,5 @@ def _chat_target(
         requested_id,
         ephemeral,
         fast_mode,
+        optional_execution(state, new_session, label="params.new_session"),
     )

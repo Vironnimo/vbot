@@ -16,6 +16,7 @@ const OPEN_SESSION_EVENT = 'vbot-desktop-open-session';
 const UPDATE_PUSH_EVENT = 'vbot-desktop-update';
 const RESTART_REQUEST_EVENT = 'vbot-desktop-restart';
 const DICTATION_PUSH_EVENT = 'vbot-desktop-dictation';
+const COMPUTER_SHARING_PUSH_EVENT = 'vbot-desktop-computer-sharing';
 // The Voice UI works only against this Desktop Voice bridge version.
 const DESKTOP_VOICE_API_VERSION = 3;
 // A Live voice start never waits longer than this for the Desktop capabilities
@@ -31,6 +32,7 @@ const DISABLED_DESKTOP_CAPABILITIES = Object.freeze({
   dictation: false,
   zoom: false,
   restart: false,
+  computerSharing: false,
   secureOrigins: Object.freeze([]),
 });
 
@@ -176,6 +178,7 @@ export async function getDesktopCapabilities() {
     dictation: Boolean(caps?.dictation),
     zoom: Boolean(caps?.zoom),
     restart: Boolean(caps?.restart),
+    computerSharing: Boolean(caps?.computerSharing),
     secureOrigins: Array.isArray(caps?.secureOrigins)
       ? caps.secureOrigins.filter((origin) => typeof origin === 'string')
       : [],
@@ -187,6 +190,59 @@ export async function getDesktopCapabilities() {
 /** Disabled capability flags for accessors without a Desktop bridge. */
 export function disabledDesktopCapabilities() {
   return { ...DISABLED_DESKTOP_CAPABILITIES, secureOrigins: [] };
+}
+
+function normalizeComputerSharing(raw) {
+  if (
+    !isPlainObject(raw) ||
+    (raw.computer_id !== null && typeof raw.computer_id !== 'string')
+  ) {
+    throw new Error('The Desktop returned an invalid computer sharing status');
+  }
+  return {
+    computer_id: raw.computer_id,
+    name: typeof raw.name === 'string' ? raw.name : '',
+    server_url: typeof raw.server_url === 'string' ? raw.server_url : '',
+    connected: raw.connected === true,
+    capabilities: {
+      terminal: raw.capabilities?.terminal === true,
+      computer_use: raw.capabilities?.computer_use === true,
+    },
+    available: {
+      terminal: raw.available?.terminal === true,
+      computer_use: raw.available?.computer_use === true,
+    },
+    active_terminals: Number.isSafeInteger(raw.active_terminals)
+      ? Math.max(0, raw.active_terminals)
+      : 0,
+    error_code: text(raw.error_code),
+  };
+}
+
+export async function getComputerSharing() {
+  return normalizeComputerSharing(await callBridge('getComputerSharing'));
+}
+
+export async function setComputerSharing(changes) {
+  return normalizeComputerSharing(
+    await callBridge('setComputerSharing', changes),
+  );
+}
+
+export function onComputerSharing(handler) {
+  if (typeof window === 'undefined') return () => {};
+  const listener = (event) => {
+    if (
+      isPlainObject(event?.detail) &&
+      (event.detail.computer_id === null ||
+        typeof event.detail.computer_id === 'string')
+    ) {
+      handler(normalizeComputerSharing(event.detail));
+    }
+  };
+  window.addEventListener(COMPUTER_SHARING_PUSH_EVENT, listener);
+  return () =>
+    window.removeEventListener(COMPUTER_SHARING_PUSH_EVENT, listener);
 }
 
 /** True when the capabilities offer the Voice bridge this WebUI speaks. */

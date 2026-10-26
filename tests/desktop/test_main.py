@@ -441,27 +441,65 @@ def test_bundled_windows_icon_is_a_multiresolution_ico() -> None:
 # -- Package boundaries ----------------------------------------------------------
 
 
-def _imported_packages(path: Path) -> set[str]:
-    packages: set[str] = set()
+def _imported_modules(path: Path) -> set[str]:
+    modules: set[str] = set()
     for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
         if isinstance(node, ast.Import):
-            packages.update(alias.name.split(".")[0] for alias in node.names)
+            modules.update(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
-            packages.add(node.module.split(".")[0])
-    return packages
+            if node.module in {"core", "core.tools", "core.utils"}:
+                modules.update(f"{node.module}.{alias.name}" for alias in node.names)
+            else:
+                modules.add(node.module)
+    return modules
 
 
 def test_desktop_stays_a_thin_client_of_the_server() -> None:
-    """Desktop imports no server, core, or CLI code and never manages server processes."""
+    """Desktop reuses native primitives but owns no server or Agent services."""
 
     modules = sorted((REPO_ROOT / "desktop").rglob("*.py"))
     assert len(modules) > 10
+    native_modules = {
+        "core.tools._terminal_launch",
+        "core.tools.process_tree",
+        "core.tools.shell_environment",
+        "core.tools.terminal_backend",
+        "core.utils.file_status",
+        "core.utils.ids",
+        "core.utils.logging",
+        "core.utils.processes",
+    }
 
     for module in modules:
-        assert not _imported_packages(module) & {"server", "core", "cli"}, module
+        imports = _imported_modules(module)
+        assert not {name for name in imports if name.partition(".")[0] in {"server", "cli"}}, module
+        assert {name for name in imports if name.partition(".")[0] == "core"} <= native_modules, (
+            module
+        )
         source = module.read_text(encoding="utf-8").lower()
         for verb in ("start", "stop", "restart"):
             assert not re.search(rf"\bserver {verb}\b", source), module
+
+    # Native capabilities reuse shared modules without loading the server's
+    # services transitively, including through package-level re-exports.
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; import desktop.execution; import desktop.terminal_execution; "
+            "import desktop.computer_execution; "
+            "blocked = ('server', 'core.runtime', 'core.chat', 'core.agents', "
+            "'core.sessions', 'core.extensions'); "
+            "loaded = [name for name in sys.modules if any(name == prefix or "
+            "name.startswith(prefix + '.') for prefix in blocked)]; "
+            "assert not loaded, loaded",
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_disabled_voice_and_dictation_build_their_bridge_without_the_audio_stack(
@@ -1055,6 +1093,9 @@ class RecordingDispatcher:
         pass
 
     def publish_event(self, _event: Any) -> None:
+        pass
+
+    def publish_computer_sharing(self, _status: Any) -> None:
         pass
 
     def close(self) -> None:

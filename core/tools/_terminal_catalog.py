@@ -10,7 +10,6 @@ conversation's view instead.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Sequence
-from pathlib import Path
 from typing import Any
 
 from core.tools.terminal_store import (
@@ -291,12 +290,16 @@ class TerminalCatalog:
         attention = info.attention
         return {
             "terminal_id": info.terminal_id,
+            "computer_id": info.computer_id,
+            "computer_name": info.computer_name,
+            "computer_online": info.computer_online,
+            "launch_pending": info.launch_pending,
             "group_id": self._view_id(info),
             # The view it shows in without a pin.
             "home_group_id": self._home_view_id(info),
             "pinned": info.group_id is not None and self._pin_valid(info.group_id),
             "state": info.state,
-            "command": Path(info.command).name or info.command,
+            "command": info.command.replace("\\", "/").rsplit("/", 1)[-1] or info.command,
             "call_name": info.call_name,
             "arguments": list(info.arguments),
             "launch_command": info.launch_command,

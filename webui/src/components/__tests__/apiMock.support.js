@@ -34,6 +34,13 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
     acknowledgeDataStoreIncident: (incidentId) =>
       call('data_store.incident_acknowledge', { incident_id: incidentId }),
     listBackgroundActivity: () => call('activity.list'),
+    listComputers: () => call('computers.list'),
+    setSessionExecution: (agentId, sessionId, execution) =>
+      call('session.set_execution', {
+        agent_id: agentId,
+        session_id: sessionId,
+        execution,
+      }),
     dismissBackgroundActivity: (id) => call('activity.dismiss', { id }),
     cancelLocalSetup: (target) =>
       call('task_model.local_setup_cancel', { target }),
