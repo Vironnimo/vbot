@@ -720,6 +720,8 @@ export default Object.freeze({
   'queue.saveEdit': 'Save',
   'queue.cancelEdit': 'Cancel',
   'queue.editError': 'Queued message could not be edited.',
+  'queue.editUnavailable':
+    'This message can no longer be changed in the Queue. Your draft is kept here; copy it before cancelling.',
   'queue.editPending':
     'Save or cancel this edit before editing another message.',
   'queue.removeError': 'Queued message could not be removed.',

@@ -1,12 +1,16 @@
 <script>
   import Button from './ui/Button.svelte';
+  import CopyButton from './ui/CopyButton.svelte';
   import Banner from './ui/Banner.svelte';
-  import { tick } from 'svelte';
+  import { tick, untrack } from 'svelte';
   import { floatingHoverCard } from '$lib/tooltip.js';
   import { t } from '$lib/i18n.js';
+  import { renameAgentInKey, renameAgentInKeys } from '$lib/chatState.js';
 
   let {
     queuedMessages = [],
+    scopeKey = '',
+    subscribeAgentRenames = null,
     onRemoveQueuedMessage,
     onSteerQueuedMessage,
     canSteer = false,
@@ -35,74 +39,104 @@
     return canSteer ? '' : t('queue.steerUnavailable');
   };
 
-  let editingId = $state('');
-  let editedContent = $state('');
-  let editOriginal = '';
-  let editError = $state('');
-  let editNotice = $state('');
-  let editSaving = $state(false);
+  const newDraft = () => ({
+    id: '',
+    content: '',
+    original: '',
+    error: '',
+    notice: '',
+    saving: false,
+  });
+  let drafts = Object.create(null);
+  let activeScope;
+  let editDraft = $state(newDraft());
+  $effect(() =>
+    subscribeAgentRenames?.((oldId, newId) => {
+      drafts = renameAgentInKeys(drafts, oldId, newId);
+      activeScope = renameAgentInKey(activeScope, oldId, newId);
+    }),
+  );
+  $effect(() => {
+    const scope = scopeKey;
+    if (scope === activeScope) return;
+    untrack(() => {
+      if (activeScope !== undefined) drafts[activeScope] = editDraft;
+      editDraft = drafts[scope] ?? newDraft();
+      activeScope = scope;
+    });
+  });
   let editorElement = $state(null);
 
   // Edits save only through an explicit Save, so opening another item must not
   // silently drop a modified draft: the open editor keeps focus until it is
   // saved or cancelled. An unmodified editor simply moves to the new item.
   const hasUnsavedDraft = () =>
-    editingId !== '' &&
-    editedContent !== editOriginal &&
-    queuedMessages.some((message) => message.id === editingId);
+    editDraft.id !== '' && editDraft.content !== editDraft.original;
+
+  // Admission and reconciliation may remove the item while its editor is
+  // open. Keep that editor visible until the user copies or discards the draft.
+  let editUnavailable = $derived(
+    editDraft.id !== '' &&
+      !queuedMessages.some(
+        (message) => message.id === editDraft.id && !message.steering,
+      ),
+  );
+  let displayedMessages = $derived(
+    editDraft.id &&
+      !queuedMessages.some((message) => message.id === editDraft.id)
+      ? [...queuedMessages, { id: editDraft.id }]
+      : queuedMessages,
+  );
 
   const focusEditor = async () => {
+    const draft = editDraft;
     await tick();
-    editorElement?.focus();
+    if (editDraft === draft) editorElement?.focus();
   };
 
   const beginEdit = (message) => {
-    if (editSaving || message?.editable !== true) {
+    if (editDraft.saving || message?.editable !== true) {
       return;
     }
-    if (message.id === editingId) {
+    if (message.id === editDraft.id) {
       focusEditor();
       return;
     }
     if (hasUnsavedDraft()) {
-      editNotice = t('queue.editPending');
+      editDraft.notice = t('queue.editPending');
       focusEditor();
       return;
     }
-    editingId = message.id;
-    editedContent = message.content ?? '';
-    editOriginal = editedContent;
-    editError = '';
-    editNotice = '';
+    editDraft.id = message.id;
+    editDraft.content = message.content ?? '';
+    editDraft.original = editDraft.content;
+    editDraft.error = '';
+    editDraft.notice = '';
     focusEditor();
   };
 
-  const cancelEdit = () => {
-    editingId = '';
-    editedContent = '';
-    editOriginal = '';
-    editError = '';
-    editNotice = '';
-    editSaving = false;
+  const cancelEdit = (draft = editDraft) => {
+    Object.assign(draft, newDraft());
   };
 
   const saveEdit = async () => {
-    const currentEditingId = editingId;
-    const nextContent = editedContent.trim();
-    if (!currentEditingId) {
+    const draft = editDraft;
+    const currentEditingId = draft.id;
+    const nextContent = editDraft.content.trim();
+    if (!currentEditingId || editUnavailable) {
       return;
     }
 
     if (!nextContent) {
-      editError = t('queue.editError');
+      editDraft.error = t('queue.editError');
       return;
     }
 
-    if (editSaving) {
+    if (editDraft.saving) {
       return;
     }
 
-    editSaving = true;
+    editDraft.saving = true;
     let saved;
     try {
       saved =
@@ -111,21 +145,21 @@
       saved = false;
     }
 
-    if (editingId !== currentEditingId) {
+    if (draft.id !== currentEditingId) {
       return;
     }
-    editSaving = false;
+    draft.saving = false;
     if (!saved) {
-      editError = t('queue.editError');
+      draft.error = t('queue.editError');
       return;
     }
-    if (editedContent.trim() === nextContent) {
-      cancelEdit();
+    if (draft.content.trim() === nextContent) {
+      cancelEdit(draft);
     }
   };
 </script>
 
-{#if queuedMessages.length > 0}
+{#if displayedMessages.length > 0}
   <Banner
     appearance="compact"
     class="queued-messages"
@@ -133,49 +167,61 @@
     aria-label={t('queue.title')}
   >
     <ol>
-      {#each queuedMessages as message (message.id)}
-        <li class:editing={editingId === message.id}>
-          {#if editingId === message.id}
+      {#each displayedMessages as message (message.id)}
+        <li class:editing={editDraft.id === message.id}>
+          {#if editDraft.id === message.id}
             <textarea
               aria-label={t('queue.editMessage')}
               class="queued-messages__editor"
               bind:this={editorElement}
-              value={editedContent}
+              value={editDraft.content}
               oninput={(event) => {
-                editedContent = event.currentTarget.value;
-                editError = '';
+                editDraft.content = event.currentTarget.value;
+                editDraft.error = '';
               }}></textarea>
             <div class="queued-messages__actions">
-              <Button
-                variant="tertiary"
-                disabled={editSaving}
-                ariaLabel={t('queue.saveEdit')}
-                onClick={saveEdit}
-              >
-                {t('queue.saveEdit')}
-              </Button>
+              {#if editUnavailable}
+                <CopyButton text={editDraft.content} />
+              {:else}
+                <Button
+                  variant="tertiary"
+                  disabled={editDraft.saving}
+                  ariaLabel={t('queue.saveEdit')}
+                  onClick={saveEdit}
+                >
+                  {t('queue.saveEdit')}
+                </Button>
+              {/if}
               <Button
                 variant="tertiary"
                 ariaLabel={t('queue.cancelEdit')}
-                onClick={cancelEdit}
+                onClick={() => cancelEdit()}
               >
                 {t('queue.cancelEdit')}
               </Button>
-              <Button
-                variant="tertiary"
-                ariaLabel={t('queue.removeMessage')}
-                onClick={() => {
-                  onRemoveQueuedMessage?.(message.id);
-                  cancelEdit();
-                }}
-              >
-                {t('common.remove')}
-              </Button>
+              {#if !editUnavailable}
+                <Button
+                  variant="tertiary"
+                  ariaLabel={t('queue.removeMessage')}
+                  onClick={() => {
+                    onRemoveQueuedMessage?.(message.id);
+                    cancelEdit();
+                  }}
+                >
+                  {t('common.remove')}
+                </Button>
+              {/if}
             </div>
-            {#if editError}
-              <p class="queued-messages__error">{editError}</p>
-            {:else if editNotice}
-              <p class="queued-messages__notice" role="status">{editNotice}</p>
+            {#if editUnavailable}
+              <p class="queued-messages__notice" role="status">
+                {t('queue.editUnavailable')}
+              </p>
+            {:else if editDraft.error}
+              <p class="queued-messages__error">{editDraft.error}</p>
+            {:else if editDraft.notice}
+              <p class="queued-messages__notice" role="status">
+                {editDraft.notice}
+              </p>
             {/if}
           {:else}
             <div class="queued-messages__preview">
@@ -214,7 +260,7 @@
               {#if message.editable === true && !message.steering}
                 <Button
                   variant="tertiary"
-                  disabled={editSaving}
+                  disabled={editDraft.saving}
                   ariaLabel={t('queue.editMessage')}
                   tooltip={t('queue.editMessage')}
                   onClick={() => beginEdit(message)}

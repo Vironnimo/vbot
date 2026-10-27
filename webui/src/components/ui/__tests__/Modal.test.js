@@ -10,6 +10,7 @@ vi.mock('svelte', async () => {
 });
 
 const { default: Modal } = await import('../Modal.svelte');
+const { default: ImageLightbox } = await import('../../ImageLightbox.svelte');
 const { default: Dropdown } = await import('../../Dropdown.svelte');
 const { default: SearchableDropdown } =
   await import('../../SearchableDropdown.svelte');
@@ -231,6 +232,35 @@ describe('Modal', () => {
       expect(outerClose).toHaveBeenCalledTimes(1);
     },
   );
+
+  it('keeps a lightbox above a modal in the same keyboard and isolation stack', async () => {
+    const outerClose = vi.fn();
+    const innerClose = vi.fn();
+    render({ onClose: outerClose });
+    const outer = document.querySelector('.modal');
+    const previous = document.activeElement;
+    const inner = mount(ImageLightbox, {
+      target: document.body,
+      props: { src: '/image.png', onClose: innerClose },
+    });
+    flushSync();
+    try {
+      expect(outer.closest('.modal-overlay').inert).toBe(true);
+      const close = document.querySelector('.image-lightbox__close');
+      expect(document.activeElement).toBe(close);
+      close.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+      );
+      expect(innerClose).toHaveBeenCalledOnce();
+      expect(outerClose).not.toHaveBeenCalled();
+    } finally {
+      await unmount(inner);
+    }
+    expect(outer.closest('.modal-overlay').inert).toBe(false);
+    expect(document.activeElement).toBe(previous);
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(outerClose).toHaveBeenCalledOnce();
+  });
 
   it('blocks every close path while closeDisabled', () => {
     const onClose = vi.fn();

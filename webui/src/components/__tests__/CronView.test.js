@@ -5,7 +5,10 @@ import { flushSync, mount, unmount } from 'svelte';
 
 import { init, t } from '../../lib/i18n.js';
 import { createAutosaveCoordinator } from '../../lib/autosave.js';
-import { createStandaloneNavigation } from '../../lib/navigation.svelte.js';
+import {
+  createNavigator,
+  createStandaloneNavigation,
+} from '../../lib/navigation.svelte.js';
 import { rpcBackedApiMock } from './apiMock.support.js';
 import { reactiveProps } from './reactiveProps.support.svelte.js';
 
@@ -769,7 +772,12 @@ describe('CronView', () => {
       .mockResolvedValueOnce({ jobs: [] })
       .mockResolvedValueOnce({ jobs: [createdJob] })
       .mockResolvedValue({ jobs: [createdJob] });
-    const navigation = createStandaloneNavigation();
+    window.history.replaceState(null, '', '#chat');
+    const navigator = createNavigator({ defaultView: 'chat' });
+    navigator.start();
+    navigator.navigate('cron');
+    const navigation = navigator.view('cron');
+    const previousIndex = window.history.state.index - 1;
 
     mountView({ navigation });
 
@@ -780,6 +788,12 @@ describe('CronView', () => {
     buttonByAriaLabel('Create schedule').click();
     flushSync();
 
+    await waitForCondition(() => document.getElementById('cron-job-prompt'));
+    // Cancelling the initial form restores the empty seed in place too.
+    buttonByText(t('common.cancel')).click();
+    await waitForCondition(() => !document.getElementById('cron-job-prompt'));
+    expect(window.history.state.index).toBe(previousIndex + 1);
+    buttonByAriaLabel('Create schedule').click();
     await waitForCondition(() => document.getElementById('cron-job-prompt'));
     inputById('cron-job-name').value = 'Morning digest';
     inputById('cron-job-name').dispatchEvent(
@@ -815,8 +829,15 @@ describe('CronView', () => {
     await waitForCondition(() =>
       document.querySelector('[data-testid="cron-delete-job-created"]'),
     );
-    // The saved job replaces the new job's entry.
+    // Creation consumes the empty seed; Back leaves the saved job in one step.
     expect(navigation.place).toEqual(['schedules', 'job-created']);
+    expect(window.history.state.index).toBe(previousIndex + 1);
+    window.history.back();
+    await waitForCondition(() => navigator.location.view === 'chat');
+    window.history.forward();
+    await waitForCondition(() => navigator.location.view === 'cron');
+    expect(navigation.place).toEqual(['schedules', 'job-created']);
+    navigator.destroy();
 
     inputById('cron-job-prompt').value = 'Prepare updated digest';
     inputById('cron-job-prompt').dispatchEvent(

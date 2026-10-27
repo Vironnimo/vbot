@@ -101,11 +101,29 @@ describe('Button', () => {
     try {
       const button = render({
         disabled: true,
+        ariaLabel: 'Edit message',
         tooltip: 'Edit message',
         disabledReason: 'Available once the Run finishes',
       });
       const anchor = button.parentElement;
       expect(anchor.classList.contains('tooltip-anchor')).toBe(true);
+
+      expect(anchor.tabIndex).toBe(0);
+      expect(anchor.getAttribute('aria-disabled')).toBe('true');
+      const reasonId = anchor.getAttribute('aria-describedby');
+      expect(document.getElementById(reasonId).textContent).toBe(
+        'Available once the Run finishes',
+      );
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab' }));
+      anchor.focus();
+      expect(document.activeElement).toBe(anchor);
+      expect(document.getElementById('app-tooltip').textContent).toBe(
+        'Available once the Run finishes',
+      );
+      expect(anchor.getAttribute('aria-describedby').split(' ')).toContain(
+        'app-tooltip',
+      );
+      anchor.blur();
 
       anchor.dispatchEvent(new Event('pointerenter'));
       vi.advanceTimersByTime(TOOLTIP_SHOW_DELAY_MS);
@@ -119,6 +137,8 @@ describe('Button', () => {
         tooltip: 'Edit message',
         disabledReason: 'Available once the Run finishes',
       });
+      expect(enabled.parentElement.hasAttribute('tabindex')).toBe(false);
+      expect(enabled.parentElement.hasAttribute('aria-disabled')).toBe(false);
       enabled.parentElement.dispatchEvent(new Event('pointerenter'));
       vi.advanceTimersByTime(TOOLTIP_SHOW_DELAY_MS);
       expect(document.getElementById('app-tooltip').textContent).toBe(

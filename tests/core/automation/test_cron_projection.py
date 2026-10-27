@@ -15,7 +15,7 @@ from core.automation.cron import CronJobValidationError, CronService
 @pytest.fixture()
 def service(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> CronService:
     monkeypatch.setattr(
-        "core.automation._cron_timing._utc_now", lambda: datetime(2026, 9, 1, tzinfo=UTC)
+        "core.automation._cron_timing._utc_now", lambda: datetime(2010, 1, 1, tzinfo=UTC)
     )
     return CronService(Mock(), tmp_path, tz="UTC")
 
@@ -179,22 +179,31 @@ class TestProjectOccurrences:
         assert occurrences == []
 
     @pytest.mark.asyncio
-    async def test_cron_expression_projects_local_schedule(self, service: CronService) -> None:
+    @pytest.mark.parametrize(
+        "created_at",
+        ["2026-09-02T08:59:59+00:00", "2026-09-02T09:00:00+00:00", "2026-09-02T09:00:01+00:00"],
+    )
+    async def test_cron_expression_projects_local_schedule(
+        self, service: CronService, monkeypatch: pytest.MonkeyPatch, created_at: str
+    ) -> None:
+        created = datetime.fromisoformat(created_at)
+        monkeypatch.setattr("core.automation._cron_timing._utc_now", lambda: created)
         await service.create_job(
             agent_id="joel",
             prompt="check mail",
             schedule_type="cron",
             cron_expression="0 9 * * *",
         )
-        occurrences = service.project_occurrences(
-            datetime(2026, 9, 2, tzinfo=UTC), datetime(2026, 9, 3, tzinfo=UTC)
-        )
-        assert len(occurrences) == 1
-        assert occurrences[0].schedule_type == "cron"
-        system_timezone = ZoneInfo(service.system_timezone_name())
-        assert occurrences[0].fire_at_utc.astimezone(system_timezone).replace(
-            tzinfo=None
-        ) == datetime(2026, 9, 2, 9, 0)  # 09:00 server-local
+        start = datetime(2026, 9, 1, tzinfo=UTC)
+        end = datetime(2026, 9, 4, tzinfo=UTC)
+        projection = service.projection()
+        occurrences = projection.project_occurrences(start, end)
+        expected = [datetime(2026, 9, day, 9, tzinfo=UTC) for day in (2, 3)]
+        assert [row.fire_at_utc for row in occurrences] == [
+            tick for tick in expected if tick >= created
+        ]
+        assert all(row.schedule_type == "cron" for row in occurrences)
+        assert projection.project_occurrences(start, created) == []
 
     @pytest.mark.asyncio
     async def test_interval_projects_from_anchor(self, service: CronService) -> None:

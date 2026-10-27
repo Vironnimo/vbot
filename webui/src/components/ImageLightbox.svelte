@@ -1,4 +1,6 @@
 <script>
+  import { onMount, onDestroy } from 'svelte';
+  import { activateModalFocus } from './ui/modalFocus.js';
   import { portal } from '$lib/dropdownPanel.js';
   import { t } from '$lib/i18n.js';
   import { useNavigation } from '$lib/navigation.svelte.js';
@@ -8,7 +10,18 @@
 
   // Back closes the lightbox instead of navigating.
   const navigation = useNavigation();
-  $effect(() => navigation?.registerLayer({ close: () => onClose() }));
+  let overlayElement;
+  let closeElement;
+  let releaseFocus = () => {};
+  onMount(() => {
+    releaseFocus = activateModalFocus({
+      dialog: overlayElement,
+      initialFocus: closeElement,
+      onClose: () => onClose(),
+      navigation,
+    });
+  });
+  onDestroy(() => releaseFocus());
 
   let imageElement = $state();
   let zoomed = $state(false);
@@ -48,25 +61,25 @@
       onClose();
     }
   }
-
-  function handleKeydown(event) {
-    if (event.key === 'Escape') {
-      onClose();
-    }
-  }
 </script>
 
-<svelte:document onkeydown={handleKeydown} />
 <svelte:window onresize={handleResize} />
 
+<!-- The shared modal owner handles Escape and traps keyboard focus. -->
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_click_events_have_key_events -->
 <div
+  bind:this={overlayElement}
   use:portal
   class="image-lightbox"
   class:image-lightbox--zoomed={zoomed}
-  role="presentation"
+  role="dialog"
+  aria-modal="true"
+  aria-label={alt || t('chat.image.alt')}
+  tabindex="-1"
   onclick={handleOverlayClick}
 >
   <button
+    bind:this={closeElement}
     type="button"
     class="image-lightbox__close"
     aria-label={t('common.close')}
