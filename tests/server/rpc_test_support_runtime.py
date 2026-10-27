@@ -27,6 +27,7 @@ from core.chat import (
     ChatSessionManager,
     CommandDispatcher,
 )
+from core.computers import ComputerRegistry
 from core.database import SnapshotBarrier, write_bootstrap_marker
 from core.memory import MemoryService
 from core.providers._wire_profile_files import WireProfileFile
@@ -578,6 +579,7 @@ class StubRuntime:
         self.chat_runs: ChatRunManager | None = None
         self.extensions: Any = None
         self.terminal_manager = StubTerminalManager()
+        self.computers = ComputerRegistry()
         self.portals = PortalRegistry()
         self.command_manager = CommandManager()
         self.cron_service: Any = StubJobService()

@@ -42,6 +42,8 @@ Adding a native capability extends Desktop's consent/factory catalog and supplie
 
 Runtime constructs the registry before TerminalManager, injects it there and into Extension hosts, and closes it after TerminalManager so active terminal cleanup still has its connection (`runtime/lifecycle-steps.md`). Registry mutation and publication stay on the serving Event Loop; durable registration writes run on a bounded worker.
 
+Cancellation waits for an admitted registration or removal write to settle and publishes any completed change before propagating. A cancelled connection keeps its saved identity offline and closes any replaced connection; it never leaves a live connection without a socket owner. The server's lifespan bridges registry lifecycle events to the shared event bus, including changes completed after request cancellation.
+
 The behavior contracts live in `tests/core/computers/test_computers.py` (exact policy, durable ownership, reconnect fencing, bounded request lifetime and no replay), `tests/server/test_computer_socket.py` (admission, correlation, cancellation and disconnect), and the native owners' Desktop/Terminal/Computer Use tests.
 
 ## Agent-facing text

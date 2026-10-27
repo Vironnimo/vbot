@@ -23,6 +23,7 @@ from server.events import (
     CRON_FAILURE_ALERT_EVENT,
     RESOURCE_KIND_ARCHIVE,
     RESOURCE_KIND_CALENDAR,
+    RESOURCE_KIND_COMPUTERS,
     RESOURCE_KIND_CRON,
     RESOURCE_KIND_EXTENSIONS,
     RESOURCE_KIND_MODELS,
@@ -101,6 +102,7 @@ def _initialize_app_state(
         app.state
     )
     app.state.terminal_change_bridge_unsubscribe = _register_terminal_change_bridge(app.state)
+    app.state.computer_change_bridge_unsubscribe = _register_computer_change_bridge(app.state)
     app.state.portal_change_bridge_unsubscribe = _register_portal_change_bridge(app.state)
     app.state.command_status_bridge_unsubscribe = _register_command_status_bridge(app.state)
     app.state.activity = ActivityMonitor(
@@ -351,6 +353,21 @@ def _register_terminal_change_bridge(state: Any) -> Any:
             state, RESOURCE_KIND_TERMINALS, scope={"terminal_id": terminal_id}
         )
     )
+
+
+def _register_computer_change_bridge(state: Any) -> Any:
+    def changed(_computer_id: str, event: str, _data: dict[str, Any]) -> None:
+        if event in {"connected", "disconnected", "removed"}:
+            publish_resource_changed(state, RESOURCE_KIND_COMPUTERS)
+
+    return state.runtime.computers.subscribe(changed)
+
+
+def _unregister_computer_change_bridge(state: Any) -> None:
+    unsubscribe = state.computer_change_bridge_unsubscribe
+    if unsubscribe is not None:
+        unsubscribe()
+    state.computer_change_bridge_unsubscribe = None
 
 
 def _unregister_terminal_change_bridge(state: Any) -> None:

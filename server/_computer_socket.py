@@ -10,8 +10,6 @@ from core.computers import ComputerError, ComputerRegistry
 from core.computers.computers import MAX_FRAME_BYTES, ComputerConnection
 from core.utils.workers import cancel_and_wait
 from server.access import scope_principal
-from server.events import RESOURCE_KIND_COMPUTERS
-from server.rpc.event_bridge import publish_resource_changed
 
 
 async def serve_computer_socket(websocket: Any, computers: ComputerRegistry) -> None:
@@ -23,7 +21,6 @@ async def serve_computer_socket(websocket: Any, computers: ComputerRegistry) -> 
     await websocket.accept()
     connection: ComputerConnection | None = None
     sender: asyncio.Task[None] | None = None
-    unsubscribe = None
     try:
         async with asyncio.timeout(10):
             hello = await _receive(websocket)
@@ -40,13 +37,6 @@ async def serve_computer_socket(websocket: Any, computers: ComputerRegistry) -> 
             }
         )
         computer_id = connection.info.id
-
-        def changed(target: str, event: str, data: dict[str, Any]) -> None:
-            if target == computer_id and event in {"connected", "disconnected"}:
-                publish_resource_changed(websocket.app.state, RESOURCE_KIND_COMPUTERS)
-
-        unsubscribe = computers.subscribe(changed)
-        publish_resource_changed(websocket.app.state, RESOURCE_KIND_COMPUTERS)
         sender = asyncio.create_task(
             _send(websocket, connection), name=f"computer-link:{computer_id}"
         )
@@ -77,8 +67,6 @@ async def serve_computer_socket(websocket: Any, computers: ComputerRegistry) -> 
             computers.disconnect(connection)
         if sender is not None:
             await cancel_and_wait(sender)
-        if unsubscribe is not None:
-            unsubscribe()
 
 
 async def _receive(websocket: Any) -> Any:
