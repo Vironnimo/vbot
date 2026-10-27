@@ -26,6 +26,7 @@ import numpy as np
 import pytest
 
 from desktop import settings as desktop_settings
+from desktop.speech import server_client as speech_server_client
 from desktop.speech.capture import AudioCapture, CaptureStatus
 from desktop.speech.microphone import MicrophoneService
 from desktop.wakeword.config import PhraseConfig, VoiceConfigError
@@ -387,6 +388,7 @@ def voice_rig(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> Iterator[Call
             speech_detector_factory=speech_detector_factory,
             transport=server.transport(),
             join_timeout=5.0,
+            readiness_recheck_seconds=0.05,
             mock_frame_seconds=0.005,
             mock_stage_seconds=0.02,
         )
@@ -609,6 +611,22 @@ def test_speech_to_text_problems_block_command_phrases_only(
         HEY: None,
     }
     assert failed["error_code"] == problem
+
+
+def test_an_unreachable_server_is_checked_again_until_it_answers(
+    voice_rig: Callable[..., Rig], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(speech_server_client, "_backoff_delay", lambda _attempt: 0.0)
+    rig = voice_rig(server=FakeVoiceServer(reachable=False))
+    rig.wait_ready()
+    assert rig.voice.status()["phrases"][0]["problem"] == "server_unreachable"
+
+    rig.server.reachable = True
+
+    wait_until(
+        lambda: rig.voice.status()["phrases"][0]["problem"] is None,
+        message="the readiness problem did not clear",
+    )
 
 
 def test_a_phrase_without_an_agent_reports_the_missing_agent(

@@ -19,7 +19,7 @@ from desktop.wakeword import contracts as voice
 from desktop.wakeword._mock import MockEvents, MockListener
 from desktop.wakeword.config import ERROR_NO_SERVER, PhraseConfig, VoiceConfig
 from desktop.wakeword.engine import WakewordEngine, WakewordModelCatalog, WakewordModelError
-from desktop.wakeword.readiness import ReadinessWorker
+from desktop.wakeword.readiness import RECHECK_SECONDS, ReadinessWorker
 from desktop.wakeword.server_client import VoiceServerClient
 
 if TYPE_CHECKING:
@@ -48,6 +48,7 @@ class VoiceRuntime:
     speech_detector_factory: Callable[[], Any] | None = None
     transport: Any = None
     join_timeout: float = JOIN_TIMEOUT_SECONDS
+    readiness_recheck_seconds: float = RECHECK_SECONDS
     mock_frame_seconds: float = 0.1
     mock_stage_seconds: float = 0.8
 

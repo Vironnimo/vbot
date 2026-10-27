@@ -338,12 +338,17 @@ class SpeechServerClient:
         Derived once per client from the server's active speech upload limit:
         the limit minus the WAV header, keeping :data:`UPLOAD_SAFETY_FRACTION`
         of it. When the limit cannot be read, the server default is used, so a
-        recording is never unbounded. Only cancellation raises.
+        recording is never unbounded; an unreachable server is asked again on
+        the next call. Only cancellation raises.
         """
         with self._budget_lock:
             if self._upload_budget_bytes is not None:
                 return self._upload_budget_bytes
-        budget = _upload_budget_for_limit(self._fetch_upload_limit_bytes())
+        try:
+            budget = _upload_budget_for_limit(self._fetch_upload_limit_bytes())
+        except SpeechServerUnreachable as exc:
+            logger.warning("Speech upload limit unavailable (%s); using the default limit", exc)
+            return DEFAULT_UPLOAD_BUDGET_BYTES
         with self._budget_lock:
             if self._upload_budget_bytes is None:
                 self._upload_budget_bytes = budget
@@ -359,6 +364,8 @@ class SpeechServerClient:
                 error_code=ERROR_TRANSCRIPTION_FAILED,
                 attempts=MAX_ATTEMPTS,
             )
+        except SpeechServerUnreachable:
+            raise
         except SpeechServerError as exc:
             logger.warning("Speech upload limit unavailable (%s); using the default limit", exc)
             return DEFAULT_SPEECH_UPLOAD_LIMIT_BYTES

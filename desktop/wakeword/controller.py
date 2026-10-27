@@ -790,6 +790,7 @@ class VoiceController:
                 session.client,
                 session.stop_event,
                 lambda result: self._on_readiness(session, result),
+                recheck_seconds=self._runtime.readiness_recheck_seconds,
             )
         actions = [
             action

@@ -112,7 +112,7 @@ Error codes a Voice bridge call can reject with: `voice_config_invalid`, `no_ser
 
 ## Readiness and phrase problems
 
-- A `vbot-voice-readiness` thread checks the server for the command phrases: `task_model.status` for `speech_to_text` (only when a command phrase is active), `agent.get` per distinct command Agent, and the upload budget. It repeats when the routing changed meanwhile and never blocks listening.
+- A `vbot-voice-readiness` thread checks the server for the command phrases: `task_model.status` for `speech_to_text` (only when a command phrase is active), `agent.get` per distinct command Agent, and the upload budget. It repeats when the routing changed meanwhile and never blocks listening. A result with a transient problem (`server_unreachable`, `speech_to_text_readiness_failed`) is checked again every 30 s (`RECHECK_SECONDS`, `readiness.py`) until it clears, so a server that comes back clears the phrase problem without a failed command.
 - Speech problem codes: `speech_to_text_unconfigured`, `speech_to_text_unavailable`, `speech_to_text_readiness_failed`, `server_unreachable`. Agent problems: `target_agent_unavailable` (any refusal of `agent.get`, including the RPC `agent_not_found`) or `server_unreachable`.
 - A phrase's `problem` is `missing_target_agent` (no Agent resolved), else the speech problem, else its Agent's problem.
 - A command detection with a problem emits `detected` then `command_failed` with the problem code and records nothing; it re-requests readiness unless the problem is `missing_target_agent`. Readiness older than 300 s is re-checked on the next command detection. A `target_agent_unavailable` send outcome marks that Agent's problem immediately.
@@ -142,7 +142,7 @@ Error codes a Voice bridge call can reject with: `voice_config_invalid`, `no_ser
 - Timeouts: RPC 10 s; transcription 600 s for local model loading and inference (models download only at install), with connect 10 s, write 30 s, pool 10 s.
 - `resolve_session` creates nothing and returns a Session id or `None` for a new Session: `new` -> `None`; `active` -> `agent.get` `current_session_id`, else the newest `session.list` entry excluding subagent, reflection, Cron, and Channel Sessions, else `None`.
 - `send_command` calls `chat.stream` with the Session id or, for `None`, `new_session: {}` (the server creates the Session with the message and makes it the Identity Agent's current one, so a refused command leaves no empty Session; `server/chat-rpcs.md` -> Chat submission target) and returns the result's `session_id`; it sends `input_origin: "speech_transcription"`, so the Model receives the speech-origin context and Voice returns to listening once the server accepted the message.
-- Upload budget: 0.9 x (`speech.upload_max_size_bytes` - 44 WAV header bytes), read once per client through `settings.get_path`; a failed or malformed read uses the 100 MiB default.
+- Upload budget: 0.9 x (`speech.upload_max_size_bytes` - 44 WAV header bytes), read once per client through `settings.get_path`; a failed or malformed read uses the 100 MiB default, and an unreachable server is asked again on the next read.
 - Error codes: `server_unreachable`, `target_agent_unavailable`, `session_resolution_failed`, `send_failed`, `transcription_failed`.
 
 ## Cues

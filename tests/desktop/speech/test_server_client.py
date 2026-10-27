@@ -305,6 +305,21 @@ def test_upload_budget_falls_back_to_the_default_limit(
     assert client.upload_budget_bytes() == int((DEFAULT_SPEECH_UPLOAD_LIMIT_BYTES - 44) * 0.9)
 
 
+def test_upload_budget_asks_again_after_an_unreachable_server(
+    make_client: Callable[..., Any],
+) -> None:
+    server = ScriptedServer(
+        *[connect_error() for _ in range(MAX_ATTEMPTS)],
+        rpc_ok({"setting": {"value": 1_000_044}}),
+    )
+    client = make_client(server)
+
+    assert client.upload_budget_bytes() == int((DEFAULT_SPEECH_UPLOAD_LIMIT_BYTES - 44) * 0.9)
+    assert client.upload_budget_bytes() == 900_000
+    assert client.upload_budget_bytes() == 900_000
+    assert len(server.rpc_calls) == MAX_ATTEMPTS + 1
+
+
 # -- Cancellation --------------------------------------------------------------------
 
 

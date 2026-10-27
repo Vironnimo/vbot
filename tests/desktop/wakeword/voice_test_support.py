@@ -112,6 +112,7 @@ class FakeVoiceServer:
         default_factory=lambda: {"main": {"id": "main", "current_session_id": "s-main"}}
     )
     upload_limit: int | None = None
+    reachable: bool = True
     transcribe_gate: threading.Event | None = None
     sent: list[dict[str, Any]] = field(default_factory=list)
     uploads: list[bytes] = field(default_factory=list)
@@ -123,6 +124,8 @@ class FakeVoiceServer:
         return httpx.MockTransport(self)
 
     async def __call__(self, request: httpx.Request) -> httpx.Response:
+        if not self.reachable:
+            raise httpx.ConnectError("server down", request=request)
         if request.url.path == "/api/speech/transcribe":
             with self.lock:
                 self.uploads.append(request.content)
