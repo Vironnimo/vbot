@@ -189,6 +189,12 @@ async def test_unusable_pinned_connection_does_not_borrow_another_ladder() -> No
 @pytest.mark.asyncio
 async def test_model_picker_marks_the_effective_model() -> None:
     server = ModelServer()
+    server.models.extend(
+        [
+            {"provider_id": "groq", "model_id": "llama-4", "name": "Llama 4"},
+            {"summary": "not a model"},
+        ]
+    )
     app = ConversationApp(server, agent_id="main")
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
@@ -203,6 +209,7 @@ async def test_model_picker_marks_the_effective_model() -> None:
         assert app.screen.choices == [
             ("GPT-5.2 · openai/gpt-5.2 · current", "openai/gpt-5.2"),
             ("Claude Sonnet 4 · anthropic/claude-sonnet-4", "anthropic/claude-sonnet-4"),
+            ("Llama 4 · groq/llama-4", "groq/llama-4"),
         ]
 
         await pilot.press("escape")
