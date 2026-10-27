@@ -133,11 +133,13 @@ class ComputerSharing:
         if available is not None:
             self._available.update(available)
         self._lock = threading.RLock()
+        self._update_lock = threading.Lock()
         self._origin = ""
         self._server_url = ""
         self._closed = False
         self._quiescing = False
         self._switching_server = False
+        self._disabling_terminal = False
         self._starting_terminals = 0
         self._thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -230,7 +232,7 @@ class ComputerSharing:
     def prepare_restart(self) -> bool:
         """Fence new work for an update only while no local terminal needs preserving."""
         with self._lock:
-            if self.active_terminals or self._switching_server:
+            if self.active_terminals or self._switching_server or self._disabling_terminal:
                 return False
             self._quiescing = True
             return True
@@ -244,7 +246,12 @@ class ComputerSharing:
         with self._lock:
             origin = self._origin
             changing = bool(origin and origin != target.origin)
-            busy = self._closed or self._quiescing or self._switching_server
+            busy = (
+                self._closed
+                or self._quiescing
+                or self._switching_server
+                or self._disabling_terminal
+            )
             if changing and not busy:
                 self._switching_server = True
             count = self.active_terminals
@@ -290,6 +297,18 @@ class ComputerSharing:
         Turning Terminal off stops its running programs, so like quitting it
         asks first through ``confirm``; without one it refuses (``declined``).
         """
+        # A confirmation may run on a different bridge thread. Serialize settings
+        # mutations so another update cannot change the grant during the dialog.
+        with self._update_lock:
+            return self._update(changes, expected_server=expected_server, confirm=confirm)
+
+    def _update(
+        self,
+        changes: Any,
+        *,
+        expected_server: str,
+        confirm: Callable[[str, str], bool] | None,
+    ) -> dict[str, Any]:
         if not isinstance(changes, dict) or set(changes) - {"name", *CAPABILITIES}:
             raise SharingError("computer_sharing_invalid", "Invalid computer sharing settings")
         normalized: dict[str, Any] = {}
@@ -326,52 +345,61 @@ class ComputerSharing:
             stopping = (
                 normalized.get("terminal") is False and _grants(self._settings, origin)["terminal"]
             )
-        count = self.active_terminals if stopping else 0
-        if count:
-            try:
-                allowed = confirm is not None and confirm(
-                    "Stop sharing Terminal?",
-                    f"{count} local terminal(s) are still running. Turning off Terminal "
-                    "sharing stops their programs. Turn it off?",
-                )
-            except Exception:
-                logger.warning(
-                    "The Desktop could not confirm stopping local terminals", exc_info=True
-                )
-                allowed = False
-            if not allowed:
-                raise SharingError("declined", "Terminal sharing stays on")
-        with self._lock:
-            if not self._origin or expected_server != self._server_url or self._closed:
-                raise SharingError(
-                    "computer_server_changed",
-                    "The selected server changed; open the settings again",
-                )
-            origin = self._origin
-
-            def apply(settings: dict[str, Any]) -> dict[str, Any]:
-                if "name" in normalized:
-                    settings["name"] = normalized["name"]
-                servers = settings.setdefault("servers", {})
-                if not isinstance(servers, dict):
-                    raise SharingError(
-                        "computer_sharing_invalid", "Stored computer sharing settings are invalid"
+            if stopping:
+                self._disabling_terminal = True
+        try:
+            count = self.active_terminals if stopping else 0
+            if count:
+                try:
+                    allowed = confirm is not None and confirm(
+                        "Stop sharing Terminal?",
+                        f"{count} local terminal(s) are still running. Turning off Terminal "
+                        "sharing stops their programs. Turn it off?",
                     )
-                grants = servers.setdefault(origin, {})
-                if not isinstance(grants, dict):
-                    raise SharingError(
-                        "computer_sharing_invalid", "Stored computer sharing settings are invalid"
+                except Exception:
+                    logger.warning(
+                        "The Desktop could not confirm stopping local terminals", exc_info=True
                     )
-                grants.update(
-                    {name: normalized[name] for name in CAPABILITIES if name in normalized}
-                )
-                return settings
+                    allowed = False
+                if not allowed:
+                    raise SharingError("declined", "Terminal sharing stays on")
+            with self._lock:
+                if not self._origin or expected_server != self._server_url or self._closed:
+                    raise SharingError(
+                        "computer_server_changed",
+                        "The selected server changed; open the settings again",
+                    )
+                origin = self._origin
 
-            updated = update_section(SETTINGS_KEY, apply, self._settings_path)
-            self._settings = updated
-            if any(_grants(updated, origin).values()):
-                self._identities.computer_identity(origin, create=True)
-            self._wake()
+                def apply(settings: dict[str, Any]) -> dict[str, Any]:
+                    if "name" in normalized:
+                        settings["name"] = normalized["name"]
+                    servers = settings.setdefault("servers", {})
+                    if not isinstance(servers, dict):
+                        raise SharingError(
+                            "computer_sharing_invalid",
+                            "Stored computer sharing settings are invalid",
+                        )
+                    grants = servers.setdefault(origin, {})
+                    if not isinstance(grants, dict):
+                        raise SharingError(
+                            "computer_sharing_invalid",
+                            "Stored computer sharing settings are invalid",
+                        )
+                    grants.update(
+                        {name: normalized[name] for name in CAPABILITIES if name in normalized}
+                    )
+                    return settings
+
+                updated = update_section(SETTINGS_KEY, apply, self._settings_path)
+                self._settings = updated
+                if any(_grants(updated, origin).values()):
+                    self._identities.computer_identity(origin, create=True)
+                self._wake()
+        finally:
+            if stopping:
+                with self._lock:
+                    self._disabling_terminal = False
         logger.info("Computer sharing settings changed (fields=%s)", ",".join(sorted(normalized)))
         self._report()
         return self.status()
@@ -421,6 +449,7 @@ class ComputerSharing:
                     self._set_connection(False, None)
                     await self._changed.wait()
                     continue
+                welcomes = self._welcomes
                 try:
                     identity = self._identities.computer_identity(origin, create=True)
                     assert identity is not None
@@ -429,7 +458,6 @@ class ComputerSharing:
                     if self._scope is None:
                         self._scope = _Scope(origin, identity)
                     scope = self._scope
-                    welcomes = self._welcomes
                     await self._configure(scope, enabled)
                     serving = asyncio.create_task(
                         self._serve(scope, server_url, _computer_name(settings.get("name")))
@@ -612,6 +640,10 @@ class ComputerSharing:
                     raise SharingError(
                         "computer_closing",
                         "The Desktop is closing, restarting or switching servers; nothing was done",
+                    )
+                if self._disabling_terminal and capability == "terminal" and operation == "start":
+                    raise SharingError(
+                        "computer_closing", "Terminal sharing is being turned off; nothing was done"
                     )
                 if capability == "terminal" and operation == "start":
                     self._starting_terminals += 1
