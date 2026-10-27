@@ -86,7 +86,8 @@ PARENT_AGENT_STEERING_SYSTEM_REMINDER = (
     "The following message from your Parent Agent, the Agent that delegated work to you, "
     "arrived while you were working. It is not from the user. Apply its corrections and "
     "additional instructions to your current task. If it asks a question or requests a "
-    "status update, answer it with `message_parent` and then resume any unfinished work. "
+    "status update, answer it with `message_parent` and then resume any unfinished work; "
+    "apply other messages without confirming them. "
     "Your final answers now go to your Parent Agent."
 )
 # Precede a user message that switches a Sub-Agent's answer destination.

@@ -188,7 +188,8 @@ PARENT_MESSAGE_SECTION_TEMPLATE = (
     "### Message from Sub-Agent {id} — {title}\n"
     "Delivery {delivery_id}.\n\n"
     "{content}\n\n"
-    "The Sub-Agent continues working; its answer arrives separately."
+    "The Sub-Agent continues working; its answer arrives separately. Tell the user about this "
+    "message only when it changes what they need to know or decide."
 )
 
 # The ``message_parent`` Tool.

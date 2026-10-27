@@ -136,12 +136,12 @@ SUBAGENT_TOOL_PARAMETERS: JsonObject = {
 
 MESSAGE_PARENT_TOOL_DESCRIPTION = (
     "Send a message to your Parent Agent, the Agent that delegated your task, without ending "
-    "your turn. Use it to ask what only your Parent Agent can decide while you continue "
-    "other work, to report a finding that changes what your Parent Agent or its other "
-    "Sub-Agents are doing, and to answer its messages. Return the task result in your final "
-    "answer. Use this Tool for status updates your Parent Agent requests while you continue "
-    "working. This call also directs your final answers to your Parent Agent "
-    "until the user writes again."
+    "your turn. Each message interrupts your Parent Agent. Use it to ask what only your "
+    "Parent Agent can decide while you continue other work, to report a blocker or finding "
+    "that makes your Parent Agent or its other Sub-Agents change what they are doing, and to "
+    "answer questions or status requests in its messages. Put progress, intermediate results "
+    "and the task result in your final answer instead. This call also directs your final "
+    "answers to your Parent Agent until the user writes again."
 )
 MESSAGE_PARENT_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
