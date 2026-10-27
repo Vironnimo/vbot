@@ -44,7 +44,7 @@ The contract owners rely on (`read_section`/`update_section`, location) is in `d
 
 ## Standalone logging
 
-`desktop/_logging.py` attaches the `vbot.*` logger tree to daily files under `<config-dir>/logs/` in the server's format. Voice logs each actual state change (`Voice state: <state> (<error_code>)`), listener starts, readiness changes, and command outcomes with codes and ids; unchanged states stay silent. Dictation logs starts, ends, lengths, and failure codes. Logs never contain transcripts. This is Desktop-local because a Desktop Client has no server `data_dir`. Fatal errors of native libraries (WebView2 through .NET, PortAudio, the wake word and speech models) go to `<config-dir>/logs/desktop-crash.log` (`logging/pipeline.md` -> Crash logs).
+`desktop/_logging.py` attaches the `vbot.*` logger tree to daily files under `<config-dir>/logs/` in the server's format. Voice logs each actual state change (`Voice state: <state> (<error_code>)`), listener starts, readiness changes, and command outcomes with codes and ids; unchanged states stay silent. Dictation logs starts, ends, lengths, and failure codes. Logs never contain transcripts. This is Desktop-local because a Desktop Client has no server `data_dir`. Fatal errors of native libraries (WebView2 through .NET, PortAudio, the wake word and speech models) go to `<config-dir>/logs/desktop-crash.log` through the shared stdlib crash-file primitive (`logging/pipeline.md` -> Crash logs).
 
 ## Tests
 

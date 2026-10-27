@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 
+from core.utils import crash_logging
 from desktop import _logging as desktop_logging
 
 
@@ -41,8 +42,8 @@ def test_desktop_crash_log_keeps_earlier_crashes_in_bounded_generations(
         # The real fault handler would keep it open and take over the test process's own.
         file.close()
 
-    monkeypatch.setattr(desktop_logging, "faulthandler", types.SimpleNamespace(enable=enable))
-    monkeypatch.setattr(desktop_logging, "_DESKTOP_CRASH_LOG_ROTATE_BYTES", 64)
+    monkeypatch.setattr(crash_logging, "faulthandler", types.SimpleNamespace(enable=enable))
+    monkeypatch.setattr(crash_logging, "CRASH_LOG_ROTATE_BYTES", 64)
     crash_log = tmp_path / "logs" / desktop_logging.DESKTOP_CRASH_LOG_NAME
     crash_log.parent.mkdir()
     crash_log.write_bytes(b"Windows fatal exception: access violation\n")

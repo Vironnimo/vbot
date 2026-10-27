@@ -24,6 +24,7 @@ from core.access.server_record import (
     write_server_access,
 )
 from core.database import DataStoreMarker, read_marker
+from core.utils import crash_logging
 from core.utils.log_viewer import LOG_LINE_PATTERN
 from core.utils.logging import resolve_daily_log_path
 from core.utils.processes import ForeignJob
@@ -123,7 +124,7 @@ def _patch_serving(
     monkeypatch.setattr(server_main.gc, "set_threshold", lambda *_thresholds: None)
     monkeypatch.setattr(server_main.sys, "setswitchinterval", lambda _interval: None)
     # The real fault handler would take over the test process's own.
-    monkeypatch.setattr(server_main, "faulthandler", SimpleNamespace(enable=_close_crash_log))
+    monkeypatch.setattr(crash_logging, "faulthandler", SimpleNamespace(enable=_close_crash_log))
     return calls
 
 
@@ -408,8 +409,8 @@ def test_main_records_fatal_errors_in_a_crash_log_kept_across_starts(
         enabled.append({"path": Path(file.name).resolve(), **options})
         _close_crash_log(file=file)
 
-    monkeypatch.setattr(server_main, "faulthandler", SimpleNamespace(enable=enable))
-    monkeypatch.setattr(server_main, "_CRASH_LOG_ROTATE_BYTES", 64)
+    monkeypatch.setattr(crash_logging, "faulthandler", SimpleNamespace(enable=enable))
+    monkeypatch.setattr(crash_logging, "CRASH_LOG_ROTATE_BYTES", 64)
     crash_log = tmp_path / "data" / "logs" / server_main.CRASH_LOG_NAME
     crash_log.parent.mkdir(parents=True)
     previous = b"Fatal Python error: Segmentation fault\n" * (2 if oversized else 1)
@@ -440,7 +441,7 @@ def test_main_starts_without_a_crash_log_it_cannot_open(
     _patch_serving(monkeypatch, _serve_until("control"))
     enabled: list[dict[str, Any]] = []
     monkeypatch.setattr(
-        server_main,
+        crash_logging,
         "faulthandler",
         SimpleNamespace(enable=lambda **options: enabled.append(options)),
     )

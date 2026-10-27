@@ -19,12 +19,14 @@ Every directory the pipeline writes daily files to (`<data_dir>/logs/`, and `<in
 
 ## Crash logs
 
+The stdlib-only `core/utils/crash_logging.py` owns crash-file rotation, opening and fault-handler installation for both processes. Server and Desktop keep their own paths, start-line text and failure logger.
+
 A native crash (an access violation or segmentation fault in sqlite-vec, winpty, onnxruntime, Pillow, ...), an abort or a fatal interpreter error ends the process without a log record or stop line. The server process (`server/main.py`, right after it creates its `LogManager`) therefore enables `faulthandler` (`all_threads=True`, `c_stack=True`) into `<data_dir>/logs/server-crash.log`, and the standalone Desktop (`desktop/main.py`) into `<config-dir>/logs/desktop-crash.log`. A dump holds every Python thread's stack with thread names and code locations only, and the crashing thread's C stack where the platform provides one (Linux; Windows prints `<cannot get C stack on this system>`).
 
 - Each process start appends one line in the daily log format (`<local time> [INFO] vbot.server - Server process started (pid=<pid>)`, `vbot.desktop - Desktop process started` for the Desktop): a dump follows the line of the process that crashed, the daily log's start line carries the same pid, and the log viewer shows the dump as that line's continuation (`logs.md`).
 - The file is appended across starts, so a dump survives the restart a supervisor makes after the crash. A start that finds it over 1 MiB first moves it to its single previous generation (`server-crash.log.1`), as the application does with `server-startup.log` (`cli/application.md`). The file stays open for the process lifetime: `faulthandler` keeps the file object referenced until the interpreter has finalized, where native libraries can still crash. A crash log that cannot be opened logs one WARNING, and the process runs without it.
 - On Windows `faulthandler` sees an exception before native code's own handlers do: a dump of an exception the code then catches (a .NET null reference inside the Desktop's WebView2 host, a `ctypes` call that reports an access violation as `OSError`) is not followed by an end of the process; the daily log shows the process going on.
-- Tests: `tests/server/test_main.py`, `tests/desktop/test_main.py`.
+- Tests: `tests/server/test_main.py`, `tests/desktop/test_logging.py`.
 
 ## Ends without a stop line
 

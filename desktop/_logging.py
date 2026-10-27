@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-import faulthandler
 import logging
 import os
 import time
 from collections.abc import Callable
-from contextlib import suppress
 from datetime import date
 from pathlib import Path
 from typing import override
 
+from core.utils.crash_logging import enable_crash_log
 from desktop.settings import config_dir
 
 logger = logging.getLogger("vbot.desktop")
@@ -23,8 +22,6 @@ _DESKTOP_LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 # Fatal errors (a native crash, a fatal interpreter error) bypass logging; the
 # fault handler writes them to this file beside the daily logs instead.
 DESKTOP_CRASH_LOG_NAME = "desktop-crash.log"
-# Checked at each start: a larger crash log moves to its single previous generation.
-_DESKTOP_CRASH_LOG_ROTATE_BYTES = 1024 * 1024
 
 
 class _DesktopLogFormatter(logging.Formatter):
@@ -128,15 +125,7 @@ def close_desktop_logging(handler: logging.Handler | None) -> None:
 
 
 def enable_desktop_crash_log(desktop_config_directory: Path | None = None) -> None:
-    """Record this process's fatal errors in the crash log beside its daily logs.
-
-    Native libraries (WebView2 through .NET, PortAudio, the wake word and speech
-    models) can end the process without a Python traceback. Each start appends
-    one line in the log format, so a crashed process's dump (every thread's
-    Python stack, and the C stack where the platform provides one) follows the
-    line of its own start. The fault handler keeps the file object referenced,
-    so it stays open until the interpreter has finalized.
-    """
+    """Record this Desktop's fatal errors beside its daily logs."""
 
     path = (
         (desktop_config_directory or config_dir())
@@ -145,20 +134,4 @@ def enable_desktop_crash_log(desktop_config_directory: Path | None = None) -> No
     )
     started = time.strftime(_DESKTOP_LOG_DATE_FORMAT)
     header = f"{started} [INFO] vbot.desktop - Desktop process started (pid={os.getpid()})\n"
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        # A missing file needs nothing; a file another Desktop process holds open
-        # cannot move and keeps growing until a later start.
-        with suppress(OSError):
-            if path.stat().st_size > _DESKTOP_CRASH_LOG_ROTATE_BYTES:
-                os.replace(path, path.with_name(f"{path.name}.1"))
-        crash_log = path.open("ab", buffering=0)
-        try:
-            crash_log.write(header.encode("utf-8"))
-        except OSError:
-            crash_log.close()
-            raise
-    except OSError as exc:
-        logger.warning("Opening the crash log failed (path=%s error=%s)", path, exc)
-        return
-    faulthandler.enable(file=crash_log, all_threads=True, c_stack=True)
+    enable_crash_log(path, header, logger=logger)
