@@ -434,6 +434,9 @@ def _project_cron_ticks(
 ) -> list[datetime]:
     if job.cron_expression is None:
         return []
+    window_start = max(window_start, _parse_utc_timestamp(job.created_at, field_name="created_at"))
+    if window_start >= window_end:
+        return []
     # get_next is exclusive; step back in UTC to include an exact window-start tick.
     cursor_local = (window_start - timedelta(microseconds=1)).astimezone(timezone)
     ticks: list[datetime] = []

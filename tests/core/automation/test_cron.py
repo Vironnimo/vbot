@@ -77,7 +77,8 @@ async def test_impossible_cron_is_rejected_before_mutation(tmp_path, expression)
 
 
 @pytest.mark.asyncio
-async def test_impossible_stored_cron_is_skipped_without_breaking_siblings(tmp_path):
+async def test_impossible_stored_cron_is_skipped_without_breaking_siblings(tmp_path, monkeypatch):
+    monkeypatch.setattr(cron_timing, "_utc_now", lambda: datetime(2026, 9, 1, tzinfo=UTC))
     service, _ = make_service(tmp_path, tz="Europe/Berlin")
     job = await service.create_job(
         agent_id="main", prompt="test", schedule_type="cron", cron_expression="0 0 * * *"
