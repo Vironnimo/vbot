@@ -6,6 +6,8 @@ projection. Recall chooses ranking/windowing and never changes this source text.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from functools import cached_property
 from typing import Any
 
 from core.chat.content_blocks import FileBlock, FileMentionBlock, MediaBlock, TextBlock
@@ -32,6 +34,54 @@ SESSION_RECALL_DEFAULT_ROLES = (
 # index). Keep the retired ``session_read`` name for historical results too.
 # Sessions owns this stored-history policy without importing Recall or the Tool layer.
 RECALL_TOOL_RESULT_NAMES = frozenset({"session_search", "session_read"})
+
+
+def compact_text(text: str) -> str:
+    """Collapse Unicode whitespace without changing the text's spelling."""
+    return " ".join(text.split())
+
+
+@dataclass(frozen=True)
+class LiteralSearchQuery:
+    """The literal text policy shared by canonical and derived Session searches.
+
+    FTS expressions retain Unicode spelling for SQLite's tokenizer. Case folding
+    belongs only to the literal candidate check; indexes choose their own tables,
+    columns, candidate filters and ranking.
+    """
+
+    query: str
+    match_mode: str = "all_terms"
+
+    @cached_property
+    def compact(self) -> str:
+        return compact_text(self.query)
+
+    @cached_property
+    def values(self) -> tuple[str, ...]:
+        if self.match_mode == "phrase":
+            return (self.compact,) if self.compact else ()
+        return tuple(self.compact.split())
+
+    @cached_property
+    def folded_values(self) -> tuple[str, ...]:
+        return tuple(value.casefold() for value in self.values)
+
+    def matches(self, text: str) -> bool:
+        haystack = compact_text(text).casefold()
+        if not haystack:
+            return False
+        matches = (value in haystack for value in self.folded_values)
+        return any(matches) if self.match_mode == "any_term" else all(matches)
+
+    @property
+    def trigram_supported(self) -> bool:
+        return bool(self.values) and all(len(value) >= 3 for value in self.values)
+
+    @cached_property
+    def fts_expression(self) -> str:
+        operator = " OR " if self.match_mode == "any_term" else " AND "
+        return operator.join('"' + value.replace('"', '""') + '"' for value in self.values)
 
 
 def is_recall_artifact_message(message: Any) -> bool:

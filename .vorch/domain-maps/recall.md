@@ -32,7 +32,7 @@ The embedding identity whose vectors one Passage index holds, so vectors of two 
 
 ## Passage Policy
 
-Sessions owns canonical searchable roles, persisted Recall-result exclusion and Content Block text extraction in `core/sessions/search_content.py`; storage, Message search and Recall consume that one policy. Passages cover only default conversation roles (`user`, `assistant`, `compaction_checkpoint`), with Compaction summaries as separately labeled Passages; each canonical entry owns its own overlapping windows, which never cross entry boundaries, and `PASSAGE_POLICY_VERSION` rebuilds the index when the policy changes (`recall/passage-index.md` -> Passage windows).
+Sessions owns canonical searchable content and the shared literal-query policy in `core/sessions/search_content.py` (`sessions.md` -> Constraints & Gotchas); Recall consumes them without its own matching or query-tokenization rules. Passages cover only default conversation roles (`user`, `assistant`, `compaction_checkpoint`), with Compaction summaries as separately labeled Passages; each canonical entry owns its own overlapping windows, which never cross entry boundaries, and `PASSAGE_POLICY_VERSION` rebuilds the index when the policy changes (`recall/passage-index.md` -> Passage windows).
 
 ## Passage index
 

@@ -783,8 +783,22 @@ async def test_literal_search_returns_multiple_source_faithful_passages(
         ("alpha beta", "phrase", {"phrase"}),
         ("beta alpha", "phrase", set()),
         ("missing gamma", "any_term", {"term"}),
+        ("alpha\u2003beta", "all_terms", {"phrase"}),
+        ("\u2003alpha\u00a0beta\t", "phrase", {"phrase"}),
+        ("Straße\u2003lang", "all_terms", {"unicode"}),
+        ('"hello"', "all_terms", {"quoted"}),
+        ("ai", "all_terms", {"short"}),
     ],
-    ids=["phrase", "phrase-order", "any-term"],
+    ids=[
+        "phrase",
+        "phrase-order",
+        "any-term",
+        "all-terms-whitespace",
+        "phrase-whitespace",
+        "unicode-terms",
+        "quoted-term",
+        "short-token",
+    ],
 )
 async def test_literal_search_honours_the_match_mode(
     sessions: ChatSessionManager,
@@ -793,7 +807,13 @@ async def test_literal_search_honours_the_match_mode(
     match_mode: str,
     expected: set[str],
 ) -> None:
-    for session_id, text in (("phrase", "alpha beta"), ("term", "gamma")):
+    for session_id, text in (
+        ("phrase", "alpha beta"),
+        ("term", "gamma"),
+        ("unicode", "Die Straße ist lang"),
+        ("quoted", 'Say "hello" now'),
+        ("short", "AI first"),
+    ):
         sessions.create("coder", session_id=session_id).append(
             ChatMessage.user(text, timestamp=timestamp(1))
         )

@@ -51,13 +51,13 @@ from core.recall._passage_catalog import (
     stored_scope,
     time_bounds,
 )
-from core.recall.canonical import compact_text, text_matches_search_request
 from core.recall.passages import (
     PASSAGE_OVERLAP_CHARS,
     PASSAGE_POLICY_VERSION,
     PASSAGE_TARGET_CHARS,
 )
 from core.recall.recall import RecallSearchRequest
+from core.sessions.search_content import LiteralSearchQuery
 from core.utils.timestamps import format_canonical_timestamp, parse_canonical_timestamp
 
 INDEX_DIR_NAME = "recall"
@@ -77,8 +77,6 @@ _VECTOR_TABLE = "passage_vectors"
 _VECTOR_TRIGGER = "passages_drop_vector"
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 _MICROSECOND = timedelta(microseconds=1)
-# FTS5 trigram needs at least three characters; shorter values use the token index.
-_TRIGRAM_MIN_CHARS = 3
 _TRIGRAM_TABLE = "passages_fts"
 _TOKEN_TABLE = "passages_fts_tokens"
 TRIGRAM_RANKING = "bm25_trigram"
@@ -710,23 +708,12 @@ def literal_query(request: RecallSearchRequest) -> LiteralQuery | None:
     means the query has no searchable value.
     """
 
-    compact = compact_text(request.query)
-    if request.match_mode == "phrase":
-        values = [compact] if compact else []
-        operator = ""
-    else:
-        values = [term for term in compact.split(" ") if term]
-        operator = " OR " if request.match_mode == "any_term" else " AND "
-    if not values:
+    literal = LiteralSearchQuery(request.query, request.match_mode)
+    if not literal.values:
         return None
-    expression = operator.join(_quote_fts_value(value) for value in values)
-    if all(len(value) >= _TRIGRAM_MIN_CHARS for value in values):
-        return LiteralQuery(_TRIGRAM_TABLE, expression, TRIGRAM_RANKING)
-    return LiteralQuery(_TOKEN_TABLE, expression, _TOKEN_RANKING)
-
-
-def _quote_fts_value(value: str) -> str:
-    return '"' + value.replace('"', '""') + '"'
+    if literal.trigram_supported:
+        return LiteralQuery(_TRIGRAM_TABLE, literal.fts_expression, TRIGRAM_RANKING)
+    return LiteralQuery(_TOKEN_TABLE, literal.fts_expression, _TOKEN_RANKING)
 
 
 def _matching_passages(
@@ -761,9 +748,10 @@ def _matching_passages(
         ORDER BY rank ASC, p.start_timestamp DESC, p.passage_id ASC, p.passage_ref ASC
     """
     matched: list[tuple[StoredPassage, float]] = []
+    literal = LiteralSearchQuery(request.query, request.match_mode)
     with closing(connection.execute(sql, parameters)) as cursor:
         for row in cursor:
-            if text_matches_search_request(str(row["text"]), request):
+            if literal.matches(str(row["text"])):
                 matched.append((stored_passage(row), float(row["rank"])))
                 if len(matched) >= wanted:
                     break

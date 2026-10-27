@@ -21,7 +21,7 @@ Task-gated detail for `sessions.md`: the integrated FTS indexes, their upkeep an
 
 ## `search_messages`
 
-`ChatSessionManager.search_messages` retains the public keyword interface and builds one internal `SessionSearchRequest`; the store and query executor pass that request intact. It owns whitespace normalization, literal matching, FTS expression/trigram preparation and timestamp normalization.
+`ChatSessionManager.search_messages` retains the public keyword interface and builds one internal `SessionSearchRequest`; the store and query executor pass that request intact. It owns scope, filters and timestamp normalization; its `LiteralSearchQuery` uses the shared text policy in `search_content.py` (`sessions.md` -> Constraints & Gotchas).
 
 - Returns a typed `SessionSearchResult` of exact hits (`SessionSearchHit`: address, Message id, role, timestamp, matched text, rank) plus `complete`, `method` (`fts`/`scan`) and `fallback_reason`. Results are bounded by `limit` (default 1,000).
 - Eligible Sessions (one `MATERIALIZED` CTE): live Sessions of the requested Project scope (the Identity scope for `project_id=None`) whose Recall visibility the request admits, optionally one Agent and one Session, minus excluded Session ids. Candidates are the current entries of eligible Sessions: their own non-superseded entries and the ancestor entries their lineage admits, filtered by role and time before any candidate is checked. Each stored entry is one candidate, so a fork never duplicates its origin's hits.

@@ -64,8 +64,17 @@ async def test_scan_budget_checks_eligible_messages_globally_in_request_order(
         ("Straße: ", "needle", "NEEDLE", "all_terms"),
         ("", "Straße", "STRASSE", "all_terms"),
         ("Straße: ", "alpha\n\t beta", "alpha beta", "phrase"),
+        ("", "alpha\u2003\u00a0beta", "\talpha beta\u2003", "phrase"),
+        ("", "C#", "c#", "all_terms"),
     ],
-    ids=["ascii", "expanded-prefix", "expanded-match", "normalized-phrase"],
+    ids=[
+        "ascii",
+        "expanded-prefix",
+        "expanded-match",
+        "normalized-phrase",
+        "unicode-whitespace",
+        "short-term",
+    ],
 )
 async def test_scan_pages_are_exact_without_loading_histories(
     sessions: ChatSessionManager,

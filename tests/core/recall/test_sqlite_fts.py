@@ -41,6 +41,8 @@ def _searchable_history(session: ChatSession) -> dict[str, ChatMessage]:
         "lower": ChatMessage.user("Switched the agent to gpt4o today", timestamp=timestamp(3)),
         "upper": ChatMessage.user("Running GPT4O benchmark", timestamp=timestamp(4)),
         "short": ChatMessage.user("Go fast", timestamp=timestamp(5)),
+        "unicode": ChatMessage.user("Die Straße ist lang", timestamp=timestamp(5)),
+        "quoted": ChatMessage.user('Say "hello" now', timestamp=timestamp(5)),
         "blocks": ChatMessage.user(
             [
                 TextBlock(type="text", text="visible block text"),
@@ -76,12 +78,26 @@ def _searchable_history(session: ChatSession) -> dict[str, ChatMessage]:
         ("pt4", "all_terms", ["upper", "lower"]),
         # Queries below the trigram length use whole tokens.
         ("go", "all_terms", ["short"]),
+        ("\u2003alpha\u00a0beta\t", "phrase", ["phrase"]),
+        ("Straße\u2003lang", "all_terms", ["unicode"]),
+        ('"hello"', "all_terms", ["quoted"]),
         # Attachment names are searchable; reasoning and Tool arguments are not.
         ("contract pdf", "all_terms", ["blocks"]),
         ("private clue", "all_terms", []),
         ("indexed argument", "all_terms", []),
     ],
-    ids=["phrase", "any-term", "substring", "short-token", "file-block", "reasoning", "tool-args"],
+    ids=[
+        "phrase",
+        "any-term",
+        "substring",
+        "short-token",
+        "phrase-whitespace",
+        "unicode-terms",
+        "quoted-term",
+        "file-block",
+        "reasoning",
+        "tool-args",
+    ],
 )
 async def test_message_search_matches_conversation_text(
     tmp_path: Path,

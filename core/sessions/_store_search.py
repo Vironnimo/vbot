@@ -126,7 +126,8 @@ def search(
     if request.empty:
         return empty
     search_filter = _search_filter(request)
-    check = _Check(connection, search_filter, matches=request.matches, limit=request.limit)
+    literal = request.literal_query
+    check = _Check(connection, search_filter, matches=literal.matches, limit=request.limit)
 
     if use_fts:
         if _store_fts._fts_health_from_connection(connection, verify_coverage=False).available:
@@ -135,13 +136,17 @@ def search(
             trigram = (
                 request.roles is not None
                 and set(request.roles).issubset(FTS_TRIGRAM_ROLES)
-                and request.trigram_supported
+                and literal.trigram_supported
                 and _store_fts._fts_table_exists(connection, FTS_TRIGRAM_TABLE)
             )
             table = FTS_TRIGRAM_TABLE if trigram else FTS_TABLE
             hits, complete = check.run(
                 _fts_candidates(
-                    connection, table, request.fts_expression(), search_filter, request.order
+                    connection,
+                    table,
+                    "{content search_text} : (" + literal.fts_expression + ")",
+                    search_filter,
+                    request.order,
                 ),
                 ranked=request.order == "relevance",
             )
