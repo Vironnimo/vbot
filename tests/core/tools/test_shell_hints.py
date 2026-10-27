@@ -38,6 +38,8 @@ _BASH_SYNTAX = (
     "`foreach ($f in Get-ChildItem *.md) { ... }`, and `Test-Path` for file tests."
 )
 _FAILED = ("python.exe exited with code 1",)
+_GIT_128 = ("git.exe exited with code 128",)
+_GIT_141 = ("git.exe exited with code 141",)
 
 
 @pytest.mark.parametrize(
@@ -481,6 +483,20 @@ def test_bash_habits_in_powershell_name_the_powershell_form(
             _NOT_RECOGNIZED,
         ),
         ("cargo build", "cargo", "Check with `Get-Command cargo`", _NOT_RECOGNIZED_DE),
+        # A path names a missing file, not a program to install.
+        (
+            "& 'C:\\Tools\\Python312\\python.exe' -V",
+            "C:\\Tools\\Python312\\python.exe",
+            "No file exists at `C:\\Tools\\Python312\\python.exe`",
+            _NOT_RECOGNIZED,
+        ),
+        (
+            ".\\backend\\.venv\\Scripts\\python.exe -m pytest",
+            ".\\backend\\.venv\\Scripts\\python.exe",
+            "No file `.\\backend\\.venv\\Scripts\\python.exe` exists relative to the current "
+            "location",
+            _NOT_RECOGNIZED,
+        ),
         # head and tail point to the untrimmed output, not to a trim stage.
         ("git log | head -n 5", "head", "Run the command without it", _NOT_RECOGNIZED),
         ("tail -n 20 app.log", "tail", "`Get-Content path -Tail 20`", _NOT_RECOGNIZED),
@@ -1248,7 +1264,7 @@ def test_a_program_that_failed_behind_a_select_first_stage_is_explained(
         (
             "& 'C:\\tools\\lint.exe' src; 'done'",
             f"{_NOT_RECOGNIZED.format(name='C:\\tools\\lint.exe')}\ndone",
-            ("Get-Command", "did not run", "code 0"),
+            ("No file exists at", "did not run", "code 0"),
         ),
         # A redirection to /dev/null kept its statement from running.
         (
@@ -1431,6 +1447,104 @@ def test_a_failed_program_in_a_pipeline_names_what_and_and_skipped(
     # In bash, && follows the pipeline's last command.
     monkeypatch.setattr(shell_hint_common, "_POWERSHELL", False)
     assert annotate_failure(command, exit_code, "checked", failed_programs=failed) is None
+
+
+@pytest.mark.parametrize(
+    ("command", "named"),
+    [
+        ("backend/.venv/Scripts/python.exe -m pytest", True),
+        # After a location change the path was resolved elsewhere.
+        ("cd backend; .venv/Scripts/python.exe -m pytest", False),
+    ],
+)
+def test_a_missing_relative_program_path_names_where_it_was_resolved(
+    tmp_path: Path, command: str, named: bool
+) -> None:
+    missing = command.split("; ")[-1].split(" ")[0]
+
+    hint = annotate_failure(command, 1, _NOT_RECOGNIZED.format(name=missing), workdir=tmp_path)
+
+    assert hint is not None and f"No file `{missing}` exists relative to" in hint
+    assert (tmp_path.as_posix() in hint) is named
+    assert "not installed" not in hint
+
+
+@pytest.mark.parametrize(
+    ("command", "exit_code", "output", "failed", "expected"),
+    [
+        (
+            "rg -n baseURL lib/*.js 2>$null | Select-Object -First 20",
+            2,
+            "",
+            ("rg.exe exited with code 2",),
+            "`rg` exited with code 2, but `2>$null` discarded",
+        ),
+        (
+            "git show --stat abc; git log -1 --format=%B def *> $null; 'done'",
+            0,
+            "commit abc\ndone",
+            ("git.exe exited with code 128",),
+            "with code 128 (the command still exited with code 0), but `*>$null` discarded",
+        ),
+        # Inside a block, after an assignment.
+        (
+            "foreach ($p in $ps) { $first = git -C $p log --format=%cs 2>$null }",
+            1,
+            "",
+            ("git.exe exited with code 128", "git.exe exited with code 1"),
+            "`git` exited with codes 128 and 1",
+        ),
+        # The output already says why, or the discarded errors are another program's.
+        ("git log -1 abc 2>$null; git show def", 128, "fatal: bad object def", _GIT_128, None),
+        ("git status 2>$null; rg todo", 2, "", ("rg.exe exited with code 2",), None),
+        ("Write-Output 'git log 2>$null'; git push", 1, "", ("git.exe exited with code 1",), None),
+    ],
+)
+def test_a_failed_program_whose_errors_went_to_null_is_named(
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
+    exit_code: int,
+    output: str,
+    failed: tuple[str, ...],
+    expected: str | None,
+) -> None:
+    monkeypatch.setattr(shell_hint_common, "_POWERSHELL", True)
+
+    hint = annotate_failure(command, exit_code, output, failed_programs=failed)
+
+    if expected is None:
+        assert hint is None
+    else:
+        assert hint is not None and expected in hint
+    # Failed programs are known on Windows only.
+    monkeypatch.setattr(shell_hint_common, "_POWERSHELL", False)
+    assert annotate_failure(command, exit_code, output, failed_programs=failed) is None
+
+
+@pytest.mark.parametrize(
+    ("command", "failed", "kept"),
+    [
+        # The stage got its lines; git's next write found the pipe closed.
+        ("git log --reverse --format=%cs | Select-Object -First 1", _GIT_141, ()),
+        ('"first: " + (git log --reverse | select -f 2)', _GIT_141, ()),
+        ("foreach ($r in $rs) { $f = git log 2>$null | Select-Object -First 1 }", _GIT_141, ()),
+        ("git log | Select-Object -First 1; git fetch", _GIT_141, ()),
+        # Another code, another program, -Wait, or no such stage is a failure.
+        ("git log | Select-Object -First 1", _GIT_128, _GIT_128),
+        ("rg x | Select-Object -First 1; git fetch", _GIT_141, _GIT_141),
+        ("git log | Select-Object -First 1 -Wait", _GIT_141, _GIT_141),
+        ("git log | Select-Object -Last 1", _GIT_141, _GIT_141),
+    ],
+)
+def test_programs_a_select_first_stage_stopped_reading_did_not_fail(
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
+    failed: tuple[str, ...],
+    kept: tuple[str, ...],
+) -> None:
+    monkeypatch.setattr(shell_hint_common, "_POWERSHELL", True)
+
+    assert shell_hints.without_closed_pipes(command, failed) == kept
 
 
 @pytest.mark.parametrize(

@@ -146,35 +146,51 @@ def note(content: str) -> Any:
 # --- Ended commands ----------------------------------------------------------
 
 
+_BUILD = "build --all"
+
+
 @pytest.mark.parametrize(
-    ("exits", "exit_code", "failed_programs"),
+    ("command", "exits", "exit_code", "failed_programs"),
     [
-        ((ProgramExit("python.exe", 5),), 1, ["python.exe exited with code 5"]),
+        (_BUILD, (ProgramExit("python.exe", 5),), 1, ["python.exe exited with code 5"]),
         # One failed program whose code is the exit code repeats it.
-        ((ProgramExit("git.exe", 128),), 128, None),
-        ((ProgramExit("app.exe", 0xC0000005),), 0xC0000005, None),
-        ((), 0xC0000005, None),
+        (_BUILD, (ProgramExit("git.exe", 128),), 128, None),
+        (_BUILD, (ProgramExit("app.exe", 0xC0000005),), 0xC0000005, None),
+        (_BUILD, (), 0xC0000005, None),
         (
+            _BUILD,
             (ProgramExit("git.exe", 128), ProgramExit("python.exe", 128)),
             128,
             ["git.exe exited with code 128", "python.exe exited with code 128"],
         ),
         # A program that failed before the last statement: the exit code is not its.
         (
+            _BUILD,
             (ProgramExit("node.exe", 1, "tests/check.js"),),
             0,
             ["node.exe exited with code 1 (tests/check.js)"],
+        ),
+        # A Select-Object -First stage stopped reading on purpose: git did not fail.
+        (
+            "git log --reverse | Select-Object -First 1; build --all",
+            (ProgramExit("git.exe", 141),),
+            0,
+            None,
         ),
     ],
 )
 @pytest.mark.asyncio
 async def test_ended_command_reports_output_exit_code_failed_programs_and_environment(
     shell: Shell,
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
     exits: tuple[ProgramExit, ...],
     exit_code: int,
     failed_programs: list[str] | None,
 ) -> None:
-    call = shell.call({"command": "build --all", "env_keys": ["API_TOKEN"], "env": {"MODE": "ci"}})
+    # Failed programs are Windows' and read as PowerShell on every host.
+    monkeypatch.setattr(shell_hint_common, "_POWERSHELL", True)
+    call = shell.call({"command": command, "env_keys": ["API_TOKEN"], "env": {"MODE": "ci"}})
     process = await shell.started()
     process.write("compiling\r\ndone\r\n")
     process.tree.exits = list(exits)
@@ -190,10 +206,10 @@ async def test_ended_command_reports_output_exit_code_failed_programs_and_enviro
         assert "last statement" in result.pop("hint")
     assert result == expected
     if exit_code == 0xC0000005:
-        shown = shell_detail_blocks({"command": "build --all"}, tool_success(result))
+        shown = shell_detail_blocks({"command": command}, tool_success(result))
         assert any("0xC0000005" in block.get("text", "") for block in shown)
-    command, env = launched(shell.launcher)
-    assert command == "build --all"
+    launched_command, env = launched(shell.launcher)
+    assert launched_command == command
     # No input, no terminal: PowerShell cannot prompt.
     assert shell.launcher.argv[0][1:-1] == (
         ["-NoProfile", "-NonInteractive", "-Command"] if sys.platform == "win32" else ["-c"]

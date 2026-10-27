@@ -193,6 +193,26 @@ def _program_name(command: str, code: str, start: int, end: int) -> str | None:
     return name.removesuffix(".exe") or None
 
 
+# An assignment a program's output goes to: `$first = git log ...`.
+_ASSIGNMENT = re.compile(r"[ \t]*+\$[\w:]++[ \t]*+[-+*/]?=(?!=)")
+
+
+def _run_starts(code: str) -> list[int]:
+    """Where a program can run in *code*, for ``_element_program``."""
+    return [0, *(match.end() for match in _RUN_START.finditer(code))]
+
+
+def _element_program(command: str, code: str, starts: list[int], position: int) -> str | None:
+    """The program the pipeline element around *position* starts with, lowercase without .exe.
+
+    *starts* are ``_run_starts(code)``; the element begins at the last one
+    before *position*, also inside a block or parentheses, after an assignment.
+    """
+    start = starts[bisect.bisect_right(starts, position) - 1]
+    assignment = _ASSIGNMENT.match(code, start, position)
+    return _program_name(command, code, assignment.end() if assignment else start, position)
+
+
 def _program_at(command: str, code: str, start: int, end: int | None = None) -> str | None:
     """The working program the pipeline at *start* begins with, lowercase without .exe."""
     first = _PIPELINE_PROGRAM.match(code, start, len(code) if end is None else end)

@@ -233,6 +233,45 @@ def _hint_powershell_command_not_found(failure: _Failure, *, exit_zero: bool = F
     return hint
 
 
+# A rooted path: a drive, or the current drive's root.
+_ROOTED_PATH = re.compile(r"[A-Za-z]:[/\\]|/")
+# A statement that changes the current location.
+_LOCATION_CHANGE_CALL = re.compile(
+    r"(?:^|[;\n{(|&])[ \t]*+(?:cd|chdir|sl|Set-Location|Push-Location|pushd|Pop-Location|popd)"
+    r"(?=[ \t;\n)}]|$)",
+    re.IGNORECASE,
+)
+
+
+def _missing_program_file(failure: _Failure, missing: str) -> str:
+    """The hint for a program PowerShell did not find at the path the command gave.
+
+    A path names a file, not a program to install: a venv's
+    ``.\\backend\\.venv\\Scripts\\python.exe`` called from another directory and a
+    mistyped absolute path got the not-installed hint, which also told them to
+    use an absolute path (Sessions 2026-10-26 and 2026-10-27, 3 calls). A
+    relative path names the working directory it was resolved from when the
+    command does not change its location and the Session may read it.
+    """
+    if _ROOTED_PATH.match(missing):
+        return (
+            f"No file exists at `{missing}`, so PowerShell could not run it. Check the path for "
+            "a typo, or find where the program is installed."
+        )
+    where = "the current location"
+    workdir = failure.workdir
+    if (
+        workdir is not None
+        and _LOCATION_CHANGE_CALL.search(_powershell_code(failure.command).flat) is None
+        and failure.permissions.check_path(workdir, "read") is None
+    ):
+        where = f"the working directory `{workdir.as_posix()}`"
+    return (
+        f"No file `{missing}` exists relative to {where}, so PowerShell could not run it. "
+        "Run it from the directory the path starts in, or give its absolute path."
+    )
+
+
 def _not_recognized_hint(failure: _Failure, missing: str) -> str | None:
     described = _description_as_command(failure, missing)
     if described is not None:
@@ -257,6 +296,8 @@ def _not_recognized_hint(failure: _Failure, missing: str) -> str | None:
         # Text PowerShell ran as a command, such as a string that lost its
         # quotes: no program to install.
         return None
+    if re.search(r"[/\\]", missing):
+        return _missing_program_file(failure, missing)
     return (
         f"`{missing}` is not installed or not on PATH. Check with `Get-Command {missing}`; "
         "install it or run it by its absolute path instead of retrying the same command."

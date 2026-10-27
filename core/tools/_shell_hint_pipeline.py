@@ -16,9 +16,11 @@ from ._shell_hint_code import (
     _POWERSHELL_NOT_RECOGNIZED,
     _RUN_START,
     _calls,
+    _element_program,
     _powershell_code,
     _program_at,
     _program_name,
+    _run_starts,
     _top_level_split,
     _top_level_statements,
     _working_program,
@@ -334,6 +336,78 @@ def _own_lines(
 
 _CHAIN = re.compile(r"&&|\|\|")
 _PIPE = re.compile(r"\|(?!\|)")
+
+
+# Git for Windows' programs exit with 141 (128 + SIGPIPE) when the reader of
+# their output stops reading, as Select-Object -First does once it has its lines.
+_READER_CLOSED_CODE = "141"
+
+
+def without_closed_pipes(command: str, failed_programs: Sequence[str]) -> tuple[str, ...]:
+    """*failed_programs* without the exits of programs whose reader stopped on purpose.
+
+    ``git log --reverse | Select-Object -First 1`` gets its line, and git exits
+    with 141 at its next write: an early stop the command asked for, not a
+    failure (Sessions 2026-10-26: 4 such exits read as failed programs, with
+    the exit-code-0 hint). Only code 141 of a program directly before a
+    Select-Object -First stage without -Wait counts, also inside a block.
+    """
+    if not _common._POWERSHELL or not any(
+        entry.partition(" exited with code ")[2].split(" ", 1)[0] == _READER_CLOSED_CODE
+        for entry in failed_programs
+    ):
+        return tuple(failed_programs)
+    flat = _powershell_code(command).flat
+    starts = _run_starts(flat)
+    feeding: set[str] = set()
+    for stage in _FIRST_STAGE.finditer(flat):
+        if _FIRST_COUNT.search(stage["arguments"]) is None or _WAIT.search(stage["arguments"]):
+            continue
+        if program := _element_program(command, flat, starts, stage.start()):
+            feeding.add(program)
+    kept: list[str] = []
+    for entry in failed_programs:
+        name, _, code = entry.partition(" exited with code ")
+        closed = code.split(" ", 1)[0] == _READER_CLOSED_CODE
+        if not (closed and name.lower().removesuffix(".exe") in feeding):
+            kept.append(entry)
+    return tuple(kept)
+
+
+# A redirection that discards a program's error stream.
+_DISCARDED_ERRORS = re.compile(r"(?<![\w>&])[2*]>[ \t]*+\$null\b", re.IGNORECASE)
+
+
+def _hint_discarded_errors(
+    command: str, exit_code: int | None, output: str, failed_programs: Sequence[str]
+) -> str | None:
+    """Say that a failed program's error message went to $null.
+
+    ``rg ... 2>$null`` exited with 2 and printed nothing, and a ``git log ...
+    2>$null`` that exited with 128 left one commit's message silently missing
+    (Sessions 2026-10-26 and 2026-10-27). Output with an error line already
+    says why, so it gets none.
+    """
+    if not _common._POWERSHELL or not failed_programs or "$null" not in command.lower():
+        return None
+    if _ERROR_LINE.search(_scan_window(output)):
+        return None
+    flat = _powershell_code(command).flat
+    starts = _run_starts(flat)
+    for redirection in _DISCARDED_ERRORS.finditer(flat):
+        program = _element_program(command, flat, starts, redirection.start())
+        codes = [] if program is None else _exit_codes(failed_programs, program)
+        if not codes:
+            continue
+        written = re.sub(r"[ \t]+", "", redirection[0])
+        listed = codes[0] if len(codes) == 1 else f"{', '.join(codes[:-1])} and {codes[-1]}"
+        zero = " (the command still exited with code 0)" if exit_code == 0 else ""
+        return (
+            f"`{program}` exited with code{'s' if len(codes) > 1 else ''} {listed}{zero}, but "
+            f"`{written}` discarded its error messages, so the output does not say why. If the "
+            f"reason matters, run it again without `{written}`."
+        )
+    return None
 
 
 def _hint_skipped_after_pipeline(

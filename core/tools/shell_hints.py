@@ -18,6 +18,7 @@ from ._shell_hint_common import (
 )
 from ._shell_hint_common import HINT_TOOL_NAMES as HINT_TOOL_NAMES
 from ._shell_hint_pipeline import (
+    _hint_discarded_errors,
     _hint_first_stage,
     _hint_hidden_failure,
     _hint_reported_error,
@@ -26,6 +27,7 @@ from ._shell_hint_pipeline import (
 )
 from ._shell_hint_pipeline import ended_jobs_hint as ended_jobs_hint
 from ._shell_hint_pipeline import sleeps as sleeps
+from ._shell_hint_pipeline import without_closed_pipes as without_closed_pipes
 from ._shell_hint_programs import (
     _hint_already_exists,
     _hint_command_not_found,
@@ -111,7 +113,8 @@ def annotate_failure(
     nested PowerShell's double-quoted -Command code (first, since every error
     follows from it), a statement PowerShell could not run behind exit code 0
     (a command it did not recognize, a redirection to /dev/null), or a program
-    failed in a pipeline with a Select-Object -First stage. A non-zero exit code
+    failed in a pipeline with a Select-Object -First stage, or a failed program's
+    errors went to $null and the output shows no error line. A non-zero exit code
     can come from a pipeline whose failed program made && skip the rest. Last, a
     successful command with expandable variables in double-quoted Python source
     is told how to preserve literal text. A command that sleeps to read a
@@ -146,6 +149,7 @@ def annotate_failure(
         lambda: _hint_skipped_after_pipeline(command, exit_code, failed_programs),
         lambda: _hint_first_stage(command, exit_code, output, lines, failed_programs),
         lambda: _hint_reported_error(command, exit_code, output),
+        lambda: _hint_discarded_errors(command, exit_code, output, failed_programs),
         lambda: _hint_python_interpolation(command, exit_code),
         lambda: _hint_waiting_for_background(command),
     ):
@@ -183,4 +187,10 @@ def _failure_hint(
     return _EXIT_CODE_HINTS.get(exit_code)
 
 
-__all__ = ["HINT_TOOL_NAMES", "annotate_failure", "ended_jobs_hint", "sleeps"]
+__all__ = [
+    "HINT_TOOL_NAMES",
+    "annotate_failure",
+    "ended_jobs_hint",
+    "sleeps",
+    "without_closed_pipes",
+]

@@ -36,7 +36,12 @@ from core.tools.command_manager import (
 from core.tools.file_state import os_error_reason
 from core.tools.model_names import BASH_TOOL_NAME, SHELL_MODEL_NAME
 from core.tools.process_tree import RunningProcess
-from core.tools.shell_hints import HINT_TOOL_NAMES, annotate_failure, ended_jobs_hint
+from core.tools.shell_hints import (
+    HINT_TOOL_NAMES,
+    annotate_failure,
+    ended_jobs_hint,
+    without_closed_pipes,
+)
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -401,14 +406,20 @@ def failed_programs(report: CommandReport) -> tuple[str, ...]:
     A single failed program whose code is the exit code of a command that
     exited by itself repeats it; a stopped command shows no exit code. Each
     entry reads ``<name> exited with code <code>``, with the hex form after
-    large codes.
+    large codes. A program whose reader stopped on purpose did not fail
+    (``counted_failures``).
     """
-    exits = report.failed_programs
+    exits = counted_failures(report)
     if len(exits) == 1 and report.stop_reason is None:
         code = exits[0].rpartition(" exited with code ")[2].split(" ", 1)[0]
         if code == str(report.exit_code):
             return ()
     return exits
+
+
+def counted_failures(report: CommandReport) -> tuple[str, ...]:
+    """The command's failed programs, less those whose reader stopped on purpose."""
+    return without_closed_pipes(report.command, report.failed_programs)
 
 
 def failure_hint(
@@ -435,17 +446,18 @@ def failure_hint(
             "finished, so the stop lost that output; to see output as it arrives, run the "
             "command without that pipe."
         )
+    failed = counted_failures(report)
     hint = annotate_failure(
         report.command,
         report.exit_code,
         output,
         workdir=report.workdir,
         offers=names,
-        failed_programs=report.failed_programs,
+        failed_programs=failed,
         output_lines=report.transcript.total_lines,
         permissions=permissions,
     )
-    if hint is None and report.exit_code == 0 and report.failed_programs:
+    if hint is None and report.exit_code == 0 and failed:
         # Agents read exit code 0 as success although a test script before
         # the last statement had failed.
         hint = (
