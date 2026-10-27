@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import shutil
 import tempfile
 import threading
 from collections.abc import Callable
@@ -26,9 +25,9 @@ from core.tools.process_tree import ProcessTree, observe_process_tree
 from core.tools.shell_environment import terminal_environment
 from core.tools.terminal_backend import (
     TerminalAdapter,
-    command_words,
     default_terminal_argv,
     spawn_terminal_adapter,
+    split_terminal_command,
     terminate_process_tree,
 )
 from core.utils.file_status import is_dir_strict
@@ -364,18 +363,9 @@ class TerminalCapability:
         argv = [command, *args] if command else [*shell_argv, *args]
         notes: list[str] = []
         operator = params.get("operator") is True
-        if (
-            command
-            and not operator
-            and any(char.isspace() for char in command)
-            and shutil.which(command, path=environment.get("PATH")) is None
-            and not Path(command).is_file()
-        ):
-            try:
-                words = command_words(command)
-            except ValueError:
-                words = []
-            if len(words) > 1 and shutil.which(words[0], path=environment.get("PATH")):
+        if command and not operator:
+            words = split_terminal_command(command, environment)
+            if words is not None:
                 argv = [*words, *args]
                 notes.append("command was read as a program and its arguments")
         integration: ShellLaunch | None = None

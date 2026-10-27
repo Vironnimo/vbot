@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import json
 import re
-import shutil
 from collections.abc import Mapping
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from core.tools._background_tasks_arguments import (
@@ -16,9 +14,6 @@ from core.tools._background_tasks_arguments import (
     SUBAGENT_ID_PREFIX,
 )
 from core.tools._shell_arguments import resolve_timeout
-from core.tools._terminal_arguments import (
-    command_words,
-)
 from core.tools.arguments import (
     optional_number,
     optional_string,
@@ -495,26 +490,6 @@ def _wait_pattern(arguments: JsonObject) -> tuple[re.Pattern[str] | None, list[s
             f"pattern is not a valid regular expression ({error}), so it was matched as "
             "literal text."
         ]
-
-
-def _split_command_line(command: str, environment: Mapping[str, str]) -> list[str] | None:
-    """Return the words of a command line sent as command, or None for one program.
-
-    A command with spaces is one program only when it names one, such as a path
-    with spaces; otherwise its first word must be a program.
-    """
-    if not any(character.isspace() for character in command):
-        return None
-    path = environment.get("PATH")
-    if shutil.which(command, path=path) is not None or Path(command).is_file():
-        return None
-    try:
-        words = command_words(command)
-    except ValueError:
-        return None
-    if len(words) < 2 or shutil.which(words[0], path=path) is None:
-        return None
-    return words
 
 
 # Errors
