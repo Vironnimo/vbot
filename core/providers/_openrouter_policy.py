@@ -6,8 +6,6 @@ import json
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-import httpx
-
 from core.providers._openrouter_constants import (
     _REASONING_TRAILING_NEWLINES_STATE_KEY,
     MAX_REASONING_PARAGRAPH_NEWLINES,
@@ -43,11 +41,6 @@ def _openrouter_provider_preferences(
     if policy["allow_fallbacks"] is False:
         preferences["allow_fallbacks"] = False
     return preferences
-
-
-def _openrouter_http_error_detail(response: httpx.Response) -> str:
-    reason = response.text
-    return f"{response.status_code} {reason}".strip() if reason else str(response.status_code)
 
 
 def openrouter_in_flight_budget_exhausted(error: Mapping[str, Any]) -> bool:

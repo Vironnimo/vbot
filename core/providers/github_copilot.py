@@ -35,9 +35,9 @@ from core.providers._responses_wire import (
     ResponsesStreamState,
     build_responses_payload,
     estimate_responses_input_tokens,
-    iter_responses_sse_deltas_with_state,
     normalize_responses_response,
     responses_returned_reasoning,
+    stream_responses_sse,
 )
 from core.providers._wire_learning import (
     execute_learning_from_rejections,
@@ -58,7 +58,6 @@ from core.providers.http import (
     connect_streaming_with_retry,
     format_http_error_detail,
     iter_sse_data,
-    iter_stream_lines,
     parse_sse_json_data,
     post_json_with_retry,
     wrap_network_error,
@@ -489,31 +488,9 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
     ) -> AsyncGenerator[dict[str, Any]]:
         response = await self._connect_stream(RESPONSES_ENDPOINT, request, request_headers)
         state = ResponsesStreamState()
-        event_lines: list[str] = []
-        seen_finish_delta = False
-        try:
-            async for line in iter_stream_lines(response):
-                if line:
-                    event_lines.append(line)
-                    continue
-                for delta in iter_responses_sse_deltas_with_state(event_lines, state):
-                    if delta.get("type") == "finish":
-                        seen_finish_delta = True
-                    yield delta
-                event_lines = []
-            if event_lines:
-                for delta in iter_responses_sse_deltas_with_state(event_lines, state):
-                    if delta.get("type") == "finish":
-                        seen_finish_delta = True
-                    yield delta
-            if not seen_finish_delta:
-                raise NetworkError("Stream ended without response completion event")
-        except httpx.TimeoutException as exc:
-            raise wrap_network_error(exc) from exc
-        except httpx.TransportError as exc:
-            raise NetworkError(f"Stream read failed: {exc}") from exc
-        finally:
-            await response.aclose()
+        async with aclosing(stream_responses_sse(response, state)) as deltas:
+            async for delta in deltas:
+                yield delta
 
     async def _stream_messages(
         self,

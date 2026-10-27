@@ -79,9 +79,9 @@ from core.providers._responses_wire import (
     ResponsesStreamState,
     build_responses_payload,
     estimate_responses_input_tokens,
-    iter_responses_sse_deltas_with_state,
     normalize_responses_response,
     responses_returned_reasoning,
+    stream_responses_sse,
 )
 from core.providers._wire_learning import (
     execute_learning_from_rejections,
@@ -104,9 +104,7 @@ from core.providers.http import (
     classify_http_status,
     connect_streaming_with_retry,
     format_http_error_detail,
-    iter_stream_lines,
     post_json_with_retry,
-    wrap_network_error,
 )
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.openai_subscription_auth import extract_chatgpt_account_id
@@ -1008,31 +1006,9 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
     ) -> AsyncGenerator[dict[str, Any]]:
         """Yield the normalized deltas of an established Responses SSE stream, then close it."""
 
-        event_lines: list[str] = []
-        seen_finish_delta = False
-        try:
-            async for line in iter_stream_lines(response):
-                if line:
-                    event_lines.append(line)
-                    continue
-                for delta in iter_responses_sse_deltas_with_state(event_lines, state):
-                    if delta.get("type") == "finish":
-                        seen_finish_delta = True
-                    yield delta
-                event_lines = []
-            if event_lines:
-                for delta in iter_responses_sse_deltas_with_state(event_lines, state):
-                    if delta.get("type") == "finish":
-                        seen_finish_delta = True
-                    yield delta
-            if not seen_finish_delta:
-                raise NetworkError("Stream ended without response completion event")
-        except httpx.TimeoutException as exc:
-            raise wrap_network_error(exc) from exc
-        except httpx.TransportError as exc:
-            raise NetworkError(f"Stream read failed: {exc}") from exc
-        finally:
-            await response.aclose()
+        async with aclosing(stream_responses_sse(response, state)) as deltas:
+            async for delta in deltas:
+                yield delta
 
     def _tries_websocket(self, cache_scope_id: str | None, conversation_id: str | None) -> bool:
         """Whether a Responses request with these ids starts on the WebSocket."""

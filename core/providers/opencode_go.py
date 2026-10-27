@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
+from contextlib import aclosing
 from typing import TYPE_CHECKING, Any, ClassVar, override
 
 import httpx
@@ -19,9 +20,9 @@ from core.providers._responses_wire import (
     ResponsesStreamState,
     build_responses_payload,
     estimate_responses_input_tokens,
-    iter_responses_sse_deltas_with_state,
     normalize_responses_response,
     responses_returned_reasoning,
+    stream_responses_sse,
 )
 from core.providers._wire_learning import (
     execute_learning_from_rejections,
@@ -33,17 +34,14 @@ from core.providers.anthropic_compatible import (
     ANTHROPIC_VERSION,
     AnthropicCompatibleAdapter,
 )
-from core.providers.errors import NetworkError, ProviderError
+from core.providers.errors import ProviderError
 from core.providers.gemini_compatible import GeminiCompatibleAdapter
 from core.providers.http import (
     PreparedRequest,
     classify_http_status,
     connect_streaming_with_retry,
-    decode_response_json,
     format_http_error_detail,
-    iter_stream_lines,
-    json_body_headers,
-    wrap_network_error,
+    post_json_with_retry,
 )
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.providers import AuthConfig, ProviderConfig
@@ -51,7 +49,6 @@ from core.providers.token_getter import TokenGetter
 from core.providers.wire_profile import Protocol
 from core.providers.wire_profiles import WireBinding
 from core.utils.http_status import parse_retry_after
-from core.utils.retry import retry_async
 
 if TYPE_CHECKING:
     from core.debug import ProviderDebugRecorder
@@ -539,26 +536,14 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         *,
         request_headers: Mapping[str, str],
     ) -> dict[str, Any]:
-        async def _do_request() -> dict[str, Any]:
-            headers = await self._build_headers()
-            headers.update(request.headers)
-            headers.update(request_headers)
-            try:
-                response = await self._client.post(
-                    OPENCODE_GO_RESPONSES_ENDPOINT,
-                    content=request.body,
-                    headers=json_body_headers(headers),
-                )
-            except httpx.TransportError as exc:
-                raise wrap_network_error(exc) from exc
-            self._classify_responses_status(
-                response.status_code,
-                detail=_opencode_go_http_error_detail(response),
-                response_headers=response.headers,
-            )
-            return dict(decode_response_json(response, "OpenCode Go Responses"))
-
-        return await retry_async(_do_request)
+        return await post_json_with_retry(
+            self._client,
+            OPENCODE_GO_RESPONSES_ENDPOINT,
+            request.body,
+            build_headers=lambda: self._responses_attempt_headers(request, request_headers),
+            handle_error_status=self._handle_responses_error_status,
+            provider_context="OpenCode Go Responses",
+        )
 
     async def _stream_responses(
         self,
@@ -571,31 +556,9 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
             request_headers=request_headers,
         )
         state = ResponsesStreamState()
-        event_lines: list[str] = []
-        seen_finish_delta = False
-        try:
-            async for line in iter_stream_lines(response):
-                if line:
-                    event_lines.append(line)
-                    continue
-                for delta in iter_responses_sse_deltas_with_state(event_lines, state):
-                    if delta.get("type") == "finish":
-                        seen_finish_delta = True
-                    yield delta
-                event_lines = []
-            if event_lines:
-                for delta in iter_responses_sse_deltas_with_state(event_lines, state):
-                    if delta.get("type") == "finish":
-                        seen_finish_delta = True
-                    yield delta
-            if not seen_finish_delta:
-                raise NetworkError("Stream ended without response completion event")
-        except httpx.TimeoutException as exc:
-            raise wrap_network_error(exc) from exc
-        except httpx.TransportError as exc:
-            raise NetworkError(f"Stream read failed: {exc}") from exc
-        finally:
-            await response.aclose()
+        async with aclosing(stream_responses_sse(response, state)) as deltas:
+            async for delta in deltas:
+                yield delta
 
     async def _connect_responses_stream(
         self,
@@ -603,29 +566,29 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         *,
         request_headers: Mapping[str, str],
     ) -> httpx.Response:
-        async def _build_headers() -> dict[str, str]:
-            headers = await self._build_headers()
-            headers.update(request.headers)
-            headers.update(request_headers)
-            return headers
-
-        def _handle_error_status(
-            status_code: int,
-            error_body: str,
-            response_headers: httpx.Headers,
-        ) -> None:
-            self._classify_responses_status(
-                status_code,
-                detail=format_http_error_detail(status_code, error_body),
-                response_headers=response_headers,
-            )
-
         return await connect_streaming_with_retry(
             self._client,
             OPENCODE_GO_RESPONSES_ENDPOINT,
             request.body,
-            build_headers=_build_headers,
-            handle_error_status=_handle_error_status,
+            build_headers=lambda: self._responses_attempt_headers(request, request_headers),
+            handle_error_status=self._handle_responses_error_status,
+        )
+
+    async def _responses_attempt_headers(
+        self, request: PreparedRequest, request_headers: Mapping[str, str]
+    ) -> dict[str, str]:
+        headers = await self._build_headers()
+        headers.update(request.headers)
+        headers.update(request_headers)
+        return headers
+
+    def _handle_responses_error_status(
+        self, status_code: int, error_body: str, response_headers: httpx.Headers
+    ) -> None:
+        self._classify_responses_status(
+            status_code,
+            detail=format_http_error_detail(status_code, error_body),
+            response_headers=response_headers,
         )
 
     @override
@@ -653,11 +616,6 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
             if model is not None and model.context_window is not None and model.context_window > 0:
                 return model.context_window
         return None
-
-
-def _opencode_go_http_error_detail(response: httpx.Response) -> str:
-    reason = response.text
-    return f"{response.status_code} {reason}".strip() if reason else str(response.status_code)
 
 
 def _model_lookup_candidates(model_id: str) -> tuple[str, ...]:
