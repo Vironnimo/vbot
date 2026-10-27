@@ -11,9 +11,10 @@ import pytest
 
 import core.automation.cron as cron_module
 from core.automation import _cron_timing as cron_timing
-from core.runs import RunKind
+from core.runs import RunKind, RunStatus
 from tests.core.automation.cron_test_support import (
     make_service,
+    scripted_runs,
 )
 
 
@@ -86,6 +87,43 @@ async def test_run_cron_job_fires_and_continues_after_trigger_failure(
     updated = service.get_job(job.id)
     assert updated.status == "paused"
     assert updated.last_fired_at == "2030-10-05T10:01:00+00:00"
+
+
+@pytest.mark.asyncio
+async def test_cron_fires_both_sides_of_a_non_hour_spring_gap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = [datetime(2026, 10, 3, 15, 20, tzinfo=UTC)]
+    monkeypatch.setattr(cron_timing, "_utc_now", lambda: clock[0])
+    service, trigger = make_service(tmp_path, tz="Australia/Lord_Howe")
+    job = await service.create_job(
+        agent_id="agent-one",
+        prompt="Reminder",
+        schedule_type="cron",
+        cron_expression="15,30 2 * * *",
+    )
+    scripted_runs(trigger, (RunStatus.COMPLETED, "one"), (RunStatus.COMPLETED, "two"))
+    scripted_trigger = trigger.trigger_run.side_effect
+    fired_at: list[datetime] = []
+
+    async def record_fire(*args: Any, **kwargs: Any) -> Any:
+        fired_at.append(clock[0])
+        if len(fired_at) == 2:
+            service._jobs[job.id].status = "paused"
+        return await scripted_trigger(*args, **kwargs)
+
+    async def sleep_until(target: datetime, **_kwargs: Any) -> bool:
+        clock[0] = target
+        return True
+
+    trigger.trigger_run.side_effect = record_fire
+    monkeypatch.setattr(cron_timing, "_sleep_until_utc", sleep_until)
+    await service._scheduler._run_recurring_job(job, "cron")
+
+    assert fired_at == [
+        datetime(2026, 10, 3, 15, 30, tzinfo=UTC),
+        datetime(2026, 10, 3, 15, 45, tzinfo=UTC),
+    ]
 
 
 @pytest.mark.asyncio
