@@ -215,7 +215,7 @@ class ChannelReplies:
                 run.id,
             )
 
-    async def _await_run_reply(self, run: Run, reply_plan: ReplyPlanFacts) -> str:
+    async def _await_run_reply(self, run: Run, reply_plan: ReplyPlanFacts) -> str | None:
         """Follow the Run to its end, then project its complete durable history."""
         projection = RunReply()
         async with self.activity(reply_plan):
@@ -244,11 +244,14 @@ class ChannelReplies:
         route: RouteFacts | None,
         run_id: str | None,
         *,
-        fallback: str = _INTERRUPTED_REPLY,
+        fallback: str | None = _INTERRUPTED_REPLY,
         status: str = "interrupted",
         reason: str | None = None,
-    ) -> str:
-        """Project exact Run history; observed live output is the unavailable-history fallback."""
+    ) -> str | None:
+        """Project exact Run history; observed live output is the unavailable-history fallback.
+
+        None when the Run ended with the silent answer.
+        """
         if route is None or run_id is None:
             return fallback
         try:

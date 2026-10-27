@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Protocol
 
+from core.runs._timeline import is_silent_answer
 from core.runs.run import (
     DEFAULT_COMPLETED_RUN_RETENTION_LIMIT,
     DEFAULT_RUN_ADMISSION,
@@ -78,8 +79,12 @@ def _decide_completion_activity(run: Run, status: RunStatus, result: object) -> 
 
     It runs before the completion is recorded and its terminal event is emitted,
     so the Session completion, the event and its observers agree. A failing
-    decision keeps the flag the Run was admitted with.
+    decision keeps the flag the Run was admitted with. A Run that completed
+    with the silent answer never counts: no one is shown that answer.
     """
+    if status is RunStatus.COMPLETED and is_silent_answer(_answer_text(result)):
+        run.contributes_to_agent_activity = False
+        return
     decide = run.completion_activity
     if decide is None:
         return
@@ -87,6 +92,16 @@ def _decide_completion_activity(run: Run, status: RunStatus, result: object) -> 
         run.contributes_to_agent_activity = bool(decide(status, result))
     except Exception:
         _LOGGER.warning("Completion activity decision failed for Run %s", run.id, exc_info=True)
+
+
+def _answer_text(result: object) -> str | None:
+    """The text of a Run result's final Assistant message, or None."""
+    content = getattr(result, "content", None)
+    if isinstance(content, str):
+        return content
+    if isinstance(content, Sequence):
+        return "".join(block.text for block in content if getattr(block, "type", None) == "text")
+    return None
 
 
 class RunPersistence(Protocol):

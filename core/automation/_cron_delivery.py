@@ -25,12 +25,10 @@ from core.automation._cron_jobs import (
     _parse_utc_timestamp,
 )
 from core.chat.content_blocks import TextBlock
-from core.runs import RunStatus
+from core.runs import SILENT_ANSWER, RunStatus
 
 if TYPE_CHECKING:
     from core.runs import CompletionActivity
-
-SILENT_ANSWER = "[SILENT]"
 
 # The failure count of a streak that alerts once before the job stops.
 _FAILING_ALERT_AT = 2

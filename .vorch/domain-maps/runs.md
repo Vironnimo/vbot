@@ -74,6 +74,6 @@ Every emitted event, transient deltas included, increments the Run-local `sequen
 
 Read these only when your task matches - not by default.
 
-- Changing Run event constants, sequencing, replay retention, transient event types, the shared event stream (`core/event_stream.py`) or `RunTimeline` -> `runs/events.md`
+- Changing Run event constants, sequencing, replay retention, transient event types, the shared event stream (`core/event_stream.py`), `RunTimeline`, or how a Silent answer is hidden -> `runs/events.md`
 - Changing Run or per-Tool cancellation, manager shutdown (`aclose`), terminal settlement, terminal payloads or the terminal log line -> `runs/lifecycle.md`
 - Changing Queue items, Queue edits or drain, steering selection, `RunAdmission`, waiting-work capacity or Extension execution ownership -> `runs/queue-and-admission.md`

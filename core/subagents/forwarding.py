@@ -19,6 +19,7 @@ from core.runs import (
     RunCancelledError,
     RunInterruptedError,
     RunStatus,
+    is_silent_answer,
 )
 from core.sessions import SessionAddress
 from core.storage.temp_files import artifact_owner
@@ -395,7 +396,8 @@ async def _turn_outcome(
 
     Steering can continue a Run after a complete answer. Its return value is
     only the last answer, so the Session is the source for the whole report.
-    A stopped or failed Run also retains its latest partial text.
+    A stopped or failed Run also retains its latest partial text. Silent
+    answers are left out; None when nothing is directed to the Parent.
     """
     result = None
     outcome = "completed"
@@ -416,7 +418,10 @@ async def _turn_outcome(
     session = await runtime.chat_sessions.get_async(_run_address(run))
     messages = await session.load_run_messages_async(run.id)
     progression = [m for m in messages if m.role in {"user", "assistant", "tool", "error"}]
-    if outcome.startswith("was cancelled") and progression and _is_complete_answer(progression[-1]):
+    ended_silent = bool(progression) and _is_silent_answer(progression[-1])
+    if outcome.startswith("was cancelled") and (
+        ended_silent or (progression and _is_complete_answer(progression[-1]))
+    ):
         # Stop during Compaction after the final answer does not make it partial.
         outcome = "completed"
     # Each entry keeps the destination at its own commit. A later Run or a later
@@ -436,12 +441,11 @@ async def _turn_outcome(
     )
     # Normal Runs persist their return value. Keep the returned text as a
     # fallback for executors that return an answer without persisting it.
-    if (
-        result is not None
-        and _message_text(result)
-        and not any(m.id == result.id for m in messages)
-    ):
-        latest = replace(result, subagent_reply_target=final_target)
+    if result is not None and not any(m.id == result.id for m in messages):
+        if _message_text(result):
+            latest = replace(result, subagent_reply_target=final_target)
+        elif _is_silent_answer(result):
+            ended_silent = True
     if (
         latest is not None
         and latest.subagent_reply_target == "parent"
@@ -449,7 +453,8 @@ async def _turn_outcome(
         and (_is_complete_answer(latest) or outcome != "completed")
     ):
         answers.append(latest)
-    if not answers and final_target != "parent":
+    # The silent answer reports nothing: the Parent is not woken for it.
+    if not answers and (final_target != "parent" or (outcome == "completed" and ended_silent)):
         return None
     sections = [
         FORWARDED_ANSWER_TEMPLATE.format(
@@ -480,7 +485,22 @@ def _is_complete_answer(message: ChatMessage) -> bool:
     )
 
 
+def _is_silent_answer(message: ChatMessage | Any) -> bool:
+    return (
+        getattr(message, "role", None) == "assistant"
+        and not getattr(message, "interrupted", False)
+        and not getattr(message, "tool_calls", None)
+        and is_silent_answer(_raw_text(message))
+    )
+
+
 def _message_text(message: ChatMessage | Any) -> str | None:
+    """The message's text, or None when it has none or is the silent answer."""
+    text = _raw_text(message)
+    return None if is_silent_answer(text) else text
+
+
+def _raw_text(message: ChatMessage | Any) -> str | None:
     content = getattr(message, "content", None)
     if isinstance(content, str):
         return content.strip() or None

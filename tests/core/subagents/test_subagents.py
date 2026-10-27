@@ -613,6 +613,10 @@ async def test_every_answer_reaches_the_parent_with_what_is_still_running(
     # A delivery's turn in the Sub-Agent Session forwards too; the user's never does.
     await harness.start_turn(child, "background result arrived")
     await harness.settle()
+    # The silent answer reports nothing and does not wake the Parent.
+    harness.loop.answers["nothing new"] = " [SILENT]"
+    await harness.start_turn(child, "nothing new")
+    await harness.settle()
     await harness.start_turn(child, "user question", kind=RunKind.USER)
     await harness.settle()
 

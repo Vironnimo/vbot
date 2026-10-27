@@ -35,6 +35,9 @@ Curated durable facts and preferences about the user and the work, owned by an I
 ## Run
 One Session execution with a durable identity and lifecycle: an initiating request, any User messages steered into it, and all Model output and Tool calls until it completes, fails, is interrupted or is cancelled (`runs.md`). Can span multiple Model/Tool steps; not an Agent, Session, or single Provider HTTP request.
 
+## Silent answer
+An Assistant answer that is exactly `[SILENT]`: it stays in the Session for the Model, but no one is shown it, and it sends, marks or forwards nothing (`runs/events.md` -> Silent answer). Not an empty answer, which Chat retries as an incomplete response.
+
 ## Queue
 A Session's ordered waiting work: messages and other Run requests that arrive while the Session is busy wait there and start as Runs one after another (`runs.md`). Not a background job system or a Provider's request queue.
 

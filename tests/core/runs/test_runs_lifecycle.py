@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import aclosing, nullcontext
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -445,16 +446,22 @@ class _RecordingCompletion:
 
 
 @pytest.mark.parametrize(
-    ("fails", "decision", "contributes"),
+    ("fails", "answer", "decision", "contributes"),
     [
-        (False, True, True),
-        (True, False, False),
-        (False, RuntimeError("decision failed"), False),
+        (False, "report", True, True),
+        (True, "report", False, False),
+        (False, "report", RuntimeError("decision failed"), False),
+        (False, " [SILENT]\n", True, False),
     ],
-    ids=["completed-counts", "failed-stays-quiet", "broken-decision-keeps-admission"],
+    ids=[
+        "completed-counts",
+        "failed-stays-quiet",
+        "broken-decision-keeps-admission",
+        "silent-answer-never-counts",
+    ],
 )
 async def test_completion_activity_decides_the_finished_runs_activity_before_it_is_recorded(
-    fails: bool, decision: bool | Exception, contributes: bool
+    fails: bool, answer: str, decision: bool | Exception, contributes: bool
 ) -> None:
     seen: list[tuple[RunStatus, Any]] = []
 
@@ -464,10 +471,12 @@ async def test_completion_activity_decides_the_finished_runs_activity_before_it_
             raise decision
         return decision
 
-    async def execute(_run: Run) -> str:
+    result = SimpleNamespace(content=answer)
+
+    async def execute(_run: Run) -> SimpleNamespace:
         if fails:
             raise RuntimeError("boom")
-        return "report"
+        return result
 
     persistence = _RecordingCompletion()
     manager = ChatRunManager(persistence=persistence)
@@ -484,7 +493,8 @@ async def test_completion_activity_decides_the_finished_runs_activity_before_it_
         await run.wait()
 
     status = RunStatus.FAILED if fails else RunStatus.COMPLETED
-    assert seen == [(status, None if fails else "report")]
+    silent = answer.strip() == "[SILENT]"
+    assert seen == ([] if silent else [(status, None if fails else result)])
     assert persistence.completions == [(status.value, contributes)]
     terminal = run.events[-1].to_dict()
     assert terminal.get(RUN_AGENT_ACTIVITY_FIELD, True) is contributes

@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 from core.chat import ChatLoop, ChatMessage, ReplySurface, reply_surface_from_note
 from core.chat.messages import REPLY_SURFACE_NOTE_PREFIX, SubAgentMessage
 from core.runs import (
+    SILENT_ANSWER,
     ActiveRunError,
     ChatRunManager,
     Run,
@@ -38,6 +39,13 @@ AUTOMATIC_COMPLETION_GUIDANCE = (
 
 
 UNREAD_COMPLETION_TEXT = "Your previous turn ended before you read the results reported above."
+
+# Only a Run vBot starts to deliver results may end silently; a note joined to
+# a running turn or an owned Run's input would end someone else's turn.
+SILENT_COMPLETION_TEXT = (
+    "If these results give you nothing to do and nothing new to report, answer exactly "
+    f"{SILENT_ANSWER} instead of a status: no one sees that answer."
+)
 
 
 _SUPPRESSED_ORIGIN_LIMIT = 256
@@ -389,7 +397,7 @@ class _CompletionDeliveryCoordinator:
                 owner = pending[0].execution_owner
                 pending = [notice for notice in pending if notice.execution_owner == owner]
                 _claim(pending, True)
-                message = _completion_message(pending)
+                message = _completion_message(pending, follow_up=owner is None)
                 try:
                     if owner is not None:
                         # Each origin keeps its exact lifetime owner even if a target
@@ -898,9 +906,15 @@ def _subagent_messages(notices: list[_CompletionNotice]) -> tuple[SubAgentMessag
     )
 
 
-def _completion_message(notices: list[_CompletionNotice]) -> str:
-    """The message delivering *notices*; those already in the Session are referred to."""
+def _completion_message(notices: list[_CompletionNotice], *, follow_up: bool = False) -> str:
+    """The message delivering *notices*; those already in the Session are referred to.
+
+    ``follow_up`` marks the input of a Run started only for this delivery,
+    which may end with the silent answer.
+    """
     sections = [AUTOMATIC_COMPLETION_GUIDANCE]
+    if follow_up:
+        sections.append(SILENT_COMPLETION_TEXT)
     if any(notice.read_after is not None for notice in notices):
         sections.extend(("", UNREAD_COMPLETION_TEXT))
     unsent = [notice for notice in notices if notice.read_after is None]

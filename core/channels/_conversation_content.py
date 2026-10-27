@@ -16,6 +16,7 @@ from core.channels.adapter import (
 from core.channels.checklist import CHECKLIST_DONE_DATA, checklist_changes, is_checklist_button
 from core.chat.messages import MessageSender
 from core.extensions import InteractionButton
+from core.runs import is_silent_answer
 from core.sessions import CHANNEL_MESSAGE_NOTE_PREFIX
 
 if TYPE_CHECKING:
@@ -255,8 +256,15 @@ class RunReply:
     def observe_compaction(self) -> None:
         self._compaction_completed = True
 
-    def settle(self, status: str, reason: str | None = None) -> str:
-        """Return the reply for the Run's terminal ``status`` and cancellation ``reason``."""
+    def settle(self, status: str, reason: str | None = None) -> str | None:
+        """Return the reply for the Run's terminal ``status`` and cancellation ``reason``.
+
+        None when the Run's answer is the silent ending: the chat gets nothing.
+        """
+        reply = self._reply(status, reason)
+        return None if is_silent_answer(reply) else reply
+
+    def _reply(self, status: str, reason: str | None) -> str:
         if status == "completed":
             return (
                 self._partial_answer()
