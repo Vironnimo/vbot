@@ -774,15 +774,18 @@ async def test_direct_ollama_cloud_catalog_is_remote_and_public(
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_failed_ollama_enrichment_keeps_the_conservative_catalog(tmp_path: Path) -> None:
+@pytest.mark.parametrize("status", [404, 500])
+async def test_failed_ollama_enrichment_keeps_the_conservative_catalog(
+    tmp_path: Path, status: int
+) -> None:
     connection = keyless_connection()
     respx.get("http://localhost:11434/api/tags").mock(
         return_value=httpx.Response(
             200, json={"models": [{"model": "ministral-3:8b", "details": {"family": "mistral3"}}]}
         )
     )
-    respx.post("http://localhost:11434/api/show").mock(
-        return_value=httpx.Response(404, json={"error": "model not found"})
+    show_route = respx.post("http://localhost:11434/api/show").mock(
+        return_value=httpx.Response(status, json={"error": "enrichment unavailable"})
     )
 
     result = await refresh_models(
@@ -791,6 +794,7 @@ async def test_failed_ollama_enrichment_keeps_the_conservative_catalog(tmp_path:
 
     model = ModelRegistry.load(tmp_path / "resources").get("ollama", "ministral-3:8b")
     assert result["model_count"] == 1
+    assert show_route.call_count == 1
     assert (model.capabilities.tools, model.context_window) == (False, None)
 
 
