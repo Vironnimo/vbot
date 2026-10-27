@@ -6,7 +6,6 @@
   import { t } from '$lib/i18n.js';
   import StatusChip from '../ui/StatusChip.svelte';
   import Button from '../ui/Button.svelte';
-  import ConfirmDialog from '../ui/ConfirmDialog.svelte';
   import {
     restartVoiceCalibration,
     stopVoiceCalibration,
@@ -27,13 +26,13 @@
   } = $props();
 
   let actionState = $state('idle');
-  let discardConfirm = $state(false);
 
   let busy = $derived(actionState !== 'idle');
   let recommendation = $derived(calibration?.recommended_sensitivity ?? null);
   let ready = $derived(
     calibration?.phase === 'ready' && recommendation !== null,
   );
+  let inconclusive = $derived(calibration?.phase === 'ready' && !ready);
   let requiredSamples = $derived(calibration?.required_samples ?? null);
   let score = $derived(clampScore(calibration?.score));
   let peak = $derived(clampScore(calibration?.peak));
@@ -47,12 +46,16 @@
       });
     }
     if (calibration?.phase === 'phrases') {
+      if (calibration.sample_state === 'capturing')
+        return t('settings.voice.calibrationPauseInstruction');
+      if (calibration.sample_state === 'settling')
+        return t('settings.voice.calibrationSettlingInstruction');
       return t('settings.voice.calibrationPhraseInstruction', {
         name: label,
-        count: calibration.sample_count,
-        required: requiredSamples ?? '–',
       });
     }
+    if (inconclusive)
+      return t('settings.voice.calibrationInconclusiveInstruction');
     return t('settings.voice.calibrationReviewInstruction');
   });
 
@@ -97,7 +100,6 @@
   }
 
   function discard() {
-    discardConfirm = false;
     return run(
       'discarding',
       async () => onStatus(await stopVoiceCalibration()),
@@ -130,20 +132,26 @@
           name: label,
         })}
       </div>
-      <div class="voice-calibration-instruction">{instruction}</div>
+      <div class="voice-calibration-instruction" role="status">
+        {instruction}
+      </div>
     </div>
     <StatusChip variant={ready ? 'success' : 'warn'}>
-      {ready
-        ? t('settings.voice.calibrationReadyToApply')
-        : t('settings.voice.calibrationListening')}
+      {inconclusive
+        ? t('settings.voice.calibrationInconclusive')
+        : ready
+          ? t('settings.voice.calibrationReadyToApply')
+          : t('settings.voice.calibrationListening')}
     </StatusChip>
   </div>
 
+  <p class="voice-calibration-help">
+    {t('settings.voice.calibrationPurpose')}
+  </p>
+
   {#if calibration?.noise_high}
     <div class="voice-calibration-noise-warning" role="alert">
-      {t('settings.voice.calibrationNoiseHighWarning', {
-        level: clampScore(calibration.noise_level).toFixed(2),
-      })}
+      {t('settings.voice.calibrationNoiseHighWarning')}
     </div>
   {/if}
 
@@ -165,73 +173,80 @@
     </li>
   </ol>
 
-  <div class="voice-calibration-model">
-    <div class="voice-calibration-model__header">
-      <span class="voice-calibration-model__identity">{label}</span>
-      <span class="voice-calibration-model__values">
-        {t('settings.voice.calibrationScore')}
-        {score.toFixed(2)}
-        · {t('settings.voice.calibrationNoise')}
-        {clampScore(calibration?.noise_level).toFixed(2)}
-        · {t('settings.voice.calibrationThreshold')}
-        {threshold.toFixed(2)}
-      </span>
-    </div>
-    <div
-      class="voice-calibration-meter"
-      role="meter"
-      aria-label={t('settings.voice.calibrationMeterAria', { name: label })}
-      aria-valuemin="0"
-      aria-valuemax="1"
-      aria-valuenow={score}
-      style={`--score: ${percent(score)}; --peak: ${percent(peak)}; --threshold: ${percent(threshold)};`}
-    >
-      <span
-        class="voice-calibration-meter__score"
-        class:voice-calibration-meter__score--match={score >= threshold}
-      ></span>
-      {#if peak > 0}
-        <span class="voice-calibration-meter__peak" aria-hidden="true"></span>
-      {/if}
-      <span class="voice-calibration-meter__threshold" aria-hidden="true"
-      ></span>
-    </div>
-    <div class="voice-calibration-model__result">
+  <div class="voice-calibration-result" role="status">
+    {#if calibration?.phase !== 'noise'}
       <span>
         {t('settings.voice.calibrationSamples', {
           count: calibration?.sample_count ?? 0,
           required: requiredSamples ?? '–',
         })}
       </span>
-      {#if ready}
-        <strong>
-          {#if currentSensitivity !== null}
-            {t('settings.voice.calibrationCurrentSensitivity')}
-            {Math.round(currentSensitivity * 100)}% →
-          {/if}
-          {t('settings.voice.calibrationRecommendation', {
-            value: Math.round(recommendation * 100),
-          })}
-        </strong>
-      {:else if peak > 0}
-        <span>
-          {t('settings.voice.calibrationPeak')}
-          {peak.toFixed(2)}
-        </span>
-      {/if}
-    </div>
+    {/if}
+    {#if ready}
+      <strong>
+        {#if currentSensitivity !== null}
+          {t('settings.voice.calibrationCurrentSensitivity')}
+          {Math.round(currentSensitivity * 100)}% →
+        {/if}
+        {t('settings.voice.calibrationRecommendation', {
+          value: Math.round(recommendation * 100),
+        })}
+      </strong>
+    {:else if calibration?.phase === 'phrases'}
+      <span class="voice-calibration-help">
+        {t('settings.voice.calibrationNoProgressHelp')}
+      </span>
+    {/if}
   </div>
 
-  <div class="voice-calibration-legend" aria-hidden="true">
-    <span>
-      <i class="voice-calibration-legend__peak"></i>
-      {t('settings.voice.calibrationPeak')}
-    </span>
-    <span>
-      <i class="voice-calibration-legend__threshold"></i>
-      {t('settings.voice.calibrationThreshold')}
-    </span>
-  </div>
+  <details class="voice-calibration-details">
+    <summary>{t('settings.voice.calibrationDetails')}</summary>
+    <p class="voice-calibration-help">
+      {t('settings.voice.calibrationDetailsHelp')}
+    </p>
+    <div class="voice-calibration-model">
+      <div class="voice-calibration-model__header">
+        <span class="voice-calibration-model__identity">{label}</span>
+        <span class="voice-calibration-model__values">
+          {t('settings.voice.calibrationScore')}
+          {score.toFixed(2)}
+          · {t('settings.voice.calibrationNoise')}
+          {clampScore(calibration?.noise_level).toFixed(2)}
+          · {t('settings.voice.calibrationThreshold')}
+          {threshold.toFixed(2)}
+        </span>
+      </div>
+      <div
+        class="voice-calibration-meter"
+        role="meter"
+        aria-label={t('settings.voice.calibrationMeterAria', { name: label })}
+        aria-valuemin="0"
+        aria-valuemax="1"
+        aria-valuenow={score}
+        style={`--score: ${percent(score)}; --peak: ${percent(peak)}; --threshold: ${percent(threshold)};`}
+      >
+        <span
+          class="voice-calibration-meter__score"
+          class:voice-calibration-meter__score--match={score >= threshold}
+        ></span>
+        {#if peak > 0}
+          <span class="voice-calibration-meter__peak" aria-hidden="true"></span>
+        {/if}
+        <span class="voice-calibration-meter__threshold" aria-hidden="true"
+        ></span>
+      </div>
+    </div>
+    <div class="voice-calibration-legend" aria-hidden="true">
+      <span>
+        <i class="voice-calibration-legend__peak"></i>
+        {t('settings.voice.calibrationPeak')}
+      </span>
+      <span>
+        <i class="voice-calibration-legend__threshold"></i>
+        {t('settings.voice.calibrationThreshold')}
+      </span>
+    </div>
+  </details>
 
   <div class="voice-calibration-actions">
     <Button
@@ -247,7 +262,7 @@
         variant="secondary"
         disabled={busy}
         loading={actionState === 'discarding'}
-        onClick={() => (discardConfirm = true)}
+        onClick={discard}
       >
         {t('settings.voice.calibrationDiscard')}
       </Button>
@@ -261,14 +276,4 @@
       </Button>
     </div>
   </div>
-
-  {#if discardConfirm}
-    <ConfirmDialog
-      title={t('settings.voice.calibrationDiscardConfirmTitle')}
-      body={t('settings.voice.calibrationDiscardConfirm')}
-      confirmLabel={t('settings.voice.calibrationDiscard')}
-      onConfirm={discard}
-      onCancel={() => (discardConfirm = false)}
-    />
-  {/if}
 </div>

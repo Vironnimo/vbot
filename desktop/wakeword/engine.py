@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import tempfile
 from collections import deque
@@ -312,7 +313,7 @@ class WakewordModelCatalog:
     def _read_custom_descriptor(self, metadata_path: Path) -> WakewordModelDescriptor | None:
         try:
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        except OSError, json.JSONDecodeError:
+        except OSError, UnicodeError, json.JSONDecodeError:
             logger.warning("Ignoring unreadable wakeword model metadata: %s", metadata_path.name)
             return None
         if not isinstance(metadata, dict):
@@ -364,6 +365,10 @@ class WakewordEngine(Protocol):
         """Release native inference resources."""
         ...
 
+    def reset(self) -> None:
+        """Forget audio and detection history after a capture gap without reloading models."""
+        ...
+
     def detect(self, audio_chunk: bytes, *, speech_present: bool = True) -> WakewordMatch | None:
         """Return at most one winning wakeword match for an audio chunk."""
         ...
@@ -393,6 +398,9 @@ class MockWakewordEngine:
 
     def stop(self) -> None:
         self._running = False
+
+    def reset(self) -> None:
+        self._index = 0
 
     def detect(self, audio_chunk: bytes, *, speech_present: bool = True) -> WakewordMatch | None:
         """Return a match when the next configured score reaches the threshold."""
@@ -526,7 +534,7 @@ class MultiWakewordEngine:
             if not self._armed[group]:
                 # Still above threshold since this phrase (or an overlapping one) fired.
                 continue
-            if not _score_is_confirmed(self._recent_scores[descriptor.id], score, threshold):
+            if not score_is_confirmed(self._recent_scores[descriptor.id], score, threshold):
                 continue
             ratio = score / threshold
             if best_match is None or ratio > best_ratio:
@@ -540,6 +548,15 @@ class MultiWakewordEngine:
         if best_match is not None:
             self._armed[self._arm_groups[best_match.model_id]] = False
         return best_match
+
+    def reset(self) -> None:
+        """Start a fresh audio stream, retaining the loaded native models."""
+        if self._features is not None:
+            self._features.reset()
+        for _descriptor, model in self._models:
+            model.reset()
+        self._arm_all()
+        self._reset_recent_scores()
 
     def _arm_all(self) -> None:
         self._armed = dict.fromkeys(self._arm_groups.values(), True)
@@ -629,8 +646,12 @@ def _threshold_for_sensitivity(sensitivity: float) -> float:
     return 1.0 - normalized_sensitivity
 
 
-def _score_is_confirmed(recent_scores: Iterable[float], score: float, threshold: float) -> bool:
-    """Whether one threshold crossing is strong enough to become a detection."""
+def score_is_confirmed(recent_scores: Iterable[float], score: float, threshold: float) -> bool:
+    """Whether a crossing confirms, given the recent window including this score.
+
+    Detection and calibration use the same rule: one confident score or two
+    crossings within ``MARGINAL_CONFIRMATION_CHUNKS``.
+    """
     if score >= threshold + CONFIDENT_SCORE_MARGIN:
         return True
     crossings = sum(1 for recent_score in recent_scores if recent_score >= threshold)
@@ -638,7 +659,8 @@ def _score_is_confirmed(recent_scores: Iterable[float], score: float, threshold:
 
 
 def _clamp_score(score: float) -> float:
-    return max(0.0, min(1.0, float(score)))
+    value = float(score)
+    return max(0.0, min(1.0, value)) if math.isfinite(value) else 0.0
 
 
 def _close_models(models: list[tuple[WakewordModelDescriptor, Any]]) -> None:

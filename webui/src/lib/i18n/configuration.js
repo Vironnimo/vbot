@@ -1395,8 +1395,8 @@ export default Object.freeze({
   'settings.voice.phraseSession': 'Session',
   'settings.voice.phraseSessionAria': 'Session for {name}',
   'settings.voice.sessionDefault': 'Default Session behavior',
-  'settings.voice.calibrate': 'Calibrate',
-  'settings.voice.calibrateAria': 'Calibrate {name}',
+  'settings.voice.calibrate': 'Tune sensitivity',
+  'settings.voice.calibrateAria': 'Tune sensitivity for {name}',
   'settings.voice.defaultAgent': 'Default Agent',
   'settings.voice.defaultAgentDescription':
     'For phrases without an Agent of their own.',
@@ -1420,7 +1420,7 @@ export default Object.freeze({
   'settings.voice.echoUnavailable': 'Unavailable',
   'settings.voice.echoUnavailableDetail':
     'Echo cancellation is not installed in this Desktop app, so the microphone signal is used unprocessed.',
-  'settings.voice.calibrationHeading': 'Calibrating “{name}”',
+  'settings.voice.calibrationHeading': 'Tune sensitivity for “{name}”',
   'settings.voice.error.missingTarget':
     'Choose an Agent for this phrase or a default Agent for this server.',
   'settings.voice.error.targetUnavailable':
@@ -1439,10 +1439,12 @@ export default Object.freeze({
     'No calibration is running anymore. Start the calibration again.',
   'settings.voice.models': 'Wake phrases',
   'settings.voice.modelsHelp':
-    'Turn on the phrases to listen for. Each active phrase has its own sensitivity and action: send a spoken command to an Agent, or start or end Live voice.\n\nHigher sensitivity hears a phrase more easily but also reacts to similar sounds more often. Calibrate measures the room and your voice to suggest a value; it works while listening is on.\n\nTo add your own phrase, import a wakeword model in TFLite format.',
+    'Turn on the phrases to listen for. Each active phrase has its own sensitivity and action: send a spoken command to an Agent, or start or end Live voice.\n\nSensitivity tuning is optional. It suggests a setting for an existing phrase using a short background check and a few repetitions. It does not train a new phrase or learn to recognize only your voice.',
   'settings.voice.modelImported': 'Imported',
   'settings.voice.modelToggleAria': 'Listen for {name}',
   'settings.voice.importModel': 'Import TFLite model',
+  'settings.voice.importHelp':
+    'Your own phrase needs a trained, compatible openWakeWord TFLite model. Importing adds that model; sensitivity tuning does not create one.',
   'settings.voice.removeModel': 'Remove imported model',
   'settings.voice.importSuccessActive':
     'Wakeword model imported and activated.',
@@ -1457,43 +1459,64 @@ export default Object.freeze({
     'vBot deletes its stored TFLite file from this Desktop.',
   'settings.voice.deleteSuccess': 'Wakeword model removed.',
   'settings.voice.sensitivity': 'Sensitivity',
+  'settings.voice.sensitivityHelp':
+    'Higher: fewer missed phrases, more false activations. Lower: fewer false activations, more missed phrases.',
+  'settings.voice.calibrationOptional': 'Optional guided tuning',
+  'settings.voice.calibrationNeedsListening':
+    'Turn on wakeword listening and wait until the microphone is listening.',
+  'settings.voice.calibrationAlreadyRunning':
+    'Finish the current sensitivity tuning first.',
+  'settings.voice.calibrationCommandBusy':
+    'Wait for the current command recording to finish.',
   'settings.voice.modelAction': 'When heard',
   'settings.voice.modelActionAria': 'When {name} is heard',
   'settings.voice.sessionBehaviorActive': 'Use active Session',
   'settings.voice.sessionBehaviorNew': 'New Session each time',
   'settings.voice.calibrationNoiseInstruction':
-    'Stay quiet for {seconds} seconds while vBot measures the room.',
+    'Stay quiet for {seconds} seconds. Keep your usual background sounds while vBot checks for false matches.',
   'settings.voice.calibrationPhraseInstruction':
-    'Say “{name}” naturally — {count} of {required} repetitions captured. Pause briefly between repetitions.',
+    'Say “{name}” once at your normal distance and volume. Then pause until the repetition count increases.',
+  'settings.voice.calibrationPauseInstruction':
+    'Phrase heard. Stay quiet for a moment so this repetition can finish.',
+  'settings.voice.calibrationSettlingInstruction':
+    'Pause briefly. Wait for the prompt before saying the phrase again.',
   'settings.voice.calibrationReviewInstruction':
-    'Measurement complete. Review the calculated sensitivity, then apply it.',
-  'settings.voice.calibrationListening': 'Commands paused',
+    'This setting fits the repetitions just measured. Apply it, then check it in everyday use; a short test cannot guarantee there will be no false activations.',
+  'settings.voice.calibrationPurpose':
+    'Wake phrase actions are paused while tuning. This adjusts sensitivity only; it does not train a phrase or your voice. Nothing changes until you apply the suggestion.',
+  'settings.voice.calibrationNoProgressHelp':
+    'Count not increasing? Pause longer, then try again at a comfortable speaking volume. If the phrase still does not register, keep your current sensitivity and try a different phrase or microphone.',
+  'settings.voice.calibrationInconclusive': 'No reliable suggestion',
+  'settings.voice.calibrationInconclusiveInstruction':
+    'These measurements do not support a reliable sensitivity setting. Keep your current sensitivity, or try a different phrase or microphone and start over. No setting has changed.',
+  'settings.voice.calibrationListening': 'Wake actions paused',
   'settings.voice.calibrationReadyToApply': 'Ready to apply',
   'settings.voice.calibrationProgressAria': 'Calibration progress',
-  'settings.voice.calibrationStepNoise': 'Room noise',
-  'settings.voice.calibrationStepPhrases': 'Wakeword samples',
+  'settings.voice.calibrationStepNoise': 'Check background',
+  'settings.voice.calibrationStepPhrases': 'Repeat phrase',
   'settings.voice.calibrationStepReview': 'Review',
-  'settings.voice.calibrationScore': 'Score',
-  'settings.voice.calibrationNoise': 'Noise',
+  'settings.voice.calibrationScore': 'Match score',
+  'settings.voice.calibrationNoise': 'Background score',
   'settings.voice.calibrationPeak': 'Peak',
   'settings.voice.calibrationThreshold': 'Threshold',
-  'settings.voice.calibrationSamples': '{count} / {required} samples',
+  'settings.voice.calibrationSamples':
+    '{count} of {required} repetitions captured',
   'settings.voice.calibrationRecommendation':
     'Recommended sensitivity {value}%',
   'settings.voice.calibrationMeterAria': '{name} detector score',
-  'settings.voice.calibrationReset': 'Restart calibration',
-  'settings.voice.calibrationDiscard': 'Discard and stop',
-  'settings.voice.calibrationDiscardConfirmTitle': 'Discard calibration?',
-  'settings.voice.calibrationDiscardConfirm':
-    'All measurements will be discarded and the sensitivity stays unchanged.',
-  'settings.voice.calibrationApply': 'Apply calibrated value',
+  'settings.voice.calibrationDetails': 'Detection details',
+  'settings.voice.calibrationDetailsHelp':
+    'These are phrase-match scores, not microphone volume or recognition accuracy. The threshold is the suggested setting when available, otherwise your current setting. A single crossing does not always count as a detection.',
+  'settings.voice.calibrationReset': 'Start over',
+  'settings.voice.calibrationDiscard': 'Keep current sensitivity',
+  'settings.voice.calibrationApply': 'Apply suggestion',
   'settings.voice.calibrationStartFailed': 'Calibration could not start.',
   'settings.voice.calibrationResetFailed': 'Calibration could not restart.',
   'settings.voice.calibrationStopFailed': 'Calibration could not stop.',
   'settings.voice.calibrationApplied': 'Wakeword sensitivity applied.',
   'settings.voice.calibrationApplyFailed': 'Calibration could not be applied.',
   'settings.voice.calibrationNoiseHighWarning':
-    'Room noise is high ({level}). Consider moving to a quieter environment or reducing background noise for better results.',
+    'Background sounds are matching this phrase strongly. Reduce the background sound or try another phrase, then start over.',
   'settings.voice.calibrationCurrentSensitivity': 'Current',
   'settings.voice.desktopOnly': 'Available in the vBot Desktop app.',
   'settings.voice.statusUnavailableTitle': 'Desktop Voice status unavailable',

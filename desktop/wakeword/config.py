@@ -261,7 +261,10 @@ def canonical_profile_key(server_url: str) -> str:
     and trailing slashes never form a different key. An empty URL yields ``""``.
     """
     url = (server_url or "").strip().rstrip("/")
-    parts = urlsplit(url)
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return ""
     if (parts.hostname or "").lower() != "localhost":
         return url
     try:

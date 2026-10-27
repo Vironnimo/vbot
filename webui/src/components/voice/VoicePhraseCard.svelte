@@ -41,6 +41,7 @@
     // Calibration: `null` hides the button (the phrase is not calibratable
     // now), otherwise whether it is disabled.
     calibrateDisabled = null,
+    calibrateDisabledReason = null,
     removeDisabled = false,
     onToggle = noop,
     onSensitivityInput = noop,
@@ -203,6 +204,9 @@
         onchange={onSensitivityCommit}
         disabled={sensitivityDisabled || !sliderAvailable}
       />
+      <p class="voice-model-card__help">
+        {t('settings.voice.sensitivityHelp')}
+      </p>
 
       <div class="voice-model-card__action">
         <span aria-hidden="true">
@@ -254,9 +258,13 @@
       {@render calibration()}
     {:else if calibrateDisabled !== null}
       <div class="voice-model-card__actions">
+        <span class="voice-model-card__help">
+          {t('settings.voice.calibrationOptional')}
+        </span>
         <Button
           variant="tertiary"
           disabled={calibrateDisabled}
+          disabledReason={calibrateDisabledReason}
           ariaLabel={t('settings.voice.calibrateAria', {
             name: model.label,
           })}

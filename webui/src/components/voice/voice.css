@@ -166,7 +166,19 @@
 }
 .voice-settings .voice-model-card__actions {
   justify-content: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
   padding-top: 8px;
+}
+.voice-settings .voice-model-card__help,
+.voice-settings .voice-model-help {
+  margin: 0;
+  color: var(--text-med);
+  font-size: var(--fs-body-sm);
+  line-height: 1.45;
+}
+.voice-settings .voice-model-card__actions .voice-model-card__help {
+  margin-right: auto;
 }
 .voice-settings .voice-model-card__action {
   display: flex;
@@ -244,6 +256,20 @@
   font-size: var(--fs-body-sm);
   line-height: 1.4;
 }
+.voice-settings .voice-calibration-help {
+  margin: 0;
+  color: var(--text-med);
+  font-size: var(--fs-body-sm);
+  line-height: 1.45;
+}
+.voice-settings .voice-calibration-details > summary {
+  color: var(--text-med);
+  font-size: var(--fs-body-sm);
+}
+.voice-settings .voice-calibration-details > .voice-calibration-help,
+.voice-settings .voice-calibration-details > .voice-calibration-model {
+  margin-top: 10px;
+}
 .voice-settings .voice-calibration-steps {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -301,8 +327,7 @@
   font-size: var(--fs-label-md);
   font-weight: 500;
 }
-.voice-settings .voice-calibration-model__identity,
-.voice-settings .voice-calibration-model__result {
+.voice-settings .voice-calibration-model__identity {
   display: flex;
   align-items: center;
 }
@@ -326,14 +351,15 @@
   font-weight: 400;
   white-space: nowrap;
 }
-.voice-settings .voice-calibration-model__result {
-  justify-content: space-between;
-  gap: 12px;
-  color: var(--text-lo);
-  font-size: var(--fs-label-sm);
+.voice-settings .voice-calibration-result {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--text-hi);
+  font-size: var(--fs-body-md);
   font-variant-numeric: tabular-nums;
 }
-.voice-settings .voice-calibration-model__result strong {
+.voice-settings .voice-calibration-result strong {
   color: var(--green);
   font-weight: 500;
 }
@@ -379,6 +405,7 @@
 .voice-settings .voice-calibration-legend {
   justify-content: flex-end;
   gap: 14px;
+  margin-top: 8px;
   color: var(--text-lo);
   font-size: var(--fs-label-sm);
 }
