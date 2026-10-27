@@ -209,8 +209,14 @@ export function createCronEditor(context) {
       requestDraftDiscard(startCreateNow);
       return;
     }
-    const open = () =>
-      context.navigation.navigate([context.category, NEW_JOB_PLACE]);
+    const open = () => {
+      const place = [context.category, NEW_JOB_PLACE];
+      // The empty category is a seed, with no selected record to return to.
+      // Replace it before creating, or Back later resolves it to the new job
+      // again and appears to do nothing.
+      if (!selectedJobId) context.navigation.replace(place);
+      else context.navigation.navigate(place);
+    };
     if (
       context.newJobDraft &&
       automationCategory(context.newJobDraft) !== context.category
@@ -247,11 +253,10 @@ export function createCronEditor(context) {
     if (submittingForm) {
       return;
     }
-    requestDraftDiscard(() =>
-      context.navigation.up(
-        selectedJob ? automationPlace(selectedJob) : [context.category],
-      ),
-    );
+    requestDraftDiscard(() => {
+      if (selectedJob) context.navigation.up(automationPlace(selectedJob));
+      else context.navigation.replace([context.category]);
+    });
   }
 
   // Cancel and a reset discard a changed new job's form, so they ask first.
