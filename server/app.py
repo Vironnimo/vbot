@@ -106,7 +106,7 @@ from server.access import (
     register_access_routes,
     scope_principal,
 )
-from server.access._rules import host_policy
+from server.access._rules import host_policy, is_server_path
 from server.events import (
     RESOURCE_KIND_AGENT_SECRETS,
     RESOURCE_KIND_DEVICES,
@@ -888,19 +888,12 @@ def _mount_webui(app: FastAPIType) -> None:
 
     @app.get("/{path:path}", include_in_schema=False)
     async def webui_fallback(path: str) -> FileResponse:
-        if _is_reserved_server_path(path):
+        if is_server_path(f"/{path}"):
             raise HTTPException(status_code=404, detail="Not Found")
         requested_file = _safe_webui_file_path(webui_dist_dir, path)
         if requested_file is not None:
             return FileResponse(requested_file)
         return FileResponse(webui_index_file, headers=WEBUI_DOCUMENT_CACHE_HEADERS)
-
-
-def _is_reserved_server_path(path: str) -> bool:
-    return path == "health" or any(
-        path == namespace or path.startswith(f"{namespace}/")
-        for namespace in ("ws", "api", "auth", "_vbot")
-    )
 
 
 def _public_browser_origins(access: AccessConfig) -> frozenset[tuple[str, str, int]]:

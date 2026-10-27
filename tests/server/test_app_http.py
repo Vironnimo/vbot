@@ -302,6 +302,7 @@ def test_webui_build_serves_the_app_shell_without_shadowing_server_routes(
                 "/ws/terminals/term-1",
                 "/auth/unknown",
                 "/_vbot/unknown",
+                "/health/x",
             )
         ]
 
@@ -315,7 +316,7 @@ def test_webui_build_serves_the_app_shell_without_shadowing_server_routes(
     assert unknown_method.json()["error"]["code"] == "method_not_found"
     assert [(response.status_code, response.json()) for response in reserved] == [
         (404, {"detail": "Not Found"})
-    ] * 6
+    ] * 7
 
     monkeypatch.setattr(server_app, "WEBUI_DIST_DIR", tmp_path / "missing-dist")
     with TestClient(create_app(runtime=ServerStubRuntime(tmp_path / "data"))) as client:
