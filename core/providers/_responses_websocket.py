@@ -49,6 +49,7 @@ from core.providers._openai_constants import (
 from core.providers._responses_wire import (
     ResponsesStreamState,
     normalize_responses_stream_event,
+    responses_error_usage_delta,
 )
 from core.providers.errors import (
     NetworkError,
@@ -949,6 +950,9 @@ class ResponsesWebSocket:
                     raise _FreshSocketRequiredError(code)
                 event_type = event_data.get("type")
                 event_name = event_type if isinstance(event_type, str) else ""
+                usage = responses_error_usage_delta(event_name, event_data, state)
+                if usage is not None:
+                    yield usage
                 raw_item = event_data.get("item")
                 final_item = (
                     copy.deepcopy(raw_item)

@@ -129,6 +129,15 @@ def test_speed_divides_the_window_tokens_by_their_generation_window(
     }
 
 
+def test_retry_usage_speed_uses_only_the_last_attempt() -> None:
+    expected = _speed({"output_tokens": 120})
+    speed = _speed({"output_tokens": 900, "last_request_usage": {"output_tokens": 120}})
+    assert speed == expected
+    unknown = _speed({"output_tokens": 900, "last_request_usage": {}})
+    assert unknown is not None
+    assert "output_tokens_per_second" not in unknown
+
+
 def _output_only(**changes: Any) -> JsonObject:
     output = {**MARKS["output"], **changes}
     return {"output": output, "answer": {**output}}

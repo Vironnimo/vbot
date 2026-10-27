@@ -311,6 +311,47 @@ async def test_compaction_request_reads_and_teaches_its_input_estimate_calibrati
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("last", [{"input_tokens": 4321}, {}, {"output_tokens": 3}])
+async def test_compaction_calibrates_from_the_final_physical_request(last) -> None:
+    class RetryAdapter(_BudgetAdapter):
+        @override
+        async def stream(
+            self, messages: list[dict], **kwargs: Any
+        ) -> AsyncIterator[dict[str, Any]]:
+            async for delta in super().stream(messages, **kwargs):
+                if delta.get("type") == "usage":
+                    yield {
+                        "type": "usage",
+                        "input_tokens": 9000,
+                        "output_tokens": 10,
+                        "last_request_usage": last,
+                    }
+                else:
+                    yield delta
+
+    summary = RetryAdapter(4321)
+    messages = [user("u1", "old"), assistant("a1", "old answer"), user("u2", "now")]
+    recorder = _SummaryCalibration()
+    await compact(
+        messages,
+        service=CompactionService(usage_recorder=cast(Any, recorder)),
+        summary_adapter=summary,
+        summary_model_id="summary",
+        summary_model_reference="openai/summary",
+        active_adapter=_BudgetAdapter(None),
+        active_model_id="active",
+        active_model_reference="openai/active",
+        settings=CompactionSettings(strategy="summary_tail", tail_tokens=1),
+        request_messages=provider_request(messages),
+    )
+    assert recorder.calls[0]["usage"]["input_tokens"] == 9000
+    assert recorder.calls[0]["usage"]["last_request_usage"] == last
+    assert [sample[1] for sample in recorder.input_estimates] == (
+        [4321] if "input_tokens" in last else []
+    )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("outcomes", "statuses", "failures"),
     [

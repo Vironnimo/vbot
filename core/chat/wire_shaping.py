@@ -118,6 +118,7 @@ from core.sessions import (
     skill_context_note_payload,
 )
 from core.tools import model_tool_name, tool_failure
+from core.usage import last_request_usage
 from core.utils.tokens import REPORTED_REASONING_TOKENS_FIELD
 
 INTERRUPTED_TOOL_RESULT_CODE = "result_unavailable"
@@ -545,7 +546,7 @@ def _carry_reported_reasoning_tokens(message: ChatMessage, data: JsonObject) -> 
     Replayed reasoning costs what the Provider reported for it, which no local
     count of its text or opaque blobs predicts (``core.utils.tokens``).
     """
-    count = (message.usage or {}).get("reasoning_tokens")
+    count = last_request_usage(message.usage).get("reasoning_tokens")
     if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
         data[REPORTED_REASONING_TOKENS_FIELD] = count
 

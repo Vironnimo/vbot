@@ -624,6 +624,29 @@ async def test_input_estimate_calibration_learns_per_model_and_survives_restart(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("final", [{"input_tokens": 125_000}, {}, {"output_tokens": 2}])
+async def test_retry_usage_calibrates_from_only_the_final_attempt(recorder, final):
+    model = "openai/retry-calibration"
+    call = await recorder.start(model=model, kind="chat")
+    usage = {
+        "input_tokens": 200_000,
+        "output_tokens": 10,
+        "last_request_usage": final,
+        "context_usage": {"tokens": 1},
+    }
+    finished = await recorder.finish(call, usage)
+    assert finished["last_request_usage"] == final
+    assert finished["context_usage"] == {"tokens": 1}
+    updated = await recorder.update(call, finished, input_estimate=(model, 100_000))
+    assert updated["input_tokens"] == 200_000
+    assert updated["last_request_usage"] == final
+    assert (recorder.input_estimate_factor(model) > 1.0) is ("input_tokens" in final)
+    [record] = read_ledger(recorder)[1]
+    assert record.usage["input_tokens"] == 200_000
+    assert "last_request_usage" not in record.usage
+
+
+@pytest.mark.asyncio
 async def test_a_known_session_generation_is_recorded_without_a_session_read(tmp_path):
     class UnreadSessions:
         def list_history_versions(self, addresses):

@@ -30,6 +30,7 @@ from core.providers.adapter import (
 )
 from core.providers.errors import ProviderContextOverflowError
 from core.providers.providers import RequestInput
+from core.usage import last_request_usage
 from core.utils.logging import get_logger
 from core.utils.retry import compute_retry_delay
 
@@ -378,9 +379,12 @@ async def _learn_input_estimate(
 
     The recorder ignores unusable samples (``is_usable_sample``).
     """
-    if calibration is None or usage is None or usage_token_is_estimated(usage, "input_tokens"):
+    if calibration is None or usage is None:
         return
-    measured = usage.get("input_tokens")
+    request_usage = last_request_usage(usage)
+    if usage_token_is_estimated(request_usage, "input_tokens"):
+        return
+    measured = request_usage.get("input_tokens")
     if not isinstance(measured, int) or isinstance(measured, bool):
         return
     model_reference, estimated = calibration

@@ -61,7 +61,7 @@ def _extract_output_text_parts(output_items: list[Mapping[str, Any]]) -> list[st
     parts: list[str] = []
     for item in output_items:
         if item.get("type") == "message":
-            parts.extend(_content_text_parts(item.get("content"), {"output_text", "text"}))
+            parts.extend(_message_output_text_parts(item.get("content")))
         elif item.get("type") in {"output_text", "text"}:
             text = item.get("text")
             if isinstance(text, str):
@@ -100,6 +100,21 @@ def _extract_reasoning_summary(output_items: list[Mapping[str, Any]]) -> list[st
         for text in _content_text_parts(item.get("summary"), {"summary_text", "text"})
         if text
     ]
+
+
+def _message_output_text_parts(content: Any) -> list[str]:
+    """Read both Assistant text and the Provider's refusal explanation."""
+    if not isinstance(content, list):
+        return _content_text_parts(content, {"output_text", "text"})
+    parts: list[str] = []
+    for block in content:
+        if isinstance(block, Mapping) and block.get("type") == "refusal":
+            refusal = block.get("refusal")
+            if isinstance(refusal, str):
+                parts.append(refusal)
+        else:
+            parts.extend(_content_text_parts([block], {"output_text", "text"}))
+    return parts
 
 
 def _content_text_parts(content: Any, allowed_types: set[str]) -> list[str]:

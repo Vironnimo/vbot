@@ -595,6 +595,38 @@ def test_usage_delta_reaches_the_final_response_without_a_visible_delta(usage: J
     assert response["terminal_outcome"] == "stop"
 
 
+def test_usage_keeps_the_last_physical_request_across_partial_snapshots() -> None:
+    accumulator = _accumulate(
+        {"type": "usage", "input_tokens": 100, "output_tokens": 3, "last_request_usage": {}},
+        {"type": "usage", "input_tokens": 210, "last_request_usage": {"input_tokens": 110}},
+        {"type": "usage", "output_tokens": 10, "last_request_usage": {"output_tokens": 7}},
+    )
+    expected = {
+        "input_tokens": 210,
+        "output_tokens": 10,
+        "last_request_usage": {"input_tokens": 110, "output_tokens": 7},
+    }
+    assert accumulator.usage == expected
+    assert accumulator.finalize_assistant_fields().usage == expected
+    # A new failed repair starts a new physical attempt, even before it reports Usage.
+    accumulator.add_delta({"type": "usage", "input_tokens": 210, "last_request_usage": {}})
+    reset_usage = accumulator.usage
+    assert reset_usage is not None and reset_usage["last_request_usage"] == {}
+    accumulator.add_delta(
+        {"type": "usage", "output_tokens": 11, "last_request_usage": {"output_tokens": 1}}
+    )
+    final_usage = accumulator.finalize_assistant_fields().usage
+    assert final_usage is not None and final_usage["last_request_usage"] == {"output_tokens": 1}
+
+
+@pytest.mark.parametrize("invalid", [None, [], {"input_tokens": -1}, {"output_tokens": True}])
+def test_usage_rejects_invalid_last_request_snapshots(invalid: Any) -> None:
+    with pytest.raises(StreamingDeltaError):
+        StreamingAccumulator().add_delta(
+            {"type": "usage", "input_tokens": 10, "last_request_usage": invalid}
+        )
+
+
 def test_usage_drops_invalid_optional_token_details() -> None:
     fields = _accumulate(
         {

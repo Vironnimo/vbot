@@ -866,6 +866,39 @@ class StreamingAccumulator:
             value = reported_speed(delta.get(measurement))
             if value is not None:
                 usage[measurement] = value
+        if "last_request_usage" in delta:
+            final = delta["last_request_usage"]
+            if not isinstance(final, dict):
+                raise StreamingDeltaError("last_request_usage must be an object")
+            previous = usage.get("last_request_usage")
+            last = dict(previous) if final and isinstance(previous, dict) else {}
+            for token_key in (
+                "input_tokens",
+                "output_tokens",
+                "cache_read_tokens",
+                "cache_write_tokens",
+                "reasoning_tokens",
+            ):
+                if token_key not in final:
+                    continue
+                token_count = final[token_key]
+                if (
+                    isinstance(token_count, bool)
+                    or not isinstance(token_count, int)
+                    or token_count < 0
+                ):
+                    raise StreamingDeltaError(
+                        f"last_request_usage {token_key} must be a non-negative integer"
+                    )
+                last[token_key] = token_count
+            if "reported_cost_usd" in final:
+                cost = nonnegative_amount(final["reported_cost_usd"])
+                if cost is None:
+                    raise StreamingDeltaError(
+                        "last_request_usage reported_cost_usd must be non-negative"
+                    )
+                last["reported_cost_usd"] = cost
+            usage["last_request_usage"] = last
         self._usage = usage
 
     def _add_finish(self, delta: JsonObject) -> None:

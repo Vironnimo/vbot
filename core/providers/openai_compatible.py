@@ -77,6 +77,7 @@ from core.providers._wire_learning import (
 from core.providers.adapter import (
     ModelLookup,
     ProviderAdapter,
+    neutralize_system_reminder_tags,
     project_tool_result_content_fallbacks,
     resolve_request_input_budget,
 )
@@ -322,10 +323,13 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                 "".join(
                     _chat_content_chunk_text(item)
                     for item in content
-                    if isinstance(item, dict) and item.get("type") == "text"
+                    if isinstance(item, dict) and item.get("type") in {"text", "refusal"}
                 )
                 or None
             )
+        refusal = message.get("refusal")
+        if isinstance(refusal, str) and refusal:
+            content = (content or "") + refusal
         normalized: dict[str, Any] = {
             "role": "assistant",
             "content": content if isinstance(content, str) or content is None else str(content),
@@ -381,7 +385,15 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         ):
             chunks = reasoning_meta.get("content_chunks")
             if isinstance(chunks, list) and all(isinstance(item, Mapping) for item in chunks):
-                wire["content"] = [dict(item) for item in chunks]
+                wire["content"] = [
+                    {
+                        **item,
+                        "refusal": neutralize_system_reminder_tags(item["refusal"]),
+                    }
+                    if item.get("type") == "refusal" and isinstance(item.get("refusal"), str)
+                    else dict(item)
+                    for item in chunks
+                ]
                 return wire
         replay = self.wire_profile(model_id or "").replay
         carrier = replay.history_field

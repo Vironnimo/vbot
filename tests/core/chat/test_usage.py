@@ -251,6 +251,27 @@ def test_request_measurement_cancels_existing_estimation_bias_and_counts_changes
     assert projected_request_input(unanchored) == RequestInput.estimate(unanchored["tokens"])
 
 
+@pytest.mark.parametrize(
+    "final", [{"input_tokens": 100, "output_tokens": 20}, {}, {"output_tokens": 20}]
+)
+def test_retry_usage_anchors_on_only_the_final_request(final):
+    calibration = _Calibration(1.0)
+    accounting = RequestContextUsage(calibration)
+    messages = [{"role": "user", "content": "task"}]
+    args = {"target": _route(), "tools": [], "scope": "epoch"}
+    accounting.observe(
+        {"input_tokens": 250, "output_tokens": 80, "last_request_usage": final}, messages, **args
+    )
+    projection = accounting.project(messages, **args)
+    if "input_tokens" in final:
+        assert projection["provider_input_tokens"] == 100
+        assert projection["provider_output_tokens"] == 20
+        assert calibration.samples[0][1] == 100
+    else:
+        assert "provider_input_tokens" not in projection
+        assert not calibration.samples
+
+
 def test_estimate_factor_scales_only_the_estimated_part_of_a_projection():
     calibration = _Calibration(1.5)
     accounting = RequestContextUsage(calibration)

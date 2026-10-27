@@ -9,6 +9,7 @@ import pytest
 from core.chat.streaming import StreamingAccumulator
 from core.providers._responses_wire import (
     ResponsesStreamState,
+    iter_responses_sse_deltas_with_state,
     normalize_responses_response,
 )
 from core.providers.adapter import (
@@ -81,6 +82,74 @@ def _function_call(call_id: str, name: str, arguments: str, **fields: Any) -> di
 # ---------------------------------------------------------------------------
 # Non-stream normalization
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("mode", ["completed", "done", "deltas"])
+def test_refusal_is_visible_once_with_or_without_streamed_fragments(mode: str) -> None:
+    output = [{"type": "message", "content": [{"type": "refusal", "refusal": "Cannot help."}]}]
+    response = {"status": "completed", "output": output}
+    assert normalize_responses_response(response)["content"] == "Cannot help."
+    lines = []
+    if mode == "deltas":
+        lines.extend(
+            [
+                sse_event(
+                    "response.refusal.delta",
+                    {"output_index": 0, "content_index": 0, "delta": "Cannot "},
+                ),
+                sse_event(
+                    "response.refusal.delta",
+                    {"output_index": 0, "content_index": 0, "delta": "help."},
+                ),
+                sse_event(
+                    "response.refusal.done",
+                    {"output_index": 0, "content_index": 0, "refusal": "Cannot help."},
+                ),
+            ]
+        )
+    elif mode == "done":
+        lines.append(
+            sse_event(
+                "response.refusal.done",
+                {"output_index": 0, "content_index": 0, "refusal": "Cannot help."},
+            )
+        )
+    if mode == "completed":
+        lines.append(sse_event("response.output_item.done", {"output_index": 0, "item": output[0]}))
+    lines.append(_completed(response))
+    accumulator = StreamingAccumulator()
+    for delta in decode_responses_sse(lines):
+        accumulator.add_delta(delta)
+    assert accumulator.finalize_assistant_fields().content == "Cannot help."
+
+
+def test_refusal_blocks_are_not_reasoning() -> None:
+    response = {
+        "output": [
+            {"type": "reasoning", "content": [{"type": "refusal", "refusal": "Not reasoning"}]}
+        ]
+    }
+    assert normalize_responses_response(response)["reasoning"] is None
+
+
+def test_failed_response_emits_usage_before_the_original_error() -> None:
+    state = ResponsesStreamState()
+    event = sse_event(
+        "response.failed",
+        {
+            "response": {
+                "status": "failed",
+                "error": {"code": "server_error", "message": "failed"},
+                "usage": {"input_tokens": 1000, "output_tokens": 250},
+            }
+        },
+    )
+    deltas = iter_responses_sse_deltas_with_state([event], state)
+    assert next(deltas) == {"type": "usage", "input_tokens": 1000, "output_tokens": 250}
+    with pytest.raises(ProviderError) as caught:
+        next(deltas)
+    assert caught.value.retryable
+    assert state.usage == {"input_tokens": 1000, "output_tokens": 250}
 
 
 def test_normalize_response_maps_text_reasoning_tool_calls_and_usage() -> None:

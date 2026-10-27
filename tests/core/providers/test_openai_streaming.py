@@ -69,6 +69,28 @@ def _completed(response: dict[str, Any]) -> dict[str, Any]:
 
 
 @pytest.mark.asyncio
+async def test_failed_sse_response_reports_usage_before_error() -> None:
+    event = {
+        "type": "response.failed",
+        "response": {
+            "status": "failed",
+            "error": {"code": "insufficient_quota", "message": "failed"},
+            "usage": {"input_tokens": 1000, "output_tokens": 250},
+        },
+    }
+    adapter = codex_adapter()
+    deltas = []
+    with respx.mock:
+        respx.post(OPENAI_SUBSCRIPTION_URL).mock(return_value=sse_response(codex_sse(event)))
+        with pytest.raises(ProviderError) as caught:
+            async for delta in adapter.stream(SAMPLE_MESSAGES, model_id=MODEL_ID):
+                deltas.append(delta)
+    assert not caught.value.retryable
+    assert deltas == [{"type": "usage", "input_tokens": 1000, "output_tokens": 250}]
+    await adapter.aclose()
+
+
+@pytest.mark.asyncio
 async def test_codex_stream_yields_normalized_responses_deltas() -> None:
     """The SSE ``event:`` name stands in for an event whose data carries no ``type``."""
 
