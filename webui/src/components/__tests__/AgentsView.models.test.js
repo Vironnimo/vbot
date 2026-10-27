@@ -153,6 +153,32 @@ describe('AgentsView models', () => {
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
     expect(options.hidden).toBe(false);
     expect(temperature.getAttribute('aria-invalid')).toBe('true');
+
+    // Correcting to the saved value needs no RPC, but clears stale feedback.
+    setTextInputValue('agent-temperature', '0.1');
+    flushSync();
+    expect(temperature.getAttribute('aria-invalid')).not.toBe('true');
+    expect(
+      document.querySelector('.agent-detail-pane [role="alert"]'),
+    ).toBeNull();
+    expect(getAgentUpdateCalls()).toHaveLength(0);
+
+    setTextInputValue('agent-temperature', '3');
+    submitAgentForm();
+    await waitForCondition(
+      () => temperature.getAttribute('aria-invalid') === 'true',
+    );
+    vi.useFakeTimers();
+    setTextInputValue('agent-temperature', '0.7');
+    temperature.blur();
+    await vi.advanceTimersByTimeAsync(800);
+    flushSync();
+    expect(getAgentUpdateCalls()).toHaveLength(1);
+    expect(getAgentUpdateCalls()[0][1].temperature).toBe(0.7);
+    expect(temperature.getAttribute('aria-invalid')).not.toBe('true');
+    expect(
+      document.querySelector('.agent-detail-pane [role="alert"]'),
+    ).toBeNull();
   });
 
   it('lists canonical model ids without a suffix when each Provider has one usable connection', async () => {

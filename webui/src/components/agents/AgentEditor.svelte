@@ -72,6 +72,7 @@
   let formValues = $state(createAgentFormValues(initialAgent ?? {}));
   let editBaselineValues = $state(createAgentFormValues(initialAgent ?? {}));
   let formErrors = $state({});
+  let validationShown = $state(false);
   let isSaving = $state(false);
   let errorMessage = $state('');
   let destroyed = false;
@@ -86,6 +87,17 @@
   let renameValue = $state('');
   let renameError = $state('');
   let isRenaming = $state(false);
+
+  // Once validation has been requested, its feedback follows the current
+  // draft, including corrections back to the saved value (no save needed).
+  $effect(() => {
+    if (!validationShown) return;
+    formErrors = normalizeAgentForm(formValues, {
+      mode: formMode,
+      initialValues:
+        formMode === AGENT_FORM_MODE_EDIT ? editBaselineValues : null,
+    }).errors;
+  });
 
   let canDeleteSelectedAgent = $derived(Boolean(agent) && agentsCount > 1);
   // The agent points at a custom identity/Memory home rather than its
@@ -192,13 +204,13 @@
     });
 
     if (source !== 'auto') {
+      validationShown = true;
       formErrors = result.errors;
       errorMessage = '';
     }
 
     if (!result.isValid) {
       if (source !== 'auto') {
-        errorMessage = t('errors.validation');
         await tick();
         editorForm?.querySelector('[aria-invalid="true"]')?.focus();
       }
@@ -612,6 +624,9 @@
       <Banner variant="error" role="alert">
         {errorMessage}
       </Banner>
+    {/if}
+    {#if validationShown && Object.keys(formErrors).length > 0}
+      <Banner variant="error" role="alert">{t('errors.validation')}</Banner>
     {/if}
 
     <AgentOverviewPanel
