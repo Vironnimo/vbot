@@ -39,6 +39,9 @@ class _Automations:
             get_job=lambda job_id: _find(self.cron_jobs, job_id),
             update_job=self._edit("cron"),
             can_fire=lambda job: job.fires,
+            references_project=lambda job, project_id: (
+                job.project_id == project_id or job.working_project_id == project_id
+            ),
         )
 
     def _edit(self, owner: str) -> Callable[..., Any]:
@@ -64,6 +67,7 @@ def _job(**fields: Any) -> Any:
             "name": "Daily report",
             "agent_id": "builder",
             "project_id": None,
+            "working_project_id": None,
             "session_id": "s1",
             "status": "active",
             "prompt": "Report.",
@@ -151,6 +155,15 @@ def _project(references: AutomationReferences) -> tuple[AutomationReference, ...
         pytest.param(_project, _cron(), [], id="project-not-identity-agent"),
         pytest.param(_project, _cron(project_id="other"), [], id="project-not-other-project"),
         pytest.param(_project, _cron(project_id="vbot", fires=False), [], id="project-not-history"),
+        pytest.param(
+            _project, _cron(working_project_id="vbot"), ["cron:job-1"], id="working-project"
+        ),
+        pytest.param(
+            _project,
+            _cron(working_project_id="vbot", fires=False),
+            [],
+            id="working-project-history",
+        ),
     ],
 )
 def test_agent_and_project_references_name_the_live_automations_of_their_target(

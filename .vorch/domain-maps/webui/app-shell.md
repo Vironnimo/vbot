@@ -25,7 +25,7 @@ AppShell's optional `sidebarFooter` snippet precedes the existing microphone and
 
 ## Main menu indicators
 
-- A view can show an indicator on its Main menu entry: App keeps `navigationIndicators` by view id and passes it to `AppShell.svelte` as `indicators`. Each entry is `{count, tone, label}` or null: tone `unread` (blue) or `running` (amber), and a label saying in words what the count means. The view that owns the meaning reports it; the shell only renders it. Chat reports non-Schedule attention (`webui/chat.md` -> Selection and Sessions). App's `app/scheduleActivity.svelte.js` reads `cron.activity` for Schedules even while the view is closed, coalescing Schedule, Session and work-state invalidations and retrying failed reads. Its blue numeric badge counts policy-eligible unread results and job alerts.
+- A view can show an indicator on its Main menu entry: App keeps `navigationIndicators` by view id and passes it to `AppShell.svelte` as `indicators`. Each entry is `{count, tone, label}` or null: tone `unread` (blue) or `running` (amber), and a label saying in words what the count means. The view that owns the meaning reports it; the shell only renders it. Chat reports non-Schedule attention (`webui/chat.md` -> Selection and Sessions). App's `app/scheduleActivity.svelte.js` reads `cron.activity` for Automations even while the view is closed, coalescing Schedule, Session and work-state invalidations and retrying failed reads. Its blue numeric badge counts policy-eligible unread results and job alerts.
 - The count (capped at `99+`, `aria-hidden`) sits at the row's end in the full menu and in the phone More sheet, and as a solid count at the icon's corner in the compact rail and the phone bottom bar. The entry's accessible name becomes `<label>, <indicator label>` (`navigation.itemIndicator`); the tooltip shows the indicator label, in the compact rail together with the entry name (`AppShell.test.js`).
 
 ## Desktop context menu
@@ -89,7 +89,7 @@ Places per view (details with each view's map):
 | Skills | `[collection]`, `[collection, skillId]`, `['directories']` | `['all']` |
 | Settings | `[pageId]`, `[pageId, sectionId]` (a bare page or section id is corrected), `['archive', entryId]` (an Archive entry), `['debug', traceId]` (a trace) | `['general']` |
 | System Prompt | `[tab, 'agent:<id>']`, `[tab, 'default', 'agent:<previewAgentId>']` | the default scope previewed with the first Agent |
-| Schedules (Cron) | `[jobId]`, `['new']` | the first job |
+| Automations (Cron) | `[category, jobId]` or `[category, 'new']`; category `schedules` or `webhooks`, legacy `[jobId]` | the first Schedule; each category keeps its own list |
 | Calendar | `[mode, 'YYYY-MM-DD']` | `month` at today in the server zone |
 | Statistics | `[subView]` | `['overview']` |
 | Logs | `[file]` | the default log file |

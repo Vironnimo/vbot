@@ -25,6 +25,7 @@ from core.automation._cron_watch import (
     compare,
     read_baseline,
     remove_baseline,
+    watch_execution_target,
     write_baseline,
 )
 from core.permissions import PermissionRulesError
@@ -91,7 +92,9 @@ class CronWatcher:
             watch = latest.watch if latest is not None else None
             if latest is None or watch is None or change is None:
                 return
-            if not change.watch.same_check(watch):
+            if not change.watch.same_check(watch) or (
+                change.execution_target != watch_execution_target(latest)
+            ):
                 return
             # The mode at the start of the Run decides, also when an edit switched it meanwhile.
             change = replace(change, watch=watch)
@@ -175,9 +178,10 @@ class CronWatcher:
             ):
                 return None
             watch = job.watch
+            target = watch_execution_target(job)
             checked_at = _timing._utc_now_iso()
             baseline = await self._owner._writer.call_async(
-                partial(read_baseline, self.state_dir, job_id, watch)
+                partial(read_baseline, self.state_dir, job_id, watch, target)
             )
             if baseline is not None:
                 protected = replace(
@@ -195,6 +199,7 @@ class CronWatcher:
                             "The protected watch baseline could not be saved",
                             checked_at=checked_at,
                             counts=not first,
+                            target=target,
                         )
                         return None
                 baseline = protected
@@ -204,18 +209,27 @@ class CronWatcher:
                 output = await self._run(job, watch)
             except WatchCheckError as error:
                 await self._record_failure(
-                    job_id, watch, str(error), checked_at=checked_at, counts=not first
+                    job_id,
+                    watch,
+                    str(error),
+                    checked_at=checked_at,
+                    counts=not first,
+                    target=target,
                 )
                 return None
             comparison = await _COMPARE_WORKERS.run(
                 compare, output, baseline, self._owner._secret_masker()
             )
-            if not self._still_watching(job_id, watch):
+            if not self._still_watching(job_id, watch, target):
                 # An edit replaced or stopped what was checked.
                 return None
             if baseline is None:
                 recorded = WatchBaseline(
-                    watch, comparison.digest, comparison.output, checked_at=checked_at
+                    watch,
+                    comparison.digest,
+                    comparison.output,
+                    checked_at=checked_at,
+                    execution_target=target,
                 )
                 try:
                     await self._owner._writer.call_async(
@@ -229,7 +243,7 @@ class CronWatcher:
                         job_id,
                         len(comparison.output),
                     )
-                await self._record_success(job_id, watch, checked_at)
+                await self._record_success(job_id, watch, checked_at, target)
                 if first or not watch.always:
                     return None
                 return WatchChange(
@@ -241,8 +255,9 @@ class CronWatcher:
                     diff_cut=False,
                     checked_at=checked_at,
                     changed=False,
+                    execution_target=target,
                 )
-            await self._record_success(job_id, watch, checked_at)
+            await self._record_success(job_id, watch, checked_at, target)
             if comparison.digest == baseline.digest:
                 _LOGGER.debug("Cron watch output unchanged (job=%s)", job_id)
                 if not watch.always:
@@ -256,6 +271,7 @@ class CronWatcher:
                     diff_cut=False,
                     checked_at=checked_at,
                     changed=False,
+                    execution_target=target,
                 )
             _LOGGER.info("Cron watch output changed (job=%s)", job_id)
             return WatchChange(
@@ -266,6 +282,7 @@ class CronWatcher:
                 diff=comparison.diff,
                 diff_cut=comparison.diff_cut,
                 checked_at=checked_at,
+                execution_target=target,
             )
 
     async def _run(self, job: CronJob, watch: CronWatch) -> str:
@@ -284,6 +301,8 @@ class CronWatcher:
                     watch.target,
                     agent_id=job.agent_id,
                     project_id=job.project_id,
+                    session_id=job.session_id,
+                    working_project_id=job.working_project_id,
                     ceiling=ceiling,
                 )
             return await checks.fetch_url(watch.target, ceiling=ceiling)
@@ -297,18 +316,25 @@ class CronWatcher:
             )
             raise WatchCheckError(f"The check could not run: {error}") from error
 
-    def _still_watching(self, job_id: str, watch: CronWatch) -> bool:
+    def _still_watching(self, job_id: str, watch: CronWatch, target: str | None) -> bool:
         job = self._owner._jobs.get(job_id)
         return (
             job is not None
             and watch.same_check(job.watch)
+            and target == watch_execution_target(job)
             and job.status == "active"
             and job_id not in self._owner._pending_restarts
         )
 
-    async def _record_success(self, job_id: str, watch: CronWatch, checked_at: str) -> None:
+    async def _record_success(
+        self,
+        job_id: str,
+        watch: CronWatch,
+        checked_at: str,
+        target: str | None,
+    ) -> None:
         job = self._owner._jobs.get(job_id)
-        if job is None or not watch.same_check(job.watch):
+        if job is None or not watch.same_check(job.watch) or target != watch_execution_target(job):
             return
         job.last_checked_at = checked_at
         if job.last_check_error is not None:
@@ -319,10 +345,17 @@ class CronWatcher:
         await self._owner._execution._save_jobs_after_fire(job_id)
 
     async def _record_failure(
-        self, job_id: str, watch: CronWatch, message: str, *, checked_at: str, counts: bool
+        self,
+        job_id: str,
+        watch: CronWatch,
+        message: str,
+        *,
+        checked_at: str,
+        counts: bool,
+        target: str | None,
     ) -> None:
         job = self._owner._jobs.get(job_id)
-        if job is None or not watch.same_check(job.watch):
+        if job is None or not watch.same_check(job.watch) or target != watch_execution_target(job):
             return
         baseline = self._owner._execution._failure_baseline(job_id)
         job.last_checked_at = checked_at
@@ -342,7 +375,11 @@ class CronWatcher:
     async def _commit(self, job_id: str, change: WatchChange) -> None:
         """Make the changed output the baseline once its Run succeeded."""
         job = self._owner._jobs.get(job_id)
-        if job is None or not change.watch.same_check(job.watch):
+        if (
+            job is None
+            or not change.watch.same_check(job.watch)
+            or change.execution_target != watch_execution_target(job)
+        ):
             return
         try:
             await self._owner._writer.call_async(
@@ -357,7 +394,7 @@ class CronWatcher:
             )
             return
         latest = self._owner._jobs.get(job_id)
-        if latest is None:
+        if latest is None or change.execution_target != watch_execution_target(latest):
             return
         latest.last_changed_at = change.checked_at
         await self._owner._execution._save_jobs_after_fire(job_id)

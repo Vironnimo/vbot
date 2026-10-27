@@ -26,6 +26,7 @@ from zoneinfo import ZoneInfo
 
 from core.automation._cron_delivery import _local, _record
 from core.automation._cron_jobs import (
+    CronJob,
     CronJobValidationError,
     CronStorageError,
     CronWatch,
@@ -37,6 +38,7 @@ from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from core.permissions import PermissionCeiling, PermissionRefusal
+from core.sessions import AGENT_DEFAULT_PROJECT, WorkingProjectChoice
 
 WATCH_STATE_DIR_NAME = "watch-state"
 
@@ -76,6 +78,8 @@ class WatchChecks(Protocol):
         *,
         agent_id: str,
         project_id: str | None,
+        session_id: str | None = None,
+        working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT,
         ceiling: PermissionCeiling | None = None,
     ) -> str: ...
 
@@ -87,6 +91,8 @@ class WatchChecks(Protocol):
         *,
         agent_id: str,
         project_id: str | None,
+        session_id: str | None = None,
+        working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT,
         ceiling: PermissionCeiling | None,
     ) -> PermissionRefusal | None:
         """Whether a job's *ceiling* refuses *watch*; None when it allows it or has none."""
@@ -104,6 +110,22 @@ class WatchBaseline:
     checked_at: str
     # When this output replaced an earlier one after the Run for the change succeeded.
     changed_at: str | None = None
+    execution_target: str | None = None
+
+
+def watch_execution_target(job: CronJob) -> str | None:
+    """Fingerprint the command's execution target; URL checks have no working directory."""
+    if job.watch is None or job.watch.kind != "command":
+        return None
+    selection = (
+        {}
+        if job.working_project_id is AGENT_DEFAULT_PROJECT
+        else {"working_project_id": job.working_project_id}
+    )
+    encoded = json.dumps(
+        [job.agent_id, job.project_id, job.session_id, selection], sort_keys=True
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,6 +146,13 @@ class WatchChange:
     diff_cut: bool
     checked_at: str
     changed: bool = True
+    execution_target: str | None = None
+
+    def applies_to(self, job: CronJob) -> bool:
+        """Whether this output still belongs to the job's check and execution target."""
+        return self.watch.same_check(job.watch) and (
+            self.execution_target is None or self.execution_target == watch_execution_target(job)
+        )
 
     def baseline(self) -> WatchBaseline:
         """The baseline once the Run for this change succeeded."""
@@ -133,6 +162,7 @@ class WatchChange:
             self.output,
             checked_at=self.checked_at,
             changed_at=self.checked_at,
+            execution_target=self.execution_target,
         )
 
 
@@ -246,7 +276,9 @@ def baseline_path(directory: Path, job_id: str) -> Path:
     return directory / f"{digest}.json"
 
 
-def read_baseline(directory: Path, job_id: str, watch: CronWatch) -> WatchBaseline | None:
+def read_baseline(
+    directory: Path, job_id: str, watch: CronWatch, execution_target: str | None = None
+) -> WatchBaseline | None:
     """The job's baseline for ``watch``; None when there is none to compare with. Blocking.
 
     An unreadable baseline is logged and counts as none.
@@ -272,7 +304,11 @@ def read_baseline(directory: Path, job_id: str, watch: CronWatch) -> WatchBaseli
             error,
         )
         return None
-    return baseline if baseline.watch.same_check(watch) else None
+    return (
+        baseline
+        if baseline.watch.same_check(watch) and baseline.execution_target == execution_target
+        else None
+    )
 
 
 def write_baseline(directory: Path, job_id: str, baseline: WatchBaseline) -> None:
@@ -288,6 +324,8 @@ def write_baseline(directory: Path, job_id: str, baseline: WatchBaseline) -> Non
         "checked_at": baseline.checked_at,
         "changed_at": baseline.changed_at,
     }
+    if baseline.execution_target is not None:
+        payload["execution_target"] = baseline.execution_target
     serialized = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     try:
         directory.mkdir(parents=True, exist_ok=True)
@@ -322,8 +360,18 @@ def _parse_baseline(payload: Any, job_id: str) -> WatchBaseline:
     comparison_hash = payload.get("comparison_hash", digest)
     if not isinstance(comparison_hash, str) or len(comparison_hash) != 64:
         raise ValueError("invalid comparison hash")
+    execution_target = payload.get("execution_target")
+    if execution_target is not None and (
+        not isinstance(execution_target, str) or len(execution_target) != 64
+    ):
+        raise ValueError("invalid execution target")
     return WatchBaseline(
-        watch, comparison_hash, output, checked_at=checked_at, changed_at=changed_at
+        watch,
+        comparison_hash,
+        output,
+        checked_at=checked_at,
+        changed_at=changed_at,
+        execution_target=execution_target,
     )
 
 

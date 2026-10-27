@@ -335,7 +335,9 @@ class ArchiveService:
         scope = ArchiveScope(project_id=project_id)
         await services.sessions.run_async(services.projects.get, project_id)
         async with services.runs.project_admission_guard(project_id):
-            references = services.automation.project_references(project_id)
+            references = await services.sessions.run_async(
+                services.automation.project_references, project_id
+            )
             if references:
                 raise ArchiveSubjectInUseError(
                     ARCHIVE_KIND_PROJECT,

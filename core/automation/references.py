@@ -104,8 +104,21 @@ class AutomationReferences:
         return self._live(lambda agent, project, _session: (agent, project) == (agent_id, None))
 
     def project_references(self, project_id: str) -> tuple[AutomationReference, ...]:
-        """Return the live automations that start Runs of any Agent of ``project_id``."""
-        return self._live(lambda _agent, project, _session: project == project_id)
+        """Return live automations bound to this Project, including Identity Sessions.
+
+        Pinned Session bindings are read synchronously; call on the Session pool.
+        """
+        references = [
+            AutomationReference("bootstrap", job.id, job.name)
+            for job in self._bootstrap.list_jobs()
+            if job.project_id == project_id and job.status not in TERMINAL_BOOTSTRAP_STATUSES
+        ]
+        references.extend(
+            AutomationReference("cron", job.id, job.name)
+            for job in self._cron.list_jobs()
+            if self._cron.can_fire(job) and self._cron.references_project(job, project_id)
+        )
+        return tuple(sorted(references, key=lambda reference: reference.label))
 
     def session_references(self, address: SessionAddress) -> tuple[AutomationReference, ...]:
         """Return the live automations that start their Runs in ``address``."""

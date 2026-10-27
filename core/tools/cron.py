@@ -27,7 +27,7 @@ from core.automation.cron import (
 )
 from core.permissions import PermissionDenied, join_ceilings
 from core.projects import InvalidAgentAddressError, format_agent_address, parse_agent_address
-from core.sessions import SessionAddress
+from core.sessions import AGENT_DEFAULT_PROJECT, SessionAddress, WorkingProjectChoice
 from core.tools._cron_arguments import (
     CURRENT_SESSION,
     DELIVER_PLATFORM_FIELD,
@@ -53,6 +53,7 @@ from core.tools._cron_arguments import (
     refusal,
     render_call,
 )
+from core.tools._cron_run_options import EXECUTION_FIELDS, execution_changes, execution_fields
 from core.tools._cron_timezone import zoned_schedule
 from core.tools._durations import LATE_LIMITS_FIELD, with_late_limits_note
 from core.tools.call_syntax import spelling
@@ -94,6 +95,7 @@ _UPDATE_FIELDS = (
     "event_id",
     "repeat",
     "session",
+    *EXECUTION_FIELDS,
     "deliver",
     "notification_policy",
     "watch",
@@ -200,6 +202,33 @@ CRON_TOOL_PARAMETERS: JsonObject = {
             "description": (
                 "Where each run's final answer goes: here (this chat, or vBot outside a chat), "
                 "app (vBot) or none. Omit on create for here."
+            ),
+        },
+        "working_project": {
+            "type": "string",
+            "minLength": 1,
+            "description": (
+                "Project id for new Sessions of an Identity Agent, or none for its Workspace. "
+                "The choice stays fixed. Omit on create to fix the Agent's current default "
+                "Project, on update to keep the choice. A pinned Session or Project Agent "
+                "keeps its own Project."
+            ),
+        },
+        "model": {
+            "type": "string",
+            "minLength": 1,
+            "description": (
+                "Model for this job's runs only, as provider/model. Omit on create to inherit the "
+                "Session or Agent setting; on update, inherit removes this override."
+            ),
+        },
+        "thinking_effort": {
+            "type": "string",
+            "minLength": 1,
+            "description": (
+                "Reasoning level for this job's runs only, supported by its Model; default "
+                "uses the Model's default. Omit on create to inherit the Session or Agent setting; "
+                "on update, inherit removes this override."
             ),
         },
         "notification_policy": {
@@ -438,7 +467,16 @@ async def _handle_create(
         raise CronCallRefusedError(_watch_runs_without_watch(arguments))
     # A restricted Session's job never runs with more access than it has.
     ceiling = context.permissions.to_ceiling_dict(source="cron")
-    await _check_watch(cron_service, watch, agent_id, project_id, ceiling)
+    execution = execution_changes(arguments, creating=True)
+    await _check_watch(
+        cron_service,
+        watch,
+        agent_id,
+        project_id,
+        ceiling,
+        session_id=session_id,
+        working_project_id=execution.get("working_project_id", AGENT_DEFAULT_PROJECT),
+    )
     job = await cron_service.create_job(
         agent_id=agent_id,
         name=arguments.get("name"),
@@ -463,6 +501,7 @@ async def _handle_create(
         ),
         watch=watch,
         permission_ceiling=ceiling,
+        **execution,
         actor="tool",
     )
     notes = [note] if note else []
@@ -502,7 +541,8 @@ async def _handle_update(
         raise CronCallRefusedError(
             refusal(
                 "update needs a field to change: name, prompt, schedule, event_id, repeat, "
-                "target, session, deliver, notification_policy, watch or watch_runs. "
+                "target, session, working_project, model, thinking_effort, deliver, "
+                "notification_policy, watch or watch_runs. "
                 "To pause or resume the job, use "
                 "disable or "
                 "enable.",
@@ -513,6 +553,7 @@ async def _handle_update(
     secret_name = arguments.pop(WEBHOOK_SECRET_FIELD, None)
     was_webhook = cron_service.get_job(job_id).schedule_type == "webhook"
     updates: dict[str, Any] = {}
+    updates.update(execution_changes(arguments, creating=False))
     if "target" in arguments:
         updates["agent_id"], updates["project_id"] = _target_agent(context, arguments["target"])
     for name in ("name", "prompt", "notification_policy"):
@@ -589,6 +630,8 @@ async def _handle_update(
             updates.get("agent_id", current.agent_id),
             updates["project_id"] if "agent_id" in updates else current.project_id,
             ceiling,
+            session_id=updates.get("session_id", current.session_id),
+            working_project_id=updates.get("working_project_id", current.working_project_id),
         )
     job = await cron_service.update_job(job_id, actor="tool", **updates)
     notes = [note] if note else []
@@ -610,7 +653,7 @@ async def _new_webhook_secret(
     except CronStorageError as error:
         notes.append(
             f"The job's secret could not be read ({str(error).rstrip('. ')}); the user can "
-            "show it in vBot's Schedules."
+            "show it in vBot's Automations."
         )
         return None
 
@@ -798,12 +841,20 @@ async def _check_watch(
     agent_id: str,
     project_id: str | None,
     ceiling: dict[str, Any] | None,
+    *,
+    session_id: str | None,
+    working_project_id: WorkingProjectChoice,
 ) -> None:
     """Refuse a watch the job's permission ceiling would refuse at every check."""
     if watch is None:
         return
     refused = await cron_service.watch_refusal(
-        watch, agent_id=agent_id, project_id=project_id, permission_ceiling=ceiling
+        watch,
+        agent_id=agent_id,
+        project_id=project_id,
+        permission_ceiling=ceiling,
+        session_id=session_id,
+        working_project_id=working_project_id,
     )
     if refused is not None:
         raise PermissionDenied(refused)
@@ -964,6 +1015,9 @@ def _validation_message(
     action: str, arguments: JsonObject, error: CronJobValidationError, calendar_offered: bool
 ) -> str:
     detail = str(error).rstrip(". ")
+    if detail.startswith("run_overrides: "):
+        detail = detail.removeprefix("run_overrides: ")
+    detail = detail.replace("working_project_id", "working_project")
     if detail.startswith("Calendar event not found"):
         listing = " The calendar list shows events and their ids." if calendar_offered else ""
         return f'cron was not run: no calendar event has id "{arguments.get("event_id")}".{listing}'
@@ -1042,6 +1096,7 @@ def _job_fields(cron_service: CronService, job: CronJob, zone: ZoneInfo) -> Json
     data["target"] = format_agent_address(job.agent_id, job.project_id)
     if job.session_id:
         data["session"] = job.session_id
+    data.update(execution_fields(job))
     data["deliver"] = _delivery_text(job.delivery)
     data["notification_policy"] = job.notification_policy
     if job.notifications:

@@ -52,6 +52,9 @@ def test_schema_advertises_only_the_canonical_fields() -> None:
         "repeat",
         "session",
         "deliver",
+        "working_project",
+        "model",
+        "thinking_effort",
         "notification_policy",
         "watch",
         "watch_runs",
@@ -241,7 +244,15 @@ def test_empty_list_has_no_body(tmp_path: Path) -> None:
 def test_update_changes_only_the_named_fields(tmp_path: Path) -> None:
     tool = cron_tool(tmp_path)
     created, _ = tool.call(
-        {"action": "create", "prompt": PROMPT, "schedule": "every 2h", "repeat": 3}
+        {
+            "action": "create",
+            "prompt": PROMPT,
+            "schedule": "every 2h",
+            "repeat": 3,
+            "working_project": "builds",
+            "model": "test/model",
+            "thinking_effort": "high",
+        }
     )
     job_id = created["data"]["id"]
 
@@ -252,6 +263,7 @@ def test_update_changes_only_the_named_fields(tmp_path: Path) -> None:
             "name": "Renamed",
             "prompt": "New prompt",
             "schedule": "every 4h",
+            "thinking_effort": "low",
         }
     )
 
@@ -264,6 +276,45 @@ def test_update_changes_only_the_named_fields(tmp_path: Path) -> None:
     )
     assert "schedule: every 4h" in text
     assert "repeat: 3" in text
+    assert job.working_project_id == "builds"
+    assert job.run_overrides is not None
+    assert job.run_overrides.as_dict() == {"model": "test/model", "thinking_effort": "low"}
+    assert "working_project: builds" in text and "model: test/model" in text
+    defaulted, _ = tool.call(
+        {"action": "update", "id": job_id, "working_project": "none", "thinking_effort": "default"}
+    )
+    assert defaulted["ok"] is True
+    job = tool.only_job()
+    assert job.working_project_id is None
+    assert job.run_overrides is not None
+    assert job.run_overrides.as_dict() == {"model": "test/model", "thinking_effort_default": True}
+    cleared, _ = tool.call(
+        {"action": "update", "id": job_id, "model": "inherit", "thinking_effort": "inherit"}
+    )
+    assert cleared["ok"] is True
+    assert tool.only_job().run_overrides is None
+
+
+@pytest.mark.parametrize("fields", [{"working_project": "bad/id"}, {"thinking_effort": "extreme"}])
+def test_invalid_execution_choices_do_not_save_a_job_or_change_it(
+    tmp_path: Path, fields: dict[str, str]
+) -> None:
+    tool = cron_tool(tmp_path)
+    create = {"action": "create", "prompt": PROMPT, "schedule": "every 2h"}
+
+    rejected, _ = tool.call({**create, **fields})
+
+    assert _error(rejected)["code"] == "invalid_arguments"
+    assert "run_overrides" not in rejected["error"]["message"]
+    assert "working_project_id" not in rejected["error"]["message"]
+    assert tool.jobs() == []
+    created, _ = tool.call(create)
+    before = tool.only_job().to_dict()
+
+    rejected, _ = tool.call({"action": "update", "id": created["data"]["id"], **fields})
+
+    assert _error(rejected)["code"] == "invalid_arguments"
+    assert tool.only_job().to_dict() == before
 
 
 def test_a_restricted_session_bounds_the_jobs_it_creates_or_changes(tmp_path: Path) -> None:
@@ -272,7 +323,14 @@ def test_a_restricted_session_bounds_the_jobs_it_creates_or_changes(tmp_path: Pa
         normalize_permission_rules({"write": "scratch"}),
         BoundaryContext(workdir=tmp_path, home=tmp_path, data_dir=tmp_path / "data"),
     )
-    create = {"action": "create", "prompt": PROMPT, "schedule": "0 9 * * *"}
+    create = {
+        "action": "create",
+        "prompt": PROMPT,
+        "schedule": "0 9 * * *",
+        "working_project": "none",
+        "model": "test/model",
+        "thinking_effort": "low",
+    }
 
     bounded, _ = tool.call(create, permissions=boundary)
     unbounded, _ = tool.call(create)
@@ -285,7 +343,8 @@ def test_a_restricted_session_bounds_the_jobs_it_creates_or_changes(tmp_path: Pa
     # A full-access change keeps the creator's boundary; a restricted one adds its own.
     tool.call({"action": "update", "id": bounded["data"]["id"], "name": "Renamed"})
     tool.call(
-        {"action": "update", "id": unbounded["data"]["id"], "name": "Renamed"}, permissions=boundary
+        {"action": "update", "id": unbounded["data"]["id"], "thinking_effort": "high"},
+        permissions=boundary,
     )
     assert ceiling(bounded) == ceiling(unbounded) == boundary.ceiling(source="cron")
     # Another restricted Session's change never widens the job: both boundaries apply.
@@ -582,6 +641,7 @@ def test_unresolvable_target_gets_target_guidance(
     recommendation: str,
 ) -> None:
     resolver = Mock()
+    resolver.resolve_working_project.return_value = None
     tool = cron_tool(tmp_path, agent_resolver=resolver)
     job = asyncio.run(
         tool.service.create_job(
@@ -952,6 +1012,7 @@ def test_event_job_runs_before_at_or_after_each_occurrence(
         f"event: Standup ({standup})",
         f"next_run: {next_run}",
         "target: agent-one",
+        "working_project: none",
         "deliver: app",
         "notification_policy: all",
     ]

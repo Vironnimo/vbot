@@ -2,6 +2,7 @@ import { onDestroy, untrack } from 'svelte';
 import {
   createCronFormValues,
   cronFormFingerprint,
+  cronNeedsProjectChoice,
   cronIntervalSeconds,
   CRON_DELIVERY_CHAT,
   CRON_FREQUENCY_CUSTOM,
@@ -36,6 +37,7 @@ import {
   rotateCronWebhookSecret,
 } from '$lib/api.js';
 import { describeCron } from './presentation.js';
+import { WEBHOOKS, automationCategory, automationPlace } from './navigation.js';
 
 // The place segment of a new job's form; any other segment is a job id.
 export const NEW_JOB_PLACE = 'new';
@@ -166,7 +168,9 @@ export function createCronEditor(context) {
 
   let detailTitle = $derived(
     isCreating
-      ? t('cron.detail.createTitle')
+      ? isWebhookSchedule
+        ? t('cron.detail.createWebhookTitle')
+        : t('cron.detail.createTitle')
       : selectedJob?.name || t('cron.detail.editTitle'),
   );
 
@@ -179,7 +183,7 @@ export function createCronEditor(context) {
     if (!isCreating && job.id === selectedJobId) {
       return;
     }
-    context.navigation.navigate([job.id]);
+    context.navigation.navigate(automationPlace(job));
   }
 
   function selectJobNow(job) {
@@ -205,7 +209,17 @@ export function createCronEditor(context) {
       requestDraftDiscard(startCreateNow);
       return;
     }
-    context.navigation.navigate([NEW_JOB_PLACE]);
+    const open = () =>
+      context.navigation.navigate([context.category, NEW_JOB_PLACE]);
+    if (
+      context.newJobDraft &&
+      automationCategory(context.newJobDraft) !== context.category
+    ) {
+      pendingDiscardAction = open;
+      showDiscardConfirm = true;
+      return;
+    }
+    open();
   }
 
   function startCreateNow() {
@@ -213,9 +227,15 @@ export function createCronEditor(context) {
     showRotateConfirm = false;
     isCreating = true;
     const blank = createCronFormValues(null, context.viewState.systemTimezone);
+    if (context.category === WEBHOOKS) {
+      updateCronSchedule(blank, { frequency: CRON_SCHEDULE_TYPE_WEBHOOK });
+    }
     blank.agent_id = context.viewState.agents[0]?.id ?? '';
     const draft = context.newJobDraft;
-    formValues = draft ? $state.snapshot(draft) : blank;
+    formValues =
+      draft && automationCategory(draft) === context.category
+        ? $state.snapshot(draft)
+        : blank;
     formBaseline = cronFormFingerprint(blank);
     formErrorMessage = '';
     context.loadProjectTeams();
@@ -228,7 +248,9 @@ export function createCronEditor(context) {
       return;
     }
     requestDraftDiscard(() =>
-      context.navigation.up(selectedJob ? [selectedJob.id] : []),
+      context.navigation.up(
+        selectedJob ? automationPlace(selectedJob) : [context.category],
+      ),
     );
   }
 
@@ -261,6 +283,15 @@ export function createCronEditor(context) {
   }
 
   function updateFormField(fieldName, value) {
+    if (fieldName === 'agent_id' && value !== formValues.agent_id) {
+      formValues.session_id = '';
+      formValues.session_mode = 'new';
+      formValues.working_project_choice = '';
+    }
+    if (fieldName === 'session_mode' && value !== formValues.session_mode) {
+      formValues.session_id = '';
+      formValues.working_project_choice = '';
+    }
     formValues[fieldName] = value;
     formErrorMessage = '';
   }
@@ -281,6 +312,14 @@ export function createCronEditor(context) {
   }
 
   function validateFormValues() {
+    if (cronNeedsProjectChoice(formValues)) {
+      formErrorMessage = t('cron.execution.chooseProject');
+      return false;
+    }
+    if (formValues.session_mode === 'existing' && !formValues.session_id) {
+      formErrorMessage = t('cron.execution.chooseSession');
+      return false;
+    }
     const hasCoreValues =
       formValues.agent_id.trim().length > 0 &&
       formValues.prompt.trim().length > 0;
@@ -402,6 +441,9 @@ export function createCronEditor(context) {
               createCronFormValues(savedJob, context.viewState.systemTimezone),
             )
           : submitted;
+        if (savedJob) {
+          formValues.original_run_overrides = savedJob.run_overrides ?? {};
+        }
       }
       return true;
     } catch (error) {

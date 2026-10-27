@@ -10,12 +10,15 @@ from contextlib import aclosing
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from core.event_stream import ReplayEventStream
 from core.runs._errors import detached_error
 from core.runs._timeline import RunTimeline
 from core.utils.errors import VBotError
+
+if TYPE_CHECKING:
+    from core.projects import AgentOverrides
 
 JsonObject = dict[str, Any]
 RunExecutor = Callable[["Run"], Awaitable[Any]]
@@ -208,6 +211,21 @@ class RunExecutionOwner:
 
 
 @dataclass(frozen=True, slots=True)
+class RunContinuationSource:
+    """Captured continuation settings, without retaining a Run or its authority."""
+
+    agent_id: str
+    session_id: str
+    project_id: str | None
+    generation_id: str | None
+    schedule_id: str | None
+    notification_policy: Callable[[], str] | None
+    completion_activity: CompletionActivity | None
+    run_overrides: AgentOverrides | None
+    parent_source: RunContinuationSource | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class RunAdmission:
     """Immutable admission decisions carried with one inbound Run request.
 
@@ -227,6 +245,7 @@ class RunAdmission:
     # The Session a background review Run examines from its own fork; accessors
     # attribute the review to that Session without reading fork metadata.
     source_session_id: str | None = None
+    parent_source: RunContinuationSource | None = None
     expected_session_generation_id: str | None = None
     # Overrides ``contributes_to_agent_activity`` for the finished Run once its
     # outcome is known, before the completion is recorded or announced.
@@ -341,6 +360,7 @@ class Run:
         execution_input_id: str | None = None,
         accessor_input_id: str | None = None,
         source_session_id: str | None = None,
+        parent_source: RunContinuationSource | None = None,
         expected_session_generation_id: str | None = None,
         completion_activity: CompletionActivity | None = None,
         schedule_id: str | None = None,
@@ -375,6 +395,7 @@ class Run:
         self.work_id = work_id
         # Accessor-only attribution of a review Run to the Session it examines.
         self.source_session_id = source_session_id
+        self.parent_source = parent_source
         self.expected_session_generation_id = expected_session_generation_id
         self.status = RunStatus.RUNNING
         self.created_at = datetime.now(UTC).isoformat()
@@ -438,12 +459,30 @@ class Run:
         # serving the Run, retried Model requests, partial answers preserved
         # after a broken stream, and whether the Run executes internal work.
         self.model: str | None = None
+        self.thinking_effort: str | None = None
+        # Chat captures temporary settings for this Run's automatic follow-ups.
+        # They are never Session defaults or changes to the Agent itself.
+        self.run_overrides: AgentOverrides | None = None
         self.retry_count = 0
         self.stream_recovery_count = 0
         self.internal = False
         self.compaction_state = "unavailable"
         self._user_compaction_requested = False
         self._tool_background_callbacks: dict[str, Callable[[], bool]] = {}
+
+    def capture_continuation_source(self) -> RunContinuationSource:
+        """Keep this Session's continuation settings beyond completed-Run retention."""
+        return RunContinuationSource(
+            agent_id=self.agent_id,
+            session_id=self.session_id,
+            project_id=self.project_id,
+            generation_id=self.expected_session_generation_id,
+            schedule_id=self.schedule_id,
+            notification_policy=self.notification_policy,
+            completion_activity=self.completion_activity,
+            run_overrides=self.run_overrides,
+            parent_source=self.parent_source,
+        )
 
     def controls(self) -> JsonObject:
         """Project live accessor controls; terminal Runs expose no actions."""

@@ -41,6 +41,7 @@ from core.chat.wire_shaping import (
 from core.computers import normalize_execution
 from core.permissions import PermissionBoundary
 from core.projects import (
+    AgentOverrides,
     FolderInstructions,
     resolve_prompt_project,
     resolve_skill_scope,
@@ -290,6 +291,7 @@ class _RunRequest:
     """Immutable input captured by one admitted Run executor."""
 
     content: str | list[ContentBlock] | None
+    run_overrides: AgentOverrides | None = None
     internal: bool = False
     input_origin: InputOrigin | None = None
     sender: MessageSender | None = None
@@ -323,6 +325,7 @@ class _RunRequest:
             and self.tool_restriction is None
             and self.tool_denial_resolver is None
             and self.max_tool_iterations is None
+            and (self.run_overrides is None or self.run_overrides.is_empty)
             and self.input_persisted_hook is None
             and self.context_note is None
             and self.temporary_binding is None
@@ -939,7 +942,7 @@ async def resolve_run_agent(
             ),
         )
     return await dependencies.agent_resolver.resolve_agent_async(
-        project_id, run.agent_id, session_id=run.session_id
+        project_id, run.agent_id, session_id=run.session_id, run_overrides=request.run_overrides
     )
 
 

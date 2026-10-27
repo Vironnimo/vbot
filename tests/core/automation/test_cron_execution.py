@@ -27,6 +27,7 @@ from core.automation.cron import (
 )
 from core.permissions import BoundaryContext, PermissionBoundary, normalize_permission_rules
 from core.projects import (
+    AgentOverrides,
     AgentResolutionError,
     ResolutionAgentNotFoundError,
     ResolutionProjectNotFoundError,
@@ -168,10 +169,20 @@ async def test_unexpected_scheduler_task_failure_restarts_active_recurring_job(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "context",
+    [
+        {"project_id": "vbot"},
+        {"working_project_id": "vbot"},
+        {"working_project_id": None},
+        {"session_id": "fixed"},
+    ],
+)
 async def test_run_once_job_fires_in_its_project_and_marks_completed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
+    context: dict[str, Any],
 ) -> None:
     # Arrange: a restricted Session created the job, so each fire runs under its boundary.
     service, trigger_service = make_service(tmp_path)
@@ -184,7 +195,8 @@ async def test_run_once_job_fires_in_its_project_and_marks_completed(
         prompt="Once prompt",
         schedule_type="once",
         run_at=(datetime.now(UTC) + timedelta(minutes=15)).isoformat(),
-        project_id="vbot",
+        **context,
+        run_overrides=AgentOverrides(model="openai/checker", thinking_effort="low"),
         permission_ceiling=creator.to_ceiling_dict(source="cron"),
     )
     monkeypatch.setattr(cron_timing, "_sleep_until_utc", AsyncMock())
@@ -197,8 +209,14 @@ async def test_run_once_job_fires_in_its_project_and_marks_completed(
     trigger_service.trigger_run.assert_awaited_once_with(
         "agent-one",
         "Once prompt",
-        None,
-        project_id="vbot",
+        context.get("session_id"),
+        project_id=context.get("project_id"),
+        **(
+            {"working_project_id": context["working_project_id"]}
+            if "working_project_id" in context
+            else {}
+        ),
+        run_overrides=AgentOverrides(model="openai/checker", thinking_effort="low"),
         run_kind=RunKind.CRON,
         schedule_id=job.id,
         notification_policy=ANY,
@@ -815,6 +833,7 @@ async def test_run_once_job_retries_completed_save_without_refiring(
         "Once prompt",
         None,
         project_id=None,
+        working_project_id=None,
         run_kind=RunKind.CRON,
         schedule_id=job.id,
         notification_policy=ANY,

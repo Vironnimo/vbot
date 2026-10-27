@@ -249,6 +249,7 @@ class SubAgentForwarding:
             parent,
             notice_id=f"subagent:{run.id}",
             origin_run_id=run.id,
+            continuation_source=run.capture_continuation_source(),
             body=body,
             execution_owner=run.execution_owner,
         )

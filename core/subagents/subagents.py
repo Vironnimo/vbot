@@ -606,6 +606,7 @@ class SubAgentCoordinator:
                     address,
                     executor,
                     admission=_admission(
+                        runtime,
                         context,
                         new_subagent_id,
                         _child_working_project(context, target_project_id),
@@ -834,6 +835,7 @@ class SubAgentCoordinator:
                 execute_prepared,
                 display_content=content,
                 admission=_admission(
+                    runtime,
                     context,
                     subagent_id,
                     working_project_id,

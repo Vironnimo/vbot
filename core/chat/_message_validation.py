@@ -147,6 +147,13 @@ def _validate_core_fields(message: _records.ChatMessage) -> None:
         raise ChatMessageValidationError(f"{message.role} messages cannot include phase")
     if message.role != "assistant" and message.reasoning_scope is not None:
         raise ChatMessageValidationError(f"{message.role} messages cannot include reasoning_scope")
+    if message.thinking_effort is not None:
+        if message.role != "assistant":
+            raise ChatMessageValidationError(
+                f"{message.role} messages cannot include thinking_effort"
+            )
+        if not isinstance(message.thinking_effort, str):
+            raise ChatMessageValidationError("thinking_effort must be a string")
     if message.role != "tool" and message.tool_display is not None:
         raise ChatMessageValidationError(f"{message.role} messages cannot include tool_display")
     if message.role != "tool" and message.tool_media is not None:

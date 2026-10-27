@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -15,6 +16,7 @@ from core.runs import (
     ChatRunManager,
     Run,
     RunAdmissionBlockedError,
+    RunContinuationSource,
     RunExecutionOwner,
     RunKind,
     RunNotFoundError,
@@ -190,6 +192,7 @@ class _CompletionDeliveryCoordinator:
         execution_owner: RunExecutionOwner | None = None,
         wake: bool = True,
         subagent_message: SubAgentMessage | None = None,
+        continuation_source: RunContinuationSource | None = None,
     ) -> asyncio.Future[None]:
         """Submit one result and return a Future resolved after durable delivery."""
         if self._closed or (
@@ -214,18 +217,31 @@ class _CompletionDeliveryCoordinator:
         if suppress_run:
             self._suppress_origin(address, origin_run_id)
         schedule_options: dict[str, Any] = {}
-        try:
-            origin = self._run_manager.get(origin_run_id)
-        except RunNotFoundError:
-            pass
-        else:
-            if origin.schedule_id is not None:
-                schedule_options = {
-                    "schedule_id": origin.schedule_id,
-                    "notification_policy": origin.notification_policy,
-                    "completion_activity": origin.completion_activity,
-                    "contributes_to_agent_activity": False,
-                }
+        source = continuation_source
+        if source is None:
+            with suppress(RunNotFoundError):
+                source = self._run_manager.get(origin_run_id).capture_continuation_source()
+        if source is not None:
+            has_parent_source = source.parent_source is not None
+            while source is not None and (
+                source.project_id,
+                source.agent_id,
+                source.session_id,
+            ) != (address.project_id, address.agent_id, address.session_id):
+                source = source.parent_source
+            if source is not None and (source.schedule_id is not None or has_parent_source):
+                schedule_options["continuation_source"] = source
+            if source is not None and source.schedule_id is not None:
+                schedule_options.update(
+                    {
+                        "schedule_id": source.schedule_id,
+                        "notification_policy": source.notification_policy,
+                        "completion_activity": source.completion_activity,
+                        "contributes_to_agent_activity": False,
+                    }
+                )
+                if source.run_overrides is not None and not source.run_overrides.is_empty:
+                    schedule_options["run_overrides"] = source.run_overrides
         delivered = asyncio.get_running_loop().create_future()
         notice = _CompletionNotice(
             id=notice_id,
@@ -293,6 +309,7 @@ class _CompletionDeliveryCoordinator:
             and notice.execution_owner == run.execution_owner
             and notice.read_after is None
         ]
+        pending = self._reject_stale_generation(bucket, pending, session.generation_id)
         if not pending:
             return None
 
@@ -396,6 +413,21 @@ class _CompletionDeliveryCoordinator:
                     continue
                 owner = pending[0].execution_owner
                 pending = [notice for notice in pending if notice.execution_owner == owner]
+                settings = pending[0].schedule_options.get("run_overrides")
+                schedule_id = pending[0].schedule_options.get("schedule_id")
+                continuation_source = pending[0].schedule_options.get("continuation_source")
+                # Neither direct settings nor a Sub-Agent's captured Parent
+                # ancestry may be borrowed by a different completion source.
+                pending = [
+                    notice
+                    for notice in pending
+                    if notice.schedule_options.get("run_overrides") == settings
+                    and notice.schedule_options.get("continuation_source") == continuation_source
+                    and (
+                        settings is None
+                        or notice.schedule_options.get("schedule_id") == schedule_id
+                    )
+                ]
                 _claim(pending, True)
                 message = _completion_message(pending, follow_up=owner is None)
                 try:
@@ -700,6 +732,7 @@ class _CompletionDeliveryCoordinator:
                 return error
             # Results withdrawn meanwhile stay out of the note.
             pending = self._still_pending(bucket, pending)
+            pending = self._reject_stale_generation(bucket, pending, session.generation_id)
             if not pending:
                 return None
             _claim(pending, True)
@@ -725,6 +758,22 @@ class _CompletionDeliveryCoordinator:
                 return error
             self._acknowledge(address, bucket, pending)
             return None
+
+    def _reject_stale_generation(
+        self,
+        bucket: _CompletionBucket,
+        notices: list[_CompletionNotice],
+        generation_id: str | None,
+    ) -> list[_CompletionNotice]:
+        stale = []
+        for notice in notices:
+            source: RunContinuationSource | None = notice.schedule_options.get(
+                "continuation_source"
+            )
+            if source is not None and source.generation_id not in (None, generation_id):
+                stale.append(notice)
+        self._fail(bucket, stale, SessionNotFoundError("The completion's Session was replaced"))
+        return [notice for notice in notices if notice not in stale]
 
     async def close_execution_group(self, extension: str, group_id: str, epoch: str) -> None:
         """Withdraw this group's pending notices; its later submissions fail validation."""

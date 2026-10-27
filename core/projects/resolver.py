@@ -225,6 +225,7 @@ class AgentResolver:
         *,
         session_id: str | None = None,
         new_session_overrides: AgentOverrides | None = None,
+        run_overrides: AgentOverrides | None = None,
         require_model: bool = True,
     ) -> RuntimeAgent:
         """Resolve one agent to a runnable :class:`RuntimeAgent`.
@@ -247,6 +248,9 @@ class AgentResolver:
         exist yet runs it with these overrides (the first Run of a new Session);
         it excludes ``session_id``.
 
+        ``run_overrides`` replaces settings in this resolved view only, after
+        Session settings. It never writes Session or Agent defaults.
+
         ``require_model=False`` preserves Session Model overrides without
         checking their availability. A Config Agent's default chain still skips
         unavailable Models and returns an empty Model when exhausted. Run
@@ -259,6 +263,7 @@ class AgentResolver:
             if address is not None
             else new_session_overrides or AgentOverrides()
         )
+        overrides = _with_run_settings(overrides, run_overrides)
         if project_id is None:
             agent: RuntimeAgent = self._resolve_identity_agent(agent_id)
         else:
@@ -298,6 +303,7 @@ class AgentResolver:
         *,
         session_id: str | None = None,
         new_session_overrides: AgentOverrides | None = None,
+        run_overrides: AgentOverrides | None = None,
         require_model: bool = True,
     ) -> RuntimeAgent:
         """Event-Loop-safe :meth:`resolve_agent`.
@@ -315,6 +321,7 @@ class AgentResolver:
             overrides = await self.session_overrides_async(address)
         else:
             overrides = new_session_overrides or AgentOverrides()
+        overrides = _with_run_settings(overrides, run_overrides)
         if project_id is not None:
             agent: RuntimeAgent = await _RESOLUTION_WORKERS.run(
                 self._resolve_config_agent,
@@ -890,6 +897,26 @@ class AgentResolver:
 
     def translated_profile(self, project: Project, scanned: AgentProfile) -> AgentProfile:
         return self._team_resolution.translated_profile(project, scanned)
+
+
+def _with_run_settings(
+    base: AgentOverrides, run_overrides: AgentOverrides | None
+) -> AgentOverrides:
+    """Overlay Run settings without replacing the Session's permission ceiling."""
+    if run_overrides is None or run_overrides.is_empty:
+        return base
+    if (
+        run_overrides.permission_ceiling is not None
+        or run_overrides.temperature is not None
+        or run_overrides.top_p is not None
+    ):
+        raise ValueError("Run overrides can replace only Model and thinking effort")
+    changes = run_overrides.as_dict()
+    if run_overrides.thinking_effort is not None:
+        changes["thinking_effort_default"] = False
+    elif run_overrides.thinking_effort_default:
+        changes["thinking_effort"] = None
+    return replace(base, **changes)
 
 
 def build_agent_resolver(

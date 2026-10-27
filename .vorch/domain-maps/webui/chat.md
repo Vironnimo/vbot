@@ -166,6 +166,8 @@ Request status is footer metadata on a running Assistant Run: retry causes and a
 
 ## Usage and errors
 
+The Run footer details show the Model and thinking effort recorded on its Assistant responses, including distinct fallback pairs. An absent historical effort stays unknown; an empty recorded effort means Provider default. These details never infer execution settings from the current Session or Agent, and the footer is keyboard-focusable (`chatTimelinePresentation.activity.test.js`, `ChatAssistantRun.test.js`).
+
 Speech Tool artifacts in `ChatAssistantRun.svelte` and `ChatTimelineEntry.svelte`
 use `components/ui/AudioPlayer.svelte`, also used by the Settings preview. It
 renders seeking, speed, volume, download and playback errors; `lib/audioPlayback.svelte.js`

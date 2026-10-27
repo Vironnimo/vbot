@@ -172,6 +172,8 @@ class ChatMessage:
     role: MessageRole
     content: str | list[ContentBlock] | None = None
     model: str | None = None
+    # Rendered effort used by this Assistant step; "" means Provider default.
+    thinking_effort: str | None = None
     reasoning: str | None = None
     reasoning_meta: JsonObject | None = None
     reasoning_scope: str | None = None
@@ -297,6 +299,7 @@ class ChatMessage:
         *,
         model: str,
         content: str | None,
+        thinking_effort: str | None = None,
         reasoning: str | None = None,
         reasoning_meta: JsonObject | None = None,
         reasoning_scope: str | None = None,
@@ -329,6 +332,7 @@ class ChatMessage:
             timestamp=_format_timestamp(timestamp),
             role="assistant",
             model=model,
+            thinking_effort=thinking_effort,
             content=content,
             reasoning=reasoning,
             reasoning_meta=dict(reasoning_meta) if reasoning_meta is not None else None,
@@ -556,6 +560,7 @@ class ChatMessage:
         if self.skill_package is not None:
             message["skill_package"] = self.skill_package.to_dict()
         _add_if_not_none(message, "model", self.model)
+        _add_if_not_none(message, "thinking_effort", self.thinking_effort)
         if self.content is not None:
             if isinstance(self.content, list):
                 message["content"] = [content_block_to_dict(block) for block in self.content]
@@ -723,6 +728,7 @@ class ChatMessage:
             skill_package=skill_package,
             content=_message_validation._parse_content(data),
             model=_message_validation._optional_string(data, "model"),
+            thinking_effort=_message_validation._optional_string(data, "thinking_effort"),
             reasoning=_message_validation._optional_string(data, "reasoning"),
             reasoning_meta=dict(reasoning_meta) if reasoning_meta is not None else None,
             reasoning_summary=data.get("reasoning_summary"),

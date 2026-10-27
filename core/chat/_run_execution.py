@@ -281,6 +281,7 @@ class RunExecution:
         internal = request.internal
         # The Runs domain logs the one terminal line; Chat supplies the route.
         run.model = parse_bare_model(agent.model)
+        run.run_overrides = request.run_overrides
         start_line_extras = ""
         if project_id is not None:
             start_line_extras += f" project={project_id}"

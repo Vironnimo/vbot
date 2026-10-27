@@ -36,6 +36,7 @@ class _UpdatingAdapter(StubAdapter):
         self._effort_updates = effort_updates
         self.before_request: Any = None
 
+    @override
     def effort_updates(self, model_id: str) -> bool:
         del model_id
         return self._effort_updates

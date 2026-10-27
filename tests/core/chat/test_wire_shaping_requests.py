@@ -102,6 +102,10 @@ _OK_RESULT = json.dumps({"ok": True, "error": None, "data": {}, "artifacts": []}
             "run_id",
         ),
         (
+            ChatMessage.assistant(model="test/model", content="Answer", thinking_effort="high"),
+            "thinking_effort",
+        ),
+        (
             ChatMessage.assistant(
                 model="openai/gpt-4.1", content="Answer", usage={"input_tokens": 100}
             ),
@@ -126,6 +130,7 @@ _OK_RESULT = json.dumps({"ok": True, "error": None, "data": {}, "artifacts": []}
         "output-files",
         "reasoning-timing",
         "run-id",
+        "thinking-effort",
         "usage",
         "tool-timing",
         "skill-package",

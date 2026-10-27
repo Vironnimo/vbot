@@ -369,6 +369,32 @@ def test_session_overrides_reject_invalid_values_before_writing(
     with pytest.raises(ModelConfigurationError):
         resolver.resolve_agent(None, "identity", session_id=session.id)
 
+    # A Run can replace that unavailable Model without changing its Session.
+    resolved = resolver.resolve_agent(
+        None,
+        "identity",
+        session_id=session.id,
+        run_overrides=AgentOverrides(model="openai/gpt-mini", thinking_effort_default=True),
+    )
+    assert resolved.model == "openai/gpt-mini"
+    assert resolved.thinking_effort == ""
+    async_resolved = asyncio.run(
+        resolver.resolve_agent_async(
+            None,
+            "identity",
+            session_id=session.id,
+            run_overrides=AgentOverrides(model="openai/gpt-mini", thinking_effort="high"),
+        )
+    )
+    assert (async_resolved.model, async_resolved.thinking_effort) == ("openai/gpt-mini", "high")
+    assert sessions.metadata_value(address, "agent_overrides") == {"model": "openai/ghost-model"}
+    with pytest.raises(ModelConfigurationError):
+        resolver.resolve_agent(
+            None, "identity", run_overrides=AgentOverrides(model="openai/ghost-model")
+        )
+    with pytest.raises(ValueError):
+        resolver.resolve_agent(None, "identity", run_overrides=AgentOverrides(temperature=0.8))
+
 
 def test_connection_bound_declared_model_falls_through_and_is_a_scan_finding(
     agents: AgentStore, projects: ProjectStore, repo: Path

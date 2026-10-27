@@ -20,6 +20,7 @@ from core.permissions import PermissionCeiling, PermissionRefusal
 from core.runs import RunStatus
 from core.secrets import KeyFileProtection, SecretStore
 from core.secrets._references import EMPTY_MASKER, SecretMasker
+from core.sessions import AGENT_DEFAULT_PROJECT, WorkingProjectChoice
 
 
 def secret_store(tmp_path: Path) -> SecretStore:
@@ -125,6 +126,7 @@ class FakeChecks:
     # The permission ceiling of each check, and the refusal ``permission_refusal`` gives.
     ceilings: list[PermissionCeiling | None] = field(default_factory=list)
     refusal: PermissionRefusal | None = None
+    targets: list[tuple[str | None, WorkingProjectChoice]] = field(default_factory=list)
 
     async def run_command(
         self,
@@ -132,10 +134,13 @@ class FakeChecks:
         *,
         agent_id: str,
         project_id: str | None,
+        session_id: str | None = None,
+        working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT,
         ceiling: PermissionCeiling | None = None,
     ) -> str:
         self.calls.append(("command", command, agent_id, project_id or ""))
         self.ceilings.append(ceiling)
+        self.targets.append((session_id, working_project_id))
         return self._answer()
 
     async def fetch_url(self, url: str, *, ceiling: PermissionCeiling | None = None) -> str:
@@ -149,6 +154,8 @@ class FakeChecks:
         *,
         agent_id: str,
         project_id: str | None,
+        session_id: str | None = None,
+        working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT,
         ceiling: PermissionCeiling | None,
     ) -> PermissionRefusal | None:
         return self.refusal if ceiling is not None else None

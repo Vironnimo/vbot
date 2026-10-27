@@ -82,6 +82,7 @@ class RecordingTriggerService:
         execution_owner: Any | None = None,
         wake: bool = True,
         subagent_message: SubAgentMessage | None = None,
+        continuation_source: Any | None = None,
     ) -> asyncio.Future[None]:
         self.notices.append(
             Notice(

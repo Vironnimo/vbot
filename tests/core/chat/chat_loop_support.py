@@ -280,7 +280,10 @@ class StubAgentResolver:
         *,
         session_id: str | None = None,
         new_session_overrides: AgentOverrides | None = None,
+        run_overrides: AgentOverrides | None = None,
+        require_model: bool = True,
     ) -> StubAgent | ConfigAgent:
+        del require_model  # This double permits every configured test Model.
         self.calls.append((project_id, agent_id))
         if project_id is None:
             agent: StubAgent | ConfigAgent = self._agents.get(agent_id)
@@ -294,6 +297,8 @@ class StubAgentResolver:
             agent = self._with_overrides(agent, SessionAddress(project_id, agent_id, session_id))
         elif new_session_overrides is not None and not new_session_overrides.is_empty:
             agent = replace(agent, **new_session_overrides.agent_changes())
+        if run_overrides is not None and not run_overrides.is_empty:
+            agent = replace(agent, **run_overrides.agent_changes())
         return agent
 
     def resolve_temporary_agent(

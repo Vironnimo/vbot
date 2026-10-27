@@ -43,6 +43,7 @@ def _tool_run(session: ChatSession, run_id: str, text: str) -> None:
     run = session.start_run(run_id)
     assistant = ChatMessage.assistant(
         model="model",
+        thinking_effort="high",
         content=None,
         reasoning=f"{text} reasoning",
         usage={"input_tokens": 10, "output_tokens": 2},

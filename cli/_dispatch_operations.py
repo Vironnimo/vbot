@@ -515,6 +515,7 @@ def _cron_create_fields_from_args(args: argparse.Namespace) -> dict[str, Any]:
         fields["repeat"] = args.repeat
     if args.session is not None:
         fields["session_id"] = args.session
+    _add_cron_execution_fields(args, fields)
     return fields
 
 
@@ -551,7 +552,30 @@ def _cron_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
         changes["session_id"] = None
     if args.status is not None:
         changes["status"] = args.status
+    _add_cron_execution_fields(args, changes)
     return changes
+
+
+def _add_cron_execution_fields(args: argparse.Namespace, fields: dict[str, Any]) -> None:
+    """Send only chosen settings; the server merges override leaves atomically."""
+    if args.working_project is not None:
+        fields["working_project_id"] = args.working_project
+    elif args.no_project:
+        fields["working_project_id"] = None
+    overrides: dict[str, Any] = {}
+    if args.model is not None:
+        overrides["model"] = args.model
+    elif getattr(args, "clear_model", False):
+        overrides["model"] = None
+    if args.thinking_effort is not None:
+        if args.thinking_effort in {"", "default"}:
+            overrides["thinking_effort_default"] = True
+        else:
+            overrides["thinking_effort"] = args.thinking_effort
+    elif getattr(args, "clear_thinking_effort", False):
+        overrides["thinking_effort"] = None
+    if overrides:
+        fields["run_overrides"] = overrides
 
 
 def _automation_prompt(args: argparse.Namespace) -> str | None:

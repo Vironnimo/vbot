@@ -103,6 +103,8 @@ def test_history_and_live_keep_ordered_phases_steering_tools_and_terminal_identi
             reasoning="Plan",
             reasoning_summary=["Plan"],
             reasoning_timing={"duration_ms": 120},
+            model="provider/model",
+            thinking_effort="high",
             tool_calls=[call],
         ),
         message(
@@ -137,6 +139,11 @@ def test_history_and_live_keep_ordered_phases_steering_tools_and_terminal_identi
         "assistant_output",
     ]
     assert run_block(history)["iterationCount"] == 2
+    output = next(
+        item for item in run_block(history)["items"] if item["type"] == "assistant_output"
+    )
+    assert output["messages"][0]["thinking_effort"] == "high"
+    assert output["messages"][0]["model"] == "provider/model"
     assert history[0]["message"]["content"] == "Original"
 
 

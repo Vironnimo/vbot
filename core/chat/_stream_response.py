@@ -461,6 +461,7 @@ async def consume_stream_response(
             output_scope=output_scope,
             message_id=message_id,
         )
+    assistant_message = replace(assistant_message, thinking_effort=run.thinking_effort)
     assistant_message = _with_assistant_output_files(assistant_message, scope=output_scope)
     output_timing = accumulator.output_timing
     if output_timing is not None:
@@ -504,6 +505,7 @@ def _finalize_after_started_tools(
         reasoning_timing=fields.reasoning_timing,
         message_id=message_id,
     )
+    assistant_message = replace(assistant_message, thinking_effort=run.thinking_effort)
     assistant_message = _with_assistant_output_files(assistant_message, scope=output_scope)
     _emit_streaming_assistant_events(run, assistant_message)
     return _AssistantStep(
@@ -553,6 +555,7 @@ def _finalize_interrupted_partial(
         interruption_cause=interruption_cause,
         message_id=message_id,
     )
+    assistant_message = replace(assistant_message, thinking_effort=run.thinking_effort)
     assistant_message = _with_assistant_output_files(assistant_message, scope=output_scope)
     _emit_streaming_assistant_events(run, assistant_message, allow_after_cancel=True)
     return _AssistantStep(

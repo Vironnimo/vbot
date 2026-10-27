@@ -9,6 +9,7 @@ from typing import Any
 from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers.adapter import ProviderAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
+from core.providers.reasoning import ReasoningIntent, normalize_thinking_effort
 from core.providers.wire_profiles import standalone_wire_binding
 
 TOKEN = "test-token"
@@ -26,6 +27,17 @@ class AdapterHookDefaults:
     ) -> int:
         del model_id, thinking_effort, explicit_limit
         return 0
+
+    def describe_reasoning_render(self, model_id: str, effort: str | None) -> ReasoningIntent:
+        del model_id
+        selected = normalize_thinking_effort(effort)
+        if selected == "none":
+            return ReasoningIntent("off")
+        return ReasoningIntent("effort", selected) if selected else ReasoningIntent("default")
+
+    def effort_updates(self, model_id: str) -> bool:
+        del model_id
+        return False
 
     def input_token_limit(self, model_id: str) -> int | None:
         del model_id

@@ -59,6 +59,7 @@ async def test_busy_session_queues_input_and_drains_it_with_its_admission() -> N
         work_id="sub-work-one",
         contributes_to_agent_activity=False,
         source_session_id="source",
+        parent_source=active_run.capture_continuation_source(),
         expected_session_generation_id="generation-one",
     )
     item = await manager.enqueue(
@@ -79,6 +80,7 @@ async def test_busy_session_queues_input_and_drains_it_with_its_admission() -> N
     assert queued_run.status == RunStatus.RUNNING
     assert queued_run.work_id == "sub-work-one"
     assert queued_run.source_session_id == "source"
+    assert queued_run.parent_source == admission.parent_source
     assert queued_run.expected_session_generation_id == "generation-one"
     assert manager.list_queued("coder", "session-one", project_id=None) == []
     [started] = [event for event in queued_run.events if event.type == RUN_STARTED_EVENT]
@@ -621,6 +623,8 @@ async def test_steering_append_failure_retains_input_and_blocks_mid_append_edits
         return "done"
 
     run = await manager.start(address, execute)
+    previous_source = run.capture_continuation_source()
+    run.parent_source = previous_source
     await asyncio.sleep(0)
     item = await manager.enqueue(address, execute, steerable=True, editable=True)
     manager.steer_queued("coder", "one", item.item_id, project_id=None)
@@ -636,6 +640,7 @@ async def test_steering_append_failure_retains_input_and_blocks_mid_append_edits
         with pytest.raises(OSError):
             await manager.deliver_steering(run, fail_append)
         assert manager.pending_steering(run) == [item]
+        assert run.parent_source is previous_source
         assert not item.future.done()
         assert manager.remove_queued("coder", "one", item.item_id, project_id=None)
     finally:

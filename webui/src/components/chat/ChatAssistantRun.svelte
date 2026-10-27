@@ -899,7 +899,8 @@
         ...(changeStats ? [changeStatsLabel(changeStats)] : []),
       ].join(' · ')}
       <div class="run-footer" aria-label={footerLabel}>
-        <span
+        <button
+          type="button"
           class="run-footer__summary"
           use:tooltip={() => runFooterDetails(item, Date.now())}
         >
@@ -909,7 +910,7 @@
             {/if}
             <span class="run-footer__part">{footerPart}</span>
           {/each}
-        </span>
+        </button>
         {#if changeStats}
           <span class="run-footer__sep" aria-hidden="true">·</span>
           <ChangeStats stats={changeStats} class="run-footer__changes" />
