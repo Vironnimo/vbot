@@ -28,7 +28,7 @@ async def test_python_calls_keep_data_and_parallel_call_results(tmp_path: Path) 
     entered: list[int] = []
     all_entered = asyncio.Event()
 
-    async def invoke(name: str, arguments: JsonObject) -> JsonObject:
+    async def invoke(name: str, arguments: JsonObject, positional: list[Any]) -> JsonObject:
         if name == "refused":
             return tool_failure("permission_denied", "Test-owned refusal.")
         value = arguments["value"]
@@ -75,7 +75,7 @@ except KeyError as error:
 
 @pytest.mark.asyncio
 async def test_python_runs_like_a_main_script(tmp_path: Path) -> None:
-    async def invoke(_name: str, _arguments: JsonObject) -> JsonObject:
+    async def invoke(_name: str, _arguments: JsonObject, _positional: list[Any]) -> JsonObject:
         raise AssertionError("This program calls no Tools")
 
     result = await run_python(
@@ -105,63 +105,67 @@ threading.Thread(target=late).start()
 async def test_python_tool_keywords_do_not_collide_with_the_client(tmp_path: Path) -> None:
     calls: list[JsonObject] = []
 
-    async def invoke(name: str, arguments: JsonObject) -> JsonObject:
-        calls.append({"tool": name, "arguments": arguments})
+    async def invoke(name: str, arguments: JsonObject, positional: list[Any]) -> JsonObject:
+        calls.append({"tool": name, "arguments": arguments, "positional": positional})
         return tool_success(arguments)
 
     result = await run_python(
-        """from vbot_tools import tools
+        """import datetime, pathlib
+from vbot_tools import tools
 tools.skill(name='demo')
 tools.mcp(action='call', target='demo/echo', arguments={'text': 'hello'})
 tools.call('dynamic', {'name': 'kept', 'arguments': {'nested': True}})
+# Values in parameter order reach the host, which knows the parameters.
+tools.read(pathlib.Path('notes.txt'), limit=5)
+tools.call('read', 'notes.txt', 1)
+tools.echo(when=datetime.date(2026, 10, 27), tags={'a'})
 """,
         cwd=tmp_path,
         environment=os.environ,
         invoke=invoke,
     )
-    assert result.status == "completed" and result.tool_calls == 3
+    assert result.status == "completed" and result.tool_calls == 6
     assert calls == [
-        {"tool": "skill", "arguments": {"name": "demo"}},
+        {"tool": "skill", "arguments": {"name": "demo"}, "positional": []},
         {
             "tool": "mcp",
             "arguments": {"action": "call", "target": "demo/echo", "arguments": {"text": "hello"}},
+            "positional": [],
         },
-        {"tool": "dynamic", "arguments": {"name": "kept", "arguments": {"nested": True}}},
+        {
+            "tool": "dynamic",
+            "arguments": {"name": "kept", "arguments": {"nested": True}},
+            "positional": [],
+        },
+        {"tool": "read", "arguments": {"limit": 5}, "positional": ["notes.txt"]},
+        {"tool": "read", "arguments": {}, "positional": ["notes.txt", 1]},
+        {"tool": "echo", "arguments": {"when": "2026-10-27", "tags": ["a"]}, "positional": []},
     ]
 
 
 @pytest.mark.asyncio
 async def test_python_rejects_non_json_arguments_before_sending(tmp_path: Path) -> None:
-    async def invoke(_name: str, _arguments: JsonObject) -> JsonObject:
+    async def invoke(_name: str, _arguments: JsonObject, _positional: list[Any]) -> JsonObject:
         raise AssertionError("Invalid arguments must never be dispatched")
 
     result = await run_python(
         """from vbot_tools import tools, ToolError
-for value in [float('nan'), {1, 2}, 'x' * (2 * 1024 * 1024)]:
+for value in [float('nan'), b'raw', 'x' * (2 * 1024 * 1024)]:
     try:
         tools.echo(value=value)
     except ToolError as error:
         print(error.code, error.message.split(':')[0])
-# Tools take named arguments only; a bare value names no parameter.
-for positional in [
-    lambda: tools.read('notes.txt'),
-    lambda: tools.write('notes.txt', 'text'),
-    lambda: tools.call('read', 'notes.txt'),
-]:
-    try:
-        positional()
-    except TypeError as error:
-        print('positional', str(error).split(':')[0])
+try:
+    tools.call('read', {'path': 'a.txt'}, path='b.txt')
+except ToolError as error:
+    print(error.code, error.message.split(':')[0])
 """,
         cwd=tmp_path,
         environment=os.environ,
         invoke=invoke,
     )
     assert result.status == "completed" and result.tool_calls == 0
-    assert (
-        result.output.splitlines()
-        == ["invalid_arguments Nothing was sent"] * 3 + ["positional Nothing was sent"] * 3
-    )
+    assert result.output.splitlines() == ["invalid_arguments Nothing was sent"] * 4
 
 
 @pytest.mark.asyncio
@@ -169,7 +173,7 @@ for positional in [
 async def test_python_output_is_bounded_and_log_keeps_the_printed_data(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, log_limit: int
 ) -> None:
-    async def invoke(_name: str, _arguments: JsonObject) -> JsonObject:
+    async def invoke(_name: str, _arguments: JsonObject, _positional: list[Any]) -> JsonObject:
         raise AssertionError("This program calls no Tools")
 
     log = tmp_path / "output.txt"
@@ -219,7 +223,7 @@ async def test_python_bridge_limits_report_failures_without_replaying(
     invoked: list[str] = []
     monkeypatch.setattr(_code_process, limit, value)
 
-    async def invoke(name: str, _arguments: JsonObject) -> JsonObject:
+    async def invoke(name: str, _arguments: JsonObject, _positional: list[Any]) -> JsonObject:
         invoked.append(name)
         return tool_success({"large": "x" * 1000})
 
@@ -253,7 +257,7 @@ except ToolError as error:
 async def test_python_failure_is_not_a_successful_cell(
     tmp_path: Path, source: str, exit_code: int, has_traceback: bool, ran: bool
 ) -> None:
-    async def invoke(_name: str, _arguments: JsonObject) -> JsonObject:
+    async def invoke(_name: str, _arguments: JsonObject, _positional: list[Any]) -> JsonObject:
         raise AssertionError("This program calls no Tools")
 
     result = await run_python(source, cwd=tmp_path, environment=os.environ, invoke=invoke)
@@ -275,7 +279,7 @@ async def test_cancelling_python_stops_descendants_and_drains_tool_calls(
     processes: list[psutil.Process] = []
     stop = asyncio.Event()
 
-    async def invoke(_name: str, arguments: JsonObject) -> JsonObject:
+    async def invoke(_name: str, arguments: JsonObject, _positional: list[Any]) -> JsonObject:
         processes.extend(psutil.Process(pid) for pid in arguments["pids"])
         admitted.set()
         try:
@@ -320,7 +324,7 @@ tools.hold(pids=[os.getpid(), child.pid])
 
 @pytest.mark.asyncio
 async def test_python_deadline_stops_uncooperative_code(tmp_path: Path) -> None:
-    async def invoke(_name: str, _arguments: JsonObject) -> JsonObject:
+    async def invoke(_name: str, _arguments: JsonObject, _positional: list[Any]) -> JsonObject:
         raise AssertionError("This program calls no Tools")
 
     result = await run_python(
@@ -350,7 +354,7 @@ async def test_output_failure_stops_python_and_closes_the_log(
             log_closed = True
         return await original_worker(function, *args, **kwargs)
 
-    async def invoke(_name: str, arguments: JsonObject) -> JsonObject:
+    async def invoke(_name: str, arguments: JsonObject, _positional: list[Any]) -> JsonObject:
         processes.append(psutil.Process(arguments["pid"]))
         return tool_success({})
 
@@ -386,7 +390,7 @@ async def test_refused_termination_closes_the_job_before_waiting_for_pipes(
             raise OSError("Test-owned termination refusal")
         return await original_worker(function, *args, **kwargs)
 
-    async def invoke(_name: str, arguments: JsonObject) -> JsonObject:
+    async def invoke(_name: str, arguments: JsonObject, _positional: list[Any]) -> JsonObject:
         processes.append(psutil.Process(arguments["pid"]))
         return tool_success({})
 

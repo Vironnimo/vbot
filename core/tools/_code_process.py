@@ -37,7 +37,7 @@ MAX_STDERR_BYTES = 16 * 1024
 MAX_LOG_BYTES = 8 * 1024 * 1024
 MAX_FAILURES = 20
 _CREATE_SUSPENDED = 0x00000004
-type ToolInvoker = Callable[[str, JsonObject], Awaitable[JsonObject]]
+type ToolInvoker = Callable[[str, JsonObject, list[Any]], Awaitable[JsonObject]]
 type ExecutionStatus = Literal["completed", "failed", "timed_out", "stopped"]
 
 
@@ -153,7 +153,8 @@ class _Bridge:
         name, arguments = request.get("name"), request.get("arguments")
         if request.get("operation") != "call" or not isinstance(name, str):
             return tool_failure("invalid_arguments", "A Tool call needs its name and arguments.")
-        if not isinstance(arguments, dict):
+        positional = request.get("positional", [])
+        if not isinstance(arguments, dict) or not isinstance(positional, list):
             return tool_failure("invalid_arguments", "Tool arguments must be a Python dictionary.")
         if self.closed or self.finished.done():
             return tool_failure("code_execution_ended", "The Python execution has ended.")
@@ -166,7 +167,7 @@ class _Bridge:
             return result
         self.calls += 1
         try:
-            result = await self.invoke(name, arguments)
+            result = await self.invoke(name, arguments, positional)
         except asyncio.CancelledError:
             self._record_failure(
                 name,

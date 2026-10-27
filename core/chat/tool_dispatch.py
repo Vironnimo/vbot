@@ -8,6 +8,7 @@ import time
 from collections.abc import Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
+from typing import Any
 
 from core.chat._programmatic_tools import ProgrammaticTools
 from core.chat._skill_activation import _active_skill_env_keys
@@ -225,12 +226,14 @@ class ToolRound:
             self._skill_packages[tool_call_id] = package
         return activated
 
-    async def _call_tool(self, parent: ToolContext, name: str, arguments: JsonObject) -> JsonObject:
+    async def _call_tool(
+        self, parent: ToolContext, name: str, arguments: JsonObject, positional: Sequence[Any]
+    ) -> JsonObject:
         calls = self._programmatic.get(parent.tool_call_id)
         if calls is None:
             calls = ProgrammaticTools(self._context, self._config, parent)
             self._programmatic[parent.tool_call_id] = calls
-        return await calls.call(name, arguments)
+        return await calls.call(name, arguments, positional)
 
     def _tool_results(
         self, completed: list[tuple[ToolCall, JsonObject]]

@@ -262,3 +262,45 @@ async def test_programmatic_removed_name_never_remaps_to_another_operation(tmp_p
     assert result.results[0]["error"]["code"] == "tool_removed"
     children = [message for message in harness.session.load() if message.programmatic]
     assert children[-1].name == "remote_write_a"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("current_format_data_directory")
+@pytest.mark.parametrize(
+    ("positional", "named", "expected"),
+    [
+        (["a.txt"], {}, {"path": "a.txt"}),
+        (["a.txt", 5], {"offset": 5}, {"path": "a.txt", "offset": 5}),
+        (["a.txt", 5], {"offset": 6}, None),
+        (["a.txt", 5, 9], {}, None),
+    ],
+)
+async def test_programmatic_positional_values_fill_parameters_in_schema_order(
+    tmp_path: Path, positional: list[Any], named: dict[str, Any], expected: dict[str, Any] | None
+) -> None:
+    tools = ToolRegistry()
+    received: list[Any] = []
+
+    async def program(context: ToolContext, _arguments: Any) -> Any:
+        return await context.call_tool("probe", named, positional)
+
+    def probe(_context: ToolContext, arguments: Any) -> Any:
+        received.append(arguments)
+        return tool_success({})
+
+    tools.register("program", "test-sentinel", {"type": "object"}, program)
+    schema = {
+        "type": "object",
+        "properties": {"path": {"type": "string"}, "offset": {"type": "integer"}},
+        "additionalProperties": False,
+    }
+    tools.register("probe", "test-sentinel", schema, probe)
+    harness = ToolDispatchHarness(tmp_path, tools)
+    result = await harness.dispatch([call("program")], base_allowed_tools=["program", "probe"])
+    if expected is None:
+        # Conflicting or surplus values are refused before the Tool runs.
+        assert result.results[0]["error"]["code"] == "invalid_arguments"
+        assert received == []
+    else:
+        assert result.results[0]["ok"] is True
+        assert received == [expected]

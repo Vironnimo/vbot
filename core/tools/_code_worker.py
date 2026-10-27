@@ -9,6 +9,7 @@ The program runs as the ``__main__`` script of its host-written file, so
 from __future__ import annotations
 
 import atexit
+import datetime
 import json
 import os
 import socket
@@ -50,6 +51,21 @@ class ToolData(dict[str, Any]):
 ToolData.__module__ = "vbot_tools"
 
 
+def _failure(code: str, message: str) -> dict[str, Any]:
+    return {"ok": False, "error": {"code": code, "message": message}}
+
+
+def _json_form(value: Any) -> Any:
+    """The one obvious JSON form of a common Python value, such as a Path."""
+    if isinstance(value, os.PathLike):
+        return os.fspath(value)
+    if isinstance(value, set | frozenset):
+        return list(value)
+    if isinstance(value, datetime.date | datetime.time):
+        return value.isoformat()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
 class _Tools:
     def __init__(self, port: int, token: str, timeout: float) -> None:
         self._port = port
@@ -59,20 +75,19 @@ class _Tools:
     def _request(self, request: dict[str, Any]) -> dict[str, Any]:
         name = str(request.get("name", "execute_code"))
         try:
-            payload = json.dumps({**request, "token": self._token}, allow_nan=False).encode("utf-8")
+            payload = json.dumps(
+                {**request, "token": self._token}, allow_nan=False, default=_json_form
+            ).encode("utf-8")
             if len(payload) + 1 > _MAX_REQUEST_BYTES:
                 raise ValueError("The arguments exceed the Python bridge's 2 MiB request limit.")
         except (TypeError, ValueError) as error:
             raise ToolError(
                 name,
-                {
-                    "ok": False,
-                    "error": {
-                        "code": "invalid_arguments",
-                        "message": "Nothing was sent: Tool arguments must be finite JSON data "
-                        f"within 2 MiB. Convert unsupported values or reduce the input. {error}",
-                    },
-                },
+                _failure(
+                    "invalid_arguments",
+                    "Nothing was sent: Tool arguments must be finite JSON data within 2 MiB. "
+                    f"Convert unsupported values or reduce the input. {error}",
+                ),
             ) from None
         # One connection per invocation keeps ordinary Python threads independent.
         # Never reconnect/replay after a send: an unanswered mutation may have run.
@@ -81,14 +96,10 @@ class _Tools:
         except OSError as error:
             raise ToolError(
                 name,
-                {
-                    "ok": False,
-                    "error": {
-                        "code": "tool_bridge_unavailable",
-                        "message": "Nothing was sent: the Python Tool bridge is unavailable. "
-                        f"{error}",
-                    },
-                },
+                _failure(
+                    "tool_bridge_unavailable",
+                    f"Nothing was sent: the Python Tool bridge is unavailable. {error}",
+                ),
             ) from None
         with connection:
             connection.settimeout(self._timeout)
@@ -102,20 +113,28 @@ class _Tools:
             raise OSError("The Tool bridge returned no result object.")
         return result
 
-    def call(self, name: str, /, *arguments: Any, **kwargs: Any) -> Any:
-        """Call a Tool by name, with its ordinary named arguments."""
-        if len(arguments) > 1 or (arguments and not isinstance(arguments[0], Mapping)):
-            # Tools have named parameters only; a bare value names none of them.
-            raise TypeError(
-                f"Nothing was sent: pass the arguments of {name} by name, such as "
-                f"tools.{name}(<parameter>=<value>), or as one dictionary."
-            )
-        inputs = dict(arguments[0] if arguments else {})
-        if inputs.keys() & kwargs.keys():
-            raise TypeError("Pass each Tool argument once, in the dictionary or as a keyword.")
-        inputs.update(kwargs)
+    def call(self, name: str, /, *values: Any, **kwargs: Any) -> Any:
+        """Call a Tool by name, with values in parameter order, keywords or one dictionary."""
+        inputs: dict[str, Any] = {}
+        if len(values) == 1 and isinstance(values[0], Mapping):
+            inputs, values = dict(values[0]), ()
+        for key, value in kwargs.items():
+            if key in inputs and inputs[key] != value:
+                raise ToolError(
+                    name,
+                    _failure(
+                        "invalid_arguments",
+                        f"Nothing was sent: {name} received {key} twice with different values, "
+                        "in the dictionary and as a keyword. Pass it once.",
+                    ),
+                )
+            inputs[key] = value
+        request: dict[str, Any] = {"operation": "call", "name": name, "arguments": inputs}
+        if values:
+            # The host knows the Tool's parameters and their order.
+            request["positional"] = list(values)
         try:
-            result = self._request({"operation": "call", "name": name, "arguments": inputs})
+            result = self._request(request)
         except (OSError, ValueError) as error:
             raise ToolError(
                 name,
@@ -139,8 +158,8 @@ class _Tools:
         if name.startswith("_"):
             raise AttributeError(name)
 
-        def invoke(*arguments: Any, **kwargs: Any) -> Any:
-            return self.call(name, *arguments, **kwargs)
+        def invoke(*values: Any, **kwargs: Any) -> Any:
+            return self.call(name, *values, **kwargs)
 
         invoke.__name__ = name
         return invoke

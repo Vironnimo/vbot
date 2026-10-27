@@ -182,7 +182,7 @@ ToolResultPayloadHook = Callable[[str, str, Any], str]
 # What a Tool does with a path it resolves; see ``ToolContext.resolve_path``.
 type PathResolveAccess = Literal["read", "write", "start_dir", "display"]
 ToolHandler = Callable[["ToolContext", JsonObject], JsonObject | Awaitable[JsonObject]]
-ToolCallHook = Callable[["ToolContext", str, JsonObject], Awaitable[JsonObject]]
+ToolCallHook = Callable[["ToolContext", str, JsonObject, Sequence[Any]], Awaitable[JsonObject]]
 
 
 @dataclass(frozen=True)
@@ -661,11 +661,17 @@ class ToolContext:
         """Whether this call can dispatch other Tools in its owning Run."""
         return self.tool_call_hook is not None
 
-    async def call_tool(self, name: str, arguments: JsonObject) -> JsonObject:
-        """Dispatch a Tool through the owning Run and return its result envelope."""
+    async def call_tool(
+        self, name: str, arguments: JsonObject, positional: Sequence[Any] = ()
+    ) -> JsonObject:
+        """Dispatch a Tool through the owning Run and return its result envelope.
+
+        *positional* values fill the Tool's parameters in schema order, as in a
+        Python call.
+        """
         if self.tool_call_hook is None:
             raise RuntimeError("Programmatic Tool calls are unavailable outside an active Run")
-        return await self.tool_call_hook(self, name, arguments)
+        return await self.tool_call_hook(self, name, arguments, positional)
 
     def after_result_persisted(self, callback: ToolResultPersistedCallback) -> None:
         """Run *callback* only after this Tool Result enters Session history."""

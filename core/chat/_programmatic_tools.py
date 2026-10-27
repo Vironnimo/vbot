@@ -7,7 +7,7 @@ import contextvars
 import json
 from collections.abc import Sequence
 from dataclasses import replace
-from typing import override
+from typing import Any, override
 
 from core.chat._skill_activation import _active_skill_env_keys
 from core.chat._step_outcomes import tool_result_facts
@@ -18,7 +18,14 @@ from core.chat.messages import ChatMessage, JsonObject, ToolCall
 from core.sessions.history import _skill_context_note_content
 from core.skills.policy import SkillPackageRef
 from core.tools import ToolCall as ScheduledToolCall
-from core.tools import ToolContext, ToolExecutionConfig, ToolExecutor, called_tool_name
+from core.tools import (
+    ToolContext,
+    ToolExecutionConfig,
+    ToolExecutor,
+    ToolNotFoundError,
+    called_tool_name,
+    tool_failure,
+)
 from core.utils.ids import new_id
 from core.utils.workers import settle_before_cancelling
 
@@ -70,7 +77,9 @@ class ProgrammaticTools(_EmittingToolRegistry):
             self._config, context=contextvars.copy_context()
         )
 
-    async def call(self, name: str, arguments: JsonObject) -> JsonObject:
+    async def call(
+        self, name: str, arguments: JsonObject, positional: Sequence[Any] = ()
+    ) -> JsonObject:
         context = self._context
         context.run.raise_if_cancelled()
         name = called_tool_name(
@@ -81,6 +90,17 @@ class ProgrammaticTools(_EmittingToolRegistry):
                 *(tool.name for tool in context.registry.list_tools(include_internal=True)),
             },
         )
+        if positional:
+            try:
+                tool = context.registry.get(name)
+            except ToolNotFoundError:
+                pass  # Dispatch reports the unknown or removed name.
+            else:
+                parameters = list(tool.contract.input_schema.get("properties") or {})
+                try:
+                    arguments = _named_arguments(name, parameters, arguments, positional)
+                except ValueError as error:
+                    return tool_failure("invalid_arguments", str(error))
         call_id = new_id("pcall")
         call = ToolCall(id=call_id, name=name, arguments=arguments)
         # Persist only masked text, as ordinary dispatch does for its events/results.
@@ -170,3 +190,26 @@ class ProgrammaticTools(_EmittingToolRegistry):
 
     async def aclose(self) -> None:
         await self._batch.aclose()
+
+
+def _named_arguments(
+    tool: str, parameters: Sequence[str], arguments: JsonObject, values: Sequence[Any]
+) -> JsonObject:
+    """Give *values* the parameters they fill in a Python call: schema order."""
+    if len(values) > len(parameters):
+        accepted = (
+            f"its parameters are {', '.join(parameters)}" if parameters else "it has no parameters"
+        )
+        raise ValueError(
+            f"Nothing was sent: {tool} received {len(values)} positional values, but {accepted}. "
+            f"Pass each value by name, such as tools.{tool}(<parameter>=<value>)."
+        )
+    named = dict(arguments)
+    for parameter, value in zip(parameters, values, strict=False):
+        if parameter in named and named[parameter] != value:
+            raise ValueError(
+                f"Nothing was sent: {tool} received {parameter} twice with different values, "
+                "by position and by name. Pass it once."
+            )
+        named[parameter] = value
+    return named
