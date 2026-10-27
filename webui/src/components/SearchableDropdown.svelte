@@ -1,5 +1,5 @@
 <script>
-  import { tick, untrack } from 'svelte';
+  import { onDestroy, tick, untrack } from 'svelte';
 
   import {
     computePanelPosition,
@@ -276,9 +276,10 @@
       return;
     }
 
+    const wasOpen = isOpen;
     isOpen = true;
     setInitialActiveOption(focus);
-    onOpenChange(true);
+    if (!wasOpen) onOpenChange(true);
     await tick();
     updatePanelPosition();
     searchInputElement?.focus();
@@ -296,6 +297,10 @@
     activeKey = '';
     onOpenChange(false);
   }
+
+  onDestroy(() => {
+    if (isOpen) onOpenChange(false);
+  });
 
   async function toggleOpen() {
     if (isOpen) {

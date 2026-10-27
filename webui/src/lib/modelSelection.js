@@ -17,13 +17,32 @@ export function isChatModel(model) {
   return !Array.isArray(tasks) || tasks.length === 0 || tasks.includes('chat');
 }
 
-export function createModelCatalogLoader({ listModels, listConnections }) {
+// A surface keeps its catalog while any of its Model pickers is open. Reads
+// still run immediately; only the latest response can replace the visible
+// options, after the last picker closes. Callers without applyCatalogs keep
+// using load() as a request-ordering guard.
+export function createModelCatalogLoader({
+  listModels,
+  listConnections,
+  applyCatalogs = () => {},
+}) {
   let requestId = 0;
+  let openPickers = 0;
+  let pendingCatalogs = null;
+
+  function applyPendingCatalogs() {
+    if (openPickers === 0 && pendingCatalogs !== null) {
+      const catalogs = pendingCatalogs;
+      pendingCatalogs = null;
+      applyCatalogs(catalogs);
+    }
+  }
 
   return {
     async load() {
       const currentRequestId = requestId + 1;
       requestId = currentRequestId;
+      pendingCatalogs = null;
 
       try {
         const [modelsResult, connectionsResult] = await Promise.all([
@@ -33,7 +52,7 @@ export function createModelCatalogLoader({ listModels, listConnections }) {
         if (currentRequestId !== requestId) {
           return null;
         }
-        return {
+        const catalogs = {
           models: Array.isArray(modelsResult?.models)
             ? modelsResult.models
             : [],
@@ -41,6 +60,9 @@ export function createModelCatalogLoader({ listModels, listConnections }) {
             ? connectionsResult.connections
             : [],
         };
+        pendingCatalogs = catalogs;
+        applyPendingCatalogs();
+        return catalogs;
       } catch (error) {
         if (currentRequestId !== requestId) {
           return null;
@@ -50,6 +72,11 @@ export function createModelCatalogLoader({ listModels, listConnections }) {
     },
     invalidate() {
       requestId += 1;
+      pendingCatalogs = null;
+    },
+    trackPickerOpen(open) {
+      openPickers = Math.max(0, openPickers + (open ? 1 : -1));
+      applyPendingCatalogs();
     },
   };
 }

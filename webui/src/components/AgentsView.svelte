@@ -20,7 +20,6 @@
   import { t } from '$lib/i18n.js';
   import { createModelCatalogLoader } from '$lib/modelSelection.js';
   import { createStandaloneNavigation } from '$lib/navigation.svelte.js';
-  import { shouldApplyReloadNow } from '$lib/resourceInvalidation.js';
 
   import AgentCreateModal from './agents/AgentCreateModal.svelte';
   import AgentEditor from './agents/AgentEditor.svelte';
@@ -43,6 +42,10 @@
   const modelCatalogLoader = createModelCatalogLoader({
     listModels,
     listConnections,
+    applyCatalogs: (catalogs) => {
+      availableModels = catalogs.models;
+      availableConnections = catalogs.connections;
+    },
   });
   let {
     // The place is the shown Agent (`[agentId]`) or the shared defaults
@@ -177,8 +180,6 @@
   // A live model reload fetches in the background but holds the visible option
   // swap while a model picker in the editor is open, so an open selection is
   // never disturbed (the chosen value lives in the editor's form state).
-  let modelDropdownOpenCount = $state(0);
-  let pendingModelCatalogs = null;
   let lastModelsRefreshToken = null;
   let lastProjectsRefreshToken = null;
   let lastAgentsRefreshToken = null;
@@ -383,57 +384,22 @@
     }
   });
 
-  function applyModelCatalogs(catalogs) {
-    availableModels = catalogs.models;
-    availableConnections = catalogs.connections;
-    pendingModelCatalogs = null;
-  }
-
   async function reloadModelCatalogs() {
-    pendingModelCatalogs = null;
-    let catalogs;
     try {
-      catalogs = await modelCatalogLoader.load();
+      await modelCatalogLoader.load();
     } catch (error) {
       loadError = viewErrorMessage(error, t('agents.loadError'));
-      return;
-    }
-    if (catalogs === null) {
-      return;
-    }
-    if (
-      shouldApplyReloadNow({
-        dropdownOpen: modelDropdownOpenCount > 0,
-      })
-    ) {
-      applyModelCatalogs(catalogs);
-    } else {
-      pendingModelCatalogs = catalogs;
-    }
-  }
-
-  function trackModelDropdownOpen(open) {
-    modelDropdownOpenCount = Math.max(
-      0,
-      modelDropdownOpenCount + (open ? 1 : -1),
-    );
-    if (modelDropdownOpenCount === 0 && pendingModelCatalogs) {
-      applyModelCatalogs(pendingModelCatalogs);
     }
   }
 
   async function loadCatalogs() {
-    pendingModelCatalogs = null;
     try {
-      const [catalogs, toolsResult] = await Promise.all([
+      const [, toolsResult] = await Promise.all([
         modelCatalogLoader.load(),
         listTools(),
         loadSkillCatalog(),
       ]);
 
-      if (catalogs !== null) {
-        applyModelCatalogs(catalogs);
-      }
       availableTools = Array.isArray(toolsResult?.tools)
         ? toolsResult.tools
         : [];
@@ -709,7 +675,7 @@
           onSkillsChanged={loadSkillCatalog}
           {onOpenSkill}
           {memoriesRefreshToken}
-          onModelDropdownOpenChange={trackModelDropdownOpen}
+          onModelDropdownOpenChange={modelCatalogLoader.trackPickerOpen}
         />
       {/key}
     </div>

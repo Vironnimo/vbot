@@ -24,6 +24,7 @@
     librarianTriggerText,
   } from '$lib/librarian.js';
   import { createSettingsDraft } from '$lib/settingsSave.js';
+  import { createModelCatalogLoader } from '$lib/modelSelection.js';
 
   // Skill maintenance: the `librarian` settings section (the schedule, when
   // unused background-made Skills are retired, whether a pass merges
@@ -98,6 +99,14 @@
 
   let availableModels = $state([]);
   let availableConnections = $state([]);
+  const modelCatalogLoader = createModelCatalogLoader({
+    listModels,
+    listConnections,
+    applyCatalogs: (catalogs) => {
+      availableModels = catalogs.models;
+      availableConnections = catalogs.connections;
+    },
+  });
 
   // The Librarian Agent and its Model draft. `overview` says whether it is
   // available; an Agent of the user that holds its id is never edited here.
@@ -160,6 +169,7 @@
     void loadLibrarian();
   });
   onDestroy(() => {
+    modelCatalogLoader.invalidate();
     disposed = true;
     unregisterLibrarianAutosave();
     librarianAutosave.cancelPendingTimer();
@@ -197,12 +207,7 @@
 
   async function loadModelCatalogs() {
     try {
-      const [modelsResult, connectionsResult] = await Promise.all([
-        listModels(),
-        listConnections(),
-      ]);
-      availableModels = modelsResult.models;
-      availableConnections = connectionsResult.connections;
+      await modelCatalogLoader.load();
     } catch (error) {
       onError(`${t('settings.models.loadError')} ${error.message}`);
     }
@@ -428,6 +433,7 @@
     fieldError={agentEditor.fieldError}
     inheritSource={agentEditor.inheritSource}
     inheritDisplayValue={agentEditor.inheritDisplayValue}
+    onModelDropdownOpenChange={modelCatalogLoader.trackPickerOpen}
     idPrefix="settings-librarian"
   />
 {/if}

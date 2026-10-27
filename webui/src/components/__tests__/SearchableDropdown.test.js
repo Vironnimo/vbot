@@ -30,6 +30,21 @@ describe('SearchableDropdown', () => {
     document.body.innerHTML = '';
   });
 
+  it('balances open-state callbacks when reopened or removed while open', async () => {
+    const onOpenChange = vi.fn();
+    mountedComponent = mount(SearchableDropdown, {
+      target: document.body,
+      props: { options: ['alpha'], onOpenChange },
+    });
+    flushSync();
+    await mountedComponent.open();
+    await mountedComponent.open();
+    expect(onOpenChange.mock.calls).toEqual([[true]]);
+    await unmount(mountedComponent);
+    mountedComponent = null;
+    expect(onOpenChange.mock.calls).toEqual([[true], [false]]);
+  });
+
   it('portals a fixed panel sized to its trigger and closes on outside mousedown or page scroll', async () => {
     const host = document.createElement('div');
     document.body.append(host);
