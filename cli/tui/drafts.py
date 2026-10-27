@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import copy
 import hashlib
-import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -31,6 +30,7 @@ from core.json_documents import (
     validate_format_version,
     write_json_document,
 )
+from core.utils.file_lock import acquire_file_lock, release_file_lock
 
 _FIELDS = frozenset(
     {
@@ -238,23 +238,11 @@ class DraftStore:
     def _locked(self) -> Iterator[None]:
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         with self.path.with_suffix(".lock").open("a+b") as handle:
-            handle.seek(0)
-            if sys.platform == "win32":
-                import msvcrt
-
-                msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
-            else:
-                import fcntl
-
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            acquire_file_lock(handle.fileno(), blocking=True)
             try:
                 yield
             finally:
-                handle.seek(0)
-                if sys.platform == "win32":
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-                else:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                release_file_lock(handle.fileno())
 
     def save(self, records: dict[str, JsonObject]) -> dict[str, str]:
         """Persist a captured local snapshot; return ids forked due to concurrent edits."""

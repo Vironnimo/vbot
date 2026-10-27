@@ -25,6 +25,7 @@ from core.access.config import (
     inferred_access_mode,
 )
 from core.utils.atomic import atomic_write_text
+from core.utils.file_lock import acquire_file_lock, release_file_lock
 from core.utils.file_status import exists_strict
 from core.utils.ids import is_safe_id, new_id
 
@@ -387,21 +388,10 @@ def exclusive(
     path = contained(root, f".{safe_id(name)}.lock")
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a+b") as handle:
-        if path.stat().st_size == 0:
-            handle.write(b"0")
-            handle.flush()
         deadline = time.monotonic() + timeout
         while True:
-            handle.seek(0)
             try:
-                if sys.platform == "win32":
-                    import msvcrt
-
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-                else:
-                    import fcntl
-
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquire_file_lock(handle.fileno())
                 break
             except OSError as exc:
                 if time.monotonic() >= deadline:
@@ -412,15 +402,7 @@ def exclusive(
                 ensure_not_removing(root)
             yield
         finally:
-            handle.seek(0)
-            if sys.platform == "win32":
-                import msvcrt
-
-                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                import fcntl
-
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            release_file_lock(handle.fileno())
 
 
 @dataclass

@@ -30,6 +30,7 @@ from typing import Any, override
 
 from core.utils import dpapi
 from core.utils.atomic import atomic_write_text
+from core.utils.file_lock import acquire_file_lock, release_file_lock
 
 FILE_NAME = "sign-ins.json"
 FORMAT_VERSION = 1
@@ -257,23 +258,11 @@ def _locked(path: Path) -> Iterator[None]:
     """Hold an exclusive lock on ``path`` so that concurrent CLI runs change the file in turn."""
 
     with path.open("a+b") as handle:
-        handle.seek(0)
-        if sys.platform == "win32":
-            import msvcrt
-
-            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
-        else:
-            import fcntl
-
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        acquire_file_lock(handle.fileno(), blocking=True)
         try:
             yield
         finally:
-            handle.seek(0)
-            if sys.platform == "win32":
-                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            release_file_lock(handle.fileno())
 
 
 def _entropy(origin: str, purpose: str) -> bytes:

@@ -46,6 +46,7 @@ from core.database.spec import (
     validate_database_name,
 )
 from core.utils.atomic import atomic_write_text
+from core.utils.file_lock import acquire_file_lock, release_file_lock
 from core.utils.file_status import is_file_strict
 from core.utils.timestamps import utc_now_timestamp
 
@@ -589,16 +590,7 @@ class OperationLock:
             return
         self.released = True
         try:
-            if os.name == "nt":
-                import msvcrt
-
-                windows_console: Any = msvcrt
-                os.lseek(self.fd, 0, os.SEEK_SET)
-                windows_console.locking(self.fd, windows_console.LK_UNLCK, 1)
-            else:
-                import fcntl
-
-                fcntl.flock(self.fd, fcntl.LOCK_UN)  # type: ignore[attr-defined]
+            release_file_lock(self.fd)
         except ImportError, OSError:
             pass
         finally:
@@ -630,21 +622,7 @@ def acquire_operation_lock(
         descriptor: int | None = None
         try:
             descriptor = os.open(str(lock_path), os.O_CREAT | os.O_RDWR)
-            if os.fstat(descriptor).st_size == 0:
-                os.write(descriptor, b"0")
-            os.lseek(descriptor, 0, os.SEEK_SET)
-            if os.name == "nt":
-                import msvcrt
-
-                windows_console: Any = msvcrt
-                windows_console.locking(descriptor, windows_console.LK_NBLCK, 1)
-            else:
-                import fcntl
-
-                fcntl.flock(  # type: ignore[attr-defined]
-                    descriptor,
-                    fcntl.LOCK_EX | fcntl.LOCK_NB,  # type: ignore[attr-defined]
-                )
+            acquire_file_lock(descriptor)
             os.lseek(descriptor, 0, os.SEEK_SET)
             with contextlib.suppress(OSError):
                 os.ftruncate(descriptor, 0)

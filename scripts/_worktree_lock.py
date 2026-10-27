@@ -12,12 +12,13 @@ import argparse
 import json
 import os
 import random
-import sys
 import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from pathlib import Path
+
+from core.utils.file_lock import acquire_file_lock, release_file_lock
 
 KIND_MERGE = "merge"
 
@@ -60,20 +61,8 @@ class MergeLockBusyError(Exception):
 
 def _acquire_file_lock(lock_file) -> bool:
     """Try to take the exclusive advisory lock without blocking."""
-    lock_file.seek(0, os.SEEK_END)
-    if lock_file.tell() == 0:
-        lock_file.write(b"0")
-        lock_file.flush()
-    lock_file.seek(0)
     try:
-        if sys.platform == "win32":
-            import msvcrt
-
-            msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
-        else:
-            import fcntl
-
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        acquire_file_lock(lock_file.fileno())
     except OSError:
         return False
     return True
@@ -81,18 +70,8 @@ def _acquire_file_lock(lock_file) -> bool:
 
 def _release_file_lock(lock_file) -> None:
     """Release the advisory lock taken by `_acquire_file_lock`."""
-    lock_file.seek(0)
-    try:
-        if sys.platform == "win32":
-            import msvcrt
-
-            msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
-        else:
-            import fcntl
-
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-    except OSError:
-        pass
+    with suppress(OSError):
+        release_file_lock(lock_file.fileno())
 
 
 def _probe_lock_is_busy(lock_path: Path) -> bool:
