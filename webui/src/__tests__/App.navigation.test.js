@@ -873,7 +873,7 @@ describe('App navigation', () => {
 
     window.history.back();
     await waitForCondition(() => {
-      expect(window.location.hash).toBe('#cron/new');
+      expect(window.location.hash).toBe('#cron/schedules/new');
       expect(prompt()?.value).toBe('Unfinished prompt');
     });
   });
