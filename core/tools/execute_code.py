@@ -34,7 +34,10 @@ from core.tools.tools import (
     tool_success,
 )
 
-EXECUTE_CODE_DESCRIPTION = "Run Python to combine Tool calls and process their results."
+EXECUTE_CODE_DESCRIPTION = (
+    "Run Python to combine Tool calls and process their results; "
+    "only what the program prints enters the conversation."
+)
 EXECUTE_CODE_PARAMETERS: JsonObject = {
     "type": "object",
     "properties": {
@@ -42,12 +45,13 @@ EXECUTE_CODE_PARAMETERS: JsonObject = {
             "type": "string",
             "description": (
                 "Python source. Import tools with `from vbot_tools import tools`, then call "
-                "any of your Tools as `tools.<name>(<parameter>=<value>)`. Calls return the "
-                "result's data as Python objects; failures raise vbot_tools.ToolError. For "
-                "text files and commands, use Python's open() and subprocess; call read for "
-                "documents such as PDFs. MCP results retain content blocks and "
+                "any of your Tools as `tools.<name>(<parameter>=<value>)`. Each call returns "
+                "the result's fields as a dictionary, its text under content or output; "
+                "failures raise vbot_tools.ToolError. Only the standard library is available. "
+                "For text files and commands, use Python's open() and subprocess; call read "
+                "for documents such as PDFs. MCP results retain content blocks and "
                 "structuredContent. Each execution starts fresh in the working directory and "
-                "stops after 300 seconds. Print the results you need."
+                "stops after 300 seconds."
             ),
         },
     },

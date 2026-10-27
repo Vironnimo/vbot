@@ -78,8 +78,12 @@ async def test_python_runs_like_a_main_script(tmp_path: Path) -> None:
     async def invoke(_name: str, _arguments: JsonObject, _positional: list[Any]) -> JsonObject:
         raise AssertionError("This program calls no Tools")
 
+    tmp_path.joinpath("helper.py").write_text("", encoding="utf-8")
     result = await run_python(
-        """import os, pickle, threading, time
+        """import importlib.util, os, pickle, threading, time
+import helper  # the working directory's own modules import
+# Only the standard library: vBot's own dependencies stay out of reach.
+assert importlib.util.find_spec("psutil") is None
 def square(value):
     return value * value
 # multiprocessing finds functions of a real __main__ script this way.

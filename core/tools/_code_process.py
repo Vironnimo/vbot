@@ -268,9 +268,12 @@ async def run_python(
 
     async def launch() -> None:
         nonlocal process
+        # -S: only the standard library, the same in every installation; vBot's
+        # own dependencies are not the program's.
         argv = [
             sys.executable,
             "-I",
+            "-S",
             "-B",
             "-u",
             "-X",
