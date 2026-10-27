@@ -43,6 +43,7 @@ from core.chat.model_resolution import (
     _model_input_modalities,
 )
 from core.chat.wire_shaping import (
+    PINNED_IMAGE_DELIVERY_SLOT,
     PINNED_IMAGE_RETIREMENT_SLOT,
     RequestImageBudget,
     _restore_in_run_assistant_reasoning,
@@ -633,14 +634,16 @@ class RequestBuilder:
     async def persist_image_retirement(
         self, session: ChatSession, image_budget: RequestImageBudget
     ) -> None:
-        """Keep newly retired images retired in later Runs of this prompt epoch."""
-        pin = image_budget.take_unsaved_pin()
-        if pin is None:
-            return
-        await _CHAT_TRANSFORM_WORKERS.run(
-            self._dependencies.sessions.ensure_prompt_pin,
-            session.address,
-            PINNED_IMAGE_RETIREMENT_SLOT,
-            pin,
-            lambda current: current == pin,
-        )
+        """Persist retirement and successful delivery evidence for later Runs."""
+        for slot, pin in (
+            (PINNED_IMAGE_RETIREMENT_SLOT, image_budget.take_unsaved_pin()),
+            (PINNED_IMAGE_DELIVERY_SLOT, image_budget.take_unsaved_delivery_pin()),
+        ):
+            if pin is not None:
+                await _CHAT_TRANSFORM_WORKERS.run(
+                    self._dependencies.sessions.ensure_prompt_pin,
+                    session.address,
+                    slot,
+                    pin,
+                    lambda current, expected=pin: current == expected,
+                )

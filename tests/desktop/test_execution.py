@@ -5,14 +5,14 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
-from desktop import servers
+from desktop import execution, servers
 from desktop.connection import ConnectionController
 from desktop.credentials import DeviceTokenStore
 from desktop.execution import ComputerSharing, SharingError
@@ -440,5 +440,157 @@ async def test_a_server_switch_preserves_local_work_until_a_ready_target_is_conf
     finally:
         answer.set()
         controller.close()
+        sharing.close()
+        await asyncio.wait_for(running, timeout=2)
+
+
+@pytest.mark.asyncio
+async def test_disabling_idle_terminal_fences_a_concurrent_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sharing, connections, handlers = make_sharing(tmp_path)
+    url = "https://one.example/"
+    sharing.set_server_url(url)
+    sharing.update({"terminal": True}, expected_server=url)
+    socket = await connections.add()
+    running = asyncio.create_task(sharing.run())
+    checked = asyncio.Event()
+    proceed = threading.Event()
+    loop = asyncio.get_running_loop()
+    original = cast(
+        "Callable[[ComputerSharing], int]",
+        cast("property", vars(ComputerSharing)["active_terminals"]).fget,
+    )
+    first = True
+
+    def pause_after_count(instance: ComputerSharing) -> int:
+        nonlocal first
+        count = original(instance)
+        if instance is sharing and first:
+            first = False
+            loop.call_soon_threadsafe(checked.set)
+            assert proceed.wait(timeout=2)
+        return count
+
+    try:
+        await asyncio.wait_for(socket.outgoing.get(), timeout=2)
+        monkeypatch.setattr(ComputerSharing, "active_terminals", property(pause_after_count))
+        disabling = asyncio.create_task(
+            asyncio.to_thread(sharing.update, {"terminal": False}, expected_server=url)
+        )
+        await asyncio.wait_for(checked.wait(), timeout=2)
+        result = await socket.call("during-disable", "start")
+        assert result["error"]["code"] == "computer_closing"
+        assert handlers[0].active_count == 0
+        proceed.set()
+        await asyncio.wait_for(disabling, timeout=2)
+        await asyncio.wait_for(handlers[0].release.wait(), timeout=2)
+        assert handlers[0].closed
+    finally:
+        proceed.set()
+        sharing.close()
+        await asyncio.wait_for(running, timeout=2)
+
+
+@pytest.mark.parametrize("outcome", ["accepted", "declined", "settings_failed", "closed"])
+@pytest.mark.asyncio
+async def test_disabling_terminal_fences_mutations_until_confirmation_and_save(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str
+) -> None:
+    sharing, connections, handlers = make_sharing(tmp_path)
+    url = "https://one.example/"
+    sharing.set_server_url(url)
+    sharing.update({"terminal": True}, expected_server=url)
+    socket = await connections.add()
+    running = asyncio.create_task(sharing.run())
+    prompted = asyncio.Event()
+    answer = threading.Event()
+    loop = asyncio.get_running_loop()
+
+    def confirm(_title: str, _message: str) -> bool:
+        loop.call_soon_threadsafe(prompted.set)
+        assert answer.wait(timeout=2)
+        return outcome != "declined"
+
+    try:
+        await asyncio.wait_for(socket.outgoing.get(), timeout=2)
+        assert (await socket.call("initial", "start"))["ok"] is True
+        if outcome == "settings_failed":
+
+            def fail_save(*_args: Any, **_kwargs: Any) -> None:
+                raise OSError("settings write failed")
+
+            monkeypatch.setattr(execution, "update_section", fail_save)
+        disabling = asyncio.create_task(
+            asyncio.to_thread(
+                sharing.update, {"terminal": False}, expected_server=url, confirm=confirm
+            )
+        )
+        await asyncio.wait_for(prompted.wait(), timeout=2)
+        assert (await socket.call("during-read", "read"))["ok"] is True
+        assert (await socket.call("during-stop", "kill"))["ok"] is True
+        assert (await socket.call("during-start", "start"))["error"]["code"] == "computer_closing"
+        assert sharing.prepare_restart() is False
+        assert sharing.status()["active_terminals"] == 1
+        if outcome == "closed":
+            sharing.close()
+        answer.set()
+        if outcome == "declined":
+            with pytest.raises(SharingError) as declined:
+                await asyncio.wait_for(disabling, timeout=2)
+            assert declined.value.error_code == "declined"
+        elif outcome == "settings_failed":
+            with pytest.raises(OSError, match="settings write failed"):
+                await asyncio.wait_for(disabling, timeout=2)
+        elif outcome == "closed":
+            with pytest.raises(SharingError) as closed:
+                await asyncio.wait_for(disabling, timeout=2)
+            assert closed.value.error_code == "computer_server_changed"
+        else:
+            await asyncio.wait_for(disabling, timeout=2)
+            await asyncio.wait_for(handlers[0].release.wait(), timeout=2)
+            assert handlers[0].closed
+        if outcome in {"declined", "settings_failed"}:
+            assert sharing.status()["capabilities"]["terminal"] is True
+            assert (await socket.call("after", "start"))["ok"] is True
+            assert handlers[0].active_count == 2
+    finally:
+        answer.set()
+        sharing.close()
+        await asyncio.wait_for(running, timeout=2)
+
+
+@pytest.mark.asyncio
+async def test_identity_failure_on_first_connection_retries_after_recovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sharing, connections, _handlers = make_sharing(tmp_path)
+    url = "https://one.example/"
+    sharing.set_server_url(url)
+    sharing.update({"terminal": True}, expected_server=url)
+    socket = await connections.add()
+    identity = sharing._identities.computer_identity
+    failures = 0
+    unavailable = asyncio.Event()
+
+    def transient_failure(origin: str, *, create: bool = False) -> Any:
+        nonlocal failures
+        if create and failures == 0:
+            failures += 1
+            raise OSError("identity temporarily unavailable")
+        return identity(origin, create=create)
+
+    monkeypatch.setattr(sharing._identities, "computer_identity", transient_failure)
+    sharing._publish = lambda status: unavailable.set() if status["error_code"] else None
+    running = asyncio.create_task(sharing.run())
+    try:
+        await asyncio.wait_for(unavailable.wait(), timeout=2)
+        assert not running.done()
+        sharing.set_server_url(url)  # Wake the retry without a real backoff wait.
+        hello = await asyncio.wait_for(socket.outgoing.get(), timeout=2)
+        assert hello["type"] == "hello"
+        assert (await socket.call("status", "status"))["ok"] is True
+        assert failures == 1
+    finally:
         sharing.close()
         await asyncio.wait_for(running, timeout=2)

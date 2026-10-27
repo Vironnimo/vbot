@@ -25,6 +25,7 @@ from core.chat.messages import (
 from core.chat.wire_shaping import _embed_notes_into_request
 from core.providers.adapter import estimate_wire_request_input_tokens
 from core.providers.providers import RequestInput
+from core.usage import last_request_usage
 from core.utils.tokens import ESTIMATOR_VERSION, estimate_request_input_tokens
 
 JsonObject = dict[str, Any]
@@ -209,8 +210,9 @@ class RequestContextUsage:
 
         Estimated input never anchors and never replaces a measurement.
         """
-        tokens = _optional_non_negative_int(usage.get("input_tokens"))
-        if tokens is None or usage_token_is_estimated(usage, "input_tokens"):
+        request_usage = last_request_usage(usage)
+        tokens = _optional_non_negative_int(request_usage.get("input_tokens"))
+        if tokens is None or usage_token_is_estimated(request_usage, "input_tokens"):
             return
         self.observe_prepared(
             usage, self.prepare(messages, target=target, tools=tools, scope=scope)
@@ -241,13 +243,14 @@ class RequestContextUsage:
         ``calibrated`` says the calibration already learned this sample (Chat's
         Usage recorder update records it with the call), so only the anchor moves.
         """
-        tokens = _optional_non_negative_int(usage.get("input_tokens"))
-        if tokens is None or usage_token_is_estimated(usage, "input_tokens"):
+        request_usage = last_request_usage(usage)
+        tokens = _optional_non_negative_int(request_usage.get("input_tokens"))
+        if tokens is None or usage_token_is_estimated(request_usage, "input_tokens"):
             return
         output_tokens = (
             None
-            if usage_token_is_estimated(usage, "output_tokens")
-            else _optional_non_negative_int(usage.get("output_tokens"))
+            if usage_token_is_estimated(request_usage, "output_tokens")
+            else _optional_non_negative_int(request_usage.get("output_tokens"))
         )
         self._anchor = _Anchor(
             prepared.key, prepared.request, tokens, output_tokens, prepared.tokens

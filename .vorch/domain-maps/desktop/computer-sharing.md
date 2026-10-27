@@ -25,7 +25,7 @@ The public status push `vbot-desktop-computer-sharing` is a single coalesced sna
 
 ## Closing and updating
 
-Closing first fences new mutations, then warns if native Terminals are running or starting. Terminal reads and status remain available during the dialog. A declined warning lifts the fence. Accepted close shuts down the native handlers before the Desktop exits. Turning Terminal sharing off while native Terminals run or start asks a native warning first (the bridge's `confirm`, user decision 2026-10-26); a declined or unavailable warning answers `declined` and keeps it shared. Disabling a capability closes its handler. No change silently redirects operations to the server computer.
+Closing first fences new mutations, then warns if native Terminals are running or starting. Terminal reads and status remain available during the dialog. A declined warning lifts the fence. Accepted close shuts down the native handlers before the Desktop exits. Turning Terminal sharing off fences new Terminal starts before counting running or starting Terminals, through confirmation and the settings write; existing Terminals remain available, including for reads, status and stopping. If Terminals run or start, it asks a native warning first (the bridge's `confirm`, user decision 2026-10-26); a declined or unavailable warning answers `declined` and keeps it shared. A declined warning or failed settings write releases the fence, and concurrent sharing updates are serialized. Disabling a capability closes its handler. No change silently redirects operations to the server computer.
 
 Automatic package restarts wait indefinitely for local Terminals. Every admitted restart also fences native requests before the successor starts, so a new Terminal cannot slip between the idle check and the handoff. Explicit restart refuses while Terminals remain; the user can stop them first. A failed handoff lifts the fence so the existing app remains usable (`desktop/update-restart.md`).
 
@@ -39,6 +39,7 @@ These transport refusals can be propagated through Terminal or Computer Use. The
 | `The computer has too many pending operations; nothing was started` | Distinguishes refused admission from an action whose outcome is unknown. |
 | `This capability is not shared; nothing was done` | Prevents treating a revoked local grant as a transport retry or assuming local effects occurred. |
 | `The Desktop is closing, restarting or switching servers; nothing was done` | Explains refusal during the native admission fence without encouraging alternate-machine execution. |
+| `Terminal sharing is being turned off; nothing was done` | Explains why a Terminal start was refused and confirms it was not started. |
 | `The operation and its parameters are required; nothing was done` | Refuses a malformed internal request before the capability sees it. |
 | `The computer operation failed; its effects are unknown.` | Unexpected native failure cannot imply an action was not executed. |
 | `Check the current state before repeating it.` | Prevents a second launch or input after an uncertain operation. |

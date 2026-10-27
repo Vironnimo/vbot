@@ -25,6 +25,7 @@ from core.models.pricing import TokenPricing, nonnegative_amount, price_usage, p
 from core.sessions import SessionAddress
 from core.usage._calibration import InputEstimateCalibration, LearnedSample
 from core.usage._failures import classify_failure
+from core.usage._request_usage import last_request_usage
 from core.usage._schema import usage_database_spec
 from core.utils.errors import FailureClass
 from core.utils.ids import new_id
@@ -511,11 +512,17 @@ class UsageRecorder:
                 not in (*_COUNTERS, *_FLAGS, "cost", "reported_cost_usd", "speed", "usage_call_id")
             }
             learned = None
-            measured = merged.get("input_tokens")
+            measured_usage = (
+                last_request_usage(usage)
+                if usage is not None and "last_request_usage" in usage
+                else merged
+            )
+            measured = measured_usage.get("input_tokens")
             if (
                 input_estimate is not None
                 and isinstance(measured, int)
-                and merged.get("input_tokens_estimated") is not True
+                and not isinstance(measured, bool)
+                and measured_usage.get("input_tokens_estimated") is not True
             ):
                 model, estimated = input_estimate
                 learned = self._calibration.write(connection, model, measured, estimated)

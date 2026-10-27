@@ -17,7 +17,7 @@ from core.model_tasks.model_tasks import TaskModelService, parse_task_model_targ
 from core.model_tasks.task_execution import TaskUsage, TaskUsageContext
 from core.providers.errors import NetworkError, ProviderError, ProviderRequestTooLargeError
 from core.providers.task_client import TaskClientRuntime
-from core.usage import UsageRecorder
+from core.usage import UsageRecorder, last_request_usage
 from core.utils.tokens import estimate_json_tokens
 from core.utils.workers import BoundedWorkerPool
 
@@ -132,7 +132,9 @@ class DecisionService:
         """Correct later size checks by the input the Provider reported."""
         recorder = self._usage_recorder
         usage = result.get("usage")
-        measured = usage.get("input_tokens") if isinstance(usage, dict) else None
+        measured = last_request_usage(usage if isinstance(usage, dict) else None).get(
+            "input_tokens"
+        )
         if recorder is None or not isinstance(measured, int) or isinstance(measured, bool):
             return
         await _DECISION_SETUP_WORKERS.run(

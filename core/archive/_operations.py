@@ -17,7 +17,14 @@ from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from core.agents import AGENT_FORMAT_VERSION, Agent, AgentError, AgentUpdateResult, ArchivedAgent
+from core.agents import (
+    AGENT_FORMAT_VERSION,
+    Agent,
+    AgentError,
+    AgentNotFoundError,
+    AgentUpdateResult,
+    ArchivedAgent,
+)
 from core.archive._types import AgentArchiveOutcome, ProjectArchiveOutcome
 from core.projects import PROJECT_FORMAT_VERSION, ProjectError
 from core.sessions import (
@@ -34,6 +41,7 @@ from core.sessions import (
     ArchiveTree,
 )
 from core.utils.file_status import exists_strict
+from core.utils.ids import has_id_entry
 from core.utils.logging import get_logger
 from core.utils.timestamps import canonical_timestamp
 
@@ -125,18 +133,42 @@ def holds_agent_id_grants(services: ArchiveServices, entry: ArchiveEntry) -> boo
     return all(other.entry_id == entry.entry_id for other in others.entries)
 
 
-def _repair_review_currents(services: ArchiveServices, entry_key: int, scope: ArchiveScope) -> None:
-    """Re-aim surviving review owners before grant/roster reads repair their pointers."""
+def _repair_review_currents(
+    services: ArchiveServices, entry_key: int, scope: ArchiveScope | None
+) -> dict[str, str]:
+    """Re-aim surviving owners only while the archived address has no live replacement."""
+    currents: dict[str, str] = {}
     for member in services.sessions.archive_ledger.members(entry_key, limit=None):
         address = member.address
         if (
             address.project_id is None
-            and (scope.project_id is not None or address.agent_id != scope.agent_id)
-            and services.agents.exists(address.agent_id)
-        ):
-            services.agents.reset_current_after_session_removed(
-                address.agent_id, address.session_id
+            and (
+                scope is None or scope.project_id is not None or address.agent_id != scope.agent_id
             )
+            and not services.sessions.exists(address)
+        ):
+            try:
+                agent = services.agents.reset_current_after_session_removed(
+                    address.agent_id, address.session_id
+                )
+            except AgentNotFoundError:
+                # A missing owner needs no repair. A broken or unreadable document
+                # in an existing owner directory must stay pending instead.
+                if has_id_entry(services.data_dir / "agents", address.agent_id):
+                    raise
+                continue
+            currents[address.agent_id] = agent.current_session_id
+    return currents
+
+
+def cleanup_currents(services: ArchiveServices, entry: ArchiveEntry) -> dict[str, str]:
+    """Finish a Project or Session archive's durable current-pointer repair."""
+    scope = (
+        ArchiveScope(project_id=entry.project_id) if entry.kind == ARCHIVE_KIND_PROJECT else None
+    )
+    currents = _repair_review_currents(services, entry.entry_key, scope)
+    services.sessions.archive_ledger.finish_cleanup(entry.entry_key)
+    return currents
 
 
 def _agent_facts(archived: ArchivedAgent) -> dict[str, Any]:
@@ -248,13 +280,20 @@ def archive_project(
                 backed_up_files[agent.id] = tuple(result.backed_up_files)
             with services.projects.archive_files(project_id, tree):
                 session_count = ledger.commit_scope(
-                    ref.entry_key, ArchiveScope(project_id=project_id)
+                    ref.entry_key, ArchiveScope(project_id=project_id), cleanup_pending=True
                 )
         except BaseException:
             if _undo_unroots(services, completed):
                 _abandon_unless_retained(services, ref, (tree,))
             raise
-        _repair_review_currents(services, ref.entry_key, ArchiveScope(project_id=project_id))
+        try:
+            entry = ledger.entry_by_key(ref.entry_key)
+            if entry is not None:
+                cleanup_currents(services, entry)
+        except Exception:
+            _LOGGER.exception(
+                "Archive cleanup failed; it completes at the next start (entry=%s)", ref.entry_id
+            )
     return ProjectArchiveOutcome(
         entry_id=ref.entry_id,
         project_id=project_id,

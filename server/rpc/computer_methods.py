@@ -5,11 +5,9 @@ from __future__ import annotations
 from typing import Any
 
 from server.access import ACCESS_DENIED, current_principal
-from server.events import RESOURCE_KIND_COMPUTERS
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
-from server.rpc.event_bridge import publish_resource_changed
 
 
 def _list(state: Any, params: dict[str, Any]) -> dict[str, Any]:
@@ -30,7 +28,6 @@ async def _remove(state: Any, params: dict[str, Any]) -> dict[str, Any]:
         await state.runtime.computers.forget(computer_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    publish_resource_changed(state, RESOURCE_KIND_COMPUTERS)
     return {"removed": computer_id}
 
 

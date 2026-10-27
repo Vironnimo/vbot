@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -173,6 +174,99 @@ async def test_registration_needs_a_free_name_and_room_and_offline_computers_can
     assert refused.value.code == "computer_not_found"
     # Its name and its place are free again.
     await registry.connect(hello("pc_extra", name="Laptop"), actor="host")
+    registry.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["new", "existing", "shutdown"])
+async def test_interrupted_registration_keeps_the_saved_identity_offline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    registry = ComputerRegistry(tmp_path)
+    old = await registry.connect(hello(), actor="host") if case == "existing" else None
+    events: list[tuple[str, str]] = []
+    registry.subscribe(lambda computer_id, event, _data: events.append((computer_id, event)))
+    assert registry._store is not None
+    original_claim = registry._store.claim
+    started = asyncio.get_running_loop().create_future()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+
+    def delayed_claim(*args: Any) -> None:
+        loop.call_soon_threadsafe(started.set_result, None)
+        assert release.wait(5)
+        original_claim(*args)
+
+    monkeypatch.setattr(registry._store, "claim", delayed_claim)
+    task = asyncio.create_task(registry.connect(hello(name="Renamed"), actor="host"))
+    try:
+        await asyncio.wait_for(started, 2)
+        if case == "shutdown":
+            registry.close()
+        else:
+            task.cancel("connection closed")
+    finally:
+        release.set()
+    if case == "shutdown":
+        with pytest.raises(ComputerError) as closed:
+            await task
+        assert closed.value.code == "computers_closed"
+    else:
+        with pytest.raises(asyncio.CancelledError) as cancelled:
+            await task
+        assert cancelled.value.args == ("connection closed",)
+    info = registry.get("pc_laptop")
+    assert info.name == "Renamed"
+    assert not info.online
+    assert old is None or old.closed
+    if case != "shutdown":
+        assert ("pc_laptop", "disconnected") in events
+    saved = json.loads((tmp_path / COMPUTERS_PATH).read_text())
+    assert saved["computers"][0]["name"] == info.name
+    if case != "shutdown":
+        monkeypatch.setattr(registry._store, "claim", original_claim)
+        connection = await registry.connect(hello(name="Renamed"), actor="host")
+        assert registry.get("pc_laptop").online
+        registry.disconnect(connection)
+    registry.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_removal_publishes_the_saved_removal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = ComputerRegistry(tmp_path)
+    connection = await registry.connect(hello(), actor="host")
+    registry.disconnect(connection)
+    events: list[tuple[str, str]] = []
+    registry.subscribe(lambda computer_id, event, _data: events.append((computer_id, event)))
+    assert registry._store is not None
+    original_forget = registry._store.forget
+    started = asyncio.get_running_loop().create_future()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+
+    def delayed_forget(computer_id: str) -> None:
+        loop.call_soon_threadsafe(started.set_result, None)
+        assert release.wait(5)
+        original_forget(computer_id)
+
+    monkeypatch.setattr(registry._store, "forget", delayed_forget)
+    task = asyncio.create_task(registry.forget("pc_laptop"))
+    try:
+        await asyncio.wait_for(started, 2)
+        task.cancel()
+    finally:
+        release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    with pytest.raises(ComputerError) as missing:
+        registry.get("pc_laptop")
+    assert missing.value.code == "computer_not_found"
+    assert ("pc_laptop", "removed") in events
+    assert json.loads((tmp_path / COMPUTERS_PATH).read_text())["computers"] == []
+    monkeypatch.setattr(registry._store, "forget", original_forget)
+    await registry.connect(hello(), actor="host")
     registry.close()
 
 

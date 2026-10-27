@@ -88,6 +88,9 @@ def similar_entries(
         return []
     try:
         for entry in islice(missing.parent.iterdir(), _SCAN_LIMIT):
+            score = _score(missing, entry)
+            if score is None or not _readable(permissions, entry):
+                continue
             try:
                 if (kind == "files" and not entry.is_file()) or (
                     kind == "dirs" and not entry.is_dir()
@@ -95,9 +98,7 @@ def similar_entries(
                     continue
             except OSError:
                 continue
-            score = _score(missing, entry)
-            if score is not None and _readable(permissions, entry):
-                candidates.append((score, entry.name.casefold(), entry))
+            candidates.append((score, entry.name.casefold(), entry))
     except OSError:
         return []
     candidates.sort(key=lambda item: (-item[0][0], -item[0][1], item[1]))

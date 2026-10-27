@@ -206,7 +206,11 @@ class SessionLifecycle:
         return ChatSession(self._store, target)
 
     async def archive(
-        self, address: SessionAddress, *, facts: Mapping[str, Any] | None = None
+        self,
+        address: SessionAddress,
+        *,
+        facts: Mapping[str, Any] | None = None,
+        cleanup_pending: bool = False,
     ) -> ArchiveEntryRef:
         """Archive one live Session as its own ``session`` archive entry.
 
@@ -214,7 +218,9 @@ class SessionLifecycle:
         An owner-managed Session refuses with a ``ChatSessionError``.
         """
         async with self.write_lock(address):
-            entry = await self._store.run_async(self._store.archive, address, facts=facts)
+            entry = await self._store.run_async(
+                self._store.archive, address, facts=facts, cleanup_pending=cleanup_pending
+            )
         self._notify_archive_changed()
         return entry
 

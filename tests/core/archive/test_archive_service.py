@@ -483,13 +483,15 @@ async def test_a_failed_project_archive_preserves_the_project_and_its_agents(
         def refuse_return(source: Path, _destination: Path) -> None:
             raise PermissionError(errno.EACCES, "Cannot return archive payload", str(source))
 
-        def deny_payload_before_commit(entry_key: int, scope: ArchiveScope) -> int:
+        def deny_payload_before_commit(
+            entry_key: int, scope: ArchiveScope, *, cleanup_pending: bool = False
+        ) -> int:
             entry = ledger.entry_by_key(entry_key)
             assert entry is not None
             deny_access((world.data_dir / entry.trees[0].path).parent)
             # The fixture denies reads only; the rollback rename fails too.
             monkeypatch.setattr("core.projects.store.move_tree", refuse_return)
-            return commit_scope(entry_key, scope)
+            return commit_scope(entry_key, scope, cleanup_pending=cleanup_pending)
 
         monkeypatch.setattr(ledger, "commit_scope", deny_payload_before_commit)
 

@@ -15,12 +15,12 @@ Orphan payload classification never follows a symbolic link or Windows junction 
 | archived Sessions without membership (an older vBot after a downgrade) | adopted as `session`/`owner_group` entries, WARNING |
 | `archive/entries/arc_*` without a row | real directories are adopted as a `recovered` entry; an empty one is removed; symbolic links and Windows junctions are left alone; WARNING |
 | `archiving` | a payload tree moves back to `source_path` when it is free; beside a source it is removed only if every payload entry also exists there unchanged (regular files compared byte for byte, no links followed). Matching configuration alone is insufficient after snapshot restore. Missing, different, unreadable or linked entries keep the payload, adopted as a `recovered` entry; recorded unroots are undone, the row is deleted |
-| `archived` with `cleanup_pending` | the Agent cleanup runs again; with a live Agent of the same id it only clears the flag |
+| `archived` with `cleanup_pending` | Agent cleanup or Project/Session current-pointer repair runs again; a live Session at the same address keeps its pointer, and an invalid or unreadable Agent document keeps cleanup pending |
 | `restoring`, payload present or target gone | a moved legacy Workspace placed inside the archive returns to the payload (one already back in its own folder stays there), then `archived` again; with neither payload nor target its restore check names `payload_missing`, and it stays purgeable |
 | `restoring`, files live at the target | the Agent or Project store replays the configuration rewrite, accepting the archived or target id, including older plans without Workspace fields; once valid, the restore commits and finishes. Otherwise the files stay live, the entry stays `restoring` with `restore_plan.live_path` and `problem`, its restore check shows both, and a later start settles it again |
 | `restoring`, payload or target cannot be checked | state, member Sessions and `restore_plan` stay unchanged; purge remains blocked, and a later start retries the restore |
 | `restored` | the follow-up runs and deletes the row |
-| `purging` | left; the retention sweep continues it after start, a manual purge at once (each first finishes an Agent cleanup still pending) |
+| `purging` | left; the retention sweep continues it after start, a manual purge at once (each first finishes any cleanup still pending) |
 
 ## Interrupted restores
 

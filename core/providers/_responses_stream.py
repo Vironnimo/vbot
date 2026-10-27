@@ -31,6 +31,7 @@ from core.providers._responses_values import (
     _response_output_from_meta,
     _response_output_items,
 )
+from core.providers._wire_learning import FailureUsageDelta
 from core.providers.adapter import (
     TerminalOutcome,
     normalize_tool_call_candidates,
@@ -67,6 +68,7 @@ class ResponsesStreamState:
     emitted_tool_arguments: dict[str, str] = field(default_factory=dict)
     started_tool_argument_deltas: set[str] = field(default_factory=set)
     emitted_output_text: str = ""
+    refusal_sections: dict[tuple[Any, Any], str] = field(default_factory=dict)
     emitted_reasoning_text: str = ""
     summary_sections: dict[tuple[int, int], str] = field(default_factory=dict)
     reasoning_meta: dict[str, Any] | None = None
@@ -155,7 +157,27 @@ def iter_responses_sse_deltas_with_state(
     """Parse Responses SSE lines using caller-owned stream state."""
 
     for event_name, event_data in _iter_sse_events(lines):
+        usage = responses_error_usage_delta(event_name, event_data, state)
+        if usage is not None:
+            yield usage
         yield from normalize_responses_stream_event(event_name, event_data, state)
+
+
+def responses_error_usage_delta(
+    event_name: str, event_data: Mapping[str, Any], state: ResponsesStreamState
+) -> dict[str, Any] | None:
+    """Emit usage from a failure before the original error propagates."""
+    if _event_type(event_name, event_data) not in RESPONSES_ERROR_EVENTS:
+        return None
+    response = event_data.get("response")
+    if not isinstance(response, Mapping):
+        return None
+    usage = _extract_responses_usage(response.get("usage"))
+    if usage is None:
+        return None
+    state.usage = dict(usage)
+    state.completed_response = dict(response)
+    return FailureUsageDelta(type="usage", **usage)
 
 
 def normalize_responses_stream_event(
@@ -181,6 +203,8 @@ def normalize_responses_stream_event(
         return _completed_event_deltas(event_data, state, implied_status="incomplete")
     if event_type == "response.output_text.delta":
         return _output_text_delta(event_data, state)
+    if event_type in {"response.refusal.delta", "response.refusal.done"}:
+        return _refusal_delta(event_data, state, snapshot=event_type.endswith(".done"))
     if event_type in REASONING_SUMMARY_DELTA_EVENTS:
         if "summary_text" in event_type:
             return _summary_delta(event_data, state)
@@ -269,6 +293,25 @@ def _output_text_delta(
     if deltas:
         state.emitted_output_text += deltas[0]["text"]
     return deltas
+
+
+def _refusal_delta(
+    event_data: Mapping[str, Any], state: ResponsesStreamState, *, snapshot: bool
+) -> list[dict[str, Any]]:
+    text = event_data.get("refusal" if snapshot else "delta")
+    if not isinstance(text, str) or not text:
+        return []
+    key = (event_data.get("output_index"), event_data.get("content_index"))
+    previous = state.refusal_sections.get(key, "")
+    if snapshot:
+        if not text.startswith(previous):
+            return []
+        text = text[len(previous) :]
+    if not text:
+        return []
+    state.refusal_sections[key] = previous + text
+    state.emitted_output_text += text
+    return [{"type": "content_delta", "text": text}]
 
 
 def _reasoning_delta(

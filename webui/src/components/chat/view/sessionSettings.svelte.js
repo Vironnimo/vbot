@@ -141,6 +141,7 @@ export function createSessionSettings(context) {
   let rowRevision = $state(0);
   let lastInvalidationId = null;
   let requestedRowKey = '';
+  let rowRequestVersion = 0;
   // Reads cannot establish ordering while a write runs; its completion rereads
   // the row. Autosave serializes writes and owns the optimistic choices.
   const overrideWrites = {};
@@ -363,15 +364,22 @@ export function createSessionSettings(context) {
         ? `${shown.key}::${context.sessionsRefreshToken}::${rowRevision}::${JSON.stringify([defaults.model, defaults.thinkingEffort])}`
         : '';
     untrack(() => {
-      if (!requestKey || requestKey === requestedRowKey) {
+      if (!requestKey) {
+        if (requestedRowKey) {
+          requestedRowKey = '';
+          rowRequestVersion += 1;
+        }
+        return;
+      }
+      if (requestKey === requestedRowKey) {
         return;
       }
       requestedRowKey = requestKey;
-      void loadRow(requestKey, shown);
+      void loadRow(requestKey, shown, ++rowRequestVersion);
     });
   });
 
-  async function loadRow(requestKey, shown) {
+  async function loadRow(requestKey, shown, requestVersion) {
     const writes = writesFor(shown.key);
     const revisionAtStart = writes.revision;
     const writingAtStart = writes.active > 0;
@@ -384,6 +392,7 @@ export function createSessionSettings(context) {
       // reply has not arrived yet. The last write schedules a replacement.
       if (
         requestKey !== requestedRowKey ||
+        requestVersion !== rowRequestVersion ||
         writingAtStart ||
         revisionAtStart !== writes.revision
       ) {

@@ -133,6 +133,10 @@ def test_core_change_callbacks_publish_server_events(tmp_path: Path) -> None:
         alert_events = publishes(lambda: cron_service._raise_failure_alert(alert))
 
         terminal_events = publishes(lambda: terminal_manager.changed_callbacks[0]("term_one"))
+        computer_events = publishes(lambda: runtime.computers._emit("pc_one", "removed", {}))
+        computer_capability_events = publishes(
+            lambda: runtime.computers._emit("pc_one", "output", {})
+        )
 
         # A background command's state is published once per change of its
         # status or of whether processes it started still run; a forgotten
@@ -211,10 +215,13 @@ def test_core_change_callbacks_publish_server_events(tmp_path: Path) -> None:
         [],
     ]
     assert skill_events == [("resource_changed", {"kind": "skills"})]
+    assert computer_events == [("resource_changed", {"kind": "computers"})]
+    assert computer_capability_events == []
     assert model_events == [("resource_changed", {"kind": "models"})]
     assert index_events == [("recall_index_status", index_status.to_dict())]
     # App shutdown releases the bridges.
     assert terminal_manager.changed_callbacks == []
+    assert runtime.computers._listeners == []
     assert command_manager.changed_callbacks == []
     assert runtime.skill_changed_callbacks == []
     assert runtime.model_catalog_changed_callbacks == []

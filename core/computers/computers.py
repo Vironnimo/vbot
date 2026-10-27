@@ -196,8 +196,26 @@ class ComputerRegistry:
                 raise ComputerError(
                     "computer_store_unavailable", "Computer registrations are unavailable."
                 )
+            store = self._store
+            key = hello.get("key")
+            if not isinstance(key, str):
+                raise ComputerError(
+                    "computer_registration_failed", "Computer registration could not be saved."
+                )
+            saved = False
+
+            def claim() -> None:
+                nonlocal saved
+                store.claim(description, key, actor)
+                saved = True
+
+            cancelled: asyncio.CancelledError | None = None
             try:
-                await _STORE_WORKER.run(self._store.claim, description, hello.get("key"), actor)
+                await _STORE_WORKER.run(claim)
+            except asyncio.CancelledError as error:
+                if not saved:
+                    raise
+                cancelled = error
             except PermissionError as error:
                 raise ComputerError(
                     "computer_identity_conflict",
@@ -210,8 +228,6 @@ class ComputerRegistry:
                     "computer_registration_failed", "Computer registration could not be saved."
                 ) from error
             computer_id = description["id"]
-            if self._closed:
-                raise ComputerError("computers_closed", "The server is shutting down.")
             previous = self._infos.get(computer_id)
             old = self._connections.get(computer_id)
             if old is not None:
@@ -220,13 +236,20 @@ class ComputerRegistry:
                 computer_id,
                 description["name"],
                 description["platform"],
-                True,
+                cancelled is None and not self._closed,
                 tuple(dict.fromkeys(description["capabilities"])),
                 instance_id,
             )
+            self._infos[computer_id] = info
+            if cancelled is not None:
+                # The socket is gone, but its completed claim is still durable.
+                if old is None:
+                    self._emit(computer_id, "disconnected", {"instance_id": instance_id})
+                raise cancelled
+            if self._closed:
+                raise ComputerError("computers_closed", "The server is shutting down.")
             connection = ComputerConnection(info)
             self._connections[computer_id] = connection
-            self._infos[computer_id] = info
             self._emit(
                 computer_id,
                 "connected",
@@ -256,8 +279,21 @@ class ComputerRegistry:
                 raise ComputerError(
                     "computer_store_unavailable", "Computer registrations are unavailable."
                 )
+            store = self._store
+            saved = False
+
+            def forget() -> None:
+                nonlocal saved
+                store.forget(computer_id)
+                saved = True
+
+            cancelled: asyncio.CancelledError | None = None
             try:
-                await _STORE_WORKER.run(self._store.forget, computer_id)
+                await _STORE_WORKER.run(forget)
+            except asyncio.CancelledError as error:
+                if not saved:
+                    raise
+                cancelled = error
             except (OSError, ValueError) as error:
                 raise ComputerError(
                     "computer_registration_failed", "Computer registration could not be saved."
@@ -265,6 +301,8 @@ class ComputerRegistry:
             del self._infos[computer_id]
             self._emit(computer_id, "removed", {})
             _LOGGER.info("Computer removed (computer=%s)", computer_id)
+            if cancelled is not None:
+                raise cancelled
 
     def disconnect(self, connection: ComputerConnection) -> None:
         if connection.closed:

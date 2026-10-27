@@ -31,6 +31,8 @@ public address or Run-id reuse never proves historical ownership.
 
 ## Interfaces
 
+- `last_request_usage(usage)` selects the final physical request measurement when the optional snapshot is present, including an empty or partial snapshot; otherwise it returns the ordinary Usage. Chat Context, Reasoning replay, output speed, Compaction and Decision calibration use this shared Usage boundary.
+
 - `start(model, kind, ...scope)` durably allocates a `use_` id immediately before
   request dispatch. Model identity is `provider/model`; Connection is separate.
 - `finish(id, usage, status=..., failure=...)` stores known canonical counters,
@@ -44,7 +46,9 @@ public address or Run-id reuse never proves historical ownership.
 - `update(id, usage, *, input_estimate=None)` enriches the same call without
   changing its outcome. With `input_estimate=(model, estimate)` a measured
   input in the merged Usage also teaches the calibration in the same write
-  transaction (Chat's per-step update).
+  transaction (Chat's per-step update). When Usage carries `last_request_usage`,
+  only that final physical attempt's measured input teaches calibration; an
+  empty or partial snapshot never falls back to aggregate attempt counters.
   Cumulative Live Voice reports replace counters instead of adding repeated
   snapshots. Chat enriches its record with final estimates before appending the
   Assistant Message. Token-only or estimated-cost updates keep an existing

@@ -11,7 +11,7 @@ import httpx
 import pytest
 import respx
 
-from core.chat.streaming import StreamingAccumulator
+from core.chat.streaming import StreamingAccumulator, stream_model_response
 from core.models.discovery import ModelDiscoveryError, refresh_models
 from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers.accounts import Account
@@ -28,7 +28,7 @@ from core.providers.token_store import OAuthToken, TokenStore
 from core.providers.xai import XAIAdapter
 from core.secrets import SecretStore
 from core.utils.retry import caller_owns_retries
-from tests.core.providers.openai_test_support import codex_sse_response
+from tests.core.providers.openai_test_support import codex_sse, codex_sse_response, sse_response
 
 RESOURCES = Path(__file__).resolve().parents[3] / "resources"
 XAI_RESPONSES_URL = "https://api.x.ai/v1/responses"
@@ -336,6 +336,157 @@ async def test_billed_cost_ticks_become_reported_usd(
         assert "reported_cost_usd" not in usage
     else:
         assert usage["reported_cost_usd"] == pytest.approx(reported_usd)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("final_reports", [False, True])
+@respx.mock
+async def test_repaired_stream_reports_total_and_last_attempt_usage(
+    xai_adapter: XAIAdapter,
+    final_reports: bool,
+) -> None:
+    failed_usage = {
+        "input_tokens": 100,
+        "output_tokens": 10,
+        "input_tokens_details": {"cached_tokens": 10},
+        "output_tokens_details": {"reasoning_tokens": 2},
+        "cost_in_usd_ticks": 10_000_000_000,
+    }
+    final_usage = {
+        "input_tokens": 200,
+        "output_tokens": 20,
+        "input_tokens_details": {"cached_tokens": 20},
+        "output_tokens_details": {"reasoning_tokens": 4},
+        "cost_in_usd_ticks": 20_000_000_000,
+    }
+    failure = {
+        "type": "response.failed",
+        "response": {
+            "status": "failed",
+            "error": {"code": "invalid_request_error", "message": "Unsupported parameter: 'top_p'"},
+            "usage": failed_usage,
+        },
+    }
+    success = {
+        "type": "response.completed",
+        "response": {
+            **SUCCESS_RESPONSE,
+            "status": "completed",
+            "usage": final_usage if final_reports else None,
+        },
+    }
+    route = respx.post(XAI_RESPONSES_URL).mock(
+        side_effect=[
+            sse_response(codex_sse(failure)),
+            sse_response(codex_sse(success)),
+        ]
+    )
+    deltas = [delta async for delta in xai_adapter.stream(HELLO, model_id="grok-4.5", top_p=0.8)]
+    usage = [delta for delta in deltas if delta.get("type") == "usage"]
+    assert route.call_count == 2
+    expected = [
+        {
+            "type": "usage",
+            "input_tokens": 100,
+            "output_tokens": 10,
+            "cache_read_tokens": 10,
+            "reasoning_tokens": 2,
+            "reported_cost_usd": 1.0,
+            "last_request_usage": {},
+        }
+    ]
+    if final_reports:
+        expected.append(
+            {
+                "type": "usage",
+                "input_tokens": 300,
+                "output_tokens": 30,
+                "cache_read_tokens": 30,
+                "reasoning_tokens": 6,
+                "reported_cost_usd": 3.0,
+                "last_request_usage": {
+                    "input_tokens": 200,
+                    "output_tokens": 20,
+                    "cache_read_tokens": 20,
+                    "reasoning_tokens": 4,
+                    "reported_cost_usd": 2.0,
+                },
+            },
+        )
+    assert usage == expected
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_two_repaired_rejections_sum_usage_without_inventing_last_measurements(
+    xai_adapter: XAIAdapter,
+) -> None:
+    def rejection(parameter: str, input_tokens: int, ticks: int) -> dict[str, Any]:
+        return {
+            "type": "response.failed",
+            "response": {
+                "status": "failed",
+                "error": {
+                    "code": "invalid_request_error",
+                    "message": f"Unsupported parameter: '{parameter}'",
+                },
+                "usage": {"input_tokens": input_tokens, "cost_in_usd_ticks": ticks},
+            },
+        }
+
+    route = respx.post(XAI_RESPONSES_URL).mock(
+        side_effect=[
+            sse_response(codex_sse(rejection("top_p", 100, 10_000_000_000))),
+            sse_response(codex_sse(rejection("temperature", 200, 20_000_000_000))),
+            codex_sse_response({**SUCCESS_RESPONSE, "status": "completed"}),
+        ]
+    )
+    deltas = [
+        delta
+        async for delta in xai_adapter.stream(
+            HELLO, model_id="grok-4.5", top_p=0.8, temperature=0.7
+        )
+    ]
+    assert route.call_count == 3
+    assert [delta for delta in deltas if delta.get("type") == "usage"] == [
+        {
+            "type": "usage",
+            "input_tokens": 300,
+            "reported_cost_usd": 3.0,
+            "last_request_usage": {},
+        }
+    ]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_repaired_stream_without_final_usage_keeps_last_request_unknown(
+    xai_adapter: XAIAdapter,
+) -> None:
+    failure = {
+        "type": "response.failed",
+        "response": {
+            "status": "failed",
+            "error": {"code": "invalid_request_error", "message": "Unsupported parameter: 'top_p'"},
+            "usage": {"input_tokens": 100, "output_tokens": 10},
+        },
+    }
+    respx.post(XAI_RESPONSES_URL).mock(
+        side_effect=[
+            sse_response(codex_sse(failure)),
+            codex_sse_response({**SUCCESS_RESPONSE, "status": "completed"}),
+        ]
+    )
+    reported: dict[str, Any] = {}
+    result = await stream_model_response(
+        xai_adapter,
+        HELLO,
+        model_id="grok-4.5",
+        top_p=0.8,
+        on_usage=reported.update,
+    )
+    assert result["usage"] == {"input_tokens": 100, "output_tokens": 10, "last_request_usage": {}}
+    assert reported == result["usage"]
 
 
 def test_request_context_uses_shared_prompt_cache_affinity(xai_adapter: XAIAdapter) -> None:

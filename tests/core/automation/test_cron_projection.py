@@ -76,19 +76,50 @@ class TestProjectOccurrences:
         assert rows[0].fire_at_utc == expected_utc
 
     @pytest.mark.asyncio
-    async def test_spring_gap_projection_matches_successive_live_fires(self, service):
-        service.set_timezone("Europe/Berlin")
+    @pytest.mark.parametrize(
+        ("zone", "expression", "start", "end", "expected"),
+        [
+            (
+                "Europe/Berlin",
+                "*/30 * * * *",
+                "2026-03-29T00:00:00+00:00",
+                "2026-03-29T03:00:00+00:00",
+                [
+                    f"2026-03-29T{hour:02}:{minute:02}:00+00:00"
+                    for hour in range(3)
+                    for minute in (0, 30)
+                ],
+            ),
+            (
+                "Australia/Lord_Howe",
+                "15,30 2 * * *",
+                "2026-10-03T15:20:00+00:00",
+                "2026-10-03T16:00:00+00:00",
+                ["2026-10-03T15:30:00+00:00", "2026-10-03T15:45:00+00:00"],
+            ),
+            (
+                "Pacific/Apia",
+                "0 0,12 * * *",
+                "2011-12-30T09:55:00+00:00",
+                "2011-12-30T23:00:00+00:00",
+                ["2011-12-30T10:00:00+00:00", "2011-12-30T22:00:00+00:00"],
+            ),
+        ],
+    )
+    async def test_spring_gap_projection_matches_successive_live_fires(
+        self, service, zone, expression, start, end, expected
+    ):
+        service.set_timezone(zone)
         job = await service.create_job(
             agent_id="joel",
             prompt="half-hour",
             schedule_type="cron",
-            cron_expression="*/30 * * * *",
+            cron_expression=expression,
         )
-        start = datetime(2026, 3, 29, 0, tzinfo=UTC)
-        end = start + timedelta(hours=3)
+        start = datetime.fromisoformat(start)
+        end = datetime.fromisoformat(end)
         projected = [row.fire_at_utc for row in service.project_occurrences(start, end)]
-        expected = [start + timedelta(minutes=30 * index) for index in range(6)]
-        assert projected == expected
+        assert projected == [datetime.fromisoformat(item) for item in expected]
         cursor = start - timedelta(microseconds=1)
         live = []
         for _ in expected:

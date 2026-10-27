@@ -286,11 +286,17 @@ class SessionStore:
         )
 
     def archive(
-        self, address: SessionAddress, *, facts: Mapping[str, Any] | None = None
+        self,
+        address: SessionAddress,
+        *,
+        facts: Mapping[str, Any] | None = None,
+        cleanup_pending: bool = False,
     ) -> ArchiveEntryRef:
         """Archive one live Session with its review forks as its own ``session`` archive entry."""
         return self._execute_write(
-            lambda connection: _store_archive.archive_session(connection, address, facts)
+            lambda connection: _store_archive.archive_session(
+                connection, address, facts, cleanup_pending=cleanup_pending
+            )
         )
 
     def review_forks(

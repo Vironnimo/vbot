@@ -102,6 +102,20 @@ def test_catalog_entry_without_optional_fields_keeps_limits_and_reasoning_unknow
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    "message",
+    [
+        {"content": None, "refusal": "Cannot help."},
+        {"content": [{"type": "refusal", "refusal": "Cannot help."}]},
+    ],
+)
+def test_normalize_response_preserves_refusal(message: dict[str, Any]) -> None:
+    assert (
+        make_adapter().normalize_response(_response(message, finish_reason="stop"))["content"]
+        == "Cannot help."
+    )
+
+
 def test_normalize_response_maps_text_tool_calls_and_reasoning_state() -> None:
     reasoning_details = [{"type": "reasoning.text", "text": "opaque"}]
     response = _response(

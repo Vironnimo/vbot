@@ -312,6 +312,28 @@ def _next_cron_fire_local(
         next_local = cast(datetime, schedule.get_next(datetime)).replace(tzinfo=timezone)
         next_utc = next_local.astimezone(UTC)
         if next_utc > reference_utc:
+            next_wall = next_local.replace(tzinfo=None)
+            resolved_wall = next_utc.astimezone(timezone).replace(tzinfo=None)
+            if resolved_wall > next_wall:
+                # A gap tick can resolve after a later, valid wall-clock tick.
+                # Find the end of the gap by bisection, then compare the first
+                # scheduled tick after it. Later gap ticks cannot beat the
+                # first one because they all use the same pre-transition offset.
+                low, high = next_wall, resolved_wall
+                while high - low > timedelta(microseconds=1):
+                    middle = low + (high - low) // 2
+                    resolved = middle.replace(tzinfo=timezone).astimezone(UTC).astimezone(timezone)
+                    if resolved.replace(tzinfo=None) > middle:
+                        low = middle
+                    else:
+                        high = middle
+                after_gap = cast(
+                    datetime,
+                    croniter(expression, high - timedelta(microseconds=1)).get_next(datetime),
+                )
+                after_gap_utc = after_gap.replace(tzinfo=timezone).astimezone(UTC)
+                if reference_utc < after_gap_utc < next_utc:
+                    next_utc = after_gap_utc
             # Just after a forward jump, an earlier wall-clock tick can still
             # be in the future once shifted by the gap (02:30 -> 03:30).
             # Compare it with the ordinary next tick in UTC, including when

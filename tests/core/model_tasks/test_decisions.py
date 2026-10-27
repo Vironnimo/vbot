@@ -187,13 +187,17 @@ async def test_a_size_rejection_by_the_provider_is_too_large(status, error, code
 
 
 @pytest.mark.asyncio
-async def test_reported_input_tokens_correct_the_size_check(monkeypatch):
+@pytest.mark.parametrize("final", [None, {"input_tokens": 321}, {}, {"output_tokens": 2}])
+async def test_reported_input_tokens_correct_the_size_check(monkeypatch, final):
     calibration = _Calibration(factor=2.0)
     owner = service(window=1_000)
     owner._usage_recorder = cast(Any, calibration)
 
     async def evaluate(target, state, questions, *, http_client=None, usage_context=None):
-        return {"answers": {}, "usage": {"input_tokens": 1234}}
+        usage = {"input_tokens": 1234}
+        if final is not None:
+            usage["last_request_usage"] = final
+        return {"answers": {}, "usage": usage}
 
     monkeypatch.setattr(owner, "_evaluate", evaluate)
     # About 0.8 of the window: fits as estimated, not as corrected.
@@ -203,9 +207,13 @@ async def test_reported_input_tokens_correct_the_size_check(monkeypatch):
 
     assert isinstance(rejected, DecisionError) and rejected.code == "too_large"
     assert answered["usage"]["input_tokens"] == 1234
-    [(model, measured, estimated)] = calibration.samples
-    assert model == "openrouter/typesafe/jev-1.13::api_key" and measured == 1234
-    assert 0 < estimated < 100
+    if final is not None and "input_tokens" not in final:
+        assert not calibration.samples
+    else:
+        [(model, measured, estimated)] = calibration.samples
+        assert model == "openrouter/typesafe/jev-1.13::api_key"
+        assert measured == (1234 if final is None else 321)
+        assert 0 < estimated < 100
 
 
 @pytest.mark.asyncio

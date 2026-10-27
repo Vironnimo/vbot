@@ -23,6 +23,7 @@ from websockets.protocol import State
 
 import core.providers.http as http_module
 import core.providers.openai as openai_module
+from core.chat.streaming import stream_model_response
 from core.debug.recorder import DebugContext, ProviderDebugRecorder
 from core.debug.store import DebugTraceStore
 from core.providers._responses_websocket import (
@@ -513,6 +514,23 @@ def _error_frame(status: int, **error: Any) -> dict[str, Any]:
     }
 
 
+@pytest.mark.asyncio
+async def test_failed_websocket_response_reports_usage_before_error() -> None:
+    event = _failed("insufficient_quota")
+    event["response"]["usage"] = {"input_tokens": 1000, "output_tokens": 250}
+    connector = FakeCodexWebSocketConnector([FakeCodexWebSocket([[event]])])
+    adapter = codex_adapter(responses_websocket_connect=connector)
+    deltas = []
+    with pytest.raises(ProviderError) as caught:
+        async for delta in adapter.stream(
+            SAMPLE_MESSAGES, model_id=MODEL_ID, conversation_id=CONVERSATION_ID
+        ):
+            deltas.append(delta)
+    assert not caught.value.retryable
+    assert deltas == [{"type": "usage", "input_tokens": 1000, "output_tokens": 250}]
+    await adapter.aclose()
+
+
 @pytest.mark.parametrize(
     ("event", "sentinel", "expected_type", "retryable"),
     [
@@ -652,43 +670,66 @@ async def test_codex_error_frames_wait_as_long_as_the_provider_reports(
     await adapter.aclose()
 
 
+@pytest.mark.parametrize("with_usage", [False, True])
 @pytest.mark.asyncio
-async def test_a_rejection_event_before_the_first_delta_is_learned_on_a_fresh_socket() -> None:
+async def test_a_rejection_event_before_the_first_delta_is_learned_on_a_fresh_socket(
+    with_usage: bool,
+) -> None:
     """An in-band rejection teaches the wire like an HTTP one (test_wire_learning.py).
 
     The failed exchange drops its socket and continuation, so the retry in the
     learned shape opens a fresh socket with the full context.
     """
 
-    rejected = FakeCodexWebSocket(
-        [
-            [
-                _error_frame(
-                    400,
-                    type="invalid_request_error",
-                    param="reasoning.effort",
-                    message="Invalid value for 'reasoning.effort': 'max'",
-                )
-            ]
-        ]
+    error = {
+        "type": "invalid_request_error",
+        "code": "invalid_request_error",
+        "param": "reasoning.effort",
+        "message": "Invalid value for 'reasoning.effort': 'max'",
+    }
+    event = (
+        {
+            "type": "response.failed",
+            "response": {
+                "status": "failed",
+                "error": error,
+                "usage": {"input_tokens": 10, "output_tokens": 1},
+            },
+        }
+        if with_usage
+        else _error_frame(400, **error)
     )
+    rejected = FakeCodexWebSocket([[event]])
     replacement = FakeCodexWebSocket([_final_turn("resp_1"), _final_turn("resp_2")])
     connector = FakeCodexWebSocketConnector([rejected, replacement])
     adapter = codex_adapter(
         responses_websocket_connect=connector, model_lookup=bundled_model_lookup()
     )
 
-    for _ in range(2):
-        deltas = [
-            delta
-            async for delta in adapter.stream(
-                SAMPLE_MESSAGES,
-                model_id="gpt-6-sol",
-                conversation_id=CONVERSATION_ID,
-                thinking_effort="max",
-            )
-        ]
-        assert deltas[-1]["type"] == "finish"
+    for iteration in range(2):
+        reported: dict[str, Any] = {}
+        result = await stream_model_response(
+            adapter,
+            SAMPLE_MESSAGES,
+            model_id="gpt-6-sol",
+            conversation_id=CONVERSATION_ID,
+            thinking_effort="max",
+            on_usage=reported.update,
+        )
+        assert result["terminal_outcome"] == "stop"
+        expected: dict[str, Any] = (
+            {
+                "input_tokens": 12,
+                "output_tokens": 4,
+                "last_request_usage": {"input_tokens": 2, "output_tokens": 3},
+            }
+            if with_usage and iteration == 0
+            else {"input_tokens": 2, "output_tokens": 3}
+        )
+        if not with_usage and iteration == 0:
+            expected["last_request_usage"] = {"input_tokens": 2, "output_tokens": 3}
+        assert result["usage"] == expected
+        assert reported == expected
 
     assert rejected.closed is True
     assert len(connector.calls) == 2
@@ -696,6 +737,53 @@ async def test_a_rejection_event_before_the_first_delta_is_learned_on_a_fresh_so
     assert [payload["reasoning"]["effort"] for payload in payloads] == ["max", "xhigh", "xhigh"]
     assert "previous_response_id" not in replacement.sent_payloads[0]
     assert replacement.sent_payloads[0]["input"] == rejected.sent_payloads[0]["input"]
+    await adapter.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("last_reports", [False, True])
+async def test_failed_learning_attempts_keep_the_combined_usage_on_error(
+    last_reports: bool,
+) -> None:
+    rejection = {
+        "type": "response.failed",
+        "response": {
+            "status": "failed",
+            "error": {
+                "code": "invalid_request_error",
+                "message": "Invalid value for 'reasoning.effort': 'max'",
+            },
+            "usage": {"input_tokens": 10, "output_tokens": 1},
+        },
+    }
+    failure = _failed("insufficient_quota")
+    if last_reports:
+        failure["response"]["usage"] = {"input_tokens": 20, "output_tokens": 2}
+    connector = FakeCodexWebSocketConnector(
+        [FakeCodexWebSocket([[rejection]]), FakeCodexWebSocket([[failure]])]
+    )
+    adapter = codex_adapter(
+        responses_websocket_connect=connector, model_lookup=bundled_model_lookup()
+    )
+    reported: dict[str, Any] = {}
+    with pytest.raises(ProviderError):
+        await stream_model_response(
+            adapter,
+            SAMPLE_MESSAGES,
+            model_id="gpt-6-sol",
+            conversation_id=CONVERSATION_ID,
+            thinking_effort="max",
+            on_usage=reported.update,
+        )
+    assert reported == (
+        {
+            "input_tokens": 30,
+            "output_tokens": 3,
+            "last_request_usage": {"input_tokens": 20, "output_tokens": 2},
+        }
+        if last_reports
+        else {"input_tokens": 10, "output_tokens": 1, "last_request_usage": {}}
+    )
     await adapter.aclose()
 
 

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -13,6 +15,7 @@ import pytest
 from starlette.websockets import WebSocketDisconnect
 
 from core.computers import ComputerError, ComputerRegistry
+from server._app_lifecycle import _register_computer_change_bridge
 from server._computer_socket import serve_computer_socket
 from server.access import Principal
 from server.access._principal import HOST, PRINCIPAL_SCOPE_KEY
@@ -99,6 +102,8 @@ async def _connected(
     registry: ComputerRegistry, computer_id: str = "pc_laptop"
 ) -> AsyncIterator[tuple[_Socket, asyncio.Task[None]]]:
     socket = _Socket()
+    socket.app.state.runtime = SimpleNamespace(computers=registry)
+    unsubscribe = _register_computer_change_bridge(socket.app.state)
     socket.receive(_hello(computer_id, name=f"Laptop {computer_id}"))
     serving = asyncio.create_task(serve_computer_socket(socket, registry))
     try:
@@ -116,6 +121,7 @@ async def _connected(
             serving.cancel()
         with suppress(asyncio.CancelledError, WebSocketDisconnect):
             await serving
+        unsubscribe()
 
 
 @pytest.mark.asyncio
@@ -284,6 +290,41 @@ async def test_wrong_registration_key_cannot_replace_an_existing_computer_link()
             assert registry.get("pc_laptop").online
     finally:
         registry.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_socket_registration_publishes_the_offline_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = ComputerRegistry(tmp_path)
+    socket = _Socket()
+    socket.app.state.runtime = SimpleNamespace(computers=registry)
+    unsubscribe = _register_computer_change_bridge(socket.app.state)
+    assert registry._store is not None
+    claim = registry._store.claim
+    loop = asyncio.get_running_loop()
+    started = loop.create_future()
+    release = threading.Event()
+
+    def delayed_claim(*args: Any) -> None:
+        loop.call_soon_threadsafe(started.set_result, None)
+        assert release.wait(5)
+        claim(*args)
+
+    monkeypatch.setattr(registry._store, "claim", delayed_claim)
+    socket.receive(_hello())
+    serving = asyncio.create_task(serve_computer_socket(socket, registry))
+    try:
+        await asyncio.wait_for(started, 2)
+        serving.cancel()
+    finally:
+        release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await serving
+    assert not registry.get("pc_laptop").online
+    assert socket.event_bus.events == [("resource_changed", {"kind": "computers"})]
+    unsubscribe()
+    registry.close()
 
 
 @pytest.mark.asyncio

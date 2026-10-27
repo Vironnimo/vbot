@@ -7,6 +7,7 @@ carries, and the originals stay reopenable.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import io
 import json
@@ -34,6 +35,7 @@ from core.providers.adapter import (
 from core.providers.errors import ProviderRequestTooLargeError
 from core.providers.http import prepare_request
 from core.providers.openai_compatible import OpenAICompatibleAdapter
+from core.runs import RunCancelledError
 from core.tools import read_media_artifact, tool_success
 from tests.core.chat.chat_integration_test_support import FakeAdapter, JsonObject, StartRuntime
 from tests.core.chat.chat_integration_test_support import resources_dir as resources_dir
@@ -280,6 +282,68 @@ async def test_provider_body_overflow_preserves_fresh_inputs_and_stops_without_r
         )
         assert "base64" not in json.dumps([message.to_dict() for message in persisted])
         assert image_path.read_bytes() == _PNG_BYTES
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("first_outcome", ["success", "failed", "cancelled"])
+async def test_prior_images_are_retired_only_after_an_accepted_response(
+    resources_dir: Path, start_runtime: StartRuntime, first_outcome: str
+) -> None:
+    _isolate_from_compaction(resources_dir)
+    attempted = asyncio.Event()
+
+    class LimitedAdapter(FakeAdapter):
+        first = True
+
+        @override
+        def request_image_limit(self, model_id: str) -> int | None:
+            return 1
+
+        @override
+        async def send(self, messages: list[dict], *, model_id: str, **kwargs: Any) -> dict:
+            if self.first:
+                self.first = False
+                attempted.set()
+                if first_outcome == "failed":
+                    raise ProviderRequestTooLargeError(1001, 1000)
+                if first_outcome == "cancelled":
+                    await asyncio.Future()
+            return await super().send(messages, model_id=model_id, **kwargs)
+
+    adapter = LimitedAdapter({"content": "done", "tool_calls": None})
+    with start_runtime(adapter) as runtime:
+        runtime.agents.create("coder", "Coder", model="fake-provider/fake-model-vision")
+        record = runtime.attachment_store.store("fixture.png", _PNG_BYTES)
+        image: list[ContentBlock] = [
+            MediaBlock("media", record.id, record.filename, record.media_type)
+        ]
+        if first_outcome == "cancelled":
+            runtime.chat_sessions.create("coder", session_id="image-delivery")
+            run = await runtime.chat_loop.start_run("coder", image, session_id="image-delivery")
+            await attempted.wait()
+            run.request_cancel(reason="user")
+            with pytest.raises(RunCancelledError):
+                await run.wait()
+        elif first_outcome == "failed":
+            with pytest.raises(ProviderRequestTooLargeError):
+                await runtime.chat_loop.send("coder", image, session_id="image-delivery")
+        else:
+            await runtime.chat_loop.send("coder", image, session_id="image-delivery")
+
+        if first_outcome == "success":
+            await runtime.chat_loop.send("coder", image, session_id="image-delivery")
+            user_blocks = [
+                part
+                for message in adapter.requests[-1].messages
+                if message.get("role") == "user" and isinstance(message.get("content"), list)
+                for part in message["content"]
+            ]
+            assert sum(part.get("type") == "media" for part in user_blocks) == 1
+        else:
+            with pytest.raises(ImageBudgetExceededError) as failure:
+                await runtime.chat_loop.send("coder", image, session_id="image-delivery")
+            assert (failure.value.count, failure.value.max_count) == (2, 1)
+            assert not adapter.requests
 
 
 def _isolate_from_compaction(resources_dir: Path) -> None:

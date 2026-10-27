@@ -133,6 +133,56 @@ async def test_waiting_work_limit_rejects_the_next_queued_run(monkeypatch) -> No
     assert await (await second.future).wait() == "done"
 
 
+@pytest.mark.parametrize("outcome", ["accepted", "failed", "cancelled"])
+@pytest.mark.parametrize("reserved", [False, True], ids=["accessor", "channel"])
+async def test_waiting_work_limit_covers_durable_acceptance(outcome: str, reserved: bool) -> None:
+    manager = ChatRunManager(waiting_work_limit=2 if reserved else 1)
+    active_execute, _ = held()
+    await manager.start(SESSION, active_execute)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    reservation = manager.reserve_waiting_work(scope="channel", scope_limit=1) if reserved else None
+
+    async def persist() -> None:
+        entered.set()
+        await release.wait()
+        if outcome == "failed":
+            raise OSError("acceptance failed")
+
+    task = asyncio.create_task(
+        manager.enqueue(
+            SESSION,
+            active_execute,
+            admission=RunAdmission(accessor_input_id="input"),
+            waiting_work_admission=reservation,
+            persist_input=persist,
+        )
+    )
+    try:
+        await entered.wait()
+        assert manager.waiting_work_count() == 1
+        with pytest.raises(WaitingWorkLimitError):
+            manager.reserve_waiting_work(scope="channel" if reserved else "other", scope_limit=1)
+        if reserved:
+            other = manager.reserve_waiting_work(scope="other", scope_limit=1)
+            assert manager.waiting_work_count() == 2
+            assert manager.release_waiting_work(other)
+        if outcome == "cancelled":
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            release.set()
+            if outcome == "failed":
+                with pytest.raises(OSError):
+                    await task
+            else:
+                await task
+        assert manager.waiting_work_count() == (1 if outcome == "accepted" else 0)
+    finally:
+        await manager.aclose()
+
+
 async def test_waiting_work_admission_transfers_to_a_queued_run() -> None:
     manager = ChatRunManager(waiting_work_limit=1)
     release = asyncio.Event()
@@ -313,6 +363,23 @@ async def test_multiple_enqueued_items_drain_in_fifo_order() -> None:
     assert started == ["first", "second", "third"]
     queued_releases["third"].set()
     assert await third_run.wait() == "third"
+
+    # A new admission already waiting for the manager lock cannot overtake an
+    # older item when the active Run publishes its terminal event.
+    active_release = asyncio.Event()
+    active_run = await manager.start(SESSION, active_execute)
+    old = await manager.enqueue(SESSION, make_executor("first"))
+    async with manager.queued_input_mutation():
+        new_task = asyncio.create_task(manager.enqueue(SESSION, make_executor("second")))
+        await asyncio.sleep(0)
+        active_release.set()
+        await active_run.wait()
+    new = await new_task
+    old_run = await asyncio.wait_for(old.future, timeout=1)
+    assert await old_run.wait() == "first"
+    new_run = await asyncio.wait_for(new.future, timeout=1)
+    assert await new_run.wait() == "second"
+    assert started[-2:] == ["first", "second"]
 
 
 async def test_remove_queued_item_cancels_future_and_removes_from_queue() -> None:

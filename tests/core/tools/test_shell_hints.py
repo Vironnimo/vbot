@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from functools import partial
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -1728,3 +1730,114 @@ def test_a_script_python_cannot_open_names_the_existing_path(
     # A hint names no path the Session's permission rules refuse.
     denied = restricted(tmp_path, deny=["Read(tools/**)"])
     assert annotate_failure(command, 2, output, workdir=tmp_path, permissions=denied) is None
+
+
+@pytest.mark.parametrize(
+    ("rules", "command", "output", "forbidden"),
+    [
+        (
+            ["Read(src/privatepackage/__init__.py)"],
+            'python -c "import privatepackage"',
+            "ModuleNotFoundError: No module named 'privatepackage'",
+            "src/privatepackage/",
+        ),
+        (
+            ["Read(secret.py)"],
+            'python -c "import secret"',
+            "ModuleNotFoundError: No module named 'secret'",
+            "working directory",
+        ),
+        (
+            ["Read(src)"],
+            'python -c "import privatepackage"',
+            "ModuleNotFoundError: No module named 'privatepackage'",
+            "src/privatepackage/",
+        ),
+        (
+            ["Read(tests/__init__.py)"],
+            "python -m unittest tests.test_errors",
+            "ModuleNotFoundError: No module named 'tests.test_errors'",
+            "__init__.py",
+        ),
+        (
+            ["Read(tests/missing.py)"],
+            "python -m unittest tests.missing",
+            "ModuleNotFoundError: No module named 'tests.missing'",
+            "working directory has no",
+        ),
+        (
+            ["Read(tools/quote_check.py)"],
+            "python tools.quote_check.py",
+            "python: can't open file '{root}/tools.quote_check.py': [Errno 2] missing",
+            "tools/quote_check.py",
+        ),
+        (
+            ["Read(tools/quote_check.py)"],
+            "python tools/qoute_check.py",
+            "python: can't open file '{root}/tools/qoute_check.py': [Errno 2] missing",
+            "tools/quote_check.py",
+        ),
+    ],
+)
+def test_python_failure_hints_do_not_inspect_denied_entries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    rules: list[str],
+    command: str,
+    output: str,
+    forbidden: str,
+) -> None:
+    for name in (
+        "src/privatepackage/__init__.py",
+        "secret.py",
+        "tests/test_errors.py",
+        "tests/__init__.py",
+        "tools/quote_check.py",
+    ):
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    permissions = restricted(tmp_path, deny=rules)
+    touched: list[Path] = []
+
+    # The boundary resolves links itself. Detect the actual hint's stat/list calls,
+    # including checks that happen before a later refusal hides their result.
+    for method in ("is_file", "is_dir", "iterdir"):
+        original = getattr(Path, method)
+
+        def guarded(
+            path: Path, *args: Any, _original: Callable[..., Any] = original, **kwargs: Any
+        ) -> Any:
+            if permissions.check_path(path, "read") is not None:
+                touched.append(path)
+            return _original(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, method, guarded)
+
+    hint = shell_hints.annotate_failure(
+        command,
+        1,
+        output.format(root=tmp_path.as_posix()),
+        workdir=tmp_path,
+        permissions=permissions,
+    )
+
+    assert not touched
+    assert hint is None or forbidden not in hint
+
+
+def test_python_import_hint_keeps_readable_package_under_permission_rules(tmp_path: Path) -> None:
+    marker = tmp_path / "src" / "privatepackage" / "__init__.py"
+    marker.parent.mkdir(parents=True)
+    marker.touch()
+    permissions = restricted(tmp_path, deny=["Read(unrelated)"])
+
+    hint = shell_hints.annotate_failure(
+        'python -c "import privatepackage"',
+        1,
+        "ModuleNotFoundError: No module named 'privatepackage'",
+        workdir=tmp_path,
+        permissions=permissions,
+    )
+
+    assert hint is not None and "src/privatepackage/" in hint

@@ -158,6 +158,50 @@ async def test_measured_usage_reaches_the_answer_the_run_end_and_the_usage_recor
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("last", [{"input_tokens": 1000, "output_tokens": 40}, {}])
+async def test_retry_usage_keeps_total_and_anchors_only_the_final_request(
+    tmp_path: Path, last: JsonObject
+) -> None:
+    adapter = StubAdapter(
+        [],
+        stream_responses=[
+            [
+                {
+                    "type": "usage",
+                    "input_tokens": 1500,
+                    "output_tokens": 55,
+                    "last_request_usage": last,
+                },
+                {"type": "content_delta", "text": "Hello"},
+                {"type": "finish", "reason": "stop"},
+            ]
+        ],
+    )
+    runtime = _runtime(tmp_path, adapter)
+    recorder = runtime.usage_recorder = UsageRecorder(tmp_path / "model-usage.db")
+    try:
+        answer = await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
+        assert answer.usage is not None
+        assert answer.usage["input_tokens"] == 1500
+        assert answer.usage["output_tokens"] == 55
+        assert answer.usage["last_request_usage"] == last
+        assert _saved_answer(runtime).usage["last_request_usage"] == last
+        context = answer.usage["context_usage"]
+        if last:
+            assert context["provider_input_tokens"] == 1000
+            assert context["provider_output_tokens"] == 40
+        else:
+            assert "provider_input_tokens" not in context
+            assert "provider_output_tokens" not in context
+        [record] = read_ledger(recorder)[1]
+        assert record.usage["input_tokens"] == 1500
+        assert record.usage["output_tokens"] == 55
+        assert "last_request_usage" not in record.usage
+    finally:
+        recorder.close()
+
+
+@pytest.mark.asyncio
 async def test_completed_answer_saves_a_price_snapshot_with_its_usage(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

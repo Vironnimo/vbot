@@ -20,6 +20,7 @@ from core.providers.reasoning import (
     REASONING_REPLAY_FULL_HISTORY,
     REASONING_REPLAY_NONE,
 )
+from core.utils.tokens import REPORTED_REASONING_TOKENS_FIELD
 from tests.core.chat.messages_test_support import FIXED_TIMESTAMP, FIXED_TIMING
 
 _SIGNED_META = {"content_blocks": [{"type": "thinking", "signature": "signed"}]}
@@ -81,6 +82,19 @@ def test_full_history_replays_reasoning_only_within_the_same_scope(
         assert entry["reasoning_meta"] == _SIGNED_META
     else:
         assert "reasoning" not in entry and "reasoning_meta" not in entry
+
+
+@pytest.mark.parametrize("last", [{"reasoning_tokens": 30}, {}, {"output_tokens": 3}])
+def test_replayed_reasoning_counts_only_the_final_physical_request(last: dict[str, int]) -> None:
+    scope = "anthropic/claude-sonnet-4::api-key"
+    answer = _reasoning_answer(
+        scope, "Answer", usage={"reasoning_tokens": 80, "last_request_usage": last}
+    )
+    entry = _full_history([answer], scope)[0]
+    if "reasoning_tokens" in last:
+        assert entry[REPORTED_REASONING_TOKENS_FIELD] == 30
+    else:
+        assert REPORTED_REASONING_TOKENS_FIELD not in entry
 
 
 def test_full_history_strips_interrupted_reasoning_without_touching_the_record() -> None:

@@ -98,6 +98,19 @@ async def test_stream_request_asks_for_usage_and_leaves_reads_to_chat_clocks(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        [_delta_chunk(refusal="Cannot "), _delta_chunk(refusal="help.")],
+        [_delta_chunk(content=[{"type": "refusal", "refusal": "Cannot help."}])],
+    ],
+)
+@pytest.mark.asyncio
+async def test_stream_preserves_refusal_as_visible_content(chunks: list[dict[str, Any]]) -> None:
+    fields = await _accumulate(sse(*chunks, _finish_chunk("stop")))
+    assert fields.content == "Cannot help."
+
+
 @pytest.mark.asyncio
 async def test_stream_yields_content_heartbeats_and_finish_and_ignores_other_fields() -> None:
     body = sse(

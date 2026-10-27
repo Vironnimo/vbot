@@ -40,6 +40,23 @@ if TYPE_CHECKING:
 
 JsonObject = dict[str, Any]
 
+
+class ServerReplayGapError(Exception):
+    """The shared socket's first retained event no longer follows its cursor."""
+
+
+async def _contiguous_server_events(
+    stream: AsyncGenerator[JsonObject], *, after_sequence: int
+) -> AsyncGenerator[JsonObject]:
+    """Reject a missing replay head before sending any partial replay."""
+    first = True
+    async for event in stream:
+        if first and event["sequence"] != after_sequence + 1:
+            raise ServerReplayGapError
+        first = False
+        yield event
+
+
 SSE_HEARTBEAT_INTERVAL_SECONDS = 10.0
 
 # Run events sent over SSE, all streams together; heartbeats are not counted.

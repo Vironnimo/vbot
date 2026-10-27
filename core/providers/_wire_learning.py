@@ -53,6 +53,50 @@ __all__ = ["execute_learning_from_rejections", "stream_learning_from_rejections"
 
 _LOGGER = get_logger("providers.wire_learning")
 
+
+class FailureUsageDelta(dict[str, Any]):
+    """Usage immediately followed by an in-band error, before learning decides to retry."""
+
+
+_USAGE_TOTAL_FIELDS = (
+    "input_tokens",
+    "output_tokens",
+    "cache_read_tokens",
+    "cache_write_tokens",
+    "reasoning_tokens",
+    "reported_cost_usd",
+)
+
+
+def _failed_attempt_usage(deltas: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Sum reported counters for rejected attempts, leaving absent measurements unknown."""
+    total: dict[str, Any] = {"type": "usage"}
+    for delta in deltas:
+        for key in _USAGE_TOTAL_FIELDS:
+            value = delta.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
+                total[key] = total.get(key, 0) + value
+    return total if len(total) > 1 else None
+
+
+def _include_failed_attempt_usage(
+    delta: dict[str, Any], failed: dict[str, Any] | None, *, repaired: bool
+) -> dict[str, Any]:
+    """Add earlier attempts to this attempt's cumulative snapshots, never to speed."""
+    if not repaired or delta.get("type") != "usage":
+        return delta
+    result = dict(delta)
+    result["last_request_usage"] = {key: delta[key] for key in _USAGE_TOTAL_FIELDS if key in delta}
+    if failed is None:
+        return result
+    for key in _USAGE_TOTAL_FIELDS:
+        value = delta.get(key)
+        previous = failed.get(key)
+        if isinstance(value, (int, float)) and isinstance(previous, (int, float)):
+            result[key] = value + previous
+    return result
+
+
 _MAX_LESSONS = 2
 """At most two lessons (rejected parameter, parameter combination, effort, off
 switch, effort update or stated limit) per request."""
@@ -300,13 +344,25 @@ async def stream_learning_from_rejections(
     """
 
     established: list[PreparedRequest] = []
+    failure_usage: list[dict[str, Any]] = []
+    attempts = 0
+    last_attempt_usage: dict[str, Any] = {}
 
     async def establish(
         request: PreparedRequest,
     ) -> tuple[AsyncGenerator[dict[str, Any]], dict[str, Any] | None]:
+        nonlocal attempts, last_attempt_usage
+        attempts += 1
+        last_attempt_usage = {}
         stream = open_stream(request)
         try:
             first = await anext(stream)
+            while isinstance(first, FailureUsageDelta):
+                failure_usage.append(dict(first))
+                last_attempt_usage.update(
+                    {key: first[key] for key in _USAGE_TOTAL_FIELDS if key in first}
+                )
+                first = await anext(stream)
         except StopAsyncIteration:
             first = None
         except BaseException:
@@ -315,19 +371,32 @@ async def stream_learning_from_rejections(
         established.append(request)
         return stream, first
 
-    stream, first = await execute_learning_from_rejections(
-        establish,
-        plan,
-        wire=wire,
-        model_id=model_id,
-        provider_label=provider_label,
-    )
+    try:
+        stream, first = await execute_learning_from_rejections(
+            establish,
+            plan,
+            wire=wire,
+            model_id=model_id,
+            provider_label=provider_label,
+        )
+    except ProviderError:
+        combined = _failed_attempt_usage(failure_usage)
+        if combined is not None:
+            if attempts > 1:
+                combined["last_request_usage"] = last_attempt_usage
+            yield combined
+        raise
+    combined = _failed_attempt_usage(failure_usage)
     request = established.pop()
     off_watch = _OffWatch() if _requests_off(request.payload, wire.profile(model_id)) else None
     request.release()
     del request
     returned_reasoning = False
     async with aclosing(stream):
+        if combined is not None:
+            if attempts > 1:
+                combined["last_request_usage"] = {}
+            yield combined
         if first is None:
             return
         delta = first
@@ -338,7 +407,7 @@ async def stream_learning_from_rejections(
             if off_watch is not None and off_watch.reasons(delta, returned_reasoning):
                 off_watch = None
                 wire.observe_off_ignored(model_id)
-            yield delta
+            yield _include_failed_attempt_usage(delta, combined, repaired=attempts > 1)
             try:
                 delta = await anext(stream)
             except StopAsyncIteration:

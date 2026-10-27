@@ -121,13 +121,22 @@ def _normalize_openai_message_delta(
             chunks.append(dict(item))
             chunk_type = item.get("type")
             kind = (
-                {"text": "content_delta", "thinking": "reasoning_delta"}.get(chunk_type)
+                {
+                    "text": "content_delta",
+                    "refusal": "content_delta",
+                    "thinking": "reasoning_delta",
+                }.get(chunk_type)
                 if isinstance(chunk_type, str)
                 else None
             )
             text = _chat_content_chunk_text(item)
             if kind and text:
                 normalized_deltas.append({"type": kind, "text": text})
+
+    refusal = delta.get("refusal")
+    if isinstance(refusal, str) and refusal:
+        normalized_deltas.append({"type": "content_delta", "text": refusal})
+        state.setdefault("content_chunks", []).append({"type": "refusal", "refusal": refusal})
 
     found = _find_openai_reasoning(
         delta, state.get(_OPENAI_STREAM_REASONING_FIELDS_STATE_KEY, OPENAI_REASONING_KEYS)

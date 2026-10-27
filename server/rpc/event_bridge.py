@@ -359,13 +359,31 @@ async def publish_archived_sessions(
         for address in addresses:
             scope = (address.project_id, address.agent_id)
             if scope not in resolved:
-                resolved[scope] = (
-                    state.runtime.chat_sessions.newest_session_id(
-                        address.agent_id, address.project_id
+                try:
+                    if address.project_id is not None:
+                        resolved[scope] = state.runtime.chat_sessions.newest_session_id(
+                            address.agent_id, address.project_id
+                        )
+                    else:
+                        current = state.runtime.agents.get_raw(address.agent_id).current_session_id
+                        removed = any(
+                            member.project_id is None
+                            and member.agent_id == address.agent_id
+                            and member.session_id == current
+                            for member in addresses
+                        )
+                        resolved[scope] = (
+                            state.runtime.chat_sessions.newest_session_id(address.agent_id)
+                            if removed
+                            else current or None
+                        )
+                except Exception:
+                    _LOGGER.exception(
+                        "Could not resolve archived Session landing (agent=%s project=%s)",
+                        address.agent_id,
+                        address.project_id or "-",
                     )
-                    if address.project_id is not None
-                    else state.runtime.agents.get(address.agent_id).current_session_id or None
-                )
+                    resolved[scope] = None
         return resolved
 
     resolved = await state.runtime.chat_sessions.run_async(resolve_landings)

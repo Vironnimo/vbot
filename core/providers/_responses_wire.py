@@ -18,6 +18,7 @@ from core.providers._responses_stream import (
     ResponsesStreamState,
     iter_responses_sse_deltas_with_state,
     normalize_responses_stream_event,
+    responses_error_usage_delta,
     stream_responses_sse,
 )
 from core.providers._responses_values import (
@@ -70,6 +71,7 @@ __all__ = [
     "iter_responses_sse_deltas_with_state",
     "normalize_responses_response",
     "normalize_responses_stream_event",
+    "responses_error_usage_delta",
     "responses_returned_reasoning",
     "stream_responses_sse",
 ]
@@ -300,16 +302,16 @@ def _has_json_object_arguments(arguments: Any) -> bool:
 
 
 # The readable text blocks of replayed output items, by item type and field.
-_READABLE_REPLAY_BLOCKS: dict[str, tuple[tuple[str, str], ...]] = {
-    "message": (("content", "output_text"),),
-    "reasoning": (("summary", "summary_text"), ("content", "reasoning_text")),
+_READABLE_REPLAY_BLOCKS: dict[str, tuple[tuple[str, str, str], ...]] = {
+    "message": (("content", "output_text", "text"), ("content", "refusal", "refusal")),
+    "reasoning": (("summary", "summary_text", "text"), ("content", "reasoning_text", "text")),
 }
 
 
 def _replay_item(item: Mapping[str, Any]) -> dict[str, Any]:
     """Copy a stored output item for replay with its readable text neutralized.
 
-    Assistant ``output_text`` and readable Reasoning (``summary_text``,
+    Assistant ``output_text`` and ``refusal`` and readable Reasoning (``summary_text``,
     ``reasoning_text``) get look-alike System Reminder tags neutralized, as
     Chat does for the Assistant text it replays itself; encrypted content,
     identifiers and every other item kind replay verbatim. The rewrite is
@@ -317,24 +319,24 @@ def _replay_item(item: Mapping[str, Any]) -> dict[str, Any]:
     """
 
     replayed = dict(item)
-    for field, block_type in _READABLE_REPLAY_BLOCKS.get(str(item.get("type")), ()):
-        blocks = item.get(field)
+    for field, block_type, text_field in _READABLE_REPLAY_BLOCKS.get(str(item.get("type")), ()):
+        blocks = replayed.get(field)
         if not isinstance(blocks, list):
             continue
-        neutralized = [_neutralized_block(block, block_type) for block in blocks]
+        neutralized = [_neutralized_block(block, block_type, text_field) for block in blocks]
         if any(new is not old for new, old in zip(neutralized, blocks, strict=True)):
             replayed[field] = neutralized
     return replayed
 
 
-def _neutralized_block(block: Any, block_type: str) -> Any:
+def _neutralized_block(block: Any, block_type: str, text_field: str) -> Any:
     if not isinstance(block, Mapping) or block.get("type") != block_type:
         return block
-    text = block.get("text")
+    text = block.get(text_field)
     if not isinstance(text, str):
         return block
     neutralized = neutralize_system_reminder_tags(text)
-    return block if neutralized == text else {**block, "text": neutralized}
+    return block if neutralized == text else {**block, text_field: neutralized}
 
 
 def _argument_sequence_at(

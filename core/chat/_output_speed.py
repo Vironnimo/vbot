@@ -36,6 +36,7 @@ from dataclasses import replace
 from typing import Any
 
 from core.chat.messages import ChatMessage, JsonObject
+from core.usage import last_request_usage
 from core.utils.tokens import estimate_message_tokens, estimate_tokens
 
 SPEED_FIELD = "speed"
@@ -196,7 +197,7 @@ def complete_output_speed(message: ChatMessage) -> ChatMessage:
     if reported is not None:
         speed.update(_reported_speed(reported, reported_duration))
     elif isinstance(marks, dict):
-        speed.update(_measured_speed(marks, usage, message))
+        speed.update(_measured_speed(marks, dict(last_request_usage(usage)), message))
     if speed:
         usage[SPEED_FIELD] = speed
     return replace(message, usage=usage)

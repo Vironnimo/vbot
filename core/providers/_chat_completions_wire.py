@@ -379,6 +379,9 @@ def _extract_openai_reasoning(
 
 def _chat_content_chunk_text(chunk: Mapping[str, Any]) -> str:
     """Read text and Mistral ThinkChunks, including nested thinking text."""
+    if chunk.get("type") == "refusal":
+        value = chunk.get("refusal")
+        return value if isinstance(value, str) else ""
     value = chunk.get("thinking") if chunk.get("type") == "thinking" else chunk.get("text")
     if isinstance(value, str):
         return value

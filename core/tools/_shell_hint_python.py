@@ -137,15 +137,15 @@ def _hint_script_not_found(failure: _Failure) -> str | None:
     if (
         name.endswith(".py")
         and len(parts) > 1
-        and dotted.is_file()
         and _readable(dotted, permissions)
+        and dotted.is_file()
     ):
         found, dots = [dotted], True
     else:
         found = [
             directory / name
-            for directory in _subdirectories(missing.parent)
-            if (directory / name).is_file() and _readable(directory / name, permissions)
+            for directory in _subdirectories(missing.parent, permissions)
+            if _readable(directory / name, permissions) and (directory / name).is_file()
         ] or [
             path
             for path in similar_entries(missing, permissions=permissions, kind="files")
@@ -218,7 +218,8 @@ def _missing_submodule(name: str, workdir: Path | None, permissions: PermissionB
         )
         if module is not None:
             shown = module.as_posix()
-            if not (workdir / top / "__init__.py").is_file():
+            marker = workdir / top / "__init__.py"
+            if _readable(marker, permissions) and not marker.is_file():
                 return (
                     f"{shown} exists in the working directory, but Python imported another "
                     f"package named '{top}': the working directory's {top}/ has no __init__.py, "
@@ -230,7 +231,14 @@ def _missing_submodule(name: str, workdir: Path | None, permissions: PermissionB
                 f"active import path. Check sys.path and the loaded {parent} package's __file__ "
                 "and __path__; correct import-path entries that select another package."
             )
-        if (workdir / package).is_dir() and _readable(workdir / package, permissions):
+        if (
+            all(
+                _readable(workdir / path, permissions)
+                for path in (package / f"{leaf}.py", package / leaf)
+            )
+            and _readable(workdir / package, permissions)
+            and (workdir / package).is_dir()
+        ):
             return (
                 f"Python imported the package '{parent}', but it has no module '{leaf}', and "
                 f"the working directory has no {package.as_posix()}/{leaf}.py. Check the name "
@@ -259,8 +267,8 @@ def _imported_elsewhere(failure: _Failure, error_at: int) -> bool:
 
 def _in_workdir(module: str, workdir: Path, permissions: PermissionBoundary) -> bool:
     package, script = workdir / module, workdir / f"{module}.py"
-    return (package.is_dir() and _readable(package, permissions)) or (
-        script.is_file() and _readable(script, permissions)
+    return (_readable(package, permissions) and package.is_dir()) or (
+        _readable(script, permissions) and script.is_file()
     )
 
 
@@ -274,8 +282,10 @@ _LISTED_ENTRIES = 200
 _SHOWN_PATHS = 3
 
 
-def _subdirectories(workdir: Path) -> list[Path]:
-    """The working directory's subdirectories, sorted, from a bounded listing."""
+def _subdirectories(workdir: Path, permissions: PermissionBoundary) -> list[Path]:
+    """The readable subdirectories of a readable folder, from a bounded listing."""
+    if not _readable(workdir, permissions):
+        return []
     try:
         entries = sorted(islice(workdir.iterdir(), _LISTED_ENTRIES))
     except OSError:
@@ -283,7 +293,7 @@ def _subdirectories(workdir: Path) -> list[Path]:
     found: list[Path] = []
     for entry in entries:
         try:
-            if entry.is_dir() and entry.name != "__pycache__":
+            if entry.name != "__pycache__" and _readable(entry, permissions) and entry.is_dir():
                 found.append(entry)
         except OSError:
             continue
@@ -300,14 +310,12 @@ def _in_subdirectories(
     to install a package of that name.
     """
     found: list[tuple[str, str]] = []
-    for directory in _subdirectories(workdir):
-        if (directory / f"{module}.py").is_file() and _readable(
-            directory / f"{module}.py", permissions
-        ):
+    for directory in _subdirectories(workdir, permissions):
+        script = directory / f"{module}.py"
+        marker = directory / module / "__init__.py"
+        if _readable(script, permissions) and script.is_file():
             found.append((f"{directory.name}/{module}.py", directory.name))
-        elif (directory / module / "__init__.py").is_file() and _readable(
-            directory / module, permissions
-        ):
+        elif _readable(marker, permissions) and marker.is_file():
             found.append((f"{directory.name}/{module}/", directory.name))
         if len(found) == _SHOWN_PATHS:
             break
