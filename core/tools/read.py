@@ -429,8 +429,8 @@ def _read_extracted_document(
             return None
         return tool_failure(
             "document_unreadable",
-            f"The text of {label} cannot be extracted: "
-            f"{unreadable_document_problem(kind, error)}. "
+            f"The text of {label} cannot be extracted. "
+            f"{unreadable_document_problem(kind, error, len(raw))} "
             "Report the file to the user instead of retrying.",
         )
 

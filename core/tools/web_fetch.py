@@ -297,8 +297,8 @@ def _fetch_document_result(
             return None
         return tool_failure(
             "document_unreadable",
-            f"The text of {url} cannot be extracted: "
-            f"{unreadable_document_problem(kind, error)}. Try another source.",
+            f"The text of {url} cannot be extracted. "
+            f"{unreadable_document_problem(kind, error, len(data))} Try another source.",
             retryable=False,
         )
 

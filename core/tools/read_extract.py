@@ -58,7 +58,15 @@ _RELATIONSHIPS_NS = "http://schemas.openxmlformats.org/package/2006/relationship
 
 
 class ExtractionError(Exception):
-    """Raised when an extractable document is malformed and cannot be rendered."""
+    """Raised when an extractable document is malformed and cannot be rendered.
+
+    ``cause`` says in plain words what is wrong with the file, for the Agent;
+    the message keeps the library's detail for logs.
+    """
+
+    def __init__(self, message: str, *, cause: str = "its content cannot be parsed") -> None:
+        super().__init__(message)
+        self.cause = cause
 
 
 class ExtractionLimitExceededError(ExtractionError):
@@ -67,6 +75,9 @@ class ExtractionLimitExceededError(ExtractionError):
 
 class DocumentPasswordError(ExtractionError):
     """Raised when a document opens only with a password."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, cause="it is protected by a password")
 
 
 class _ExtractionBudget:
@@ -107,12 +118,41 @@ def identifies_document(media_type: str) -> bool:
     return media_type in _MEDIA_TYPE_KINDS
 
 
-def unreadable_document_problem(kind: str, error: ExtractionError) -> str:
-    """Say, for the Agent, why a document's text cannot be extracted."""
-    label = document_label(kind)
+def unreadable_document_problem(kind: str, error: ExtractionError, size: int) -> str:
+    """Say, for the Agent, why a document's text cannot be extracted.
+
+    The size and the cause are the evidence Agents otherwise gather themselves
+    (a hex dump, a search for the end marker) before telling the user.
+    """
+    document = f"The {document_label(kind)} ({_size_label(size)})"
     if isinstance(error, DocumentPasswordError):
-        return f"the {label} is protected by a password"
-    return f"the {label} is damaged or in a form that cannot be read"
+        return f"{document} cannot be opened: {error.cause}."
+    return f"{document} is damaged: {error.cause}."
+
+
+def _size_label(size: int) -> str:
+    if size < 1024:
+        return f"{size} bytes"
+    if size < 1024 * 1024:
+        return f"{size / 1024:.0f} KB"
+    return f"{size / (1024 * 1024):.1f} MB"
+
+
+def _pdf_damage(data: bytes) -> str:
+    """Name what is visibly wrong with a PDF that pypdf could not parse."""
+    if not data.lstrip().startswith(b"%PDF-"):
+        return "it does not start with a PDF header"
+    if b"%%EOF" not in data[-2048:]:
+        return "it ends without its end-of-file marker, so it is probably cut off"
+    return "its internal structure is broken"
+
+
+def _archive_damage(data: bytes) -> str:
+    """Name what is wrong with an Office file that does not open as a ZIP package."""
+    if data.startswith(b"\xd0\xcf\x11\xe0"):
+        # Encrypted Office files and legacy .doc/.xls share this container.
+        return "it is a password-protected or legacy-format Office file, not a ZIP package"
+    return "it is not a complete ZIP package, as Office files are"
 
 
 def ensure_document_input_size(size_bytes: int) -> int:
@@ -172,7 +212,7 @@ def _extract_pdf(data: bytes, budget: _ExtractionBudget) -> str:
         except ExtractionError:
             raise
         except Exception as error:
-            raise ExtractionError(f"cannot read PDF: {error}") from error
+            raise ExtractionError(f"cannot read PDF: {error}", cause=_pdf_damage(data)) from error
         finally:
             pypdf_filters.decompress = original_decompress
 
@@ -192,7 +232,9 @@ def _bounded_pdf_decompress(data: bytes, budget: _ExtractionBudget) -> bytes:
             )
         tail = decoder.flush(budget.remaining - len(expanded) + 1)
     except zlib.error as error:
-        raise ExtractionError(f"cannot decompress PDF stream: {error}") from error
+        raise ExtractionError(
+            f"cannot decompress PDF stream: {error}", cause="a compressed part of it is corrupt"
+        ) from error
 
     if len(tail) > budget.remaining - len(expanded):
         raise ExtractionLimitExceededError(
@@ -213,7 +255,9 @@ def _extract_ipynb(data: bytes) -> str:
     try:
         document = json.loads(data)
     except ValueError as error:
-        raise ExtractionError(f"cannot parse notebook: {error}") from error
+        raise ExtractionError(
+            f"cannot parse notebook: {error}", cause="its notebook JSON is invalid"
+        ) from error
 
     if not isinstance(document, dict):
         raise ExtractionError("notebook root is not an object")
@@ -258,14 +302,18 @@ def _read_zip_member(data: bytes, member: str, budget: _ExtractionBudget) -> byt
                 )
             return content
     except (BadZipFile, OSError) as error:
-        raise ExtractionError(f"cannot open archive: {error}") from error
+        raise ExtractionError(
+            f"cannot open archive: {error}", cause=_archive_damage(data)
+        ) from error
 
 
 def _parse_xml(data: bytes) -> ElementTree.Element:
     try:
         return ElementTree.fromstring(data)
     except ElementTree.ParseError as error:
-        raise ExtractionError(f"malformed XML: {error}") from error
+        raise ExtractionError(
+            f"malformed XML: {error}", cause="the XML inside it is malformed"
+        ) from error
 
 
 def _extract_docx(data: bytes, budget: _ExtractionBudget) -> str:
@@ -277,7 +325,7 @@ def _extract_docx(data: bytes, budget: _ExtractionBudget) -> str:
     """
     document_xml = _read_zip_member(data, "word/document.xml", budget)
     if document_xml is None:
-        raise ExtractionError("docx has no word/document.xml")
+        raise ExtractionError("docx has no word/document.xml", cause="it has no document body")
 
     root = _parse_xml(document_xml)
     paragraphs: list[str] = []
@@ -386,7 +434,9 @@ def _fallback_worksheet_targets(data: bytes) -> list[tuple[str, str]]:
                 if name.startswith("xl/worksheets/") and name.endswith(".xml")
             ]
     except (BadZipFile, OSError) as error:
-        raise ExtractionError(f"cannot open archive: {error}") from error
+        raise ExtractionError(
+            f"cannot open archive: {error}", cause=_archive_damage(data)
+        ) from error
 
     return [(Path(member).stem, member) for member in sorted(members)]
 

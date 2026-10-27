@@ -1056,8 +1056,8 @@ async def test_files_without_a_readable_form_get_a_note(
     ("name", "raw", "problem"),
     [
         # Without a NUL byte in its probe, a damaged PDF once streamed as text.
-        ("broken.pdf", b"%PDF-1.4 not really a pdf body", "damaged"),
-        ("broken.docx", b"PK\x03\x04 not really a zip \x00 body", "damaged"),
+        ("broken.pdf", b"%PDF-1.4 not really a pdf body", "end-of-file marker"),
+        ("broken.docx", b"PK\x03\x04 not really a zip \x00 body", "ZIP package"),
         ("locked.pdf", _locked_pdf(), "protected by a password"),
     ],
     ids=["pdf", "docx", "password_pdf"],
@@ -1069,7 +1069,8 @@ async def test_documents_whose_text_cannot_be_extracted_fail(
 
     message = failure(await read(tmp_path, {"path": name}), "document_unreadable")
 
-    assert name in message and problem in message
+    # The cause and size spare the Agent inspecting the bytes itself.
+    assert name in message and problem in message and f"{len(raw)} bytes" in message
 
 
 @pytest.mark.asyncio
