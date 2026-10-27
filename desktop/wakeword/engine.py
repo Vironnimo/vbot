@@ -48,6 +48,12 @@ DETECTOR_KIND_TFLITE_HEAD = "tflite_head"
 CONFIDENT_SCORE_MARGIN = 0.15
 MARGINAL_CONFIRMATION_CHUNKS = 5
 
+# A sustained head (okay_nabu) can dip below a high threshold and cross it again
+# within one utterance, so re-arming on the score alone fires that utterance
+# twice. After a phrase fires, it (and every phrase overlapping it) stays
+# disarmed for this many 80 ms chunks (2 s), as other openWakeWord hosts do.
+REFRACTORY_CHUNKS = 25
+
 _CUSTOM_MODEL_PREFIX = "custom/"
 _CUSTOM_MODEL_DIRECTORY_NAME = "wakewords"
 _CUSTOM_MODEL_METADATA_SUFFIX = ".json"
@@ -425,7 +431,8 @@ class MultiWakewordEngine:
 
     Each phrase confirms its own threshold crossings and keeps its own arm
     state: a phrase that fired re-arms only once its raw score falls below its
-    threshold, while the other phrases stay armed. Active phrases whose models
+    threshold after :data:`REFRACTORY_CHUNKS` chunks have passed, while the
+    other phrases stay armed. Active phrases whose models
     ``overlap`` share one arm state instead, because one utterance drives both
     detectors in consecutive windows: after either fires, neither fires again
     until a window in which all of them are below their thresholds. Among
@@ -453,6 +460,8 @@ class MultiWakewordEngine:
         self._features: Any = None
         self._arm_groups = _arm_groups(descriptors)
         self._armed: dict[str, bool] = {}
+        self._chunk = 0
+        self._rearm_at: dict[str, int] = {}
         self._arm_all()
         self._score_listener = score_listener
         self._recent_scores: dict[str, deque[float]] = {}
@@ -515,6 +524,7 @@ class MultiWakewordEngine:
         """
         if self._features is None or not self._models:
             return None
+        self._chunk += 1
         embeddings = self._features.process(audio_chunk)
         best_match: WakewordMatch | None = None
         best_ratio = 0.0
@@ -543,10 +553,12 @@ class MultiWakewordEngine:
         if self._score_listener is not None:
             self._score_listener(scores)
         for group, below_threshold in groups_below_threshold.items():
-            if below_threshold:
+            if below_threshold and self._chunk >= self._rearm_at.get(group, 0):
                 self._armed[group] = True
         if best_match is not None:
-            self._armed[self._arm_groups[best_match.model_id]] = False
+            group = self._arm_groups[best_match.model_id]
+            self._armed[group] = False
+            self._rearm_at[group] = self._chunk + REFRACTORY_CHUNKS
         return best_match
 
     def reset(self) -> None:
@@ -560,6 +572,7 @@ class MultiWakewordEngine:
 
     def _arm_all(self) -> None:
         self._armed = dict.fromkeys(self._arm_groups.values(), True)
+        self._rearm_at = {}
 
     def _reset_recent_scores(self) -> None:
         self._recent_scores = {

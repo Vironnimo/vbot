@@ -24,6 +24,7 @@ from desktop.wakeword.config import DEFAULT_MODEL_IDS, MAX_ACTIVE_PHRASES, Phras
 from desktop.wakeword.engine import (
     DETECTOR_KIND_TFLITE_HEAD,
     MAX_CUSTOM_WAKEWORD_MODEL_BYTES,
+    REFRACTORY_CHUNKS,
     MockWakewordEngine,
     MultiWakewordEngine,
     WakewordEngine,
@@ -444,11 +445,16 @@ def test_engine_rejects_an_unsupported_detector_kind_and_releases_features(
         ([0.9, 0.9], [False, False], [None, None]),
         ([float("nan"), float("inf"), -float("inf")], [True] * 3, [None] * 3),
         ([0.55, 0.9, 0.55], [True, False, True], [None, None, 0.55]),
-        ([0.8, 0.9, 0.1, 0.7], [True] * 4, [0.8, None, None, 0.7]),
+        ([0.8, 0.9, 0.1, 0.7], [True] * 4, [0.8, None, None, None]),
         (
-            [0.9, 0.9, 0.9, 0.9, 0.1, 0.9],
-            [True, True, False, True, False, True],
-            [0.9, None, None, None, None, 0.9],
+            [0.8, *[0.1] * REFRACTORY_CHUNKS, 0.7],
+            [True] * (REFRACTORY_CHUNKS + 2),
+            [0.8, *[None] * REFRACTORY_CHUNKS, 0.7],
+        ),
+        (
+            [0.9] * (REFRACTORY_CHUNKS + 2) + [0.1, 0.9],
+            [True, *[False] * REFRACTORY_CHUNKS, True, True, True],
+            [0.9, *[None] * (REFRACTORY_CHUNKS + 2), 0.9],
         ),
     ],
     ids=[
@@ -459,6 +465,7 @@ def test_engine_rejects_an_unsupported_detector_kind_and_releases_features(
         "no-speech-zeroes-scores",
         "non-finite-scores-do-not-trigger",
         "gated-chunks-do-not-confirm",
+        "no-refire-within-the-refractory-period",
         "rearms-after-the-score-drops",
         "rearms-on-raw-scores-across-a-gated-pause",
     ],
@@ -506,17 +513,16 @@ def test_engine_rearms_each_phrase_independently(
     catalog: WakewordModelCatalog, models: ScriptedModels
 ) -> None:
     jarvis, alexa = "builtin/hey_jarvis", "builtin/alexa"
-    models.heads[jarvis] = ScriptedHead([0.9, 0.9, 0.9, 0.1, 0.9])
-    models.heads[alexa] = ScriptedHead([0.1, 0.9, 0.9, 0.9, 0.9])
+    models.heads[jarvis] = ScriptedHead([0.9, 0.9, 0.9, *[0.1] * REFRACTORY_CHUNKS, 0.9])
+    models.heads[alexa] = ScriptedHead([0.1, *[0.9] * (REFRACTORY_CHUNKS + 3)])
     engine = _started(catalog, [PhraseConfig(jarvis), PhraseConfig(alexa)])
 
     # jarvis fires; alexa still fires while jarvis stays above its threshold.
     # Neither re-fires until its own score drops below its threshold.
-    assert [engine.detect(b"audio") for _ in range(5)] == [
+    assert [engine.detect(b"audio") for _ in range(REFRACTORY_CHUNKS + 4)] == [
         WakewordMatch(jarvis, 0.9, 0.5),
         WakewordMatch(alexa, 0.9, 0.5),
-        None,
-        None,
+        *[None] * (REFRACTORY_CHUNKS + 1),
         WakewordMatch(jarvis, 0.9, 0.5),
     ]
 
@@ -524,18 +530,15 @@ def test_engine_rearms_each_phrase_independently(
 def test_engine_rearms_overlapping_phrases_together(
     catalog: WakewordModelCatalog, models: ScriptedModels
 ) -> None:
-    models.heads[OKAY] = ScriptedHead([0.1, 0.9, 0.9, 0.1, 0.1, 0.9])
-    models.heads[HEY] = ScriptedHead([0.9, 0.1, 0.1, 0.1, 0.1, 0.1])
+    models.heads[OKAY] = ScriptedHead([0.1, 0.9, 0.9, *[0.1] * REFRACTORY_CHUNKS, 0.9])
+    models.heads[HEY] = ScriptedHead([0.9, *[0.1] * (REFRACTORY_CHUNKS + 3)])
     engine = _started(catalog, [PhraseConfig(OKAY), PhraseConfig(HEY)])
 
     # One utterance: hey peaks first, then okay rises before both are quiet.
     # A window with both below their thresholds re-arms the pair.
-    assert [engine.detect(b"audio") for _ in range(6)] == [
+    assert [engine.detect(b"audio") for _ in range(REFRACTORY_CHUNKS + 4)] == [
         WakewordMatch(HEY, 0.9, 0.5),
-        None,
-        None,
-        None,
-        None,
+        *[None] * (REFRACTORY_CHUNKS + 2),
         WakewordMatch(OKAY, 0.9, 0.5),
     ]
 
@@ -653,6 +656,25 @@ def test_bundled_nabu_models_activate_once_per_phrase_on_real_audio(
         assert set(matches) <= set(DEFAULT_MODEL_IDS)
     else:
         assert matches == expected
+
+
+# okay_nabu sustains its score for about a second and dips below high
+# thresholds within it; with the speech gate open (no speech detector, or speech
+# continuing after the phrase) one utterance must still activate at most once.
+@pytest.mark.parametrize("model_ids", [[OKAY], DEFAULT_MODEL_IDS], ids=["okay", "both"])
+def test_bundled_nabu_model_activates_at_most_once_at_every_sensitivity(
+    real_models: None, model_ids: list[str]
+) -> None:
+    catalog = WakewordModelCatalog(FIXTURES / "settings.json")
+    for step in range(1, 20):
+        sensitivity = round(step * 0.05, 2)
+        engine = catalog.create_engine(
+            [PhraseConfig(model_id, sensitivity) for model_id in model_ids]
+        )
+
+        matches = _detect_file(engine, FIXTURES / "okay_nabu.wav", None)
+
+        assert len(matches) <= 1, sensitivity
 
 
 _PHRASE_FIXTURES = ("okay_nabu.wav", "hey_nabu.wav", "unrelated_hey_jarvis.wav")
