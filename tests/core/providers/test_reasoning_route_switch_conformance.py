@@ -12,7 +12,7 @@ import pytest
 import respx
 
 from core.chat import ChatMessage, ToolCall
-from core.models.models import Model, ModelRegistry
+from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
 from core.providers._responses_wire import build_responses_payload
 from core.providers.adapter import ProviderAdapter
 from core.providers.anthropic_compatible import AnthropicCompatibleAdapter
@@ -396,12 +396,35 @@ NATIVE_RESPONSES_OUTPUT: list[dict[str, Any]] = [
 ]
 
 
+# Replay remains a contract after an id leaves the generated catalog. Pin the
+# LongCat facts used by this regression; keep its real bundled wire profile.
+_LONGCAT_REPLAY_MODEL = Model(
+    model_id="longcat-2.5-preview-free",
+    name="LongCat 2.5 Preview Free",
+    capabilities=Capabilities(
+        vision=True,
+        tools=True,
+        json_mode=False,
+        reasoning=ReasoningCapabilities(supported=True, control="on_off"),
+    ),
+    context_window=1_000_000,
+    max_output_tokens=131_072,
+    family="longcat",
+    metadata={"opencode_go": {"interleaved_field": "reasoning_content"}},
+)
+
+
 def _bundled_adapter(provider_id: str) -> ProviderAdapter:
     registry = ModelRegistry.load(RESOURCES)
     config = ProviderRegistry.load(RESOURCES).get(provider_id)
 
     def lookup(candidate: str) -> Model | None:
-        return registry.get(provider_id, candidate)
+        if provider_id == "opencode-go" and candidate == _LONGCAT_REPLAY_MODEL.model_id:
+            return _LONGCAT_REPLAY_MODEL
+        try:
+            return registry.get(provider_id, candidate)
+        except KeyError:
+            return None
 
     if provider_id == "openai":
         return OpenAIAdapter(
