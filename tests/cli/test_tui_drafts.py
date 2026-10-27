@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
 from pathlib import Path
@@ -100,6 +101,8 @@ async def test_restored_submission_retains_its_identity_until_the_input_changes(
         original = next(params for method, params in server.calls if method == "chat.stream")
         assert original["input_id"]
         await pilot.press("ctrl+q")
+        for worker in [worker for worker in app.workers if worker.group == "detach"]:
+            await worker.wait()
 
     reopened_store = DraftStore(server.url, directory=tmp_path)
     next_server = ReceiptServer()
@@ -206,10 +209,21 @@ def test_unreadable_drafts_are_never_replaced(tmp_path: Path, invalid: str) -> N
 
 
 @pytest.mark.asyncio
-async def test_detach_restores_drafts_and_edit_recovery_without_sending(tmp_path: Path) -> None:
+async def test_detach_restores_drafts_and_edit_recovery_without_sending(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     server = Server()
     store = DraftStore(server.url, directory=tmp_path)
     app = ConversationApp(server, agent_id="main", draft_store=store, restored_drafts=store.load())
+    saving, continue_save = asyncio.Event(), asyncio.Event()
+    persist = app.submissions.persist
+
+    async def persist_after_release() -> None:
+        saving.set()
+        await continue_save.wait()
+        await persist()
+
+    monkeypatch.setattr(app.submissions, "persist", persist_after_release)
     saved_edit: JsonObject = {
         "draft_id": "edit-input",
         "agent": "main",
@@ -230,7 +244,14 @@ async def test_detach_restores_drafts_and_edit_recovery_without_sending(tmp_path
         await pilot.pause()
         app.submissions.saved_drafts.append(copy.deepcopy(saved_edit))
         await pilot.press("ctrl+q")
+        await saving.wait()
         await pilot.pause()
+        # UI idle is not a completed detach: persistence may still be waiting.
+        # Leaving run_test now would cancel that worker and lose the last snapshot.
+        assert app.is_running
+        [detaching] = [worker for worker in app.workers if worker.group == "detach"]
+        continue_save.set()
+        await detaching.wait()
     next_server = Server()
     next_store = DraftStore(server.url, directory=tmp_path)
     restored = next_store.load()

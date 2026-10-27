@@ -326,5 +326,7 @@ async def test_secret_command_is_sent_alone_and_never_kept(
         assert app.submissions.history == []
         assert editor.text == ("" if outcome == "accepted" else typed)
         await pilot.press("ctrl+q")
+        for worker in [worker for worker in app.workers if worker.group == "detach"]:
+            await worker.wait()
     assert "ghp_value123" not in store.path.read_text(encoding="utf-8")
     assert [record["draft"] for record in store.load().values()] == [""]
