@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from functools import partial
 from typing import TYPE_CHECKING
 
 from core.attachments.images import ImageConverter
@@ -16,6 +15,7 @@ from core.chat.block_resolver import ContentBlockResolver
 from core.chat.content_blocks import ContentBlock, MediaBlock, content_block_to_dict
 from core.chat.messages import ChatMessage, JsonObject
 from core.chat.wire_shaping import (
+    PINNED_IMAGE_DELIVERY_SLOT,
     PINNED_IMAGE_RETIREMENT_SLOT,
     RequestImageBudget,
     limit_request_images,
@@ -76,16 +76,12 @@ class RequestMedia:
                 session.address,
                 PINNED_IMAGE_RETIREMENT_SLOT,
             )
-            await _CHAT_TRANSFORM_WORKERS.run(
-                partial(
-                    image_budget.restore,
-                    retirement_pin,
-                    request_messages,
-                    current_user_message_id=(
-                        current_user_message.id if current_user_message is not None else None
-                    ),
-                )
+            delivery_pin = await _CHAT_TRANSFORM_WORKERS.run(
+                self._sessions.prompt_pin,
+                session.address,
+                PINNED_IMAGE_DELIVERY_SLOT,
             )
+            await _CHAT_TRANSFORM_WORKERS.run(image_budget.restore, retirement_pin, delivery_pin)
         return await _CHAT_TRANSFORM_WORKERS.run(
             limit_request_images,
             request_messages,

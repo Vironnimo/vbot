@@ -31,6 +31,9 @@ from core.chat._request_images import (
     _IMAGE_BUDGET_NOTE as _IMAGE_BUDGET_NOTE,
 )
 from core.chat._request_images import (
+    PINNED_IMAGE_DELIVERY_SLOT as PINNED_IMAGE_DELIVERY_SLOT,
+)
+from core.chat._request_images import (
     PINNED_IMAGE_RETIREMENT_SLOT as PINNED_IMAGE_RETIREMENT_SLOT,
 )
 from core.chat._request_images import (

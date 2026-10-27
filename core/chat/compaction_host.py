@@ -12,6 +12,7 @@ from core.chat._request_builder import (
     RequestBuilder,
 )
 from core.chat._request_epoch import _finalize_compaction_checkpoint
+from core.chat._request_images import PINNED_IMAGE_DELIVERY_SLOT, retain_delivery_pin
 from core.chat._request_targets import _resolve_request_image_limit, _resolved_model_reference
 from core.chat._run_permissions import permitted_project_context, run_permission_boundary
 from core.chat._run_state import (
@@ -551,8 +552,11 @@ class ChatCompactionHost:
     ) -> bool:
         refresh = cast(_CompactionPromptRefresh | None, prompt_refresh)
         async with self.sessions.write_lock(session.address):
+            delivery = await self.sessions.run_async(
+                self.sessions.prompt_pin, session.address, PINNED_IMAGE_DELIVERY_SLOT
+            )
             committed = await session.commit_compaction_async(
-                checkpoint, since=since, epoch=_prompt_epoch(refresh, request_state)
+                checkpoint, since=since, epoch=_prompt_epoch(refresh, request_state, delivery)
             )
         if committed is None:
             return False
@@ -577,8 +581,11 @@ class ChatCompactionHost:
         refresh = cast(_CompactionPromptRefresh | None, prompt_refresh)
         session = context.session
         async with self.sessions.write_lock(session.address):
+            delivery = await self.sessions.run_async(
+                self.sessions.prompt_pin, session.address, PINNED_IMAGE_DELIVERY_SLOT
+            )
             committed = await context.session_snapshot.commit_checkpoint(
-                session, checkpoint, epoch=_prompt_epoch(refresh, request_state)
+                session, checkpoint, epoch=_prompt_epoch(refresh, request_state, delivery)
             )
         if not committed:
             return False
@@ -703,7 +710,9 @@ class ChatCompactionHost:
 
 
 def _prompt_epoch(
-    refresh: _CompactionPromptRefresh | None, request_state: RequestState
+    refresh: _CompactionPromptRefresh | None,
+    request_state: RequestState,
+    delivery_pin: JsonObject | None,
 ) -> PromptEpoch:
     """The prompt epoch a committed checkpoint starts: fresh pins and seen Skills.
 
@@ -726,6 +735,7 @@ def _prompt_epoch(
         ),
         # Compacted history keeps every remaining image until a limit retires it anew.
         PINNED_IMAGE_RETIREMENT_SLOT: None,
+        PINNED_IMAGE_DELIVERY_SLOT: retain_delivery_pin(delivery_pin, request_state.messages),
     }
     if refresh is None:
         return PromptEpoch(pins=request_pins)

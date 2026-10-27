@@ -16,7 +16,7 @@ from core.chat._prompt_block_epoch import PromptBlockPin
 from core.chat._run_state import RequestBuildInputs, _RunRequest
 from core.chat._tool_epoch import ToolEpochPin
 from core.chat.messages import ToolCall
-from core.chat.wire_shaping import PINNED_IMAGE_RETIREMENT_SLOT
+from core.chat.wire_shaping import PINNED_IMAGE_DELIVERY_SLOT, PINNED_IMAGE_RETIREMENT_SLOT
 from core.extensions import ExtensionAPI, ExtensionRecord, ExtensionRegistry
 from core.extensions.extensions import ExtensionDeclarations
 from core.model_tasks import TASK_IMAGE_UNDERSTANDING
@@ -163,6 +163,13 @@ async def test_compaction_pins_the_current_tools_for_the_new_epoch(
     runtime.chat_sessions.ensure_prompt_pin(
         session.address, PINNED_IMAGE_RETIREMENT_SLOT, retired, lambda current: current == retired
     )
+    retained_user = next(message for message in session.load() if message.role == "user")
+    delivered = {
+        "images": [["user", retained_user.id, 0, "retained"], ["user", "removed", 0, "old"]]
+    }
+    runtime.chat_sessions.ensure_prompt_pin(
+        session.address, PINNED_IMAGE_DELIVERY_SLOT, delivered, lambda current: current == delivered
+    )
     tools.unregister("dropped")
     # Keys in the author's order, which is not alphabetical at any level.
     ordered = {
@@ -193,6 +200,9 @@ async def test_compaction_pins_the_current_tools_for_the_new_epoch(
     assert pin is not None and pin.epoch != old_epoch
     # Compacted history keeps every remaining image until a limit retires it anew.
     assert runtime.chat_sessions.prompt_pin(session.address, PINNED_IMAGE_RETIREMENT_SLOT) is None
+    assert runtime.chat_sessions.prompt_pin(session.address, PINNED_IMAGE_DELIVERY_SLOT) == {
+        "images": [["user", retained_user.id, 0, "retained"]]
+    }
     assert pin.names == ("get_weather", "added", ANALYZE_IMAGE_TOOL_NAME, "kept")
     assert rebuilt.tool_epoch.pin == pin
     # The new epoch's first request already sends the bytes a restarted runtime's next

@@ -15,6 +15,8 @@ from core.providers.adapter import (
 
 # Compaction starts a new epoch without it.
 PINNED_IMAGE_RETIREMENT_SLOT = "pinned_image_retirement"
+# Delivery evidence survives Compaction, which resets retirement but retains images.
+PINNED_IMAGE_DELIVERY_SLOT = "pinned_image_delivery"
 _IMAGE_BUDGET_NOTE = (
     "[This image was supplied in an earlier Model request and has now been omitted "
     "to make room for more images. Its file path remains available. "
@@ -88,6 +90,35 @@ def _retirement_addresses(pin: JsonObject | None) -> set[_ImageAddress]:
     }
 
 
+def _delivery_keys(pin: JsonObject | None) -> set[_ImageKey]:
+    entries = pin.get("images") if isinstance(pin, dict) else None
+    if not isinstance(entries, list):
+        return set()
+    return {
+        (entry[0], entry[1], entry[2], entry[3])
+        for entry in entries
+        if isinstance(entry, list)
+        and len(entry) == 4
+        and isinstance(entry[0], str)
+        and isinstance(entry[1], str)
+        and isinstance(entry[2], int)
+        and not isinstance(entry[2], bool)
+        and isinstance(entry[3], str)
+    }
+
+
+def retain_delivery_pin(pin: JsonObject | None, messages: list[JsonObject]) -> JsonObject | None:
+    """Keep evidence only for messages retained in the active request."""
+    identities = {
+        (message.get("role"), message.get("id") or message.get("tool_call_id"))
+        for message in messages
+        if message.get("role") in {"user", "tool"}
+        and isinstance(message.get("id") or message.get("tool_call_id"), str)
+    }
+    kept = sorted(key for key in _delivery_keys(pin) if key[:2] in identities)
+    return {"images": [list(key) for key in kept]} if kept else None
+
+
 @dataclass
 class RequestImageBudget:
     """Which images a Session's requests still carry, shared by rebuilds and fallback.
@@ -100,9 +131,9 @@ class RequestImageBudget:
 
     The retired addresses persist in the Session's prompt epoch
     (``PINNED_IMAGE_RETIREMENT_SLOT``), so later Runs render the same notes,
-    and Compaction starts over. Images from before the Run count as
-    delivered; a fresh image is never retired before a successful response
-    acknowledged it (``record_delivered``).
+    and Compaction starts over. Exact image keys acknowledged by a successful
+    response persist separately, including across Compaction; an image without
+    that evidence stays fresh (``record_delivered``).
 
     Projection is pure unless remember=True is used on the live request view.
     """
@@ -111,6 +142,7 @@ class RequestImageBudget:
     _retired: set[_ImageAddress] = field(default_factory=set)
     _restored: bool = False
     _unsaved: bool = False
+    _unsaved_delivery: bool = False
 
     @property
     def restored(self) -> bool:
@@ -118,20 +150,13 @@ class RequestImageBudget:
 
     def restore(
         self,
-        pin: JsonObject | None,
-        messages: list[JsonObject],
-        *,
-        current_user_message_id: str | None,
+        retirement_pin: JsonObject | None,
+        delivery_pin: JsonObject | None,
     ) -> None:
-        """Start from the Session's retirements; earlier images count as delivered."""
+        """Restore retired addresses and exact acknowledged image keys."""
         self._restored = True
-        self._retired |= _retirement_addresses(pin)
-        self._delivered.update(
-            image.key
-            for image in _request_images(messages)
-            if image.key is not None
-            and messages[image.message_index].get("id") != current_user_message_id
-        )
+        self._retired |= _retirement_addresses(retirement_pin)
+        self._delivered.update(_delivery_keys(delivery_pin))
 
     def take_unsaved_pin(self) -> JsonObject | None:
         """Return the pin value once new retirements need persisting, else ``None``."""
@@ -140,8 +165,24 @@ class RequestImageBudget:
         self._unsaved = False
         return {"images": [list(address) for address in sorted(self._retired)]}
 
+    def take_unsaved_delivery_pin(self) -> JsonObject | None:
+        """Return acknowledged keys when new delivery evidence needs persisting."""
+        if not self._unsaved_delivery:
+            return None
+        self._unsaved_delivery = False
+        return {"images": [list(key) for key in sorted(self._delivered)]}
+
     def record_delivered(self, messages: list[JsonObject]) -> None:
-        self._delivered.update(image.key for image in _request_images(messages) if image.key)
+        delivered = {image.key for image in _request_images(messages) if image.key}
+        retained = retain_delivery_pin({"images": [list(key) for key in self._delivered]}, messages)
+        # A hook or conversion can change pixels at one address. Only its latest
+        # delivered payload needs evidence, so repeated changes cannot grow the pin.
+        addresses = {key[:3] for key in delivered}
+        prior = {key for key in _delivery_keys(retained) if key[:3] not in addresses}
+        updated = prior | delivered
+        if updated != self._delivered:
+            self._delivered = updated
+            self._unsaved_delivery = True
 
     def project(
         self,

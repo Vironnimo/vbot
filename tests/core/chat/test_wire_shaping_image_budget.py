@@ -144,23 +144,24 @@ def test_body_rejection_retires_image_data_down_to_half(
     assert budget.shrink(smaller, max_bytes=max_bytes) == smaller
 
 
-def test_retirements_persist_and_earlier_images_count_as_delivered() -> None:
+def test_retirements_and_acknowledged_images_persist() -> None:
     history = [_resolved_image_result(i) for i in range(6)]
     current = _as_user_message({**_resolved_image_result(6), "id": "user-current"})
     messages = [*history, current]
     first_run = RequestImageBudget()
     first_run.record_delivered(history)
+    delivery_pin = first_run.take_unsaved_delivery_pin()
     retired = first_run.shrink(messages, max_bytes=None)
     pin = first_run.take_unsaved_pin()
     assert pin is not None
     assert first_run.take_unsaved_pin() is None
 
     next_run = RequestImageBudget()
-    next_run.restore(pin, messages, current_user_message_id="user-current")
+    next_run.restore(pin, delivery_pin)
 
     # The next Run renders the same notes, so its request prefix stays cached.
     assert next_run.project(messages) == retired
-    # Images from before the Run may retire; the new user turn's image is fresh.
+    # Only acknowledged images may retire; the new user turn's image is fresh.
     with pytest.raises(ImageBudgetExceededError):
         RequestImageBudget().project(messages, image_limit=1)
     fresh_only = next_run.project(messages, image_limit=1)
@@ -177,3 +178,31 @@ def test_changed_image_at_the_same_address_is_fresh() -> None:
 
     with pytest.raises(ImageBudgetExceededError):
         budget.project([changed, _resolved_image_result(1)], image_limit=1)
+
+
+def test_unacknowledged_images_stay_fresh_after_restore() -> None:
+    old = _as_user_message({**_resolved_image_result(0), "id": "failed-user"})
+    new = _as_user_message({**_resolved_image_result(1), "id": "new-user"})
+    budget = RequestImageBudget()
+    budget.restore(None, None)
+
+    with pytest.raises(ImageBudgetExceededError):
+        budget.project([old, new], image_limit=1)
+    assert budget.shrink([old, new], max_bytes=None) == [old, new]
+
+    budget.record_delivered([old])
+    evidence = budget.take_unsaved_delivery_pin()
+    restored = RequestImageBudget()
+    restored.restore(None, evidence)
+    assert restored.project([old, new], image_limit=1)[0]["content"][0]["type"] == "text"
+    changed = deepcopy(old)
+    changed["content"][0]["base64"] = "BBBB"
+    with pytest.raises(ImageBudgetExceededError):
+        restored.project([changed, new], image_limit=1)
+    restored.record_delivered([changed])
+    updated = restored.take_unsaved_delivery_pin()
+    assert updated is not None and len(updated["images"]) == 1
+    newest = RequestImageBudget()
+    newest.restore(None, updated)
+    with pytest.raises(ImageBudgetExceededError):
+        newest.project([old, new], image_limit=1)
