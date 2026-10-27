@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING
 
 from core.archive._operations import (
     cleanup_agent,
+    cleanup_currents,
     holds_agent_id_grants,
     prune_empty_parents,
     stored_path,
@@ -155,10 +156,11 @@ def _purge_claimed(
 
     try:
         check_stop()
-        if entry.kind == ARCHIVE_KIND_AGENT and entry.cleanup_pending:
-            # The archive's cleanup did not finish: the id leaves the delegation
-            # lists before the entry, which records the grants, is deleted.
-            cleanup_agent(services, entry)
+        if entry.cleanup_pending:
+            if entry.kind == ARCHIVE_KIND_AGENT:
+                cleanup_agent(services, entry)
+            else:
+                cleanup_currents(services, entry)
         while ledger.purge_next_session(entry.entry_key):
             check_stop()
         for tree in entry.trees:

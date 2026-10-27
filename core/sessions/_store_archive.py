@@ -383,7 +383,11 @@ def finish_cleanup(connection: sqlite3.Connection, entry_key: int) -> None:
 
 
 def archive_session(
-    connection: sqlite3.Connection, address: SessionAddress, facts: Mapping[str, Any] | None
+    connection: sqlite3.Connection,
+    address: SessionAddress,
+    facts: Mapping[str, Any] | None,
+    *,
+    cleanup_pending: bool = False,
 ) -> ArchiveEntryRef:
     """Archive one live Session generation as its own ``session`` entry.
 
@@ -404,6 +408,7 @@ def archive_session(
         archived_at=now,
         retention_start=now,
         facts=facts,
+        cleanup_pending=cleanup_pending,
     )
     session_key = int(state["session_key"])
     keys = [

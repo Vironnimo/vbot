@@ -87,6 +87,58 @@ async def test_rm_archives_project(tmp_path: Path, review_scope: str | None) -> 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("unavailable_landing", [False, True])
+async def test_rm_reports_committed_archive_when_review_owner_landing_is_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    unavailable_landing: bool,
+) -> None:
+    state, _repo = await _vbot_state(tmp_path, "builder.md")
+    agents, sessions = state.runtime.agents, state.runtime.chat_sessions
+    agents.create("original")
+    sessions.create("original", session_id="landing")
+    source = sessions.create("original", session_id="source")
+    review = await sessions.fork(source.address, run_kind=RunKind.MEMORY_REFLECTION)
+    await sessions.move(source.address, SessionAddress("vbot", "builder", source.id))
+    agents.update("original", current_session_id=review.id)
+    original_get = agents.get_raw
+
+    def fail_reset(*_args: Any) -> Any:
+        raise OSError("review owner unavailable")
+
+    def get_until_archived(agent_id: str) -> Any:
+        if unavailable_landing and agent_id == "original" and not sessions.exists(review.address):
+            raise OSError("review owner unavailable")
+        return original_get(agent_id)
+
+    monkeypatch.setattr(agents, "reset_current_after_session_removed", fail_reset)
+    monkeypatch.setattr(agents, "get_raw", get_until_archived)
+    result = await rpc_result(state, "project.rm", project_id="vbot")
+
+    entry = sessions.archive_ledger.entry(result["archive_entry_id"])
+    assert entry is not None and entry.cleanup_pending
+    events = [
+        event["payload"]["scope"]
+        for event in state.event_bus.events
+        if event["payload"].get("kind") == "sessions"
+    ]
+    assert events == [
+        {
+            "agent_id": "original",
+            "project_id": None,
+            "deleted_session_id": review.id,
+            "next_session_id": None if unavailable_landing else "landing",
+        }
+    ]
+    assert ("Could not resolve archived Session landing" in caplog.text) == unavailable_landing
+    assert original_get("original").current_session_id == review.id
+    monkeypatch.undo()
+    state.runtime.archive.recover()
+    assert agents.get_raw("original").current_session_id == "landing"
+
+
+@pytest.mark.asyncio
 async def test_rm_unroots_identity_agents_and_resets_default_workspaces(
     tmp_path: Path,
 ) -> None:

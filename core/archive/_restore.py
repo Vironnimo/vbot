@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 from core.agents import Agent, AgentError, default_workspace_dir
 from core.archive._operations import (
+    cleanup_currents,
     holds_agent_id_grants,
     prune_empty_parents,
     reroot_agents,
@@ -146,6 +147,8 @@ def restore(services: ArchiveServices, entry_id: str, target_id: str | None) -> 
     with services.snapshot_barrier.compound_mutation():
         ledger.begin_restore(entry.entry_id, restore_plan)
         try:
+            if entry.cleanup_pending and entry.kind != ARCHIVE_KIND_AGENT:
+                cleanup_currents(services, entry)
             addresses = _move_and_commit(services, plan, target, renamed)
         except ArchiveAddressTakenError as error:
             _abort(services, plan)

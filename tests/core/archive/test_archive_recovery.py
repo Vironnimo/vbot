@@ -261,6 +261,115 @@ async def test_a_failed_agent_cleanup_keeps_the_archive_and_completes_at_the_nex
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["session", "project"])
+async def test_failed_current_repair_keeps_committed_archive_pending_until_recovery(
+    world: ArchiveWorld, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    from core.runs import RunKind
+
+    owner = agent_with_session(world, "review-owner")
+    source = SessionAddress(None, owner.id, owner.current_session_id)
+    world.sessions.create(owner.id, session_id="landing")
+    if kind == "session":
+        removed = source
+    else:
+        world.projects.create("original", "Original", tmp_path / "repo")
+        removed = (await world.sessions.fork(source, run_kind=RunKind.MEMORY_REFLECTION)).address
+        world.agents.update(owner.id, current_session_id=removed.session_id)
+        await world.sessions.move(source, SessionAddress("original", "worker", source.session_id))
+
+    monkeypatch.setattr(world.agents, "reset_current_after_session_removed", _fail)
+    outcome = (
+        await world.service.archive_session(removed)
+        if kind == "session"
+        else await world.service.archive_project("original")
+    )
+    assert not world.sessions.exists(removed)
+    assert world.entry(outcome.entry_id).cleanup_pending
+    assert world.agents.get_raw(owner.id).current_session_id == removed.session_id
+    assert removed in world.closed_transports
+
+    world.service.recover()
+    assert world.entry(outcome.entry_id).cleanup_pending
+    monkeypatch.undo()
+    world.service.recover()
+    assert not world.entry(outcome.entry_id).cleanup_pending
+    assert world.agents.get_raw(owner.id).current_session_id == "landing"
+    world.service.recover()
+    assert world.agents.get_raw(owner.id).current_session_id == "landing"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["restore", "purge"])
+async def test_pending_current_repair_finishes_before_entry_is_removed(
+    world: ArchiveWorld, monkeypatch: pytest.MonkeyPatch, action: str
+) -> None:
+    owner = agent_with_session(world, "coder")
+    removed = SessionAddress(None, owner.id, owner.current_session_id)
+    world.sessions.create(owner.id, session_id="landing")
+    monkeypatch.setattr(world.agents, "reset_current_after_session_removed", _fail)
+    outcome = await world.service.archive_session(removed)
+    assert world.entry(outcome.entry_id).cleanup_pending
+    if action == "restore":
+        with pytest.raises(OSError):
+            await world.service.restore(outcome.entry_id)
+        assert world.entry(outcome.entry_id).state == "archived"
+    else:
+        result = await world.service.purge([outcome.entry_id])
+        assert result.pending
+    assert world.entry(outcome.entry_id).cleanup_pending
+    monkeypatch.undo()
+
+    if action == "restore":
+        await world.service.restore(outcome.entry_id)
+    else:
+        result = await world.service.purge([outcome.entry_id])
+        assert result.purged
+    assert world.agents.get_raw(owner.id).current_session_id == "landing"
+    assert world.sessions.archive_ledger.entry(outcome.entry_id) is None
+
+
+@pytest.mark.asyncio
+async def test_current_repair_waits_for_a_valid_agent_document(
+    world: ArchiveWorld, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    owner = agent_with_session(world, "coder")
+    removed = SessionAddress(None, owner.id, owner.current_session_id)
+    world.sessions.create(owner.id, session_id="landing")
+    monkeypatch.setattr(world.agents, "reset_current_after_session_removed", _fail)
+    outcome = await world.service.archive_session(removed)
+    monkeypatch.undo()
+    config = world.data_dir / "agents" / owner.id / "agent.json"
+    original = config.read_bytes()
+    config.write_text("invalid json", encoding="utf-8")
+
+    world.service.recover()
+    assert world.entry(outcome.entry_id).cleanup_pending
+    assert config.read_text(encoding="utf-8") == "invalid json"
+    config.write_bytes(original)
+    world.service.recover()
+    assert not world.entry(outcome.entry_id).cleanup_pending
+    assert world.agents.get_raw(owner.id).current_session_id == "landing"
+
+
+@pytest.mark.asyncio
+async def test_pending_current_repair_does_not_change_a_reused_live_session_address(
+    world: ArchiveWorld, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    owner = agent_with_session(world, "coder")
+    removed = SessionAddress(None, owner.id, owner.current_session_id)
+    monkeypatch.setattr(world.agents, "reset_current_after_session_removed", _fail)
+    outcome = await world.service.archive_session(removed)
+    monkeypatch.undo()
+    world.sessions.create(owner.id, session_id=removed.session_id)
+
+    world.service.recover()
+
+    assert not world.entry(outcome.entry_id).cleanup_pending
+    assert world.agents.get_raw(owner.id).current_session_id == removed.session_id
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "left",
     [

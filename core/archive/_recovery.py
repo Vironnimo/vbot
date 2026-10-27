@@ -16,7 +16,13 @@ from typing import TYPE_CHECKING, Any
 
 from core.agents import AGENT_FORMAT_VERSION
 from core.archive import _restore
-from core.archive._operations import cleanup_agent, prune_empty_parents, reroot_agents, stored_path
+from core.archive._operations import (
+    cleanup_agent,
+    cleanup_currents,
+    prune_empty_parents,
+    reroot_agents,
+    stored_path,
+)
 from core.projects import PROJECT_FORMAT_VERSION
 from core.sessions import (
     ARCHIVE_ENTRIES_DIR,
@@ -89,7 +95,7 @@ def _settle(services: ArchiveServices, entry: ArchiveEntry) -> bool:
         if entry.kind == ARCHIVE_KIND_AGENT:
             cleanup_agent(services, entry)
         else:
-            services.sessions.archive_ledger.finish_cleanup(entry.entry_key)
+            cleanup_currents(services, entry)
         _LOGGER.info("Interrupted archive completed (entry=%s kind=%s)", entry.entry_id, entry.kind)
         return True
     if entry.state == ARCHIVE_STATE_RESTORING:

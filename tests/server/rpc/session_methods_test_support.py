@@ -67,7 +67,16 @@ class FakeSessions:
         self.archived: list[tuple[str, str, str | None]] = []
         self.archived_members: dict[int, tuple[Any, ...]] = {}
         self.archive_ledger = SimpleNamespace(
-            members=lambda entry_key, **_kwargs: self.archived_members[entry_key]
+            members=lambda entry_key, **_kwargs: self.archived_members[entry_key],
+            entry=lambda entry_id: SimpleNamespace(
+                entry_key=next(
+                    key
+                    for key, members in self.archived_members.items()
+                    if f"arc_{members[0].address.session_id}" == entry_id
+                ),
+                kind="session",
+            ),
+            finish_cleanup=lambda _entry_key: None,
         )
         self.got: list[tuple[str, str, str | None]] = []
         self.forked: list[dict[str, Any]] = []
@@ -133,7 +142,16 @@ class FakeSessions:
     def review_forks(self, address: Any) -> tuple[Any, ...]:
         return ()
 
-    async def archive(self, address: Any, *, facts: Mapping[str, Any] | None = None) -> Any:
+    def exists(self, address: Any) -> bool:
+        return False
+
+    async def archive(
+        self,
+        address: Any,
+        *,
+        facts: Mapping[str, Any] | None = None,
+        cleanup_pending: bool = False,
+    ) -> Any:
         self.archived.append((address.agent_id, address.session_id, address.project_id))
         if self.archive_error is not None:
             raise self.archive_error
@@ -314,6 +332,7 @@ def stub_session_state() -> tuple[SimpleNamespace, FakeResolver, FakeSessions]:
             }
         ),
     )
+    runtime.agents.get_raw = lambda agent_id: runtime.agents.get(agent_id)
     # Tests arrange pinned automations by replacing these fakes' listings.
     runtime.automation_references = AutomationReferences(
         bootstrap=cast(Any, runtime.bootstrap_service),

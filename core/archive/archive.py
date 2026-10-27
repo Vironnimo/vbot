@@ -492,9 +492,6 @@ class ArchiveService:
                 return removed
 
             removed_currents = await sessions.run_async(current_members)
-            removed_current = (
-                removed_currents.get(address.agent_id) if address.project_id is None else None
-            )
             for member in members:
                 await services.terminals.close_scope(
                     TerminalOwner(member.project_id, member.agent_id, member.session_id)
@@ -506,25 +503,31 @@ class ArchiveService:
             # Archiving the rows and moving the current pointer is one unit for data snapshots.
             async with services.snapshot_barrier.compound_mutation_async():
                 ref = await sessions.archive(
-                    address, facts={"ephemeral_expiry": True} if ephemeral_expiry else None
+                    address,
+                    facts={"ephemeral_expiry": True} if ephemeral_expiry else None,
+                    cleanup_pending=True,
                 )
-                archived_members = await sessions.run_async(
-                    sessions.archive_ledger.members, ref.entry_key, limit=None
-                )
-                archived_addresses = tuple(member.address for member in archived_members)
+                archived_addresses = members
                 next_session_id = None
-                if address.project_id is None:
-                    agent = await sessions.run_async(
-                        services.agents.reset_current_after_session_removed,
-                        address.agent_id,
-                        removed_current or address.session_id,
-                    )
-                    next_session_id = agent.current_session_id or None
-                for review_agent, current in removed_currents.items():
-                    if address.project_id is None and review_agent == address.agent_id:
-                        continue
-                    await sessions.run_async(
-                        services.agents.reset_current_after_session_removed, review_agent, current
+                try:
+
+                    def finish() -> tuple[tuple[SessionAddress, ...], dict[str, str]]:
+                        entry = self._require_entry(ref.entry_id)
+                        archived = tuple(
+                            member.address
+                            for member in sessions.archive_ledger.members(
+                                entry.entry_key, limit=None
+                            )
+                        )
+                        return archived, _operations.cleanup_currents(services, entry)
+
+                    archived_addresses, currents = await sessions.run_async(finish)
+                    if address.project_id is None:
+                        next_session_id = currents.get(address.agent_id) or None
+                except Exception:
+                    _LOGGER.exception(
+                        "Archive cleanup failed; it completes at the next start (entry=%s)",
+                        ref.entry_id,
                     )
             await services.scratch_areas.remove_areas(scratch_roots)
             await self._close_session_transports(archived_addresses)

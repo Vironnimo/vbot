@@ -74,7 +74,7 @@ async def test_delete_identity_session_archives_and_lands_on_the_reaimed_current
         *([TerminalOwner(None, review_agent, "review")] if with_review else []),
     ]
     # Identity pointer re-aimed through the shared seam; the landing is its result.
-    assert state._resets == [("builder", "s1")]
+    assert ("builder", "s1") in state._resets
     # Dropped from the recall index immediately.
     assert state._recall_removals == [("builder", "s1", None)]
     events = resource_changes(state)
