@@ -956,6 +956,8 @@
               refreshToken={agentSecretsRefreshToken}
             />
             <QueuedMessages
+              scopeKey={composerDraftKey}
+              {subscribeAgentRenames}
               queuedMessages={target.activeSessionState?.queue ?? []}
               onRemoveQueuedMessage={actions.handleRemoveQueuedMessage}
               onSteerQueuedMessage={actions.handleSteerQueuedMessage}

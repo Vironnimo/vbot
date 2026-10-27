@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
+import { reactiveProps } from './reactiveProps.support.svelte.js';
 import { init, t } from '../../lib/i18n.js';
 import {
   FLOATING_HOVER_CLOSE_DELAY_MS,
@@ -244,4 +245,68 @@ describe('QueuedMessages', () => {
     previews()[0].click();
     await vi.waitFor(() => expect(editor().value).toBe('First'));
   });
+  it.each(['admitted', 'steering'])(
+    'retains the draft when the edited item is %s, also during a failed save',
+    async (state) => {
+      let settleSave;
+      let renameAgent;
+      const onEditQueuedMessage = vi.fn(
+        () =>
+          new Promise((resolve) => {
+            settleSave = resolve;
+          }),
+      );
+      const props = reactiveProps({
+        scopeKey: 'agent::session-one',
+        subscribeAgentRenames: (listener) => {
+          renameAgent = listener;
+        },
+        queuedMessages: [{ id: 'q', content: 'Original', editable: true }],
+        onEditQueuedMessage,
+      });
+      mountQueue(props);
+      button('queue.editMessage').click();
+      flushSync();
+      typeInEditor('Keep this revision');
+      button('queue.saveEdit').click();
+      props.queuedMessages =
+        state === 'admitted'
+          ? []
+          : [{ id: 'q', content: 'Original', editable: true, steering: true }];
+      flushSync();
+      expect(editor().value).toBe('Keep this revision');
+      expect(
+        document.querySelector('.queued-messages__notice[role="status"]'),
+      ).not.toBeNull();
+      expect(button('queue.saveEdit')).toBeUndefined();
+      expect(button('queue.removeMessage')).toBeUndefined();
+      expect(button('common.copy')).toBeTruthy();
+      const originalQueue = props.queuedMessages;
+      props.scopeKey = 'agent::session-two';
+      props.queuedMessages = [];
+      flushSync();
+      expect(editor()).toBeNull();
+      settleSave(false);
+      await Promise.resolve();
+      flushSync();
+      expect(editor()).toBeNull();
+      renameAgent('agent', 'renamed');
+      props.scopeKey = 'renamed::session-one';
+      props.queuedMessages = originalQueue;
+      flushSync();
+      expect(editor().value).toBe('Keep this revision');
+      props.queuedMessages = [
+        ...props.queuedMessages,
+        { id: 'next', content: 'Next', editable: true },
+      ];
+      flushSync();
+      previews()[0].click();
+      flushSync();
+      expect(editor().value).toBe('Keep this revision');
+      button('queue.cancelEdit').click();
+      flushSync();
+      expect(editor()).toBeNull();
+      expect(onEditQueuedMessage).toHaveBeenCalledTimes(1);
+    },
+  );
 });
