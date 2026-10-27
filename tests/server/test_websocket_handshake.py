@@ -179,6 +179,76 @@ def test_websocket_handshake_reports_replay_gap_without_partial_replay(tmp_path:
         assert first_event["payload"] == {"id": f"live-{cursor}"}
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("resume", [False, True])
+async def test_websocket_reconnects_if_retention_overflows_during_hello(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, resume: bool
+) -> None:
+    import server.app as server_app
+
+    bus = ServerEventBus(event_retention_limit=2)
+    _set_bus_epoch(bus, "epoch-abc")
+    bus.publish("run_started", {"id": "before-connect"})
+    app = _stub_app(tmp_path)
+    app.state.event_bus = bus
+    app.state.client_registry = ClientRegistry()
+    app.state.server_identity = {"version": "1", "started_at": "2026-01-01T00:00:00.000000Z"}
+    monkeypatch.setattr(server_app, "_active_runs_snapshot", lambda _state: [])
+    monkeypatch.setattr(server_app, "_queues_snapshot", lambda _state: [])
+    frames: list[dict[str, Any]] = []
+    closes: list[int] = []
+
+    async def accept() -> None:
+        pass
+
+    async def receive() -> dict[str, Any]:
+        await asyncio.Event().wait()
+        return {}
+
+    async def send_text(text: str) -> None:
+        frame = json.loads(text)
+        frames.append(frame)
+        if frame["type"] == "connection_ready":
+            for index in range(3):
+                bus.publish("run_started", {"id": str(index)})
+
+    async def close(*, code: int, reason: str) -> None:
+        closes.append(code)
+
+    socket = SimpleNamespace(
+        app=app,
+        query_params={"epoch": bus.epoch, "after_sequence": "1"} if resume else {},
+        headers={},
+        scope={},
+        accept=accept,
+        receive=receive,
+        send_text=send_text,
+        close=close,
+    )
+    endpoint = next(
+        cast(Any, route).endpoint for route in app.routes if getattr(route, "path", None) == "/ws"
+    )
+    async with asyncio.timeout(2):
+        await endpoint(socket)
+
+    assert [frame["type"] for frame in frames] == ["connection_ready"]
+    hello = frames[0]
+    assert hello["replay_status"] == ("resumed" if resume else "fresh")
+    assert closes == [1013]
+    assert bus.subscriber_count == 0
+    # The client's unchanged cursor will be declared a gap at the next hello.
+    cursor = 1 if resume else hello["last_sequence"]
+    assert (
+        server_app._connection_replay_status(
+            bus,
+            client_epoch=bus.epoch,
+            client_after_sequence=cursor,
+            last_sequence=bus.last_sequence,
+        )
+        == "gap"
+    )
+
+
 def _stub_run(run_id: str, **fields: Any) -> Any:
     values: dict[str, Any] = {
         "id": run_id,

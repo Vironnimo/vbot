@@ -78,11 +78,13 @@ from server._request_bodies import _read_json_payload_with_limit, _require_json_
 from server._speech_routes import register_speech_routes
 from server._streams import (
     REPLAY_STATUS_RESUMED,
+    ServerReplayGapError,
     _active_runs_snapshot,
     _bus_epoch,
     _bus_last_sequence,
     _close_log_stream,
     _connection_replay_status,
+    _contiguous_server_events,
     _parse_after_sequence,
     _parse_query_string,
     _queues_snapshot,
@@ -717,13 +719,11 @@ def create_app(
         # high-water mark and *before* the subscribe loop. Publishing the connect
         # signal first means its sequence sits at or below the live-only floor,
         # so this window does not replay its own presence event while other
-        # windows still see it; the floor is read before the hello send, so
-        # events arriving during that send are not skipped (no replay gap).
+        # windows still see it.
         client_entry = _register_ws_client(websocket)
         try:
-            # Read last_sequence *before* sending the hello frame so any events
-            # published during the await are still in the retained deque and get
-            # replayed by the subsequent subscribe.
+            # Events published during the hello send replay from this floor. If
+            # retention loses the replay head, close without advancing the cursor.
             last_sequence_at_hello = _bus_last_sequence(event_bus)
             replay_status = _connection_replay_status(
                 event_bus,
@@ -749,15 +749,20 @@ def create_app(
                 subscribe_after_sequence = client_after_sequence
             else:
                 subscribe_after_sequence = last_sequence_at_hello
-            async with aclosing(
-                event_bus.subscribe(after_sequence=subscribe_after_sequence)
-            ) as stream:
+            async with (
+                aclosing(event_bus.subscribe(after_sequence=subscribe_after_sequence)) as stream,
+                aclosing(
+                    _contiguous_server_events(stream, after_sequence=subscribe_after_sequence)
+                ) as contiguous,
+            ):
                 await _stream_websocket_events(
                     websocket,
-                    stream,
+                    contiguous,
                     file_delivery=file_delivery,
                     file_actor=_file_actor(websocket.scope),
                 )
+        except ServerReplayGapError:
+            await websocket.close(code=1013, reason="Replay gap; reconnect")
         except WebSocketDisconnect:
             return
         finally:
