@@ -17,17 +17,21 @@ from __future__ import annotations
 from functools import cache
 from typing import Any
 
-from core.tools._patch_syntax import _Hunk, _Operation, _parse, _PatchError, _Replacement
+from core.tools._patch_syntax import _Operation, _parse, _PatchError
+from core.tools._replacement_requests import (
+    REPLACEMENT_FIELD_NAMES,
+    content_operation,
+    replacement_fields,
+    replacement_operation,
+)
 from core.tools.call_syntax import SpellingAliases, normalize_call_arguments, spelling
 from core.tools.contracts import ToolContract, compile_tool_contract
-from core.tools.fuzzy_match import dominant_line_ending
 from core.tools.tools import JsonObject
 
 APPLY_PATCH_TOOL_NAME = "apply_patch"
 
 _TEXT: dict[str, Any] = {"type": "string"}
 _PATH: dict[str, Any] = {"type": "string", "minLength": 1}
-_EDIT_FIELDS = ("old_string", "new_string", "replace_all", "path")
 
 # Accepted but not advertised: the fields other harnesses' edit Tools use.
 PATCH_HIDDEN_PARAMETERS: dict[str, Any] = {
@@ -59,18 +63,7 @@ _TRANSLATED_FIELDS: dict[str, Any] = {"edits": {"type": "array"}}
 _FIELD_ALIASES = SpellingAliases(
     {
         "patch": ("input", "patch_text", "diff", "unified_diff", "patch_content"),
-        "path": (
-            "file_path",
-            "file",
-            "filename",
-            "target_file",
-            "absolute_path",
-            "relative_path",
-            "relative_workspace_path",
-        ),
-        "old_string": ("old_str", "old_text", "old", "search", "find", "original"),
-        "new_string": ("new_str", "new_text", "new", "replace", "replacement", "replace_with"),
-        "replace_all": ("all", "replace_all_occurrences", "global"),
+        **REPLACEMENT_FIELD_NAMES,
         "content": (
             "contents",
             "file_text",
@@ -136,16 +129,7 @@ def normalize_patch_arguments(arguments: Any) -> Any:
 def _edit_item(item: Any, number: int) -> Any:
     if not isinstance(item, dict):
         return item
-    edit: dict[str, Any] = {}
-    for key, value in item.items():
-        field = key if key in _EDIT_FIELDS else _FIELD_ALIASES.get(key, key)
-        if field == "replace_all" and value in (None, ""):
-            continue
-        if field in edit and edit[field] != value:
-            raise ValueError(
-                f"edits item {number} gives {field} twice with different values; send one."
-            )
-        edit[field] = value
+    edit = replacement_fields(item, number, aliases=_FIELD_ALIASES)
     edit = _repair_contract().normalize_arguments(edit)
     if isinstance(edit, dict) and "old_string" in edit and "new_string" not in edit:
         raise ValueError(
@@ -246,54 +230,17 @@ def patch_operations(arguments: JsonObject) -> list[_Operation]:
     return [content_operation(path, arguments["content"])]
 
 
-def content_operation(
-    path: str, content: str, *, only_if_empty: bool = False, label: str = ""
-) -> _Operation:
-    """Create or replace a file with ``content``; its final line break follows the file.
-
-    A new file's lines all end as most lines of ``content`` do.
-    """
-    text = content.replace("\r\n", "\n").replace("\r", "\n")
-    newline = dominant_line_ending(content) or "\n"
-    hunks = []
-    if text:
-        lines = text.split("\n")
-        no_newline = lines[-1] != ""
-        if not no_newline:
-            lines.pop()
-        hunks = [_Hunk(lines=[("+", line) for line in lines], no_newline=no_newline)]
-    return _Operation(
-        "add",
-        path,
-        hunks=hunks,
-        only_if_empty=only_if_empty,
-        newline=newline,
-        label=label,
-        keeps_final_break=True,
-    )
-
-
 def _edit_operations(path: str, edits: list[JsonObject]) -> list[_Operation]:
     operations: list[_Operation] = []
     for number, edit in enumerate(edits, 1):
         target = edit.get("path", path)
         label = f"edit {number}" if len(edits) > 1 else ""
-        if edit["old_string"] == "":
-            operations.append(
-                content_operation(target, edit["new_string"], only_if_empty=True, label=label)
-            )
-            continue
-        hunk = _Hunk(
-            replacement=_Replacement(
-                edit["old_string"], edit["new_string"], edit.get("replace_all", False)
-            ),
-            label=label,
-        )
+        operation = replacement_operation(target, edit, label=label)
         last = operations[-1] if operations else None
-        if last is not None and last.action == "update" and last.path == target:
-            last.hunks.append(hunk)
+        if last is not None and last.action == operation.action == "update" and last.path == target:
+            last.hunks.extend(operation.hunks)
         else:
-            operations.append(_Operation("update", target, hunks=[hunk]))
+            operations.append(operation)
     return operations
 
 

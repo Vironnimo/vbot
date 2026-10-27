@@ -27,6 +27,7 @@ from core.skills.skills import RESOURCE_DIRECTORIES, SKILL_FILENAME
 from core.utils.atomic import atomic_write_bytes
 from core.utils.file_status import is_link_status
 from core.utils.ids import is_reserved_name, reserved_name_message
+from core.utils.line_endings import dominant_line_ending
 
 type _PublicationFingerprint = dict[str, tuple[int, int, int, int, int, str | None]]
 
@@ -132,12 +133,8 @@ def _read_raw_text(path: Path) -> str:
 
 
 def _detect_line_ending(text: str) -> str:
-    """Return the line ending used in ``text`` (CRLF, CR, or LF)."""
-    if "\r\n" in text:
-        return "\r\n"
-    if "\r" in text:
-        return "\r"
-    return "\n"
+    """Return the existing file's majority style, or LF when it has no line endings."""
+    return dominant_line_ending(text) or "\n"
 
 
 def _to_line_ending(text: str, ending: str) -> str:

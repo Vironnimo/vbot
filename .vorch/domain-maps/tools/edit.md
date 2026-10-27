@@ -9,7 +9,10 @@ one dialect per prompt epoch, chosen by the primary route's Model family
 (`chat/request-building.md` -> Tool catalog per prompt epoch).
 `core/tools/edit.py` owns registration, dispatch, result and failure wording, and
 the dialect helpers; `_edit_arguments.py` owns both Tools' input contracts and
-argument interpretation, re-exported through the public owner. The shared change pipeline
+argument interpretation, re-exported through the public owner. Replacement field
+aliases, conflict checks and operation construction come from
+`_replacement_requests.py`, shared with the patch dialect; batching and
+partial-item failures stay Tool-owned. The shared change pipeline
 (`_file_changes.py`: locks, planning, read guard, atomic writes, reports) and the
 engine (`_edit_engine.py`, `copy_match.py`, `fuzzy_match.py`) are shared with
 `apply_patch`; their canonical description is `apply_patch.md`.
@@ -46,9 +49,10 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
   the shared rule (`tools.md` -> Unknown fields): inert fields run without effect
   with a note; fields whose meaning could change the call fail before mutation.
 - **Argument repair** (`normalize_edit_arguments`, wrapped by `_refusing`, so every
-  refusal is `invalid_arguments` opening with `No file was changed.`): `file_path`/
-  `filename` -> `path`, `old_str`/`old_text`/`oldText` and the `new_*` twins,
-  any case or separator spelling (`filePath`, `oldString`, `replaceAll`); `edits`
+  refusal is `invalid_arguments` opening with `No file was changed.`): path and replacement aliases match `apply_patch` (`apply_patch.md` -> Contract),
+  including `file_path`/`target_file`, `search`/`find`/`original`,
+  `replace`/`replacement`/`replace_with`, and `all`/`global` for `replace_all`,
+  with any case or separator spelling (`filePath`, `oldString`, `replaceAll`); `edits`
   or one of its items sent as JSON text, also with unescaped `"` or raw line
   breaks inside `old_string`/`new_string` (`decode_json_argument`, the shared
   quote repair in `tools/call-repair.md` -> Shared argument repair, against the schema of an

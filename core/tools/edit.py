@@ -40,8 +40,9 @@ from core.tools._edit_arguments import WRITE_TOOL_PARAMETERS as WRITE_TOOL_PARAM
 from core.tools._file_changes import cancelled_paths, change_batch, file_reports, run_operations
 from core.tools._patch_entries import _resolve
 from core.tools._patch_report import EQUAL_TEXT, failure_text, patch_result
-from core.tools._patch_requests import APPLY_PATCH_TOOL_NAME, content_operation
-from core.tools._patch_syntax import _Hunk, _Operation, _PatchError, _Replacement
+from core.tools._patch_requests import APPLY_PATCH_TOOL_NAME
+from core.tools._patch_syntax import _Operation, _PatchError
+from core.tools._replacement_requests import content_operation, replacement_operation
 from core.tools.availability import TOOL_ACTIVATION_FOLLOWS
 from core.tools.file_state import FileReadState
 from core.tools.model_names import model_tool_name
@@ -189,22 +190,13 @@ def _edit_operations(
         if _REFUSED in edit:
             refused.add(identity)
             continue
-        if edit["old_string"] == "":
-            operations.append(
-                content_operation(target, edit["new_string"], only_if_empty=True, label=label)
-            )
-            continue
-        hunk = _Hunk(
-            replacement=_Replacement(
-                edit["old_string"], edit["new_string"], edit.get("replace_all", False)
-            ),
-            label=label,
-            precise_only=identity in refused,
+        operation = replacement_operation(
+            target, edit, label=label, precise_only=identity in refused
         )
-        if combine and operations and operations[-1].action == "update":
-            operations[-1].hunks.append(hunk)
+        if combine and operations and operations[-1].action == operation.action == "update":
+            operations[-1].hunks.extend(operation.hunks)
         else:
-            operations.append(_Operation("update", target, hunks=[hunk]))
+            operations.append(operation)
     return operations
 
 
