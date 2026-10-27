@@ -1,6 +1,6 @@
 # WebUI shared controls
 
-Read when using or changing the behavior of the shared `LazyContent`, `SortableList`, `PathField`, `DataTable`, `DateField`, `TimeField`, `Modal`, `ImageLightbox` or `Dropdown` controls. The rule to use them is in `webui.md` -> Ownership; their appearance is in `webui/design.md` -> Shared controls and feedback, their files in `webui/source-map.md` -> UI primitives.
+Read when using or changing the behavior of the shared `LazyContent`, `SortableList`, `PathField`, `DataTable`, `DateField`, `TimeField`, `Button`, `Modal`, `ImageLightbox` or `Dropdown` controls. The rule to use them is in `webui.md` -> Ownership; their appearance is in `webui/design.md` -> Shared controls and feedback, their files in `webui/source-map.md` -> UI primitives.
 
 ## LazyContent
 
@@ -41,3 +41,7 @@ dnd-kit setup: the manager gets its plugins and sensors at construction, because
 - The private `components/ui/modalFocus.js` lifetime is shared by `Modal` and `ImageLightbox`: it owns background isolation, focus entry/restoration, the navigation layer and one keyboard stack. The Lightbox focuses its close button. Of stacked modal surfaces (a dialog or image preview opened from a dialog) only the newest answers Escape and Tab (`ui/__tests__/Modal.test.js`). During IME composition the Modal leaves shortcuts to native input; composing Escape also stops before background window handlers, preserving the dialog and its draft. Escape already consumed by a nested picker dismisses only that picker; the enclosing dialog retains its draft and closes on a subsequent unhandled Escape.
 - `SearchableDropdown` balances `onOpenChange` for actual state transitions, including closing an open picker on teardown; calling `open()` again while open does not report another opening. This lets catalog owners hold refreshed options until every picker is closed (`SearchableDropdown.test.js`).
 - Shared Dropdown variants implement the listbox/combobox keyboard contract with an explicit active option (the simple list adds typeahead; the searchable one filters); callers provide values and callbacks, not bespoke keyboard behavior. The searchable variant's collapsible-group mode switches to the tree pattern: Right opens a group or enters it, Left closes it or returns to its header, Enter toggles a header; callers own which groups are open (`expandedGroups` plus `onGroupToggle`). A Dropdown inside a `FormField` passes the field's `labelId` as `ariaLabelledby`, so its visible label and current value name the trigger; without it the trigger falls back to `ariaLabel` or the placeholder.
+
+## Disabled Button help
+
+`Button.svelte` keeps native controls disabled. With a `disabledReason`, its wrapper becomes the keyboard-focusable disabled control, named from the button and described by persistent hidden reason text; the shared tooltip shows the same reason on keyboard focus or hover. Enabling the button removes that extra tab stop and exposes the native control again (`ui/__tests__/Button.test.js`).

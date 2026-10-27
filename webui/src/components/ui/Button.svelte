@@ -41,6 +41,7 @@
     VARIANT_CLASS[variant] ?? VARIANT_CLASS.secondary,
   );
   let isDisabled = $derived(disabled || loading);
+  const componentId = $props.id();
   let buttonClass = $derived(
     [variantClass, icon ? 'btn-icon' : '', className].filter(Boolean).join(' '),
   );
@@ -49,11 +50,13 @@
 {#snippet control(buttonTooltip)}
   <button
     {...rest}
+    id={rest.id || (disabledReason ? `${componentId}-control` : undefined)}
     {type}
     class={buttonClass}
     disabled={isDisabled}
     aria-label={ariaLabel || undefined}
     aria-busy={loading || undefined}
+    aria-hidden={isDisabled && disabledReason ? true : undefined}
     use:tooltipAction={buttonTooltip}
     onclick={onClick}
   >
@@ -62,10 +65,23 @@
 {/snippet}
 
 {#if disabledReason}
+  <!-- The focusable disabled wrapper represents the unavailable control;
+       its native button stays disabled and is hidden from the accessibility tree. -->
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
   <span
     class="tooltip-anchor"
+    role={isDisabled ? 'button' : undefined}
+    tabindex={isDisabled ? 0 : undefined}
+    aria-disabled={isDisabled || undefined}
+    aria-label={isDisabled && ariaLabel ? ariaLabel : undefined}
+    aria-labelledby={isDisabled && !ariaLabel
+      ? rest.id || `${componentId}-control`
+      : undefined}
+    aria-describedby={isDisabled ? `${componentId}-disabled-reason` : undefined}
     use:tooltipAction={isDisabled ? disabledReason : tooltip}
-    >{@render control('')}</span
+    >{@render control('')}<span id={`${componentId}-disabled-reason`} hidden
+      >{disabledReason}</span
+    ></span
   >
 {:else}
   {@render control(tooltip)}
