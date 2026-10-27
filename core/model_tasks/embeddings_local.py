@@ -20,17 +20,17 @@ import asyncio
 import base64
 import json
 import os
-import subprocess
 import sys
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
-from contextlib import suppress
+from contextlib import closing, suppress
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from threading import Lock, Timer
+from threading import Lock
 from typing import Any, Protocol, override
 
+from core.model_tasks._worker_process import JsonLineWorker, WorkerStoppedError
 from core.model_tasks.constants import TASK_TEXT_EMBEDDING
 from core.model_tasks.local_setup import LocalSetup
 from core.model_tasks.local_targets import LocalTaskTargetDescriptor, LocalTaskTargetRegistry
@@ -307,28 +307,11 @@ class _Child(Protocol):
     def close(self) -> None: ...
 
 
-class _WorkerProcess:
+class _WorkerProcess(JsonLineWorker):
     """The serving child: one blocking request/reply exchange at a time."""
 
     def __init__(self, python: Path, spec: Mapping[str, Any], threads: int) -> None:
-        from core.utils.processes import subprocess_creation_flags
-
-        self._process = subprocess.Popen(
-            [str(python), "-I", "-B", str(_WORKER), "--serve"],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            encoding="utf-8",
-            creationflags=subprocess_creation_flags(),
-            start_new_session=os.name != "nt",
-            env={
-                **os.environ,
-                "PYTHONUTF8": "1",
-                "TOKENIZERS_PARALLELISM": "false",
-                "HF_HUB_OFFLINE": "1",
-            },
-        )
+        super().__init__(python, _WORKER, ["--serve"], environment={"HF_HUB_OFFLINE": "1"})
         try:
             self._exchange({"op": "load", "model": dict(spec), "threads": threads}, "loaded")
         except BaseException:
@@ -349,23 +332,11 @@ class _WorkerProcess:
         return vectors, tokens
 
     def _exchange(self, request: Mapping[str, Any], answer: str) -> Any:
-        process = self._process
-        assert process.stdin is not None and process.stdout is not None
-        # A hung child is killed; its closed pipe then ends this exchange.
-        timer = Timer(_EXCHANGE_TIMEOUT_S, self.kill)
-        timer.daemon = True
-        timer.start()
         try:
-            # ASCII JSON: the isolated child ignores PYTHONUTF8 and reads stdin in
-            # the console code page, which would garble non-ASCII text.
-            process.stdin.write(json.dumps(request) + "\n")
-            process.stdin.flush()
-            line = process.stdout.readline()
-        finally:
-            timer.cancel()
-        if not line:
-            raise LocalEmbeddingError("The local embedding engine stopped")
-        reply = json.loads(line)
+            with closing(self.exchange(request, _EXCHANGE_TIMEOUT_S)) as events:
+                reply = next(events)
+        except WorkerStoppedError as error:
+            raise LocalEmbeddingError("The local embedding engine stopped") from error
         if reply.get("error") == "input_too_long":
             raise LocalEmbeddingInputTooLongError(
                 int(reply["index"]), int(reply["tokens"]), int(reply["limit"])
@@ -378,24 +349,7 @@ class _WorkerProcess:
 
     def kill(self) -> None:
         """Kill the child's process tree; a blocked exchange then ends."""
-        from core.utils.processes import kill_process_tree
-
-        process = self._process
-        if process.poll() is None:
-            try:
-                kill_process_tree(process)
-            except OSError, ProcessLookupError:
-                with suppress(OSError):
-                    process.kill()
-            with suppress(subprocess.TimeoutExpired):
-                process.wait(timeout=10)
-
-    def close(self) -> None:
-        self.kill()
-        for stream in (self._process.stdin, self._process.stdout):
-            if stream is not None:
-                with suppress(OSError):
-                    stream.close()
+        self.end("aborted")
 
 
 ChildFactory = Callable[[Path, Mapping[str, Any], int], _Child]

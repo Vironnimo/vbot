@@ -5,18 +5,14 @@ from __future__ import annotations
 import base64
 import gc
 import importlib
-import json
-import os
 import re
-import signal
-import subprocess
 import tempfile
 import wave
 from collections.abc import Callable, Container, Generator, Iterator, Mapping, Sequence
-from contextlib import closing, nullcontext, suppress
+from contextlib import closing, nullcontext
 from pathlib import Path
-from threading import Lock, Timer
-from typing import Any, cast
+from threading import Lock
+from typing import Any
 
 from core.model_tasks._speech_context import (
     _AUDIO,
@@ -26,6 +22,7 @@ from core.model_tasks._speech_context import (
     LocalSpeechError,
     LocalSpeechExecutionError,
 )
+from core.model_tasks._worker_process import JsonLineWorker, WorkerStoppedError
 from core.model_tasks.speech_input import iter_decoded_frames
 from core.model_tasks.speech_setup import LocalSpeechSetup
 from core.model_tasks.speech_types import (
@@ -71,7 +68,7 @@ class _WaitingWorkers:
             worker.end("closed")
 
 
-class _WorkerProcess:
+class _WorkerProcess(JsonLineWorker):
     """A ``speech_worker.py`` child the parent talks to in JSON lines.
 
     The child is ended with its process tree when a request passes its deadline,
@@ -82,38 +79,12 @@ class _WorkerProcess:
     _closed_message: str  # The error of a request whose child closing ended.
 
     def __init__(self, python: Path, arguments: Sequence[str], waiting: _WaitingWorkers) -> None:
-        from core.utils.processes import subprocess_creation_flags
-
         self._waiting = waiting
-        self._ending = Lock()
-        self._ended = ""  # Why the parent ended the child, if it did.
-        self._process = subprocess.Popen(
-            [
-                str(python),
-                "-I",
-                "-B",
-                str(Path(__file__).with_name("speech_worker.py")),
-                *arguments,
-            ],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            encoding="utf-8",
-            creationflags=subprocess_creation_flags(),
-            start_new_session=os.name != "nt",
-            env={**os.environ, "PYTHONUTF8": "1", "TOKENIZERS_PARALLELISM": "false"},
-        )
+        super().__init__(python, Path(__file__).with_name("speech_worker.py"), arguments)
 
     def abort(self) -> None:
         """End the child from another thread; the running request fails."""
         self.end("aborted")
-
-    def end(self, reason: str) -> None:
-        """Kill the child's process tree; the first reason names the failure."""
-        with self._ending:
-            self._ended = self._ended or reason
-        _kill_speech_process(self._process)
 
     def _exchange(
         self,
@@ -128,40 +99,32 @@ class _WorkerProcess:
         Progress forwards the child's phases (only *phases* when given). The child
         is ended once *deadline* seconds pass without that answer.
         """
-        process = self._process
-        assert process.stdin is not None and process.stdout is not None
-        timer = Timer(deadline, self.end, ("deadline",))
-        timer.daemon = True
         self._waiting.add(self)
-        timer.start()
         try:
-            process.stdin.write(json.dumps(request) + "\n")
-            process.stdin.flush()
-            while line := process.stdout.readline(4096):
-                event = json.loads(line)
-                if event.get("error"):
-                    raise RuntimeError(event["error"])
-                if on_event is not None:
-                    on_event(event)
-                if (
-                    (phase := event.get("phase"))
-                    and (phases is None or phase in phases)
-                    and (progress := _PROGRESS.get()) is not None
-                ):
-                    progress.update(phase)
-                if (payload := event.get(answer)) is not None:
-                    return payload
-        except OSError, ValueError:
-            if not self._ended:
-                raise  # A broken pipe or line of a child ended here is reported below.
+            with closing(self.exchange(request, deadline, read_limit=4096)) as events:
+                for event in events:
+                    if event.get("error"):
+                        raise RuntimeError(event["error"])
+                    if on_event is not None:
+                        on_event(event)
+                    if (
+                        (phase := event.get("phase"))
+                        and (phases is None or phase in phases)
+                        and (progress := _PROGRESS.get()) is not None
+                    ):
+                        progress.update(phase)
+                    if (payload := event.get(answer)) is not None:
+                        return payload
+        except WorkerStoppedError as error:
+            if error.reason == "deadline":
+                raise TimeoutError(
+                    f"Speech worker did not answer within {deadline:.0f} seconds"
+                ) from error
+            if error.reason == "closed":
+                raise LocalSpeechError(self._closed_message) from error
+            raise RuntimeError("Speech worker exited") from error
         finally:
-            timer.cancel()
             self._waiting.discard(self)
-        if self._ended == "deadline":
-            raise TimeoutError(f"Speech worker did not answer within {deadline:.0f} seconds")
-        if self._ended == "closed":
-            raise LocalSpeechError(self._closed_message)
-        raise RuntimeError("Speech worker exited")
 
     def _load(self, options: Mapping[str, Any]) -> None:
         """Have the child load its model; a child that fails to is closed."""
@@ -172,9 +135,6 @@ class _WorkerProcess:
         except BaseException:
             self.close()
             raise
-
-    def close(self) -> None:
-        _close_speech_process(self._process)
 
 
 class _TtsEngine(_WorkerProcess):
@@ -277,29 +237,6 @@ class _ManagedSttEngine(_WorkerProcess):
             segments=tuple(payload.get("segments", ())),
             usage=payload.get("usage"),
         )
-
-
-def _kill_speech_process(process: subprocess.Popen[str]) -> None:
-    """Kill a speech child's whole process tree; its pipes stay with their owner."""
-    from core.utils.processes import windows_taskkill_tree
-
-    if process.poll() is None:
-        if os.name == "nt":
-            if not windows_taskkill_tree(process.pid):
-                with suppress(ProcessLookupError):
-                    process.kill()
-        else:
-            with suppress(ProcessLookupError):
-                cast(Any, os).killpg(process.pid, cast(Any, signal).SIGKILL)
-        process.wait()
-
-
-def _close_speech_process(process: subprocess.Popen[str]) -> None:
-    _kill_speech_process(process)
-    if process.stdin:
-        process.stdin.close()
-    if process.stdout:
-        process.stdout.close()
 
 
 def _audio_chunks(

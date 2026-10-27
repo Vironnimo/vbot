@@ -95,7 +95,10 @@ worker and cancellation path. Coverage: `test_speech.py`, `test_speech_input.py`
 `speech_local.py` owns executor residency, request admission and lifecycle; internal
 `_speech_catalog.py` holds target definitions/options, `_speech_context.py` owns
 execution contracts and request cancellation/context, and `_speech_engines.py`
-holds worker protocol, audio chunking and engine adapters. These units import no
+holds speech worker protocol, audio chunking and engine adapters. Its child
+transport shares `_worker_process.py` with local embeddings: isolated launch,
+JSON lines, request deadlines and process-tree cleanup; speech retains progress,
+waiting-child registration and cancellation reasons. These units import no
 ML runtime until an engine first loads; `speech_models.py` (`SPEECH_MODELS`) pins
 every built-in target's Model: repository, commit revision, and each file's SHA-256
 and size. Moving a target to a newer upstream revision means editing its entry there.

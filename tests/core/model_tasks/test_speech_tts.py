@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, Mock
 import numpy as np
 import pytest
 
-from core.model_tasks import _speech_context, local_setup, speech_worker
+from core.model_tasks import _speech_context, _worker_process, local_setup, speech_worker
 from core.model_tasks._speech_context import _AUDIO, _PROGRESS
 from core.model_tasks._speech_engines import _TtsEngine, _WaitingWorkers
 from core.model_tasks.constants import TASK_TEXT_TO_SPEECH
@@ -505,8 +505,6 @@ def test_worker_generates_playable_wav_and_keeps_every_text_chunk(tmp_path, engi
 def test_process_adapter_keeps_audio_and_text_off_arguments_and_cleans_up(
     tmp_path, monkeypatch, delivery
 ):
-    from core.model_tasks import _speech_engines as speech_local
-
     streaming = delivery != "buffered"
     failed = delivery == "consumer_failure"
     output = io.BytesIO()
@@ -524,9 +522,7 @@ def test_process_adapter_keeps_audio_and_text_off_arguments_and_cleans_up(
         return True
 
     kill_tree = Mock(side_effect=kill)
-    monkeypatch.setattr("core.utils.processes.windows_taskkill_tree", kill_tree)
-    if sys.platform != "win32":
-        monkeypatch.setattr("os.killpg", kill_tree)
+    monkeypatch.setattr("core.utils.processes.kill_process_tree", kill_tree)
     process = Mock()
     emitted = []
     responses = iter(
@@ -564,7 +560,7 @@ def test_process_adapter_keeps_audio_and_text_off_arguments_and_cleans_up(
 
     process.stdin.write.side_effect = write
     popen = Mock(return_value=process)
-    monkeypatch.setattr(speech_local.subprocess, "Popen", popen)
+    monkeypatch.setattr(_worker_process.subprocess, "Popen", popen)
     setup = LocalSpeechSetup(engine="qwen3-tts", directory=tmp_path)
     token = _PROGRESS.set(SpeechProgress())
 
@@ -633,16 +629,14 @@ async def test_tts_worker_that_stops_answering_is_ended(tmp_path, monkeypatch, e
             assert not self.cancelled
             self.function(*self.args)
 
-    monkeypatch.setattr(speech_local, "Timer", Timer)
+    monkeypatch.setattr(_worker_process, "Timer", Timer)
     monkeypatch.setattr(_speech_context, "Timer", Timer)
 
     def kill_tree(*_arguments):
         killed.set()
         return True
 
-    monkeypatch.setattr("core.utils.processes.windows_taskkill_tree", kill_tree)
-    if sys.platform != "win32":
-        monkeypatch.setattr("os.killpg", kill_tree)
+    monkeypatch.setattr("core.utils.processes.kill_process_tree", kill_tree)
     # The child stops answering during load or synthesis; killing it ends its output.
     process = Mock()
     process.poll.side_effect = lambda: 0 if killed.is_set() else None
@@ -656,7 +650,7 @@ async def test_tts_worker_that_stops_answering_is_ended(tmp_path, monkeypatch, e
         return "" if killed.wait(10) else "{}"
 
     process.stdout.readline.side_effect = readline
-    monkeypatch.setattr(speech_local.subprocess, "Popen", Mock(return_value=process))
+    monkeypatch.setattr(_worker_process.subprocess, "Popen", Mock(return_value=process))
     setup = LocalSpeechSetup(engine="qwen3-tts", directory=tmp_path)
     entry = SpeechEngineDefinition(
         LocalTaskTargetDescriptor(

@@ -1016,6 +1016,11 @@ async def test_managed_stt_worker_that_stops_answering_is_ended(
                 LocalSpeechExecutionError if ending == "deadline" else LocalSpeechError
             )
         assert workers[0]._process.poll() is not None
+        assert (
+            workers[0]._ended
+            == {"deadline": "deadline", "cancellation": "aborted", "shutdown": "closed"}[ending]
+        )
+        assert not executor._waiting._workers
         assert executor.memory_status()["models"][0]["loaded"] is False
     finally:
         await executor.aclose()
