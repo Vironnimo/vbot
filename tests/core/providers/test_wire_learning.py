@@ -93,6 +93,87 @@ _WITHIN_4096 = _Within(4096)
         ),
         (paths.GO_RESPONSES, "Too many images: max 2 images per request, got 3", False),
         (paths.ZEN_GEMINI_STREAM, "Exceeded maximum number of images (2)", False),
+        pytest.param(
+            paths.PLATFORM,
+            "Too many images in request: 3, maximum allowed: 2.",
+            False,
+            id="azure-comma-maximum",
+        ),
+        pytest.param(
+            paths.CHAT,
+            "Too many images in request. Max is 2.",
+            False,
+            id="azure-older-maximum",
+        ),
+        pytest.param(
+            paths.CHAT,
+            "At most 2 image(s) may be provided in one request.",
+            False,
+            id="vllm-request",
+        ),
+        pytest.param(
+            paths.CHAT,
+            "At most 2 image(s) may be provided in one prompt. "
+            "Set `--limit-mm-per-prompt` to increase this limit.",
+            False,
+            id="vllm-prompt",
+        ),
+        pytest.param(
+            paths.CHAT,
+            "Too many images provided. This model supports up to 2 images",
+            False,
+            id="groq",
+        ),
+        pytest.param(
+            paths.CHAT,
+            "The model returned the following errors: Too many input images: 3, max allowed: 2",
+            False,
+            id="bedrock-llama-via-compatible-route",
+        ),
+        pytest.param(
+            paths.ZEN_GEMINI_STREAM,
+            "too many images: maximum allowed for model gemini-3.1-pro-preview is 2, got 3",
+            False,
+            id="gemini-model-maximum",
+        ),
+        pytest.param(
+            paths.MESSAGES.streaming(lambda: anthropic.sse_response(anthropic.sse())),
+            "Too much media: 0 document pages + 3 images > 2",
+            True,
+            id="anthropic-zero-pages",
+        ),
+        pytest.param(
+            paths.COPILOT_MESSAGES,
+            "too many images and documents: 3 + 0 > 2",
+            True,
+            id="anthropic-zero-documents-via-copilot",
+        ),
+        pytest.param(
+            paths.OPENROUTER,
+            {
+                "error": {
+                    "code": 400,
+                    "message": "Provider returned error",
+                    "metadata": {
+                        "raw": json.dumps(_error("Exceeded maximum number of images (2)")),
+                    },
+                }
+            },
+            False,
+            id="openrouter-nested-upstream-error",
+        ),
+        pytest.param(
+            paths.OPENROUTER.streaming(lambda: paths.responses_sse()),
+            {
+                "error": {
+                    "code": 400,
+                    "message": "Provider returned error",
+                    "metadata": {"raw": "Too many images in request: 3, maximum allowed: 2."},
+                }
+            },
+            False,
+            id="openrouter-in-band-upstream-error",
+        ),
         (paths.OLLAMA, "a request may include at most 2 images", False),
         (
             paths.OLLAMA.streaming(paths.OLLAMA.success),
@@ -104,7 +185,7 @@ _WITHIN_4096 = _Within(4096)
 @pytest.mark.asyncio
 async def test_image_count_rejections_are_learned_and_handed_to_chat_without_replay(
     path: paths.RequestPath,
-    rejection: str,
+    rejection: str | dict[str, Any],
     tool_result: bool,
 ) -> None:
     from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
@@ -128,12 +209,21 @@ async def test_image_count_rejections_are_learned_and_handed_to_chat_without_rep
     adapter = path.adapter()
     before = adapter.request_image_limit(path.model_id)
     with respx.mock, caller_owns_retries():
+        body = _error(rejection) if isinstance(rejection, str) else rejection
         response = (
-            httpx.Response(200, text=": heartbeat\n\n" + paths.chat_sse(_error(rejection)).text)
+            httpx.Response(
+                200,
+                text=": heartbeat\n\n"
+                + paths.chat_sse(
+                    {"choices": [], "usage": {"prompt_tokens": 10, "completion_tokens": 0}}, body
+                ).text,
+            )
             if path.stream and path.url == paths.CHAT.url
             else httpx.Response(200, text=json.dumps({"error": rejection}) + "\n")
             if path.stream and path.url == paths.OLLAMA.url
-            else _rejection(400, _error(rejection))
+            else httpx.Response(200, text="data: " + json.dumps({"type": "error", **body}) + "\n\n")
+            if path.stream and path.url in {paths.MESSAGES.url, paths.OPENROUTER.url}
+            else _rejection(422 if "one prompt" in str(rejection) else 400, body)
         )
         route = respx.post(path.url).mock(return_value=response)
         with pytest.raises(ProviderImageLimitError) as failure:
@@ -143,35 +233,81 @@ async def test_image_count_rejections_are_learned_and_handed_to_chat_without_rep
     assert failure.value.retryable is False
     assert before != 2
     assert adapter.request_image_limit(path.model_id) == 2
-    assert adapter.request_image_limit("unrelated-model") != 2
+    assert adapter.request_image_limit("gpt-6-astra") != 2
     await adapter.aclose()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("scenario", ["within-limit", "image-size", "auth", "after-output"])
-async def test_image_limit_learning_requires_an_exceeded_count_before_output(scenario: str) -> None:
-    adapter = paths.CHAT.adapter()
+@pytest.mark.parametrize(
+    ("scenario", "detail", "status"),
+    [
+        ("within-limit", "a request may include at most 2 images", 400),
+        ("image-size", "each image may include at most 2 megabytes", 400),
+        ("auth", "a request may include at most 2 images", 401),
+        ("after-output", "a request may include at most 2 images", 400),
+        ("after-reasoning", "a request may include at most 2 images", 400),
+        ("after-tool-call", "a request may include at most 2 images", 400),
+        ("rate-limit", "Too many images provided. This model supports up to 2 images", 429),
+        ("server-error", "Too many images in request: 3, maximum allowed: 2.", 503),
+        ("in-band-server", "Too many images in request: 3, maximum allowed: 2.", 503),
+        ("in-band-rate", "Too many images in request: 3, maximum allowed: 2.", 429),
+        ("in-band-auth", "Too many images in request: 3, maximum allowed: 2.", 401),
+        ("in-band-payment", "Too many images in request: 3, maximum allowed: 2.", 402),
+        ("document-pages", "Too much media: 1 document pages + 3 images > 2", 400),
+        ("documents", "too many images and documents: 3 + 1 > 2", 400),
+        ("vague", "Too many images", 400),
+        ("ambiguous", "Request rejected (too many or oversized images)", 400),
+        ("per-message", "At most 2 image(s) may be provided in one message.", 400),
+        (
+            "per-minute",
+            "Too many images provided. This model supports up to 2 images per minute",
+            400,
+        ),
+        ("video-count", "At most 2 video(s) may be provided in one prompt.", 400),
+        ("zero-limit", "At most 0 image(s) may be provided in one prompt.", 400),
+        ("decimal-limit", "Too many images in request: 3 > 2.5", 400),
+        ("grouped-number", "Too many images in request: 3 > 2,000", 400),
+        ("pixels", "Image dimensions exceed the maximum allowed size: 3 > 2", 400),
+        ("no-images", "Too many images in request: 3, maximum allowed: 2.", 400),
+    ],
+)
+async def test_image_limit_learning_requires_an_exceeded_count_before_output(
+    scenario: str, detail: str, status: int
+) -> None:
+    path = (
+        paths.OPENROUTER.streaming(lambda: paths.responses_sse())
+        if scenario.startswith("in-band-")
+        else paths.CHAT
+    )
+    adapter = path.adapter()
+    before = adapter.request_image_limit(path.model_id)
     image = {"type": "media", "media_type": "image/png", "base64": "aW1hZ2U="}
     messages = [{"role": "user", "content": [image] * (2 if scenario == "within-limit" else 3)}]
-    detail = (
-        "each image may include at most 2 megabytes"
-        if scenario == "image-size"
-        else "a request may include at most 2 images"
-    )
-    path = paths.CHAT
-    response = _rejection(401 if scenario == "auth" else 400, _error(detail))
-    if scenario == "after-output":
+    if scenario == "no-images":
+        messages = [{"role": "user", "content": json.dumps(messages)}]
+    response = _rejection(status, _error(detail))
+    if scenario.startswith("in-band-"):
+        event = {"type": "error", "error": {"code": status, "message": detail}}
+        response = httpx.Response(200, text="data: " + json.dumps(event) + "\n\n")
+    elif scenario.startswith("after-"):
         path = path.streaming(paths.chat_sse)
-        response = paths.chat_sse(
-            {"choices": [{"delta": {"content": "Already answered"}}]}, _error(detail)
-        )
+        delta: dict[str, Any] = {"content": "Already answered"}
+        if scenario == "after-reasoning":
+            delta = {"reasoning_content": "Already thinking"}
+        elif scenario == "after-tool-call":
+            delta = {
+                "tool_calls": [
+                    {"index": 0, "id": "call-1", "function": {"name": "read", "arguments": "{}"}}
+                ]
+            }
+        response = paths.chat_sse({"choices": [{"delta": delta}]}, _error(detail))
     with respx.mock, caller_owns_retries():
         route = respx.post(path.url).mock(return_value=response)
         with pytest.raises(ProviderError) as failure:
             await paths.request(adapter, path, {}, messages)
         assert route.call_count == 1
     assert not isinstance(failure.value, ProviderImageLimitError)
-    assert adapter.request_image_limit(path.model_id) is None
+    assert adapter.request_image_limit(path.model_id) == before
     await adapter.aclose()
 
 

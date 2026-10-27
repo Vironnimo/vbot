@@ -513,17 +513,37 @@ def _learn(
     return None
 
 
+# A complete positive integer: do not learn 2 from a malformed 2.5 or 2,000.
+_IMAGE_COUNT_LIMIT = r"([1-9]\d{0,5})(?!\d|[.,]\d)"
 _STATED_IMAGE_MAXIMUM = tuple(
     re.compile(wording)
     for wording in (
-        r"a request may include at most ([1-9]\d{0,5}) images\b",
-        r"too many images in request:\s*\d+\s*>\s*([1-9]\d{0,5})\b",
+        rf"a request may include at most {_IMAGE_COUNT_LIMIT} images\b",
+        rf"too many images in request:\s*\d+\s*>\s*{_IMAGE_COUNT_LIMIT}\b",
         r"request contains \d+ images, exceeding the maximum of "
-        r"([1-9]\d{0,5}) allowed per request\b",
-        r"too many images:\s*max ([1-9]\d{0,5}) images per request\b",
-        r"exceeded maximum number of images\s*\(([1-9]\d{0,5})\)",
+        rf"{_IMAGE_COUNT_LIMIT} allowed per request\b",
+        rf"too many images:\s*max {_IMAGE_COUNT_LIMIT} images per request\b",
+        # Azure and compatible gateways (including forwarded OpenRouter errors).
+        rf"exceeded maximum number of images\s*\({_IMAGE_COUNT_LIMIT}\)",
+        rf"too many images in request:\s*\d+,\s*maximum allowed:\s*{_IMAGE_COUNT_LIMIT}\b",
+        rf"too many images in request\.\s*max is {_IMAGE_COUNT_LIMIT}\b",
+        # vLLM's older request wording and its current prompt wording.
+        rf"at most {_IMAGE_COUNT_LIMIT} image\(s\) may be provided in one (?:request|prompt)\b",
+        # Groq: require the end of the statement, not a per-minute/message quota.
+        rf"too many images provided\.\s*this model supports up to {_IMAGE_COUNT_LIMIT} images"
+        r"(?=$|[.!\"'\\}\]])",
+        # Bedrock's Llama path; this also works through a compatible gateway.
+        rf"too many input images:\s*\d+,\s*max allowed:\s*{_IMAGE_COUNT_LIMIT}\b",
+        # Reported Gemini routes; the Model name is not evidence of a fixed cap.
+        r"too many images:\s*maximum allowed for model [\w./:-]+ is "
+        rf"{_IMAGE_COUNT_LIMIT},\s*got \d+\b",
+        # Anthropic/Bedrock combine images with documents or rendered PDF pages.
+        # Only a zero document count establishes a reusable image-only ceiling.
+        rf"too many images and documents:\s*\d+\s*\+\s*0\s*>\s*{_IMAGE_COUNT_LIMIT}\b",
+        rf"too much media:\s*0 document pages\s*\+\s*\d+ images\s*>\s*{_IMAGE_COUNT_LIMIT}\b",
     )
 )
+"""Reported rejection forms; sources and scope are in providers/request-policy.md."""
 
 
 def learn_image_limit(
