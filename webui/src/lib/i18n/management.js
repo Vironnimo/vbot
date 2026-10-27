@@ -464,6 +464,38 @@ export default Object.freeze({
   'agents.order.saveError': 'Agent order could not be saved.',
   'agents.form.id': 'Agent ID',
   'agents.form.name': 'Name',
+  'agents.soul.title': 'Soul',
+  'agents.soul.help':
+    'Who this Agent is and how it works: its SOUL.md. Every new Session starts with it.',
+  'agents.soul.edit': 'Edit',
+  'agents.soul.write': 'Write soul',
+  'agents.soul.empty': 'SOUL.md is empty.',
+  'agents.soul.loading': 'Loading SOUL.md…',
+  'agents.soul.loadError': 'SOUL.md could not be loaded: {error}',
+  'agents.soul.stats': '{lines} lines · {size}',
+  'agents.soul.statsOne': '1 line · {size}',
+  'agents.soul.editorTitle': 'Soul of {name}',
+  'agents.soul.editorDescription':
+    'New Sessions start with the saved version; running Sessions pick it up at their next Compaction.',
+  'agents.soul.viewLabel': 'SOUL.md view',
+  'agents.soul.tabWrite': 'Write',
+  'agents.soul.tabPreview': 'Preview',
+  'agents.soul.contentLabel': 'SOUL.md',
+  'agents.soul.placeholder':
+    'Describe who this Agent is, how it talks and how it works.',
+  'agents.soul.previewEmpty': 'Nothing to preview yet.',
+  'agents.soul.unsaved': 'Unsaved changes',
+  'agents.soul.saving': 'Saving…',
+  'agents.soul.saveError': 'SOUL.md was not saved: {error}',
+  'agents.soul.conflict':
+    'SOUL.md changed while you were editing it, possibly by the Agent itself.',
+  'agents.soul.conflictLoad': 'Load current version',
+  'agents.soul.conflictOverwrite': 'Overwrite with mine',
+  'agents.soul.tooLarge':
+    'Larger than {limit}: Sessions would get only a note that the file is too large instead of its content.',
+  'agents.soul.discardTitle': 'Discard changes to SOUL.md?',
+  'agents.soul.discardMessage': 'Your edits will be lost.',
+  'agents.soul.discard': 'Discard',
   'agents.form.description': 'Description',
   'agents.form.descriptionHelp':
     'What this Agent is for, in 5 to 10 words. Other Agents read it when they choose a Sub-Agent; without it they use this Agent only when it is named.',

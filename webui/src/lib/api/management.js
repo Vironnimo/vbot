@@ -72,6 +72,26 @@ export function suggestAgentDescription(id, options = {}) {
   return rpc('agent.suggest_description', { id }, options);
 }
 
+// The Agent's SOUL.md with the revision a write names; `soul_conflict` errors
+// carry the current file in `details.data`.
+export function getAgentSoul(id, options = {}) {
+  requireNonEmptyString(
+    id,
+    'Agent id must be a non-empty string',
+    'agent.soul.get',
+  );
+  return rpc('agent.soul.get', { id }, options);
+}
+
+export function setAgentSoul(id, content, revision, options = {}) {
+  requireNonEmptyString(
+    id,
+    'Agent id must be a non-empty string',
+    'agent.soul.set',
+  );
+  return rpc('agent.soul.set', { id, content, revision }, options);
+}
+
 export function createAgent(params = {}, options = {}) {
   requirePlainObject(params, 'Agent payload must be an object', 'agent.create');
   return rpc('agent.create', params, options);

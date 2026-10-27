@@ -451,6 +451,67 @@ describe('AgentsView', () => {
     expect(card.dataset.floatingSide).toBe('right');
   });
 
+  it('edits SOUL.md in its own dialog and offers the current file after a conflicting change', async () => {
+    const souls = new Map();
+    rpcMock.mockImplementation(
+      createAgentsRpcMock({ soul: '# Alpha\n\nCalm and precise.\n', souls }),
+    );
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+
+    const soulRow = () => document.body.querySelector('.agent-soul');
+    await waitForCondition(
+      () => soulRow()?.querySelector('.agent-soul__preview h1'),
+      100,
+    );
+    expect(soulRow().querySelector('.agent-soul__meta').textContent).toContain(
+      '3 lines',
+    );
+
+    const editSoul = async () => {
+      soulRow().querySelector('button').click();
+      await waitForCondition(
+        () => document.getElementById('agent-soul-content'),
+        100,
+      );
+    };
+    const save = () =>
+      getDialog(t('agents.soul.editorTitle', { name: 'Alpha' }))
+        .querySelector('.btn-primary')
+        .click();
+
+    await editSoul();
+    setTextInputValue('agent-soul-content', '# Alpha\n\nCurious.\n');
+    save();
+    await waitForCondition(
+      () => !document.getElementById('agent-soul-content'),
+      100,
+    );
+    expect(rpcMock).toHaveBeenCalledWith('agent.soul.set', {
+      id: 'alpha',
+      content: '# Alpha\n\nCurious.\n',
+      revision: 'r1',
+    });
+    expect(soulRow().querySelector('.agent-soul__preview p').textContent).toBe(
+      'Curious.',
+    );
+
+    // The Agent rewrites its SOUL.md while the user edits it.
+    await editSoul();
+    souls.set('alpha', { content: 'Written by Alpha.', revision: 'r9' });
+    setTextInputValue('agent-soul-content', 'Stale edit');
+    save();
+    await waitForCondition(() => hasButton(t('agents.soul.conflictLoad')), 100);
+    expect(souls.get('alpha').content).toBe('Written by Alpha.');
+
+    getButton(t('agents.soul.conflictLoad')).click();
+    flushSync();
+    expect(document.getElementById('agent-soul-content').value).toBe(
+      'Written by Alpha.',
+    );
+    expect(hasButton(t('agents.soul.conflictLoad'))).toBe(false);
+  });
+
   it('opens Add as a compact modal and sends selected create payload', async () => {
     const agents = [baseAgent()];
 

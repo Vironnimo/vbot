@@ -10,6 +10,7 @@ from core.agents import (
     AgentOrderConflictError,
     AgentReferencedError,
     InvalidAgentOrderError,
+    SoulConflictError,
 )
 from core.archive import (
     ArchiveEntryBusyError,
@@ -79,6 +80,7 @@ from server.rpc.errors import (
     RPC_ERROR_RUN_NOT_FOUND,
     RPC_ERROR_SESSION_CAPABILITY_EXPIRED,
     RPC_ERROR_SETTINGS_CONFLICT,
+    RPC_ERROR_SOUL_CONFLICT,
     RPC_ERROR_TERMINAL_PROGRAM_NOT_RUNNING,
     RpcError,
 )
@@ -191,6 +193,13 @@ def _map_expected_error(error: Exception) -> RpcError:
         return RpcError(RPC_ERROR_AGENT_NOT_FOUND, str(error))
     if isinstance(error, AgentOrderConflictError):
         return RpcError(RPC_ERROR_AGENT_ORDER_CONFLICT, str(error))
+    if isinstance(error, SoulConflictError):
+        # The current file lets the client show what changed without another read.
+        return RpcError(
+            RPC_ERROR_SOUL_CONFLICT,
+            str(error),
+            data={"content": error.current.content, "revision": error.current.revision},
+        )
     if isinstance(error, AgentReferencedError):
         return RpcError(RPC_ERROR_AGENT_IN_USE, str(error))
     if isinstance(error, SettingsConflictError):

@@ -283,8 +283,37 @@ export function createAgentsRpcMock(options = {}) {
   const memoryScopes = structuredClone(
     options.memories ?? { agent: [], user: [] },
   );
+  // Every Agent's SOUL.md by id; a write must name the revision it replaces.
+  // A test passes its own Map to change a file behind the editor's back.
+  const souls = options.souls ?? new Map();
+  const soulOf = (id) =>
+    souls.get(id) ?? { content: options.soul ?? '# Soul\n', revision: 'r1' };
+  const soulResponse = (id) => ({
+    ...soulOf(id),
+    path: `/data/agents/${id}/workspace/SOUL.md`,
+    prompt_limit_bytes: 131072,
+  });
 
   return async (method, params) => {
+    if (method === 'agent.soul.get') {
+      return soulResponse(params.id);
+    }
+
+    if (method === 'agent.soul.set') {
+      const current = soulOf(params.id);
+      if (params.revision !== current.revision) {
+        const conflict = new Error('SOUL.md changed since it was read');
+        conflict.code = 'soul_conflict';
+        conflict.details = { data: current };
+        throw conflict;
+      }
+      souls.set(params.id, {
+        content: params.content,
+        revision: `${current.revision}+`,
+      });
+      return soulResponse(params.id);
+    }
+
     if (method === 'model.list') {
       return { models };
     }

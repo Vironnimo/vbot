@@ -58,6 +58,9 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
         expected_revision: expectedRevision,
       }),
     getAgent: (id) => call('agent.get', { id }),
+    getAgentSoul: (id) => call('agent.soul.get', { id }),
+    setAgentSoul: (id, content, revision) =>
+      call('agent.soul.set', { id, content, revision }),
     createAgent: (params) => call('agent.create', params),
     updateAgent: (params) => call('agent.update', params),
     renameAgent: (id, newId) => call('agent.rename', { id, new_id: newId }),

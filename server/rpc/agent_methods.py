@@ -13,10 +13,11 @@ from collections.abc import Callable
 from contextlib import AsyncExitStack
 from typing import Any, cast
 
+from core.agents import AgentStore, SoulFile
 from core.archive import ArchiveSubjectInUseError
 from core.memory import MEMORY_PROMPT_MODES
 from core.permissions import PermissionRulesError, normalize_permission_rules
-from core.prompts import load_bundled_default_layout
+from core.prompts import INLINE_FILE_MAX_BYTES, load_bundled_default_layout
 from core.runs import RunAdmissionBlockedError
 from core.settings import (
     ALLOWED_THINKING_EFFORTS,
@@ -145,6 +146,44 @@ async def _suggest_agent_description(state: Any, params: JsonObject) -> JsonObje
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return {"description": description}
+
+
+def _soul_response(soul: SoulFile) -> JsonObject:
+    return {
+        "content": soul.content,
+        "revision": soul.revision,
+        "path": soul.path,
+        # Larger files reach no System Prompt (``render_prompt_file``).
+        "prompt_limit_bytes": INLINE_FILE_MAX_BYTES,
+    }
+
+
+async def _get_agent_soul(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"id"}, "agent.soul.get")
+    agent_id = _required_string(params, "id")
+    soul = await _run_agent_operation(state, state.runtime.agents.read_soul, agent_id)
+    return _soul_response(soul)
+
+
+async def _set_agent_soul(state: Any, params: JsonObject) -> JsonObject:
+    """Replace SOUL.md at ``revision``; ``soul_conflict`` carries the current file."""
+    _reject_unsupported(params, {"id", "content", "revision"}, "agent.soul.set")
+    agent_id = _required_string(params, "id")
+    content = params.get("content")
+    if not isinstance(content, str):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "content must be a string")
+    revision = params.get("revision")
+    if not isinstance(revision, str):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "revision must be a string")
+
+    agents: AgentStore = state.runtime.agents
+    soul = await _run_agent_operation(
+        state, lambda: agents.write_soul(agent_id, content, expected_revision=revision)
+    )
+    # Open editors in other windows re-read the Agent and its SOUL preview.
+    publish_resource_changed(state, RESOURCE_KIND_AGENTS)
+    _LOGGER.info("Agent SOUL.md updated (agent=%s)", agent_id)
+    return _soul_response(soul)
 
 
 def _create_agent_record(state: Any, params: JsonObject) -> JsonObject:
@@ -657,6 +696,8 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "agent.reorder": _reorder_agents,
         "agent.get": _get_agent,
         "agent.suggest_description": _suggest_agent_description,
+        "agent.soul.get": _get_agent_soul,
+        "agent.soul.set": _set_agent_soul,
         "agent.create": _create_agent,
         "agent.update": _update_agent,
         "agent.rename": _rename_agent,

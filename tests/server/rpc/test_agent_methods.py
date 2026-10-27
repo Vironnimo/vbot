@@ -132,6 +132,39 @@ async def test_a_suggested_description_comes_from_the_agent_files_and_saves_noth
 
 
 @pytest.mark.asyncio
+async def test_soul_writes_name_the_revision_they_replace(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.agents = _real_agent_state(tmp_path / "real", {}).runtime.agents
+    state.runtime.agents.create("coder")
+    read = await rpc_result(state, "agent.soul.get", id="coder")
+    soul_path = Path(read["path"])
+    assert (soul_path.name, read["content"]) == ("SOUL.md", "# SOUL.md\n")
+
+    saved = await rpc_result(
+        state, "agent.soul.set", id="coder", content="You review code.", revision=read["revision"]
+    )
+    assert saved["content"] == "You review code."
+    assert saved["revision"] != read["revision"]
+    assert resource_changes(state) == [{"kind": "agents"}]
+
+    # The Agent rewrote it meanwhile: the stale write changes nothing and returns that file.
+    soul_path.write_text("Rewritten by the Agent.", encoding="utf-8")
+    conflict = await rpc_error(
+        state, "agent.soul.set", id="coder", content="Stale edit", revision=saved["revision"]
+    )
+    assert conflict["code"] == "soul_conflict"
+    assert conflict["data"]["content"] == "Rewritten by the Agent."
+    assert soul_path.read_text(encoding="utf-8") == "Rewritten by the Agent."
+
+    state.runtime.agents.ensure_builtin_agents()
+    librarian = await rpc_result(state, "agent.soul.get", id="librarian")
+    refused = await rpc_error(
+        state, "agent.soul.set", id="librarian", content="x", revision=librarian["revision"]
+    )
+    assert refused["code"] == "domain_error"
+
+
+@pytest.mark.asyncio
 async def test_agent_create_returns_resolved_defaults_but_keeps_raw_values(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
     state.runtime.storage.update_settings_sections(

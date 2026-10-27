@@ -39,6 +39,7 @@ from core.agents._config import (
 from core.agents._mutations import AgentMutations
 from core.agents._rename import AgentRenames
 from core.agents._roster import AgentRoster
+from core.agents._soul import SoulConflictError, SoulFile, SoulFileError, read_soul, write_soul
 from core.agents._types import (
     BUILTIN_AGENT_IDS,
     BUILTIN_AGENT_NAMES,
@@ -131,6 +132,9 @@ __all__ = [
     "LibrarianProblem",
     "SKILL_AGENT_CREATED_AT_KEY",
     "SKILL_AGENT_ID_KEY",
+    "SoulConflictError",
+    "SoulFile",
+    "SoulFileError",
     "WORKSPACE_IDENTITY_FILES",
     "WORKSPACE_TEMPLATE_FILES",
     "default_workspace_dir",
@@ -686,6 +690,29 @@ class AgentStore:
     def place_in_roster(self, agent_id: str, index: int | None) -> None:
         """Move a restored Agent to its recorded roster position; best effort, idempotent."""
         _archive.place_in_roster(self, agent_id, index)
+
+    def read_soul(self, agent_id: str) -> SoulFile:
+        """Return the Agent's SOUL.md from its Workspace with the revision a write must name."""
+
+        def read() -> SoulFile:
+            agent = self._load_seeded_agent(self._require_agent_path(agent_id))
+            return read_soul(Path(agent.workspace))
+
+        return self._repairing_read(read)
+
+    def write_soul(self, agent_id: str, content: str, *, expected_revision: str) -> SoulFile:
+        """Replace the Agent's SOUL.md unless it changed since ``expected_revision``.
+
+        Raises :class:`SoulConflictError` with the current file when it did, and
+        :class:`BuiltinAgentError` for a built-in Agent, whose Workspace vBot keeps.
+        Held under the store lock, so a rename or archive cannot move the
+        Workspace away during the write.
+        """
+        with self._change():
+            agent = self._load_seeded_agent(self._require_agent_path(agent_id))
+            if is_builtin_agent(agent):
+                raise BuiltinAgentError(f"Built-in Agent {agent_id} has no editable SOUL.md")
+            return write_soul(Path(agent.workspace), content, expected_revision=expected_revision)
 
     def reset_current_after_session_removed(self, agent_id: str, removed_session_id: str) -> Agent:
         """Re-point an identity agent's current session after one is gone.

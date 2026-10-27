@@ -615,6 +615,7 @@
     {/if}
 
     <AgentOverviewPanel
+      {agent}
       {availableModels}
       {availableConnections}
       {projectOptions}

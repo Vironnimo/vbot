@@ -138,6 +138,8 @@ export {
   reorderAgents,
   getAgent,
   suggestAgentDescription,
+  getAgentSoul,
+  setAgentSoul,
   createAgent,
   updateAgent,
   validatePermissionRules,

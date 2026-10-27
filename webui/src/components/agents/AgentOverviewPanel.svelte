@@ -9,7 +9,9 @@
   import Dropdown from '../Dropdown.svelte';
   import TextField from '../ui/TextField.svelte';
   import AgentModelSettings from './AgentModelSettings.svelte';
+  import AgentSoul from './AgentSoul.svelte';
   let {
+    agent = null,
     availableModels,
     availableConnections,
     projectOptions,
@@ -154,6 +156,14 @@
             {/if}
           </div>
         </div>
+
+        {#if formMode === AGENT_FORM_MODE_EDIT && agent}
+          <AgentSoul
+            agentId={agent.id}
+            agentName={agent.name}
+            refreshKey={agent}
+          />
+        {/if}
 
         {#if formMode === AGENT_FORM_MODE_EDIT}
           <div class="s-row">
