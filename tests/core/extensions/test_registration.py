@@ -430,7 +430,11 @@ def _lifecycle_source(
     boom = f"        raise {failure}('handler failure')\n" if failure else ""
     # Hanging handlers never finish on their own; only the deadline moves on.
     define = "    async def" if hang else "    def"
-    wait = "        await asyncio.Event().wait()\n" if hang else ""
+    wait = (
+        "        api.get_config()['expire_deadline']()\n        await asyncio.Event().wait()\n"
+        if hang
+        else ""
+    )
     return (
         "import asyncio\n"
         "import pathlib\n"
@@ -455,7 +459,30 @@ def test_lifecycle_handlers_fire_in_load_order_and_fail_open(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, failure: str
 ) -> None:
     monkeypatch.setattr(extension_callbacks, "_SLOW_EXTENSION_HANDLER_SECONDS", 0)
-    monkeypatch.setattr(extension_callbacks, "_LIFECYCLE_HANDLER_TIMEOUT_SECONDS", 0.05)
+    deadline: asyncio.Event | None = None
+
+    def expire_deadline() -> None:
+        assert deadline is not None
+        deadline.set()
+
+    async def wait_for_callback(
+        tasks: Iterable[asyncio.Task[Any]], *, timeout: float | None = None
+    ) -> tuple[set[asyncio.Task[Any]], set[asyncio.Task[Any]]]:
+        nonlocal deadline
+        assert timeout == extension_callbacks._LIFECYCLE_HANDLER_TIMEOUT_SECONDS
+        deadline = asyncio.Event()
+        waiting = set(tasks)
+        expired = asyncio.create_task(deadline.wait())
+        try:
+            # Only the deliberately hanging handler expires its deadline. Healthy
+            # worker completion must not depend on scheduling within 50 ms.
+            done, _ = await asyncio.wait(waiting | {expired}, return_when=asyncio.FIRST_COMPLETED)
+            return done & waiting, waiting - done
+        finally:
+            expired.cancel()
+            await asyncio.gather(expired, return_exceptions=True)
+
+    monkeypatch.setattr(extension_callbacks, "_wait", wait_for_callback)
     caplog.set_level(logging.WARNING, logger="vbot.extensions")
     root = tmp_path / "extensions"
     marker = tmp_path / "lifecycle.txt"
@@ -464,7 +491,11 @@ def test_lifecycle_handlers_fire_in_load_order_and_fail_open(
     write_extension(root, "stuck", _lifecycle_source("stuck", marker, hang=True))
     write_extension(root, "zeta", _lifecycle_source("zeta", marker))
 
-    registry = ExtensionRegistry.load(root, disabled={"dormant"})
+    registry = ExtensionRegistry.load(
+        root,
+        disabled={"dormant"},
+        config_provider=lambda _: {"expire_deadline": expire_deadline},
+    )
     asyncio.run(registry.fire_startup())
     asyncio.run(registry.fire_shutdown())
     registry.fire_shutdown_blocking()
