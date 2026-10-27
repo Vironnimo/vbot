@@ -337,8 +337,9 @@ def test_repeated_read_failures_disconnect_until_the_microphone_returns(
 ) -> None:
     sd = FakeSoundDevice()
     sd.feed(OSError("gone"), OSError("gone"), OSError("gone"))
+    pool, _ = pool_of(FakeEchoStage())
 
-    run = start_capture(sd)
+    run = start_capture(sd, echo_cancellation=True, echo_stages=pool)
     wait_until(lambda: len(run.statuses) >= 5)
 
     assert run.states()[:5] == [
@@ -348,6 +349,8 @@ def test_repeated_read_failures_disconnect_until_the_microphone_returns(
         ("disconnected", "microphone_read_failed"),
         ("capturing", None),
     ]
+    # No capture runs while disconnected, so echo cancellation is off until it reopens.
+    assert [status.echo_state for status in list(run.statuses)[2:5]] == ["active", "off", "active"]
     # PortAudio is refreshed only while no Voice stream is open.
     refresh = sd.events.index("terminate")
     assert sd.events[refresh - 1] == "stream.close"
@@ -555,10 +558,11 @@ def test_echo_state_changes_are_published(start_capture: Callable[..., Running])
     assert run.capture.status.state == "capturing"
 
 
+@pytest.mark.parametrize("device_rate", [16000, 48000], ids=["other-rate", "stage-rate"])
 def test_a_failing_stage_is_replaced_by_pass_through(
-    start_capture: Callable[..., Running],
+    start_capture: Callable[..., Running], device_rate: int
 ) -> None:
-    sd = FakeSoundDevice()
+    sd = FakeSoundDevice(default_samplerate=device_rate)
     stage = FakeEchoStage(rate=48000)
     pool, _ = pool_of(stage)
     subscriptions: list[CaptureSubscription] = []
@@ -573,7 +577,9 @@ def test_a_failing_stage_is_replaced_by_pass_through(
     assert CaptureGap("echo_failed") in items
     after = items[items.index(CaptureGap("echo_failed")) + 1 :]
     assert len(after) >= 2
-    assert all(isinstance(item, AudioBlock) and item.recording_rate == 16000 for item in after)
+    assert all(
+        isinstance(item, AudioBlock) and item.recording_rate == device_rate for item in after
+    )
     assert "stage.close" in stage.log
     wait_until(lambda: run.capture.status.echo_state == "unavailable")
     assert run.capture.status.state == "capturing"

@@ -704,7 +704,8 @@ class AudioCapture:
         self._stage_open_rate = capture_rate
         self._stage_rate = capture_rate
         self._resampler = _create_resampler(capture_rate)
-        if previous_rate and previous_rate != capture_rate:
+        # Audio the failed stage and the resampler held back is lost, at any rate.
+        if previous_rate:
             self._deliver_gap(GAP_ECHO_FAILED)
 
     def _disconnect(self, error_code: str) -> None:
@@ -712,7 +713,7 @@ class AudioCapture:
         self._close_stream()
         # The reference stream must be closed before PortAudio is refreshed.
         self._close_stage()
-        self._publish(CaptureStatus(CAPTURE_DISCONNECTED, error_code, echo_state=self._stage.state))
+        self._publish(CaptureStatus(CAPTURE_DISCONNECTED, error_code, echo_state=ECHO_OFF))
 
     def _close_stream(self) -> None:
         stream, self._stream = self._stream, None
