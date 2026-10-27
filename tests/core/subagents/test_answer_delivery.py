@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, override
 
 import pytest
 
+from core.activity import SessionActivity
 from core.automation import TriggerService
 from core.chat import ChatMessage
 from core.permissions import PermissionBoundary
@@ -32,6 +34,8 @@ class _SteeringAdapter(StubAdapter):
         )
         self.entered = asyncio.Event()
         self.release = asyncio.Event()
+        self.second_entered = asyncio.Event()
+        self.second_release = asyncio.Event()
 
     @override
     async def send(
@@ -40,6 +44,9 @@ class _SteeringAdapter(StubAdapter):
         if not self.requests:
             self.entered.set()
             await self.release.wait()
+        elif len(self.requests) == 1:
+            self.second_entered.set()
+            await self.second_release.wait()
         return await super().send(messages, model_id=model_id, **kwargs)
 
 
@@ -74,6 +81,15 @@ async def test_steered_answers_arrive_once_in_order_and_later_runs_do_not_replay
     service = TriggerService(loop, manager, runtime, sessions=sessions)
     coordinator = SubAgentCoordinator(runtime, service)
     coordinator.install(manager)
+    activity = SessionActivity(
+        runs=manager,
+        commands=SimpleNamespace(
+            add_changed_callback=lambda callback: lambda: None,
+            pending_wakes=lambda address: 0,
+        ),
+        completions=service,
+        subagents=coordinator,
+    )
     submitted = asyncio.Queue[asyncio.Future[None]]()
     submit = service.submit_completion
 
@@ -134,6 +150,15 @@ async def test_steered_answers_arrive_once_in_order_and_later_runs_do_not_replay
             )
             assert manager.steer_queued("coder", "child", item.item_id, project_id=None)
         adapter.release.set()
+        await adapter.second_entered.wait()
+        # MAIN_REPORT already committed to its original recipient. A later
+        # user redirect cannot release the Parent's Goal while it is still
+        # owed that answer, even before the steered Run ends and forwards it.
+        link = await coordinator.parent_link(child.address)
+        assert link is not None and link.reply_target == ("parent" if steered_parent else "user")
+        assert await coordinator.parent_answer_pending(child.address) is initial_parent
+        assert (await activity.pending_wakes(parent.address)).subagents == 1
+        adapter.second_release.set()
         assert (await run.wait()).content == "ADDENDUM"
         assert await item.future is run
         receipt = await asyncio.wait_for(submitted.get(), 5)
@@ -152,6 +177,8 @@ async def test_steered_answers_arrive_once_in_order_and_later_runs_do_not_replay
         assert await service.deliver_background_completions(parent_run, parent)
         await asyncio.wait_for(receipt, 5)
         assert not await service.deliver_background_completions(parent_run, parent)
+        assert not await coordinator.parent_answer_pending(child.address)
+        assert (await activity.pending_wakes(parent.address)).subagents == 0
         answers = [m for m in await child.load_run_messages_async(run.id) if m.role == "assistant"]
         assert [m.content for m in answers] == ["MAIN_REPORT", "ADDENDUM"]
         [notice] = [m for m in parent.load() if m.role == "note"]
@@ -185,7 +212,9 @@ async def test_steered_answers_arrive_once_in_order_and_later_runs_do_not_replay
         assert "MAIN_REPORT" not in bodies[1] and "ADDENDUM" not in bodies[1]
     finally:
         adapter.release.set()
+        adapter.second_release.set()
         parent_release.set()
+        await activity.aclose()
         await manager.aclose()
         await service.aclose()
         await coordinator.drain_activity()
