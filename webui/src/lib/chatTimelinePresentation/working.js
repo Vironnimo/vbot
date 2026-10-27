@@ -5,7 +5,7 @@ import {
   toolNameForRunTool,
   toolStartedTimestamp,
 } from './toolFacts.js';
-import { visibleRunChildren } from './activity.js';
+import { reasoningDurationMs, visibleRunChildren } from './activity.js';
 import { isShowWidgetTool } from './widgets.js';
 import { isPortalTool } from './portals.js';
 
@@ -144,31 +144,48 @@ export function workingGroupDetails(summary) {
   };
 }
 
-// How long the group's Tools ran, from the first start to the last end (or
-// now while the group is active), so parallel calls count once. Thinking has
-// no reliable start time in Session history, so a Thinking-only group adds up
-// its own durations instead. Null when nothing is measurable.
+// Add Thinking and the elapsed span of each consecutive batch of Tools.
+// Parallel calls count once; Thinking between batches is not counted again
+// as a gap between Tools. History does not retain a Thinking start time,
+// so use the same measured/frozen/live duration as each Thinking row.
 function workingGroupDurationMs(children, active, nowMs) {
-  const tools = children.filter((child) => child.type === 'tool_call');
-  if (tools.length === 0) {
-    const durations = children
-      .map((child) => child.durationMs ?? child.durationEstimateMs)
-      .filter((duration) => Number.isFinite(duration) && duration >= 0);
-    return durations.length > 0
-      ? durations.reduce((sum, duration) => sum + duration, 0)
-      : null;
+  let total = null;
+  let tools = [];
+  const add = (duration) => {
+    if (duration !== null) total = (total ?? 0) + duration;
+  };
+  for (const child of children) {
+    if (child.type === 'tool_call') {
+      tools.push(child);
+    } else {
+      add(toolBatchDurationMs(tools, false, nowMs));
+      tools = [];
+      add(reasoningDurationMs(child, nowMs));
+    }
   }
+  add(toolBatchDurationMs(tools, active, nowMs));
+  return total;
+}
+
+function toolBatchDurationMs(tools, active, nowMs) {
   let start = null;
   let end = null;
+  let longestDuration = null;
   for (const tool of tools) {
+    const duration = toolDurationMs(tool);
+    if (duration !== null) {
+      longestDuration = Math.max(longestDuration ?? 0, duration);
+    }
     const from = timestampToMs(toolStartedTimestamp(tool));
     if (from === null) continue;
-    const duration = toolDurationMs(tool);
     start = start === null ? from : Math.min(start, from);
-    const to = duration === null ? from : from + duration;
-    end = end === null ? to : Math.max(end, to);
+    if (duration !== null) {
+      const to = from + duration;
+      end = end === null ? to : Math.max(end, to);
+    }
   }
-  if (start === null) return null;
-  if (active) end = Math.max(end, nowMs);
-  return end >= start ? end - start : null;
+  if (start === null) return longestDuration;
+  if (active) end = Math.max(end ?? start, nowMs);
+  if (end === null) return longestDuration;
+  return Math.max(longestDuration ?? 0, end - start);
 }

@@ -79,22 +79,26 @@ export function isRunChildWorking(assistantRun, child) {
 // ticking with the shared nowMs clock while the deltas still stream.
 // Returns '' when nothing is measurable (no timing, no streamed start time).
 export function reasoningDurationLabel(child, nowMs = Date.now()) {
+  return formatDurationMs(reasoningDurationMs(child, nowMs));
+}
+
+export function reasoningDurationMs(child, nowMs = Date.now()) {
   const durationMs = child?.durationMs;
   if (Number.isFinite(durationMs) && durationMs >= 0) {
-    return formatDurationMs(durationMs);
+    return durationMs;
   }
   const estimateMs = child?.durationEstimateMs;
   if (Number.isFinite(estimateMs) && estimateMs >= 0) {
-    return formatDurationMs(estimateMs);
+    return estimateMs;
   }
   if (!child?.streaming) {
-    return '';
+    return null;
   }
   const start = timestampToMs(child.timestamp);
   if (start === null) {
-    return '';
+    return null;
   }
-  return formatDurationMs(Math.max(0, nowMs - start));
+  return Math.max(0, nowMs - start);
 }
 
 // Footer line for an assistant run: status · duration · iterations · end

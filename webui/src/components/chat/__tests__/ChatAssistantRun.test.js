@@ -553,6 +553,78 @@ describe('ChatAssistantRun', () => {
         ],
         { kinds: ['read', 'bash'], count: '2 Tool calls', time: 'took 5.0s' },
       ],
+      [
+        'Thinking before and after a near-instant Tool call',
+        [
+          { ...reasoningItem('Plan.', { id: 'before' }), durationMs: 1700 },
+          readChild({
+            status: 'success',
+            timing: {
+              started_at: '2026-06-09T12:00:02Z',
+              completed_at: '2026-06-09T12:00:02.010Z',
+            },
+          }),
+          { ...reasoningItem('Check.', { id: 'after' }), durationMs: 1000 },
+        ],
+        {
+          kinds: ['read'],
+          count: '1 Tool call',
+          note: '2 thoughts',
+          time: 'took 2.7s',
+        },
+      ],
+      [
+        'Thinking between Tool batches counted only once',
+        [
+          readChild({
+            status: 'success',
+            timing: {
+              started_at: '2026-06-09T12:00:00Z',
+              completed_at: '2026-06-09T12:00:02Z',
+            },
+          }),
+          { ...reasoningItem('Check.'), durationEstimateMs: 1000 },
+          bashChild({
+            status: 'success',
+            timing: {
+              started_at: '2026-06-09T12:00:03Z',
+              completed_at: '2026-06-09T12:00:05Z',
+            },
+          }),
+        ],
+        {
+          kinds: ['read', 'bash'],
+          count: '2 Tool calls',
+          note: '1 thought',
+          time: 'took 5.0s',
+        },
+      ],
+      [
+        'measured durations even without Tool timestamps',
+        [
+          { ...reasoningItem('Plan.'), durationMs: 1700 },
+          readChild({ status: 'success', durationMs: 1000 }),
+        ],
+        {
+          kinds: ['read'],
+          count: '1 Tool call',
+          note: '1 thought',
+          time: 'took 2.7s',
+        },
+      ],
+      [
+        'no duration when the rows have no measurable timing',
+        [
+          reasoningItem('Plan.'),
+          readChild({ status: 'success', startedAt: '2026-06-09T12:00:00Z' }),
+        ],
+        {
+          kinds: ['read'],
+          count: '1 Tool call',
+          note: '1 thought',
+          time: null,
+        },
+      ],
     ])('summarizes a finished group with %s', (_case, items, expected) => {
       run.mount({ item: assistantRun({ items }), chatWorkingMode: 'compact' });
 
@@ -570,10 +642,37 @@ describe('ChatAssistantRun', () => {
       expect(summaryText('.working-block__count')).toBe(expected.count);
       expect(summaryText('.working-block__note')).toBe(expected.note ?? null);
       expect(workingBlock().querySelector('summary .te-dot')).toBeNull();
-      if (expected.time) {
+      if ('time' in expected) {
         expect(summaryText('.working-block__time')).toBe(expected.time);
       }
     });
+
+    it.each(['reasoning', 'tool_call'])(
+      'includes live %s time in the group duration',
+      (latestType) => {
+        const thought = {
+          ...reasoningItem('Plan.', { streaming: latestType === 'reasoning' }),
+          ...(latestType === 'reasoning'
+            ? { timestamp: '2026-06-09T12:00:02Z' }
+            : { durationMs: 1700 }),
+        };
+        const tool = readChild({
+          status: latestType === 'tool_call' ? 'running' : 'success',
+          startedAt: '2026-06-09T12:00:02Z',
+          ...(latestType === 'reasoning' ? { durationMs: 1700 } : {}),
+        });
+        run.mount({
+          item: assistantRun({
+            status: 'running',
+            items:
+              latestType === 'reasoning' ? [tool, thought] : [thought, tool],
+          }),
+          nowMs: Date.parse('2026-06-09T12:00:03Z'),
+          chatWorkingMode: 'compact',
+        });
+        expect(summaryText('.working-block__time')).toBe('2.7s');
+      },
+    );
 
     it('closes each open nested block from its own side line', () => {
       run.mount({
