@@ -227,6 +227,9 @@ def test_in_band_error_maps_to_the_shared_taxonomy_and_keeps_the_raw_body(
     assert type(classified) is expected_type
     assert classified.retryable is retryable
     assert classified.retry_after == retry_after
+    code = payload.get("code")
+    if type(classified) is ProviderError and isinstance(code, int) and 400 <= code <= 599:
+        assert classified.status_code == code
     prefix = f"{payload['message']}: "
     text = str(classified)
     assert text.startswith(prefix)

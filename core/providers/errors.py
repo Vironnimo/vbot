@@ -444,6 +444,11 @@ def classify_in_band_error_type(
 
     def _build(retryable: bool) -> ProviderError:
         provider_error = ProviderError(message, retryable=retryable)
+        # A router can report a rejected HTTP-like request inside a successful
+        # stream. Preserve that evidence for request repair, even when router
+        # leniency otherwise allows retrying this unclassified error.
+        if numeric_code is not None and 400 <= numeric_code <= 599:
+            provider_error.status_code = numeric_code
         if retryable:
             retry_after = hints.get("retry_after")
             if (
