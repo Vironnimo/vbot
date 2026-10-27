@@ -1,4 +1,5 @@
 <script>
+  import AutocompletePopup from './composer/AutocompletePopup.svelte';
   import { t } from '$lib/i18n.js';
   import { skillAutocompleteRows } from './composer/autocomplete.js';
 
@@ -14,49 +15,14 @@
   } = $props();
 
   let matchingSkills = $derived(skillAutocompleteRows(skills, query));
-  let containerElement = $state(null);
-
-  // Keep the active option visible inside the scrollable popup when keyboard
-  // navigation or list changes move it out of the visible area. Only the
-  // container is scrolled — the page and timeline stay put.
-  $effect(() => {
-    activeIndex;
-    matchingSkills.length;
-
-    const container = containerElement;
-    if (!container) {
-      return;
-    }
-
-    const activeOption = container.querySelector(
-      '.skill-autocomplete__option.active',
-    );
-    if (!activeOption) {
-      return;
-    }
-
-    const containerRect = container.getBoundingClientRect();
-    const optionRect = activeOption.getBoundingClientRect();
-    if (optionRect.top < containerRect.top) {
-      container.scrollTop -= containerRect.top - optionRect.top;
-    } else if (optionRect.bottom > containerRect.bottom) {
-      container.scrollTop += optionRect.bottom - containerRect.bottom;
-    }
-  });
+  let popup = $state(null);
 
   export function hasMatches() {
     return matchingSkills.length > 0;
   }
 
   export function selectActive() {
-    const skill = matchingSkills[activeIndex];
-
-    if (skill) {
-      onSelect(skill);
-      return true;
-    }
-
-    return false;
+    return popup?.selectActive() ?? false;
   }
 
   function eyebrowText() {
@@ -68,108 +34,32 @@
   }
 </script>
 
-{#if matchingSkills.length > 0}
-  <div
-    bind:this={containerElement}
-    class="skill-autocomplete"
-    role="listbox"
-    aria-label={t('skillAutocomplete.label')}
-  >
-    <div class="skill-autocomplete__eyebrow">
-      {eyebrowText()}
-    </div>
-    {#each matchingSkills as skill, index (`${skill.type}:${skill.name}`)}
-      <button
-        type="button"
-        class="skill-autocomplete__option"
-        class:active={index === activeIndex}
-        role="option"
-        aria-selected={index === activeIndex}
-        onmouseenter={() => onHover(index)}
-        onmousedown={(event) => event.preventDefault()}
-        onclick={() => onSelect(skill)}
-      >
-        <span class="skill-autocomplete__name">{skill.name}</span>
-        {#if skill.description}
-          <span class="skill-autocomplete__description">
-            {skill.description}
-          </span>
-        {:else}
-          <span class="skill-autocomplete__description muted">
-            {t('skillAutocomplete.noDescription')}
-          </span>
-        {/if}
-      </button>
-    {/each}
-  </div>
-{/if}
+<AutocompletePopup
+  bind:this={popup}
+  kind="skill"
+  items={matchingSkills}
+  keyOf={(skill) => `${skill.type}:${skill.name}`}
+  {activeIndex}
+  ariaLabel={t('skillAutocomplete.label')}
+  eyebrow={eyebrowText()}
+  {onSelect}
+  {onHover}
+>
+  {#snippet row(skill)}
+    <span class="skill-autocomplete__name">{skill.name}</span>
+    {#if skill.description}
+      <span class="skill-autocomplete__description">
+        {skill.description}
+      </span>
+    {:else}
+      <span class="skill-autocomplete__description muted">
+        {t('skillAutocomplete.noDescription')}
+      </span>
+    {/if}
+  {/snippet}
+</AutocompletePopup>
 
 <style>
-  .skill-autocomplete {
-    position: absolute;
-    right: var(--composer-pad-x, 0px);
-    bottom: calc(100% - 8px);
-    left: var(--composer-pad-x, 0px);
-    z-index: 20;
-    display: flex;
-    flex-direction: column;
-    max-width: var(--chat-measure);
-    max-height: min(320px, 45vh);
-    margin-inline: auto;
-    overflow-y: auto;
-    border: 1px solid var(--border-2);
-    border-radius: var(--r-md);
-    background: var(--surface-2);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
-  }
-
-  /* The popup scrolls; its rows must keep their full height instead of
-     shrinking to fit the capped column (rows with overflow: hidden would
-     otherwise collapse onto their padding and clip their text). */
-  .skill-autocomplete > * {
-    flex-shrink: 0;
-  }
-
-  .skill-autocomplete__eyebrow {
-    padding: 8px 10px 6px;
-    border-bottom: 1px solid var(--border);
-    color: var(--text-lo);
-    background: var(--surface);
-    font-size: var(--fs-label-sm);
-    font-weight: 600;
-    line-height: 1;
-  }
-
-  .skill-autocomplete__option {
-    display: grid;
-    grid-template-columns: minmax(14ch, 0.2fr) minmax(0, 1fr);
-    gap: var(--space-sm);
-    width: 100%;
-    padding: 9px 10px;
-    border: 0;
-    border-bottom: 1px solid var(--border);
-    color: var(--text-med);
-    background: transparent;
-    text-align: left;
-    transition:
-      background-color 120ms ease,
-      color 120ms ease;
-  }
-
-  .skill-autocomplete__option:last-child {
-    border-bottom: 0;
-  }
-
-  .skill-autocomplete__option:hover,
-  .skill-autocomplete__option.active {
-    color: var(--text-hi);
-    background: var(--surface-3);
-  }
-
-  .skill-autocomplete__option.active {
-    box-shadow: inset 2px 0 0 var(--accent);
-  }
-
   .skill-autocomplete__name {
     overflow: hidden;
     color: var(--text-hi);
@@ -192,17 +82,5 @@
   .skill-autocomplete__description.muted {
     color: var(--text-lo);
     font-style: italic;
-  }
-
-  @media (max-width: 640px) {
-    .skill-autocomplete {
-      right: 14px;
-      left: 14px;
-    }
-
-    .skill-autocomplete__option {
-      grid-template-columns: 1fr;
-      gap: 3px;
-    }
   }
 </style>
