@@ -421,6 +421,7 @@ class StubAgentResolver:
         *,
         session_id: str | None = None,
         new_session_overrides: AgentOverrides | None = None,
+        run_overrides: AgentOverrides | None = None,
         require_model: bool = True,
     ) -> StubAgent | ConfigAgent:
         agent: StubAgent | ConfigAgent
@@ -442,7 +443,10 @@ class StubAgentResolver:
                 self.models.require_configured(overrides.model)
         else:
             overrides = self.session_overrides(SessionAddress(project_id, agent_id, session_id))
-        return replace(agent, **overrides.agent_changes())
+        agent = replace(agent, **overrides.agent_changes())
+        if run_overrides is not None and not run_overrides.is_empty:
+            agent = replace(agent, **run_overrides.agent_changes())
+        return agent
 
     async def resolve_agent_async(
         self, project_id: str | None, agent_id: str, **options: Any

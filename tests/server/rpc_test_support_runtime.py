@@ -418,6 +418,9 @@ class StubJobService:
 class StubChannelService:
     """Channel service double that holds no Channels."""
 
+    def setup_activities(self) -> list[Any]:
+        return []
+
     def list_channels(self) -> list[Any]:
         return []
 
@@ -596,7 +599,10 @@ class StubRuntime:
         )
         self.channel_service: Any = StubChannelService()
         self.subagents: Any = SimpleNamespace(references_identity_agent=lambda _agent_id: False)
-        self.speech: Any = SimpleNamespace(preload_configured=lambda task_types=(): None)
+        self.speech: Any = SimpleNamespace(
+            preload_configured=lambda task_types=(): None, local_activities=list
+        )
+        self.embeddings: Any = SimpleNamespace(local_activities=list)
         self.statistics_index: Any = StubStatisticsIndex()
         self.usage_recorder: Any = None
         self.trigger_service: Any = None
