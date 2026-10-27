@@ -33,7 +33,9 @@ def registry(analyzer: FakeAnalyzer | None = None) -> ToolRegistry:
     return result
 
 
-async def invoke(context: ToolContext, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+async def invoke(
+    context: ToolContext, name: str, arguments: dict[str, Any], _positional: Any = ()
+) -> dict[str, Any]:
     return tool_success({"name": name, **arguments})
 
 
@@ -73,9 +75,7 @@ async def test_python_source_reaches_worker_unchanged(
         arguments,
         ["execute_code", "bash"],
     )
-    assert result == tool_success(
-        {"status": "completed", "output": "selected\n", "tool_calls": 0, "exit_code": 0}
-    )
+    assert result == tool_success({"status": "completed", "output": "selected\n"})
     assert calls == ['print("Grüße")\n']
     assert not log.exists()  # Only shortened output names (and keeps) its capture file.
 

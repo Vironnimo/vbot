@@ -44,9 +44,10 @@ EXECUTE_CODE_PARAMETERS: JsonObject = {
                 "Python source. Import tools with `from vbot_tools import tools`, then call "
                 "any of your Tools as `tools.<name>(<parameter>=<value>)`. Calls return the "
                 "result's data as Python objects; failures raise vbot_tools.ToolError. For "
-                "local files and commands, use Python's open() and subprocess. MCP results "
-                "retain content blocks and structuredContent. Each execution starts fresh in "
-                "the working directory and stops after 300 seconds. Print the results you need."
+                "text files and commands, use Python's open() and subprocess; call read for "
+                "documents such as PDFs. MCP results retain content blocks and "
+                "structuredContent. Each execution starts fresh in the working directory and "
+                "stops after 300 seconds. Print the results you need."
             ),
         },
     },
@@ -148,13 +149,12 @@ class _ExecuteCode:
                 "cancelled_by_user",
                 "Nothing was run: the user stopped this Python execution before it started.",
             )
-        data: JsonObject = {
-            "status": result.status,
-            "output": result.output,
-            "tool_calls": result.tool_calls,
-        }
-        if result.exit_code is not None:
-            data["exit_code"] = result.exit_code
+        data: JsonObject = {"status": result.status, "output": result.output}
+        if result.status != "completed":
+            # What already ran matters only when the program did not finish.
+            data["tool_calls"] = result.tool_calls
+            if result.exit_code is not None:
+                data["exit_code"] = result.exit_code
         if result.stderr:
             data["stderr"] = result.stderr
         if result.tool_failures:
@@ -233,12 +233,16 @@ class _ExecuteCode:
             if restricted
             else RunIdentity(context.agent_id, context.session_id, context.project_id)
         )
-        return command_environment(
+        environment = command_environment(
             run,
             scratch=scratch,
             confined=restricted,
             credential_names=self._credential_names() if restricted else (),
         ).complete()
+        # The program runs vBot's own interpreter: pip may install only into a
+        # virtual environment, never into vBot's verified runtime.
+        environment["PIP_REQUIRE_VIRTUALENV"] = "1"
+        return environment
 
     async def _scratch(self, context: ToolContext) -> ScratchFolder | None:
         if self._scratch_areas is not None:
