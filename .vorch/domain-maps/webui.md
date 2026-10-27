@@ -58,7 +58,7 @@ The WebUI is vBot's Svelte accessor: it presents server-owned state and sends us
 Read these only when your task matches - not by default.
 
 - Adding or changing editable settings, existing-record forms, save controls, input handling, or editor-replacing navigation (including Extension pages) -> `webui/autosave.md`
-- Using or changing the behavior of the shared LazyContent, SortableList, PathField, DataTable, DateField, TimeField, Modal or Dropdown -> `webui/shared-controls.md`
+- Using or changing the behavior of the shared LazyContent, SortableList, PathField, DataTable, DateField, TimeField, Modal, ImageLightbox or Dropdown -> `webui/shared-controls.md`
 - The Extension page host or page client: frame bridge, page routes and layers, invalidations, page capabilities, Run streams, page styles -> `webui/extension-pages.md`
 - Live voice control, call media/owner socket, UI requests from a Live call, or spoken Run updates -> `model_tasks/live.md`
 - The Terminals view: xterm rendering, Terminal sockets, geometry, dictation -> `tools/terminal.md`

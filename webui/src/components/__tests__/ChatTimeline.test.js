@@ -418,21 +418,44 @@ describe('ChatTimeline messages', () => {
       expect(link.getAttribute('rel')).toBe('noopener noreferrer');
     });
 
-    it('opens a lightbox for a Markdown image and closes it on Escape', () => {
+    it('isolates lightbox focus and restores it on Escape', () => {
       timeline.render(
         sessionWithOutput('![diagram](https://example.com/diagram.png)'),
       );
       expect(document.querySelector('.image-lightbox')).toBeNull();
 
+      const trigger = document.createElement('button');
+      document.body.appendChild(trigger);
+      trigger.focus();
       document.querySelector('.assistant-run .msg-markdown img').click();
       flushSync();
       expect(
         document.querySelector('.image-lightbox__image').getAttribute('src'),
       ).toBe('https://example.com/diagram.png');
 
+      const dialog = document.querySelector('.image-lightbox');
+      const close = dialog.querySelector('.image-lightbox__close');
+      expect(dialog.getAttribute('role')).toBe('dialog');
+      expect(dialog.getAttribute('aria-modal')).toBe('true');
+      expect(dialog.getAttribute('aria-label')).toBeTruthy();
+      expect(document.activeElement).toBe(close);
+      expect(trigger.inert).toBe(true);
+      for (const shiftKey of [false, true]) {
+        const tab = new KeyboardEvent('keydown', {
+          key: 'Tab',
+          shiftKey,
+          cancelable: true,
+        });
+        document.dispatchEvent(tab);
+        expect(tab.defaultPrevented).toBe(true);
+        expect(document.activeElement).toBe(close);
+      }
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
       flushSync();
       expect(document.querySelector('.image-lightbox')).toBeNull();
+      expect(trigger.inert).toBe(false);
+      expect(document.activeElement).toBe(trigger);
+      trigger.remove();
     });
 
     it('renders signed server file URLs as an image lightbox and download link', () => {
