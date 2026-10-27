@@ -13,6 +13,7 @@ from core.chat.messages import (
     ChatMessage,
     JsonObject,
 )
+from core.compaction._cycles import ToolCycleSuffix
 from core.compaction._tail_types import (
     COMPACTION_USER_QUOTE_PREFIX,
     TAIL_FLOOR_PERCENT,
@@ -176,22 +177,17 @@ def _safe_tail_boundary_indices(messages: list[ChatMessage]) -> list[int]:
     the left, but boundaries already found to its right remain valid.
     """
     boundaries: list[int] = []
-    results: set[str | None] = set()
+    cycles = ToolCycleSuffix()
     for index in range(len(messages) - 1, -1, -1):
         message = messages[index]
         if message.role in {"note", "run_summary", "agent_takeover", "error"}:
             continue
-        if message.role == "tool":
-            if message.tool_call_id in results:
-                break  # A repeated Result is orphaned after its first occurrence.
-            results.add(message.tool_call_id)
-            continue
-        if message.role == "assistant":
-            if {call.id for call in message.tool_calls or []} != results:
-                break  # Missing or foreign Results make every earlier cut unsafe.
-            results.clear()
-        elif results:
-            break  # Results cannot cross a User or another visible message.
+        if not cycles.accepts(
+            message.role,
+            call_ids=(call.id for call in message.tool_calls or ()),
+            result_id=message.tool_call_id,
+        ):
+            break
         if _can_start_tail(message):
             boundaries.append(index)
     boundaries.reverse()

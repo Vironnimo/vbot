@@ -20,6 +20,7 @@ from core.compaction import (
     CompactionSettings,
     find_tail_boundary,
 )
+from core.compaction._overflow import _safe_exchange_starts
 from core.compaction.compaction import (
     COMPACTION_SUMMARY_NOTE_PREFIX,
     TAIL_SOFT_LIMIT_PERCENT,
@@ -193,6 +194,15 @@ def test_find_tail_boundary_keeps_only_provider_safe_suffixes_of_historical_sequ
             find_tail_boundary(messages, tail_tokens=100_000)
     else:
         assert find_tail_boundary(messages, tail_tokens=100_000) == messages[boundary_index].id
+
+    # Native overflow requests share cycle safety, while permitting only User
+    # exchanges as cuts. Timeline metadata is absent from their projection.
+    request = [item.to_dict() for item in messages if item.role in {"user", "assistant", "tool"}]
+    assert [request[index]["id"] for index in _safe_exchange_starts(request)] == [
+        item.id
+        for index, item in enumerate(messages)
+        if boundary_index is not None and index >= boundary_index and item.role == "user"
+    ]
 
 
 def test_working_tail_treats_the_latest_user_as_an_ordinary_step() -> None:
