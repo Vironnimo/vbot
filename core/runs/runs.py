@@ -133,6 +133,8 @@ class ChatRunManager:
         self._guarded_agents: set[tuple[str | None, str]] = set()
         self._guarded_projects: set[str] = set()
         self._waiting_work_admissions: dict[str, WaitingWorkAdmission] = {}
+        # Slots reserved while a queued input is durably accepted.
+        self._pending_waiting_scopes: list[str | None] = []
         self._runs: dict[str, Run] = {}
         self._run_started_callbacks: list[Callable[[Run], None]] = []
         self._run_finished_callbacks: list[Callable[[Run], None]] = []
@@ -324,7 +326,9 @@ class ChatRunManager:
                 raise RunAdmissionBlockedError("run manager is shutting down")
             self._ensure_run_admission_allowed_locked(address, admission)
             active_run = self._active_by_session.get(address)
-            if active_run is not None and active_run.status == RunStatus.RUNNING:
+            if (
+                active_run is not None and active_run.status == RunStatus.RUNNING
+            ) or self._queues.get(address):
                 raise ActiveRunError(f"session already has an active run: {address.session_id}")
             return self._start_run_locked(
                 address=address,
@@ -388,7 +392,9 @@ class ChatRunManager:
                 item.future.cancel()
                 raise
             active_run = self._active_by_session.get(address)
-            if active_run is None or active_run.status != RunStatus.RUNNING:
+            if (
+                active_run is None or active_run.status != RunStatus.RUNNING
+            ) and not self._queues.get(address):
                 if persist_input is not None:
                     await persist_input()
                 self._consume_waiting_work_admission(waiting_work_admission)
@@ -413,10 +419,16 @@ class ChatRunManager:
                 raise WaitingWorkLimitError("global waiting work limit reached")
 
             item.waiting_scope = waiting_scope
-            if persist_input is not None:
-                await persist_input()
-            queue = self._queues.setdefault(address, deque())
-            queue.append(item)
+            # Reservations and queued items share the limit even while a durable
+            # acceptance yields to Channel ingress, which reserves synchronously.
+            self._pending_waiting_scopes.append(waiting_scope)
+            try:
+                if persist_input is not None:
+                    await persist_input()
+                queue = self._queues.setdefault(address, deque())
+                queue.append(item)
+            finally:
+                self._pending_waiting_scopes.pop()
             _notify(self._input_queued_callbacks, address, "Queued input callback failed")
             _LOGGER.debug(
                 "Run queued for busy session (agent=%s session=%s queue_depth=%d)",
@@ -437,14 +449,18 @@ class ChatRunManager:
         return admission.scope
 
     def _waiting_work_count(self) -> int:
-        return len(self._waiting_work_admissions) + sum(
-            len(queue) for queue in self._queues.values()
+        return (
+            len(self._waiting_work_admissions)
+            + len(self._pending_waiting_scopes)
+            + sum(len(queue) for queue in self._queues.values())
         )
 
     def _waiting_work_count_for_scope(self, scope: str) -> int:
-        return sum(
-            admission.scope == scope for admission in self._waiting_work_admissions.values()
-        ) + sum(item.waiting_scope == scope for queue in self._queues.values() for item in queue)
+        return (
+            sum(admission.scope == scope for admission in self._waiting_work_admissions.values())
+            + sum(item.waiting_scope == scope for queue in self._queues.values() for item in queue)
+            + sum(pending_scope == scope for pending_scope in self._pending_waiting_scopes)
+        )
 
     def list_queued(
         self, agent_id: str, session_id: str, *, project_id: str | None
@@ -467,7 +483,9 @@ class ChatRunManager:
             raise RunAdmissionBlockedError("run manager is shutting down")
         for address, item in inputs:
             active = self._active_by_session.get(address)
-            if active is None or active.status != RunStatus.RUNNING:
+            if (active is None or active.status != RunStatus.RUNNING) and not self._queues.get(
+                address
+            ):
                 run = self._start_run_locked(
                     address=address,
                     executor=item.executor,
@@ -988,90 +1006,89 @@ class ChatRunManager:
                 run.mark_failed(error, payload_extras=payload)
             else:
                 run.mark_completed(result, payload_extras=payload)
-            async with self._lock:
-                if self._active_by_session.get(address) is run:
-                    self._active_by_session.pop(address, None)
-                self._prune_terminal_runs_locked()
             try:
-                await self._drain_next(address)
+                async with self._lock:
+                    if self._active_by_session.get(address) is run:
+                        self._active_by_session.pop(address, None)
+                    self._prune_terminal_runs_locked()
+                    await self._drain_next_locked(address)
             finally:
                 self._notify_run_finished(run)
         if abort is not None:
             raise abort
 
-    async def _drain_next(self, address: SessionAddress) -> None:
-        async with self._lock:
-            if self._closed:
-                closed_queue = self._queues.pop(address, ())
-                for item in closed_queue:
-                    if not item.future.done():
-                        item.future.cancel()
-                return
-            active_run = self._active_by_session.get(address)
-            if active_run is not None and active_run.status == RunStatus.RUNNING:
-                return
+    async def _drain_next_locked(self, address: SessionAddress) -> None:
+        if self._closed:
+            closed_queue = self._queues.pop(address, ())
+            for item in closed_queue:
+                if not item.future.done():
+                    item.future.cancel()
+            return
+        active_run = self._active_by_session.get(address)
+        if active_run is not None and active_run.status == RunStatus.RUNNING:
+            return
 
-            queue = self._queues.get(address)
+        queue = self._queues.get(address)
+        if not queue:
+            self._queues.pop(address, None)
+            return
+
+        if any(pending.steering for pending in queue):
+            # Selected input no Run took starts first; the stable sort keeps
+            # Queue order within both groups, and the rest of the selection
+            # reaches the new Run at its first Model request.
+            queue = deque(sorted(queue, key=lambda pending: not pending.steering))
+            self._queues[address] = queue
+        while queue:
+            item = queue.popleft()
+            # The cancellation callback normally removes an abandoned item
+            # immediately. This guard closes the same-tick race where the
+            # active Run drains before that callback gets its event-loop turn.
+            if item.future.done() and item.admission.accessor_input_id is None:
+                continue
             if not queue:
                 self._queues.pop(address, None)
-                return
 
-            if any(pending.steering for pending in queue):
-                # Selected input no Run took starts first; the stable sort keeps
-                # Queue order within both groups, and the rest of the selection
-                # reaches the new Run at its first Model request.
-                queue = deque(sorted(queue, key=lambda pending: not pending.steering))
-                self._queues[address] = queue
-            while queue:
-                item = queue.popleft()
-                # The cancellation callback normally removes an abandoned item
-                # immediately. This guard closes the same-tick race where the
-                # active Run drains before that callback gets its event-loop turn.
-                if item.future.done() and item.admission.accessor_input_id is None:
-                    continue
-                if not queue:
-                    self._queues.pop(address, None)
-
-                try:
-                    self._ensure_run_admission_allowed_locked(address, item.admission)
-                    run = self._start_run_locked(
-                        address=address,
-                        executor=item.executor,
-                        queue_item_id=item.item_id,
-                        admission=item.admission,
-                    )
-                except RunAdmissionBlockedError as error:
-                    if (
-                        item.admission.accessor_input_id is not None
-                        and self._input_withdrawer is not None
-                    ):
-                        await self._input_withdrawer(address, item.admission.accessor_input_id)
-                    if not item.future.done():
-                        item.future.set_exception(error)
-                    continue
-                except Exception as error:
-                    # One broken item must not strand the rest of the Queue. Its
-                    # owner receives the failure; the remaining items keep draining.
-                    _LOGGER.error(
-                        "Queued Run could not start (agent=%s session=%s item=%s)",
-                        address.agent_id,
-                        address.session_id,
-                        item.item_id,
-                        exc_info=True,
-                    )
-                    if (
-                        item.admission.accessor_input_id is not None
-                        and self._input_withdrawer is not None
-                    ):
-                        await self._input_withdrawer(address, item.admission.accessor_input_id)
-                    if not item.future.done():
-                        item.future.set_exception(error)
-                    continue
+            try:
+                self._ensure_run_admission_allowed_locked(address, item.admission)
+                run = self._start_run_locked(
+                    address=address,
+                    executor=item.executor,
+                    queue_item_id=item.item_id,
+                    admission=item.admission,
+                )
+            except RunAdmissionBlockedError as error:
+                if (
+                    item.admission.accessor_input_id is not None
+                    and self._input_withdrawer is not None
+                ):
+                    await self._input_withdrawer(address, item.admission.accessor_input_id)
                 if not item.future.done():
-                    item.future.set_result(run)
-                return
+                    item.future.set_exception(error)
+                continue
+            except Exception as error:
+                # One broken item must not strand the rest of the Queue. Its
+                # owner receives the failure; the remaining items keep draining.
+                _LOGGER.error(
+                    "Queued Run could not start (agent=%s session=%s item=%s)",
+                    address.agent_id,
+                    address.session_id,
+                    item.item_id,
+                    exc_info=True,
+                )
+                if (
+                    item.admission.accessor_input_id is not None
+                    and self._input_withdrawer is not None
+                ):
+                    await self._input_withdrawer(address, item.admission.accessor_input_id)
+                if not item.future.done():
+                    item.future.set_exception(error)
+                continue
+            if not item.future.done():
+                item.future.set_result(run)
+            return
 
-            self._queues.pop(address, None)
+        self._queues.pop(address, None)
 
     def _start_run_locked(
         self,
