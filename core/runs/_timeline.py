@@ -26,6 +26,29 @@ _TEXT_KINDS = ("reasoning", "assistant_output")
 # Only these events make a row stream; until one arrives, as when folding
 # durable History, no row streams.
 _STREAMING_EVENTS = frozenset({"reasoning_delta", "assistant_output_delta", "tool_call_delta"})
+SILENT_ANSWER = "[SILENT]"
+
+
+def is_silent_answer(text: object) -> bool:
+    """Whether an Assistant answer is the silent ending, which no one is shown.
+
+    The answer stays in the Session for the Model; only its presentation is
+    dropped: the transcript, Channel replies, unread notices and forwarding.
+    """
+    return isinstance(text, str) and text.strip() == SILENT_ANSWER
+
+
+def _hidden(child: JsonObject) -> bool:
+    """A silent answer row, or a streaming one that can still become one."""
+    if child["type"] != "assistant_output":
+        return False
+    content = child.get("content")
+    if not isinstance(content, str):
+        return False
+    if child.get("streaming"):
+        started = content.lstrip()
+        return bool(started) and SILENT_ANSWER.startswith(started.rstrip())
+    return is_silent_answer(content)
 
 
 class RunTimeline:
@@ -100,7 +123,9 @@ class RunTimeline:
             for child in self.run["items"]:
                 self._join_parts(child)
             row = {key: value for key, value in self.run.items() if key != "items"}
-            row["items"] = self._ordered_children(self.run["items"])
+            row["items"] = self._ordered_children(
+                [child for child in self.run["items"] if not _hidden(child)]
+            )
             return [*self.before, row, *self.after]
         if self._snapshot is None:
             children = []
@@ -113,7 +138,9 @@ class RunTimeline:
             self._child_snapshots = {child["id"]: child for child in children}
             self._dirty_children.clear()
             row = copy.deepcopy({key: value for key, value in self.run.items() if key != "items"})
-            row["items"] = self._ordered_children(children)
+            row["items"] = self._ordered_children(
+                [child for child in children if not _hidden(child)]
+            )
             self._snapshot = [*copy.deepcopy(self.before), row, *copy.deepcopy(self.after)]
         return self._snapshot
 

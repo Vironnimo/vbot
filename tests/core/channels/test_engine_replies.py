@@ -73,6 +73,8 @@ def _cancelled_after(*messages: dict[str, Any]) -> Callable[[], Run]:
     [
         (lambda: make_completed_run(output_text="final reply"), "final reply"),
         (make_empty_completed_run, content_module._EMPTY_ASSISTANT_REPLY),
+        # The silent answer settles the owed reply without a message.
+        (lambda: make_completed_run(output_text=" [SILENT] "), None),
         # The failure text stays internal.
         (lambda: make_failed_run(message="boom"), engine_module._FAILED_REPLY),
         # A failure after the complete answer still delivers it.
@@ -104,6 +106,7 @@ def _cancelled_after(*messages: dict[str, Any]) -> Callable[[], Run]:
     ids=[
         "completed",
         "empty",
+        "silent",
         "failed",
         "failed-after-answer",
         "cancelled",
@@ -116,7 +119,7 @@ def _cancelled_after(*messages: dict[str, Any]) -> Callable[[], Run]:
     ],
 )
 async def test_each_run_outcome_becomes_one_reply(
-    tmp_path: Path, make_run: Callable[[], Run], reply: str
+    tmp_path: Path, make_run: Callable[[], Run], reply: str | None
 ) -> None:
     trigger_mock = AsyncMock(return_value=make_run())
     engine, _sessions, _trigger, transport = make_engine(tmp_path, trigger_run=trigger_mock)
@@ -124,7 +127,7 @@ async def test_each_run_outcome_becomes_one_reply(
     await engine.handle_inbound_text(make_conversation(), "hello")
     await drain(engine, 12345)
 
-    assert transport.sent == [("12345", reply)]
+    assert transport.sent == ([] if reply is None else [("12345", reply)])
     assert transport.activity_targets == ["12345"]
     await engine.stop()
 

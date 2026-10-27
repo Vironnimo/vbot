@@ -238,6 +238,8 @@ async def test_owned_completion_for_a_live_owner_is_delivered(
     else:
         assert len(started) == 1
         assert "live owned result" in started[0]
+        # The owner's Run is not one vBot started only for this delivery.
+        assert automation_module.SILENT_COMPLETION_TEXT not in started[0]
     assert loop.messages == []
     await service.aclose()
     await manager.aclose()
@@ -733,6 +735,8 @@ async def test_results_ready_at_run_end_coalesce_and_later_ones_get_a_new_delive
     assert loop.messages[0].index("first") < loop.messages[0].index("second")
     assert "finished later" not in loop.messages[0]
     assert "finished later" in loop.messages[1]
+    # A Run started only for the delivery may end without a visible answer.
+    assert all(automation_module.SILENT_COMPLETION_TEXT in message for message in loop.messages)
 
 
 @pytest.mark.parametrize(
@@ -786,6 +790,8 @@ async def test_completion_delivery_joins_active_run_at_next_request_boundary(
     notes = _notes(session)
     assert len(notes) == 1
     assert "finished during the active run" in notes[0]
+    # A note joins a running turn, which must not end silently.
+    assert automation_module.SILENT_COMPLETION_TEXT not in notes[0]
     # In the Session now, but it wakes the Session until the Model answered.
     assert service.pending_completion_wakes(_ADDRESS) == 1
     if ending == "user_cancelled":

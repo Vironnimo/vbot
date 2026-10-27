@@ -1,6 +1,6 @@
 """Runs domain public API."""
 
-from core.runs._timeline import RunTimeline
+from core.runs._timeline import SILENT_ANSWER, RunTimeline, is_silent_answer
 from core.runs.run import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
     ASSISTANT_OUTPUT_EVENT,
@@ -96,6 +96,7 @@ __all__ = [
     "RUN_INTERRUPTED_EVENT",
     "RUN_KIND_FIELD",
     "RUN_STARTED_EVENT",
+    "SILENT_ANSWER",
     "STREAM_ATTEMPT_RESTARTED_EVENT",
     "Run",
     "RunAdmission",
@@ -119,5 +120,6 @@ __all__ = [
     "TRANSIENT_EVENT_TYPES",
     "UNATTENDED_RUN_KINDS",
     "USER_MESSAGE_EVENT",
+    "is_silent_answer",
     "is_unattended_run_kind",
 ]

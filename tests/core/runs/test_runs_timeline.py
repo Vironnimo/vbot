@@ -359,6 +359,38 @@ def test_restarted_attempt_removes_only_its_uncommitted_output() -> None:
     assert len({item["id"] for item in items}) == 4
 
 
+@pytest.mark.parametrize("streamed", [True, False], ids=["live", "history"])
+def test_silent_answer_is_never_shown_and_its_tool_calls_stay(streamed: bool) -> None:
+    timeline = RunTimeline("run")
+    call = {"id": "call", "name": "read", "arguments": {}}
+    emit(
+        timeline,
+        "assistant_output",
+        {"message": {"id": "a", "role": "assistant", "content": "", "tool_calls": [call]}},
+    )
+    emit(timeline, "tool_call_result", {"tool_call": call, "result": {"ok": True}})
+    if streamed:
+        for delta in ("\n[SIL", "ENT]"):
+            emit(timeline, "assistant_output_delta", {"content_delta": delta})
+            assert [item["type"] for item in block(timeline)["items"]] == ["tool_call"]
+    emit(
+        timeline,
+        "assistant_output",
+        {"message": {"id": "b", "role": "assistant", "content": "\n[SILENT]"}},
+    )
+    assert [item["type"] for item in block(timeline)["items"]] == ["tool_call"]
+    history = next(row for row in timeline.snapshot(isolated=False) if "items" in row)
+    assert [item["type"] for item in history["items"]] == ["tool_call"]
+
+
+def test_streamed_text_that_starts_like_the_silent_answer_appears_once_it_differs() -> None:
+    timeline = RunTimeline("run")
+    emit(timeline, "assistant_output_delta", {"content_delta": "[SIL"})
+    assert block(timeline)["items"] == []
+    emit(timeline, "assistant_output_delta", {"content_delta": "ENT] is the marker"})
+    assert [item["content"] for item in block(timeline)["items"]] == ["[SILENT] is the marker"]
+
+
 @pytest.mark.parametrize(
     "status,expected",
     [

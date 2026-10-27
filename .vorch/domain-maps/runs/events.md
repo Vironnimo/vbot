@@ -1,6 +1,6 @@
 # Run Events
 
-Run event constants, transient types, sequencing, replay retention, the shared event stream and the in-memory `RunTimeline`. Event payloads belong to the domains that emit them (`runs.md` -> Events).
+Run event constants, transient types, sequencing, replay retention, the shared event stream, the in-memory `RunTimeline` and the Silent answer. Event payloads belong to the domains that emit them (`runs.md` -> Events).
 
 ## Event constants and transient types
 
@@ -23,3 +23,12 @@ Cancellation suppression (`runs.md` -> Interfaces, `Run.emit`) never removes eve
 ## RunTimeline
 
 `core/runs/_timeline.py::RunTimeline` folds visible events at emission, before the bounded raw replay window can discard them, and is released on settlement. Ownership, the semantic contract and the timeline protocol: `chat/timeline.md`.
+
+## Silent answer
+
+`core/runs/_timeline.py::is_silent_answer` is the one test (trimmed text exactly `[SILENT]`, `SILENT_ANSWER`); the answer stays in Session history for the Model, and every path that presents a Run's answer drops it (user decision 2026-10-27, display option "hidden completely"):
+
+- `RunTimeline.snapshot` (live and History folds) leaves out `assistant_output` rows holding it; a streaming row is held back while its text is still a prefix of the marker and appears once it differs. The Run's Tool rows stay (`tests/core/runs/test_runs_timeline.py`).
+- `_decide_completion_activity` (`runs.py`) makes a Run that completed with it never count as activity, before any `completion_activity` decision: no unread mark or notification (`test_completion_activity_decides_the_finished_runs_activity_before_it_is_recorded`).
+- Channels send no reply and settle the owed one (`channels/reply-delivery.md`); Sub-Agent forwarding forwards nothing and does not wake the Parent (`subagents/forwarding.md`).
+- Agents learn the marker only in follow-up delivery Runs (`automation/completion-delivery.md` -> Agent-facing text) and Cron context notes (`automation/cron.md`, whose `is_silent` accepts more forms for its delivery).
