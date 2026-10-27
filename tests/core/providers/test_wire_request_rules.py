@@ -182,7 +182,14 @@ async def _over_codex_websocket(request: Mapping[str, Any]) -> _Sent:
     ],
 )
 @pytest.mark.asyncio
-@pytest.mark.parametrize("extra_value", ["extra-body", {"custom": True}, [None, "custom", {}]])
+@pytest.mark.parametrize(
+    "extra_value",
+    [
+        "extra-body",
+        {"custom": True},
+        [None, "custom", {}, {"images": None}, {"images": "opaque"}],
+    ],
+)
 async def test_body_and_header_rules_reach_every_request_path(
     capture: _Capture, built: str, replaced: str, extra_value: Any
 ) -> None:

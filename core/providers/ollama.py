@@ -67,6 +67,7 @@ from core.providers._ollama_wire import (
     _extract_ollama_usage,
     _find_ollama_reasoning,
     _normalize_ollama_done_reason,
+    _ollama_image_count,
     _ollama_openai_base_url,
     _ollama_stream_tool_calls,
     _to_ollama_messages,
@@ -529,9 +530,7 @@ class OllamaAdapter(ProviderAdapter):
         try:
             return await retry_async(_do_request)
         except ProviderError as error:
-            image_count = sum(
-                len(message.get("images", [])) for message in request.payload["messages"]
-            )
+            image_count = _ollama_image_count(request.payload)
             learned = learn_image_limit(error, image_count, wire=self.wire, model_id=model_id)
             if learned is not None:
                 raise learned from error
@@ -576,7 +575,7 @@ class OllamaAdapter(ProviderAdapter):
                 response_headers=response_headers,
             )
 
-        image_count = sum(len(message.get("images", [])) for message in request.payload["messages"])
+        image_count = _ollama_image_count(request.payload)
         try:
             response = await connect_streaming_with_retry(
                 self._client,

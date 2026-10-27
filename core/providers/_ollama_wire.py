@@ -35,6 +35,18 @@ def _ollama_openai_base_url(native_base_url: str) -> str:
     )
 
 
+def _ollama_image_count(payload: Mapping[str, Any]) -> int:
+    """Count native image entries without interpreting opaque request overrides."""
+    messages = payload.get("messages")
+    if not isinstance(messages, list):
+        return 0
+    return sum(
+        sum(isinstance(image, str) for image in images)
+        for message in messages
+        if isinstance(message, Mapping) and isinstance(images := message.get("images"), list)
+    )
+
+
 def _to_ollama_messages(
     messages: list[dict[str, Any]], *, history_field: str | None
 ) -> list[dict[str, Any]]:
