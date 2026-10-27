@@ -150,7 +150,9 @@ class CatalogSummaries:
     async def close(self) -> None:
         """Finish the pending writes; later changes stay in memory."""
         while self._writes:
-            await asyncio.gather(*tuple(self._writes), return_exceptions=True)
+            writes = tuple(self._writes)
+            await asyncio.gather(*writes, return_exceptions=True)
+            self._writes.difference_update(writes)
         self._database = None
 
     def get(self, connection: str) -> CatalogSummary | None:

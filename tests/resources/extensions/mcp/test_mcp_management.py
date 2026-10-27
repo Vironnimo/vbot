@@ -273,9 +273,21 @@ async def test_known_tool_names_survive_restarts_and_leave_with_the_connection(h
         service, registry = await restart()
         await service.management.manage("save", {"connection": _CONNECTION})
         assert _tools(registry) == _NO_TOOLS
+        written = asyncio.Event()
+        write = service.catalogs._write
+
+        async def write_before_cleanup(connection):
+            await write(connection)
+            written.set()
+
+        monkeypatch.setattr(service.catalogs, "_write", write_before_cleanup)
         service._publish(service.runners["example"], _CATALOG)
         known = _tools(registry)
         assert known == "Tools: get_scene_info, execute_blender_code"
+        # Resume before the completed write's discard callback. Closing must
+        # remove settled Tasks itself instead of starving that callback.
+        await written.wait()
+        await service.catalogs.close()
         await stop(service)
 
         service, registry = await restart()
