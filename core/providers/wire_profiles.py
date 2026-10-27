@@ -157,6 +157,12 @@ class WireBinding:
                 self.provider_id, self.connection_id, model_id, window
             )
 
+    def observe_request_max_images(self, model_id: str, limit: int) -> None:
+        if self.observations is not None:
+            self.observations.record_request_max_images(
+                self.provider_id, self.connection_id, model_id, limit
+            )
+
     def learned_context_window(self, model_id: str) -> int | None:
         """The Context window a rejection stated for ``model_id`` on this Connection."""
 
@@ -457,6 +463,12 @@ class _Resolution:
             self._apply(entry.connections.get(self.connection_id, _EMPTY), LAYER_MODEL_CONNECTION)
         if self.observed is not None and self.observed.max_output_tokens is not None:
             self._bound_output_limit(self.observed.max_output_tokens)
+        if self.observed is not None and self.observed.request_max_images is not None:
+            media = self.values.setdefault("media", {})
+            configured = media.get("request_max_images")
+            if configured is None or self.observed.request_max_images < configured:
+                media["request_max_images"] = self.observed.request_max_images
+                self.provenance["media.request_max_images"] = LAYER_OBSERVED
 
         status, verification = self._status(entry, rules)
         return WireProfile(

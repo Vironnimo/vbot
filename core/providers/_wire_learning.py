@@ -14,6 +14,11 @@ requests start from the corrected shape and a configured Model entry is never
 silently overridden; a stated output maximum bounds every layer, and a stated
 Context window replaces the catalog window the Adapter budgets against.
 
+An explicit image-count rejection instead records the limit and raises
+``ProviderImageLimitError``: Chat alone knows which delivered images can retire.
+It can arrive after heartbeats or Usage, but never teaches after Model output.
+Native Ollama borrows this image learner without enabling parameter learning.
+
 Every request path learns the same way. A request
 (:func:`execute_learning_from_rejections`) is established when its reply
 arrives; a stream (:func:`stream_learning_from_rejections`) when its first
@@ -36,7 +41,12 @@ from contextlib import aclosing
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from core.providers.errors import ProviderAuthError, ProviderContextOverflowError, ProviderError
+from core.providers.errors import (
+    ProviderAuthError,
+    ProviderContextOverflowError,
+    ProviderError,
+    ProviderImageLimitError,
+)
 from core.providers.http import (
     PreparedRequest,
     RequestPlan,
@@ -49,7 +59,11 @@ from core.providers.wire_profile import WireProfile
 from core.providers.wire_profiles import WireBinding
 from core.utils.logging import get_logger
 
-__all__ = ["execute_learning_from_rejections", "stream_learning_from_rejections"]
+__all__ = [
+    "execute_learning_from_rejections",
+    "learn_image_limit",
+    "stream_learning_from_rejections",
+]
 
 _LOGGER = get_logger("providers.wire_learning")
 
@@ -274,6 +288,14 @@ async def execute_learning_from_rejections[T](
             if isinstance(error, ProviderAuthError):
                 raise
             profile = wire.profile(model_id)
+            image_error = learn_image_limit(
+                error,
+                _request_image_count(request.payload, profile.protocol),
+                wire=wire,
+                model_id=model_id,
+            )
+            if image_error is not None:
+                raise image_error from error
             lesson = _learn(str(error), request.payload, profile, limits_only=error.retryable)
             if lesson is None:
                 raise
@@ -336,11 +358,14 @@ async def stream_learning_from_rejections(
     from ``plan``. An error raised before the stream yields its first delta (an
     HTTP rejection or an in-band error event) is learned and retried exactly
     like :func:`execute_learning_from_rejections`; once a delta was yielded,
-    every error propagates unchanged and the request is never sent again, so
+    parameter errors propagate unchanged and the request is never sent again, so
     its payload and body are released. A delta carrying reasoning records that
     the Model returned reasoning; when the request turned reasoning off,
     reasoning in a delta or inline in the answer (``split_inline_reasoning``)
     records that the Model ignores reasoning off.
+
+    An image-count error after only heartbeats or Usage still reaches Chat as
+    ``ProviderImageLimitError``; after Model output it propagates unchanged.
     """
 
     established: list[PreparedRequest] = []
@@ -388,10 +413,13 @@ async def stream_learning_from_rejections(
         raise
     combined = _failed_attempt_usage(failure_usage)
     request = established.pop()
-    off_watch = _OffWatch() if _requests_off(request.payload, wire.profile(model_id)) else None
+    profile = wire.profile(model_id)
+    image_count = _request_image_count(request.payload, profile.protocol)
+    off_watch = _OffWatch() if _requests_off(request.payload, profile) else None
     request.release()
     del request
     returned_reasoning = False
+    emitted_output = False
     async with aclosing(stream):
         if combined is not None:
             if attempts > 1:
@@ -401,6 +429,8 @@ async def stream_learning_from_rejections(
             return
         delta = first
         while True:
+            if delta.get("type") not in {"usage", "heartbeat"}:
+                emitted_output = True
             if not returned_reasoning and _delta_returns_reasoning(delta):
                 returned_reasoning = True
                 wire.observe_reasoning_returned(model_id)
@@ -412,6 +442,12 @@ async def stream_learning_from_rejections(
                 delta = await anext(stream)
             except StopAsyncIteration:
                 return
+            except ProviderError as error:
+                if not emitted_output:
+                    learned = learn_image_limit(error, image_count, wire=wire, model_id=model_id)
+                    if learned is not None:
+                        raise learned from error
+                raise
 
 
 @dataclass(frozen=True, eq=False)
@@ -475,6 +511,73 @@ def _learn(
         switch = ".".join(carriers.off_switch)
         return _Lesson("effort", ("none",), f"reasoning off switch {switch}={carriers.off_value!r}")
     return None
+
+
+_STATED_IMAGE_MAXIMUM = tuple(
+    re.compile(wording)
+    for wording in (
+        r"a request may include at most ([1-9]\d{0,5}) images\b",
+        r"too many images in request:\s*\d+\s*>\s*([1-9]\d{0,5})\b",
+        r"request contains \d+ images, exceeding the maximum of "
+        r"([1-9]\d{0,5}) allowed per request\b",
+        r"too many images:\s*max ([1-9]\d{0,5}) images per request\b",
+        r"exceeded maximum number of images\s*\(([1-9]\d{0,5})\)",
+    )
+)
+
+
+def learn_image_limit(
+    error: ProviderError,
+    image_count: int,
+    *,
+    wire: WireBinding,
+    model_id: str,
+) -> ProviderImageLimitError | None:
+    """Learn an explicit image-count rejection before output; leave retirement to Chat."""
+
+    if isinstance(error, ProviderAuthError) or error.status_code not in {None, 400, 422}:
+        return None
+    if error.retryable and error.status_code is None:
+        return None
+    limit = _stated(str(error).lower(), _STATED_IMAGE_MAXIMUM)
+    if limit is None or image_count <= limit:
+        return None
+    wire.observe_request_max_images(model_id, limit)
+    normalized = ProviderImageLimitError(limit, str(error))
+    normalized.status_code = error.status_code
+    return normalized
+
+
+def _request_image_count(payload: Mapping[str, Any], protocol: str) -> int:
+    """Count only wire image parts, never text, Tool arguments or image output settings."""
+
+    field = (
+        "contents" if protocol == "gemini" else "input" if protocol == "responses" else "messages"
+    )
+    messages = payload.get(field)
+    if not isinstance(messages, list):
+        return 0
+    count = 0
+    for message in messages:
+        if not isinstance(message, Mapping):
+            continue
+        blocks = message.get("parts" if protocol == "gemini" else "content")
+        pending = list(blocks) if isinstance(blocks, list) else []
+        while pending:
+            block = pending.pop()
+            if not isinstance(block, Mapping):
+                continue
+            if block.get("type") in {"image", "image_url", "input_image"}:
+                count += 1
+            elif block.get("type") == "tool_result" and isinstance(block.get("content"), list):
+                pending.extend(block["content"])
+            elif protocol == "gemini":
+                media = block.get("inlineData", block.get("fileData"))
+                if isinstance(media, Mapping) and str(media.get("mimeType", "")).startswith(
+                    "image/"
+                ):
+                    count += 1
+    return count
 
 
 def _learn_limit(lowered: str, payload: Mapping[str, Any]) -> _Lesson | None:

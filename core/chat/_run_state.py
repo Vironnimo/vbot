@@ -347,7 +347,7 @@ class _ModelTarget:
     wire_media_types: frozenset[str]
     chunk_timeout_seconds: float | None
     max_image_bytes: int | None = None
-    # Documented image-count limit of one request on this route, if known.
+    # Configured or learned image-count limit of one request on this route, if known.
     max_request_images: int | None = None
     # Whether the route returns calls to Tools outside the request's Tool list
     # (the Adapter's ``list_announced_tools`` is false).

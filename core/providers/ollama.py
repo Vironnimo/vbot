@@ -71,6 +71,7 @@ from core.providers._ollama_wire import (
     _ollama_stream_tool_calls,
     _to_ollama_messages,
 )
+from core.providers._wire_learning import learn_image_limit
 from core.providers.adapter import (
     ModelLookup,
     ProviderAdapter,
@@ -525,7 +526,16 @@ class OllamaAdapter(ProviderAdapter):
                 self.wire.observe_reasoning_field(model_id, found[0])
             return parsed
 
-        return await retry_async(_do_request)
+        try:
+            return await retry_async(_do_request)
+        except ProviderError as error:
+            image_count = sum(
+                len(message.get("images", [])) for message in request.payload["messages"]
+            )
+            learned = learn_image_limit(error, image_count, wire=self.wire, model_id=model_id)
+            if learned is not None:
+                raise learned from error
+            raise
 
     # ------------------------------------------------------------------
     # stream() — NDJSON streaming
@@ -566,14 +576,21 @@ class OllamaAdapter(ProviderAdapter):
                 response_headers=response_headers,
             )
 
-        response = await connect_streaming_with_retry(
-            self._client,
-            CHAT_ENDPOINT,
-            request.body,
-            build_headers=_build_headers,
-            handle_error_status=_handle_error_status,
-            wrap_transport_error=self._wrap_transport_error,
-        )
+        image_count = sum(len(message.get("images", [])) for message in request.payload["messages"])
+        try:
+            response = await connect_streaming_with_retry(
+                self._client,
+                CHAT_ENDPOINT,
+                request.body,
+                build_headers=_build_headers,
+                handle_error_status=_handle_error_status,
+                wrap_transport_error=self._wrap_transport_error,
+            )
+        except ProviderError as error:
+            learned = learn_image_limit(error, image_count, wire=self.wire, model_id=model_id)
+            if learned is not None:
+                raise learned from error
+            raise
         # The established stream never sends the request again.
         request.release()
 
@@ -582,6 +599,7 @@ class OllamaAdapter(ProviderAdapter):
         has_tool_calls = False
         tool_call_count = 0
         seen_done = False
+        emitted_output = False
         try:
             async for line in iter_stream_lines(response):
                 if not line.strip():
@@ -591,23 +609,35 @@ class OllamaAdapter(ProviderAdapter):
                     continue
                 error_message = parsed.get("error")
                 if error_message:
-                    raise ProviderError(f"Provider stream error: {error_message}", retryable=False)
+                    stream_error = ProviderError(
+                        f"Provider stream error: {error_message}", retryable=False
+                    )
+                    if not emitted_output:
+                        learned = learn_image_limit(
+                            stream_error, image_count, wire=self.wire, model_id=model_id
+                        )
+                        if learned is not None:
+                            raise learned from stream_error
+                    raise stream_error
 
                 message = parsed.get("message")
                 if isinstance(message, dict):
                     found = _find_ollama_reasoning(message, reasoning_fields)
                     if found is not None:
+                        emitted_output = True
                         if not observed_reasoning_field:
                             self.wire.observe_reasoning_field(model_id, found[0])
                             observed_reasoning_field = True
                         yield {"type": "reasoning_delta", "text": found[1]}
                     content = message.get("content")
                     if isinstance(content, str) and content:
+                        emitted_output = True
                         yield {"type": "content_delta", "text": content}
                     for tool_call in _ollama_stream_tool_calls(
                         message.get("tool_calls"), start_index=tool_call_count
                     ):
                         tool_call_count += 1
+                        emitted_output = True
                         has_tool_calls = True
                         yield {
                             "type": "tool_call_delta",

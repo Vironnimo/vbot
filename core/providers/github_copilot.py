@@ -127,9 +127,13 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
     def request_image_limit(self, model_id: str) -> int | None:
         vision = self._runtime_metadata_for_model(model_id).get("vision")
         value = vision.get("max_prompt_images") if isinstance(vision, Mapping) else None
-        return (
+        catalog_limit = (
             value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
         )
+        wire_limit = super().request_image_limit(model_id)
+        if catalog_limit is None:
+            return wire_limit
+        return min(catalog_limit, wire_limit) if wire_limit is not None else catalog_limit
 
     @override
     def _build_payload(
