@@ -71,7 +71,7 @@ from core.providers.adapter import (
     TERMINAL_OUTCOME_TOOL_CALLS,
     request_input_budget,
 )
-from core.providers.errors import ProviderRequestTooLargeError
+from core.providers.errors import ProviderImageLimitError, ProviderRequestTooLargeError
 from core.runs import (
     MODEL_STEP_USAGE_EVENT,
     QueuedRunItem,
@@ -476,6 +476,7 @@ class AgenticProgression:
                 tool_round: ToolRound | None = tool_round,
                 offered_tool_names: list[str] = offered_tool_names,
                 removed_tool_names: frozenset[str] = removed_tool_names,
+                public_model: str = target.public_model,
             ) -> None:
                 assert tool_round is not None
                 tool_calls = _offered_tool_calls(
@@ -485,9 +486,7 @@ class AgenticProgression:
                     removed=removed_tool_names,
                 )
                 # A restart before the turn persists still shows these calls.
-                context.stream_draft.record_tool_calls(
-                    model=target.public_model, tool_calls=tool_calls
-                )
+                context.stream_draft.record_tool_calls(model=public_model, tool_calls=tool_calls)
                 tool_round.start(tool_calls)
 
             while True:
@@ -539,15 +538,31 @@ class AgenticProgression:
                             # generation while the Run is active.
                             session_generation_id=context.session_snapshot.cursor.generation_id,
                         )
-                except ProviderRequestTooLargeError as exc:
-                    smaller = await _CHAT_TRANSFORM_WORKERS.run(
-                        partial(
-                            context.image_budget.shrink,
-                            messages_for_request,
-                            max_bytes=exc.max_bytes,
-                            image_limit=target.max_request_images,
+                except (ProviderRequestTooLargeError, ProviderImageLimitError) as exc:
+                    if isinstance(exc, ProviderImageLimitError):
+                        target = replace(
+                            target,
+                            max_request_images=min(
+                                target.max_request_images or exc.max_images, exc.max_images
+                            ),
                         )
-                    )
+                        smaller = await _CHAT_TRANSFORM_WORKERS.run(
+                            partial(
+                                context.image_budget.project,
+                                messages_for_request,
+                                image_limit=target.max_request_images,
+                                remember=True,
+                            )
+                        )
+                    else:
+                        smaller = await _CHAT_TRANSFORM_WORKERS.run(
+                            partial(
+                                context.image_budget.shrink,
+                                messages_for_request,
+                                max_bytes=exc.max_bytes,
+                                image_limit=target.max_request_images,
+                            )
+                        )
                     if smaller == messages_for_request:
                         raise
                     messages_for_request = smaller

@@ -151,6 +151,11 @@
   ],
   "rules": [
     {
+      "when": {"ids": ["glm-5.3-flash"]},
+      "set": {"media": {"request_max_images": 30}},
+      "note": "User-reported Go rejection on 2026-10-27: a request may include at most 30 images. Scoped to the observed Model; other gateway routes can have different limits."
+    },
+    {
       "when": {"ids": ["minimax-m3.1-flash-free", "minimax-m3.1-flash"]},
       "set": {"protocol": "chat_completions", "reasoning": {"off": "low"}},
       "note": "M3.1 Flash uses Chat Completions rather than Go's older MiniMax Messages route (https://opencode.ai/v2/docs/console/go/, 2026-10-27). The current paid id, like the earlier free id, rejects raw none; mandatory thinking uses low."

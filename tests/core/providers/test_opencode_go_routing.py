@@ -320,6 +320,9 @@ async def test_no_wire_enables_strict_tool_schemas(wire: str, model_id: str, url
 
 def test_wire_media_support_follows_the_routed_wire() -> None:
     adapter = go_adapter()
+    assert adapter.request_image_limit("glm-5.3-flash") == 30
+    assert adapter.request_image_limit("glm-5.3") is None
+    assert adapter.request_image_limit(CHAT_MODEL) is None
     chat_adapter = OpenAICompatibleAdapter(go_config(), API_KEY)
 
     assert adapter.wire_media_support("minimax-m2.7") == IMAGE_WIRE_MEDIA_TYPES

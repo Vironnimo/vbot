@@ -75,6 +75,17 @@ class ProviderRequestTooLargeError(ProviderError):
         super().__init__(message, retryable=False)
 
 
+class ProviderImageLimitError(ProviderError):
+    """A rejected request exceeded the stated image count; Chat can retire old images."""
+
+    failure_class = "rejected"
+    code = "provider_image_limit"
+
+    def __init__(self, max_images: int, detail: str) -> None:
+        self.max_images = max_images
+        super().__init__(detail, retryable=False)
+
+
 class ProviderContextOverflowError(ProviderError):
     """The Provider rejected the request because its input exceeds the Context window.
 

@@ -5,12 +5,12 @@ Model): which readable field carried reasoning, whether reasoning came back at
 all, which optional parameter the wire rejected, which parameters it accepts
 only one of at a time, which effort value it refused (``none`` also for a
 refused explicit off), whether the Model reasons although the request
-turned reasoning off, and the output maximum and Context window a rejection
+turned reasoning off, and the output maximum, Context window and image count a rejection
 stated. The resolver turns these facts
 into profile values below every explicit Model entry, so a configured or
 verified profile always wins and an unconfigured Model improves after its first
 responses instead of failing the same way on every request. A stated output
-maximum is the exception: it bounds every layer (``wire_profiles``), because no
+maximum or image count is the exception: it bounds every layer (``wire_profiles``), because no
 entry can make the wire accept more than the Provider says it does.
 
 A rejection is not forever: each rejected parameter, parameter group or effort,
@@ -57,6 +57,7 @@ _OFF_IGNORED: _Rejection = ("off", "ignored")
 _EFFORT_UPDATES_REJECTED: _Rejection = ("effort_updates", "rejected")
 _MAX_OUTPUT_STATED: _Rejection = ("limit", "max_output_tokens")
 _CONTEXT_WINDOW_STATED: _Rejection = ("limit", "context_window")
+_IMAGE_COUNT_STATED: _Rejection = ("limit", "request_max_images")
 
 
 @dataclass(frozen=True)
@@ -77,6 +78,8 @@ class ObservedFacts:
     """The output maximum a rejection stated for this Model on this Connection."""
     context_window: int | None = None
     """The Context window a rejection stated for this Model on this Connection."""
+    request_max_images: int | None = None
+    """The image count a rejection stated for this Model on this Connection."""
 
     def is_empty(self) -> bool:
         return self == _NO_FACTS
@@ -105,6 +108,8 @@ class ObservedFacts:
             return replace(self, max_output_tokens=None)
         if rejection == _CONTEXT_WINDOW_STATED:
             return replace(self, context_window=None)
+        if rejection == _IMAGE_COUNT_STATED:
+            return replace(self, request_max_images=None)
         return replace(
             self, rejected_efforts=tuple(item for item in self.rejected_efforts if item != name)
         )
@@ -307,6 +312,20 @@ class WireObservations:
             rejection=_CONTEXT_WINDOW_STATED,
         )
 
+    def record_request_max_images(
+        self, provider_id: str, connection_id: str, model_id: str, limit: int
+    ) -> None:
+        """A rejection stated the maximum image count for one request."""
+
+        self._update(
+            provider_id,
+            connection_id,
+            model_id,
+            lambda facts: replace(facts, request_max_images=limit),
+            f"the wire allows at most {limit} images per request",
+            rejection=_IMAGE_COUNT_STATED,
+        )
+
     def forget(
         self,
         provider_id: str,
@@ -416,6 +435,7 @@ class WireObservations:
                     | ({_EFFORT_UPDATES_REJECTED} if updated.effort_updates_rejected else set())
                     | ({_MAX_OUTPUT_STATED} if updated.max_output_tokens is not None else set())
                     | ({_CONTEXT_WINDOW_STATED} if updated.context_window is not None else set())
+                    | ({_IMAGE_COUNT_STATED} if updated.request_max_images is not None else set())
                 )
                 for evicted in [item for item in times if item not in kept]:
                     del times[evicted]
@@ -519,6 +539,11 @@ def _document(facts: Mapping[str, ObservedFacts], learned_at: _RejectionTimes) -
                 "value": item.context_window,
                 "learned_at": _stamp(times.get(_CONTEXT_WINDOW_STATED)),
             }
+        if item.request_max_images is not None:
+            entry["request_max_images"] = {
+                "value": item.request_max_images,
+                "learned_at": _stamp(times.get(_IMAGE_COUNT_STATED)),
+            }
         if entry:
             targets[key] = entry
     return {"format_version": OBSERVATIONS_FORMAT_VERSION, "targets": targets}
@@ -561,6 +586,7 @@ def _read(
         effort_updates_rejected = _flag(entry.get("effort_updates_rejected"), now)
         max_output = _limit(entry.get("max_output_tokens"), now)
         context_window = _limit(entry.get("context_window"), now)
+        image_count = _limit(entry.get("request_max_images"), now)
         times: dict[_Rejection, datetime] = {
             ("parameter", name): at for name, at in parameters.items()
         }
@@ -574,6 +600,8 @@ def _read(
             times[_MAX_OUTPUT_STATED] = max_output[1]
         if context_window is not None:
             times[_CONTEXT_WINDOW_STATED] = context_window[1]
+        if image_count is not None:
+            times[_IMAGE_COUNT_STATED] = image_count[1]
         if times:
             learned_at[key] = times
         facts[key] = ObservedFacts(
@@ -586,6 +614,7 @@ def _read(
             effort_updates_rejected=effort_updates_rejected is not None,
             max_output_tokens=max_output[0] if max_output is not None else None,
             context_window=context_window[0] if context_window is not None else None,
+            request_max_images=image_count[0] if image_count is not None else None,
         )
     return facts, learned_at
 

@@ -19,7 +19,12 @@ import httpx
 import pytest
 import respx
 
-from core.providers.errors import ProviderAuthError, ProviderContextOverflowError, ProviderError
+from core.providers.errors import (
+    ProviderAuthError,
+    ProviderContextOverflowError,
+    ProviderError,
+    ProviderImageLimitError,
+)
 from core.providers.providers import REQUEST_ESTIMATE_MIN_MARGIN_TOKENS
 from core.utils.retry import caller_owns_retries
 
@@ -74,6 +79,100 @@ class _Within:
 
 
 _WITHIN_4096 = _Within(4096)
+
+
+@pytest.mark.parametrize(
+    ("path", "rejection", "tool_result"),
+    [
+        (paths.CHAT, "a request may include at most 2 images", False),
+        (paths.CHAT.streaming(paths.chat_sse), "Too many images in request: 3 > 2", False),
+        (
+            paths.MESSAGES,
+            "request contains 3 images, exceeding the maximum of 2 allowed per request",
+            True,
+        ),
+        (paths.GO_RESPONSES, "Too many images: max 2 images per request, got 3", False),
+        (paths.ZEN_GEMINI_STREAM, "Exceeded maximum number of images (2)", False),
+        (paths.OLLAMA, "a request may include at most 2 images", False),
+        (
+            paths.OLLAMA.streaming(paths.OLLAMA.success),
+            "a request may include at most 2 images",
+            False,
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_image_count_rejections_are_learned_and_handed_to_chat_without_replay(
+    path: paths.RequestPath,
+    rejection: str,
+    tool_result: bool,
+) -> None:
+    from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
+
+    images = [{"type": "media", "media_type": "image/png", "base64": "aW1hZ2U="} for _ in range(3)]
+    messages = [{"role": "user", "content": images}]
+    if tool_result:
+        messages = [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": "read-images", "name": "read", "arguments": {}}],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "read-images",
+                "content": "images",
+                TOOL_RESULT_CONTENT_BLOCKS_FIELD: images,
+            },
+        ]
+    adapter = path.adapter()
+    before = adapter.request_image_limit(path.model_id)
+    with respx.mock, caller_owns_retries():
+        response = (
+            httpx.Response(200, text=": heartbeat\n\n" + paths.chat_sse(_error(rejection)).text)
+            if path.stream and path.url == paths.CHAT.url
+            else httpx.Response(200, text=json.dumps({"error": rejection}) + "\n")
+            if path.stream and path.url == paths.OLLAMA.url
+            else _rejection(400, _error(rejection))
+        )
+        route = respx.post(path.url).mock(return_value=response)
+        with pytest.raises(ProviderImageLimitError) as failure:
+            await paths.request(adapter, path, {}, messages)
+        assert len(route.calls) == 1
+    assert failure.value.max_images == 2
+    assert failure.value.retryable is False
+    assert before != 2
+    assert adapter.request_image_limit(path.model_id) == 2
+    assert adapter.request_image_limit("unrelated-model") != 2
+    await adapter.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scenario", ["within-limit", "image-size", "auth", "after-output"])
+async def test_image_limit_learning_requires_an_exceeded_count_before_output(scenario: str) -> None:
+    adapter = paths.CHAT.adapter()
+    image = {"type": "media", "media_type": "image/png", "base64": "aW1hZ2U="}
+    messages = [{"role": "user", "content": [image] * (2 if scenario == "within-limit" else 3)}]
+    detail = (
+        "each image may include at most 2 megabytes"
+        if scenario == "image-size"
+        else "a request may include at most 2 images"
+    )
+    path = paths.CHAT
+    response = _rejection(401 if scenario == "auth" else 400, _error(detail))
+    if scenario == "after-output":
+        path = path.streaming(paths.chat_sse)
+        response = paths.chat_sse(
+            {"choices": [{"delta": {"content": "Already answered"}}]}, _error(detail)
+        )
+    with respx.mock, caller_owns_retries():
+        route = respx.post(path.url).mock(return_value=response)
+        with pytest.raises(ProviderError) as failure:
+            await paths.request(adapter, path, {}, messages)
+        assert route.call_count == 1
+    assert not isinstance(failure.value, ProviderImageLimitError)
+    assert adapter.request_image_limit(path.model_id) is None
+    await adapter.aclose()
 
 
 @pytest.mark.parametrize(
@@ -470,6 +569,15 @@ async def test_a_rejection_is_learned_retried_and_remembered_for_later_requests(
             ProviderContextOverflowError,
             1,
             id="context-window-not-stated",
+        ),
+        pytest.param(
+            paths.CHAT,
+            {},
+            400,
+            "a request may include at most 2 images",
+            ProviderError,
+            1,
+            id="image-limit-without-images",
         ),
     ],
 )

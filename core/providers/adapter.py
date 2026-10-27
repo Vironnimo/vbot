@@ -647,7 +647,7 @@ class ProviderAdapter(ABC):
         return self.wire_profile(model_id).media.request_max_bytes
 
     def request_image_limit(self, model_id: str) -> int | None:
-        """Documented maximum number of images in one request to this Model, if known.
+        """Configured or learned maximum image count for one request, if known.
 
         Counts every image in the request, earlier turns and Tool Results
         included. Chat keeps requests within it by retiring the oldest

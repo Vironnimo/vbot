@@ -96,6 +96,10 @@ def _profiles(
                 store.record_max_output_tokens(
                     "acme", "api-key", target, observed.max_output_tokens
                 )
+            if observed.request_max_images is not None:
+                store.record_request_max_images(
+                    "acme", "api-key", target, observed.request_max_images
+                )
 
     profiles = WireProfiles(
         files=files,
@@ -216,7 +220,8 @@ def test_layers_apply_in_order_and_record_their_provenance() -> None:
                     "set": {"response": {"reasoning_fields": ["thinking"]}},
                     "connections": {
                         "api-key": {
-                            "request": {"output_limit_cap": 3000, "list_announced_tools": True}
+                            "request": {"output_limit_cap": 3000, "list_announced_tools": True},
+                            "media": {"request_max_images": 50},
                         }
                     },
                 }
@@ -224,7 +229,10 @@ def test_layers_apply_in_order_and_record_their_provenance() -> None:
         },
         {"m": model, "m-disabled": _model("m-disabled", supported=False)},
         observed=ObservedFacts(
-            reasoning_field="reasoning", rejected_parameters=("top_k",), max_output_tokens=2500
+            reasoning_field="reasoning",
+            rejected_parameters=("top_k",),
+            max_output_tokens=2500,
+            request_max_images=30,
         ),
     )
 
@@ -232,6 +240,7 @@ def test_layers_apply_in_order_and_record_their_provenance() -> None:
 
     assert issues == []
     assert profile.model_id == "m"
+    assert profile.media.request_max_images == 30
     assert profile.request.output_limit_field == "max_tokens"
     assert profile.source_of("request.output_limit_field") == "protocol"
     assert profile.request.list_announced_tools is True
@@ -730,6 +739,7 @@ def test_learned_facts_shape_unconfigured_profiles_and_survive_a_restart(tmp_pat
     store.record_effort_updates_rejected("acme", "api-key", "m")
     store.record_max_output_tokens("acme", "api-key", "m", 4000)
     store.record_context_window("acme", "api-key", "m", 65536)
+    store.record_request_max_images("acme", "api-key", "m", 30)
     store.flush()
     after = _resolve(profiles, "m")
 
@@ -748,12 +758,15 @@ def test_learned_facts_shape_unconfigured_profiles_and_survive_a_restart(tmp_pat
     assert set(after.request.parameters) == {"temperature"}
     assert after.request.exclusive_parameters == (("temperature", "top_p"),)
     assert (before.request.output_limit_cap, after.request.output_limit_cap) == (None, 4000)
+    assert (before.media.request_max_images, after.media.request_max_images) == (None, 30)
+    assert _resolve(profiles, "m", "other").media.request_max_images is None
     assert _resolve(profiles, "unknown").reasoning.supported is True
 
     reloaded = WireObservations.load(path, save_delay=None)
     assert reloaded.facts_for("acme", "api-key", "m") == store.facts_for("acme", "api-key", "m")
     assert reloaded.facts_for("acme", "api-key", "m").effort_updates_rejected
     assert reloaded.facts_for("acme", "api-key", "m").context_window == 65536
+    assert reloaded.facts_for("acme", "api-key", "m").request_max_images == 30
     assert reloaded.forget("acme", model_id="unknown") == 1
     assert reloaded.facts_for("acme", "api-key", "m").reasoning_field == "reasoning_content"
     assert reloaded.forget("acme", "api-key") == 1
@@ -774,6 +787,7 @@ def test_learned_rejections_expire_and_the_profile_follows(tmp_path: Path) -> No
     store.record_effort_updates_rejected("acme", "api-key", "m")
     store.record_max_output_tokens("acme", "api-key", "m", 4000)
     store.record_context_window("acme", "api-key", "m", 65536)
+    store.record_request_max_images("acme", "api-key", "m", 30)
     now[0] += timedelta(days=10)
     store.record_rejected_parameter("acme", "api-key", "m", "top_p")
     store.flush()
@@ -781,6 +795,7 @@ def test_learned_rejections_expire_and_the_profile_follows(tmp_path: Path) -> No
     assert _resolve(profiles, "m").request.exclusive_parameters == (("temperature", "top_k"),)
     assert _resolve(profiles, "m").reasoning.off == "lowest"
     assert _resolve(profiles, "m").request.output_limit_cap == 4000
+    assert _resolve(profiles, "m").media.request_max_images == 30
 
     now[0] += REJECTION_TTL - timedelta(days=10)
     remaining = ObservedFacts(
@@ -792,6 +807,7 @@ def test_learned_rejections_expire_and_the_profile_follows(tmp_path: Path) -> No
     assert _resolve(profiles, "m").request.exclusive_parameters == ()
     assert _resolve(profiles, "m").reasoning.off == "auto"
     assert _resolve(profiles, "m").request.output_limit_cap is None
+    assert _resolve(profiles, "m").media.request_max_images is None
     assert store.facts_for("acme", "api-key", "m") == remaining
     store.flush()
     assert (

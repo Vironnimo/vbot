@@ -15,7 +15,9 @@ import random
 from pathlib import Path
 from typing import Any, override
 
+import httpx
 import pytest
+import respx
 from PIL import Image
 
 from core.chat import wire_shaping
@@ -32,7 +34,7 @@ from core.providers.adapter import (
     TOOL_RESULT_CONTENT_BLOCKS_FIELD,
     estimate_wire_request_input_tokens,
 )
-from core.providers.errors import ProviderRequestTooLargeError
+from core.providers.errors import ProviderImageLimitError, ProviderRequestTooLargeError
 from core.providers.http import prepare_request
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.runs import RunCancelledError
@@ -235,11 +237,15 @@ async def test_fresh_images_are_delivered_together_or_fail_explicitly(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("source", ["user", "tool", "text"])
-async def test_provider_body_overflow_preserves_fresh_inputs_and_stops_without_retry(
-    start_runtime: StartRuntime, source: str
+@pytest.mark.parametrize(
+    ("source", "limit_kind"),
+    [("user", "body"), ("tool", "body"), ("text", "body"), ("user", "count"), ("tool", "count")],
+)
+async def test_provider_media_overflow_preserves_fresh_inputs_and_stops_without_retry(
+    start_runtime: StartRuntime, source: str, limit_kind: str
 ) -> None:
     rejected: list[list[JsonObject]] = []
+    image_count = 2 if limit_kind == "count" else 1
 
     class LimitedAdapter(FakeAdapter):
         @override
@@ -247,13 +253,16 @@ async def test_provider_body_overflow_preserves_fresh_inputs_and_stops_without_r
             if source == "tool" and not self.requests:
                 return await super().send(messages, model_id=model_id, **kwargs)
             rejected.append(messages)
+            if limit_kind == "count":
+                raise ProviderImageLimitError(1, "a request may include at most 1 images")
             raise ProviderRequestTooLargeError(1001, 1000)
 
     adapter = LimitedAdapter(
         {
             "content": None,
             "tool_calls": [
-                {"id": "read-image", "name": "read", "arguments": {"path": "frame.png"}}
+                {"id": f"read-image-{index}", "name": "read", "arguments": {"path": "frame.png"}}
+                for index in range(image_count)
             ],
         }
     )
@@ -264,11 +273,20 @@ async def test_provider_body_overflow_preserves_fresh_inputs_and_stops_without_r
         content: str | list[ContentBlock] = "inspect frame.png"
         if source == "user":
             record = runtime.attachment_store.store("frame.png", _PNG_BYTES)
-            content = [MediaBlock("media", record.id, record.filename, record.media_type)]
-        with pytest.raises(ProviderRequestTooLargeError) as failure:
+            content = [
+                MediaBlock("media", record.id, record.filename, record.media_type)
+            ] * image_count
+        error_type = (
+            ImageBudgetExceededError if limit_kind == "count" else ProviderRequestTooLargeError
+        )
+        with pytest.raises(error_type) as failure:
             await runtime.chat_loop.send("coder", content, session_id="too-large")
-        assert failure.value.size_bytes == 1001
-        assert failure.value.max_bytes == 1000
+        if isinstance(failure.value, ImageBudgetExceededError):
+            assert (failure.value.count, failure.value.max_count) == (2, 1)
+        else:
+            assert isinstance(failure.value, ProviderRequestTooLargeError)
+            assert failure.value.size_bytes == 1001
+            assert failure.value.max_bytes == 1000
         assert len(rejected) == 1
         assert len(adapter.requests) == (1 if source == "tool" else 0)
         if source != "text":
@@ -278,7 +296,7 @@ async def test_provider_body_overflow_preserves_fresh_inputs_and_stops_without_r
         assert persisted[-1].status == "failed"
         assert persisted[-1].iteration_count == (1 if source == "tool" else 0)
         assert sum(message.role == "tool" for message in persisted) == (
-            1 if source == "tool" else 0
+            image_count if source == "tool" else 0
         )
         assert "base64" not in json.dumps([message.to_dict() for message in persisted])
         assert image_path.read_bytes() == _PNG_BYTES
@@ -552,14 +570,16 @@ async def test_rereading_overwritten_image_delivers_each_calls_own_pixels(
 # to fourteen images, are what exercise the eviction and reopening sequence end to end.
 # Each case also covers the run without pressure until its first eviction.
 @pytest.mark.asyncio
-@pytest.mark.parametrize("budget_kind", ["count", "body"])
+@pytest.mark.parametrize("budget_kind", ["count", "body", "learned-count"])
 async def test_long_mixed_image_run_keeps_images_and_can_reopen_originals(
     resources_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
     start_runtime: StartRuntime,
     budget_kind: str,
+    respx_mock: respx.MockRouter,
 ) -> None:
-    count_limit = budget_kind == "count"
+    count_limit = budget_kind != "body"
+    learned_count = budget_kind == "learned-count"
     provider_pressure = budget_kind == "body"
     # Isolate byte pressure from token Compaction with a realistic large Context.
     _isolate_from_compaction(resources_dir)
@@ -609,10 +629,14 @@ async def test_long_mixed_image_run_keeps_images_and_can_reopen_originals(
         @override
         def request_image_limit(self, model_id: str) -> int | None:
             # Each retirement goes down to half the limit: the newest two frames.
+            if learned_count:
+                return wire.request_image_limit(model_id)
             return 4 if count_limit else None
 
         @override
         async def send(self, messages: list[dict], *, model_id: str, **kwargs: Any) -> dict:
+            if learned_count:
+                await wire.send(messages, model_id=model_id, **kwargs)
             if provider_pressure:
                 plan = wire._request_plan(
                     messages, model_id, lambda: wire._build_payload(messages, model_id, **kwargs)
@@ -651,6 +675,41 @@ async def test_long_mixed_image_run_keeps_images_and_can_reopen_originals(
             "test-key",
             model_lookup=lambda model_id: runtime.models.get("fake-provider", model_id),
         )
+        if learned_count:
+
+            def reject_image_count(request: httpx.Request) -> httpx.Response:
+                payload = json.loads(request.content)
+                count = sum(
+                    part.get("type") == "image_url"
+                    for message in payload["messages"]
+                    if isinstance(message.get("content"), list)
+                    for part in message["content"]
+                )
+                if count > 4:
+                    rejected_sizes.append(count)
+                    return httpx.Response(
+                        400,
+                        json={
+                            "error": {
+                                "type": "invalid_request_error",
+                                "message": "Upstream request failed: [invalid_request_error] "
+                                "a request may include at most 4 images",
+                            }
+                        },
+                    )
+                return httpx.Response(
+                    200,
+                    json={
+                        "choices": [
+                            {
+                                "message": {"role": "assistant", "content": "ok"},
+                                "finish_reason": "stop",
+                            }
+                        ]
+                    },
+                )
+
+            respx_mock.post(url__regex=r".*/chat/completions").mock(side_effect=reject_image_count)
         # Five encoded frames fit beside the request's ~40 KB of text and Tools; six do not.
         monkeypatch.setattr(wire, "request_body_limit", lambda model_id: 1024 * 1024)
         monkeypatch.setattr(runtime.storage, "load_reflection_settings", lambda: {"enabled": False})
@@ -754,7 +813,7 @@ async def test_long_mixed_image_run_keeps_images_and_can_reopen_originals(
                 )
             assert persisted[-1].iteration_count == 16
             assert not any(message.role == "error" for message in persisted)
-            assert len(rejected_sizes) == (3 if provider_pressure else 0)
+            assert len(rejected_sizes) == (3 if provider_pressure else 1 if learned_count else 0)
             assert runtime.chat_runs is not None
             assert "base64" not in json.dumps([message.to_dict() for message in persisted])
             assert len([message for message in persisted if message.role == "tool"]) == 15
