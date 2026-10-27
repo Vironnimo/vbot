@@ -278,8 +278,15 @@ class CommandRecorder:
                     silent_hops += len(decisions)
             elif any(decisions):
                 has_speech = True
-                kept.extend(block.recording for block in pre_speech)
-                kept.append(item.recording)
+                # A small server budget may be shorter than the pre-roll. Keep
+                # the first speech ahead of the oldest background audio, and
+                # respect the budget from the very first retained block.
+                first_speech = item.recording[: budget // 2 * 2]
+                prefix = b"".join(block.recording for block in pre_speech)
+                prefix_bytes = (budget - len(first_speech)) // 2 * 2
+                if prefix_bytes:
+                    kept.append(prefix[-prefix_bytes:])
+                kept.append(first_speech)
                 kept_bytes = sum(len(chunk) for chunk in kept)
                 pre_speech.clear()
                 silent_hops = trailing_silence

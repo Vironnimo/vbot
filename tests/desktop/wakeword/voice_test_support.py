@@ -52,6 +52,7 @@ class ScriptedEngine:
         self.score_listener = score_listener
         self.fail_start = False
         self.fail_detect = False
+        self.resets = 0
         self.started = threading.Event()
         self.stopped = threading.Event()
         self.chunks: list[tuple[int, bool]] = []
@@ -76,6 +77,9 @@ class ScriptedEngine:
 
     def stop(self) -> None:
         self.stopped.set()
+
+    def reset(self) -> None:
+        self.resets += 1
 
     def detect(self, audio_chunk: bytes, *, speech_present: bool = True) -> WakewordMatch | None:
         with self._lock:

@@ -12,6 +12,7 @@ import json
 import wave
 from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -51,6 +52,7 @@ class ScriptedFeatures:
         self.frames = frames
         self.chunks: list[bytes] = []
         self.closed = False
+        self.resets = 0
 
     def process(self, chunk: bytes) -> list[str]:
         self.chunks.append(chunk)
@@ -58,6 +60,9 @@ class ScriptedFeatures:
 
     def close(self) -> None:
         self.closed = True
+
+    def reset(self) -> None:
+        self.resets += 1
 
 
 class ScriptedHead:
@@ -68,6 +73,7 @@ class ScriptedHead:
         self._constant = constant
         self.frames: list[str] = []
         self.closed = False
+        self.resets = 0
 
     def scores(self, frames: list[str]) -> list[float]:
         self.frames.extend(frames)
@@ -77,6 +83,9 @@ class ScriptedHead:
 
     def close(self) -> None:
         self.closed = True
+
+    def reset(self) -> None:
+        self.resets += 1
 
 
 class ScriptedModels:
@@ -209,7 +218,50 @@ def test_catalog_cleans_up_a_model_that_fails_validation(
     assert list((tmp_path / "wakewords").iterdir()) == []
 
 
-def test_catalog_ignores_obsolete_or_tampered_custom_metadata(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("input_type", "output_type", "accepted"),
+    [(1, 1, True), (2, 1, False), (1, 2, False)],
+    ids=["float32", "integer-input", "integer-output"],
+)
+def test_catalog_requires_float32_phrase_tensors(
+    tmp_path: Path,
+    catalog: WakewordModelCatalog,
+    monkeypatch: pytest.MonkeyPatch,
+    input_type: int,
+    output_type: int,
+    accepted: bool,
+) -> None:
+    from desktop.wakeword import _openwakeword
+
+    closed: list[bool] = []
+    # int32 and float32 have the same byte width: shape and byte counts alone
+    # cannot validate an imported model's input and output contract.
+    interpreter = SimpleNamespace(
+        input_shape=lambda: (1, 16, 96),
+        input_bytes=16 * 96 * 4,
+        output_bytes=4,
+        input_type=input_type,
+        output_type=output_type,
+        close=lambda: closed.append(True),
+    )
+    monkeypatch.setattr(_openwakeword, "_tflite", lambda: None)
+    monkeypatch.setattr(_openwakeword, "_Interpreter", lambda *_args: interpreter)
+
+    if accepted:
+        imported = catalog.import_model("phrase.tflite", b"model")
+        assert catalog.resolve(imported.id) == imported
+    else:
+        with pytest.raises(WakewordModelError) as error:
+            catalog.import_model("phrase.tflite", b"model")
+        assert error.value.error_code == "wakeword_model_invalid"
+        assert list((tmp_path / "wakewords").iterdir()) == []
+    assert closed == [True]
+
+
+@pytest.mark.parametrize("metadata_kind", ["obsolete-format", "invalid-json", "invalid-utf8"])
+def test_catalog_ignores_obsolete_or_tampered_custom_metadata(
+    tmp_path: Path, metadata_kind: str
+) -> None:
     model_dir = tmp_path / "wakewords"
     model_dir.mkdir()
     token = "a" * 32
@@ -226,9 +278,17 @@ def test_catalog_ignores_obsolete_or_tampered_custom_metadata(tmp_path: Path) ->
         encoding="utf-8",
     )
 
-    assert [
-        model.id for model in WakewordModelCatalog(tmp_path / "settings.json").list_models()
-    ] == (BUILTIN_IDS)
+    if metadata_kind == "invalid-json":
+        (model_dir / f"{token}.json").write_text("{", encoding="utf-8")
+    elif metadata_kind == "invalid-utf8":
+        (model_dir / f"{token}.json").write_bytes(b"\xff")
+
+    catalog = WakewordModelCatalog(tmp_path / "settings.json")
+    assert [model.id for model in catalog.list_models()] == BUILTIN_IDS
+    assert catalog.resolve(OKAY).id == OKAY
+    with pytest.raises(WakewordModelError) as error:
+        catalog.resolve(f"custom/{token}")
+    assert error.value.error_code == "wakeword_model_unavailable"
 
 
 def test_catalog_deletes_only_imported_models(
@@ -382,6 +442,7 @@ def test_engine_rejects_an_unsupported_detector_kind_and_releases_features(
         ([0.55, 0.0, 0.55], [True] * 3, [None, None, 0.55]),
         ([0.55, 0.0, 0.0, 0.0, 0.0, 0.55], [True] * 6, [None] * 6),
         ([0.9, 0.9], [False, False], [None, None]),
+        ([float("nan"), float("inf"), -float("inf")], [True] * 3, [None] * 3),
         ([0.55, 0.9, 0.55], [True, False, True], [None, None, 0.55]),
         ([0.8, 0.9, 0.1, 0.7], [True] * 4, [0.8, None, None, 0.7]),
         (
@@ -396,6 +457,7 @@ def test_engine_rejects_an_unsupported_detector_kind_and_releases_features(
         "repeated-marginal-score",
         "marginal-beyond-confirmation-window",
         "no-speech-zeroes-scores",
+        "non-finite-scores-do-not-trigger",
         "gated-chunks-do-not-confirm",
         "rearms-after-the-score-drops",
         "rearms-on-raw-scores-across-a-gated-pause",
@@ -418,8 +480,26 @@ def test_engine_confirms_marginal_scores_and_rearms_after_a_phrase(
         None if score is None else WakewordMatch(OKAY, score, 0.5) for score in matches
     ]
     assert [frame[OKAY] for frame in observed] == [
-        score if present else 0.0 for score, present in zip(scores, speech, strict=True)
+        score if present and np.isfinite(score) else 0.0
+        for score, present in zip(scores, speech, strict=True)
     ]
+
+
+@pytest.mark.parametrize("score", [0.55, 0.9], ids=["marginal-history", "disarmed-phrase"])
+def test_engine_reset_forgets_a_disconnected_stream_without_reloading_models(
+    catalog: WakewordModelCatalog, models: ScriptedModels, score: float
+) -> None:
+    models.heads[OKAY] = ScriptedHead(constant=score)
+    engine = _started(catalog, [PhraseConfig(OKAY)])
+    expected = None if score == 0.55 else WakewordMatch(OKAY, score, 0.5)
+    assert engine.detect(b"before the gap") == expected
+
+    engine.reset()
+
+    assert engine.detect(b"after the gap") == expected
+    assert len(models.created) == 1
+    assert models.features.resets == models.heads[OKAY].resets == 1
+    assert not models.features.closed and not models.heads[OKAY].closed
 
 
 def test_engine_rearms_each_phrase_independently(
@@ -652,6 +732,11 @@ def test_engine_scores_real_audio_like_pyopen_wakeword(
         )
         engine.start()
         try:
+            # A reset after real audio must restore the same scores as a fresh stream.
+            for chunk in _chunks(FIXTURES / fixture_name)[:10]:
+                engine.detect(chunk)
+            observed.clear()
+            engine.reset()
             for chunk in _chunks(FIXTURES / fixture_name):
                 engine.detect(chunk)
         finally:

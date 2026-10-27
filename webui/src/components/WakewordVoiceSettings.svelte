@@ -56,6 +56,7 @@
   ]);
 
   let {
+    active = true,
     agents = [],
     // The Desktop advertises wakeword support (any Voice bridge version).
     wakewordAvailable = false,
@@ -83,6 +84,7 @@
   let enablePending = $state(null);
   let enableError = $state(null);
   let calibrationStarting = $state(null);
+  let calibrationStopping = null;
   let deleteConfirmModel = $state(null);
 
   let voiceReady = $derived(
@@ -216,7 +218,11 @@
   // Changes that restart listening wait while a calibration or a model
   // action runs.
   let captureLocked = $derived(
-    !loaded || calibrating || modelActionBusy || enableBusy,
+    !loaded ||
+      calibrating ||
+      calibrationStarting !== null ||
+      modelActionBusy ||
+      enableBusy,
   );
   let routingLocked = $derived(!loaded || modelActionBusy);
 
@@ -260,6 +266,26 @@
     });
   });
 
+  $effect(() => {
+    // Settings keeps visited sections mounted while another section is shown.
+    if (!active && calibration !== null) {
+      untrack(() => void releaseCalibration().catch(errorToast));
+    }
+  });
+
+  function releaseCalibration() {
+    if (calibrationStopping) return calibrationStopping;
+    calibrationStopping = stopVoiceCalibration()
+      .then((snapshot) => {
+        desktopVoice?.adopt(snapshot);
+        if (!destroyed) syncFromStatus(desktopVoice?.status ?? snapshot);
+      })
+      .finally(() => {
+        calibrationStopping = null;
+      });
+    return calibrationStopping;
+  }
+
   onDestroy(() => {
     destroyed = true;
     unregisterVoiceAutosave();
@@ -268,7 +294,7 @@
       listsRetryTimer = null;
     }
     // Commands stay paused while a calibration runs; leaving the panel ends it.
-    if (untrack(() => calibrating)) void stopVoiceCalibration().catch(() => {});
+    if (untrack(() => calibrating)) void releaseCalibration().catch(errorToast);
   });
 
   async function loadLists() {
@@ -390,7 +416,22 @@
     calibrationStarting = modelId;
     try {
       if (!(await voiceAutosave.flush())) return;
-      adoptStatus(await startVoiceCalibration(modelId));
+      if (destroyed || !active) return;
+      const snapshot = await startVoiceCalibration(modelId);
+      // The native request can finish after navigation destroyed this panel.
+      // Its calibration still needs an owner to release the command pause.
+      if (destroyed || !active) {
+        const current = desktopVoice?.status;
+        // A push may already have caused the hidden panel to stop it.
+        if (
+          current?.sequence > snapshot.sequence &&
+          current.calibration === null
+        )
+          return;
+        await releaseCalibration();
+        return;
+      }
+      adoptStatus(snapshot);
     } catch (error) {
       errorToast(error, t('settings.voice.calibrationStartFailed'));
     } finally {
@@ -418,8 +459,22 @@
       enableBusy ||
       status.mode !== 'real' ||
       !status.enabled ||
-      status.state !== 'listening'
+      status.state !== 'listening' ||
+      status.recording !== null
     );
+  }
+
+  function calibrateDisabledReason() {
+    if (calibrationStarting !== null || calibrating)
+      return t('settings.voice.calibrationAlreadyRunning');
+    if (status?.recording) return t('settings.voice.calibrationCommandBusy');
+    if (
+      status?.mode !== 'real' ||
+      !status?.enabled ||
+      status?.state !== 'listening'
+    )
+      return t('settings.voice.calibrationNeedsListening');
+    return null;
   }
 
   async function refreshAfterModelChange() {
@@ -578,6 +633,7 @@
               enableBusy ||
               modelActionBusy ||
               calibrating ||
+              calibrationStarting !== null ||
               (!status.enabled && status.mode === 'unavailable')}
             ariaLabel={t('settings.voice.enabledAria')}
           />
@@ -671,6 +727,7 @@
                 sensitivityDisabled={captureLocked}
                 routingDisabled={routingLocked}
                 calibrateDisabled={calibrateDisabled(model.id)}
+                calibrateDisabledReason={calibrateDisabledReason()}
                 removeDisabled={captureLocked}
                 onToggle={(checked) => handlePhraseToggle(model.id, checked)}
                 onSensitivityInput={(value) =>
@@ -720,6 +777,9 @@
               {t('settings.voice.importModel')}
             </Button>
           </div>
+          <p class="voice-model-help">
+            {t('settings.voice.importHelp')}
+          </p>
         </div>
       </div>
 

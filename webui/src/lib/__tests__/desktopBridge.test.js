@@ -623,6 +623,8 @@ describe('Voice status validation', () => {
         sample_count: 2,
         required_samples: 3,
         recommended_sensitivity: null,
+        issue: null,
+        sample_state: 'capturing',
         noise_seconds_remaining: 0,
       },
     });
@@ -712,6 +714,8 @@ describe('Voice status validation', () => {
       phase: 'noise',
       required_samples: null,
       recommended_sensitivity: null,
+      issue: null,
+      sample_state: null,
     });
   });
 

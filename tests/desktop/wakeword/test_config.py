@@ -170,6 +170,7 @@ def test_parse_keeps_valid_profile_fields_next_to_malformed_ones() -> None:
                     },
                 },
                 "http://other:8421": ["not", "a", "profile"],
+                "http://[": {"target_agent_id": "main"},
                 "": {"target_agent_id": "main"},
             }
         }

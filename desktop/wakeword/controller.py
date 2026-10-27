@@ -372,6 +372,8 @@ class VoiceController:
                 or state != voice.STATE_LISTENING
                 or not isinstance(model_id, str)
                 or self._config.phrase(model_id) is None
+                or self._recording is not None
+                or self._wake_phrases_paused
             ):
                 raise voice.VoiceControlError(
                     "Calibration needs Voice listening with this wake phrase active.",
@@ -592,7 +594,12 @@ class VoiceController:
         recording: voice._Recording | None = None
         with self._lock:
             session = self._session
-            if generation != self._generation or session is None:
+            if (
+                generation != self._generation
+                or session is None
+                or session.stop_event.is_set()
+                or self._calibration is not None
+            ):
                 return
             model_id = detection.model_id
             if self._wake_phrases_paused:

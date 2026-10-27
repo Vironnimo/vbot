@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from statistics import median
-
 import pytest
 
 from desktop.wakeword.calibration import (
@@ -47,6 +45,8 @@ def test_guided_calibration_measures_noise_then_recommends_a_sensitivity() -> No
         "sample_count": 0,
         "required_samples": REQUIRED_SAMPLES,
         "recommended_sensitivity": None,
+        "issue": None,
+        "sample_state": None,
         "noise_seconds_remaining": 3,
     }
     _quiet_room(calibration)
@@ -62,6 +62,7 @@ def test_guided_calibration_measures_noise_then_recommends_a_sensitivity() -> No
     assert phrase_status["noise_level"] == pytest.approx(0.0295)
     assert phrase_status["noise_high"] is False
     assert phrase_status["noise_seconds_remaining"] == 0
+    assert phrase_status["sample_state"] == "settling"
 
     for index, peak in enumerate((0.7, 0.6, 0.8, 0.65, 0.75), start=1):
         _say_phrase(calibration, peak, now)
@@ -74,6 +75,8 @@ def test_guided_calibration_measures_noise_then_recommends_a_sensitivity() -> No
     assert ready["phase"] == "ready"
     assert ready["peak"] == pytest.approx(0.8)
     assert ready["recommended_sensitivity"] == 0.65
+    assert ready["issue"] is None
+    assert ready["sample_state"] is None
     assert calibration.recommended_sensitivity == 0.65
 
 
@@ -98,6 +101,8 @@ def test_restart_begins_again_with_the_noise_phase() -> None:
         "sample_count": 0,
         "required_samples": REQUIRED_SAMPLES,
         "recommended_sensitivity": None,
+        "issue": None,
+        "sample_state": None,
         "noise_seconds_remaining": 3,
     }
     assert calibration.expired(now + CALIBRATION_TIMEOUT_SECONDS - 1) is False
@@ -151,8 +156,12 @@ def test_a_repetition_counts_only_after_the_score_settles() -> None:
     status = calibration.status(now)
     assert status is not None
     assert status["sample_count"] == 0
+    assert status["sample_state"] == "ready"
 
-    _say_phrase(calibration, 0.8, now)
+    calibration.feed({MODEL: 0.8}, now)
+    assert calibration.status(now)["sample_state"] == "capturing"  # type: ignore[index]
+    for score in (0.01, 0.01):
+        calibration.feed({MODEL: score}, now)
 
     status = calibration.status(now)
     assert status is not None
@@ -172,6 +181,37 @@ def test_a_repetition_records_its_highest_score() -> None:
     assert calibration.recommended_sensitivity == recommended_sensitivity(
         noise_level, [0.9] * REQUIRED_SAMPLES
     )
+
+
+@pytest.mark.parametrize(
+    ("repetition", "expected"),
+    [
+        ((0.08,), None),  # An isolated marginal peak cannot trigger the real engine.
+        ((0.08, 0.08), 0.95),  # Two marginal crossings do confirm.
+        ((0.21,), 0.95),  # A strong isolated peak confirms above threshold + 0.15.
+        ((0.4,), 0.8),
+    ],
+)
+def test_recommendation_respects_the_detectors_confirmation(
+    repetition: tuple[float, ...], expected: float | None
+) -> None:
+    calibration = PhraseCalibration(MODEL, now=START)
+    _quiet_room(calibration)
+    now = START + NOISE_SECONDS
+    for _ in range(REQUIRED_SAMPLES):
+        for score in (0.01, 0.01, *repetition, 0.01, 0.01):
+            calibration.feed({MODEL: score}, now)
+
+    status = calibration.status(now)
+    assert status is not None
+    assert status["phase"] == "ready"
+    assert status["sample_count"] == REQUIRED_SAMPLES
+    assert status["recommended_sensitivity"] == expected
+    assert status["issue"] == ("insufficient_separation" if expected is None else None)
+
+    # Restart must discard failed samples as well as successful recommendations.
+    calibration.restart(now)
+    assert calibration.status(now)["issue"] is None  # type: ignore[index]
 
 
 @pytest.mark.parametrize(
@@ -213,6 +253,7 @@ def test_percentile_interpolates_between_ordered_values() -> None:
         (0.0, [0.08, 0.1, 0.12, 0.09, 0.11]),
         (0.03, [0.6, 0.7, 0.8, 0.65, 0.75]),
         (0.31, [0.48, 0.55, 0.62, 0.50, 0.58]),
+        (0.0, [0.15, 0.9, 0.9, 0.9, 0.9]),
     ],
 )
 def test_recommended_threshold_uses_a_supported_step_between_noise_and_phrase(
@@ -220,15 +261,22 @@ def test_recommended_threshold_uses_a_supported_step_between_noise_and_phrase(
     phrase_peaks: list[float],
 ) -> None:
     sensitivity = recommended_sensitivity(noise_level, phrase_peaks)
+    assert sensitivity is not None
     threshold = 1.0 - sensitivity
 
     assert sensitivity / 0.05 == pytest.approx(round(sensitivity / 0.05))
     assert threshold >= noise_level + 0.02 - 1e-9
-    assert threshold <= median(phrase_peaks) - 0.02 + 1e-9
+    assert threshold <= min(phrase_peaks) - 0.02 + 1e-9
 
 
-def test_recommendation_without_room_between_noise_and_phrase_is_most_sensitive() -> None:
-    assert recommended_sensitivity(0.0, [0.05] * REQUIRED_SAMPLES) == 0.95
+@pytest.mark.parametrize(
+    ("noise", "peaks"),
+    [(0.0, [0.05] * REQUIRED_SAMPLES), (0.4, [0.4] * REQUIRED_SAMPLES), (0.0, [])],
+)
+def test_no_recommendation_without_room_between_noise_and_phrase(
+    noise: float, peaks: list[float]
+) -> None:
+    assert recommended_sensitivity(noise, peaks) is None
 
 
 @pytest.mark.parametrize(("noise_level", "gate"), [(0.0, 0.07), (0.0295, 0.07), (0.31, 0.37)])

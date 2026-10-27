@@ -145,6 +145,12 @@ class DetectionLoop:
                 pre_roll.clear()
                 pre_roll_seconds = 0.0
                 speech_gate.reset()
+                try:
+                    self._engine.reset()
+                except Exception:
+                    logger.exception("Wakeword detection could not reset after a capture gap")
+                    self._on_failed(ERROR_DETECTION_FAILED)
+                    return
                 continue
             pre_roll.append(item)
             pre_roll_seconds += item.duration

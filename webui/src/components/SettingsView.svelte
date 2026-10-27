@@ -393,6 +393,7 @@
     />
   {:else if panelId === 'voice_controls'}
     <Panel
+      {active}
       {agents}
       wakewordAvailable={desktopCapabilities?.wakeword === true}
       {desktopVoice}

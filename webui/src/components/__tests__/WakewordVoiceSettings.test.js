@@ -147,6 +147,7 @@ function createVoiceOwner(status, { available = true } = {}) {
 
 describe('WakewordVoiceSettings', () => {
   let mountedComponent;
+  let panelProps;
   let owner;
 
   beforeEach(() => {
@@ -184,14 +185,15 @@ describe('WakewordVoiceSettings', () => {
 
   async function mountPanel({ status = voiceStatus(), ...props } = {}) {
     owner ??= createVoiceOwner(status);
+    panelProps = reactiveProps({
+      agents: AGENTS,
+      wakewordAvailable: true,
+      desktopVoice: owner,
+      ...props,
+    });
     mountedComponent = mount(WakewordVoiceSettings, {
       target: document.body,
-      props: {
-        agents: AGENTS,
-        wakewordAvailable: true,
-        desktopVoice: owner,
-        ...props,
-      },
+      props: panelProps,
     });
     flushSync();
     await settle();
@@ -712,8 +714,8 @@ describe('WakewordVoiceSettings', () => {
       startWith(calibration());
       await mountPanel({ onToast });
 
-      expect(buttonByLabel('Calibrate Hey Jarvis')).toBeNull();
-      buttonByLabel('Calibrate Okay Nabu').click();
+      expect(buttonByLabel('Tune sensitivity for Hey Jarvis')).toBeNull();
+      buttonByLabel('Tune sensitivity for Okay Nabu').click();
       await settle();
 
       expect(desktopBridge.startVoiceCalibration).toHaveBeenCalledWith(NABU);
@@ -724,7 +726,9 @@ describe('WakewordVoiceSettings', () => {
       expect(panel.textContent).toContain(
         t('settings.voice.calibrationRecommendation', { value: 65 }),
       );
-      expect(buttonByLabel('Calibrate Hey Nabu').disabled).toBe(true);
+      expect(buttonByLabel('Tune sensitivity for Hey Nabu').disabled).toBe(
+        true,
+      );
       expect(slider(NABU).disabled).toBe(true);
       expect(desktopBridge.updateVoiceConfig).not.toHaveBeenCalled();
 
@@ -747,13 +751,21 @@ describe('WakewordVoiceSettings', () => {
       expect(document.querySelector('.voice-calibration-panel')).toBeNull();
     });
 
-    it('calibrates only while listening', async () => {
-      await mountPanel({
-        status: voiceStatus({ enabled: false, state: 'off' }),
-      });
+    it.each([
+      { enabled: false, state: 'off' },
+      { recording: { command_id: 'recording-1', model_id: NABU } },
+    ])(
+      'calibrates only while listening without a recording: %o',
+      async (overrides) => {
+        await mountPanel({
+          status: voiceStatus(overrides),
+        });
 
-      expect(buttonByLabel('Calibrate Okay Nabu').disabled).toBe(true);
-    });
+        expect(buttonByLabel('Tune sensitivity for Okay Nabu').disabled).toBe(
+          true,
+        );
+      },
+    );
 
     it('restarts and discards a calibration without saving', async () => {
       startWith(calibration({ phase: 'phrases', sample_count: 1 }));
@@ -768,7 +780,7 @@ describe('WakewordVoiceSettings', () => {
         }),
       }));
       await mountPanel();
-      buttonByLabel('Calibrate Okay Nabu').click();
+      buttonByLabel('Tune sensitivity for Okay Nabu').click();
       await settle();
 
       expect(buttonByText(t('settings.voice.calibrationApply')).disabled).toBe(
@@ -789,11 +801,6 @@ describe('WakewordVoiceSettings', () => {
 
       const discard = t('settings.voice.calibrationDiscard');
       buttonByText(discard).click();
-      flushSync();
-      const dialog = document.querySelector('[role="dialog"]');
-      [...dialog.querySelectorAll('button')]
-        .find((button) => button.textContent.trim() === discard)
-        .click();
       await waitForCondition(
         () => document.querySelector('.voice-calibration-panel') === null,
       );
@@ -803,13 +810,73 @@ describe('WakewordVoiceSettings', () => {
       expect(slider(NABU).value).toBe('0.5');
     });
 
-    it('ends a running calibration when the panel closes', async () => {
-      await mountPanel({ status: voiceStatus({ calibration: calibration() }) });
+    it.each([
+      ['running', 'unmount'],
+      ['starting', 'unmount'],
+      ['running', 'hide'],
+      ['starting', 'hide'],
+    ])('ends a %s calibration on %s', async (stage, close) => {
+      let resolveStart;
+      const snapshot = voiceStatus({
+        sequence: 2,
+        calibration: calibration(),
+      });
+      desktopBridge.startVoiceCalibration.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveStart = resolve;
+          }),
+      );
+      await mountPanel({
+        status: stage === 'running' ? snapshot : voiceStatus(),
+      });
+      if (stage === 'starting') {
+        buttonByLabel('Tune sensitivity for Okay Nabu').click();
+        await settle();
+        expect(slider(NABU).disabled).toBe(true);
+        expect(switchByLabel('Enable wakeword listening').disabled).toBe(true);
+      }
 
-      await unmount(mountedComponent);
-      mountedComponent = null;
+      if (close === 'unmount') {
+        await unmount(mountedComponent);
+        mountedComponent = null;
+      } else {
+        panelProps.active = false;
+        await settle();
+      }
+      if (stage === 'starting') {
+        owner.status = snapshot;
+        await settle();
+        resolveStart(snapshot);
+        await settle();
+      }
 
       expect(desktopBridge.stopVoiceCalibration).toHaveBeenCalledOnce();
+    });
+
+    it('keeps sensitivity unchanged when calibration cannot recommend a value', async () => {
+      startWith(
+        calibration({
+          recommended_sensitivity: null,
+          issue: 'insufficient_separation',
+        }),
+      );
+      await mountPanel();
+      buttonByLabel('Tune sensitivity for Okay Nabu').click();
+      await settle();
+
+      const panel = document.querySelector('.voice-calibration-panel');
+      expect(panel.querySelector('.chip--success')).toBeNull();
+      expect(panel.querySelector('details').open).toBe(false);
+      expect(buttonByText(t('settings.voice.calibrationApply')).disabled).toBe(
+        true,
+      );
+      buttonByText(t('settings.voice.calibrationDiscard')).click();
+      await settle();
+
+      expect(desktopBridge.updateVoiceConfig).not.toHaveBeenCalled();
+      expect(document.querySelector('.voice-calibration-panel')).toBeNull();
+      expect(slider(NABU).value).toBe('0.5');
     });
   });
 

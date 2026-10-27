@@ -1017,12 +1017,41 @@ def test_calibration_needs_a_listening_active_phrase(voice_rig: Callable[..., Ri
 
     with pytest.raises(VoiceControlError) as unknown:
         rig.voice.start_calibration("builtin/alexa")
+    rig.voice.pause_wake_phrases(True)
+    with pytest.raises(VoiceControlError) as dictating:
+        rig.voice.start_calibration(OKAY)
+    rig.voice.pause_wake_phrases(False)
+    rig.say_wake_phrase()
+    with pytest.raises(VoiceControlError) as recording:
+        rig.voice.start_calibration(OKAY)
     rig.voice.set_enabled(False)
     with pytest.raises(VoiceControlError) as off:
         rig.voice.start_calibration(OKAY)
 
     assert unknown.value.error_code == "calibration_unavailable"
+    assert dictating.value.error_code == "calibration_unavailable"
+    assert recording.value.error_code == "calibration_unavailable"
     assert off.value.error_code == "calibration_unavailable"
+
+
+def test_calibration_started_while_dispatching_a_match_still_suppresses_it(
+    voice_rig: Callable[..., Rig], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rig = voice_rig()
+    rig.wait_ready()
+
+    def start_between_gate_and_dispatch(_generation: int) -> bool:
+        # A bridge call can start calibration after the loop checked its gate.
+        rig.voice.start_calibration(OKAY)
+        return False
+
+    monkeypatch.setattr(rig.voice, "_calibrating", start_between_gate_and_dispatch)
+    rig.wake()
+    rig.wait_heard()
+
+    assert rig.voice.status()["calibration"] is not None
+    assert "detected" not in rig.sink.kinds()
+    assert rig.voice.status()["recording"] is None
 
 
 # -- Echo cancellation -----------------------------------------------------------------------

@@ -253,16 +253,28 @@ def test_an_ended_capture_cancels_the_recording(harness: Callable[..., RecorderH
     assert recording.result() == RecordingResult("cancelled")
 
 
-def test_the_upload_budget_ends_the_recording(harness: Callable[..., RecorderHarness]) -> None:
+@pytest.mark.parametrize(
+    ("rate", "pre_roll_seconds", "budget"),
+    [(16000, 0.0, 16000), (48000, 0.32, 16000), (48000, 0.32, 47)],
+    ids=["continuous-speech", "pre-roll-exceeds-budget", "first-block-exceeds-budget"],
+)
+def test_the_upload_budget_ends_the_recording(
+    harness: Callable[..., RecorderHarness], rate: int, pre_roll_seconds: float, budget: int
+) -> None:
     rig = harness()
-    rig.budget[0] = 16000  # half a second of 16 kHz audio
-    recording = rig.record()
+    rig.budget[0] = budget
+    subscription = FakeSubscription()
+    pre_roll = subscription.blocks(_quiet(pre_roll_seconds), recording_rate=rate)
+    recording = rig.record(pre_roll, subscription)
 
-    recording.subscription.push_audio(tone(3.0, 16000))
+    recording.subscription.push_audio(tone(3.0, 16000), recording_rate=rate)
     result = recording.result()
 
     assert result.outcome == "audio"
-    assert 16000 - 1280 < len(_wav(result)[1]) <= 16000
+    frames = _wav(result)[1]
+    assert max(0, budget - int(rate * 0.04 * 2)) < len(frames) <= budget
+    assert len(frames) % 2 == 0
+    assert np.abs(np.frombuffer(frames, dtype=np.int16)).max() > QUIET
 
 
 def test_a_recording_that_never_pauses_ends_at_the_maximum_duration(

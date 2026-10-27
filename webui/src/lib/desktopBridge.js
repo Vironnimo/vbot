@@ -419,6 +419,10 @@ function normalizeCalibration(raw) {
         ? raw.required_samples
         : null,
     recommended_sensitivity: finite(raw.recommended_sensitivity),
+    issue: raw.issue === 'insufficient_separation' ? raw.issue : null,
+    sample_state: ['settling', 'ready', 'capturing'].includes(raw.sample_state)
+      ? raw.sample_state
+      : null,
     noise_seconds_remaining: Math.max(
       0,
       finite(raw.noise_seconds_remaining) ?? 0,

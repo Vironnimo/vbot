@@ -187,6 +187,7 @@ def test_a_gap_clears_the_pending_audio_and_the_pre_roll(start_loop: Callable[..
     assert len(state.engine.chunks) == 2  # the half chunk before the gap was dropped
     assert state.detections[0].pre_roll == tuple(after)
     assert detector.resets == 1
+    assert state.engine.resets == 1
 
 
 def test_a_gap_forgets_the_speech_heard_before_it(start_loop: Callable[..., Loop]) -> None:

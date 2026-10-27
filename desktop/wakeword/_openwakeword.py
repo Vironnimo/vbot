@@ -40,6 +40,7 @@ _EMBEDDING_FEATURES = 96
 _MAX_EMBEDDINGS = 10 * 8
 
 _FLOAT32_BYTES = 4
+_TFLITE_FLOAT32 = 1
 _OK = 0
 
 
@@ -83,6 +84,7 @@ class _TfLite:
         _declare(lib.TfLiteInterpreterGetOutputTensor, [pointer, int32], pointer)
         _declare(lib.TfLiteTensorNumDims, [pointer], int32)
         _declare(lib.TfLiteTensorDim, [pointer, int32], int32)
+        _declare(lib.TfLiteTensorType, [pointer], ctypes.c_int)
         _declare(lib.TfLiteTensorByteSize, [pointer], ctypes.c_size_t)
         _declare(lib.TfLiteTensorCopyFromBuffer, [pointer, pointer, ctypes.c_size_t], ctypes.c_int)
         _declare(lib.TfLiteTensorCopyToBuffer, [pointer, pointer, ctypes.c_size_t], ctypes.c_int)
@@ -158,6 +160,8 @@ class _Interpreter:
             self.output = lib.TfLiteInterpreterGetOutputTensor(self._interpreter, 0)
             if not self.input or not self.output:
                 raise RuntimeError(f"{Path(model_path).name} has no input or output tensor")
+            self.input_type = int(lib.TfLiteTensorType(self.input))
+            self.output_type = int(lib.TfLiteTensorType(self.output))
             self.input_bytes = int(lib.TfLiteTensorByteSize(self.input))
             self.output_bytes = int(lib.TfLiteTensorByteSize(self.output))
         except BaseException:
@@ -259,6 +263,10 @@ class FeatureStream:
         except BaseException:
             self._mel.close()
             raise
+        self.reset()
+
+    def reset(self) -> None:
+        """Restore a new stream's zero prefill without rebuilding the interpreters."""
         self._audio = np.zeros(_MAX_SAMPLES, dtype=np.float32)
         self._new_samples = _PREFILL_SAMPLES
         self._mels = np.zeros((_MAX_MELS, _MEL_BANDS), dtype=np.float32)
@@ -311,6 +319,8 @@ class PhraseHead:
                 or shape[0] != 1
                 or shape[2] != _EMBEDDING_FEATURES
                 or not 1 <= shape[1] <= _MAX_EMBEDDINGS
+                or self._head.input_type != _TFLITE_FLOAT32
+                or self._head.output_type != _TFLITE_FLOAT32
                 or self._head.input_bytes != shape[1] * _EMBEDDING_FEATURES * _FLOAT32_BYTES
                 or self._head.output_bytes != _FLOAT32_BYTES
             ):
@@ -319,6 +329,10 @@ class PhraseHead:
             self._head.close()
             raise
         self._windows = shape[1]
+        self.reset()
+
+    def reset(self) -> None:
+        """Discard embeddings from before a discontinuity in the microphone stream."""
         self._embeddings = np.zeros((_MAX_EMBEDDINGS, _EMBEDDING_FEATURES), dtype=np.float32)
         self._new_embeddings = 0
 
