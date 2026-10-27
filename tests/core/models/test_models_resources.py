@@ -271,18 +271,19 @@ def test_opencode_go_current_endpoint_profiles_load(registry: ModelRegistry) -> 
             "muse-spark-1.2-contributor",
             "muse-spark-1.3-contributor",
         ),
-        "gemini": ("gemini-4-argon-contributor",),
+        "gemini": ("gemini-4-argon",),
         "chat_completions": (
             "beam-free",
+            "iceman-contributor-free",
             "glm-5.1",
             "glm-5.3-flash",
             "glm-5.3",
             "glm-5.2",
             "kimi-k3",
+            "kimi-k3.1-pro",
             "kimi-k2.6",
             "kimi-k2.7-code",
             "longcat-2.0",
-            "longcat-2.5-preview-free",
             "deepseek-v4.1-flash",
             "deepseek-v4-pro",
             "mimo-v2.5",
@@ -291,7 +292,7 @@ def test_opencode_go_current_endpoint_profiles_load(registry: ModelRegistry) -> 
             "mimo-v2.6-pro",
             "hy4-preview",
             "hy3",
-            "minimax-m3.1-flash-free",
+            "minimax-m3.1-flash",
             "step-5-preview",
             "omen-alpha",
         ),
@@ -312,7 +313,7 @@ def test_opencode_go_current_endpoint_profiles_load(registry: ModelRegistry) -> 
         for protocol, model_ids in expected_by_protocol.items()
         for model_id in model_ids
     }
-    assert len(expected) == 37
+    assert len(expected) == 38
 
     assert {
         model_id: _wire_profile(registry, "opencode-go", model_id).protocol for model_id in expected
@@ -355,14 +356,14 @@ _FIVE_LEVELS = (True, "levels", ("low", "medium", "high", "xhigh", "max"))
     ("model_id", "expected"),
     [
         pytest.param(
-            "minimax-m3.1-flash-free",
+            "minimax-m3.1-flash",
             {
-                "name": "MiniMax M3.1 Flash Free",
+                "name": "MiniMax M3.1 Flash",
                 "context_window": 1_000_000,
                 "max_output_tokens": 512_000,
                 "reasoning": _FIVE_LEVELS,
             },
-            id="minimax-m3.1-flash-free",
+            id="minimax-m3.1-flash",
         ),
         pytest.param(
             "step-5-preview",
@@ -376,20 +377,6 @@ _FIVE_LEVELS = (True, "levels", ("low", "medium", "high", "xhigh", "max"))
                 "replay_scope": "full_history",
             },
             id="step-5-preview",
-        ),
-        pytest.param(
-            "longcat-2.5-preview-free",
-            {
-                "name": "LongCat 2.5 Preview Free",
-                "context_window": 1_000_000,
-                "max_output_tokens": 131_072,
-                "tools": True,
-                "vision": True,
-                "input_modalities": ("text", "image"),
-                "reasoning": (True, "on_off", ()),
-                "replay_scope": "full_history",
-            },
-            id="longcat-2.5-preview-free",
         ),
         *(
             pytest.param(
@@ -526,11 +513,12 @@ def test_gpt6_astra_profile_loads(registry: ModelRegistry) -> None:
 
 
 @pytest.mark.parametrize(
-    ("model_id", "short_rates", "long_rates", "supports_none"),
+    ("model_id", "short_rates", "long_rates", "supports_none", "subscription_window", "on_zen"),
     [
-        ("gpt-6-sol", (2.0, 0.2, 2.5, 10.0), (4.0, 0.4, 5.0, 15.0), True),
-        ("gpt-6-luna", (0.1, 0.01, 0.125, 0.5), (0.2, 0.02, 0.25, 0.75), True),
-        ("gpt-6.1-sol", (2.0, 0.1, 2.5, 10.0), (4.0, 0.2, 5.0, 15.0), False),
+        ("gpt-6-sol", (2.0, 0.2, 2.5, 10.0), (4.0, 0.4, 5.0, 15.0), True, 272_000, True),
+        ("gpt-6-luna", (0.1, 0.01, 0.125, 0.5), (0.2, 0.02, 0.25, 0.75), True, 272_000, True),
+        ("gpt-6.1-sol", (2.0, 0.1, 2.5, 10.0), (4.0, 0.2, 5.0, 15.0), False, 272_000, True),
+        ("gpt-6.1-terra", (1.0, 0.05, 1.25, 5.0), (2.0, 0.1, 2.5, 7.5), True, 500_000, False),
     ],
 )
 def test_gpt6_loads_with_official_limits_and_pricing_on_every_published_provider(
@@ -539,12 +527,14 @@ def test_gpt6_loads_with_official_limits_and_pricing_on_every_published_provider
     short_rates: tuple[float, ...],
     long_rates: tuple[float, ...],
     supports_none: bool,
+    subscription_window: int,
+    on_zen: bool,
 ) -> None:
     model = registry.get("openai", model_id)
 
     assert model.connections == ("api-key", "subscription")
     assert model.context_window_for("api-key") == 1_050_000
-    assert model.context_window_for("subscription") == 272_000
+    assert model.context_window_for("subscription") == subscription_window
     assert model.max_output_tokens == 128_000
     assert model.capabilities.input_modalities[:2] == ("text", "image")
     assert model.capabilities.output_modalities == ("text",)
@@ -565,16 +555,20 @@ def test_gpt6_loads_with_official_limits_and_pricing_on_every_published_provider
         tier.rates.output,
     ) == long_rates
 
-    zen = registry.get("opencode-zen", model_id)
-    zen_wire = _wire_profile(registry, "opencode-zen", model_id)
-    assert zen.connections == ("api-key", "account")
-    assert zen_wire.protocol == "responses"
-    assert zen.capabilities.reasoning.levels == model.capabilities.reasoning.levels
-    assert zen.capabilities.tools is True
-    if not supports_none:
-        assert zen_wire.reasoning.off == "low"
-        assert zen.capabilities.json_mode is True
-        assert zen_wire.replay.scope == "none"
+    if on_zen:
+        zen = registry.get("opencode-zen", model_id)
+        zen_wire = _wire_profile(registry, "opencode-zen", model_id)
+        assert zen.connections == ("api-key", "account")
+        assert zen_wire.protocol == "responses"
+        assert zen.capabilities.reasoning.levels == model.capabilities.reasoning.levels
+        assert zen.capabilities.tools is True
+        if not supports_none:
+            assert zen_wire.reasoning.off == "low"
+            assert zen.capabilities.json_mode is True
+            assert zen_wire.replay.scope == "none"
+    else:
+        with pytest.raises(KeyError):
+            registry.get("opencode-zen", model_id)
     openrouter = registry.get("openrouter", f"openai/{model_id}")
     assert openrouter.connections == ("api-key",)
     assert openrouter.capabilities.tools is True

@@ -1,6 +1,13 @@
 {
   "provider_id": "openai",
   "models": {
+    "gpt-6.1-terra": {
+      "canonical": "openai/gpt-6.1-terra",
+      "connections": ["api-key", "subscription"],
+      "connection_context_windows": {
+        "api-key": 1050000
+      }
+    },
     "gpt-6.1-sol": {
       "canonical": "openai/gpt-6.1-sol",
       "connections": ["api-key", "subscription"],

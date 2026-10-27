@@ -603,6 +603,20 @@ async def test_codex_gpt6_uses_catalog_efforts_and_verified_minimum(
         pytest.param(
             "gpt-6.1-sol", platform_adapter, platform_payload, "max", "max", id="gpt61-platform-max"
         ),
+        pytest.param(
+            "gpt-6.1-terra",
+            platform_adapter,
+            platform_payload,
+            "none",
+            "none",
+            id="terra-platform-off",
+        ),
+        pytest.param(
+            "gpt-6.1-terra", codex_adapter, codex_payload, "none", "low", id="terra-codex-minimum"
+        ),
+        pytest.param(
+            "gpt-6.1-terra", codex_adapter, codex_payload, "max", "max", id="terra-codex-max"
+        ),
     ],
 )
 @pytest.mark.asyncio
@@ -643,6 +657,7 @@ async def test_codex_gpt_5_6_does_not_assume_the_public_reasoning_context() -> N
     [
         (codex_adapter, "gpt-6.1-sol", True, "priority"),
         (codex_adapter, "gpt-6.1-sol", False, None),
+        (codex_adapter, "gpt-6.1-terra", True, "priority"),
         (codex_adapter, "gpt-5-codex", True, None),
         (platform_adapter, "gpt-6.1-sol", True, None),
     ],

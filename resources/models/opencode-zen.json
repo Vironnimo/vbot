@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-10-26T09:18:43.261937+00:00",
+  "fetched_at": "2026-10-27T09:03:41.238497+00:00",
   "models": {
     "beam-free": {
       "capabilities": {
@@ -884,55 +884,6 @@
           "output": 10.0
         },
         "source": "models.dev:opencode/claude-sonnet-5-5"
-      }
-    },
-    "deepseek-v4-flash": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": false,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "control": "levels",
-          "levels": [
-            "low",
-            "high",
-            "max"
-          ],
-          "supported": true
-        },
-        "supported_parameters": [],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": false
-      },
-      "connections": [
-        "api-key",
-        "account"
-      ],
-      "context_window": 1000000,
-      "family": "deepseek-flash",
-      "max_output_tokens": 384000,
-      "metadata": {
-        "opencode_zen": {
-          "interleaved_field": "reasoning_content"
-        }
-      },
-      "name": "deepseek-v4-flash",
-      "pricing": {
-        "rates": {
-          "cache_read": 0.028,
-          "input": 0.14,
-          "output": 0.28
-        },
-        "source": "models.dev:opencode/deepseek-v4-flash"
       }
     },
     "deepseek-v4-pro": {

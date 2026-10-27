@@ -14,6 +14,10 @@ OpenAI-compatible Provider with OpenRouter-specific reasoning, per-Model Chat Co
 
 The 2026-09-22 refresh adds `openai/gpt-6-sol` and `openai/gpt-6-luna` plus OpenRouter's Pro and batch variants. The base ids are selectable through the existing Chat Completions route. Synthetic live calls through the actual Adapter returned one Tool Call for each base id both at Provider-default reasoning and with explicit `none`; this does not establish the same result for Pro or batch variants.
 
+## Catalog refresh and GPT-6.1 Terra (2026-10-27)
+
+The live catalog adds twenty ids and removes fourteen, including the replacement of free MiniMax M3.1 Flash with its paid id, Kimi K3.1 Pro, and GPT-6.1 Terra/Pro with their batch variants. Existing catalog projection and Chat defaults admit the additions without new wire exceptions. Production Adapter streaming, PNG input and a real Tool continuation passed on `openai/gpt-6.1-terra` through `api-key`; the response carries readable `reasoning` and opaque metadata. No complete replay-accounting, maximum-capacity, Pro, batch or other-new-Model inference claim follows from this smoke, and no blanket verified record is added.
+
 ## Catalog refresh (2026-10-19)
 
 The complete refresh lists 685 ids: `minimax/minimax-m3.1-flash:free` and `inception/mercury-3` were added since the 2026-10-18 snapshot; `deepseek/deepseek-r1`, `microsoft/wizardlm-2-8x22b`, and `sao10k/l3.3-euryale-70b` left the feed. Both additions pass raw Chat requests and production Adapter send, stream and Tool continuation on `api-key`. M3.1 also passes every catalog effort (`low/medium/high/xhigh/max`, with `none` rendered as `low` because the feed marks Reasoning mandatory) and PNG image input. Its catalog publishes Context 1,000,000, output 524,288, and free input/output pricing. No special wire rule is needed; no blanket verification record or replay-accounting claim is added. Sources: the live `/models` feed and [MiniMax's Chat contract](https://platform.minimax.io/docs/api-reference/text-chat-openai), read 2026-10-19.
