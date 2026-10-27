@@ -601,6 +601,102 @@ describe('SessionListDrawer list', () => {
     });
     expect(document.querySelector('.session-drawer__more-hint')).toBeNull();
   });
+
+  it('loads an externally selected Session without losing pages and ignores an older selection', async () => {
+    const cursor = {
+      active_sort: 2460000,
+      agent_id: 'alpha',
+      session_id: 'session-1',
+    };
+    let releaseOlder;
+    let olderReads = 0;
+    api.listSessions.mockImplementation(async (_agent, query) => {
+      if (query.cursor) {
+        return {
+          sessions: [session('page-two')],
+          total_count: 3,
+          next_cursor: null,
+        };
+      }
+      if (query.requiredSession?.sessionId === 'older-selection') {
+        olderReads += 1;
+        if (olderReads > 1) {
+          return {
+            sessions: [session('older-selection', { title: 'New title' })],
+          };
+        }
+        return await new Promise((resolve) => {
+          releaseOlder = () =>
+            resolve({ sessions: [session('older-selection')] });
+        });
+      }
+      if (query.requiredSession?.sessionId === 'hidden-selection') {
+        return {
+          sessions: [
+            session('hidden-selection', { is_subagent_session: true }),
+          ],
+        };
+      }
+      return {
+        sessions: [session('session-1')],
+        total_count: 3,
+        next_cursor: cursor,
+      };
+    });
+    const props = drawer.mount();
+    await waitForCondition(() => rowCount() === 1);
+    props.currentSessionId = 'older-selection';
+    flushSync();
+    await waitForCondition(() => typeof releaseOlder === 'function');
+    expect(document.querySelector('.session-row__select--active')).toBeNull();
+
+    props.currentSessionId = 'hidden-selection';
+    flushSync();
+    await waitForCondition(() => rowCount() === 2);
+    expect(
+      sessionRowButton('hidden-selection').classList.contains(
+        'session-row__select--active',
+      ),
+    ).toBe(true);
+    // Returning to the same Session starts a new read; the first answer must
+    // not win merely because its address matches the current selection again.
+    props.currentSessionId = 'older-selection';
+    flushSync();
+    await waitForCondition(() =>
+      document.body.textContent.includes('New title'),
+    );
+    releaseOlder();
+    await Promise.resolve();
+    flushSync();
+    expect(document.body.textContent).not.toContain('older-selection');
+    expect(
+      sessionRowButton('New title').classList.contains(
+        'session-row__select--active',
+      ),
+    ).toBe(true);
+
+    props.currentSessionId = 'hidden-selection';
+    flushSync();
+
+    const list = document.querySelector('.session-drawer__list');
+    Object.defineProperties(list, {
+      scrollTop: { configurable: true, value: 900 },
+      clientHeight: { configurable: true, value: 100 },
+      scrollHeight: { configurable: true, value: 1000 },
+    });
+    list.dispatchEvent(new Event('scroll'));
+    flushSync();
+    await waitForCondition(() => rowCount() === 4);
+    expect(api.listSessions.mock.calls.at(-1)[1]).toMatchObject({
+      cursor,
+      limit: 20,
+    });
+    expect(
+      sessionRowButton('hidden-selection').classList.contains(
+        'session-row__select--active',
+      ),
+    ).toBe(true);
+  });
 });
 
 describe('SessionListDrawer by Project', () => {

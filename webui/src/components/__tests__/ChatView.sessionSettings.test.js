@@ -245,6 +245,65 @@ describe('ChatView Session settings', () => {
     expect(rpcCalls('session.set_fast_mode')[1].enabled).toBe(false);
   });
 
+  it('rereads Session settings after a draft and rejects the earlier pending read', async () => {
+    let enabled = false;
+    let holdNext = false;
+    let releaseOldRead;
+    getSessionMock.mockImplementation(async () => {
+      const session = {
+        id: 'session-1',
+        fast_mode: enabled,
+        agent_overrides: { model: FAST },
+      };
+      if (holdNext) {
+        holdNext = false;
+        return await new Promise((resolve) => {
+          releaseOldRead = () => resolve({ session });
+        });
+      }
+      return { session };
+    });
+    rpcMock.mockImplementation(
+      settingsRpcMock({
+        agents: [createAgent({ model: FAST })],
+        models: [...MODELS, fastModel],
+      }),
+    );
+    listedSessions({ id: 'session-1', title: 'Previous conversation' });
+    const props = reactiveProps({});
+    await chat.mountChat(props);
+    await waitForCondition(
+      () => picker('Fast mode')?.getAttribute('aria-pressed') === 'false',
+    );
+
+    holdNext = true;
+    props.sessionInvalidations = [
+      { id: 1, scope: { agent_id: 'alpha', session_id: 'session-1' } },
+    ];
+    await waitForCondition(() => typeof releaseOldRead === 'function');
+    findNewSessionButton().click();
+    await waitForCondition(
+      () => testChatStateRefs[0].agents[0].current_session_id === '',
+    );
+    enabled = true;
+    props.sessionInvalidations = [
+      ...props.sessionInvalidations,
+      { id: 2, scope: { agent_id: 'alpha', session_id: 'session-1' } },
+    ];
+    flushSync();
+    sessionListButton().click();
+    await waitForCondition(() =>
+      Boolean(findButtonByText('Previous conversation')),
+    );
+    findButtonByText('Previous conversation').click();
+    await waitForCondition(
+      () => picker('Fast mode')?.getAttribute('aria-pressed') === 'true',
+    );
+    releaseOldRead();
+    await settle();
+    expect(picker('Fast mode').getAttribute('aria-pressed')).toBe('true');
+  });
+
   describe('draft', () => {
     // An Identity Agent without a current Session shows its draft.
     const draftAgent = (overrides = {}) =>

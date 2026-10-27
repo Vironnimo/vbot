@@ -59,6 +59,9 @@ export function createSessionList(context) {
 
   let loadedListKey = '';
   let loadVersion = 0;
+  let lastRequiredSession = '';
+  let observedSelection = '';
+  let requiredRequestVersion = 0;
 
   // The list reloads when the addressed agent changes, when the All-agents
   // filter changes which addresses are loaded, or when the roster itself
@@ -94,6 +97,17 @@ export function createSessionList(context) {
 
   $effect(() => {
     const normalizedCurrentSessionId = asText(context.currentSessionId);
+    const agentAddress = asText(context.agentId);
+    const selectionKey = `${agentAddress}::${normalizedCurrentSessionId}`;
+    if (selectionKey !== observedSelection) {
+      if (
+        observedSelection &&
+        !(sessionState.loading && lastRequiredSession === selectionKey)
+      )
+        lastRequiredSession = '';
+      observedSelection = selectionKey;
+      requiredRequestVersion += 1;
+    }
 
     if (!normalizedCurrentSessionId) {
       if (sessionState.selectedSessionId !== null) {
@@ -109,6 +123,22 @@ export function createSessionList(context) {
     );
 
     if (!hasCurrentSession) {
+      if (sessionState.selectedSessionId !== null) {
+        sessionState = selectSession(sessionState, null);
+      }
+      if (
+        !context.filters.byProject &&
+        !sessionState.loading &&
+        agentAddress &&
+        selectionKey !== lastRequiredSession
+      ) {
+        lastRequiredSession = selectionKey;
+        void loadRequiredSession(
+          agentAddress,
+          normalizedCurrentSessionId,
+          requiredRequestVersion,
+        );
+      }
       return;
     }
 
@@ -194,6 +224,7 @@ export function createSessionList(context) {
     }
 
     const requestVersion = ++loadVersion;
+    lastRequiredSession = `${targetAgentId}::${asText(context.currentSessionId)}`;
     nextCursor = null;
     totalSessionCount = 0;
     loadingMore = false;
@@ -233,6 +264,39 @@ export function createSessionList(context) {
         loading: false,
         error: error.message,
       };
+    }
+  };
+
+  // A navigation can select a Session outside the pages already loaded. Read
+  // just that required row without replacing those pages or their cursor.
+  const loadRequiredSession = async (
+    agentAddress,
+    sessionId,
+    selectionVersion,
+  ) => {
+    const requestVersion = loadVersion;
+    try {
+      const result = await loadRawSessions(agentAddress, 1);
+      if (
+        requestVersion !== loadVersion ||
+        selectionVersion !== requiredRequestVersion ||
+        asText(context.agentId) !== agentAddress ||
+        asText(context.currentSessionId) !== sessionId
+      )
+        return;
+      const required = result.sessions.find(
+        (entry) =>
+          entry.id === sessionId && entry.agent_address === agentAddress,
+      );
+      if (required) sessionState = appendSessionList(sessionState, [required]);
+    } catch (error) {
+      if (
+        requestVersion === loadVersion &&
+        selectionVersion === requiredRequestVersion &&
+        asText(context.agentId) === agentAddress &&
+        asText(context.currentSessionId) === sessionId
+      )
+        sessionState = { ...sessionState, error: error.message };
     }
   };
 
