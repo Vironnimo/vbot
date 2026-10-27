@@ -144,7 +144,7 @@ def seed_workspace(template_dir: Path, workspace_path: Path) -> None:
             )
             continue
         try:
-            with target.open("x", encoding="utf-8") as stream:
+            with target.open("x", encoding="utf-8", newline="\n") as stream:
                 stream.write(template_content)
         except FileExistsError:
             continue
