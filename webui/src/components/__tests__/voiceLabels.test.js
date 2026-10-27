@@ -41,8 +41,8 @@ const RECORDING = { command_id: 'c-1' };
 const command = (stage) => ({ command_id: 'c-1', model_id: null, stage });
 
 describe('voiceIndicator', () => {
-  // Priority: an error, a running recording, a lost microphone, commands in
-  // flight, starting, listening; no status or a disabled Voice is off.
+  // Priority: an error, a running recording, a lost microphone, sensitivity
+  // tuning, commands in flight, starting, listening; disabled Voice is off.
   it.each([
     ['no status yet', null, 'off', 'off', 'off'],
     ['disabled Voice', voiceStatus({ enabled: false }), 'off', 'off', 'off'],
@@ -75,6 +75,16 @@ describe('voiceIndicator', () => {
       'warning',
       'microphone_disconnected',
       'microphoneDisconnected',
+    ],
+    [
+      'sensitivity tuning while an earlier command is being sent',
+      voiceStatus({
+        calibration: { phase: 'ready' },
+        commands: [command('sending')],
+      }),
+      'warning',
+      'tuning',
+      'tuning',
     ],
     [
       'the last command being transcribed',

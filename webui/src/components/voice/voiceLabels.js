@@ -8,8 +8,8 @@ import { desktopErrorCode } from '$lib/desktopBridge.js';
  * `tone` is one of off | listening | recording | processing | warning | error
  * (the CSS modifier of both indicators); `recording` tells whether a command
  * recording runs that the user can stop. Priority: an error, then a running
- * recording, a lost microphone, commands being transcribed or sent, starting,
- * listening, off.
+ * recording, a lost microphone, sensitivity tuning, commands being transcribed
+ * or sent, starting, listening, off.
  */
 export function voiceIndicator(status) {
   if (status?.state === 'error') {
@@ -37,6 +37,13 @@ export function voiceIndicator(status) {
       'warning',
       t('voice.state.microphone_disconnected'),
       t('voice.mic.tooltip.microphoneDisconnected'),
+    );
+  }
+  if (status.calibration) {
+    return indicator(
+      'warning',
+      t('voice.state.tuning'),
+      t('voice.mic.tooltip.tuning'),
     );
   }
   const command = status.commands?.at(-1);

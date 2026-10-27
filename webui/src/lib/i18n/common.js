@@ -226,6 +226,7 @@ export default Object.freeze({
   'voice.state.off': 'Disabled',
   'voice.state.starting': 'Starting',
   'voice.state.listening': 'Listening',
+  'voice.state.tuning': 'Tuning sensitivity',
   'voice.state.recording': 'Recording',
   'voice.state.transcribing': 'Transcribing',
   'voice.state.sending': 'Sending',
@@ -235,6 +236,8 @@ export default Object.freeze({
   'voice.mic.tooltip.off': 'Wakeword disabled',
   'voice.mic.tooltip.starting': 'Starting wakeword listening',
   'voice.mic.tooltip.listening': 'Listening for wake phrases',
+  'voice.mic.tooltip.tuning':
+    'Wake phrase actions are paused while tuning sensitivity',
   'voice.mic.tooltip.recording': 'Recording — click to stop and send',
   'voice.mic.tooltip.processing': 'Processing voice command',
   'voice.mic.tooltip.microphoneDisconnected': 'Microphone disconnected',
