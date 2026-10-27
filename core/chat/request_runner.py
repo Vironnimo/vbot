@@ -239,6 +239,16 @@ class WireRequestRunner:
             while True:
                 run.raise_if_cancelled()
                 await budget.begin(response_model, retry_notice)
+                reasoning = await _CHAT_TRANSFORM_WORKERS.run(
+                    adapter.describe_reasoning_render,
+                    model_id,
+                    effort_kwargs["thinking_effort"],
+                )
+                run.thinking_effort = reasoning.effort_level
+                if run.thinking_effort is None:
+                    run.thinking_effort = {"off": "none", "default": "", "on": "on"}.get(
+                        reasoning.kind
+                    )
                 try:
                     # One Chat budget covers establishment and open-stream
                     # recovery. Standalone Adapter consumers keep their retries.
@@ -400,7 +410,7 @@ class WireRequestRunner:
                 failure="incomplete",
             )
             step = replace(step, message=replace(step.message, usage=usage))
-        return step
+        return replace(step, message=replace(step.message, thinking_effort=run.thinking_effort))
 
     async def _start_usage_call(
         self, public_model: str, run: Run, session_generation_id: str | None

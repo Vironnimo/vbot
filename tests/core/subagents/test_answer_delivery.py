@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, override
@@ -13,7 +14,9 @@ from core.activity import SessionActivity
 from core.automation import TriggerService
 from core.chat import ChatMessage
 from core.permissions import PermissionBoundary
-from core.runs import Run, RunAdmission, RunKind
+from core.projects import AgentOverrides
+from core.runs import SILENT_ANSWER, ChatRunManager, Run, RunAdmission, RunKind, RunNotFoundError
+from core.sessions import SessionAddress
 from core.storage import TemporaryFileManager
 from core.subagents import SubAgentCoordinator
 from core.subagents.links import link_session
@@ -48,6 +51,137 @@ class _SteeringAdapter(StubAdapter):
             self.second_entered.set()
             await self.second_release.wait()
         return await super().send(messages, model_id=model_id, **kwargs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("background_completion", [False, True])
+async def test_subagent_results_keep_parent_automation_settings_after_origin_eviction(
+    tmp_path: Path, background_completion: bool
+) -> None:
+    class HeldAdapter(StubAdapter):
+        def __init__(self) -> None:
+            responses = ["Parent waiting", SILENT_ANSWER if background_completion else "Report"]
+            if background_completion:
+                responses.append("Background report")
+            responses.extend(["Parent handled report", "Manual answer"])
+            super().__init__([{"content": content} for content in responses])
+            self.parent_entered, self.parent_release = asyncio.Event(), asyncio.Event()
+            self.child_entered, self.child_release = asyncio.Event(), asyncio.Event()
+
+        @override
+        async def send(self, messages, *, model_id, **kwargs):
+            if any(message.get("content") == "Child task" for message in messages):
+                self.child_entered.set()
+                await self.child_release.wait()
+            elif any(message.get("content") == "Automate" for message in messages):
+                self.parent_entered.set()
+                await self.parent_release.wait()
+            return await super().send(messages, model_id=model_id, **kwargs)
+
+    adapter = HeldAdapter()
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=StubAgent(id="coder", model="openai/gpt-5.2", thinking_effort="low"),
+        adapter=adapter,
+    )
+    runtime.storage.temporary_files = TemporaryFileManager(tmp_path)
+    runtime.terminal_manager = runtime.command_manager = None
+    sessions = runtime.chat_sessions
+    manager = ChatRunManager(persistence=sessions, completed_run_retention_limit=1)
+    runtime.chat_runs = runtime.chat_run_manager = manager
+    loop = runtime.chat_loop = build_chat_loop(runtime)
+    service = TriggerService(loop, manager, runtime, sessions=sessions)
+    coordinator = SubAgentCoordinator(runtime, service)
+    coordinator.install(manager)
+    overrides = AgentOverrides(model="openai/gpt-mini", thinking_effort="high")
+    parent = await loop.start_run_in_new_session(
+        "coder",
+        "Automate",
+        run_kind=RunKind.CRON,
+        schedule_id="automation",
+        run_overrides=overrides,
+    )
+    other_release = asyncio.Event()
+
+    async def other_work(_run):
+        await other_release.wait()
+        return "done"
+
+    other = await manager.start(SessionAddress(None, "coder", "unrelated"), other_work)
+    continuations: asyncio.Queue[Run] = asyncio.Queue()
+    manager.add_run_started_callback(
+        lambda run: (
+            continuations.put_nowait(run)
+            if run.session_id == parent.session_id and run.run_kind is RunKind.SYSTEM
+            else None
+        )
+    )
+    try:
+        await asyncio.wait_for(adapter.parent_entered.wait(), 2)
+        result = await coordinator.spawn(
+            ToolContext(
+                agent_id="coder",
+                session_id=parent.session_id,
+                run_id=parent.id,
+                tool_call_id="delegate",
+                tool_name="subagent",
+                tool_call_index=0,
+                workspace=tmp_path,
+                vbot_root=tmp_path,
+                data_root=tmp_path,
+                permissions=PermissionBoundary.UNRESTRICTED,
+            ),
+            {
+                "action": "run",
+                "description": "Review",
+                "content": "Child task",
+                "model": "openai/gpt-5.2",
+                "thinking_effort": "low",
+            },
+        )
+        assert result["ok"], result
+        child_address = SessionAddress(None, "coder", result["data"]["session_id"])
+        child = manager.active_run(
+            agent_id="coder", session_id=child_address.session_id, project_id=None
+        )
+        assert child is not None
+        await asyncio.wait_for(adapter.child_entered.wait(), 2)
+        assert child.parent_source is not None and child.parent_source.run_overrides == overrides
+        assert child.run_overrides is None and child.schedule_id is None
+        adapter.parent_release.set()
+        await parent.wait()
+
+        other_release.set()
+        await other.wait()
+        with pytest.raises(RunNotFoundError):
+            manager.get(parent.id)
+        adapter.child_release.set()
+        await child.wait()
+        if background_completion:
+            await service.submit_completion(
+                child_address,
+                notice_id="child-command",
+                origin_run_id=child.id,
+                body="Child command completed",
+            )
+        follow_up = await asyncio.wait_for(continuations.get(), 2)
+        answer = await follow_up.wait()
+        assert answer.content == "Parent handled report"
+        assert (answer.model, answer.thinking_effort) == ("openai/gpt-mini", "high")
+        assert follow_up.schedule_id == "automation" and follow_up.run_overrides == overrides
+        normal = await loop.start_run("coder", "Manual", session_id=parent.session_id)
+        manual = await normal.wait()
+        assert (manual.model, manual.thinking_effort) == ("openai/gpt-5.2", "low")
+        child_settings = runtime.agent_resolver.session_overrides(child_address)
+        assert (child_settings.model, child_settings.thinking_effort) == ("openai/gpt-5.2", "low")
+    finally:
+        adapter.parent_release.set()
+        adapter.child_release.set()
+        other_release.set()
+        await manager.aclose()
+        await service.aclose()
+        await coordinator.drain_activity()
+        sessions.close()
 
 
 @pytest.mark.asyncio
@@ -111,7 +245,10 @@ async def test_steered_answers_arrive_once_in_order_and_later_runs_do_not_replay
         run = await manager.start(
             child.address,
             loop.run_executor("Review", parent_agent_input=initial_parent),
-            admission=RunAdmission(run_kind=RunKind.SUBAGENT if initial_parent else RunKind.USER),
+            admission=RunAdmission(
+                run_kind=RunKind.SUBAGENT if initial_parent else RunKind.USER,
+                parent_source=replace(parent_run.capture_continuation_source(), schedule_id="old"),
+            ),
         )
         await asyncio.wait_for(adapter.entered.wait(), 5)
         if steered_parent:
@@ -161,6 +298,9 @@ async def test_steered_answers_arrive_once_in_order_and_later_runs_do_not_replay
         adapter.second_release.set()
         assert (await run.wait()).content == "ADDENDUM"
         assert await item.future is run
+        assert run.parent_source == (
+            parent_run.capture_continuation_source() if steered_parent else None
+        )
         receipt = await asyncio.wait_for(submitted.get(), 5)
         assert not receipt.done()
         # A Run ending with Parent replies is read before, and without, delivery;

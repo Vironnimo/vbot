@@ -17,16 +17,18 @@ import core.automation._completion as automation_module
 from core.automation import TriggerService
 from core.chat import ChatMessage, ChatSession, ChatSessionError, ChatSessionManager, ReplySurface
 from core.chat.messages import SubAgentMessage
+from core.projects import AgentOverrides
 from core.runs import (
     ChatRunManager,
     Run,
     RunAdmission,
     RunAdmissionBlockedError,
+    RunContinuationSource,
     RunExecutionOwner,
     RunKind,
 )
 from core.secrets._references import SecretMasker
-from core.sessions import SessionAddress
+from core.sessions import SessionAddress, SessionNotFoundError
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("current_format_data_directory")]
 
@@ -52,6 +54,8 @@ class _CompletionChatLoop:
         input_persisted_hook: Callable[[], None],
         run_kind: RunKind,
         context_note: ChatMessage | None = None,
+        run_overrides: AgentOverrides | None = None,
+        continuation_source: RunContinuationSource | None = None,
         **schedule_options: Any,
     ) -> Run:
         assert internal is True
@@ -59,6 +63,7 @@ class _CompletionChatLoop:
         self.start_attempts += 1
 
         async def executor(_run: Run) -> str:
+            _run.run_overrides = run_overrides
             self.messages.append(content)
             self.reply_surfaces.append(reply_surface)
             self.context_notes.append(context_note)
@@ -68,7 +73,11 @@ class _CompletionChatLoop:
         run = await self._run_manager.start(
             SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id),
             executor,
-            admission=RunAdmission(run_kind=run_kind, **schedule_options),
+            admission=RunAdmission(
+                run_kind=run_kind,
+                parent_source=continuation_source.parent_source if continuation_source else None,
+                **schedule_options,
+            ),
         )
         self.runs.append(run)
         return run
@@ -617,8 +626,10 @@ async def test_closing_during_a_reminder_write_persists_it_once(
     await manager.aclose()
 
 
+@pytest.mark.parametrize("stale_generation", [False, True])
 async def test_completion_start_failure_persists_system_reminder_without_run(
     tmp_path: Path,
+    stale_generation: bool,
 ) -> None:
     run_manager = ChatRunManager()
     sessions = ChatSessionManager(tmp_path)
@@ -639,7 +650,23 @@ async def test_completion_start_failure_persists_system_reminder_without_run(
         notice_id="bash:fallback",
         origin_run_id="origin-run",
         body="background command finished: hunter2-very-secret",
+        continuation_source=(
+            Run(
+                run_id="old",
+                agent_id="coder",
+                session_id="session-one",
+                expected_session_generation_id="retired",
+                schedule_id="schedule",
+            ).capture_continuation_source()
+            if stale_generation
+            else None
+        ),
     )
+    if stale_generation:
+        with pytest.raises(SessionNotFoundError):
+            await asyncio.wait_for(delivery, timeout=5)
+        assert _notes(sessions.get(_ADDRESS)) == []
+        return
     await asyncio.wait_for(delivery, timeout=5)
 
     completion_loop.start_run.assert_awaited_once()
@@ -983,13 +1010,17 @@ async def test_user_cancelled_origin_gets_its_completions_as_notes_without_a_run
     assert any("completed after cancellation" in note for note in notes)
 
 
-async def test_follow_up_of_scheduled_work_keeps_the_schedule_notification_source():
+@pytest.mark.parametrize(
+    "overrides", [None, AgentOverrides(model="openai/gpt-mini", thinking_effort="low")]
+)
+async def test_follow_up_of_scheduled_work_keeps_the_schedule_notification_source(overrides):
     runs = ChatRunManager()
 
     def policy():
         return "errors"
 
     async def execute(_run):
+        _run.run_overrides = overrides
         return "Waiting for the background command"
 
     origin = await runs.start(
@@ -1017,6 +1048,64 @@ async def test_follow_up_of_scheduled_work_keeps_the_schedule_notification_sourc
         assert follow_up.notification_policy is policy
         assert follow_up.completion_activity is origin.completion_activity
         assert follow_up.run_kind is RunKind.SYSTEM
+        assert follow_up.run_overrides == overrides
+    finally:
+        await trigger.aclose()
+        await runs.aclose()
+
+
+@pytest.mark.parametrize("child_completion", [False, True])
+async def test_follow_ups_keep_different_automation_settings_separate(child_completion):
+    runs = ChatRunManager()
+    settings = [
+        AgentOverrides(model="openai/gpt-mini", thinking_effort="low"),
+        AgentOverrides(model="openai/gpt-5.2", thinking_effort="high"),
+    ]
+    origins = []
+    for overrides in settings:
+
+        async def execute(run, captured=overrides):
+            run.run_overrides = captured
+            return "Waiting"
+
+        origin = await runs.start(
+            _ADDRESS, execute, admission=RunAdmission(run_kind=RunKind.CRON, schedule_id="one")
+        )
+        await origin.wait()
+        if child_completion:
+
+            async def child_work(_run):
+                return "Child waiting"
+
+            origin = await runs.start(
+                SessionAddress(None, "coder", "child"),
+                child_work,
+                admission=RunAdmission(parent_source=origin.capture_continuation_source()),
+            )
+            await origin.wait()
+        origins.append(origin)
+
+    loop = _CompletionChatLoop(runs)
+    trigger = TriggerService(cast(Any, loop), runs, cast(Any, Mock()))
+    try:
+        receipts = [
+            trigger.submit_completion(
+                SessionAddress(None, "coder", "child") if child_completion else _ADDRESS,
+                notice_id=f"command:{index}",
+                origin_run_id=origin.id,
+                body=f"Result {index}",
+            )
+            for index, origin in enumerate(origins)
+        ]
+        await asyncio.wait_for(asyncio.gather(*receipts), timeout=1)
+        for follow_up in loop.runs:
+            await follow_up.wait()
+        if child_completion:
+            assert [run.parent_source.run_overrides for run in loop.runs] == settings
+            assert all(run.run_overrides is None and run.schedule_id is None for run in loop.runs)
+        else:
+            assert [run.run_overrides for run in loop.runs] == settings
+            assert all(run.schedule_id == "one" for run in loop.runs)
     finally:
         await trigger.aclose()
         await runs.aclose()

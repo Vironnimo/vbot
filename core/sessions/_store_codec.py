@@ -336,14 +336,15 @@ def _insert_assistant(connection: sqlite3.Connection, entry_key: int, message: C
     usage, usage_extra, usage_present = _split_structured_fields(stored_usage, _USAGE_VALIDATORS)
     timing, timing_extra, _timing_present = _timing_fields(message.reasoning_timing)
     connection.execute(
-        "INSERT INTO assistant_entries (entry_key, phase, reasoning_scope, has_tool_calls, "
+        "INSERT INTO assistant_entries (entry_key, thinking_effort, phase, reasoning_scope, has_tool_calls, "
         "interrupted, interruption_cause, usage_present, input_tokens, output_tokens, "
         "cache_read_tokens, cache_write_tokens, reasoning_tokens, input_tokens_estimated, "
         "output_tokens_estimated, reasoning_started_at, reasoning_completed_at, "
         "reasoning_duration_ms, usage_extra_json, reasoning_timing_extra_json) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             entry_key,
+            message.thinking_effort,
             message.phase,
             message.reasoning_scope,
             int(message.tool_calls is not None),
@@ -677,7 +678,7 @@ class EntryBatch:
 
     def _decode_assistant(self, key: int, data: JsonObject) -> None:
         assistant = self.assistants[key]
-        for column in ("phase", "reasoning_scope", "interruption_cause"):
+        for column in ("thinking_effort", "phase", "reasoning_scope", "interruption_cause"):
             if assistant[column] is not None:
                 data[column] = assistant[column]
         if assistant["interrupted"]:
@@ -869,7 +870,7 @@ _SUBAGENT_MESSAGE_FIELDS = (
     "project_id",
 )
 _ASSISTANT_COLUMNS = (
-    "entry_key, phase, reasoning_scope, has_tool_calls, interrupted, interruption_cause, "
+    "entry_key, thinking_effort, phase, reasoning_scope, has_tool_calls, interrupted, interruption_cause, "
     "usage_present, "
     + ", ".join(_USAGE_COUNT_COLUMNS)
     + ", "

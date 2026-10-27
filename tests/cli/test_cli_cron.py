@@ -44,6 +44,35 @@ def _webhook(reach: str = "internet") -> dict[str, Any]:
             {"schedule_type": "once", "run_at": "2026-07-01T09:00:00+00:00"},
             id="once",
         ),
+        pytest.param(
+            (
+                "--every",
+                "15",
+                "--working-project",
+                "builds",
+                "--model",
+                "test/model",
+                "--thinking-effort",
+                "low",
+            ),
+            {
+                "schedule_type": "interval",
+                "interval_seconds": 900,
+                "working_project_id": "builds",
+                "run_overrides": {"model": "test/model", "thinking_effort": "low"},
+            },
+            id="fixed-project-and-run-settings",
+        ),
+        pytest.param(
+            ("--every", "15", "--no-project", "--thinking-effort", "default"),
+            {
+                "schedule_type": "interval",
+                "interval_seconds": 900,
+                "working_project_id": None,
+                "run_overrides": {"thinking_effort_default": True},
+            },
+            id="workspace-and-model-default-reasoning",
+        ),
         # The server reads the event time.
         pytest.param(
             ("--event", "evt_1", "--event-time", "start - 30m"),
@@ -126,6 +155,10 @@ def test_cron_prompt_file_is_decoded_before_the_request(
         ),
         pytest.param((), id="no-schedule"),
         pytest.param(("--cron", "0 9 * * *", "--timezone", "Europe/Berlin"), id="per-job-timezone"),
+        pytest.param(
+            ("--every", "15", "--working-project", "builds", "--no-project"),
+            id="conflicting-project",
+        ),
     ],
 )
 def test_cron_create_rejects_invalid_schedule_options(
@@ -174,6 +207,8 @@ def test_cron_create_confirms_the_target_schedule_and_next_fire(
             "status": "active",
             "next_fire_at": "2026-07-21T07:00:00+00:00",
             "last_outcome": None,
+            "working_project_id": "vbot",
+            "run_overrides": {"model": "test/model", "thinking_effort": "low"},
         },
     )
 
@@ -188,6 +223,9 @@ def test_cron_create_confirms_the_target_schedule_and_next_fire(
         "name=Build check",
         "agent=builder@vbot",
         "next_fire_at=2026-07-21T07:00:00+00:00",
+        "working_project=vbot",
+        "model=test/model",
+        "thinking_effort=low",
     ):
         assert text in out
 
@@ -319,6 +357,16 @@ def test_cron_show_prints_exactly_the_complete_saved_job(
             id="schedule",
         ),
         pytest.param(("--status", "paused"), {"status": "paused"}, id="status"),
+        pytest.param(
+            ("--no-project", "--clear-model", "--clear-thinking-effort"),
+            {"working_project_id": None, "run_overrides": {"model": None, "thinking_effort": None}},
+            id="clear-execution-overrides",
+        ),
+        pytest.param(
+            ("--thinking-effort", "high"),
+            {"run_overrides": {"thinking_effort": "high"}},
+            id="effort-patch-keeps-model",
+        ),
         pytest.param(
             ("--event", "evt_1", "--event-time", "end + 1h"),
             {"schedule_type": "event", "event_id": "evt_1", "event_time": "end + 1h"},

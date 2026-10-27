@@ -849,7 +849,8 @@ def bootstrap(runtime: Runtime) -> None:
         runtime._goal_service.set_run_relay(runtime._channel_service.relay_completion_run)
         runtime._cron_service.set_chat_delivery(runtime._channel_service)
         runtime._watch_checks = WatchCheckRunner(
-            agents=runtime._agents,
+            agent_resolver=runtime._agent_resolver,
+            sessions=runtime._chat_sessions,
             projects=runtime._projects,
             data_root=runtime._storage.data_dir,
             command_checker=runtime._command_checker,
@@ -1024,6 +1025,7 @@ def _watch_boundary(
     ceiling: PermissionCeiling,
     agent_id: str | None,
     project_id: str | None,
+    working_project_id: str | None,
 ) -> PermissionBoundary:
     """The boundary a Cron watch check of a job with *ceiling* runs under. Blocking.
 
@@ -1049,7 +1051,9 @@ def _watch_boundary(
     else:
         agent = runtime.agent_resolver.resolve_agent(project_id, agent_id, require_model=False)
         project_root = (
-            Path(runtime.projects.get(project_id).cwd) if project_id is not None else None
+            Path(runtime.projects.get(working_project_id).cwd)
+            if working_project_id is not None
+            else None
         )
         permissions = session_permissions(
             agent, data_dir=data_dir, project_root=project_root, ceiling=ceiling

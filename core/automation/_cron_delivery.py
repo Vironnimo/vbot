@@ -226,7 +226,7 @@ def channel_gone_alert(job: CronJob, channel_id: str, count: int) -> str:
     return (
         f'Scheduled job "{job.name}" could not deliver {messages} because its Channel '
         f"{channel_id} no longer exists; vBot stopped trying after "
-        f"{CHANNEL_GONE_HOURS} hours. Choose another chat for the job in vBot under Schedules."
+        f"{CHANNEL_GONE_HOURS} hours. Choose another chat for the job in vBot under Automations."
     )
 
 
@@ -246,7 +246,7 @@ def failure_alert(
         ):
             return (
                 f'Scheduled job "{job.name}" stopped after {job.consecutive_failures} failures '
-                f"in a row. Last error: {error}. Enable it again in vBot under Schedules "
+                f"in a row. Last error: {error}. Enable it again in vBot under Automations "
                 "once the cause is fixed."
             )
         return f'Scheduled job "{job.name}" failed and will not run again. Last error: {error}.'

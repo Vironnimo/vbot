@@ -10,7 +10,7 @@ Command. The shell Tool's host shell: PowerShell 7 with the shell Tool's
 bootstrap on Windows (UTF-8 console, English messages, plain text), bash
 elsewhere (``host_shell_start``), started on pipes and contained in its process
 tree (``launch_pipe_process``). It runs in the job's working directory: the
-Project's directory for a Project Agent, the Agent's Workspace otherwise, with
+selected Working Project's directory, or the Agent's Workspace, with
 a command's start environment (``unattended_command_environment``). Its output
 is stdout and stderr together, as the shell Tool shows them, decoded as UTF-8,
 up to ``COMMAND_OUTPUT_MAX_BYTES``; the rest is read and dropped. A non-zero
@@ -45,7 +45,7 @@ import contextlib
 from collections.abc import Awaitable, Callable, Container, Sequence
 from functools import partial
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 import httpx
 
@@ -58,6 +58,7 @@ from core.permissions import (
     PermissionDenied,
     PermissionRefusal,
 )
+from core.sessions import AGENT_DEFAULT_PROJECT, SessionAddress, WorkingProjectChoice
 from core.tools._command_launch import PipeCommandProcess, launch_pipe_process
 from core.tools._public_http import PublicFetchError, _decoded, fetch_public
 from core.tools.process_tree import ProcessTreeTracker, track_process_tree
@@ -72,6 +73,10 @@ from core.tools.web_fetch import is_html_page, is_textual_content_type, looks_bi
 from core.utils.logging import get_logger
 from core.utils.tls import shared_ssl_context
 from core.utils.workers import BoundedWorkerPool, settle_before_cancelling
+
+if TYPE_CHECKING:
+    from core.projects import AgentResolver
+    from core.sessions import ChatSessionManager
 
 COMMAND_TIMEOUT_SECONDS = 60
 COMMAND_OUTPUT_MAX_BYTES = 64 * 1024
@@ -95,11 +100,9 @@ _LOGGER = get_logger("tools.watch_checks")
 Launch = Callable[..., Awaitable[PipeCommandProcess]]
 # The boundary of a job's ceiling for a check of the job's Agent and Project
 # (no Agent: a URL check); blocking.
-CeilingBoundary = Callable[[PermissionCeiling, str | None, str | None], PermissionBoundary]
-
-
-class _Agents(Protocol):
-    async def get_async(self, agent_id: str) -> Any: ...
+CeilingBoundary = Callable[
+    [PermissionCeiling, str | None, str | None, str | None], PermissionBoundary
+]
 
 
 class _Projects(Protocol):
@@ -112,7 +115,8 @@ class WatchCheckRunner:
     def __init__(
         self,
         *,
-        agents: _Agents,
+        agent_resolver: AgentResolver,
+        sessions: ChatSessionManager,
         projects: _Projects,
         data_root: Path,
         launch: Launch = launch_pipe_process,
@@ -122,7 +126,8 @@ class WatchCheckRunner:
         ceiling_boundary: CeilingBoundary | None = None,
         credential_names: Callable[[], Container[str]] = frozenset,
     ) -> None:
-        self._agents = agents
+        self._agent_resolver = agent_resolver
+        self._sessions = sessions
         self._credential_names = credential_names
         self._projects = projects
         self._data_root = data_root
@@ -138,6 +143,8 @@ class WatchCheckRunner:
         *,
         agent_id: str,
         project_id: str | None,
+        session_id: str | None = None,
+        working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT,
         ceiling: PermissionCeiling | None,
     ) -> PermissionRefusal | None:
         """The refusal of *watch* under a job's *ceiling*, or None (also without one).
@@ -149,9 +156,11 @@ class WatchCheckRunner:
             return None
         try:
             if watch.kind == "url":
-                return (await self._boundary(ceiling, None, None)).check_url(watch.target)
-            workdir = await self._workdir(agent_id, project_id)
-            boundary = await self._boundary(ceiling, agent_id, project_id)
+                return (await self._boundary(ceiling, None, None, None)).check_url(watch.target)
+            workdir, working_project = await self._workdir(
+                agent_id, project_id, session_id, working_project_id
+            )
+            boundary = await self._boundary(ceiling, agent_id, project_id, working_project)
         except WatchCheckError:
             return None
         return await self._command_refusal(
@@ -164,14 +173,18 @@ class WatchCheckRunner:
         *,
         agent_id: str,
         project_id: str | None,
+        session_id: str | None = None,
+        working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT,
         ceiling: PermissionCeiling | None = None,
     ) -> str:
         """Run ``command`` in the job's working directory; its output."""
-        workdir = await self._workdir(agent_id, project_id)
+        workdir, working_project = await self._workdir(
+            agent_id, project_id, session_id, working_project_id
+        )
         withheld: Container[str] | None = None
         if ceiling is not None:
             withheld = self._credential_names()
-            boundary = await self._boundary(ceiling, agent_id, project_id)
+            boundary = await self._boundary(ceiling, agent_id, project_id, working_project)
             refused = await self._command_refusal(command, workdir, boundary, withheld)
             if refused is not None:
                 raise WatchCheckError(_refused(refused))
@@ -250,7 +263,7 @@ class WatchCheckRunner:
     async def fetch_url(self, url: str, *, ceiling: PermissionCeiling | None = None) -> str:
         """GET ``url``; its main text for an HTML page, else the decoded body."""
         if ceiling is not None:
-            return await self._fetch_guarded(url, await self._boundary(ceiling, None, None))
+            return await self._fetch_guarded(url, await self._boundary(ceiling, None, None, None))
         try:
             async with (
                 asyncio.timeout(URL_TIMEOUT_SECONDS),
@@ -307,14 +320,20 @@ class WatchCheckRunner:
         return await _WORKERS.run(_page_text, response.content, content_type, response.url)
 
     async def _boundary(
-        self, ceiling: PermissionCeiling, agent_id: str | None, project_id: str | None
+        self,
+        ceiling: PermissionCeiling,
+        agent_id: str | None,
+        project_id: str | None,
+        working_project_id: str | None,
     ) -> PermissionBoundary:
         if self._ceiling_boundary is None:
             raise WatchCheckError(
                 "The check did not run: this vBot cannot apply the job's permission rules"
             )
         try:
-            return await _WORKERS.run(self._ceiling_boundary, ceiling, agent_id, project_id)
+            return await _WORKERS.run(
+                self._ceiling_boundary, ceiling, agent_id, project_id, working_project_id
+            )
         except Exception as error:
             owner = f"Project {project_id}" if project_id is not None else f"Agent {agent_id}"
             raise WatchCheckError(
@@ -349,14 +368,30 @@ class WatchCheckRunner:
             home=Path.home(),
         )
 
-    async def _workdir(self, agent_id: str, project_id: str | None) -> Path:
-        """The Project's directory for a Project Agent, else the Agent's Workspace."""
+    async def _workdir(
+        self,
+        agent_id: str,
+        project_id: str | None,
+        session_id: str | None,
+        requested: WorkingProjectChoice,
+    ) -> tuple[Path, str | None]:
+        """The same Working Project or Workspace the job's Run uses."""
         try:
-            if project_id is not None:
-                project = await _WORKERS.run(self._projects.get, project_id)
+            if session_id is not None:
+                await self._sessions.get_async(SessionAddress(project_id, agent_id, session_id))
+            agent = await self._agent_resolver.resolve_agent_async(
+                project_id, agent_id, session_id=session_id, require_model=False
+            )
+            working_project = await self._agent_resolver.resolve_working_project_async(
+                project_id,
+                agent,
+                session_id=session_id,
+                requested=AGENT_DEFAULT_PROJECT if project_id is not None else requested,
+            )
+            if working_project is not None:
+                project = await _WORKERS.run(self._projects.get, working_project)
                 path = Path(project.cwd)
             else:
-                agent = await self._agents.get_async(agent_id)
                 workspace = getattr(agent, "workspace", None)
                 path = (
                     Path(workspace)
@@ -372,7 +407,7 @@ class WatchCheckRunner:
             raise WatchCheckError(
                 f"The check command did not run: its working directory {path} does not exist"
             )
-        return path
+        return path, working_project
 
 
 def _shell_start(command: str, workdir: Path, withheld: Container[str] | None) -> HostShellStart:

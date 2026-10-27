@@ -20,6 +20,7 @@ from core.runs import (
     Run,
     RunAdmission,
     RunKind,
+    RunNotFoundError,
 )
 from core.sessions import (
     AGENT_DEFAULT_PROJECT,
@@ -74,17 +75,23 @@ def _caller(context: ToolContext) -> SessionAddress:
 
 
 def _admission(
+    runtime: RuntimeServices,
     context: ToolContext,
     subagent_id: str,
     working_project_id: str | None,
     *,
     expected_session_generation_id: str | None = None,
 ) -> RunAdmission:
+    try:
+        parent_source = runtime.chat_run_manager.get(context.run_id).capture_continuation_source()
+    except RunNotFoundError:
+        parent_source = None
     return RunAdmission(
         working_project_id=working_project_id,
         run_kind=RunKind.SUBAGENT,
         work_id=subagent_id,
         owner=context.execution_owner,
+        parent_source=parent_source,
         contributes_to_agent_activity=context.execution_owner is None,
         expected_session_generation_id=expected_session_generation_id,
     )

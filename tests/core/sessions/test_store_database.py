@@ -122,9 +122,13 @@ def test_session_writes_keep_owner_errors_and_classify_storage_failures(tmp_path
 def test_the_store_opens_after_an_additive_schema_change(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    store = SessionStore(tmp_path / "sessions.db")
-    store.ensure_live(_address("session"))
-    store.close()
+    with monkeypatch.context() as older:
+        older.setattr(
+            _store_schema, "SCHEMA_SQL", SCHEMA_SQL.replace("  thinking_effort TEXT,\n", "")
+        )
+        store = SessionStore(tmp_path / "sessions.db")
+        store.ensure_live(_address("session"))
+        store.close()
     monkeypatch.setattr(
         _store_schema,
         "SCHEMA_SQL",
@@ -140,6 +144,11 @@ def test_the_store_opens_after_an_additive_schema_change(
             ).fetchone()
         )
         assert tuple(probe) == (0,)
+        assert "thinking_effort" in store._read(
+            lambda connection: {
+                row["name"] for row in connection.execute("PRAGMA table_info(assistant_entries)")
+            }
+        )
     finally:
         store.close()
 

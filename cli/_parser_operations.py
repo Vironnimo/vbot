@@ -17,6 +17,7 @@ from cli._parser_common import (
     PERFORMANCE_HELP,
     STATISTICS_HELP,
     STATISTICS_SECTIONS,
+    THINKING_EFFORTS,
     _add_command_parser,
     _add_text_file_argument,
     server_url_argument,
@@ -79,6 +80,7 @@ def _add_cron_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
         help="Maximum future fires; recurring schedules are unlimited when omitted",
     )
     _add_cron_session_argument(create_parser)
+    _add_cron_execution_arguments(create_parser, update=False)
     _add_cron_delivery_arguments(create_parser, update=False)
     create_parser.add_argument("--watch", metavar="<command-or-url>", help=_CRON_WATCH_HELP)
     create_parser.add_argument(
@@ -121,6 +123,7 @@ def _add_cron_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
     update_parser.add_argument(
         "--status", choices=CRON_STATUSES, help="Set the job status directly"
     )
+    _add_cron_execution_arguments(update_parser, update=True)
     _add_cron_delivery_arguments(update_parser, update=True)
     watch_group = update_parser.add_mutually_exclusive_group()
     watch_group.add_argument(
@@ -207,6 +210,50 @@ _CRON_WATCH_HELP = (
     "bash elsewhere). Only for --cron and --every jobs. Omit for none"
 )
 _CRON_WATCH_RUNS = ("on_change", "always")
+
+
+def _add_cron_execution_arguments(parser: argparse.ArgumentParser, *, update: bool) -> None:
+    """Explicit working context and Run-only overrides, shared by create and update."""
+    project = parser.add_mutually_exclusive_group()
+    project.add_argument(
+        "--working-project",
+        metavar="<project-id>",
+        help="Fix the Project for new Sessions of an Identity Agent. "
+        + (
+            "Omit to keep the choice"
+            if update
+            else "Omit to fix the Agent's current default Project"
+        ),
+    )
+    project.add_argument(
+        "--no-project",
+        action="store_true",
+        help="Run new Sessions of an Identity Agent in its Workspace; the choice stays fixed",
+    )
+    model = parser.add_mutually_exclusive_group()
+    model.add_argument(
+        "--model",
+        metavar="<provider/model>",
+        help="Model for this job's Runs only. "
+        + ("Omit to keep the override" if update else "Omit to inherit the Session or Agent Model"),
+    )
+    if update:
+        model.add_argument(
+            "--clear-model", action="store_true", help="Inherit the Session or Agent Model again"
+        )
+    thinking = parser.add_mutually_exclusive_group()
+    thinking.add_argument(
+        "--thinking-effort",
+        choices=(*(effort for effort in THINKING_EFFORTS if effort), "default"),
+        help="Reasoning for this job's Runs only; default uses the Model's default. "
+        + ("Omit to keep the override" if update else "Omit to inherit Session or Agent Reasoning"),
+    )
+    if update:
+        thinking.add_argument(
+            "--clear-thinking-effort",
+            action="store_true",
+            help="Inherit Session or Agent Reasoning again",
+        )
 
 
 def _add_cron_delivery_arguments(parser: argparse.ArgumentParser, *, update: bool) -> None:

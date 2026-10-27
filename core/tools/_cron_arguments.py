@@ -97,6 +97,9 @@ _CHANGE_FIELDS = (
     "event_id",
     "repeat",
     "session",
+    "working_project",
+    "model",
+    "thinking_effort",
     "deliver",
     "notification_policy",
     "watch",
@@ -123,6 +126,8 @@ _FIELD_ALIASES = SpellingAliases(
             "target_agent_id",
         ),
         "notification_policy": ("notifications",),
+        "working_project": ("working_project_id",),
+        "thinking_effort": ("reasoning_effort",),
         "name": ("title", "label", "job_name", "display_name", "task_name"),
         "prompt": ("message", "instruction", "instructions", "task", "text", "content", "goal"),
         "repeat": (

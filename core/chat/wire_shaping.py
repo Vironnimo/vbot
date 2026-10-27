@@ -209,6 +209,7 @@ def _message_to_request_dict(
 ) -> JsonObject:
     data = message.to_dict()
     data.pop("run_id", None)
+    data.pop("thinking_effort", None)
     data.pop("subagent_reply_target", None)
     data.pop("skill_package", None)
     if data.get("role") == "assistant":
@@ -517,6 +518,7 @@ def _assistant_continuation_dict(
     """
     data = message.to_dict()
     data.pop("run_id", None)
+    data.pop("thinking_effort", None)
     _carry_reported_reasoning_tokens(message, data)
     data.pop("usage", None)
     data.pop("timing", None)

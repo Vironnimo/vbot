@@ -754,6 +754,14 @@ describe('ChatAssistantRun', () => {
         item: assistantRun({
           status: 'completed',
           durationMs: 8000,
+          items: [
+            {
+              ...outputItem('Checked.'),
+              messages: [
+                { model: 'test/automation-model', thinking_effort: 'low' },
+              ],
+            },
+          ],
           changeStats: {
             files: 1,
             added: 3,
@@ -781,6 +789,11 @@ describe('ChatAssistantRun', () => {
           ),
         ].map((part) => part.textContent),
       ).toEqual([filesChanged, '+3', '-2']);
+      footer().querySelector('.run-footer__summary').focus();
+      flushSync();
+      expect(document.querySelector('#app-tooltip').textContent).toContain(
+        'test/automation-model · low',
+      );
     });
 
     it.each([

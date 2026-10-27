@@ -24,6 +24,12 @@ CRON_UPDATE_FLAGS = (
     "--repeat",
     "--session",
     "--clear-session",
+    "--working-project",
+    "--no-project",
+    "--model",
+    "--clear-model",
+    "--thinking-effort",
+    "--clear-thinking-effort",
     "--status",
     "--deliver",
     "--watch",
@@ -268,6 +274,7 @@ def _format_job_row(job: object) -> str:
             f" remaining_runs={remaining_runs}",
             f" next_fire_at={next_fire_at}",
             f" session={job.get('session_id') or 'new'}",
+            *_format_execution(job),
             f" delivery={_format_delivery(job.get('delivery'))}",
             f" watch={_format_watch(job.get('watch'))}",
             f" last_outcome={last_outcome}",
@@ -277,6 +284,22 @@ def _format_job_row(job: object) -> str:
         ],
         separator="",
     )
+
+
+def _format_execution(job: Mapping[str, Any]) -> list[str]:
+    """The saved choices, including an explicit Workspace and Model default."""
+    fields: list[str] = []
+    if "working_project_id" in job:
+        fields.append(f" working_project={job['working_project_id'] or 'Workspace'}")
+    overrides = job.get("run_overrides")
+    if isinstance(overrides, dict):
+        if overrides.get("model"):
+            fields.append(f" model={overrides['model']}")
+        if overrides.get("thinking_effort_default"):
+            fields.append(" thinking_effort=default")
+        elif overrides.get("thinking_effort"):
+            fields.append(f" thinking_effort={overrides['thinking_effort']}")
+    return fields
 
 
 def _format_job_operation(action: str, job: Mapping[str, Any], *, fallback_id: str = "?") -> str:

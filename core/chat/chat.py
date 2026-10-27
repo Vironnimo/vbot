@@ -49,6 +49,7 @@ from core.runs import (
     Run,
     RunAdmission,
     RunCancelledError,
+    RunContinuationSource,
     RunExecutor,
     RunKind,
     WaitingWorkAdmission,
@@ -330,6 +331,7 @@ class ChatLoop:
         sender: MessageSender | None = None,
         reply_surface: ReplySurface | None = None,
         project_id: str | None = None,
+        run_overrides: AgentOverrides | None = None,
         tool_restriction: Sequence[str] | None = None,
         tool_denial_resolver: Callable[[str], str | None] | None = None,
         max_tool_iterations: int | None = None,
@@ -340,6 +342,7 @@ class ChatLoop:
         schedule_id: str | None = None,
         notification_policy: Callable[[], str] | None = None,
         source_session_id: str | None = None,
+        continuation_source: RunContinuationSource | None = None,
         context_note: str | ChatMessage | None = None,
         permission_ceiling: PermissionCeiling | None = None,
     ) -> Run:
@@ -362,6 +365,11 @@ class ChatLoop:
         ``source_session_id`` attributes a review Run executing in a fork to the
         Session it examines; it is accessor-only provenance on the Run.
 
+        ``run_overrides`` replaces Model settings only for this Run. It does
+        not change the Session's saved settings or the Agent's defaults.
+        ``continuation_source`` keeps the originating delegation ancestry and
+        binds a completion to the captured Session generation.
+
         ``context_note`` is stored as a note right before the input, for context
         the Model reads with it, such as what happened since the previous Run;
         a prepared note keeps its display record, and an internal Run stores it
@@ -382,6 +390,7 @@ class ChatLoop:
             sender=sender,
             reply_surface=reply_surface,
             project_id=project_id,
+            run_overrides=run_overrides,
             tool_restriction=tool_restriction,
             tool_denial_resolver=tool_denial_resolver,
             max_tool_iterations=max_tool_iterations,
@@ -392,6 +401,7 @@ class ChatLoop:
             schedule_id=schedule_id,
             notification_policy=notification_policy,
             source_session_id=source_session_id,
+            continuation_source=continuation_source,
             context_note=context_note,
             permission_ceiling=permission_ceiling,
         )
@@ -424,6 +434,7 @@ class ChatLoop:
         *,
         session_id: str | None = None,
         agent_overrides: AgentOverrides | None = None,
+        run_overrides: AgentOverrides | None = None,
         working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT,
         ephemeral: bool = False,
         execution: JsonObject | None = None,
@@ -482,6 +493,7 @@ class ChatLoop:
             sender=sender,
             reply_surface=reply_surface,
             project_id=project_id,
+            run_overrides=run_overrides,
             tool_restriction=tool_restriction,
             tool_denial_resolver=tool_denial_resolver,
             max_tool_iterations=max_tool_iterations,
@@ -506,6 +518,7 @@ class ChatLoop:
         sender: MessageSender | None = None,
         reply_surface: ReplySurface | None = None,
         project_id: str | None = None,
+        run_overrides: AgentOverrides | None = None,
         tool_restriction: Sequence[str] | None = None,
         tool_denial_resolver: Callable[[str], str | None] | None = None,
         max_tool_iterations: int | None = None,
@@ -531,7 +544,9 @@ class ChatLoop:
         )
         await self._reject_owner_managed_session(project_id, agent_id, session_id)
         resolver = self._dependencies.agent_resolver
-        agent = await resolver.resolve_agent_async(project_id, agent_id, session_id=session_id)
+        agent = await resolver.resolve_agent_async(
+            project_id, agent_id, session_id=session_id, run_overrides=run_overrides
+        )
         working_project_id = await resolver.resolve_working_project_async(
             project_id, agent, session_id=session_id
         )
@@ -541,6 +556,7 @@ class ChatLoop:
         manager = self._dependencies.run_manager
         request = _RunRequest(
             content=content,
+            run_overrides=run_overrides,
             internal=internal,
             input_origin=input_origin,
             sender=sender,
@@ -585,17 +601,20 @@ class ChatLoop:
         reply_surface: ReplySurface | None = None,
     ) -> tuple[str, RunExecutor, str]:
         """Build replacement data for a queued run without mutating queue state."""
+        executor = queued_item.executor
+        if not isinstance(executor, _QueuedRunExecutor) or executor.loop is not self:
+            raise ChatError("queued item is not an editable chat request")
         agent = await self._dependencies.agent_resolver.resolve_agent_async(
-            project_id, agent_id, session_id=session_id
+            project_id,
+            agent_id,
+            session_id=session_id,
+            run_overrides=executor.request.run_overrides,
         )
         provider_id, _connection_id = _resolve_agent_connection(self._dependencies, agent)
         _ensure_provider_exists(self._dependencies.providers, provider_id)
         session = await self._get_session_async(
             agent_id, session_id, create_missing=False, project_id=project_id
         )
-        executor = queued_item.executor
-        if not isinstance(executor, _QueuedRunExecutor) or executor.loop is not self:
-            raise ChatError("queued item is not an editable chat request")
         return (
             session.id,
             executor.with_edited_content(content, input_origin, reply_surface),
@@ -705,6 +724,7 @@ class ChatLoop:
         sender: MessageSender | None = None,
         reply_surface: ReplySurface | None = None,
         project_id: str | None = None,
+        run_overrides: AgentOverrides | None = None,
         tool_restriction: Sequence[str] | None = None,
         tool_denial_resolver: Callable[[str], str | None] | None = None,
         max_tool_iterations: int | None = None,
@@ -716,10 +736,17 @@ class ChatLoop:
         notification_policy: Callable[[], str] | None = None,
         edit_message_id: str | None = None,
         source_session_id: str | None = None,
+        continuation_source: RunContinuationSource | None = None,
         context_note: str | ChatMessage | None = None,
         permission_ceiling: PermissionCeiling | None = None,
     ) -> Run:
         _validate_run_tool_iteration_limit(max_tool_iterations)
+        if continuation_source is not None and (
+            continuation_source.project_id,
+            continuation_source.agent_id,
+            continuation_source.session_id,
+        ) != (project_id, agent_id, session_id):
+            raise ChatError("Continuation settings belong to another Session")
         if session_id is None and create_missing and new_session is None:
             new_session = _NewSession()
         session = None
@@ -733,9 +760,17 @@ class ChatLoop:
                     raise
         if session_id is not None:
             await self._reject_owner_managed_session(project_id, agent_id, session_id)
+        if (
+            continuation_source is not None
+            and continuation_source.generation_id is not None
+            and (session is None or session.generation_id != continuation_source.generation_id)
+        ):
+            raise ChatError("The continuation's Session is no longer available")
         resolver = self._dependencies.agent_resolver
         if new_session is None:
-            agent = await resolver.resolve_agent_async(project_id, agent_id, session_id=session_id)
+            agent = await resolver.resolve_agent_async(
+                project_id, agent_id, session_id=session_id, run_overrides=run_overrides
+            )
             # A Session that does not exist yet (``create_missing``) starts in the
             # Agent's default Project.
             working_project_id = await resolver.resolve_working_project_async(
@@ -743,7 +778,10 @@ class ChatLoop:
             )
         else:
             agent = await resolver.resolve_agent_async(
-                project_id, agent_id, new_session_overrides=new_session.agent_overrides
+                project_id,
+                agent_id,
+                new_session_overrides=new_session.agent_overrides,
+                run_overrides=run_overrides,
             )
             working_project_id = await resolver.resolve_working_project_async(
                 project_id, agent, requested=new_session.working_project_id
@@ -751,13 +789,24 @@ class ChatLoop:
         _reject_live_input(agent, run_kind)
         provider_id, _connection_id = _resolve_agent_connection(self._dependencies, agent)
         _ensure_provider_exists(self._dependencies.providers, provider_id)
+        session_agent = agent
+        if run_overrides is not None and not run_overrides.is_empty:
+            # Capture ordinary defaults, never the temporary Run settings. A
+            # replaced Session Model need not be available for this Run.
+            session_agent = await resolver.resolve_agent_async(
+                project_id,
+                agent_id,
+                session_id=session_id if new_session is None else None,
+                new_session_overrides=new_session.agent_overrides if new_session else None,
+                require_model=False,
+            )
         if new_session is not None:
             session = await self._dependencies.sessions.create_async(
                 agent_id,
                 session_id=new_session.session_id,
                 project_id=project_id,
                 actor=new_session.actor,
-                metadata=new_session.metadata(agent, permission_ceiling),
+                metadata=new_session.metadata(session_agent, permission_ceiling),
                 working_project_id=_stored_working_project(project_id, working_project_id),
             )
         elif session is None:
@@ -770,7 +819,7 @@ class ChatLoop:
             )
         if new_session is None:
             await self._dependencies.sessions.run_async(
-                resolver.capture_session_settings, session.address, agent
+                resolver.capture_session_settings, session.address, session_agent
             )
             if permission_ceiling is not None:
                 await self._dependencies.sessions.run_async(
@@ -783,6 +832,7 @@ class ChatLoop:
         manager = self._dependencies.run_manager
         request = _RunRequest(
             content=content,
+            run_overrides=run_overrides,
             internal=internal,
             input_origin=input_origin,
             sender=sender,
@@ -807,7 +857,14 @@ class ChatLoop:
                     schedule_id=schedule_id,
                     notification_policy=notification_policy,
                     source_session_id=source_session_id,
-                    expected_session_generation_id=session.generation_id,
+                    parent_source=(
+                        continuation_source.parent_source if continuation_source else None
+                    ),
+                    expected_session_generation_id=(
+                        continuation_source.generation_id
+                        if continuation_source and continuation_source.generation_id is not None
+                        else session.generation_id
+                    ),
                 ),
             )
         except BaseException:

@@ -5,6 +5,7 @@
   import CronDeliverySettings from './cron/CronDeliverySettings.svelte';
   import CronWatchSettings from './cron/CronWatchSettings.svelte';
   import CronWebhookSettings from './cron/CronWebhookSettings.svelte';
+  import CronExecutionSettings from './cron/CronExecutionSettings.svelte';
   import {
     displayValue,
     headerStatusVisible,
@@ -25,6 +26,7 @@
   import { t } from '$lib/i18n.js';
   import Button from './ui/Button.svelte';
   import SaveStatus from './ui/SaveStatus.svelte';
+  import TabList from './ui/TabList.svelte';
   import Banner from './ui/Banner.svelte';
   import ContextMenu from './ui/ContextMenu.svelte';
   import { contextMenuAnchor, isContextMenuKey } from './ui/contextMenu.js';
@@ -43,9 +45,7 @@
     visibleCronJobs,
   } from '$lib/cronView.js';
   import TextField from './ui/TextField.svelte';
-  import Dropdown from './Dropdown.svelte';
   import TextArea from './ui/TextArea.svelte';
-  import InfoHint from './ui/InfoHint.svelte';
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
   import { onMount, untrack } from 'svelte';
   import { createStandaloneNavigation } from '$lib/navigation.svelte.js';
@@ -57,12 +57,17 @@
   } from '$lib/api.js';
   import { createAgentTargetCatalogLoader } from '$lib/agentTargetOptions.js';
   import { createCronEditor, NEW_JOB_PLACE } from './cron/editor.svelte.js';
+  import {
+    SCHEDULES,
+    WEBHOOKS,
+    automationCategory,
+    readAutomationPlace,
+  } from './cron/navigation.js';
 
   const noop = () => {};
 
   let {
-    // The place is the shown job, [job id], or ['new'] for a new job's form.
-    // An empty place shows the first job.
+    // Category followed by the job id or 'new'; old job-only links still open.
     navigation = createStandaloneNavigation(),
     // The changed new job's form values, kept while the view is closed; null
     // without one.
@@ -80,6 +85,9 @@
   const editor = createCronEditor({
     get navigation() {
       return navigation;
+    },
+    get category() {
+      return category;
     },
     get newJobDraft() {
       return newJobDraft;
@@ -111,6 +119,7 @@
   });
 
   let viewState = $state(createCronViewState());
+  let category = $state(SCHEDULES);
   let expandedJobs = $state({});
 
   // Project teams power the project-agent options in the cron dropdown. They are
@@ -118,6 +127,7 @@
   // `project.list` with the cached Teams) and kept for the lifetime of the
   // view, so they are never read again on every render.
   let projectTeams = $state([]);
+  let projectCatalog = $state([]);
   let projectTeamsLoaded = false;
   const targetCatalog = createAgentTargetCatalogLoader({
     listProjects,
@@ -139,10 +149,25 @@
   let lastAgentsRefreshToken = 0;
   let lastProjectsRefreshToken = 0;
 
-  let hasAgents = $derived(viewState.agents.length > 0);
+  let hasAgents = $derived(
+    viewState.agents.length > 0 ||
+      projectTeams.some((project) => project.team.length > 0),
+  );
   let isLoading = $derived(viewState.loadingAgents || viewState.loadingJobs);
   let jobs = $derived(
     visibleCronJobs(viewState.jobs, viewState.systemTimezone, scheduleActivity),
+  );
+  let categoryJobs = $derived(
+    jobs.filter((job) => automationCategory(job) === category),
+  );
+  let categoryTabs = $derived([
+    { id: SCHEDULES, label: t('cron.categories.schedules') },
+    { id: WEBHOOKS, label: t('cron.categories.webhooks') },
+  ]);
+  let createTitle = $derived(
+    category === WEBHOOKS
+      ? t('cron.detail.createWebhookTitle')
+      : t('cron.detail.createTitle'),
   );
   // Identity agents (bare ids, unchanged) plus project agents addressed as
   // `agent@projekt`. A project option's value IS the address, so saving sends it
@@ -179,9 +204,14 @@
   // empty place shows the first job, an unknown one keeps the shown job, and
   // the entry is corrected to what is shown.
   $effect(() => {
-    const target = navigation.place[0] ?? '';
+    const place = navigation.place;
     if (!placeReady) return;
     untrack(() => {
+      const { category: selectedCategory, target } = readAutomationPlace(
+        place,
+        jobs,
+      );
+      category = selectedCategory;
       showPlace(target);
       showJobInPlace();
     });
@@ -191,12 +221,12 @@
   // empty list keeps it, so a job saved a moment ago survives a reload that
   // does not name it yet.
   $effect(() => {
-    void jobs;
+    void categoryJobs;
     if (!placeReady) return;
     untrack(() => {
-      if (editor.isCreating || jobs.length === 0) return;
-      if (!jobs.some((job) => job.id === editor.selectedJobId)) {
-        editor.selectJobNow(jobs[0]);
+      if (editor.isCreating || categoryJobs.length === 0) return;
+      if (!categoryJobs.some((job) => job.id === editor.selectedJobId)) {
+        editor.selectJobNow(categoryJobs[0]);
       }
     });
   });
@@ -212,18 +242,28 @@
 
   function showPlace(target) {
     if (target === NEW_JOB_PLACE && hasAgents) {
-      if (!editor.isCreating) editor.startCreateNow();
+      // A direct new-form link must not erase the one unsaved draft. The
+      // category's Create action offers the explicit discard before replacing it.
+      if (newJobDraft && automationCategory(newJobDraft) !== category) {
+        category = automationCategory(newJobDraft);
+      }
+      if (
+        !editor.isCreating ||
+        automationCategory(editor.formValues) !== category
+      ) {
+        editor.startCreateNow();
+      }
       return;
     }
     // A job saved a moment ago is shown before the list names it.
     if (target && !editor.isCreating && target === editor.selectedJobId) {
       return;
     }
-    const listed = (id) => jobs.find((job) => job.id === id);
+    const listed = (id) => categoryJobs.find((job) => job.id === id);
     const job =
       listed(target) ??
       (target && !editor.isCreating ? listed(editor.selectedJobId) : null) ??
-      jobs[0];
+      categoryJobs[0];
     if (!job) {
       editor.isCreating = false;
       editor.selectedJobId = '';
@@ -234,9 +274,14 @@
 
   function showJobInPlace() {
     const shown = editor.isCreating ? NEW_JOB_PLACE : editor.selectedJobId;
-    if ((navigation.place[0] ?? '') !== shown) {
-      navigation.replace(shown ? [shown] : []);
+    const next = shown ? [category, shown] : [category];
+    if (navigation.place.join('/') !== next.join('/')) {
+      navigation.replace(next);
     }
+  }
+
+  function showCategory(next) {
+    if (next !== category) navigation.navigate([next]);
   }
 
   $effect(() => {
@@ -296,6 +341,7 @@
       }
 
       applyAgentListResponse(viewState, result);
+      if (viewState.agents.length === 0) await loadProjectTeams();
     } catch (error) {
       if (destroyed || requestId !== agentsRequestId) {
         return;
@@ -355,6 +401,7 @@
     const catalog = await targetCatalog.load();
     if (!catalog) return;
     projectTeams = catalog.projectTeams;
+    projectCatalog = catalog.projects;
     projectTeamsLoaded = !catalog.projectError;
   }
 
@@ -427,7 +474,22 @@
 </script>
 
 <section class="cron-view view active" aria-labelledby="cron-list-title">
-  <div class="cron-layout">
+  <div class="view-toolbar view-toolbar--tabs cron-categories">
+    <TabList
+      class="view-toolbar__tabs"
+      items={categoryTabs}
+      value={category}
+      ariaLabel={t('cron.title')}
+      idPrefix="automation-categories"
+      onChange={showCategory}
+    />
+  </div>
+  <div
+    class="cron-layout"
+    role="tabpanel"
+    id={`automation-categories-panel-${category}`}
+    aria-labelledby={`automation-categories-tab-${category}`}
+  >
     <aside
       class="cron-list-pane secondary-pane"
       aria-labelledby="cron-list-title"
@@ -440,8 +502,8 @@
           <Button
             variant="tertiary"
             icon
-            ariaLabel={t('cron.detail.createTitle')}
-            tooltip={t('cron.detail.createTitle')}
+            ariaLabel={createTitle}
+            tooltip={createTitle}
             disabled={!hasAgents}
             onClick={editor.startCreate}
           >
@@ -487,11 +549,16 @@
               {t('common.retry')}
             </Button>
           </div>
-        {:else if jobs.length === 0}
-          <EmptyState density="compact" description={t('cron.emptyTitle')} />
+        {:else if categoryJobs.length === 0}
+          <EmptyState
+            density="compact"
+            description={category === WEBHOOKS
+              ? t('cron.webhooks.emptyTitle')
+              : t('cron.emptyTitle')}
+          />
         {:else}
           <ul class="cron-list" aria-label={t('cron.list.ariaLabel')}>
-            {#each jobs as job (job.id)}
+            {#each categoryJobs as job (job.id)}
               <li>
                 <div class="cron-item-row">
                   <button
@@ -581,20 +648,24 @@
         <EmptyState
           fill
           class="master-detail-empty"
-          title={jobs.length === 0
-            ? t('cron.emptyDetailTitle')
+          title={categoryJobs.length === 0
+            ? category === WEBHOOKS
+              ? t('cron.webhooks.emptyDetailTitle')
+              : t('cron.emptyDetailTitle')
             : t('cron.selectTitle')}
           description={!serverUnavailable && !hasAgents
             ? t('cron.noAgents')
-            : t('cron.emptySubtitle')}
+            : category === WEBHOOKS
+              ? t('cron.webhooks.emptySubtitle')
+              : t('cron.emptySubtitle')}
         >
           {#snippet actions()}
             <Button
-              variant={jobs.length === 0 ? 'primary' : 'secondary'}
+              variant={categoryJobs.length === 0 ? 'primary' : 'secondary'}
               disabled={!hasAgents}
               onClick={editor.startCreate}
             >
-              {t('cron.detail.createTitle')}
+              {createTitle}
             </Button>
           {/snippet}
         </EmptyState>
@@ -912,29 +983,6 @@
                     </div>
                   </div>
 
-                  <div class="s-row">
-                    <div class="s-row-info">
-                      <label class="s-row-label" for="cron-form-agent">
-                        {t('cron.form.agent')}
-                        <span class="cron-required" aria-hidden="true">*</span>
-                      </label>
-                    </div>
-                    <div class="s-row-control">
-                      <Dropdown
-                        id="cron-form-agent"
-                        value={editor.formValues.agent_id}
-                        options={agentOptions}
-                        placeholder={t('cron.form.agentPlaceholder')}
-                        ariaLabel={t('cron.form.agent')}
-                        disabled={!hasAgents || editor.submittingForm}
-                        triggerClass="cron-dropdown"
-                        listClass="cron-dropdown-list"
-                        onValueChange={(value) =>
-                          editor.updateFormField('agent_id', value)}
-                      />
-                    </div>
-                  </div>
-
                   <div class="s-row s-row--stacked cron-prompt-row">
                     <label class="s-row-label" for="cron-job-prompt">
                       {t('cron.form.prompt')}
@@ -955,10 +1003,19 @@
               </div>
             </section>
 
-            <CronTimingSettings
+            <CronExecutionSettings
               {editor}
-              systemTimezone={viewState.systemTimezone}
+              {agentOptions}
+              agents={viewState.agents}
+              projects={projectCatalog}
             />
+
+            {#if !editor.isWebhookSchedule}
+              <CronTimingSettings
+                {editor}
+                systemTimezone={viewState.systemTimezone}
+              />
+            {/if}
 
             {#if canWatch(editor.formValues.schedule_type)}
               <CronWatchSettings {editor} />
@@ -971,52 +1028,33 @@
               />
             {/if}
 
-            <section class="s-section" aria-labelledby="cron-section-session">
+            <section
+              class="s-section"
+              aria-labelledby="cron-notifications-title"
+            >
               <header class="s-section__head">
-                <h3 class="s-section__title" id="cron-section-session">
-                  {t('cron.sections.session')}
+                <h3 class="s-section__title" id="cron-notifications-title">
+                  {t('notifications.label')}
                 </h3>
               </header>
-              <p class="s-section__desc">
-                {t('cron.sections.sessionSubtitle')}
-              </p>
               <div class="s-section__body">
                 <div class="s-group">
                   <div class="s-row">
                     <div class="s-row-info">
-                      <label
-                        class="s-row-label cron-label-with-hint"
-                        for="cron-job-session"
-                      >
-                        {t('cron.form.sessionId')}
-                        <InfoHint text={t('cron.form.sessionIdHelp')} />
-                      </label>
+                      <p class="s-row-desc">
+                        {t('notifications.scheduleHelp')}
+                      </p>
                     </div>
                     <div class="s-row-control">
-                      <TextField
-                        id="cron-job-session"
-                        value={editor.formValues.session_id}
-                        placeholder={t('cron.form.sessionIdPlaceholder')}
-                        disabled={editor.isCreating && editor.submittingForm}
-                        onInput={(next) =>
-                          editor.updateFormField('session_id', next)}
+                      <NotificationPolicySelect
+                        value={editor.formValues.notification_policy}
+                        onChange={(value) =>
+                          editor.updateFormField('notification_policy', value)}
                       />
                     </div>
                   </div>
                 </div>
               </div>
-            </section>
-
-            <section class="s-group">
-              <h3 class="s-group-title">{t('notifications.label')}</h3>
-              <p class="s-group-description">
-                {t('notifications.scheduleHelp')}
-              </p>
-              <NotificationPolicySelect
-                value={editor.formValues.notification_policy}
-                onChange={(value) =>
-                  editor.updateFormField('notification_policy', value)}
-              />
             </section>
             <CronDeliverySettings {editor} {channels} />
 

@@ -22,7 +22,7 @@ from core.automation.cron import (
     CronStorageError,
 )
 from core.calendar import BoundJob, CalendarService, EventJobTargetMissingError
-from core.projects import ResolutionAgentNotFoundError
+from core.projects import ResolutionAgentNotFoundError, ResolutionProjectNotFoundError
 from core.runs import RunKind
 from tests.core.automation.cron_test_support import make_service
 
@@ -598,25 +598,32 @@ async def test_a_schedule_change_replaces_the_event_binding(services: _Services)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("agent_gone", [False, True])
+@pytest.mark.parametrize("missing", [None, "agent-one", "work"])
 async def test_moving_a_past_event_later_checks_the_target_of_the_job_it_revives(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, agent_gone: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, missing: str | None
 ) -> None:
     clock = _Clock(_local("2030-01-06T13:00"))
     monkeypatch.setattr(cron_timing, "_utc_now", clock)
     removed: set[str] = set()
 
-    def resolve_agent(_project_id: str | None, agent_id: str) -> Any:
+    def resolve_agent(_project_id: str | None, agent_id: str, **_kwargs: Any) -> Any:
         if agent_id in removed:
             raise ResolutionAgentNotFoundError(f"Agent not found: {agent_id}")
         return SimpleNamespace(id=agent_id)
+
+    def resolve_working_project(_project: Any, _agent: Any, **_kwargs: Any) -> str:
+        if "work" in removed:
+            raise ResolutionProjectNotFoundError("Project not found: work")
+        return "work"
 
     calendar = CalendarService(tmp_path, tz=_ZONE)
     cron, _trigger = make_service(
         tmp_path,
         tz=_ZONE,
         calendar=calendar,
-        agent_resolver=SimpleNamespace(resolve_agent=resolve_agent),
+        agent_resolver=SimpleNamespace(
+            resolve_agent=resolve_agent, resolve_working_project=resolve_working_project
+        ),
     )
     event = calendar.create_event(**_SINGLE)
     job = await cron.create_job(
@@ -627,15 +634,16 @@ async def test_moving_a_past_event_later_checks_the_target_of_the_job_it_revives
     # The event passed without a Run, so the job is history and the Agent could go.
     clock.now = _local("2030-01-11T09:00")
     assert cron.can_fire(job) is False
-    if agent_gone:
-        removed.add("agent-one")
+    if missing:
+        removed.add(missing)
 
     move = calendar.update_event(event.id, start="2030-01-20T15:00", actor="test")
 
-    if agent_gone:
+    if missing:
         with pytest.raises(EventJobTargetMissingError) as refused:
             await move
-        assert refused.value.problems == ((job.id, "Agent agent-one no longer exists"),)
+        subject = "Agent agent-one" if missing == "agent-one" else "Project work"
+        assert refused.value.problems == ((job.id, f"{subject} no longer exists"),)
         assert calendar.get_event(event.id).start == "2030-01-10T15:00:00"
     else:
         await move

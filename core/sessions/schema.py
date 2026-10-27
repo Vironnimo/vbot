@@ -331,6 +331,7 @@ CREATE TABLE entry_text (
 
 CREATE TABLE assistant_entries (
   entry_key INTEGER PRIMARY KEY REFERENCES entries (entry_key) ON DELETE CASCADE,
+  thinking_effort TEXT,
   phase TEXT,
   reasoning_scope TEXT,
   has_tool_calls INTEGER NOT NULL DEFAULT 0 CHECK (has_tool_calls IN (0, 1)),

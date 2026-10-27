@@ -159,6 +159,30 @@ export const runFooterDetails = (assistantRun, nowMs = Date.now()) => {
       : iterationCount === 1
         ? t('chat.details.modelResponseOne')
         : t('chat.details.modelResponseCount', { count: iterationCount });
+  // Read the settings actually recorded on responses. The Session's current
+  // settings may be different, especially after an Automation's temporary
+  // override or a fallback. Keep distinct Model/effort pairs in response order.
+  const seenModels = new Set();
+  for (const child of assistantRun.items ?? []) {
+    if (child.type !== 'assistant_output') continue;
+    for (const message of child.messages ?? []) {
+      const model = trimmedString(message.model);
+      if (!model) continue;
+      const effort = message.thinking_effort;
+      const hasEffort = typeof effort === 'string';
+      const key = JSON.stringify([model, hasEffort ? effort : null]);
+      if (seenModels.has(key)) continue;
+      seenModels.add(key);
+      rows.push({
+        label: hasEffort
+          ? t('chat.details.modelAndThinking')
+          : t('chat.details.model'),
+        value: hasEffort
+          ? `${model} · ${effort || t('chat.details.providerDefault')}`
+          : model,
+      });
+    }
+  }
   return { title: runStatusLabel(assistantRun.status), text, rows };
 };
 

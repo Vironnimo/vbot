@@ -13,6 +13,7 @@ import pytest
 from core.chat import ChatError
 from core.projects import AgentOverrides
 from core.providers.errors import ProviderError
+from core.providers.reasoning import ReasoningIntent
 from core.runs import RunCancelledError
 from tests.core.chat.chat_loop_support import (
     StubAdapter,
@@ -172,6 +173,13 @@ async def test_invalid_model_binding_fails_before_any_session_or_request(
     assert runtime.adapter_provider_id is None
     assert runtime.chat_sessions.list("coder") == []
 
+    # A bad temporary Model is checked before a newly requested Session exists.
+    with pytest.raises(ChatError):
+        await loop.start_run_in_new_session(
+            "coder", "Scheduled work", run_overrides=AgentOverrides(model="missing/model")
+        )
+    assert runtime.chat_sessions.list("coder") == []
+
 
 @pytest.mark.asyncio
 async def test_session_agent_overrides_apply_to_every_run_of_only_that_session(
@@ -241,6 +249,107 @@ async def test_a_new_session_starts_with_its_agent_overrides_and_keeps_them(
     assert (request["model_id"], request["kwargs"]["thinking_effort"]) == ("gpt-mini", "high")
     metadata = runtime.chat_sessions.get_metadata(session_address("coder", run.session_id))
     assert metadata["agent_overrides"] == {"model": "openai/gpt-mini", "thinking_effort": "high"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["new", "existing", "queued"])
+@pytest.mark.parametrize(
+    ("effort", "intent", "rendered"),
+    [
+        ("high", ReasoningIntent("effort", effort_level="high"), "high"),
+        (None, ReasoningIntent("default"), ""),
+        ("none", ReasoningIntent("off"), "none"),
+        ("max", ReasoningIntent("effort", effort_level="high"), "high"),
+        ("high", ReasoningIntent("on"), "on"),
+        ("high", ReasoningIntent("on", effort_level="high"), "high"),
+        ("high", ReasoningIntent("budget", budget_tokens=1024), None),
+    ],
+    ids=[
+        "effort",
+        "provider-default",
+        "disabled",
+        "provider-snapped",
+        "toggle",
+        "toggle-with-effort",
+        "budget-without-effort",
+    ],
+)
+async def test_run_overrides_leave_session_defaults_for_the_next_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+    effort: str | None,
+    intent: ReasoningIntent,
+    rendered: str | None,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", thinking_effort="low")
+    adapter = StubAdapter(
+        [{"content": "Done", "tool_calls": None} for _ in range(2 if path == "new" else 3)]
+    )
+    describe = adapter.describe_reasoning_render
+    monkeypatch.setattr(
+        adapter,
+        "describe_reasoning_render",
+        lambda model, selected: intent if model == "gpt-mini" else describe(model, selected),
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    loop = build_chat_loop(runtime)
+    overrides = AgentOverrides(
+        model="openai/gpt-mini", thinking_effort=effort, thinking_effort_default=effort is None
+    )
+    if path == "new":
+        run = await loop.start_run_in_new_session("coder", "Automated", run_overrides=overrides)
+        session_id = run.session_id
+    else:
+        initial = await loop.start_run_in_new_session("coder", "Initial")
+        await initial.wait()
+        session_id = initial.session_id
+        if path == "existing":
+            run = await loop.start_run(
+                "coder", "Automated", session_id=session_id, run_overrides=overrides
+            )
+        else:
+            release = asyncio.Event()
+
+            async def block(_run: Any) -> str:
+                await release.wait()
+                return "Released"
+
+            blocker = await runtime.chat_run_manager.start(
+                session_address("coder", session_id), block
+            )
+            try:
+                queued = await loop.queue_run(
+                    "coder", "Automated", session_id=session_id, run_overrides=overrides
+                )
+                assert not queued.steerable
+                _, executor, display = await loop.build_queue_update(
+                    "coder", session_id, "Updated automated task", queued
+                )
+                assert runtime.chat_runs.update_queued(
+                    "coder", session_id, queued.item_id, executor, display, project_id=None
+                )
+            finally:
+                release.set()
+                await blocker.wait()
+            run = await queued.future
+    automated = await run.wait()
+    normal = await loop.start_run("coder", "Manual", session_id=session_id)
+    ordinary = await normal.wait()
+    assert [
+        (request["model_id"], request["kwargs"]["thinking_effort"])
+        for request in adapter.requests[-2:]
+    ] == [("gpt-mini", effort), ("gpt-5.2", "low")]
+    assert (automated.model, automated.thinking_effort) == ("openai/gpt-mini", rendered)
+    assert (ordinary.model, ordinary.thinking_effort) == ("openai/gpt-5.2", "low")
+    assert run.run_overrides == overrides
+    assert normal.run_overrides is None
+    saved = runtime.agent_resolver.session_overrides(session_address("coder", session_id))
+    assert (saved.model, saved.thinking_effort) == ("openai/gpt-5.2", "low")
+    assert (agent.model, agent.thinking_effort) == ("openai/gpt-5.2", "low")
+    history = runtime.chat_sessions.get(session_address("coder", session_id)).load_active()
+    answers = [message for message in history if message.role == "assistant"]
+    assert [message.thinking_effort for message in answers[-2:]] == [rendered, "low"]
 
 
 @pytest.mark.asyncio

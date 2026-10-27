@@ -325,8 +325,9 @@ def test_tool_result_persisted_needs_the_call_and_its_result_in_that_session(man
         persisted(_address("coder", "missing"))
 
 
+@pytest.mark.parametrize("thinking_effort", ["high", ""])
 def test_role_specific_relational_message_storage_round_trips(
-    manager, tmp_path, monkeypatch
+    manager, tmp_path, monkeypatch, thinking_effort
 ) -> None:
     session = manager.create("coder", session_id="normalized")
     user = ChatMessage.user(
@@ -344,6 +345,7 @@ def test_role_specific_relational_message_storage_round_trips(
     )
     assistant = ChatMessage.assistant(
         model="provider/model",
+        thinking_effort=thinking_effort,
         content="file:C:\\tmp\\result.txt",
         reasoning="reasoning text",
         reasoning_summary=["**First**\n\nReasoning", "**Second**\n\nMore reasoning"],

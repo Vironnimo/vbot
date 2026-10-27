@@ -59,7 +59,9 @@ from core.automation._cron_jobs import (
     _resolve_timezone,
     _target_validation_error,
     _validate_cron_job_data,
+    cron_run_overrides,
     normalize_job_fields,
+    patch_run_overrides,
     validate_cron_jobs_data,
     validate_cron_jobs_file,
 )
@@ -86,13 +88,20 @@ from core.config_validation import JsonDiagnostic
 from core.json_documents import JsonDocumentWriteError, write_json_document
 from core.permissions import PermissionCeiling, PermissionRefusal
 from core.projects import (
+    AgentOverrides,
     AgentResolutionError,
     ResolutionAgentNotFoundError,
     ResolutionProjectNotFoundError,
+    WorkingProjectMissingError,
     format_agent_address,
 )
 from core.secrets._references import EMPTY_MASKER, SecretMasker
-from core.sessions import SessionAddress
+from core.sessions import (
+    AGENT_DEFAULT_PROJECT,
+    SessionAddress,
+    SessionNotFoundError,
+    WorkingProjectChoice,
+)
 from core.utils.file_status import exists_strict
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
@@ -151,6 +160,7 @@ __all__ = [
     "validate_cron_jobs_data",
     "validate_cron_jobs_file",
     "CronService",
+    "cron_run_overrides",
 ]
 
 
@@ -383,6 +393,8 @@ class CronService:
         session_id: str | None = None,
         status: CronJobStatus = "active",
         project_id: str | None = None,
+        working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT,
+        run_overrides: AgentOverrides | None = None,
         delivery: CronDelivery | None = None,
         notification_policy: str = "all",
         watch: CronWatch | None = None,
@@ -433,6 +445,8 @@ class CronService:
                 last_fired_at=None,
                 created_at=_timing._utc_now_iso(),
                 project_id=project_id,
+                working_project_id=working_project_id,
+                run_overrides=run_overrides,
                 delivery=delivery,
                 notification_policy=notification_policy,
                 watch=watch,
@@ -443,7 +457,7 @@ class CronService:
             if job.schedule_type == "webhook":
                 self._webhooks.check_available()
             self._event_binding._check_event_binding(job)
-            await self._validate_references_async(job, check_delivery=True)
+            await self._validate_references_async(job, check_delivery=True, snapshot_new=True)
             self._reject_past_once_run(job)
             self._validate_capacity(job)
             self._jobs[job.id] = job
@@ -585,6 +599,25 @@ class CronService:
         if event is None:
             return False
         return self._event_binding._event_job_can_fire(job, event, now or _timing._utc_now())
+
+    def references_project(self, job: CronJob, project_id: str) -> bool:
+        """Whether the job's explicit target or pinned Session works in a Project.
+
+        A legacy fresh-Session job has no stable Project binding. A pinned
+        Identity Session does, independently of its Agent's current default.
+        The caller runs these Session reads on the Session database's pool.
+        """
+        if job.project_id is not None:
+            return job.project_id == project_id
+        if job.session_id is not None and self._sessions is not None:
+            try:
+                binding = self._sessions.working_project(
+                    SessionAddress(None, job.agent_id, job.session_id)
+                )
+            except SessionNotFoundError:
+                return False
+            return binding.project_id == project_id
+        return job.working_project_id == project_id
 
     async def load_projection(self) -> None:
         """Preload the persisted job catalog before capturing a display projection."""
@@ -807,12 +840,25 @@ class CronService:
             issued = False
             try:
                 if changed_fields and changed_fields != ["notification_policy"]:
+                    snapshot_target = (
+                        not rename
+                        and "working_project_id" not in fields
+                        and candidate.project_id is None
+                        and candidate.session_id is None
+                        and any(
+                            getattr(job, name) != getattr(candidate, name)
+                            for name in ("agent_id", "project_id", "session_id")
+                        )
+                    )
                     # A chat is checked when it or the job's Agent changes, so an
                     # unrelated edit (pausing, say) works while its Channel is gone.
                     await self._validate_references_async(
                         candidate,
                         check_delivery=bool({"delivery", "agent_id"} & set(changed_fields)),
+                        snapshot_new=snapshot_target,
                     )
+                    if snapshot_target:
+                        fields = {**fields, "working_project_id": candidate.working_project_id}
                     if candidate.schedule_type == "webhook" and job.schedule_type != "webhook":
                         await settle_before_cancelling(self._prepare_webhook(job_id))
                         issued = True
@@ -821,7 +867,9 @@ class CronService:
                         job_id, fields, validate_references=False, rename=rename
                     )
                 if changed_fields:
-                    await self._apply_edit(job_id, job, candidate, changed_fields, restart_task)
+                    await self._apply_edit(
+                        job_id, job, candidate, changed_fields, restart_task, rename=rename
+                    )
             except BaseException:
                 if issued:
                     await settle_before_cancelling(self._webhooks.discard_secret(job_id))
@@ -835,6 +883,8 @@ class CronService:
         candidate: CronJob,
         changed_fields: list[str],
         restart_task: bool,
+        *,
+        rename: bool = False,
     ) -> None:
         """Apply a staged edit to memory and the job tasks at once, then save; undo on failure."""
         edited = self._clone_job(candidate)
@@ -854,7 +904,7 @@ class CronService:
         await settle_before_cancelling(self._save_edit(undo))
         if job.schedule_type == "webhook" and candidate.schedule_type != "webhook":
             await settle_before_cancelling(self._webhooks.discard(job_id))
-        if "watch" in changed_fields and _new_check(job.watch, candidate.watch):
+        if _new_check(job, candidate, rename=rename):
             await self._renew_watch(candidate)
 
     async def _prepare_webhook(self, job_id: str) -> None:
@@ -878,6 +928,8 @@ class CronService:
         agent_id: str,
         project_id: str | None,
         permission_ceiling: dict[str, Any] | None,
+        working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT,
+        session_id: str | None = None,
     ) -> PermissionRefusal | None:
         """Whether a job's stored-form *permission_ceiling* refuses *watch*.
 
@@ -890,6 +942,8 @@ class CronService:
             watch,
             agent_id=agent_id,
             project_id=project_id,
+            working_project_id=working_project_id,
+            session_id=session_id,
             ceiling=PermissionCeiling.from_ceiling_dict(permission_ceiling),
         )
 
@@ -933,6 +987,23 @@ class CronService:
 
         if not fields:
             return job, job, [], False
+
+        fields = dict(fields)
+        if isinstance(fields.get("run_overrides"), dict):
+            fields["run_overrides"] = patch_run_overrides(
+                job.run_overrides, fields["run_overrides"]
+            )
+        if (
+            not rename
+            and "working_project_id" not in fields
+            and any(
+                name in fields and fields[name] != getattr(job, name)
+                for name in ("agent_id", "project_id", "session_id")
+            )
+        ):
+            # A changed target derives its context anew. Fresh Identity targets
+            # capture the current default during reference validation.
+            fields["working_project_id"] = AGENT_DEFAULT_PROJECT
 
         if (
             job.status in TERMINAL_CRON_JOB_STATUSES
@@ -998,7 +1069,7 @@ class CronService:
                 candidate.remaining_runs = 1
         if candidate.schedule_type == "webhook" and job.schedule_type != "webhook":
             self._webhooks.check_available()
-        watch_changed = "watch" in fields and _new_check(job.watch, candidate.watch)
+        watch_changed = _new_check(job, candidate, rename=rename)
         if watch_changed:
             # Checks of an earlier watch say nothing about this one.
             candidate.last_checked_at = None
@@ -1283,14 +1354,35 @@ class CronService:
         """Say which part of the job's target no longer exists, if one does; blocking."""
         target = format_agent_address(job.agent_id, job.project_id)
         if self._agent_resolver is not None:
+            agent = None
             try:
-                self._agent_resolver.resolve_agent(job.project_id, job.agent_id)
+                agent = self._agent_resolver.resolve_agent(
+                    job.project_id, job.agent_id, require_model=False
+                )
             except ResolutionProjectNotFoundError:
                 return f"Project {job.project_id} no longer exists"
             except ResolutionAgentNotFoundError:
                 return f"Agent {target} no longer exists"
             except AgentResolutionError:
                 pass  # It exists but cannot run now; the fire records why.
+            if (
+                agent is not None
+                and job.project_id is None
+                and (
+                    job.session_id is not None
+                    or job.working_project_id is not AGENT_DEFAULT_PROJECT
+                )
+            ):
+                try:
+                    self._agent_resolver.resolve_working_project(
+                        None, agent, session_id=job.session_id, requested=job.working_project_id
+                    )
+                except WorkingProjectMissingError as error:
+                    return f"Project {error.project_id} no longer exists"
+                except ResolutionProjectNotFoundError:
+                    return f"Project {job.working_project_id} no longer exists"
+                except AgentResolutionError:
+                    pass
         if (
             job.session_id is not None
             and self._sessions is not None
@@ -1310,27 +1402,68 @@ class CronService:
         _schedule.normalize_job_schedule(self._timezone, _timing._utc_now(), job)
 
     async def _validate_references_async(
-        self, job: CronJob, *, check_delivery: bool = False
+        self, job: CronJob, *, check_delivery: bool = False, snapshot_new: bool = False
     ) -> None:
         """Event-Loop-safe :meth:`_validate_references`: its reads use the Session pool.
 
         With ``check_delivery``, a chat delivery's Channel must exist and belong
         to the job's Agent.
         """
+        validate = (
+            partial(self._validate_references, snapshot_new=True)
+            if snapshot_new
+            else self._validate_references
+        )
         if self._sessions is None:
-            self._validate_references(job)
+            validate(job)
         else:
-            await self._sessions.run_async(self._validate_references, job)
+            await self._sessions.run_async(validate, job)
         if check_delivery:
             await check_chat_delivery(job, self._chats)
 
-    def _validate_references(self, job: CronJob) -> None:
+    def _validate_references(self, job: CronJob, *, snapshot_new: bool = False) -> None:
         """Refuse a job whose target Agent or selected Session is unavailable. Blocking."""
         if self._agent_resolver is not None:
             try:
-                self._agent_resolver.resolve_agent(job.project_id, job.agent_id)
+                kwargs: dict[str, Any] = {}
+                if job.session_id is not None:
+                    kwargs["session_id"] = job.session_id
+                if job.run_overrides is not None:
+                    kwargs["run_overrides"] = job.run_overrides
+                agent = self._agent_resolver.resolve_agent(job.project_id, job.agent_id, **kwargs)
+                choose_new = snapshot_new and job.session_id is None and job.project_id is None
+                if job.project_id is None and (
+                    choose_new
+                    or job.session_id is not None
+                    or job.working_project_id is not AGENT_DEFAULT_PROJECT
+                ):
+                    actual = self._agent_resolver.resolve_working_project(
+                        job.project_id,
+                        agent,
+                        session_id=job.session_id,
+                        requested=job.working_project_id,
+                    )
+                    if (
+                        job.session_id is not None
+                        and job.working_project_id is not AGENT_DEFAULT_PROJECT
+                        and actual != job.working_project_id
+                    ):
+                        raise CronJobValidationError(
+                            "A pinned Session keeps its own Working Project"
+                        )
+                    if choose_new:
+                        job.working_project_id = actual
             except Exception as error:
+                if isinstance(error, CronJobValidationError):
+                    raise
                 raise _target_validation_error(job, error) from error
+        elif (
+            snapshot_new
+            and job.session_id is None
+            and job.project_id is None
+            and job.working_project_id is AGENT_DEFAULT_PROJECT
+        ):
+            job.working_project_id = None
         if (
             job.session_id is not None
             and self._sessions is not None
@@ -1406,6 +1539,18 @@ def _log_retarget(job_id: str, agent_id: str, new_agent_id: str) -> None:
     )
 
 
-def _new_check(before: CronWatch | None, after: CronWatch | None) -> bool:
-    """Whether an edit gives the job another check; changing only ``always`` keeps it."""
-    return after is not None if before is None else not before.same_check(after)
+def _new_check(before: CronJob, after: CronJob, *, rename: bool = False) -> bool:
+    """A new check or command context needs a fresh baseline; renames keep identity."""
+    if before.watch is None:
+        return after.watch is not None
+    if not before.watch.same_check(after.watch):
+        return True
+    return (
+        not rename
+        and after.watch is not None
+        and after.watch.kind == "command"
+        and any(
+            getattr(before, name) != getattr(after, name)
+            for name in ("agent_id", "project_id", "working_project_id", "session_id")
+        )
+    )

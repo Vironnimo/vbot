@@ -9,7 +9,6 @@ import {
   CRON_FREQUENCY_INTERVAL,
   CRON_FREQUENCY_MONTHLY,
   CRON_FREQUENCY_ONCE,
-  CRON_FREQUENCY_WEBHOOK,
   CRON_FREQUENCY_WEEKLY,
   CRON_STATUS_ACTIVE,
   CRON_SCHEDULE_TYPE_EVENT,
@@ -42,7 +41,6 @@ export function frequencyOptions() {
     { value: CRON_FREQUENCY_WEEKLY, label: t('cron.frequency.weekly') },
     { value: CRON_FREQUENCY_MONTHLY, label: t('cron.frequency.monthly') },
     { value: CRON_FREQUENCY_CUSTOM, label: t('cron.frequency.custom') },
-    { value: CRON_FREQUENCY_WEBHOOK, label: t('cron.frequency.webhook') },
   ];
 }
 

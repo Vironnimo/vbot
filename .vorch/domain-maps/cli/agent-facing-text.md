@@ -6,6 +6,9 @@ Bundled `vbot-docs` Skill (`resources/skills/vbot-docs/`), the Agents' guide to 
 
 | Text | Reason |
 |---|---|
+| `vbot-docs` task row `Automations: scheduled Runs, change checks and Webhooks` | Makes the reference discoverable when the task is an external event rather than a timed schedule. |
+| `references/cron.md`: `For new Sessions of an Identity Agent, --working-project ...` through `Project ids come from vbot project list.` | Distinguishes a fixed Working Project or explicit Workspace from the one-time capture of the Agent default, and prevents conflicting Project selection for pinned Sessions or Project Agents. |
+| `references/cron.md`: `--model ... and --thinking-effort ... override only this automation's Runs ...` through `changing one leaves the other unchanged.` | Teaches Run scope, supported effort values, inheritance and per-field clearing without making an Agent alter the user's Session settings or resend unrelated overrides. |
 | Agent `--project-memory`: `Use shared Memory from enabled Projects; independent of workspace Memory` | The Agent switch controls a separate scope, so selecting it with personal Memory off must remain understandable. |
 | Project `--memory`: `Allow Agents to use this Project's shared Memory.` and its omit rule | The Project switch gates Agent access while preserving entries and user editing; omission keeps defaults on create or the current switch on update. |
 | Memory target: `Identity Agent id, or Project id with --project` / `Select shared Project Memory for this id; the scope is project` | The same positional grammar supports all revision commands without confusing Project ids with Identity Agent ids. |

@@ -25,6 +25,8 @@ from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from core.permissions import PermissionCeiling
+    from core.projects import AgentOverrides
+    from core.runs import RunContinuationSource
     from core.runtime.runtime import Runtime
     from core.sessions import ChatSession, ChatSessionManager
 
@@ -123,6 +125,7 @@ class TriggerService:
         execution_owner: RunExecutionOwner | None = None,
         wake: bool = True,
         subagent_message: SubAgentMessage | None = None,
+        continuation_source: RunContinuationSource | None = None,
     ) -> asyncio.Future[None]:
         """Coalesce one background result at the target Session's next Run boundary.
 
@@ -130,6 +133,8 @@ class TriggerService:
         persisted without one and reaches the Agent with its next Run. A
         ``subagent_message`` travels as the display record of the delivering
         note, so the conversation shows the message where it arrived.
+        ``continuation_source`` preserves captured settings after an origin Run
+        leaves bounded lookup retention; cancellation still uses ``origin_run_id``.
         """
         return self._completion_delivery.submit(
             address,
@@ -139,6 +144,7 @@ class TriggerService:
             execution_owner=execution_owner,
             wake=wake,
             subagent_message=subagent_message,
+            continuation_source=continuation_source,
         )
 
     def set_owned_completion_starter(self, starter: Callable[..., Awaitable[Run]]) -> None:
@@ -221,6 +227,7 @@ class TriggerService:
         reply_surface: ReplySurface | None = None,
         project_id: str | None = None,
         working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT,
+        run_overrides: AgentOverrides | None = None,
         actor: str | None = None,
         tool_restriction: Sequence[str] | None = None,
         tool_denial_resolver: Callable[[str], str | None] | None = None,
@@ -248,6 +255,8 @@ class TriggerService:
         activity, overriding ``contributes_to_agent_activity``.
         With no ``session_id``, ``working_project_id`` and ``actor`` select the
         new Session's working Project and creation attribution, as in Chat.
+        ``run_overrides`` replaces Model settings only for the triggered Run,
+        including when it waits in the Queue; Session defaults stay unchanged.
         ``permission_ceiling`` bounds the Run by the boundary of the Session
         that caused it, such as a Cron job's creator (``ChatLoop.start_run``).
         """
@@ -266,6 +275,8 @@ class TriggerService:
             schedule_id,
             notification_policy,
         )
+        if run_overrides is not None and not run_overrides.is_empty:
+            run_kwargs["run_overrides"] = run_overrides
         if session_id is None:
             session_kwargs: dict[str, Any] = {}
             if working_project_id is not AGENT_DEFAULT_PROJECT:

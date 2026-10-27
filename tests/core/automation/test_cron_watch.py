@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import UTC, datetime, timedelta
@@ -22,6 +23,7 @@ from core.automation.cron import (
 )
 from core.runs import RunStatus
 from core.secrets._references import SecretMasker
+from core.sessions import AGENT_DEFAULT_PROJECT
 from tests.core.automation.cron_test_support import (
     FakeChats,
     FakeChecks,
@@ -230,47 +232,116 @@ async def test_failed_checks_count_toward_the_streak_and_alert_without_touching_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("changed_field", ["watch", "working_project_id", "session_id"])
 async def test_a_new_watch_is_checked_at_once_and_its_failure_counts_toward_no_streak(
     tmp_path: Path,
+    changed_field: str,
 ) -> None:
     service, trigger_service = make_service(tmp_path)
     service.start()
     checks = FakeChecks([WatchCheckError("The watched URL answered HTTP 503"), "Status: up"])
     try:
-        job_id = await _watching_job(
-            service, checks, watch=CronWatch.parse("url", "https://status.example/a")
+        watch = (
+            CronWatch.parse("url", "https://status.example/a")
+            if changed_field == "watch"
+            else _COMMAND
         )
+        job_id = await _watching_job(service, checks, watch=watch)
         assert await service.await_first_check(job_id)
         failed = service.get_job(job_id)
         assert failed.last_check_error == "The watched URL answered HTTP 503"
         assert failed.consecutive_failures == 0
 
-        fixed = CronWatch.parse("url", "https://status.example/b")
-        await service.update_job(job_id, watch=fixed)
+        updates: dict[str, Any] = {
+            "watch": CronWatch.parse("url", "https://status.example/b"),
+            "working_project_id": "project-a",
+            "session_id": "pinned",
+        }
+        await service.update_job(job_id, **{changed_field: updates[changed_field]})
         assert await service.await_first_check(job_id)
         checked = service.get_job(job_id)
         assert checked.last_checked_at is not None and checked.last_check_error is None
-        assert _baseline(service, job_id)["watch"] == {"url": "https://status.example/b"}
+        expected_watch = updates["watch"] if changed_field == "watch" else watch
+        assert _baseline(service, job_id)["watch"] == expected_watch.to_dict()
+        if changed_field != "watch":
+            assert checks.targets[-1] == (
+                "pinned" if changed_field == "session_id" else None,
+                "project-a" if changed_field == "working_project_id" else AGENT_DEFAULT_PROJECT,
+            )
         trigger_service.trigger_run.assert_not_awaited()
     finally:
         await service.aclose()
 
 
 @pytest.mark.asyncio
-async def test_the_baseline_is_replaced_when_unreadable_and_removed_with_its_watch(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+@pytest.mark.parametrize("phase", ["check", "admission"])
+async def test_retargeting_a_watch_discards_output_from_its_earlier_project(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str
+) -> None:
+    service, trigger_service = make_service(tmp_path)
+    checks = FakeChecks(["before", "changed", "new project"])
+    job_id = await _watching_job(service, checks, working_project_id=None)
+    await service._watcher.fire(service.get_job(job_id))
+    entered, release = asyncio.Event(), asyncio.Event()
+    if phase == "check":
+        run_command = checks.run_command
+
+        async def blocked_check(*args: Any, **kwargs: Any) -> str:
+            entered.set()
+            await release.wait()
+            return await run_command(*args, **kwargs)
+
+        monkeypatch.setattr(checks, "run_command", blocked_check)
+    else:
+        trigger = service._execution._trigger_job_run
+
+        async def blocked_admission(*args: Any, **kwargs: Any) -> Any:
+            entered.set()
+            await release.wait()
+            return await trigger(*args, **kwargs)
+
+        monkeypatch.setattr(service._execution, "_trigger_job_run", blocked_admission)
+
+    fire = asyncio.create_task(service._watcher.fire(service.get_job(job_id)))
+    await entered.wait()
+    await service.update_job(job_id, working_project_id="project-a")
+    release.set()
+    await fire
+    trigger_service.trigger_run.assert_not_awaited()
+    assert service.get_job(job_id).last_checked_at is None
+    assert not baseline_path(service._cron_dir / WATCH_STATE_DIR_NAME, job_id).exists()
+
+    await service._watcher.fire(service.get_job(job_id))
+    assert _baseline(service, job_id)["output"] == "new project"
+    assert checks.targets[-1] == (None, "project-a")
+    trigger_service.trigger_run.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("damage", ["unreadable", "target_changed", "target_missing"])
+async def test_the_baseline_is_replaced_when_unusable_and_removed_with_its_watch(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, damage: str
 ) -> None:
     service, trigger_service = make_service(tmp_path)
     job_id = await _watching_job(service, FakeChecks(["v1", "v2"]))
     await service._watcher.fire(service.get_job(job_id))
     path = baseline_path(service._cron_dir / WATCH_STATE_DIR_NAME, job_id)
-    path.write_text("{broken", encoding="utf-8")
+    if damage == "unreadable":
+        path.write_text("{broken", encoding="utf-8")
+    else:
+        payload = _baseline(service, job_id)
+        if damage == "target_changed":
+            payload["execution_target"] = "0" * 64
+        else:
+            payload.pop("execution_target")
+        path.write_text(json.dumps(payload), encoding="utf-8")
 
     with caplog.at_level(logging.WARNING, logger="vbot.automation.cron"):
         await service._watcher.fire(service.get_job(job_id))
 
     trigger_service.trigger_run.assert_not_awaited()
-    assert "baseline unreadable" in caplog.text
+    if damage == "unreadable":
+        assert "baseline unreadable" in caplog.text
     assert _baseline(service, job_id)["output"] == "v2"
     await service.update_job(job_id, watch=None)
     assert not path.exists()

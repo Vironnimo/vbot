@@ -265,7 +265,7 @@ export default Object.freeze({
   'settings.general.copyDataDirectory': 'Copy data directory',
   'settings.general.timezone': 'Time zone',
   'settings.general.timezoneHelp':
-    'vBot shows every date and time in this time zone. Agents, Schedules, and Calendar events use it for the current time.\n\nIt starts as the time zone of the computer running the vBot server.',
+    'vBot shows every date and time in this time zone. Agents, Automations, and Calendar events use it for the current time.\n\nIt starts as the time zone of the computer running the vBot server.',
   'settings.general.timezoneSearch': 'Search time zones…',
   'settings.general.keepAwake': 'Keep computer awake',
   'settings.general.keepAwakeHelp':
@@ -364,12 +364,12 @@ export default Object.freeze({
   'settings.librarian.archiveAfterDescription':
     'Days without use or change before an unpinned Skill is retired.',
   'settings.librarian.archiveAfterHelp':
-    'A pass retires an unpinned Skill, whoever created it, once it was neither used nor changed in a conversation or by you for this many days. Use by the Agents a Skill is shared with counts too; changes by Reflection and earlier passes do not. Retired Skills move to the archive, where you can restore them. A Skill named in one of the Agent’s Schedules, including the Agent jobs of Calendar events, stays, because those use it only when they run. From 1 to 3650 days. Default: 90.',
+    'A pass retires an unpinned Skill, whoever created it, once it was neither used nor changed in a conversation or by you for this many days. Use by the Agents a Skill is shared with counts too; changes by Reflection and earlier passes do not. Retired Skills move to the archive, where you can restore them. A Skill named in one of the Agent’s Automations, including the Agent jobs of Calendar events, stays, because those use it only when they run. From 1 to 3650 days. Default: 90.',
   'settings.librarian.consolidate': 'Merge overlapping Skills',
   'settings.librarian.consolidateDescription':
     'Each pass lets the Librarian merge and correct the Agent’s Skills.',
   'settings.librarian.consolidateHelp':
-    'After retiring unused Skills, the Librarian reads the Agent’s unpinned Skills, merges overlapping ones into one Skill, corrects hard-to-use instructions and deletes wrong or obsolete ones. Merged Skills move to the archive; the Agents they were shared with and the Schedules that named them move to the Skill that absorbed them.\n\nThis step runs only when there are at least two such Skills and one of them changed since the last merge. It is a Run of the Librarian in a new Session of its own, with the Librarian’s Model, so it uses tokens. Default: on.',
+    'After retiring unused Skills, the Librarian reads the Agent’s unpinned Skills, merges overlapping ones into one Skill, corrects hard-to-use instructions and deletes wrong or obsolete ones. Merged Skills move to the archive; the Agents they were shared with and the Automations that named them move to the Skill that absorbed them.\n\nThis step runs only when there are at least two such Skills and one of them changed since the last merge. It is a Run of the Librarian in a new Session of its own, with the Librarian’s Model, so it uses tokens. Default: on.',
   'settings.librarian.agent': 'The Librarian',
   'settings.librarian.agentDescription':
     'The Librarian is an Agent of its own that works only on Skills. Its Model decides how well it merges; the settings and conversations of the curated Agents are not affected.',
@@ -389,7 +389,7 @@ export default Object.freeze({
   'settings.notifications.title': 'Desktop notifications',
   'settings.notifications.intro': 'Shown by the vBot tray app on Windows.',
   'settings.notifications.help':
-    'The vBot tray app of an installed vBot on Windows shows these notifications.\n\nRun completed and Run failed cover Agent Runs in your Sessions, not Sub-Agent, Channel, or other background work. They are skipped while a vBot window already shows that Session.\n\nAutomation failed covers Schedules, including the Agent jobs of Calendar events, that fail. Update finished reports how a vBot update ended, successfully or not. Server stopped appears when the server the tray started stops unexpectedly.',
+    'The vBot tray app of an installed vBot on Windows shows these notifications.\n\nRun completed and Run failed cover Agent Runs in your Sessions, not Sub-Agent, Channel, or other background work. They are skipped while a vBot window already shows that Session.\n\nAutomation failed covers Automations, including the Agent jobs of Calendar events, that fail. Update finished reports how a vBot update ended, successfully or not. Server stopped appears when the server the tray started stops unexpectedly.',
   'settings.notifications.runCompleted': 'Run completed',
   'settings.notifications.runFailed': 'Run failed',
   'settings.notifications.automationFailed': 'Automation failed',

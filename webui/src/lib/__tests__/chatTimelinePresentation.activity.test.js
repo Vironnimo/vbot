@@ -141,7 +141,7 @@ describe('runFooterParts', () => {
     ).toEqual([status('running')]);
   });
 
-  it('details the Run state, moments, runtime and Model responses', () => {
+  it('details the Run state and recorded Models and effort without inferring older settings', () => {
     const start = '2026-08-05T18:19:52Z';
     const nowMs = Date.parse(end) + 60_000;
     const moment = (value) => formatMoment(value, { nowMs, seconds: true });
@@ -154,6 +154,18 @@ describe('runFooterParts', () => {
           iterationCount: 3,
           startTimestamp: start,
           endTimestamp: end,
+          items: [
+            {
+              type: 'assistant_output',
+              messages: [
+                { model: 'provider/old' },
+                { model: 'provider/worker', thinking_effort: 'high' },
+                { model: 'provider/worker', thinking_effort: 'high' },
+                { model: 'provider/fallback', thinking_effort: '' },
+                { model: 'provider/worker', thinking_effort: 'none' },
+              ],
+            },
+          ],
         },
         nowMs,
       ),
@@ -164,6 +176,19 @@ describe('runFooterParts', () => {
         { label: t('chat.details.started'), value: moment(start) },
         { label: t('chat.details.finished'), value: moment(end) },
         { label: t('chat.details.duration'), value: seconds('8.0') },
+        { label: t('chat.details.model'), value: 'provider/old' },
+        {
+          label: t('chat.details.modelAndThinking'),
+          value: 'provider/worker · high',
+        },
+        {
+          label: t('chat.details.modelAndThinking'),
+          value: `provider/fallback · ${t('chat.details.providerDefault')}`,
+        },
+        {
+          label: t('chat.details.modelAndThinking'),
+          value: 'provider/worker · none',
+        },
       ],
     });
   });

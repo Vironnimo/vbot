@@ -275,6 +275,7 @@ def test_factories_persist_only_their_role_fields_and_round_trip(
             "role": "assistant",
             "model": "openai/gpt-4.1",
             "content": "The weather is sunny.",
+            "thinking_effort": "high",
             "reasoning_meta": {"signature": "opaque"},
             "usage": {"input_tokens": 200, "output_tokens": 30},
         },
@@ -379,9 +380,10 @@ _DISPLAY = {"version": 1, "primary": [{"kind": "path", "value": "src/app.py"}], 
                 model="openai/gpt-4.1",
                 content="Answer",
                 reasoning="Thought",
+                thinking_effort="",
                 reasoning_timing=FIXED_TIMING,
             ),
-            {"reasoning_timing": FIXED_TIMING},
+            {"reasoning_timing": FIXED_TIMING, "thinking_effort": ""},
         ),
         (
             ChatMessage.assistant(
@@ -544,7 +546,14 @@ def test_absent_optional_fields_are_omitted_and_unknown_fields_ignored() -> None
     serialized = answer.to_dict()
 
     assert answer.usage is None and answer.interrupted is False and user.sender is None
-    for key in ("usage", "interrupted", "interruption_cause", "reasoning_timing", "phase"):
+    for key in (
+        "usage",
+        "interrupted",
+        "interruption_cause",
+        "reasoning_timing",
+        "thinking_effort",
+        "phase",
+    ):
         assert key not in serialized
     assert "sender" not in user.to_dict()
     future = {**user.to_dict(), "future_field": "ignored"}
@@ -780,6 +789,8 @@ _BAD_TIMING = {"started_at": "no-offset", "completed_at": "x", "duration_ms": 1}
     "build",
     [
         lambda: ChatMessage.assistant(model="m/x", content="Checking.", phase=1).to_dict(),  # type: ignore[arg-type]
+        lambda: ChatMessage.assistant(model="m/x", content="Answer", thinking_effort=1).to_dict(),  # type: ignore[arg-type]
+        lambda: replace(ChatMessage.user("Hello"), thinking_effort="high").to_dict(),
         lambda: ChatMessage.assistant(
             model="m/x", content="Answer", reasoning_timing=FIXED_TIMING
         ).to_dict(),
@@ -813,6 +824,8 @@ _BAD_TIMING = {"started_at": "no-offset", "completed_at": "x", "duration_ms": 1}
     ],
     ids=[
         "non-string-phase",
+        "non-string-thinking-effort",
+        "thinking-effort-on-user",
         "reasoning-timing-without-reasoning",
         "malformed-reasoning-timing",
         "reasoning-timing-on-user",

@@ -4,8 +4,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from core.automation.cron import CronDelivery, CronJobValidationError, CronService, CronWatch
+from core.automation.cron import (
+    CronDelivery,
+    CronJobValidationError,
+    CronService,
+    CronWatch,
+    cron_run_overrides,
+)
 from core.projects import format_agent_address
+from core.sessions import AGENT_DEFAULT_PROJECT
 from server.rpc.agent_refs import _agent_reference_lock
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
@@ -13,6 +20,7 @@ from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.validation import (
     _optional_positive_integer,
     _optional_string,
+    _optional_working_project,
     _reject_unsupported,
     _required_agent_address,
     _required_string,
@@ -37,6 +45,8 @@ async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
         "event_time",
         "repeat",
         "session_id",
+        "working_project_id",
+        "run_overrides",
         "delivery",
         "notification_policy",
         "watch",
@@ -133,6 +143,7 @@ async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
                 notification_policy=params.get("notification_policy", "all"),
                 watch=watch,
                 actor="rpc",
+                **_execution_fields(params, creating=True),
                 **event_fields,
             )
     except Exception as exc:
@@ -242,6 +253,8 @@ async def _cron_update(state: Any, params: JsonObject) -> JsonObject:
         "event_time",
         "repeat",
         "session_id",
+        "working_project_id",
+        "run_overrides",
         "delivery",
         "notification_policy",
         "watch",
@@ -251,6 +264,7 @@ async def _cron_update(state: Any, params: JsonObject) -> JsonObject:
 
     job_id = _required_string(params, "id")
     updates: JsonObject = {}
+    updates.update(_execution_fields(params, creating=False))
 
     if "agent_id" in params:
         # Re-targeting also re-parses the address form, so changing the project of
@@ -468,6 +482,12 @@ def _cron_job_response(cron_service: Any, job: Any) -> JsonObject:
         "event_title": None if event is None else event.title,
         "remaining_runs": job.remaining_runs,
         "session_id": job.session_id,
+        **(
+            {"working_project_id": job.working_project_id}
+            if job.working_project_id is not AGENT_DEFAULT_PROJECT
+            else {}
+        ),
+        "run_overrides": None if job.run_overrides is None else job.run_overrides.as_dict(),
         "notification_policy": job.notification_policy,
         "delivery": (job.delivery or CronDelivery(kind="none")).to_dict(),
         "status": job.status,
@@ -498,6 +518,21 @@ def _cron_job_response(cron_service: Any, job: Any) -> JsonObject:
         # A webhook job's URL and requests; null for another schedule.
         "webhook": _webhook_response(cron_service, job),
     }
+
+
+def _execution_fields(params: JsonObject, *, creating: bool) -> JsonObject:
+    """Parse execution choices; updates retain a leaf patch for owner-side merging."""
+    fields: JsonObject = {}
+    if "working_project_id" in params:
+        fields["working_project_id"] = _optional_working_project(params, None)
+    if "run_overrides" in params:
+        raw = params["run_overrides"]
+        try:
+            parsed = cron_run_overrides(raw, strict=True)
+        except CronJobValidationError as error:
+            raise RpcError(RPC_ERROR_INVALID_REQUEST, str(error)) from error
+        fields["run_overrides"] = parsed if creating else raw
+    return fields
 
 
 def _webhook_response(cron_service: Any, job: Any) -> JsonObject | None:

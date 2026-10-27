@@ -15,6 +15,7 @@ import pytest
 
 from core.automation.cron import CronWatch, WatchCheckError
 from core.permissions import BoundaryContext, PermissionBoundary, PermissionCeiling
+from core.sessions import AGENT_DEFAULT_PROJECT, SessionAddress, WorkingProjectChoice
 from core.tools import _public_http as public_http
 from core.tools import shell_environment, watch_checks
 from core.tools._powershell import PowerShellRequest
@@ -66,19 +67,52 @@ class _Launches:
         return shell
 
 
-def _runner(tmp_path: Path, launches: _Launches | None = None, **kwargs: Any) -> WatchCheckRunner:
+def _runner(
+    tmp_path: Path,
+    launches: _Launches | None = None,
+    *,
+    default_project: str | None = None,
+    **kwargs: Any,
+) -> WatchCheckRunner:
     project_dir = tmp_path / "project"
     project_dir.mkdir(exist_ok=True)
     workspace = tmp_path / "workspace"
     workspace.mkdir(exist_ok=True)
 
-    async def agent(agent_id: str) -> Any:
+    async def agent(_project_id: str | None, agent_id: str, **_kwargs: Any) -> Any:
         if agent_id == "gone":
             raise LookupError("Agent not found: gone")
         return SimpleNamespace(workspace=str(workspace))
 
+    async def working_project(
+        project_id: str | None,
+        _agent: Any,
+        *,
+        session_id: str | None,
+        requested: WorkingProjectChoice,
+    ) -> str | None:
+        if session_id == "missing-project":
+            raise LookupError("The Session's Working Project is unavailable")
+        if project_id is not None:
+            assert requested is AGENT_DEFAULT_PROJECT
+            return project_id
+        if session_id == "pinned":
+            return "project-a"
+        return default_project if requested is AGENT_DEFAULT_PROJECT else requested
+
+    async def session(address: SessionAddress) -> Any:
+        if address.session_id == "missing-session":
+            raise LookupError("Session is unavailable")
+        return SimpleNamespace(address=address)
+
     return WatchCheckRunner(
-        agents=SimpleNamespace(get_async=agent),
+        agent_resolver=cast(
+            Any,
+            SimpleNamespace(
+                resolve_agent_async=agent, resolve_working_project_async=working_project
+            ),
+        ),
+        sessions=cast(Any, SimpleNamespace(get_async=session)),
         projects=SimpleNamespace(get=lambda _project_id: SimpleNamespace(cwd=str(project_dir))),
         data_root=tmp_path / "data",
         launch=cast(Any, launches if launches is not None else _Launches(lambda _shell: None)),
@@ -109,14 +143,23 @@ def _host_shell(monkeypatch: pytest.MonkeyPatch) -> list[CommandEnvironment]:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("project_id", "directory"),
+    ("project_id", "working_project_id", "session_id", "default_project", "directory"),
     [
-        pytest.param("project-a", "project", id="project"),
-        pytest.param(None, "workspace", id="agent"),
+        pytest.param("project-a", AGENT_DEFAULT_PROJECT, None, None, "project", id="project"),
+        pytest.param(None, AGENT_DEFAULT_PROJECT, None, None, "workspace", id="agent"),
+        pytest.param(None, "project-a", None, None, "project", id="working-project"),
+        pytest.param(None, None, None, "project-a", "workspace", id="explicit-workspace"),
+        pytest.param(None, AGENT_DEFAULT_PROJECT, "pinned", None, "project", id="pinned"),
+        pytest.param(None, AGENT_DEFAULT_PROJECT, None, "project-a", "project", id="default"),
     ],
 )
 async def test_a_check_command_runs_in_the_jobs_directory_and_keeps_the_start_of_its_output(
-    tmp_path: Path, project_id: str | None, directory: str
+    tmp_path: Path,
+    project_id: str | None,
+    working_project_id: WorkingProjectChoice,
+    session_id: str | None,
+    default_project: str | None,
+    directory: str,
 ) -> None:
     def script(shell: _Shell) -> None:
         shell.write("x" * (COMMAND_OUTPUT_MAX_BYTES - 2) + "äö")
@@ -125,8 +168,12 @@ async def test_a_check_command_runs_in_the_jobs_directory_and_keeps_the_start_of
 
     launches = _Launches(script)
 
-    output = await _runner(tmp_path, launches).run_command(
-        "Get-Content status.txt", agent_id="agent-one", project_id=project_id
+    output = await _runner(tmp_path, launches, default_project=default_project).run_command(
+        "Get-Content status.txt",
+        agent_id="agent-one",
+        project_id=project_id,
+        working_project_id=working_project_id,
+        session_id=session_id,
     )
 
     assert output == "x" * (COMMAND_OUTPUT_MAX_BYTES - 2) + "ä"
@@ -139,22 +186,36 @@ async def test_a_check_command_runs_in_the_jobs_directory_and_keeps_the_start_of
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("agent_id", "exit_code", "output", "problem"),
+    ("agent_id", "session_id", "exit_code", "output", "problem"),
     [
         pytest.param(
-            "agent-one", 3, "fetching\nboom  \n\n", "exited with code 3: boom", id="exit-code"
+            "agent-one", None, 3, "fetching\nboom  \n\n", "exited with code 3: boom", id="exit-code"
         ),
         pytest.param(
-            "agent-one", _NOT_RUN + 1, "", "did not run: PowerShell could not enter", id="not-run"
+            "agent-one",
+            None,
+            _NOT_RUN + 1,
+            "",
+            "did not run: PowerShell could not enter",
+            id="not-run",
         ),
-        pytest.param("agent-one", None, "", "timed out after", id="timeout"),
-        pytest.param("gone", 0, "", "did not run: Agent gone is not available", id="no-agent"),
+        pytest.param("agent-one", None, None, "", "timed out after", id="timeout"),
+        pytest.param(
+            "gone", None, 0, "", "did not run: Agent gone is not available", id="no-agent"
+        ),
+        pytest.param(
+            "agent-one", "missing-project", 0, "", "Working Project is unavailable", id="no-project"
+        ),
+        pytest.param(
+            "agent-one", "missing-session", 0, "", "Session is unavailable", id="no-session"
+        ),
     ],
 )
 async def test_a_check_command_fails_with_what_went_wrong(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     agent_id: str,
+    session_id: str | None,
     exit_code: int | None,
     output: str,
     problem: str,
@@ -170,7 +231,7 @@ async def test_a_check_command_fails_with_what_went_wrong(
 
     with pytest.raises(WatchCheckError, match=problem):
         await _runner(tmp_path, launches).run_command(
-            "Get-Content status.txt", agent_id=agent_id, project_id=None
+            "Get-Content status.txt", agent_id=agent_id, project_id=None, session_id=session_id
         )
 
     assert all(shell.killed for shell in launches.shells)
@@ -268,8 +329,14 @@ async def test_a_context_command_returns_its_output_with_any_exit_code_within_th
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "address_project", ["project-a", None], ids=["project-agent", "identity-agent"]
+)
 async def test_a_job_with_a_permission_ceiling_runs_only_checks_its_rules_allow(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _host_shell: list[CommandEnvironment]
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    _host_shell: list[CommandEnvironment],
+    address_project: str | None,
 ) -> None:
     monkeypatch.setenv("VBOT_DATA_DIR", str(tmp_path / "data"))
     login = shell_environment._login_environment
@@ -282,11 +349,15 @@ async def test_a_job_with_a_permission_ceiling_runs_only_checks_its_rules_allow(
     assert ceiling is not None
 
     def boundary(
-        stored: PermissionCeiling, agent_id: str | None, project_id: str | None
+        stored: PermissionCeiling,
+        agent_id: str | None,
+        project_id: str | None,
+        working_project_id: str | None,
     ) -> PermissionBoundary:
         # A command check names the job's Agent and Project; a URL check neither.
-        assert (agent_id, project_id) in {("agent-one", "project-a"), (None, None)}
-        workdir = project if project_id is not None else tmp_path / "data"
+        assert (agent_id, project_id) in {("agent-one", address_project), (None, None)}
+        assert working_project_id == ("project-a" if agent_id is not None else None)
+        workdir = project if working_project_id is not None else tmp_path / "data"
         context = BoundaryContext(workdir=workdir, home=project, data_dir=tmp_path / "data")
         return PermissionBoundary.build(None, context, ceilings=(stored,))
 
@@ -304,13 +375,15 @@ async def test_a_job_with_a_permission_ceiling_runs_only_checks_its_rules_allow(
         await runner.run_command(
             "Remove-Item -Recurse ../elsewhere",
             agent_id="agent-one",
-            project_id="project-a",
+            project_id=address_project,
+            working_project_id="project-a",
             ceiling=ceiling,
         )
     refused_url = await runner.permission_refusal(
         CronWatch.parse("url", "https://intranet.example/"),
         agent_id="agent-one",
-        project_id="project-a",
+        project_id=address_project,
+        working_project_id="project-a",
         ceiling=ceiling,
     )
     with pytest.raises(WatchCheckError, match="refuse fetching intranet.example"):
@@ -322,7 +395,11 @@ async def test_a_job_with_a_permission_ceiling_runs_only_checks_its_rules_allow(
     # without vBot's control variables and the credentials vBot knows.
     analyzer.result = plan("Get-Content", reads=[project / "status.txt"])
     output = await runner.run_command(
-        "Get-Content status.txt", agent_id="agent-one", project_id="project-a", ceiling=ceiling
+        "Get-Content status.txt",
+        agent_id="agent-one",
+        project_id=address_project,
+        working_project_id="project-a",
+        ceiling=ceiling,
     )
     assert output == ""
     line, _shell, cwd, environment = analyzer.lines[-1]

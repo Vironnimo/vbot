@@ -29,11 +29,12 @@ from core.automation.cron import (
     CronTargetUnavailableError,
 )
 from core.projects import (
+    AgentOverrides,
     AgentResolutionError,
     ResolutionAgentNotFoundError,
     ResolutionProjectNotFoundError,
 )
-from core.sessions import SessionAddress
+from core.sessions import AGENT_DEFAULT_PROJECT, SessionAddress
 from tests.core.automation.cron_test_support import (
     FakeChats,
     make_service,
@@ -279,6 +280,8 @@ def test_jobs_json_is_created_on_demand(tmp_path: Path) -> None:
         {"name": "New name"},
         {"prompt": "New instruction"},
         {"agent_id": "agent-two"},
+        {"working_project_id": "vbot"},
+        {"run_overrides": {"model": "openai/checker"}},
     ],
 )
 async def test_terminal_jobs_cannot_be_changed_through_update(
@@ -438,7 +441,32 @@ async def test_unreadable_jobs_file_disables_cron_without_overwriting_it(
 
 
 @pytest.mark.asyncio
-async def test_unknown_fields_are_kept_when_jobs_are_saved(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("known_overrides", "changes"),
+    [
+        pytest.param({"model": "openai/checker"}, {}, id="known-and-future"),
+        pytest.param({}, {}, id="future-only"),
+        pytest.param(
+            {"model": "openai/checker"}, {"run_overrides": {"model": None}}, id="clear-last-model"
+        ),
+        pytest.param(
+            {"thinking_effort": "high"},
+            {"run_overrides": {"thinking_effort": None}},
+            id="clear-last-effort",
+        ),
+        pytest.param(
+            {"thinking_effort_default": True},
+            {"run_overrides": {"thinking_effort": None}},
+            id="clear-provider-default",
+        ),
+        pytest.param(
+            {"model": "openai/checker"}, {"run_overrides": None}, id="clear-known-overrides"
+        ),
+    ],
+)
+async def test_unknown_fields_are_kept_when_jobs_are_saved(
+    tmp_path: Path, known_overrides: dict[str, Any], changes: dict[str, Any]
+) -> None:
     jobs_path = tmp_path / "cron" / "jobs.json"
     jobs_path.parent.mkdir(parents=True)
     progress = {
@@ -461,6 +489,10 @@ async def test_unknown_fields_are_kept_when_jobs_are_saved(tmp_path: Path) -> No
                         "cron_expression": "0 9 * * *",
                         "timezone": "Europe/Paris",
                         "event_progress": progress,
+                        "run_overrides": {
+                            **known_overrides,
+                            "future_option": {"kept": True},
+                        },
                     }
                 ],
             }
@@ -470,7 +502,7 @@ async def test_unknown_fields_are_kept_when_jobs_are_saved(tmp_path: Path) -> No
     service, _trigger_service = make_service(tmp_path)
 
     loaded = service.list_jobs()
-    await service.update_job("job-one", prompt="Changed schedule")
+    await service.update_job("job-one", prompt="Changed schedule", **changes)
 
     assert [job.id for job in loaded] == ["job-one"]
     assert not hasattr(loaded[0], "timezone")
@@ -478,6 +510,10 @@ async def test_unknown_fields_are_kept_when_jobs_are_saved(tmp_path: Path) -> No
     assert persisted["format_version"] == 1
     assert persisted["future_setting"] == {"kept": True}
     assert persisted["jobs"][0]["prompt"] == "Changed schedule"
+    assert persisted["jobs"][0]["run_overrides"] == {
+        "future_option": {"kept": True},
+        **({} if changes else known_overrides),
+    }
     assert persisted["jobs"][0]["timezone"] == "Europe/Paris"
     assert persisted["jobs"][0]["event_progress"] == progress
 
@@ -639,7 +675,7 @@ async def test_edits_validate_target_and_owned_session_off_the_loop(
     reading_threads: list[threading.Thread] = []
 
     def reads(result: Any) -> Mock:
-        def read(*_args: Any) -> Any:
+        def read(*_args: Any, **_kwargs: Any) -> Any:
             reading_threads.append(threading.current_thread())
             return result
 
@@ -648,7 +684,10 @@ async def test_edits_validate_target_and_owned_session_off_the_loop(
     async def on_the_pool(function: Any, *args: Any) -> Any:
         return await asyncio.to_thread(function, *args)
 
-    resolver = SimpleNamespace(resolve_agent=reads(SimpleNamespace(id="agent-one")))
+    resolver = SimpleNamespace(
+        resolve_agent=reads(SimpleNamespace(id="agent-one")),
+        resolve_working_project=Mock(return_value=None),
+    )
     sessions = SimpleNamespace(exists=reads(False), run_async=on_the_pool)
     service, _trigger_service = make_service(tmp_path, agent_resolver=resolver, sessions=sessions)
     job = await service.create_job(
@@ -669,7 +708,7 @@ async def test_edits_validate_target_and_owned_session_off_the_loop(
         else:
             await service.update_job(job.id, **fields)
 
-    resolver.resolve_agent.assert_called_once_with("vbot", "agent-one")
+    resolver.resolve_agent.assert_called_once_with("vbot", "agent-one", session_id="wrong-session")
     sessions.exists.assert_called_once_with(
         SessionAddress(project_id="vbot", agent_id="agent-one", session_id="wrong-session")
     )
@@ -680,7 +719,10 @@ async def test_edits_validate_target_and_owned_session_off_the_loop(
 
 @pytest.mark.asyncio
 async def test_a_fire_while_an_edit_checks_its_references_is_kept(tmp_path: Path) -> None:
-    resolver = SimpleNamespace(resolve_agent=Mock(return_value=SimpleNamespace(id="agent-one")))
+    resolver = SimpleNamespace(
+        resolve_agent=Mock(return_value=SimpleNamespace(id="agent-one")),
+        resolve_working_project=Mock(return_value=None),
+    )
     service, _trigger_service = make_service(tmp_path, agent_resolver=resolver)
     job = await service.create_job(
         agent_id="agent-one",
@@ -768,7 +810,10 @@ async def test_missing_target_is_a_cron_validation_and_resolver_not_found_error(
 ) -> None:
     # Cron's own catchers see a validation error; RPC accessors see the precise
     # resolver not-found error and report agent_not_found / project_not_found.
-    resolver = SimpleNamespace(resolve_agent=Mock(return_value=SimpleNamespace(id="ghost")))
+    resolver = SimpleNamespace(
+        resolve_agent=Mock(return_value=SimpleNamespace(id="ghost")),
+        resolve_working_project=Mock(return_value=None),
+    )
     service, _trigger_service = make_service(tmp_path, agent_resolver=resolver)
     job = await service.create_job(
         agent_id="ghost", prompt="Ping", schedule_type="cron", cron_expression="0 9 * * *"
@@ -801,7 +846,10 @@ async def test_target_that_cannot_run_keeps_the_resolver_reason(
 ) -> None:
     # An existing target without a usable Model must not be reported as missing.
     reason = "agent 'stranded' has no usable model"
-    resolver = SimpleNamespace(resolve_agent=Mock(return_value=SimpleNamespace(id="stranded")))
+    resolver = SimpleNamespace(
+        resolve_agent=Mock(return_value=SimpleNamespace(id="stranded")),
+        resolve_working_project=Mock(return_value=None),
+    )
     service, _trigger_service = make_service(tmp_path, agent_resolver=resolver)
     job = await service.create_job(
         agent_id="stranded", prompt="Ping", schedule_type="cron", cron_expression="0 9 * * *"
@@ -841,6 +889,134 @@ async def test_project_id_defaults_to_none_and_round_trips(tmp_path: Path) -> No
     reloaded_service, _ = make_service(tmp_path)
     reloaded = {job.id: job.project_id for job in reloaded_service.list_jobs()}
     assert reloaded == {bare.id: None, blank.id: None, scoped.id: "vbot"}
+
+
+@pytest.mark.asyncio
+async def test_execution_choices_round_trip_and_override_edits_preserve_other_settings(
+    tmp_path: Path,
+) -> None:
+    service, _ = make_service(tmp_path)
+    fields: dict[str, Any] = {"agent_id": "builder", "prompt": "Check", **_CRON}
+    legacy = await service.create_job(**fields)
+    workspace = await service.create_job(**fields, working_project_id=None)
+    project = await service.create_job(
+        **fields,
+        working_project_id="vbot",
+        run_overrides=AgentOverrides(model="openai/checker", thinking_effort="low"),
+    )
+    assert legacy.to_dict()["working_project_id"] is None
+    # Simulate a pre-feature document: absence remains legacy after unrelated edits.
+    legacy_path = tmp_path / "cron/jobs.json"
+    legacy_data = json.loads(legacy_path.read_text())
+    next(item for item in legacy_data["jobs"] if item["id"] == legacy.id).pop("working_project_id")
+    legacy_path.write_text(json.dumps(legacy_data))
+    assert workspace.to_dict()["working_project_id"] is None
+    assert service.references_project(project, "vbot")
+    reloaded, _ = make_service(tmp_path)
+    await reloaded.update_job(legacy.id, name="Legacy remains compatible")
+    await reloaded.update_job(project.id, run_overrides={"thinking_effort": "high"})
+    assert reloaded.get_job(legacy.id).working_project_id is AGENT_DEFAULT_PROJECT
+    assert reloaded.get_job(workspace.id).working_project_id is None
+    current = reloaded.get_job(project.id)
+    assert current.working_project_id == "vbot"
+    assert current.run_overrides == AgentOverrides(model="openai/checker", thinking_effort="high")
+    current = await reloaded.update_job(project.id, run_overrides={"thinking_effort_default": True})
+    assert current.run_overrides == AgentOverrides(
+        model="openai/checker", thinking_effort_default=True
+    )
+    current = await reloaded.update_job(project.id, run_overrides={"thinking_effort": None})
+    assert current.run_overrides == AgentOverrides(model="openai/checker")
+    current = await reloaded.update_job(project.id, run_overrides=None)
+    assert current.run_overrides is None
+    assert "run_overrides" not in current.to_dict()
+    assert "run_overrides" not in next(
+        item
+        for item in json.loads((tmp_path / "cron/jobs.json").read_text())["jobs"]
+        if item["id"] == project.id
+    )
+
+
+@pytest.mark.asyncio
+async def test_pin_derives_its_project_and_refuses_conflicting_explicit_context(
+    tmp_path: Path,
+) -> None:
+    async def read(function: Any, *args: Any) -> Any:
+        return function(*args)
+
+    resolver = SimpleNamespace(
+        resolve_agent=Mock(return_value=SimpleNamespace(id="builder")),
+        resolve_working_project=Mock(
+            side_effect=lambda _project, _agent, *, session_id, requested: (
+                "pinned"
+                if session_id
+                else "current-default"
+                if requested is AGENT_DEFAULT_PROJECT
+                else requested
+            )
+        ),
+    )
+    sessions = SimpleNamespace(
+        exists=lambda _address: True,
+        working_project=lambda _address: SimpleNamespace(project_id="pinned"),
+        run_async=read,
+    )
+    service, _ = make_service(tmp_path, agent_resolver=resolver, sessions=sessions)
+    job = await service.create_job(
+        agent_id="builder",
+        prompt="Check",
+        working_project_id="fresh",
+        schedule_type="cron",
+        cron_expression="0 9 * * *",
+    )
+    pinned = await service.update_job(job.id, session_id="session-1")
+    assert pinned.working_project_id is AGENT_DEFAULT_PROJECT
+    assert service.references_project(pinned, "pinned")
+    assert not service.references_project(pinned, "fresh")
+    with pytest.raises(CronJobValidationError):
+        await service.update_job(job.id, working_project_id="other")
+    assert service.get_job(job.id) == pinned
+    await service.update_job(job.id, run_overrides={"model": "openai/checker"})
+    resolver.resolve_agent.assert_called_with(
+        None,
+        "builder",
+        session_id="session-1",
+        run_overrides=AgentOverrides(model="openai/checker"),
+    )
+    scoped = await service.update_job(job.id, session_id=None, project_id="team")
+    assert scoped.working_project_id is AGENT_DEFAULT_PROJECT
+    with pytest.raises(CronJobValidationError):
+        await service.update_job(job.id, working_project_id=None)
+    restored = await service.update_job(job.id, project_id=None)
+    assert restored.working_project_id == "current-default"
+    await service.update_job(job.id, session_id="session-1")
+    unpinned = await service.update_job(job.id, session_id=None)
+    assert unpinned.working_project_id == "current-default"
+
+
+@pytest.mark.asyncio
+async def test_a_new_jobs_omitted_project_captures_the_current_default(tmp_path: Path) -> None:
+    default = "initial"
+
+    def project(_scope: Any, _agent: Any, *, requested: Any, session_id: Any) -> str | None:
+        return default if requested is AGENT_DEFAULT_PROJECT else requested
+
+    resolver = SimpleNamespace(
+        resolve_agent=Mock(return_value=SimpleNamespace(id="builder")),
+        resolve_working_project=project,
+    )
+    service, _ = make_service(tmp_path, agent_resolver=resolver)
+    job = await service.create_job(
+        agent_id="builder", prompt="Check", schedule_type="cron", cron_expression="0 9 * * *"
+    )
+    default = "changed"
+    updated = await service.update_job(job.id, name="Same context")
+    assert updated.working_project_id == "initial"
+    assert service.references_project(updated, "initial")
+    assert not service.references_project(updated, "changed")
+    reloaded, _ = make_service(tmp_path)
+    assert reloaded.get_job(job.id).working_project_id == "initial"
+    retargeted = await service.update_job(job.id, agent_id="another")
+    assert retargeted.working_project_id == "changed"
 
 
 _CHAT = CronDelivery(kind="chat", channel_id="tg-main", platform_target="chat-42")

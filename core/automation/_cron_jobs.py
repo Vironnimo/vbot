@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -43,7 +43,12 @@ from core.json_documents import (
     validate_collection_root,
 )
 from core.permissions import PermissionCeiling, PermissionRulesError
-from core.projects import ResolutionAgentNotFoundError, ResolutionProjectNotFoundError
+from core.projects import (
+    AgentOverrides,
+    ResolutionAgentNotFoundError,
+    ResolutionProjectNotFoundError,
+)
+from core.sessions import AGENT_DEFAULT_PROJECT, WorkingProjectChoice
 from core.settings import is_valid_agent_id, is_valid_project_id
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
@@ -142,6 +147,8 @@ _MUTABLE_FIELDS = frozenset(
         "session_id",
         "status",
         "project_id",
+        "working_project_id",
+        "run_overrides",
         "delivery",
         "watch",
         "permission_ceiling",
@@ -179,6 +186,7 @@ _DELIVERY_FIELDS = frozenset(("kind", "channel_id", "platform_target", "thread_i
 _LAST_RESULT_FIELDS = frozenset(("text", "at", "run_id"))
 _WATCH_KINDS = ("command", "url")
 _WATCH_FIELDS = frozenset((*_WATCH_KINDS, "always"))
+RUN_OVERRIDE_FIELDS = frozenset(("model", "thinking_effort", "thinking_effort_default"))
 CRON_JOB_SHAPE = json_object(
     _CRON_JOB_FIELDS,
     {
@@ -186,6 +194,7 @@ CRON_JOB_SHAPE = json_object(
         "delivery": json_object(_DELIVERY_FIELDS),
         "last_result": json_object(_LAST_RESULT_FIELDS),
         "watch": json_object(_WATCH_FIELDS),
+        "run_overrides": json_object(RUN_OVERRIDE_FIELDS),
         "notifications": json_list(json_object(NOTIFICATION_FIELDS), key="id"),
         "unread_alert": json_object(ALERT_FIELDS),
     },
@@ -264,6 +273,45 @@ class CronStorageError(CronServiceError):
     """Raised when cron storage cannot be read or written."""
 
 
+def cron_run_overrides(value: Any, *, strict: bool = False) -> AgentOverrides | None:
+    """Read the Model/Reasoning settings of an Automation, ignoring future stored fields.
+
+    Public input uses ``strict`` to reject fields this surface cannot set.
+    An absent or empty object inherits the Session's ordinary settings.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise CronJobValidationError("run_overrides must be an object or null")
+    if strict and (unknown := sorted(set(value) - RUN_OVERRIDE_FIELDS)):
+        raise CronJobValidationError(f"Unsupported run_overrides fields: {', '.join(unknown)}")
+    try:
+        overrides = AgentOverrides(
+            **{key: value[key] for key in RUN_OVERRIDE_FIELDS if key in value}
+        )
+    except (ValueError, TypeError) as error:
+        raise CronJobValidationError(f"run_overrides: {error}") from error
+    return None if overrides.is_empty else overrides
+
+
+def patch_run_overrides(
+    previous: AgentOverrides | None, changes: dict[str, Any]
+) -> AgentOverrides | None:
+    """Apply only supplied override leaves, with null clearing an inherited setting."""
+    cron_run_overrides(changes, strict=True)
+    merged = previous.as_dict() if previous is not None else {}
+    if "thinking_effort" in changes:
+        merged.pop("thinking_effort_default", None)
+    if changes.get("thinking_effort_default") is True:
+        merged.pop("thinking_effort", None)
+    for key, value in changes.items():
+        if value is None:
+            merged.pop(key, None)
+        else:
+            merged[key] = value
+    return cron_run_overrides(merged, strict=True)
+
+
 def _target_validation_error(job: CronJob, error: Exception) -> CronTargetError:
     """Describe why a Cron job's target Agent cannot be resolved.
 
@@ -338,6 +386,19 @@ def _validate_cron_job_data(diagnostics: list[JsonDiagnostic], item_path: str, i
         add_error(diagnostics, item_path, "Expected a JSON object")
         return
     warn_unknown_keys(diagnostics, item_path, item, CRON_JOB_SHAPE.fields, "cron job field")
+    overrides = item.get("run_overrides")
+    if isinstance(overrides, dict):
+        warn_unknown_keys(
+            diagnostics,
+            f"{item_path}.run_overrides",
+            overrides,
+            RUN_OVERRIDE_FIELDS,
+            "run override field",
+        )
+    try:
+        cron_run_overrides(overrides)
+    except CronJobValidationError as error:
+        add_error(diagnostics, f"{item_path}.run_overrides", str(error))
     validate_optional_allowed_string(
         diagnostics,
         f"{item_path}.notification_policy",
@@ -367,6 +428,7 @@ def _validate_cron_job_data(diagnostics: list[JsonDiagnostic], item_path: str, i
         "event_id",
         "session_id",
         "project_id",
+        "working_project_id",
         "last_fired_at",
         "last_attempt_at",
         "last_completed_at",
@@ -629,6 +691,11 @@ class CronJob:
     # through the ``cron`` Tool, in its stored ceiling form; every fire applies it.
     # ``None``: the job was set up by the user or a full-access Session.
     permission_ceiling: dict[str, Any] | None = None
+    # Absence keeps legacy jobs' Agent-default behavior; explicit None is Workspace.
+    working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT
+    run_overrides: AgentOverrides | None = None
+    # Retain the container even when only future fields remain after known settings clear.
+    _run_overrides_unknown: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def notification_activity(self, runs: dict[str, Any]) -> dict[str, Any]:
         unread = int(runs.get("unread_count", 0))
@@ -729,6 +796,13 @@ class CronJob:
             data["unread_alert"] = self.unread_alert.to_dict()
         if self.permission_ceiling is not None:
             data["permission_ceiling"] = deepcopy(self.permission_ceiling)
+        if self.working_project_id is not AGENT_DEFAULT_PROJECT:
+            data["working_project_id"] = self.working_project_id
+        if self.run_overrides is not None or self._run_overrides_unknown:
+            data["run_overrides"] = {
+                **deepcopy(self._run_overrides_unknown),
+                **({} if self.run_overrides is None else self.run_overrides.as_dict()),
+            }
         return data
 
     def delivery_progress(self) -> dict[str, Any]:
@@ -767,6 +841,15 @@ class CronJob:
             last_fired_at=payload.get("last_fired_at"),
             created_at=str(payload.get("created_at") or _utc_now_iso()),
             project_id=payload.get("project_id"),
+            working_project_id=payload.get("working_project_id", AGENT_DEFAULT_PROJECT),
+            run_overrides=cron_run_overrides(payload.get("run_overrides")),
+            _run_overrides_unknown=deepcopy(
+                {
+                    key: value
+                    for key, value in (payload.get("run_overrides") or {}).items()
+                    if key not in RUN_OVERRIDE_FIELDS
+                }
+            ),
             last_attempt_at=payload.get("last_attempt_at"),
             last_completed_at=payload.get("last_completed_at"),
             last_run_id=payload.get("last_run_id"),
@@ -1153,6 +1236,30 @@ def normalize_job_fields(job: CronJob) -> None:
                 "hyphen, or underscore"
             )
         job.project_id = normalized_project_id or None
+
+    if (
+        job.working_project_id is not AGENT_DEFAULT_PROJECT
+        and job.working_project_id is not None
+        and (
+            not isinstance(job.working_project_id, str)
+            or not is_valid_project_id(job.working_project_id)
+        )
+    ):
+        raise CronJobValidationError(
+            "working_project_id must be a Project id or null for Workspace"
+        )
+    if (
+        job.project_id is not None
+        and job.working_project_id is not AGENT_DEFAULT_PROJECT
+        and job.working_project_id != job.project_id
+    ):
+        raise CronJobValidationError("A Project Agent works in its own Project")
+    if job.run_overrides is not None:
+        if not isinstance(job.run_overrides, AgentOverrides):
+            raise CronJobValidationError("run_overrides must contain Model/Reasoning settings")
+        if job.run_overrides.permission_ceiling is not None:
+            raise CronJobValidationError("run_overrides cannot change permissions")
+        job.run_overrides = cron_run_overrides(job.run_overrides.as_dict(), strict=True)
 
     _parse_utc_timestamp(job.created_at, field_name="created_at")
     if job.last_fired_at is not None:

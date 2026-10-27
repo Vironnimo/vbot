@@ -43,6 +43,8 @@ Programmatic Tool activity uses the existing Assistant declaration and Tool Resu
 - `sessions.0007_accessor_inputs` refuses older runtimes that cannot recover accepted ordinary Accessor work. Its additive tables keep the indexed receipt narrow, the Chat-owned execution payload separate, the canonical fallback User/Notes independent of that opaque format, and attachment roots outside transcript entries; their lifetime follows the receipt's immutable Session key.
 - `sessions.0009_tool_invocations` adds the independent Tool-start ledger and backfills proven own Results in bounded batches; older writers are refused (`sessions/runs.md` -> Canonical Tool invocations).
 
+Assistant `thinking_effort` records the effective rendered effort alongside the Model: absent means it was not recorded or a Provider budget has no comparable effort level, an empty string means Provider default, `none` means disabled, and `on` means enabled by a binary toggle without a comparable effort level. An explicit rendered effort level takes precedence. It survives History and lineage copies, but request shaping removes it from Model Context. The nullable `assistant_entries` column is an additive generation-1 change.
+
 ## Kernel integration
 
 Connection and journal policy, the serialized writer, the read pool, error classification, quarantine, data snapshots and metrics are kernel behavior (`database.md`); the Session store adds only the following.

@@ -24,6 +24,7 @@ from core.automation.cron import (
     WebhookStatus,
 )
 from core.projects import (
+    AgentOverrides,
     AgentResolutionError,
     ResolutionAgentNotFoundError,
     ResolutionProjectNotFoundError,
@@ -250,6 +251,44 @@ async def test_bootstrap_list_projects_each_job() -> None:
             {"target": "builder@vbot", "project_id": "vbot"},
             id="project-target",
         ),
+        pytest.param(
+            {
+                **_CRON_PARAMS,
+                "working_project_id": "vbot",
+                "run_overrides": {"model": "openai/checker", "thinking_effort": "high"},
+            },
+            _cron_job(
+                session_id=None,
+                working_project_id="vbot",
+                run_overrides=AgentOverrides(model="openai/checker", thinking_effort="high"),
+            ),
+            {
+                "agent_id": "main",
+                "name": "Status check",
+                "schedule_type": "cron",
+                "cron_expression": "*/5 * * * *",
+                "working_project_id": "vbot",
+                "run_overrides": AgentOverrides(model="openai/checker", thinking_effort="high"),
+            },
+            {
+                "working_project_id": "vbot",
+                "run_overrides": {"model": "openai/checker", "thinking_effort": "high"},
+            },
+            id="execution-choices",
+        ),
+        pytest.param(
+            {**_CRON_PARAMS, "working_project_id": None},
+            _cron_job(session_id=None, working_project_id=None),
+            {
+                "agent_id": "main",
+                "name": "Status check",
+                "schedule_type": "cron",
+                "cron_expression": "*/5 * * * *",
+                "working_project_id": None,
+            },
+            {"working_project_id": None},
+            id="explicit-workspace",
+        ),
         # Kind none is stored as no delivery; a chat is passed on whole.
         pytest.param(
             {**_CRON_PARAMS, "delivery": {"kind": "none"}},
@@ -457,6 +496,7 @@ async def test_cron_list_projects_each_job_with_its_next_fire_time() -> None:
                 "event_title": None,
                 "remaining_runs": None,
                 "session_id": "session-1",
+                "run_overrides": None,
                 "delivery": {"kind": "app"},
                 "notification_policy": "all",
                 "status": "active",
@@ -542,6 +582,16 @@ async def test_cron_list_projects_each_job_with_its_next_fire_time() -> None:
             id="watch-always",
         ),
         pytest.param({"watch": None}, {"watch": None}, id="no-watch"),
+        pytest.param({"working_project_id": None}, {"working_project_id": None}, id="workspace"),
+        pytest.param(
+            {"working_project_id": "vbot"}, {"working_project_id": "vbot"}, id="working-project"
+        ),
+        pytest.param(
+            {"run_overrides": {"thinking_effort": "high", "model": None}},
+            {"run_overrides": {"thinking_effort": "high", "model": None}},
+            id="run-override-patch",
+        ),
+        pytest.param({"run_overrides": None}, {"run_overrides": None}, id="clear-run-overrides"),
     ],
 )
 async def test_cron_update_passes_only_the_given_fields(
@@ -658,6 +708,17 @@ async def test_a_jobs_unread_alert_is_returned_until_acknowledged() -> None:
         ("cron.update", {"id": "job-1", "watch": {"command": "ls", "url": "https://a.example"}}),
         ("cron.update", {"id": "job-1", "watch": {"url": "ftp://files.example/status"}}),
         ("cron.update", {"id": "job-1", "watch": {"command": "ls", "always": "yes"}}),
+        ("cron.create", {**_CRON_PARAMS, "working_project_id": "../invalid"}),
+        ("cron.update", {"id": "job-1", "run_overrides": {"temperature": 0.2}}),
+        ("cron.update", {"id": "job-1", "run_overrides": {"model": ""}}),
+        (
+            "cron.update",
+            {
+                "id": "job-1",
+                "run_overrides": {"thinking_effort": "high", "thinking_effort_default": True},
+            },
+        ),
+        ("cron.update", {"id": "job-1", "run_overrides": {"thinking_effort_default": "yes"}}),
         ("cron.list", {"extra": True}),
         ("bootstrap.list", {"extra": True}),
         ("cron.update", {"prompt": "missing id"}),

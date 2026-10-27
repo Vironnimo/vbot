@@ -6,7 +6,7 @@ export default Object.freeze({
   'notifications.sessionHelp':
     'Controls badges and desktop notifications for this Session. Scheduled Runs use their Schedule’s setting. Unread results remain marked here.',
   'notifications.scheduleHelp':
-    'Controls the Schedules badge and desktop notifications. Unread results remain marked in the Run history. Channel delivery has its own setting.',
+    'Controls the Automations badge and desktop notifications. Unread results remain marked in the Run history. Channel delivery has its own setting.',
   'notifications.unread': 'Unread result',
   'live.title': 'Live voice',
   'live.agent.voice': 'Live voice',
@@ -110,9 +110,9 @@ export default Object.freeze({
     'vBot was updated, but the restart did not complete. Try again to use the new version.',
   'app.desktopRestart.restart': 'Restart',
   'app.desktopRestart.restarting': 'Restarting…',
-  'app.desktopRestart.cronDraftTitle': 'Discard the new schedule?',
+  'app.desktopRestart.cronDraftTitle': 'Discard the new Automation?',
   'app.desktopRestart.cronDraftBody':
-    'The schedule you started creating is not saved yet. Restarting the app discards it.',
+    'The Automation you started creating is not saved yet. Restarting the app discards it.',
   'app.desktopRestart.cronDraftConfirm': 'Discard and restart',
   'app.desktopRestart.error.title': 'The app did not restart',
   'app.desktopRestart.error.noUpdate':
@@ -131,7 +131,7 @@ export default Object.freeze({
   'navigation.projects': 'Projects',
   'navigation.calendar': 'Calendar',
   'navigation.skills': 'Skills',
-  'navigation.cron': 'Schedules',
+  'navigation.cron': 'Automations',
   'navigation.systemPrompt': 'System Prompt',
   'navigation.settings': 'Settings',
   'navigation.logs': 'Logs',

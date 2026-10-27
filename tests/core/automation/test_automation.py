@@ -11,6 +11,7 @@ import pytest
 
 from core.automation import TriggerService
 from core.chat import MessageSender, ReplySurface
+from core.projects import AgentOverrides
 from core.runs import ActiveRunError, ChatRunManager, Run
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("current_format_data_directory")]
@@ -34,6 +35,7 @@ def make_queued_item(run: Run | None = None) -> SimpleNamespace:
         ("vbot", {}),
         (None, {"working_project_id": "work", "actor": "command"}),
         (None, {"working_project_id": None, "actor": "command"}),
+        (None, {"run_overrides": AgentOverrides(model="openai/gpt-mini", thinking_effort="low")}),
     ],
 )
 async def test_trigger_run_without_session_starts_in_a_new_session(
@@ -198,6 +200,14 @@ _INTERNAL = {"internal": True, "reply_surface": None, "project_id": None}
             {"reply_surface": _SURFACE}, {**_VISIBLE, "reply_surface": _SURFACE}, id="reply-surface"
         ),
         pytest.param({"internal": True}, _INTERNAL, id="internal"),
+        pytest.param(
+            {"run_overrides": AgentOverrides(model="openai/gpt-mini", thinking_effort="high")},
+            {
+                **_VISIBLE,
+                "run_overrides": AgentOverrides(model="openai/gpt-mini", thinking_effort="high"),
+            },
+            id="run-overrides",
+        ),
         pytest.param(
             {"internal": True, "input_persisted_hook": _input_persisted},
             {**_INTERNAL, "input_persisted_hook": _input_persisted},

@@ -374,6 +374,13 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 4px 6px;
+  border: 0;
+  padding: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: inherit;
+  cursor: help;
 }
 
 .run-footer__part {

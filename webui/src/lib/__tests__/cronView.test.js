@@ -8,6 +8,7 @@ import {
   createCronFormValues,
   createCronViewState,
   cronFormFingerprint,
+  cronNeedsProjectChoice,
   cronScheduleFields,
   describeCronExpression,
   updateCronSchedule,
@@ -15,6 +16,56 @@ import {
 } from '../cronView.js';
 
 describe('cron form payloads and history projection', () => {
+  it('preserves explicit Project choices and patches only changed Run overrides', () => {
+    const legacy = createCronFormValues({
+      agent_id: 'main',
+      schedule_type: 'webhook',
+    });
+    expect(cronNeedsProjectChoice(legacy)).toBe(true);
+    expect(buildUpdateCronPayload(legacy)).not.toHaveProperty(
+      'working_project_id',
+    );
+
+    const form = createCronFormValues({
+      agent_id: 'main',
+      schedule_type: 'webhook',
+      working_project_id: null,
+      run_overrides: { model: 'fake/model', thinking_effort: 'high' },
+    });
+    expect(form.working_project_choice).toBe('workspace');
+    expect(cronNeedsProjectChoice(form)).toBe(false);
+    expect(buildUpdateCronPayload(form)).toMatchObject({
+      working_project_id: null,
+    });
+    expect(buildUpdateCronPayload(form)).not.toHaveProperty('run_overrides');
+    form.model_override = '';
+    expect(buildUpdateCronPayload(form).run_overrides).toEqual({ model: null });
+    form.thinking_effort_override = 'default';
+    expect(buildUpdateCronPayload(form).run_overrides).toEqual({
+      model: null,
+      thinking_effort_default: true,
+    });
+    form.working_project_choice = 'project:work';
+    expect(buildCreateCronPayload(form)).toMatchObject({
+      working_project_id: 'work',
+      run_overrides: { thinking_effort_default: true },
+    });
+    form.session_mode = 'existing';
+    form.session_id = 'ses-fixed';
+    expect(buildUpdateCronPayload(form)).not.toHaveProperty(
+      'working_project_id',
+    );
+    expect(cronNeedsProjectChoice(form)).toBe(false);
+    const providerDefault = createCronFormValues({
+      agent_id: 'main',
+      run_overrides: { thinking_effort_default: true },
+    });
+    providerDefault.thinking_effort_override = '';
+    expect(buildUpdateCronPayload(providerDefault).run_overrides).toEqual({
+      thinking_effort: null,
+    });
+  });
+
   it('builds interval and repeat payloads while allowing an omitted name', () => {
     const form = createCronFormValues();
     form.agent_id = 'main';

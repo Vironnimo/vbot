@@ -1,6 +1,6 @@
 import cronstrue from 'cronstrue';
 
-import { formatAgentAddress } from './agentAddress.js';
+import { formatAgentAddress, parseAgentAddress } from './agentAddress.js';
 import { asText } from './values.js';
 
 export const CRON_SCHEDULE_TYPE_CRON = 'cron';
@@ -388,6 +388,11 @@ export function createCronFormValues(job = null, systemTimezone = 'UTC') {
       ...eventTimeFields('start', 0),
       repeat: '',
       session_id: '',
+      session_mode: 'new',
+      working_project_choice: '',
+      model_override: '',
+      thinking_effort_override: '',
+      original_run_overrides: {},
       notification_policy: 'all',
       ...deliveryFormFields({ kind: CRON_DELIVERY_APP }),
       ...watchFormFields(null),
@@ -426,6 +431,17 @@ export function createCronFormValues(job = null, systemTimezone = 'UTC') {
         ? ''
         : String(normalized.remaining_runs),
     session_id: normalized.session_id ?? '',
+    session_mode: normalized.session_id ? 'existing' : 'new',
+    working_project_choice: Object.hasOwn(normalized, 'working_project_id')
+      ? normalized.working_project_id === null
+        ? 'workspace'
+        : `project:${normalized.working_project_id}`
+      : '',
+    model_override: normalized.run_overrides?.model ?? '',
+    thinking_effort_override: normalized.run_overrides?.thinking_effort_default
+      ? 'default'
+      : (normalized.run_overrides?.thinking_effort ?? ''),
+    original_run_overrides: normalized.run_overrides ?? {},
     notification_policy: normalized.notification_policy,
     ...deliveryFormFields(normalized.delivery),
     ...watchFormFields(normalized.watch),
@@ -501,6 +517,7 @@ export function applyAgentListResponse(state, result) {
   const rawAgents = Array.isArray(result?.agents) ? result.agents : [];
   state.agents = rawAgents
     .map((agent) => ({
+      ...agent,
       id: asText(agent?.id),
       name: asText(agent?.name) || asText(agent?.id),
     }))
@@ -551,6 +568,15 @@ export function cronFormFingerprint(formValues) {
     event_time: eventTimeText(values),
     repeat: repeatFingerprint(values.repeat),
     session_id: requiredText(values.session_id),
+    session_mode:
+      values.session_mode ?? (values.session_id ? 'existing' : 'new'),
+    working_project_choice:
+      values.session_mode !== 'existing' &&
+      !values.session_id &&
+      parseAgentAddress(values.agent_id).projectId === null
+        ? (values.working_project_choice ?? '')
+        : '',
+    run_overrides: cronRunOverrides(values),
     notification_policy: values.notification_policy ?? 'all',
     delivery: cronDeliveryPayload(values),
     watch: cronWatchPayload(values),
@@ -563,6 +589,59 @@ function repeatFingerprint(value) {
   const text = requiredText(value);
   const count = positiveInteger(text);
   return count > 0 ? String(count) : text;
+}
+
+export function cronNeedsProjectChoice(values) {
+  return (
+    (values.session_mode ?? (values.session_id ? 'existing' : 'new')) ===
+      'new' &&
+    parseAgentAddress(values.agent_id).projectId === null &&
+    !values.working_project_choice
+  );
+}
+
+function cronRunOverrides(values) {
+  const overrides = {};
+  if (optionalText(values.model_override))
+    overrides.model = values.model_override.trim();
+  const effort = optionalText(values.thinking_effort_override);
+  if (effort === 'default') overrides.thinking_effort_default = true;
+  else if (effort) overrides.thinking_effort = effort;
+  return overrides;
+}
+
+function cronExecutionPayload(values, updating = false) {
+  const payload = {};
+  const existing =
+    (values.session_mode ?? (values.session_id ? 'existing' : 'new')) ===
+    'existing';
+  if (!existing && parseAgentAddress(values.agent_id).projectId === null) {
+    const choice = values.working_project_choice ?? '';
+    if (choice === 'workspace') payload.working_project_id = null;
+    else if (choice.startsWith('project:'))
+      payload.working_project_id = choice.slice(8);
+  }
+  const overrides = cronRunOverrides(values);
+  if (!updating) {
+    if (Object.keys(overrides).length) payload.run_overrides = overrides;
+    return payload;
+  }
+  const original = values.original_run_overrides ?? {};
+  const patch = {};
+  if ((overrides.model ?? null) !== (original.model ?? null)) {
+    patch.model = overrides.model ?? null;
+  }
+  if (
+    (overrides.thinking_effort ?? null) !==
+      (original.thinking_effort ?? null) ||
+    Boolean(overrides.thinking_effort_default) !==
+      Boolean(original.thinking_effort_default)
+  ) {
+    if (overrides.thinking_effort_default) patch.thinking_effort_default = true;
+    else patch.thinking_effort = overrides.thinking_effort ?? null;
+  }
+  if (Object.keys(patch).length) payload.run_overrides = patch;
+  return payload;
 }
 
 export function buildCreateCronPayload(formValues) {
@@ -600,6 +679,7 @@ export function buildCreateCronPayload(formValues) {
   }
   payload.delivery = cronDeliveryPayload(formValues);
   payload.notification_policy = formValues.notification_policy ?? 'all';
+  Object.assign(payload, cronExecutionPayload(formValues));
   const watch = cronWatchPayload(formValues);
   if (watch !== null) {
     payload.watch = watch;
@@ -621,6 +701,7 @@ export function buildUpdateCronPayload(formValues) {
     notification_policy: formValues.notification_policy ?? 'all',
     delivery: cronDeliveryPayload(formValues),
     watch: cronWatchPayload(formValues),
+    ...cronExecutionPayload(formValues, true),
   };
 
   if (scheduleType === CRON_SCHEDULE_TYPE_CRON) {
@@ -697,6 +778,10 @@ function normalizeCronJob(job, systemTimezone = 'UTC') {
     event_title: optionalText(job?.event_title),
     remaining_runs: remainingRuns,
     session_id: optionalText(job?.session_id),
+    ...(Object.hasOwn(job ?? {}, 'working_project_id')
+      ? { working_project_id: optionalText(job.working_project_id) }
+      : {}),
+    run_overrides: job?.run_overrides ?? {},
     notification_policy: job?.notification_policy ?? 'all',
     delivery: normalizeDelivery(job?.delivery),
     // What the job checks before each Run, or null.

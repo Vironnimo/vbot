@@ -28,7 +28,7 @@ from core.projects import (
     format_agent_address,
 )
 from core.runs import RunCancelledError, RunKind
-from core.sessions import SessionNotFoundError
+from core.sessions import AGENT_DEFAULT_PROJECT, SessionNotFoundError
 from core.utils.logging import get_logger
 from core.utils.workers import settle_before_cancelling
 
@@ -86,6 +86,7 @@ class CronExecution:
                     latest is None
                     or latest.status != "active"
                     or job.id in self._owner._pending_restarts
+                    or (change is not None and not change.applies_to(latest))
                 ):
                     return CronRunOutcome(succeeded=False, admitted=admitted)
 
@@ -107,6 +108,7 @@ class CronExecution:
                     latest is None
                     or latest.status != "active"
                     or job.id in self._owner._pending_restarts
+                    or (change is not None and not change.applies_to(latest))
                 ):
                     return CronRunOutcome(succeeded=False, admitted=admitted)
                 # Capacity and claim persistence can delay even an on-time fire.
@@ -178,6 +180,7 @@ class CronExecution:
                             partial(self._owner._jobs.get, job.id)
                         ),
                         **_ceiling_kwargs(latest),
+                        **_execution_kwargs(latest),
                     )
                     admitted = True
                     if batch is not None:
@@ -528,3 +531,17 @@ def _ceiling_kwargs(job: CronJob) -> dict[str, Any]:
     """The creator boundary a fire runs under; omitted for full access."""
     ceiling = job.ceiling()
     return {} if ceiling is None else {"permission_ceiling": ceiling}
+
+
+def _execution_kwargs(job: CronJob) -> dict[str, Any]:
+    """Explicit context for fresh Identity Sessions and temporary settings for every Run."""
+    fields: dict[str, Any] = {}
+    if (
+        job.session_id is None
+        and job.project_id is None
+        and job.working_project_id is not AGENT_DEFAULT_PROJECT
+    ):
+        fields["working_project_id"] = job.working_project_id
+    if job.run_overrides is not None:
+        fields["run_overrides"] = job.run_overrides
+    return fields

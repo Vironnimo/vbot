@@ -91,6 +91,241 @@ describe('CronView', () => {
     return mountedComponent;
   }
 
+  it('requires an explicit Project for new Sessions and pins a chosen Session with its own Model settings', async () => {
+    const pinned = {
+      id: 'ses-pinned',
+      auto_title: 'Release investigation',
+      working_project_id: 'release',
+      agent_overrides: { model: 'fake/efficient', thinking_effort: 'low' },
+    };
+    rpcMock.mockImplementation(async (method) => {
+      if (method === 'agent.list')
+        return {
+          agents: [
+            {
+              id: 'agent-alpha',
+              name: 'Alpha',
+              model: 'fake/general',
+              root_project_id: 'other',
+            },
+          ],
+        };
+      if (method === 'project.list')
+        return {
+          projects: [
+            {
+              project_id: 'release',
+              display_name: 'Release project',
+              scan: { team: [] },
+            },
+            {
+              project_id: 'other',
+              display_name: 'Other project',
+              scan: { team: [] },
+            },
+          ],
+        };
+      if (method === 'session.list')
+        return { sessions: [pinned], next_cursor: null };
+      if (method === 'session.get') return { session: pinned };
+      if (method === 'channel.list') return { channels: [] };
+      if (method === 'model.list')
+        return {
+          models: [
+            {
+              id: 'fake/efficient',
+              provider_id: 'fake',
+              effective_context_window: 128000,
+              capabilities: {
+                tools: true,
+                reasoning: {
+                  supported: true,
+                  mandatory: true,
+                  levels: ['low', 'high'],
+                },
+              },
+            },
+          ],
+        };
+      if (method === 'connection.list')
+        return {
+          connections: [
+            { id: 'fake/default', provider_id: 'fake', usable: true },
+          ],
+        };
+      throw new Error(`Unexpected RPC ${method}`);
+    });
+    mountView({ navigation: createStandaloneNavigation(['webhooks', 'new']) });
+    await waitForCondition(() =>
+      document.getElementById('cron-working-project'),
+    );
+    inputById('cron-job-prompt').value = 'Handle this event';
+    inputById('cron-job-prompt').dispatchEvent(
+      new Event('input', { bubbles: true }),
+    );
+    flushSync();
+    buttonByText(t('common.save')).click();
+    flushSync();
+    expect(createCronJobMock).not.toHaveBeenCalled();
+    expect(
+      document.getElementById('cron-working-project').textContent,
+    ).toContain(t('cron.execution.selectProject'));
+
+    chooseOption('cron-working-project', t('cron.execution.workspace'));
+    chooseOption('cron-session-mode', t('cron.execution.existingSession'));
+    await waitForCondition(() =>
+      rpcMock.mock.calls.some(([method]) => method === 'session.list'),
+    );
+    await waitForCondition(
+      () =>
+        !document
+          .getElementById('cron-job-session')
+          .textContent.includes(t('common.loading')),
+    );
+    chooseOption('cron-job-session', pinned.auto_title);
+    await waitForCondition(() =>
+      document
+        .querySelector('[data-testid="cron-fixed-project"]')
+        .textContent.includes('Release project'),
+    );
+    expect(document.getElementById('cron-working-project')).toBeNull();
+    const advanced = document.querySelector('.cron-advanced');
+    advanced.open = true;
+    advanced.dispatchEvent(new Event('toggle'));
+    flushSync();
+    await waitForCondition(() =>
+      rpcMock.mock.calls.some(([method]) => method === 'model.list'),
+    );
+    expect(document.getElementById('cron-run-model').textContent).toContain(
+      'fake/efficient',
+    );
+    chooseOption('cron-run-effort', t('agents.form.thinkingEffortOption.high'));
+    buttonByText(t('common.save')).click();
+    await waitForCondition(() => createCronJobMock.mock.calls.length === 1);
+    const payload = createCronJobMock.mock.calls[0][0];
+    expect(payload).toMatchObject({
+      schedule_type: 'webhook',
+      session_id: 'ses-pinned',
+      run_overrides: { thinking_effort: 'high' },
+    });
+    expect(payload).not.toHaveProperty('working_project_id');
+    expect(
+      rpcMock.mock.calls.some(([method]) =>
+        ['session.set_agent_overrides', 'agent.update'].includes(method),
+      ),
+    ).toBe(false);
+  });
+
+  it('uses the Project Agent effective Model to offer only its supported Reasoning levels', async () => {
+    const fallback = createAgentListRpcMock();
+    rpcMock.mockImplementation(async (method, params) => {
+      if (method === 'agent.list') return { agents: [] };
+      if (method === 'project.list')
+        return {
+          projects: [
+            {
+              project_id: 'work',
+              display_name: 'Work',
+              scan: {
+                team: [
+                  {
+                    agent_id: 'builder',
+                    display_name: 'Builder',
+                    effective: {
+                      model: { value: 'fake/reasoner' },
+                      thinking_effort: { value: 'low' },
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        };
+      if (method === 'model.list')
+        return {
+          models: [
+            {
+              id: 'fake/reasoner',
+              provider_id: 'fake',
+              capabilities: {
+                reasoning: {
+                  supported: true,
+                  mandatory: true,
+                  levels: ['low'],
+                },
+              },
+            },
+          ],
+        };
+      if (method === 'connection.list') return { connections: [] };
+      return fallback(method, params);
+    });
+    mountView({ navigation: createStandaloneNavigation(['schedules', 'new']) });
+    await waitForCondition(() => document.getElementById('cron-form-agent'));
+    await waitForCondition(() =>
+      rpcMock.mock.calls.some(([method]) => method === 'project.list'),
+    );
+    chooseOption('cron-form-agent', 'builder@work');
+    const advanced = document.querySelector('.cron-advanced');
+    advanced.open = true;
+    advanced.dispatchEvent(new Event('toggle'));
+    flushSync();
+    await waitForCondition(() =>
+      rpcMock.mock.calls.some(([method]) => method === 'model.list'),
+    );
+    await waitForCondition(() =>
+      document
+        .getElementById('cron-run-model')
+        .textContent.includes('fake/reasoner'),
+    );
+    document.getElementById('cron-run-effort').click();
+    flushSync();
+    const choices = [...document.querySelectorAll('[role="option"]')].map(
+      (option) => option.textContent.trim(),
+    );
+    expect(choices).toContain(t('agents.form.thinkingEffortOption.low'));
+    expect(choices).not.toContain(t('agents.form.thinkingEffortOption.high'));
+    expect(choices).not.toContain(t('agents.form.thinkingEffortOption.none'));
+    expect(document.getElementById('cron-working-project')).toBeNull();
+  });
+
+  it('lets legacy jobs change notifications but requires a fixed Project before an execution edit', async () => {
+    const legacy = cronJob();
+    delete legacy.working_project_id;
+    updateCronJobMock.mockImplementation(async (changes) => {
+      Object.assign(legacy, changes);
+      return { ok: true };
+    });
+    listCronJobsMock.mockResolvedValue({ jobs: [legacy] });
+    mountView();
+    await waitForCondition(() => document.getElementById('cron-job-prompt'));
+    buttonByAriaLabel(t('notifications.label')).click();
+    flushSync();
+    const muted = [...document.querySelectorAll('[role="option"]')].find(
+      (option) => option.textContent.trim() === t('notifications.muted'),
+    );
+    muted.click();
+    flushSync();
+    buttonByText(t('common.save')).click();
+    await waitForCondition(() => updateCronJobMock.mock.calls.length === 1);
+    expect(updateCronJobMock).toHaveBeenLastCalledWith({
+      id: legacy.id,
+      notification_policy: 'muted',
+    });
+    inputById('cron-job-prompt').value = 'Changed execution';
+    inputById('cron-job-prompt').dispatchEvent(
+      new Event('input', { bubbles: true }),
+    );
+    flushSync();
+    await waitForCondition(() => findButtonByText(t('common.save')));
+    buttonByText(t('common.save')).click();
+    flushSync();
+    expect(updateCronJobMock).toHaveBeenCalledTimes(1);
+    expect(document.body.textContent).toContain(
+      t('cron.execution.chooseProject'),
+    );
+  });
+
   it('opens five recent Runs, pages more, and reads only on an explicit action', async () => {
     const job = cronJob({ id: 'job-history', name: 'Daily review' });
     listCronJobsMock.mockResolvedValue({ jobs: [job] });
@@ -326,19 +561,12 @@ describe('CronView', () => {
       'Default scheduled run',
     );
     expect(document.querySelectorAll('.cron-summary-item')).toHaveLength(4);
-    expect(
-      document.querySelectorAll('.cron-detail-scroll .s-section'),
-    ).toHaveLength(5);
+    expect(document.getElementById('cron-execution-title')).toBeTruthy();
     expect(document.querySelector('.cron-technical-details')).toBeTruthy();
     // The Enabled switch states active or paused; no duplicate chip.
     expect(document.querySelector('.detail-btns .chip')).toBeNull();
     // An expression the planner cannot express stays editable as Custom.
     expect(inputById('cron-job-expression').value).toBe('*/30 * * * *');
-    expect(
-      document.querySelectorAll(
-        '.cron-detail-scroll .s-group label.s-row-label',
-      ).length,
-    ).toBe(9);
   });
 
   it('shows the job named by the place and records job and new-job steps in it', async () => {
@@ -346,6 +574,7 @@ describe('CronView', () => {
       jobs: [
         cronJob({ id: 'job-one' }),
         cronJob({ id: 'job-two', prompt: 'Second prompt' }),
+        cronJob({ id: 'job-hook', schedule_type: 'webhook' }),
       ],
     });
     const navigation = createStandaloneNavigation(['job-two']);
@@ -357,23 +586,43 @@ describe('CronView', () => {
 
     buttonByTestId('cron-item-job-one').click();
     flushSync();
-    expect(navigation.place).toEqual(['job-one']);
+    expect(navigation.place).toEqual(['schedules', 'job-one']);
     expect(inputById('cron-job-prompt').value).toBe('Default cron prompt');
 
     buttonByAriaLabel('Create schedule').click();
     flushSync();
-    expect(navigation.place).toEqual(['new']);
+    expect(navigation.place).toEqual(['schedules', 'new']);
     expect(inputById('cron-job-prompt').value).toBe('');
 
     // Cancel goes up to the job the new job's form was opened from.
     buttonByText(t('common.cancel')).click();
     flushSync();
-    expect(navigation.place).toEqual(['job-one']);
+    expect(navigation.place).toEqual(['schedules', 'job-one']);
 
     // The empty place (the view's start page) names the first job.
     navigation.navigate([]);
     flushSync();
-    expect(navigation.place).toEqual(['job-one']);
+    expect(navigation.place).toEqual(['schedules', 'job-one']);
+
+    // Categories are page-level destinations, and each Create uses its trigger.
+    document.getElementById('automation-categories-tab-webhooks').click();
+    flushSync();
+    expect(navigation.place).toEqual(['webhooks', 'job-hook']);
+    expect(
+      document.querySelector('[data-testid="cron-item-job-one"]'),
+    ).toBeNull();
+    expect(
+      document.querySelector('[data-testid="cron-item-job-hook"]'),
+    ).toBeTruthy();
+    buttonByAriaLabel(t('cron.detail.createWebhookTitle')).click();
+    flushSync();
+    expect(navigation.place).toEqual(['webhooks', 'new']);
+    expect(document.getElementById('cron-job-frequency')).toBeNull();
+    expect(document.getElementById('cron-section-webhook')).toBeTruthy();
+
+    navigation.navigate(['schedules', 'job-two']);
+    flushSync();
+    expect(inputById('cron-job-prompt').value).toBe('Second prompt');
   });
 
   it('keeps a changed new job when its form is left and discards it only on Cancel', async () => {
@@ -407,7 +656,7 @@ describe('CronView', () => {
     // Choosing a job leaves the form without asking.
     buttonByTestId('cron-item-job-one').click();
     flushSync();
-    expect(navigation.place).toEqual(['job-one']);
+    expect(navigation.place).toEqual(['schedules', 'job-one']);
     expect(document.querySelector('[role="dialog"]')).toBeNull();
 
     // The view closes (another main view) and reopens on the new job's form.
@@ -547,6 +796,8 @@ describe('CronView', () => {
     );
     flushSync();
 
+    chooseOption('cron-working-project', t('cron.execution.workspace'));
+
     buttonByText(t('common.save')).click();
 
     await waitForCondition(() => createCronJobMock.mock.calls.length === 1);
@@ -556,6 +807,7 @@ describe('CronView', () => {
       prompt: 'Prepare morning digest',
       schedule_type: 'cron',
       cron_expression: '0 6 * * *',
+      working_project_id: null,
       notification_policy: 'all',
       delivery: { kind: 'app' },
     });
@@ -564,7 +816,7 @@ describe('CronView', () => {
       document.querySelector('[data-testid="cron-delete-job-created"]'),
     );
     // The saved job replaces the new job's entry.
-    expect(navigation.place).toEqual(['job-created']);
+    expect(navigation.place).toEqual(['schedules', 'job-created']);
 
     inputById('cron-job-prompt').value = 'Prepare updated digest';
     inputById('cron-job-prompt').dispatchEvent(
@@ -586,6 +838,7 @@ describe('CronView', () => {
       notification_policy: 'all',
       delivery: { kind: 'none' },
       watch: null,
+      working_project_id: null,
     });
   });
 
@@ -651,6 +904,7 @@ describe('CronView', () => {
       new Event('input', { bubbles: true }),
     );
     flushSync();
+    chooseOption('cron-working-project', t('cron.execution.workspace'));
     buttonByText(t('common.save')).click();
     await waitForCondition(() => listCronJobsMock.mock.calls.length === 2);
     expect(createCronJobMock).toHaveBeenCalledWith(
@@ -769,6 +1023,7 @@ describe('CronView', () => {
       schedule_type: 'event',
       event_id: 'evt-1',
       event_time: 'start - 45m',
+      working_project_id: null,
       session_id: null,
       notification_policy: 'all',
       delivery: { kind: 'none' },
@@ -1070,15 +1325,15 @@ describe('CronView', () => {
       }
       return createAgentListRpcMock()(method);
     });
-    mountView();
+    const navigation = createStandaloneNavigation(['job-hook']);
+    mountView({ navigation });
     await waitForCondition(() =>
       document.querySelector('[data-testid="cron-webhook-url"]'),
     );
 
     // A webhook job keeps no time and checks nothing; its request starts it.
-    expect(document.getElementById('cron-job-frequency').textContent).toContain(
-      t('cron.frequency.webhook'),
-    );
+    expect(navigation.place).toEqual(['webhooks', 'job-hook']);
+    expect(document.getElementById('cron-job-frequency')).toBeNull();
     expect(document.getElementById('cron-job-watch')).toBeNull();
     expect(document.querySelector('.cron-summary').textContent).toContain(
       t('cron.detail.nextRequest'),
@@ -1158,7 +1413,7 @@ describe('CronView', () => {
     expect(updateCronJobMock).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'job-one', prompt: 'Unsaved draft' }),
     );
-    expect(navigation.place).toEqual(['job-two']);
+    expect(navigation.place).toEqual(['schedules', 'job-two']);
     expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
 
@@ -1277,8 +1532,8 @@ function gatedNavigation(coordinator, initialPlace = []) {
 function confirmDialog(label) {
   const footer = document.body.querySelector('.modal-footer');
   expect(footer, 'confirm dialog not open').toBeTruthy();
-  const button = Array.from(footer.querySelectorAll('button')).find(
-    (item) => item.textContent.trim() === label,
+  const button = Array.from(footer.querySelectorAll('button')).find((item) =>
+    item.textContent.trim().startsWith(label),
   );
   expect(button, `confirm button not found: ${label}`).toBeTruthy();
   button.click();
@@ -1301,8 +1556,8 @@ function createAgentListRpcMock(agents = defaultAgents(), channels = []) {
 function chooseOption(id, label) {
   document.getElementById(id).click();
   flushSync();
-  const option = [...document.querySelectorAll('.dropdown-option')].find(
-    (item) => item.textContent.trim() === label,
+  const option = [...document.querySelectorAll('[role="option"]')].find(
+    (item) => item.textContent.trim().startsWith(label),
   );
   expect(option, `option not found: ${label}`).toBeTruthy();
   option.click();
@@ -1333,6 +1588,7 @@ function cronJob(overrides = {}) {
     run_at: null,
     remaining_runs: null,
     session_id: null,
+    working_project_id: null,
     status: 'active',
     last_fired_at: '2026-05-14T10:00:00+00:00',
     last_attempt_at: '2026-05-14T10:00:00+00:00',

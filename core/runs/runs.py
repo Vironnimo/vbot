@@ -680,6 +680,9 @@ class ChatRunManager:
             item.steering_in_flight = True
             try:
                 await persist(item)
+                # A new Parent input replaces its predecessor's continuation
+                # source only once Chat has durably accepted the steering.
+                run.parent_source = item.admission.parent_source
                 address = _session_address(run.project_id, run.agent_id, run.session_id)
                 queue = self._queues.get(address)
                 if queue is not None and item in queue:
@@ -1129,6 +1132,7 @@ class ChatRunManager:
             execution_input_id=admission.input_id,
             accessor_input_id=admission.accessor_input_id,
             source_session_id=admission.source_session_id,
+            parent_source=admission.parent_source,
             expected_session_generation_id=admission.expected_session_generation_id,
             completion_activity=admission.completion_activity,
             schedule_id=admission.schedule_id,

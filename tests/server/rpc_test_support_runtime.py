@@ -389,6 +389,11 @@ class StubJobService:
         """Whether a cron job can start another Run: it is not finished history."""
         return job.status not in TERMINAL_CRON_JOB_STATUSES
 
+    def references_project(self, job: Any, project_id: str) -> bool:
+        return (
+            job.project_id == project_id or getattr(job, "working_project_id", None) == project_id
+        )
+
     def add_changed_callback(self, _callback: Callable[[], None]) -> Callable[[], None]:
         return _unsubscribe
 

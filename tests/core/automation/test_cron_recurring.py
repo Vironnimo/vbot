@@ -77,6 +77,7 @@ async def test_run_cron_job_fires_and_continues_after_trigger_failure(
         "Cron prompt",
         None,
         project_id=None,
+        working_project_id=None,
         run_kind=RunKind.CRON,
         schedule_id=job.id,
         notification_policy=ANY,
