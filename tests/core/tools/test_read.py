@@ -1015,17 +1015,29 @@ async def test_documents_are_read_as_their_extracted_text(
     assert content(result) == f"[Extracted text from {name} {expected}"
 
 
+def _locked_pdf() -> bytes:
+    from io import BytesIO
+
+    from pypdf import PdfWriter
+
+    writer = PdfWriter()
+    writer.add_blank_page(width=72, height=72)
+    writer.encrypt("secret")
+    buffer = BytesIO()
+    writer.write(buffer)
+    return buffer.getvalue()
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("name", "raw", "expected"),
     [
         ("clip.mp4", _MP4, "[clip.mp4 is a video (video/mp4); this model cannot view video.]"),
-        # A document the extractor cannot parse falls back to the ordinary file checks.
-        ("broken.docx", b"PK\x03\x04 not really a zip \x00 body", binary_notice("broken.docx")),
-        ("broken.pdf", b"%PDF-1.4 not really a pdf \x00 body", binary_notice("broken.pdf")),
+        # Text that only carries a document's extension reads as text.
         ("broken.ipynb", b"{not valid json", "1| {not valid json"),
+        ("notes.pdf", b"plain notes", "1| plain notes"),
     ],
-    ids=["video", "broken_docx", "broken_pdf", "broken_ipynb"],
+    ids=["video", "broken_ipynb", "text_named_pdf"],
 )
 async def test_files_without_a_readable_form_get_a_note(
     tmp_path: Path, name: str, raw: bytes, expected: str
@@ -1037,6 +1049,27 @@ async def test_files_without_a_readable_form_get_a_note(
 
     assert content(result) == expected
     assert store.stored == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("name", "raw", "problem"),
+    [
+        # Without a NUL byte in its probe, a damaged PDF once streamed as text.
+        ("broken.pdf", b"%PDF-1.4 not really a pdf body", "damaged"),
+        ("broken.docx", b"PK\x03\x04 not really a zip \x00 body", "damaged"),
+        ("locked.pdf", _locked_pdf(), "protected by a password"),
+    ],
+    ids=["pdf", "docx", "password_pdf"],
+)
+async def test_documents_whose_text_cannot_be_extracted_fail(
+    tmp_path: Path, name: str, raw: bytes, problem: str
+) -> None:
+    tmp_path.joinpath(name).write_bytes(raw)
+
+    message = failure(await read(tmp_path, {"path": name}), "document_unreadable")
+
+    assert name in message and problem in message
 
 
 @pytest.mark.asyncio

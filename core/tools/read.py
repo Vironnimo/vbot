@@ -48,6 +48,8 @@ from core.tools.read_extract import (
     document_label,
     ensure_document_input_size,
     extract_document_text,
+    identifies_document,
+    unreadable_document_problem,
 )
 from core.tools.search import display_search_path
 from core.tools.tools import (
@@ -358,7 +360,14 @@ def make_read_handler(
                 return tool_failure("document_too_large", str(error))
             except OSError as error:
                 return read_error(error)
-            extracted = _read_extracted_document(resolved.name, raw, kind, arguments, label)
+            extracted = _read_extracted_document(
+                resolved.name,
+                raw,
+                kind,
+                arguments,
+                label,
+                identified=identifies_document(media_type) or _looks_binary(probe),
+            )
             if extracted is not None:
                 return extracted
             del raw
@@ -399,22 +408,31 @@ def make_read_handler(
 
 
 def _read_extracted_document(
-    name: str, raw: bytes, kind: str, arguments: JsonObject, label: str
+    name: str, raw: bytes, kind: str, arguments: JsonObject, label: str, *, identified: bool
 ) -> JsonObject | None:
     """Return rendered text for a PDF/Office/notebook file, or ``None`` to fall through.
 
-    On a malformed document the extractor raises ``ExtractionError``; returning
-    ``None`` then lets the caller fall back to the binary-notice / text path. The
-    rendered text is numbered-gutter-free (it is a rendering, not editable source)
-    but still passes through the shared line/byte truncation. An empty extraction
-    (e.g. a scanned PDF with no text layer) becomes an explicit note.
+    A document whose text cannot be extracted fails when its bytes are that
+    document or binary (*identified*): a damaged PDF has no other readable form.
+    Text that only carries a document's extension, such as invalid notebook JSON,
+    returns ``None`` and reads as text. The rendered text is numbered-gutter-free
+    (it is a rendering, not editable source) but still passes through the shared
+    line/byte truncation. An empty extraction (e.g. a scanned PDF with no text
+    layer) becomes an explicit note.
     """
     try:
         extracted = extract_document_text(raw, kind)
     except ExtractionLimitExceededError as error:
         return tool_failure("document_too_large", str(error))
-    except ExtractionError:
-        return None
+    except ExtractionError as error:
+        if not identified:
+            return None
+        return tool_failure(
+            "document_unreadable",
+            f"The text of {label} cannot be extracted: "
+            f"{unreadable_document_problem(kind, error)}. "
+            "Report the file to the user instead of retrying.",
+        )
 
     header = f"[Extracted text from {name} ({document_label(kind)})]:"
     try:

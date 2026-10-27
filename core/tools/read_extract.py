@@ -65,6 +65,10 @@ class ExtractionLimitExceededError(ExtractionError):
     """Raised when document processing would exceed its decompression budget."""
 
 
+class DocumentPasswordError(ExtractionError):
+    """Raised when a document opens only with a password."""
+
+
 class _ExtractionBudget:
     """Track the total uncompressed document data admitted to an extractor."""
 
@@ -98,6 +102,19 @@ def document_label(kind: str) -> str:
     return _DOCUMENT_LABELS.get(kind, "document")
 
 
+def identifies_document(media_type: str) -> bool:
+    """Whether the sniffed bytes alone name an extractable document kind."""
+    return media_type in _MEDIA_TYPE_KINDS
+
+
+def unreadable_document_problem(kind: str, error: ExtractionError) -> str:
+    """Say, for the Agent, why a document's text cannot be extracted."""
+    label = document_label(kind)
+    if isinstance(error, DocumentPasswordError):
+        return f"the {label} is protected by a password"
+    return f"the {label} is damaged or in a form that cannot be read"
+
+
 def ensure_document_input_size(size_bytes: int) -> int:
     """Reject a document whose compressed/raw input already exceeds the budget."""
     if size_bytes > _MAX_DOCUMENT_EXTRACTED_BYTES:
@@ -129,8 +146,8 @@ def _extract_pdf(data: bytes, budget: _ExtractionBudget) -> str:
 
     A scanned (image-only) PDF has no text layer, so every page extracts empty;
     that returns ``""`` and the caller surfaces an explicit "no extractable text"
-    note rather than a wall of bare page headers. A malformed or password-locked
-    PDF raises ``ExtractionError`` so the caller falls back to a binary notice.
+    note rather than a wall of bare page headers. A malformed PDF raises
+    ``ExtractionError``, a password-locked one ``DocumentPasswordError``.
     The broad ``except`` is deliberate: pypdf raises a wide, undocumented range on
     a malformed file (and page access is lazy), and a bad document must never take
     the run down — it is converted to a domain error, never swallowed.
@@ -147,10 +164,10 @@ def _extract_pdf(data: bytes, budget: _ExtractionBudget) -> str:
         pypdf_filters.decompress = lambda data: _bounded_pdf_decompress(data, budget)
         try:
             reader = PdfReader(BytesIO(data))
-            if reader.is_encrypted:
-                # A PDF is often encrypted with an empty owner password purely to set
-                # permissions; that still opens for reading. A real password fails.
-                reader.decrypt("")
+            # A PDF is often encrypted with an empty owner password purely to set
+            # permissions; that still opens for reading. A real password fails.
+            if reader.is_encrypted and not reader.decrypt(""):
+                raise DocumentPasswordError("the PDF requires a password")
             page_texts = [(page.extract_text() or "").strip() for page in reader.pages]
         except ExtractionError:
             raise

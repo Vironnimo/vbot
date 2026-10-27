@@ -60,6 +60,7 @@ from core.tools.read_extract import (
     detect_extractable_document,
     document_label,
     extract_document_text,
+    unreadable_document_problem,
 )
 from core.tools.tools import (
     JsonObject,
@@ -273,13 +274,16 @@ def _binary_notice(url: str, media_type: str, size_bytes: int) -> JsonObject:
     )
 
 
-def _fetch_document_result(url: str, sniffed: str, data: bytes) -> JsonObject | None:
+def _fetch_document_result(
+    url: str, media_type: str, sniffed: str, data: bytes
+) -> JsonObject | None:
     """Render a fetched PDF/Office/notebook as text, or ``None`` to fall through.
 
-    ``None`` means the payload is not an extractable document, or extraction
-    failed on a malformed file — the caller then falls back to the binary-notice
-    or text path. An empty extraction (e.g. a scanned PDF with no text layer)
-    becomes an explicit note. Text then follows saved-page sizing and paging.
+    ``None`` means the payload is not an extractable document, or is text that
+    only carries a document's name — the caller then returns it as text. A binary
+    payload whose text cannot be extracted fails. An empty extraction (e.g. a
+    scanned PDF with no text layer) becomes an explicit note. Text then follows
+    saved-page sizing and paging.
     """
     kind = detect_extractable_document(_filename_from_url(url), sniffed)
     if kind is None:
@@ -288,8 +292,15 @@ def _fetch_document_result(url: str, sniffed: str, data: bytes) -> JsonObject | 
         extracted = extract_document_text(data, kind)
     except ExtractionLimitExceededError as error:
         return tool_failure("document_too_large", str(error), retryable=False)
-    except ExtractionError:
-        return None
+    except ExtractionError as error:
+        if not _is_binary_payload(media_type, sniffed, data):
+            return None
+        return tool_failure(
+            "document_unreadable",
+            f"The text of {url} cannot be extracted: "
+            f"{unreadable_document_problem(kind, error)}. Try another source.",
+            retryable=False,
+        )
 
     body = extracted.strip() or "(no extractable text)"
     output = f"[Extracted text from {url} ({document_label(kind)})]\n---\n{body}"
@@ -317,8 +328,8 @@ def _shape_success(
 
     # A PDF/Word/Excel document becomes readable text instead of a binary notice.
     # Detection is by sniffed type first (a fetched URL often has no usable
-    # extension), and a malformed file falls through to the binary/text path below.
-    document = _fetch_document_result(final_url, sniffed, result.content)
+    # extension); a malformed binary document fails.
+    document = _fetch_document_result(final_url, media_type, sniffed, result.content)
     if document is not None:
         return document
 

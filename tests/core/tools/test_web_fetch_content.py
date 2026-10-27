@@ -362,13 +362,6 @@ async def test_html_becomes_readable_text(
             [],
         ),
         (
-            "https://example.com/broken.pdf",
-            "application/pdf",
-            b"%PDF-1.4 not really a pdf \x00 body",
-            ["Binary content", "application/pdf"],
-            [],
-        ),
-        (
             "https://example.com/installer.exe",
             "application/octet-stream",
             b"MZ\x90\x00\x03\x00\x00\x00\x04\x00\x00\x00garbage\x00bytes",
@@ -404,7 +397,6 @@ async def test_html_becomes_readable_text(
         "pdf",
         "docx-without-extension",
         "scanned-pdf",
-        "malformed-pdf",
         "exe",
         "nul",
         "json",
@@ -482,19 +474,38 @@ async def test_notebook_is_recognized_by_the_final_url_after_a_redirect(
 
 
 @pytest.mark.asyncio
-async def test_document_text_over_the_extraction_limit_is_a_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("url", "content_type", "body", "code"),
+    [
+        (
+            "https://example.com/large.docx",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            _minimal_docx("x" * 512),
+            "document_too_large",
+        ),
+        (
+            "https://example.com/broken.pdf",
+            "application/pdf",
+            b"%PDF-1.4 not really a pdf \x00 body",
+            "document_unreadable",
+        ),
+    ],
+    ids=["over_limit", "damaged"],
+)
+async def test_documents_whose_text_cannot_be_extracted_fail(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    url: str,
+    content_type: str,
+    body: bytes,
+    code: str,
 ) -> None:
     monkeypatch.setattr(read_extract_module, "_MAX_DOCUMENT_EXTRACTED_BYTES", 128)
-    _serve(
-        monkeypatch,
-        content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        content=_minimal_docx("x" * 512),
-    )
+    _serve(monkeypatch, content_type=content_type, content=body)
 
-    result = await fetch(tmp_path, {"url": "https://example.com/large.docx"})
+    result = await fetch(tmp_path, {"url": url})
 
-    error = assert_failure_envelope(result, "document_too_large")
+    error = assert_failure_envelope(result, code)
     assert error["retryable"] is False
 
 
