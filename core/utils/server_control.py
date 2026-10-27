@@ -17,6 +17,7 @@ from typing import IO, Any
 import psutil  # type: ignore[import-untyped]
 
 from core.utils.atomic import atomic_write_bytes
+from core.utils.file_lock import acquire_file_lock, release_file_lock
 
 CONTROL_DIRECTORY_NAME = "runtime"
 CONTROL_TOKEN_HEADER = "X-VBot-Control-Token"
@@ -59,30 +60,9 @@ def process_started(process: psutil.Process) -> float:
     return created
 
 
-def _lock_claim(handle: IO[bytes]) -> None:
-    """Take the non-blocking lifetime lock on byte 0; ``OSError`` while another holds it."""
-    if sys.platform == "win32":
-        import msvcrt
-
-        handle.seek(0)
-        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-    else:
-        import fcntl
-
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-
-
 def _unlock_claim(handle: IO[bytes]) -> None:
     with suppress(OSError):
-        handle.seek(0)
-        if sys.platform == "win32":
-            import msvcrt
-
-            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-        else:
-            import fcntl
-
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        release_file_lock(handle.fileno())
 
 
 @contextmanager
@@ -99,12 +79,7 @@ def server_control_claim(data_dir: str | Path, port: int) -> Iterator[ServerCont
     handle = lock_path.open("a+b")
     locked = False
     try:
-        if os.name == "nt":
-            handle.seek(0, os.SEEK_END)
-            if handle.tell() == 0:
-                handle.write(b"\0")
-                handle.flush()
-        _lock_claim(handle)
+        acquire_file_lock(handle.fileno())
         locked = True
         existing = read_server_control(data_dir, port)
         stale: ServerControlRecord | None = None
@@ -163,7 +138,7 @@ def _claim_held(path: Path) -> bool:
         return True
     with handle:
         try:
-            _lock_claim(handle)
+            acquire_file_lock(handle.fileno())
         except OSError:
             return True
         _unlock_claim(handle)

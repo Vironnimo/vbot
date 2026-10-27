@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
 import { init } from '../../lib/i18n.js';
+import { reactiveProps } from './reactiveProps.support.svelte.js';
 
 vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
@@ -54,6 +55,46 @@ describe.each([
     expect(document.querySelector('[role="option"].active')).toBeNull();
     expect(mountedComponent.selectActive()).toBe(false);
     expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it('scrolls only the popup to keep the active row visible and preserves input focus on mouse selection', () => {
+    const onSelect = vi.fn();
+    const props = reactiveProps({
+      ...componentProps,
+      activeIndex: 4,
+      onSelect,
+    });
+    mountedComponent = mount(Component, { target: document.body, props });
+    flushSync();
+    const popup = document.querySelector('[role="listbox"]');
+    const option = document.querySelector('[role="option"]');
+    vi.spyOn(popup, 'getBoundingClientRect').mockReturnValue({
+      top: 10,
+      bottom: 50,
+    });
+    const optionBounds = vi
+      .spyOn(option, 'getBoundingClientRect')
+      .mockReturnValue({ top: 40, bottom: 70 });
+    props.activeIndex = 0;
+    flushSync();
+    expect(popup.scrollTop).toBe(20);
+
+    props.activeIndex = 4;
+    flushSync();
+    optionBounds.mockReturnValue({ top: -10, bottom: 20 });
+    props.activeIndex = 0;
+    flushSync();
+    expect(popup.scrollTop).toBe(0);
+    const mouseDown = new MouseEvent('mousedown', {
+      bubbles: true,
+      cancelable: true,
+    });
+    option.dispatchEvent(mouseDown);
+    expect(mouseDown.defaultPrevented).toBe(true);
+    option.click();
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(mountedComponent.selectActive()).toBe(true);
+    expect(onSelect).toHaveBeenCalledTimes(2);
   });
 });
 

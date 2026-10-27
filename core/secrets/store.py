@@ -116,6 +116,7 @@ from core.secrets._keys import (
     default_key_protections,
 )
 from core.utils.errors import StorageError
+from core.utils.file_lock import acquire_file_lock, release_file_lock
 from core.utils.file_status import stat_or_none
 from core.utils.log_conditions import LoggedConditions
 from core.utils.logging import get_logger
@@ -888,15 +889,7 @@ def _acquire_write_lock(path: Path) -> IO[bytes]:
         # another writer that has already locked byte 0 of the empty file.
         while True:
             try:
-                handle.seek(0)
-                if sys.platform == "win32":
-                    import msvcrt
-
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-                else:
-                    import fcntl
-
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquire_file_lock(handle.fileno())
                 return handle
             except OSError as exc:
                 if time.monotonic() >= deadline:
@@ -912,15 +905,7 @@ def _acquire_write_lock(path: Path) -> IO[bytes]:
 
 def _release_write_lock(handle: IO[bytes]) -> None:
     with suppress(OSError):
-        handle.seek(0)
-        if sys.platform == "win32":
-            import msvcrt
-
-            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-        else:
-            import fcntl
-
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        release_file_lock(handle.fileno())
     handle.close()
 
 

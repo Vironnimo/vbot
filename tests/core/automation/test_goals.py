@@ -311,13 +311,24 @@ async def test_a_user_reply_reactivates_a_blocked_goal_but_background_results_do
     ]
 
 
-async def test_running_background_work_holds_the_next_automatic_turn(harness: _Harness) -> None:
+@pytest.mark.parametrize("unavailable", [False, True], ids=["pending", "unavailable"])
+async def test_running_background_work_holds_the_next_automatic_turn(
+    harness: _Harness, monkeypatch: pytest.MonkeyPatch, unavailable: bool
+) -> None:
+    async def pending(_address: SessionAddress) -> bool:
+        if unavailable and harness.work_pending:
+            raise PermissionError("Pending work unavailable")
+        return harness.work_pending
+
+    monkeypatch.setattr(harness.goals, "_work_pending", pending)
     harness.work_pending = True
 
     await harness.command("Run the benchmark suite")
     await harness.settle()
     assert len(harness.loop.started) == 1
     assert harness.goal()["turns"] == 0
+    # Unknown wake state retains the same fallback as known pending work.
+    assert _ADDRESS in harness.goals._deferred  # noqa: SLF001
 
     # The work's result wakes the Session; that Run's end continues the goal.
     harness.work_pending = False
@@ -333,6 +344,36 @@ async def test_running_background_work_holds_the_next_automatic_turn(harness: _H
     )
     await harness.settle()
 
+    assert harness.loop.started[-1] == (GOAL_CONTINUE_TEXT, RunKind.SYSTEM)
+    assert harness.goal()["status"] == "complete"
+
+
+async def test_unavailable_pending_work_keeps_the_goal_fallback(
+    harness: _Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from core.automation import goals as module
+
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def unavailable(_address: SessionAddress) -> bool:
+        raise PermissionError("Pending work unavailable")
+
+    async def fallback(delay: float) -> None:
+        assert delay == module.GOAL_WAIT_FALLBACK_SECONDS
+        entered.set()
+        await release.wait()
+
+    monkeypatch.setattr(harness.goals, "_work_pending", unavailable)
+    monkeypatch.setattr(module, "_sleep", fallback)
+    await harness.command("Finish the report")
+    await entered.wait()
+    await harness.settle()
+    assert len(harness.loop.started) == 1
+    harness.loop.turns = [_marks(harness.goals, "complete")]
+    release.set()
+    deferred = harness.goals._deferred[_ADDRESS]  # noqa: SLF001
+    await deferred
+    await harness.settle()
     assert harness.loop.started[-1] == (GOAL_CONTINUE_TEXT, RunKind.SYSTEM)
     assert harness.goal()["status"] == "complete"
 

@@ -87,7 +87,7 @@ The document is in `DURABLE_DOCUMENTS` (`"secrets"`, validated by `validate_secr
 
 - Never log, return or print a value; logs and status name entries, sections, files, line numbers and reasons only.
 - One `SecretStore` instance per data directory and process: its `RLock` serializes reads and writes. Every write holds `secrets.lock` (an OS-owned `msvcrt`/`fcntl` lock released when a process ends; re-entrant within one instance; 30 s timeout raises `SecretStoreError` with nothing changed) from its re-read to its write, so the server, the CLI and an update's verification start never lose each other's changes.
-- The write lock needs no file content: Windows locks byte 0 even beyond EOF. Never initialize that byte before acquiring the lock; another first writer may already hold it (`test_concurrent_writers_keep_every_entry`).
+- OS acquire/release uses `core/utils/file_lock.py`; no sentinel is written before locking byte 0 beyond EOF, avoiding a race with another first writer (`test_concurrent_writers_keep_every_entry`).
 - Enter writes through `update` (it holds `document_change` for the snapshot freeze before the store lock).
 - Tests use `KeyFileProtection(directories=...)` or the isolated test home (`tests/conftest.py` clears `XDG_CONFIG_HOME` and `VBOT_SECRET_KEY_FILE`); on Windows the default store uses real DPAPI. Case-folding tests monkeypatch `core.secrets.store.CREDENTIAL_NAMES_IGNORE_CASE`. Tests: `tests/core/secrets/`, `tests/core/storage/test_storage_credentials.py`, `tests/core/providers/test_token_store.py`, `tests/cli/test_data_store.py`, `tests/server/rpc/test_secret_methods.py`.
 

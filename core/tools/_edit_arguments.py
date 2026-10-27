@@ -9,6 +9,13 @@ from functools import cache, partial
 from typing import Any
 
 from core.tools._patch_syntax import _same_path
+from core.tools._replacement_requests import (
+    REPLACEMENT_ALIASES,
+    replacement_fields,
+)
+from core.tools._replacement_requests import (
+    replacement_field as _edit_field,
+)
 from core.tools._swarm_references import wiki_change_call
 from core.tools.call_syntax import SpellingAliases, normalize_call_arguments, spelling
 from core.tools.contracts import (
@@ -75,13 +82,6 @@ WRITE_TOOL_PARAMETERS: JsonObject = {
     },
     "required": ["path", "content"],
 }
-_EDIT_ALIASES = SpellingAliases(
-    {
-        "path": _PATH_ALIASES,
-        "old_string": ("old_str", "old_text"),
-        "new_string": ("new_str", "new_text"),
-    }
-)
 _WRITE_ALIASES = SpellingAliases(
     {"path": _PATH_ALIASES, "content": ("text", "contents", "file_text")}
 )
@@ -133,7 +133,7 @@ def normalize_edit_arguments(arguments: Any) -> Any:
     normalized = normalize_call_arguments(
         _edit_repair_contract(),
         arguments,
-        field_aliases=_EDIT_ALIASES,
+        field_aliases=REPLACEMENT_ALIASES,
         field_normalizers={"edits": partial(_edits_value, beside=beside)},
         empty_as_omitted=("path", "replace_all"),
     )
@@ -295,14 +295,6 @@ def _check_flat_edit(edit: dict[str, Any]) -> None:
         )
 
 
-def _edit_field(key: str) -> str:
-    """Return the field an ``edits`` item key names, else the key itself."""
-    field = _EDIT_ALIASES.get(key, key)
-    if field not in (*_EDIT_FIELDS, "path"):
-        field = next((name for name in _EDIT_FIELDS if spelling(name) == spelling(key)), key)
-    return field
-
-
 def _holds_old_text(item: Any) -> bool:
     """Say whether an ``edits`` item, in any spelling, has a nonempty old_string."""
     if isinstance(item, str):
@@ -325,24 +317,17 @@ def _edit_item(item: Any, number: int, *, held: bool) -> Any:
             f"edits item {number} is not an object. Send each edit as an object with old_string "
             "and new_string."
         )
-    edit: dict[str, Any] = {}
-    for key, value in item.items():
-        field = _edit_field(key)
+    edit = replacement_fields(item, number, empty_as_omitted=("replace_all", "path"))
+    for field, value in list(edit.items()):
         if field not in (*_EDIT_FIELDS, "path"):
-            if not _edit_item_contract().normalize_arguments({key: value}):
+            if not _edit_item_contract().normalize_arguments({field: value}):
                 # An empty value under a name that is not a field requests nothing.
+                del edit[field]
                 continue
             raise ValueError(
-                f'edits item {number} has "{key}", which is not a field of an edit. Each edit '
+                f'edits item {number} has "{field}", which is not a field of an edit. Each edit '
                 "takes old_string, new_string and replace_all."
             )
-        if field in {"replace_all", "path"} and value in (None, ""):
-            continue
-        if field in edit and edit[field] != value:
-            raise ValueError(
-                f"edits item {number} gives {field} twice with different values; send one."
-            )
-        edit[field] = value
     path = edit.pop("path", None)
     edit = _edit_item_contract().normalize_arguments(edit)
     if "old_string" not in edit:

@@ -192,23 +192,34 @@ def test_failed_or_invalid_rewrite_writes_nothing(
         ),
     ],
 )
-def test_changes_keep_the_crlf_style_of_an_existing_file(
+@pytest.mark.parametrize(
+    ("ending", "stray"),
+    [
+        pytest.param(b"\r\n", b"", id="crlf"),
+        pytest.param(b"\n", b"stray\r\n", id="lf-with-stray-crlf"),
+        pytest.param(b"\r\n", b"stray\r", id="crlf-with-stray-cr"),
+        pytest.param(b"\r", b"stray\n", id="cr-with-stray-lf"),
+    ],
+)
+def test_changes_keep_the_majority_newline_style_of_an_existing_file(
     service: SkillAuthoringService,
     root: Path,
     relative: str,
     operation: Callable[[SkillAuthoringService, Path], object],
     marker: str,
+    ending: bytes,
+    stray: bytes,
 ) -> None:
     service.create(root, "demo", skill_document(body="# Demo\nold line\n"), writer=AGENT)
     service.write_file(root, "demo", "references/notes.md", "notes\nold line\n", writer=AGENT)
     target = root / "demo" / relative
-    target.write_bytes(target.read_bytes().replace(b"\n", b"\r\n"))
+    target.write_bytes(target.read_bytes().replace(b"\n", ending) + stray)
 
     operation(service, root)
 
     written = target.read_bytes()
     assert marker.encode() in written
-    assert b"\n" not in written.replace(b"\r\n", b"")
+    assert not any(char in written.replace(ending, b"") for char in (b"\r", b"\n"))
     text = service.read_text(root, "demo", relative)
     assert marker in text
     assert "\r" not in text

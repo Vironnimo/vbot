@@ -13,6 +13,7 @@
   import { t } from '$lib/i18n.js';
   import {
     buildModelSelectOptions,
+    createModelCatalogLoader,
     filterModelSelectOptions,
     modelFilterFooterLabel,
     modelSelectionValue,
@@ -47,6 +48,14 @@
   });
   let availableModels = $state([]);
   let availableConnections = $state([]);
+  const modelCatalogLoader = createModelCatalogLoader({
+    listModels,
+    listConnections,
+    applyCatalogs: (catalogs) => {
+      availableModels = catalogs.models;
+      availableConnections = catalogs.connections;
+    },
+  });
   let showAllModels = $state(false);
   let lastModelsRefreshToken = null;
 
@@ -88,6 +97,7 @@
 
   onMount(() => void loadModelCatalogs());
   onDestroy(() => {
+    modelCatalogLoader.invalidate();
     unregisterSessionTitlesAutosave();
     sessionTitlesAutosave.cancelPendingTimer();
   });
@@ -111,12 +121,7 @@
 
   async function loadModelCatalogs() {
     try {
-      const [modelsResult, connectionsResult] = await Promise.all([
-        listModels(),
-        listConnections(),
-      ]);
-      availableModels = modelsResult.models;
-      availableConnections = connectionsResult.connections;
+      await modelCatalogLoader.load();
     } catch (error) {
       onError(`${t('settings.models.loadError')} ${error.message}`);
     }
@@ -195,6 +200,7 @@
         panelClass="settings-view__model-panel"
         footerActionLabel={modelFilterFooter}
         onFooterAction={() => (showAllModels = !showAllModels)}
+        onOpenChange={modelCatalogLoader.trackPickerOpen}
         onValueChange={selectModel}
       />
     </div>

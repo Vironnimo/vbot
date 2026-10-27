@@ -53,7 +53,8 @@ def _current_effort_label(app: ConversationApp, view: Conversation) -> str:
     return value if isinstance(value, str) and value else "Provider default"
 
 
-def _model_choices(models: Any, current: str | None) -> list[tuple[str, str]]:
+def model_choices(models: Any, *, current: str | None = None) -> list[tuple[str, str]]:
+    """Project a Model catalog into the labels and references every TUI picker uses."""
     if not isinstance(models, list):
         return []
     current_base = current.partition("::")[0] if current else None
@@ -176,7 +177,7 @@ async def menu(app: ConversationApp) -> None:
         response = await app.client.rpc("model.list", {"task": "chat"})
         if not _current(app, view, key):
             return
-        choices = _model_choices(response.get("models"), current_model)
+        choices = model_choices(response.get("models"), current=current_model)
         if not choices:
             app._notice("No usable chat Models are available.", error=True)
             return

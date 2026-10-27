@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import AsyncGenerator, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, tzinfo
 from typing import Any
+
+import httpx
 
 from core.providers._responses_output import (
     _assistant_phase_from_output,
@@ -34,13 +36,14 @@ from core.providers.adapter import (
     normalize_tool_call_candidates,
 )
 from core.providers.errors import (
+    NetworkError,
     ProviderError,
     classify_in_band_error_type,
     exhausted_quota_code,
     in_band_error_text,
     usage_limit_error,
 )
-from core.providers.http import split_stream_lines
+from core.providers.http import iter_stream_lines, split_stream_lines, wrap_network_error
 from core.providers.reasoning import merge_reasoning_meta
 from core.utils.http_status import parse_rate_limit_retry_after, parse_retry_after
 
@@ -110,6 +113,39 @@ class ResponsesStreamState:
                 self,
             )
         return result
+
+
+async def stream_responses_sse(
+    response: httpx.Response,
+    state: ResponsesStreamState,
+) -> AsyncGenerator[dict[str, Any]]:
+    """Decode an established Responses SSE stream and close it on every exit."""
+
+    event_lines: list[str] = []
+    seen_finish_delta = False
+    try:
+        async for line in iter_stream_lines(response):
+            if line:
+                event_lines.append(line)
+                continue
+            for delta in iter_responses_sse_deltas_with_state(event_lines, state):
+                if delta.get("type") == "finish":
+                    seen_finish_delta = True
+                yield delta
+            event_lines = []
+        if event_lines:
+            for delta in iter_responses_sse_deltas_with_state(event_lines, state):
+                if delta.get("type") == "finish":
+                    seen_finish_delta = True
+                yield delta
+        if not seen_finish_delta:
+            raise NetworkError("Stream ended without response completion event")
+    except httpx.TimeoutException as exc:
+        raise wrap_network_error(exc) from exc
+    except httpx.TransportError as exc:
+        raise NetworkError(f"Stream read failed: {exc}") from exc
+    finally:
+        await response.aclose()
 
 
 def iter_responses_sse_deltas_with_state(

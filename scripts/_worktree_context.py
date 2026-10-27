@@ -6,12 +6,13 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO
+
+from core.utils.file_lock import acquire_file_lock, release_file_lock
 
 VALID_WORKTREE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 PORT_ALLOCATION_LOCK_NAME = "vbot-worktree-port.lock"
@@ -121,29 +122,11 @@ class WorktreeContext:
         lock_path = self.git_common_dir() / PORT_ALLOCATION_LOCK_NAME
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         with lock_path.open("a+b") as lock_file:
-            lock_file.seek(0, os.SEEK_END)
-            if lock_file.tell() == 0:
-                lock_file.write(b"0")
-                lock_file.flush()
-            lock_file.seek(0)
-            if sys.platform == "win32":
-                import msvcrt
-
-                msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
-                try:
-                    yield
-                finally:
-                    lock_file.seek(0)
-                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
-                return
-
-            import fcntl
-
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            acquire_file_lock(lock_file.fileno(), blocking=True)
             try:
                 yield
             finally:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                release_file_lock(lock_file.fileno())
 
     def git_common_dir(self) -> Path:
         """Resolve the shared Git directory from either the main tree or a worktree."""

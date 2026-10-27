@@ -4,20 +4,23 @@ from __future__ import annotations
 
 import array
 import asyncio
+import base64
 import io
 import json
 import os
 import sys
 import threading
 from collections.abc import AsyncIterator, Mapping
+from concurrent.futures import Future
 from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 
-from core.model_tasks import embedding_worker, local_setup
+from core.model_tasks import _worker_process, embedding_worker, embeddings_local, local_setup
 from core.model_tasks.embeddings_local import (
     LocalEmbeddingError,
     LocalEmbeddingExecutor,
@@ -410,6 +413,7 @@ def test_worker_wire_round_trip(monkeypatch: pytest.MonkeyPatch) -> None:
         {"op": "load", "model": {"graph": "g"}, "threads": 2},
         {"op": "embed", "texts": ["ab", "Grüße"]},
         {"op": "embed", "texts": ["ok", "long"]},
+        {"op": "embed", "texts": ["fine"]},
         {"op": "embed", "texts": ["boom"]},
     ]
     wire = io.StringIO()
@@ -433,23 +437,112 @@ def test_worker_wire_round_trip(monkeypatch: pytest.MonkeyPatch) -> None:
     }
     # The parent decodes exactly these frames; failures name no private detail.
     sent = io.StringIO()
-    parent = object.__new__(_WorkerProcess)
-    parent._process = SimpleNamespace(  # type: ignore[assignment]
-        stdin=sent, stdout=io.StringIO("\n".join(replies[2:]) + "\n"), poll=lambda: 0
+    process = SimpleNamespace(
+        stdin=sent, stdout=io.StringIO("\n".join(replies[1:]) + "\n"), poll=lambda: 0
     )
-    vectors, tokens = parent.embed(["ab", "Grüße"])
-    assert (vectors, tokens) == ([[2.0, 0.5, 0.25], [5.0, 0.5, 0.25]], [7, 7])
-    with pytest.raises(LocalEmbeddingInputTooLongError) as too_long:
-        parent.embed(["ok", "long"])
-    assert too_long.value.index == 1
-    with pytest.raises(LocalEmbeddingError, match=r"\(RuntimeError\)$"):
-        parent.embed(["boom"])
-    # Requests are ASCII lines: the isolated child reads stdin in the console code page.
-    assert sent.getvalue().isascii()
-    assert json.loads(sent.getvalue().splitlines()[0]) == {
-        "op": "embed",
-        "texts": ["ab", "Grüße"],
-    }
+    popen = Mock(return_value=process)
+    monkeypatch.setattr(_worker_process.subprocess, "Popen", popen)
+    parent = _WorkerProcess(Path("worker-python"), {"graph": "g"}, 2)
+    try:
+        vectors, tokens = parent.embed(["ab", "Grüße"])
+        assert (vectors, tokens) == ([[2.0, 0.5, 0.25], [5.0, 0.5, 0.25]], [7, 7])
+        with pytest.raises(LocalEmbeddingInputTooLongError) as too_long:
+            parent.embed(["ok", "long"])
+        assert (too_long.value.index, too_long.value.tokens, too_long.value.limit) == (
+            1,
+            3000,
+            2048,
+        )
+        assert parent.embed(["fine"]) == ([[4.0, 0.5, 0.25]], [7])
+        with pytest.raises(LocalEmbeddingError, match=r"\(RuntimeError\)$"):
+            parent.embed(["boom"])
+        # Requests are ASCII lines: the isolated child reads stdin in the console code page.
+        assert sent.getvalue().isascii()
+        assert [json.loads(line) for line in sent.getvalue().splitlines()[:2]] == requests[1:3]
+        assert popen.call_args.args[0] == [
+            "worker-python",
+            "-I",
+            "-B",
+            str(embeddings_local._WORKER),
+            "--serve",
+        ]
+        assert popen.call_args.kwargs["env"]["HF_HUB_OFFLINE"] == "1"
+    finally:
+        parent.close()
+    assert process.stdin.closed and process.stdout.closed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["loading", "embedding"])
+async def test_unresponsive_worker_is_ended_and_the_next_request_loads_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str
+) -> None:
+    armed: Future[Any] = Future()
+    timers: list[Any] = []
+    processes: list[Any] = []
+    stopped = threading.Event()
+
+    class Timer:
+        def __init__(self, interval, function, args=()):
+            self.interval, self.function, self.args = interval, function, args
+            self.cancelled = False
+            timers.append(self)
+
+        def start(self):
+            pass
+
+        def cancel(self):
+            self.cancelled = True
+
+        def fire(self):
+            assert not self.cancelled
+            self.function(*self.args)
+
+    def launch(*_args, **_kwargs):
+        first = not processes
+        replies = iter([] if first and phase == "loading" else ['{"loaded":true}\n'])
+        vector = base64.b64encode(array.array("f", [1.0, 0.5]).tobytes()).decode("ascii")
+
+        def readline(_limit):
+            if (reply := next(replies, None)) is not None:
+                return reply
+            if first:
+                armed.set_result(timers[-1])
+                assert stopped.wait(5)
+                return ""
+            return json.dumps({"embedded": {"vectors": vector, "dimension": 2, "tokens": [7]}})
+
+        process = Mock()
+        process.stdout.readline.side_effect = readline
+        process.poll.side_effect = lambda: 0 if first and stopped.is_set() else None
+        processes.append(process)
+        return process
+
+    kill_tree = Mock(side_effect=lambda _process: stopped.set())
+    monkeypatch.setattr(_worker_process, "Timer", Timer)
+    monkeypatch.setattr(_worker_process.subprocess, "Popen", launch)
+    monkeypatch.setattr("core.utils.processes.kill_process_tree", kill_tree)
+    executor = LocalEmbeddingExecutor(engines_dir=tmp_path)
+    install_fake(tmp_path, GRANITE)
+    try:
+        request = asyncio.create_task(executor.embed(GRANITE.id, ["first"], query=True, options={}))
+        timer = await asyncio.wrap_future(armed)
+        assert timer.interval == embeddings_local._EXCHANGE_TIMEOUT_S
+        await asyncio.to_thread(timer.fire)
+        with pytest.raises(LocalEmbeddingError):
+            await request
+        assert not executor.memory_status()["models"][0]["loaded"]
+        kill_tree.assert_called_once_with(processes[0])
+        processes[0].wait.assert_called_once()
+        processes[0].stdin.close.assert_called_once()
+        processes[0].stdout.close.assert_called_once()
+        assert (await executor.embed(GRANITE.id, ["next"], query=True, options={})).tokens == (7,)
+        assert len(processes) == 2
+        assert executor.memory_status()["models"][0]["loaded"]
+        assert all(timer.cancelled for timer in timers)
+    finally:
+        stopped.set()
+        await executor.aclose()
 
 
 @pytest.mark.parametrize(

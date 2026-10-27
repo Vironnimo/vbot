@@ -18,6 +18,7 @@ from core.runs import (
     RunAdmissionBlockedError,
     RunCancelledError,
     RunInterruptedError,
+    RunStatus,
 )
 from core.sessions import SessionAddress
 from core.storage.temp_files import artifact_owner
@@ -140,12 +141,33 @@ class SubAgentForwarding:
         return [run for run, _task in self._followed.values()]
 
     def pending(self, address: SessionAddress) -> bool:
-        """Whether a Run of the Session at *address* has not yet handed its answer
-        to delivery: it still runs, or its forwarding is not done."""
-        return any(
-            run_id not in self._silenced and not task.done() and _run_address(run) == address
+        """Whether the Session has followed work not yet handed to delivery."""
+        return bool(self._pending_runs(address))
+
+    def _pending_runs(self, address: SessionAddress) -> list[Run]:
+        return [
+            run
             for run_id, (run, task) in self._followed.items()
-        )
+            if run_id not in self._silenced and not task.done() and _run_address(run) == address
+        ]
+
+    async def parent_answer_pending(self, address: SessionAddress) -> bool:
+        """Read the actual Parent-directed answers of still-followed Runs.
+
+        The current reply target governs future output, but cannot redirect a
+        complete answer committed before user steering. Terminal work uses the
+        very same selection as delivery, including failures without an answer.
+        """
+        for run in self._pending_runs(address):
+            if run.status != RunStatus.RUNNING:
+                directed = await _turn_outcome(self._runtime, run) is not None
+            else:
+                session = await self._runtime.chat_sessions.get_async(address)
+                messages = await session.load_run_messages_async(run.id)
+                directed = bool(_parent_answers(messages))
+            if directed and run in self._pending_runs(address):
+                return True
+        return False
 
     def add_forwarded_callback(
         self, callback: Callable[[SessionAddress], None]
@@ -408,9 +430,7 @@ async def _turn_outcome(
         ),
         "parent" if run.run_kind.value in {"subagent", "system"} else "user",
     )
-    answers = [
-        m for m in messages if _is_complete_answer(m) and m.subagent_reply_target == "parent"
-    ]
+    answers = _parent_answers(messages)
     latest = next(
         (m for m in reversed(messages) if m.role == "assistant" and _message_text(m)), None
     )
@@ -444,6 +464,10 @@ async def _turn_outcome(
         "\n\n".join(sections) or fallback,
         tuple(m.id for m in answers),
     )
+
+
+def _parent_answers(messages: list[ChatMessage]) -> list[ChatMessage]:
+    return [m for m in messages if _is_complete_answer(m) and m.subagent_reply_target == "parent"]
 
 
 def _is_complete_answer(message: ChatMessage) -> bool:

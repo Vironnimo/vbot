@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -31,6 +30,12 @@ from core.sessions.search_content import (
 )
 from core.sessions.search_content import (
     SESSION_RECALL_DEFAULT_ROLES as SESSION_RECALL_DEFAULT_ROLES,
+)
+from core.sessions.search_content import (
+    LiteralSearchQuery,
+)
+from core.sessions.search_content import (
+    compact_text as compact_text,
 )
 from core.sessions.search_content import (
     content_block_to_text as content_block_to_text,
@@ -91,8 +96,6 @@ SESSION_RECALL_LITERAL_SEARCH_GUIDANCE = (
     "substring; synonyms and paraphrases do not match. Matches "
     "are newest first."
 )
-
-_WHITESPACE_PATTERN = re.compile(r"\s+")
 
 
 @dataclass(frozen=True)
@@ -274,18 +277,6 @@ def message_hit(hit: SessionSearchHit, request: RecallSearchRequest) -> RecallSe
     )
 
 
-def text_matches_search_request(text: str, request: RecallSearchRequest) -> bool:
-    haystack = compact_text(text).casefold()
-    if not haystack:
-        return False
-    if request.match_mode == "phrase":
-        return compact_text(request.query).casefold() in haystack
-    terms = query_terms(request.query)
-    if request.match_mode == "any_term":
-        return any(term in haystack for term in terms)
-    return all(term in haystack for term in terms)
-
-
 def first_match_span(text: str, query: str, match_mode: str) -> tuple[int | None, int | None]:
     """Locate a useful raw-source span without normalizing the returned text."""
 
@@ -307,22 +298,10 @@ def first_match_span(text: str, query: str, match_mode: str) -> tuple[int | None
         normalized.append(folded)
         source_positions.extend([position] * len(folded))
     haystack = "".join(normalized)
-    needles = (
-        [compact_text(query).casefold()]
-        if match_mode == "phrase"
-        else [term for term in query_terms(query) if term]
-    )
+    needles = LiteralSearchQuery(query, match_mode).folded_values
     matches = [(haystack.find(needle), len(needle)) for needle in needles if needle]
     matches = [(index, length) for index, length in matches if index >= 0]
     if not matches:
         return None, None
     index, length = min(matches, key=lambda item: item[0])
     return source_positions[index], source_positions[index + length - 1] + 1
-
-
-def query_terms(query: str) -> list[str]:
-    return [term.casefold() for term in compact_text(query).split(" ") if term]
-
-
-def compact_text(text: str) -> str:
-    return _WHITESPACE_PATTERN.sub(" ", text).strip()

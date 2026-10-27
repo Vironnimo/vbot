@@ -6,7 +6,7 @@ and are offered instead of it to Models outside the GPT families, one dialect pe
 prompt epoch (`edit.md` -> Dialect helpers). It also runs calls shaped for other
 harnesses' edit/write Tools.
 Add File creation-or-replacement is a vBot extension to the V4A-style interface.
-`core/tools/apply_patch.py` owns the Tool's definition, request failures, display and registration. Its internal `_patch_requests.py` turns other harnesses' argument shapes into canonical fields and parsed operations; `_patch_syntax.py` owns V4A parsing and parsed operation values; `_file_changes.py` owns the change pipeline all three file edit Tools share (resolving and locking paths, planning steps in memory, the read guard, atomic commits, rechecks, read stamps, change statistics and file reports; this map's Contract and Mutation invariants describe it); `_edit_engine.py` owns locating and splicing one file's hunks and `old_string` replacements in current text (a fixed sequence of matching steps per kind of change); `_patch_entries.py` owns entry snapshots, Delete/Move entry resolution, and entry renames; `_patch_report.py` owns the Model-facing result text; `_change_preview.py` owns bounded preview regions.
+`core/tools/apply_patch.py` owns the Tool's definition, request failures, display and registration. Its internal `_patch_requests.py` interprets patch call shapes; `_replacement_requests.py` shares replacement field aliases, conflict checks, and Add/replacement operation construction with `edit` and `write`, while each Tool keeps its batch and failure policy; `_patch_syntax.py` owns V4A parsing and parsed operation values; `_file_changes.py` owns the change pipeline all three file edit Tools share (resolving and locking paths, planning steps in memory, the read guard, atomic commits, rechecks, read stamps, change statistics and file reports; this map's Contract and Mutation invariants describe it); `_edit_engine.py` owns locating and splicing one file's hunks and `old_string` replacements in current text (a fixed sequence of matching steps per kind of change); `_patch_entries.py` owns entry snapshots, Delete/Move entry resolution, and entry renames; `_patch_report.py` owns the Model-facing result text; `_change_preview.py` owns bounded preview regions.
 The edit engine coordinates focused internal units: `_edit_replacement.py` owns
 replacement interpretation, `_edit_hunks.py` line-hunk placement and splicing,
 `_edit_locations.py` common location/poststate rules, and `_edit_diagnostics.py`
@@ -14,7 +14,8 @@ bounded matching failures. `copy_match.py` retains passage/hunk placement while
 `_copy_tokens.py` owns token alignment and merging. `fuzzy_match.py` retains
 precise matching/replacement; `_fuzzy_text.py` owns normalization and indentation,
 `_fuzzy_candidates.py` candidate search, `_fuzzy_differences.py` difference
-diagnostics, and `_fuzzy_types.py` shared result records.
+diagnostics, and `_fuzzy_types.py` shared result records. The pure newline-style
+decision lives in `core/utils/line_endings.py`, shared with Skill authoring.
 A step is the pipeline's unit that is written at once: `apply_patch` runs each
 hunk, Add, Delete and Move as its own step (partial success below), `edit` runs its
 canonical one-file call as one step that writes the file once (`run_operations(...,

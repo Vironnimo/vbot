@@ -296,6 +296,7 @@ def test_every_route_but_the_exempt_ones_needs_a_principal_when_authenticated(
     assert client.post("/api/files/x").status_code == 401
     assert client.get("/api/files/x/y").status_code == 401
     assert client.get("/api/extension-runs/x/other").status_code == 401
+    assert client.get("/health/x").status_code == 401
     # No generated API documentation reveals the route table.
     assert client.get("/openapi.json").headers["content-type"].startswith("text/html")
     assert client.get("/docs").headers["content-type"].startswith("text/html")

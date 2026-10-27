@@ -20,10 +20,10 @@ from core.models.models import ModelRegistry
 from core.prompts import LayoutEntry, SystemPromptManager
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.providers import ProviderRegistry
-from core.runs import Run
+from core.runs import Run, RunAdmission, RunKind
 from core.runtime._configuration import _VBOT_ROOT
 from core.runtime.runtime import Runtime
-from core.sessions import ChatSessionManager, SessionAddress
+from core.sessions import SUBAGENT_REPLY_TARGET_META_KEY, ChatSessionManager, SessionAddress
 from core.skills.skills import SkillRegistry
 from core.statistics import StatisticsIndex
 from core.storage.layout import DATA_DIRECTORY_RELATIVE_PATHS
@@ -390,6 +390,65 @@ async def test_scratch_retention_preserves_files_when_a_run_starts_during_sweep(
         await sweep
         if run is not None:
             await run.wait()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["transitive-child", "reply-to-user", "held-result", "service"])
+async def test_goals_use_live_activity_wakes_and_keep_the_service_command_policy(
+    runtime: Runtime, monkeypatch: pytest.MonkeyPatch, source: str
+) -> None:
+    sessions = runtime.chat_sessions
+    parent = sessions.create("main", "goal-parent").address
+    child = sessions.create("main", "goal-child").address
+    grandchild = sessions.create("main", "goal-grandchild").address
+    for address, ancestor in ((child, parent), (grandchild, child)):
+        link_session(
+            sessions,
+            address,
+            subagent_id=f"sub_{address.session_id}",
+            parent=ancestor,
+            run_id="run_parent",
+            tool_call_id=None,
+            tool_call_index=None,
+        )
+    if source == "reply-to-user":
+        sessions.mutate_metadata(
+            child, lambda metadata: metadata.update({SUBAGENT_REPLY_TARGET_META_KEY: "user"})
+        )
+    gate = asyncio.Event()
+
+    async def execute(_run: Run) -> None:
+        await gate.wait()
+
+    manager = runtime.chat_runs
+    assert manager is not None
+    pending = runtime.goals._work_pending  # noqa: SLF001 -- the Runtime's installed boundary.
+    assert pending is not None
+    try:
+        if source in {"transitive-child", "reply-to-user"}:
+            # Session-message Runs do not auto-forward in this test: their live
+            # activity is enough to exercise the real durable Parent links.
+            await manager.start(
+                grandchild, execute, admission=RunAdmission(run_kind=RunKind.SESSION_MESSAGE)
+            )
+        elif source == "held-result":
+            run = await manager.start(
+                parent, execute, admission=RunAdmission(run_kind=RunKind.SESSION_MESSAGE)
+            )
+            receipt = runtime.trigger_service.submit_completion(
+                parent, notice_id="goal-result", origin_run_id=run.id, body="Result arrived."
+            )
+            receipt.add_done_callback(lambda done: None if done.cancelled() else done.exception())
+        else:
+            # Services intentionally hold Goals, although they do not keep the
+            # Session activity waiting. No real server process is necessary.
+            monkeypatch.setattr(
+                runtime.command_manager, "has_pending_delivery", lambda owner: owner == parent
+            )
+            assert not await runtime.session_activity.pending_wakes(parent)
+        assert await pending(parent) is (source != "reply-to-user")
+    finally:
+        await runtime.aclose()
 
 
 def test_start_bootstraps_main_agent_when_data_dir_is_empty(shared_runtime: Runtime) -> None:

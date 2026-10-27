@@ -75,16 +75,8 @@ def _agent_default_project(agents: AgentStore, agent_id: str) -> str | None:
 
 
 async def _goal_work_pending(runtime: Runtime, address: SessionAddress) -> bool:
-    """Whether work runs whose result wakes the Session: a Sub-Agent or a delivering command."""
-    sessions = runtime._chat_sessions
-    runs = runtime._chat_run_manager
-    if sessions is None or runs is None:
-        return False
-    children = await sessions.run_async(sessions.subagent_children, address)
-    if any(
-        runs.has_activity_for_session(child.agent_id, child.session_id, project_id=child.project_id)
-        for child in children
-    ):
+    """Wait for activity's live wake sources and the Goal policy's service commands."""
+    if await runtime.session_activity.pending_wakes(address):
         return True
     commands = runtime._command_manager
     return commands is not None and commands.has_pending_delivery(address)

@@ -10,7 +10,7 @@ Provider probe CLIs and their disposable Eval workers use Runtime-owned startup 
 
 ## Developer harness ownership
 
-Worktree creation and listing stay in `scripts/worktree.py`; merge landing, rollback and repair belong to `_worktree_merge.py`, and service shutdown, data ownership and checkout cleanup to `_worktree_removal.py`. Both use an explicit `WorktreeContext` (`_worktree_context.py`) for repository and executing-checkout identity, subprocesses and port locking; helpers never import entrypoint globals. The push check uses the same private-checkout cleanup owner. Safety and recovery protocols remain documented in `scripts/README-worktree.md`.
+Worktree creation and listing stay in `scripts/worktree.py`; merge landing, rollback and repair belong to `_worktree_merge.py`, and service shutdown, data ownership and checkout cleanup to `_worktree_removal.py`. Both use an explicit `WorktreeContext` (`_worktree_context.py`) for repository and executing-checkout identity, subprocesses and port locking; helpers never import entrypoint globals. Port and merge locks use `core/utils/file_lock.py` for OS acquire/release; Worktree tooling keeps waits, holder records and repair leases. The push check uses the same private-checkout cleanup owner. Safety and recovery protocols remain documented in `scripts/README-worktree.md`.
 
 Load-scenario defaults, validation and result serialization belong to `scripts/perf_load_suite/config.py`; `runner.py` owns orchestration. Tool lab replay keeps recorded-history decoding in `_replay_evidence.py`, Session path identity and rewriting in `_replay_paths.py`, and forward simulation in `_replay_history.py`.
 

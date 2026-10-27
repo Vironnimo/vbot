@@ -464,6 +464,7 @@ def test_desktop_stays_a_thin_client_of_the_server() -> None:
         "core.tools.process_tree",
         "core.tools.shell_environment",
         "core.tools.terminal_backend",
+        "core.utils.crash_logging",
         "core.utils.file_status",
         "core.utils.ids",
         "core.utils.logging",

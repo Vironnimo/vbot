@@ -396,6 +396,15 @@ class SubAgentCoordinator:
         sessions = self._runtime.chat_sessions
         return await sessions.run_async(read_link, sessions, address, strict=True)
 
+    async def child_sessions(self, address: SessionAddress) -> list[SessionAddress]:
+        """Read the indexed direct children, before resolving their current links."""
+        sessions = self._runtime.chat_sessions
+        return await sessions.run_async(sessions.subagent_children, address)
+
+    async def parent_answer_pending(self, address: SessionAddress) -> bool:
+        """Whether followed work already owes Parent an answer despite a later redirect."""
+        return await self._forwarding.parent_answer_pending(address)
+
     def references_identity_agent(self, agent_id: str) -> bool:
         """Return whether a followed Run in an Identity Agent's Session is still forwarding."""
         return any(

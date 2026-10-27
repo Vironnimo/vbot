@@ -39,7 +39,6 @@ from core.config_validation import (
     validate_non_empty_string,
     validate_optional_path_string,
     validate_optional_string_list,
-    validate_positive_integer,
     validate_required_fields,
     validate_string,
     validate_string_list,
@@ -99,6 +98,7 @@ from core.tools.tool_loading import TOOL_LOADING_FIELDS, normalize_tool_loading
 from core.utils.context_commands import context_commands_problem, normalize_context_commands
 from core.utils.ids import is_reserved_name, reserved_name_message
 from core.utils.timestamps import utc_now_timestamp
+from core.utils.user_order import validate_order_fields
 
 DEFAULT_FALLBACK_MODELS: list[str] = []
 
@@ -225,26 +225,9 @@ def validate_agent_order_data(data: Any) -> list[JsonDiagnostic]:
         return diagnostics
 
     warn_unknown_keys(diagnostics, "$", data, AGENT_ORDER_SHAPE.fields, "agent order field")
-    validate_required_fields(diagnostics, "$", data, _AGENT_ORDER_FIELDS)
-    if "revision" in data:
-        validate_positive_integer(diagnostics, "$.revision", data["revision"], required=True)
-    agent_ids = data.get("agent_ids")
-    if "agent_ids" in data:
-        validate_string_list(diagnostics, "$.agent_ids", agent_ids)
-    if isinstance(agent_ids, list):
-        seen: set[str] = set()
-        for index, agent_id in enumerate(agent_ids):
-            if not isinstance(agent_id, str):
-                continue
-            if not is_valid_agent_id(agent_id):
-                add_error(
-                    diagnostics,
-                    f"$.agent_ids[{index}]",
-                    "must be a valid Agent id",
-                )
-            if agent_id in seen:
-                add_error(diagnostics, f"$.agent_ids[{index}]", "must be unique")
-            seen.add(agent_id)
+    validate_order_fields(
+        diagnostics, data, ids_field="agent_ids", valid_id=is_valid_agent_id, item_label="Agent"
+    )
     return diagnostics
 
 
@@ -525,21 +508,6 @@ def _validate_string_field(field: str, value: Any, *, allow_empty: bool) -> str:
     if not allow_empty and not value:
         raise AgentError(f"{field} must be a non-empty string")
     return value
-
-
-def _apply_agent_order(
-    agents: list[Agent],
-    order: _AgentOrderDocument | None,
-) -> list[Agent]:
-    """Project valid Agents through stored order, appending new ids by id."""
-    if order is None:
-        return agents
-
-    agents_by_id = {agent.id: agent for agent in agents}
-    ordered = [agents_by_id[agent_id] for agent_id in order.agent_ids if agent_id in agents_by_id]
-    ordered_ids = {agent.id for agent in ordered}
-    ordered.extend(agent for agent in agents if agent.id not in ordered_ids)
-    return ordered
 
 
 AGENT_NAME_MAX_LENGTH = 80

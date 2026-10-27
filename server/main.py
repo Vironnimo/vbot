@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import faulthandler
 import gc
 import logging
 import os
@@ -12,7 +11,6 @@ import signal
 import socket
 import sys
 import time
-from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
@@ -52,6 +50,7 @@ from core.utils.config import (
     resolve_port,
     resolve_server_bind,
 )
+from core.utils.crash_logging import enable_crash_log
 from core.utils.logging import LogManager, build_uvicorn_log_config, get_logger
 from core.utils.processes import ForeignJob, activate_process_containment, foreign_job
 from core.utils.server_control import (
@@ -83,8 +82,6 @@ _APP_ROOT = Path(__file__).resolve().parents[1]
 # Fatal errors (a native crash, a fatal interpreter error) bypass logging; the
 # fault handler writes them to this file in the log directory instead.
 CRASH_LOG_NAME = "server-crash.log"
-# Checked at each start: a larger crash log moves to its single previous generation.
-_CRASH_LOG_ROTATE_BYTES = 1024 * 1024
 # Bound transport draining before lifespan teardown cancels Runs and closes services.
 _GRACEFUL_SHUTDOWN_SECONDS = 5
 
@@ -668,35 +665,11 @@ def _format_duration(seconds: float) -> str:
 
 
 def _enable_crash_log(data_dir: Path) -> None:
-    """Record this process's fatal errors in the crash log of its log directory.
-
-    Each start appends one line in the daily log format, so a crashed process's
-    dump (every thread's Python stack, and the C stack where the platform
-    provides one) follows the line of its own start, and the Logs view shows it
-    as that line's continuation. The fault handler keeps the file object
-    referenced, so it stays open until the interpreter has finalized; native
-    libraries still crash there.
-    """
+    """Record this server's fatal errors beside its daily logs."""
     path = DataDirectoryLayout(data_dir).logs / CRASH_LOG_NAME
     started = time.strftime("%Y-%m-%d %H:%M:%S")
     header = f"{started} [INFO] vbot.server - Server process started (pid={os.getpid()})\n"
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        # A missing file needs nothing; a file another server process holds open
-        # cannot move and keeps growing until a later start.
-        with suppress(OSError):
-            if path.stat().st_size > _CRASH_LOG_ROTATE_BYTES:
-                os.replace(path, path.with_name(f"{path.name}.1"))
-        crash_log = path.open("ab", buffering=0)
-        try:
-            crash_log.write(header.encode("utf-8"))
-        except OSError:
-            crash_log.close()
-            raise
-    except OSError as exc:
-        _LOGGER.warning("Opening the crash log failed (path=%s error=%s)", path, exc)
-        return
-    faulthandler.enable(file=crash_log, all_threads=True, c_stack=True)
+    enable_crash_log(path, header, logger=_LOGGER)
 
 
 # A thread that computes holds the GIL until the waiting Event Loop asks for it,

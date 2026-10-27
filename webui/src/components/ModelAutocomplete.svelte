@@ -1,4 +1,5 @@
 <script>
+  import AutocompletePopup from './composer/AutocompletePopup.svelte';
   import { modelAutocompleteRows } from './composer/autocomplete.js';
   import { t } from '$lib/i18n.js';
   import OptionMarker from './OptionMarker.svelte';
@@ -17,186 +18,54 @@
   } = $props();
 
   let matchingOptions = $derived(modelAutocompleteRows(options, query));
-  let containerElement = $state(null);
-
-  // Keep the active option visible inside the scrollable popup when keyboard
-  // navigation or list changes move it out of the visible area. Only the
-  // container is scrolled — the page and timeline stay put.
-  $effect(() => {
-    // Track reactive dependencies so the effect re-runs on navigation and
-    // list changes.
-    activeIndex;
-    matchingOptions.length;
-
-    const container = containerElement;
-    if (!container) {
-      return;
-    }
-
-    const activeOption = container.querySelector(
-      '.model-autocomplete__option.active',
-    );
-    if (!activeOption) {
-      return;
-    }
-
-    const containerRect = container.getBoundingClientRect();
-    const optionRect = activeOption.getBoundingClientRect();
-    if (optionRect.top < containerRect.top) {
-      container.scrollTop -= containerRect.top - optionRect.top;
-    } else if (optionRect.bottom > containerRect.bottom) {
-      container.scrollTop += optionRect.bottom - containerRect.bottom;
-    }
-  });
+  let popup = $state(null);
 
   export function hasMatches() {
     return matchingOptions.length > 0;
   }
 
   export function selectActive() {
-    const option = matchingOptions[activeIndex];
-
-    if (option) {
-      onSelect(option);
-      return true;
-    }
-
-    return false;
+    return popup?.selectActive() ?? false;
   }
 </script>
 
-{#if matchingOptions.length > 0 || loading}
-  <div
-    bind:this={containerElement}
-    class="model-autocomplete"
-    role="listbox"
-    aria-label={t('modelAutocomplete.label')}
-  >
-    <div class="model-autocomplete__eyebrow">
-      {t('modelAutocomplete.eyebrow')}
-    </div>
-    {#if loading && matchingOptions.length === 0}
-      <div class="model-autocomplete__loading">
-        {t('common.loading')}
-      </div>
-    {/if}
-    {#each matchingOptions as option, index (option.value)}
-      <button
-        type="button"
-        class="model-autocomplete__option"
-        class:active={index === activeIndex}
-        role="option"
-        aria-selected={index === activeIndex}
-        onmouseenter={() => onHover(index)}
-        onmousedown={(event) => event.preventDefault()}
-        onclick={() => onSelect(option)}
+<AutocompletePopup
+  bind:this={popup}
+  kind="model"
+  items={matchingOptions}
+  keyOf={(option) => option.value}
+  {activeIndex}
+  {loading}
+  {footerLabel}
+  {onFooterAction}
+  ariaLabel={t('modelAutocomplete.label')}
+  eyebrow={t('modelAutocomplete.eyebrow')}
+  {onSelect}
+  {onHover}
+>
+  {#snippet row(option)}
+    <span class="model-autocomplete__head">
+      <span class="model-autocomplete__label"
+        >{#if option.labelLead}<span class="model-autocomplete__lead"
+            >{option.labelLead}</span
+          >{option.label.slice(
+            option.labelLead.length,
+          )}{:else}{option.label}{/if}</span
       >
-        <span class="model-autocomplete__head">
-          <span class="model-autocomplete__label"
-            >{#if option.labelLead}<span class="model-autocomplete__lead"
-                >{option.labelLead}</span
-              >{option.label.slice(
-                option.labelLead.length,
-              )}{:else}{option.label}{/if}</span
-          >
-          {#if option.marker}
-            <OptionMarker
-              label={option.marker.label}
-              tooltip={option.marker.tooltip}
-            />
-          {/if}
-        </span>
-        {#if option.secondaryLabel}
-          <span class="model-autocomplete__meta">{option.secondaryLabel}</span>
-        {/if}
-      </button>
-    {/each}
-    {#if matchingOptions.length > 0 && footerLabel}
-      <button
-        type="button"
-        class="model-autocomplete__footer"
-        onclick={() => onFooterAction()}
-      >
-        {footerLabel}
-      </button>
+      {#if option.marker}
+        <OptionMarker
+          label={option.marker.label}
+          tooltip={option.marker.tooltip}
+        />
+      {/if}
+    </span>
+    {#if option.secondaryLabel}
+      <span class="model-autocomplete__meta">{option.secondaryLabel}</span>
     {/if}
-  </div>
-{/if}
+  {/snippet}
+</AutocompletePopup>
 
 <style>
-  .model-autocomplete {
-    position: absolute;
-    right: var(--composer-pad-x, 0px);
-    bottom: calc(100% - 8px);
-    left: var(--composer-pad-x, 0px);
-    z-index: 20;
-    display: flex;
-    flex-direction: column;
-    max-width: var(--chat-measure);
-    max-height: min(320px, 45vh);
-    margin-inline: auto;
-    overflow-y: auto;
-    border: 1px solid var(--border-2);
-    border-radius: var(--r-md);
-    background: var(--surface-2);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
-  }
-
-  /* The popup scrolls; its rows must keep their full height instead of
-     shrinking to fit the capped column (rows with overflow: hidden would
-     otherwise collapse onto their padding and clip their text). */
-  .model-autocomplete > * {
-    flex-shrink: 0;
-  }
-
-  .model-autocomplete__eyebrow {
-    padding: 8px 10px 6px;
-    border-bottom: 1px solid var(--border);
-    color: var(--text-lo);
-    background: var(--surface);
-    font-size: var(--fs-label-sm);
-    font-weight: 600;
-    line-height: 1;
-  }
-
-  .model-autocomplete__loading {
-    padding: 9px 10px;
-    color: var(--text-lo);
-    font-family: var(--font-ui);
-    font-size: var(--fs-body-sm);
-    font-style: italic;
-  }
-
-  .model-autocomplete__option {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    width: 100%;
-    padding: 7px 10px;
-    border: 0;
-    border-bottom: 1px solid var(--border);
-    color: var(--text-med);
-    background: transparent;
-    text-align: left;
-    transition:
-      background-color 120ms ease,
-      color 120ms ease;
-  }
-
-  .model-autocomplete__option:last-of-type {
-    border-bottom: 0;
-  }
-
-  .model-autocomplete__option:hover,
-  .model-autocomplete__option.active {
-    color: var(--text-hi);
-    background: var(--surface-3);
-  }
-
-  .model-autocomplete__option.active {
-    box-shadow: inset 2px 0 0 var(--accent);
-  }
-
   .model-autocomplete__head {
     display: flex;
     align-items: center;
@@ -225,29 +94,5 @@
     line-height: 1.3;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  .model-autocomplete__footer {
-    padding: 7px 10px;
-    border: 0;
-    border-top: 1px solid var(--border);
-    color: var(--text-lo);
-    background: var(--surface);
-    font-family: var(--font-ui);
-    font-size: var(--fs-label-sm);
-    text-align: left;
-    transition: background-color 120ms ease;
-  }
-
-  .model-autocomplete__footer:hover {
-    color: var(--text-hi);
-    background: var(--surface-3);
-  }
-
-  @media (max-width: 640px) {
-    .model-autocomplete {
-      right: 14px;
-      left: 14px;
-    }
   }
 </style>

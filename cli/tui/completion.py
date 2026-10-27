@@ -16,6 +16,7 @@ from textual.containers import Vertical
 from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
 
+from cli.tui.models import model_choices
 from cli.tui.rendering import one_line, terminal_text
 
 type JsonObject = dict[str, Any]
@@ -126,24 +127,10 @@ def command_suggestions(items: list[JsonObject]) -> list[Suggestion]:
 
 def model_suggestions(models: list[JsonObject]) -> list[Suggestion]:
     """Offer the chat Models with the reference a `/model` message needs."""
-    result: list[Suggestion] = []
-    for row in models:
-        if not isinstance(row, dict):
-            continue
-        provider = row.get("provider_id")
-        model_id = row.get("model_id")
-        reference = row.get("id")
-        if (
-            not isinstance(reference, str)
-            and isinstance(provider, str)
-            and isinstance(model_id, str)
-        ):
-            reference = f"{provider}/{model_id}"
-        if not isinstance(reference, str) or not reference:
-            continue
-        name = str(row.get("name") or model_id or reference)
-        result.append(Suggestion(f"{name} · {reference}", reference, "model", send=True))
-    return result
+    return [
+        Suggestion(label, reference, "model", send=True)
+        for label, reference in model_choices(models)
+    ]
 
 
 def file_suggestions(paths: list[str]) -> list[Suggestion]:

@@ -63,10 +63,15 @@ observer on every Run. After the Run's terminal commit, a spawned decision runs:
 3. Not `active`: nothing.
 4. `turns >= max_turns`: pause `limit`.
 5. Queued input for the Session: nothing; that Run's end decides again.
-6. Running work whose result wakes the Session (a direct Sub-Agent child with
-   activity, or `CommandManager.has_pending_delivery`): wait. The result's Run
-   decides again; a fallback continues after `GOAL_WAIT_FALLBACK_SECONDS`
-   (10 minutes), because a command such as a dev server never ends.
+6. Pending wakes from `SessionActivity.pending_wakes` (`activity.md`), plus
+   `CommandManager.has_pending_delivery`: wait. This includes transitive
+   Sub-Agent work, committed Parent answers after a recipient change, forwarding
+   gaps and held completions; unlike UI activity, it excludes idle settle periods.
+   Goals deliberately still count service commands. An unavailable wake check
+   also defers, logging degradation once and recovery when reads succeed again.
+   The result's Run decides again; the fallback continues after
+   `GOAL_WAIT_FALLBACK_SECONDS` (10 minutes), including when the check stayed
+   unavailable or a command such as a dev server never ends.
 7. Otherwise count the turn and start an internal `system` Run through
    `ChatLoop.start_run` with the Session's latest reply surface, the input
    `GOAL_CONTINUE_TEXT`, or `GOAL_LAST_TURN_TEXT` for the turn that reaches the
@@ -159,12 +164,12 @@ in the `update_goal` definition; reasons for those sentences:
 ## Source and tests
 
 - `core/automation/goals.py`; `tests/core/automation/test_goals.py` (continuation,
-  every pause reason, blocked reactivation, waiting, commands, restart, the
+  every pause reason, blocked reactivation, waiting and unavailable-work fallback, commands, restart, the
   rows each change writes).
 - Grant and Compaction retention: `core/chat/_run_state.py`,
   `core/chat/_request_builder.py`, `core/chat/_scratch_context.py`;
   `tests/core/chat/test_chat_goal_session.py`.
-- Wiring: `core/runtime/_bootstrap_services.py` (`_goal_work_pending`), shutdown step
+- Wiring: `core/runtime/_bootstrap_services.py` (`_goal_work_pending` delegates to Activity and adds service commands; `tests/core/runtime/test_runtime_wiring.py`), shutdown step
   `goals`, server bridge in `server/_app_lifecycle.py`.
 - WebUI: `webui/src/components/chat/ComposerGoal.svelte`,
   `ChatView.sessionSettings.test.js`; rows: `goalEventLabel`

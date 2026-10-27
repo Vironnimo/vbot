@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from core.chat.wire_shaping import system_reminder_request_message
+from core.compaction._cycles import ToolCycleSuffix
 from core.providers.adapter import is_request_context_message
 
 OVERFLOW_TOOL_OMISSION = (
@@ -116,22 +117,20 @@ def _safe_exchange_starts(messages: Sequence[dict[str, Any]]) -> list[int]:
     these boundaries can discard older exchanges without orphaning a Result.
     """
     starts: list[int] = []
-    results: set[Any] = set()
+    cycles = ToolCycleSuffix()
     for index in range(len(messages) - 1, -1, -1):
         message = messages[index]
         role = message.get("role")
-        if role == "tool":
-            call_id = message.get("tool_call_id")
-            if not isinstance(call_id, str) or call_id in results:
-                break
-            results.add(call_id)
-            continue
-        if role == "assistant":
-            calls = message.get("tool_calls") or []
-            if {call.get("id") for call in calls} != results:
-                break
-            results.clear()
-        elif results:
+        call_id = message.get("tool_call_id")
+        if role == "tool" and not isinstance(call_id, str):
+            break
+        if not cycles.accepts(
+            role,
+            call_ids=(call.get("id") for call in message.get("tool_calls") or ())
+            if role == "assistant"
+            else (),
+            result_id=call_id,
+        ):
             break
         if role == "user" and not is_request_context_message(message):
             starts.append(index)

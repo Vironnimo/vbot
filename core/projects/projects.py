@@ -300,7 +300,7 @@ def validate_project_data(data: Any) -> list[JsonDiagnostic]:
         _validate_model_mappings(data.get("model_mappings", {}))
     except ProjectError as error:
         add_error(diagnostics, "$.model_mappings", str(error))
-    _validate_auto_load_list(diagnostics, "$.auto_load", data.get("auto_load"))
+    validate_optional_string_list(diagnostics, "$.auto_load", data.get("auto_load"))
     if (problem := context_commands_problem(data.get("context_commands"))) is not None:
         add_error(diagnostics, "$.context_commands", problem)
     for switch in ("auto_instructions", "folder_instructions", "memory_enabled"):
@@ -345,17 +345,6 @@ def _validate_project_config_id(diagnostics: list[JsonDiagnostic], value: Any) -
             "$.project_id",
             "must be 1-64 characters using only letters, numbers, hyphen, or underscore",
         )
-
-
-def _validate_auto_load_list(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:
-    if value is None:
-        return
-    if not isinstance(value, list):
-        add_error(diagnostics, path, "must be a list of strings")
-        return
-    for index, item in enumerate(value):
-        if not isinstance(item, str) or not item.strip():
-            add_error(diagnostics, f"{path}[{index}]", "must be a non-empty string")
 
 
 def _validate_override_schema(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:

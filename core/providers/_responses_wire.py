@@ -18,6 +18,7 @@ from core.providers._responses_stream import (
     ResponsesStreamState,
     iter_responses_sse_deltas_with_state,
     normalize_responses_stream_event,
+    stream_responses_sse,
 )
 from core.providers._responses_values import (
     _REASONING_META_KEYS,
@@ -70,6 +71,7 @@ __all__ = [
     "normalize_responses_response",
     "normalize_responses_stream_event",
     "responses_returned_reasoning",
+    "stream_responses_sse",
 ]
 
 

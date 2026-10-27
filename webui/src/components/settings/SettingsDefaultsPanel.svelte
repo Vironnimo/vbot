@@ -28,7 +28,6 @@
     buildAgentDefaultsPayload,
     normalizeAgentDefaultsSettings,
   } from '$lib/settingsView.js';
-  import { shouldApplyReloadNow } from '$lib/resourceInvalidation.js';
 
   const noop = () => {};
   const AGENT_THINKING_EFFORT_OPTIONS = Object.freeze([
@@ -82,8 +81,6 @@
   // A live model reload fetches in the background but holds the visible option
   // swap while a picker is open, so an open selection is never disturbed; the
   // form's selected value lives in `agentDefaults`, separate from these options.
-  let modelDropdownOpenCount = $state(0);
-  let pendingModelCatalogs = null;
   let lastModelsRefreshToken = null;
 
   let showAllModels = $state(false);
@@ -154,6 +151,10 @@
   const modelCatalogLoader = createModelCatalogLoader({
     listModels,
     listConnections,
+    applyCatalogs: (catalogs) => {
+      availableModels = catalogs.models;
+      availableConnections = catalogs.connections;
+    },
   });
   const agentDefaultsAutosave = createDebouncedAutosave({
     getSnapshot: () => ({ ...agentDefaults }),
@@ -195,58 +196,15 @@
     }
     if (modelsRefreshToken !== lastModelsRefreshToken) {
       lastModelsRefreshToken = modelsRefreshToken;
-      void reloadModelCatalogs();
+      void loadModelCatalogs();
     }
   });
 
-  function applyModelCatalogs(catalogs) {
-    availableModels = catalogs.models;
-    availableConnections = catalogs.connections;
-    pendingModelCatalogs = null;
-  }
-
   async function loadModelCatalogs() {
-    pendingModelCatalogs = null;
     try {
-      const catalogs = await modelCatalogLoader.load();
-      if (catalogs !== null) {
-        applyModelCatalogs(catalogs);
-      }
+      await modelCatalogLoader.load();
     } catch (error) {
       onError(`${t('settings.models.loadError')} ${error.message}`);
-    }
-  }
-
-  async function reloadModelCatalogs() {
-    pendingModelCatalogs = null;
-    let catalogs;
-    try {
-      catalogs = await modelCatalogLoader.load();
-    } catch (error) {
-      onError(`${t('settings.models.loadError')} ${error.message}`);
-      return;
-    }
-    if (catalogs === null) {
-      return;
-    }
-    if (
-      shouldApplyReloadNow({
-        dropdownOpen: modelDropdownOpenCount > 0,
-      })
-    ) {
-      applyModelCatalogs(catalogs);
-    } else {
-      pendingModelCatalogs = catalogs;
-    }
-  }
-
-  function trackModelDropdownOpen(open) {
-    modelDropdownOpenCount = Math.max(
-      0,
-      modelDropdownOpenCount + (open ? 1 : -1),
-    );
-    if (modelDropdownOpenCount === 0 && pendingModelCatalogs) {
-      applyModelCatalogs(pendingModelCatalogs);
     }
   }
 
@@ -359,7 +317,7 @@
         panelClass="settings-view__model-panel"
         footerActionLabel={modelFilterFooter}
         onFooterAction={() => (showAllModels = !showAllModels)}
-        onOpenChange={trackModelDropdownOpen}
+        onOpenChange={modelCatalogLoader.trackPickerOpen}
         onValueChange={(selectedValue) =>
           updateAgentDefaultsModelSelection('model', selectedValue)}
       />
@@ -413,7 +371,7 @@
             ariaLabel={`${t('settings.defaults.fallbackModels')} ${index + 1}`}
             triggerClass="settings-view__dropdown"
             panelClass="settings-view__model-panel"
-            onOpenChange={trackModelDropdownOpen}
+            onOpenChange={modelCatalogLoader.trackPickerOpen}
             onValueChange={(selectedValue) =>
               updateFallbackModelEntry(index, selectedValue)}
           />

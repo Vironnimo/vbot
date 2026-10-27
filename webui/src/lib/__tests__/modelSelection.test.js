@@ -87,7 +87,12 @@ describe('createModelCatalogLoader', () => {
       .fn()
       .mockReturnValueOnce(staleConnections.promise)
       .mockResolvedValue({ connections: [{ id: 'new:connection' }] });
-    const loader = createModelCatalogLoader({ listModels, listConnections });
+    const applyCatalogs = vi.fn();
+    const loader = createModelCatalogLoader({
+      listModels,
+      listConnections,
+      applyCatalogs,
+    });
 
     const stale = loader.load();
     const failing = loader.load();
@@ -102,6 +107,46 @@ describe('createModelCatalogLoader', () => {
     failingModels.reject(new Error('stale failure'));
     await expect(stale).resolves.toBeNull();
     await expect(failing).resolves.toBeNull();
+    expect(applyCatalogs).toHaveBeenCalledExactlyOnceWith({
+      models: [{ id: 'new/model' }],
+      connections: [{ id: 'new:connection' }],
+    });
+  });
+
+  it('holds the latest catalog until every picker closes and drops invalidated reads and pending swaps', async () => {
+    const applyCatalogs = vi.fn();
+    const response = deferred();
+    const listModels = vi.fn().mockResolvedValue({ models: [{ id: 'first' }] });
+    const loader = createModelCatalogLoader({
+      listModels,
+      listConnections: async () => ({ connections: [] }),
+      applyCatalogs,
+    });
+    loader.trackPickerOpen(true);
+    loader.trackPickerOpen(true);
+    await loader.load();
+    listModels.mockResolvedValue({ models: [{ id: 'latest' }] });
+    await loader.load();
+    loader.trackPickerOpen(false);
+    expect(applyCatalogs).not.toHaveBeenCalled();
+    loader.trackPickerOpen(false);
+    expect(applyCatalogs).toHaveBeenCalledExactlyOnceWith({
+      models: [{ id: 'latest' }],
+      connections: [],
+    });
+
+    loader.trackPickerOpen(true);
+    await loader.load();
+    loader.invalidate();
+    loader.trackPickerOpen(false);
+    expect(applyCatalogs).toHaveBeenCalledTimes(1);
+
+    listModels.mockReturnValueOnce(response.promise);
+    const inFlight = loader.load();
+    loader.invalidate();
+    response.resolve({ models: [{ id: 'disposed' }] });
+    await expect(inFlight).resolves.toBeNull();
+    expect(applyCatalogs).toHaveBeenCalledTimes(1);
   });
 });
 

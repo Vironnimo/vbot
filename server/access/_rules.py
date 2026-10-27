@@ -336,6 +336,13 @@ def is_webhook_route(method: str, path: str) -> bool:
     return method == "POST" and _WEBHOOK_ROUTE.fullmatch(path) is not None
 
 
+def is_server_path(path: str) -> bool:
+    """Whether an absolute request path belongs to a reserved server namespace."""
+    return any(
+        path == namespace or path.startswith(f"{namespace}/") for namespace in _SERVER_NAMESPACES
+    )
+
+
 def classify_route(scope_type: str, method: str, path: str) -> RouteClass:
     """Whether a route needs a principal in ``authenticated`` mode. Fails closed."""
     if scope_type != "http":
@@ -348,9 +355,7 @@ def classify_route(scope_type: str, method: str, path: str) -> RouteClass:
             return "exempt"
         if is_capability_route(method, path):
             return "exempt"
-    if method in {"GET", "HEAD"} and not any(
-        path == namespace or path.startswith(f"{namespace}/") for namespace in _SERVER_NAMESPACES
-    ):
+    if method in {"GET", "HEAD"} and not is_server_path(path):
         return "shell"
     return "protected"
 

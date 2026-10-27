@@ -67,6 +67,9 @@ class WaitingFor:
     commands: int = 0
     results: int = 0
 
+    def __bool__(self) -> bool:
+        return bool(self.subagents or self.commands or self.results)
+
 
 @dataclass(frozen=True, slots=True)
 class SessionActivityState:
@@ -150,6 +153,10 @@ class SubAgentSource(Protocol):
 
     async def parent_link(self, address: SessionAddress) -> SubAgentLink | None: ...
 
+    async def child_sessions(self, address: SessionAddress) -> list[SessionAddress]: ...
+
+    async def parent_answer_pending(self, address: SessionAddress) -> bool: ...
+
 
 class _Unreadable:
     pass
@@ -170,6 +177,7 @@ class _Entry:
     """What this process follows of one Session while it is not settled idle."""
 
     dirty: bool = False
+    revision: int = 0
     # Tell the Parent after the next recompute, also without a change.
     tell_parent: bool = False
     worker: asyncio.Task[None] | None = None
@@ -233,6 +241,27 @@ class SessionActivity:
         """Every Session that is not idle, with its activity."""
         with self._lock:
             return list(self._published.items())
+
+    async def pending_wakes(self, address: SessionAddress) -> WaitingFor:
+        """Read pending wakes now, independently of publication and idle settling.
+
+        Goals use this same aggregation as activity, but cannot wait for the
+        UI's settle period or overlook a child whose first event is still
+        waiting for its activity worker. Source changes during link reads
+        invalidate the snapshot and are included before returning.
+        """
+        while not self._closed:
+            revisions: dict[SessionAddress, tuple[_Entry | None, int]] = {}
+            pending = await self._waiting_for(
+                address, seen=frozenset({address}), revisions=revisions
+            )
+            if all(
+                self._entries.get(followed) is entry
+                and (entry is None or entry.revision == revision)
+                for followed, (entry, revision) in revisions.items()
+            ):
+                return pending
+        return WaitingFor()
 
     def add_changed_callback(self, callback: SessionActivityCallback) -> Callable[[], None]:
         """Call *callback* with each published change of a Session's activity.
@@ -298,6 +327,7 @@ class SessionActivity:
         if entry is None:
             entry = self._entries[address] = _Entry()
         entry.dirty = True
+        entry.revision += 1
         entry.tell_parent = entry.tell_parent or tell_parent
         if entry.worker is not None:
             return
@@ -348,12 +378,24 @@ class SessionActivity:
                 item.admission.contributes_to_agent_activity for item in queued
             )
             return _Computed("working", contributes=contributes)
-        commands = self._commands.pending_wakes(address)
-        results = self._completions.pending_completion_wakes(address)
-        subagents = await self._pending_subagents(address)
-        if subagents or commands or results:
-            return _Computed("waiting", WaitingFor(subagents, commands, results))
-        return _Computed("idle")
+        pending = await self._waiting_for(address, seen=frozenset({address}))
+        return _Computed("waiting", pending) if pending else _Computed("idle")
+
+    async def _waiting_for(
+        self,
+        address: SessionAddress,
+        *,
+        seen: frozenset[SessionAddress],
+        revisions: dict[SessionAddress, tuple[_Entry | None, int]] | None = None,
+    ) -> WaitingFor:
+        if revisions is not None:
+            entry = self._entries.get(address)
+            revisions.setdefault(address, (entry, entry.revision if entry is not None else 0))
+        return WaitingFor(
+            subagents=await self._pending_subagents(address, seen=seen, revisions=revisions),
+            commands=self._commands.pending_wakes(address),
+            results=self._completions.pending_completion_wakes(address),
+        )
 
     def _working(self, address: SessionAddress) -> bool:
         return self._runs.active_run(
@@ -366,29 +408,55 @@ class SessionActivity:
             )
         )
 
-    async def _pending_subagents(self, address: SessionAddress) -> int:
-        """Count the Sub-Agents whose answers go to *address* and are still to come.
+    async def _pending_subagents(
+        self,
+        address: SessionAddress,
+        *,
+        seen: frozenset[SessionAddress],
+        revisions: dict[SessionAddress, tuple[_Entry | None, int]] | None,
+    ) -> int:
+        """Count children that still owe this Session an answer.
 
-        Only Sessions followed now can be pending; each candidate's link is read
-        afresh, since a user input can redirect its answers. A link that cannot
-        be read counts: the Sub-Agent is active, so ``idle`` would be premature.
+        Publication follows known active children, including their settle
+        periods. Fresh queries read durable links and follow actual wake
+        sources instead, even before activity workers have found the tree.
         """
-        candidates = [
-            child
-            for child, parent in list(self._parents.items())
-            if parent == address
-            and child != address
-            and (
-                self.state(child).state != "idle"
-                or self._subagents.forwarding_pending(child)
-                or self._working(child)
-            )
-        ]
+        if revisions is None:
+            candidates = [
+                (child, await self._read_link(child))
+                for child, parent in tuple(self._parents.items())
+                if parent == address
+                and child not in seen
+                and (
+                    self.state(child).state != "idle"
+                    or self._subagents.forwarding_pending(child)
+                    or self._working(child)
+                )
+            ]
+        else:
+            candidates = [(child, None) for child in await self._subagents.child_sessions(address)]
         count = 0
-        for child in candidates:
-            link = await self._read_link(child)
-            if isinstance(link, _Unreadable) or (
-                link is not None and link.parent == address and link.reply_target == "parent"
+        for child, link in candidates:
+            if revisions is not None:
+                entry = self._entries.get(child)
+                revisions.setdefault(child, (entry, entry.revision if entry is not None else 0))
+                link = await self._subagents.parent_link(child)
+            if child in seen:
+                continue
+            if isinstance(link, _Unreadable):
+                count += 1
+                continue
+            if link is None or link.parent != address:
+                continue
+            if link.reply_target != "parent":
+                if await self._subagents.parent_answer_pending(child):
+                    count += 1
+                continue
+            if (
+                revisions is None
+                or self._working(child)
+                or self._subagents.forwarding_pending(child)
+                or await self._waiting_for(child, seen=seen | {child}, revisions=revisions)
             ):
                 count += 1
         return count

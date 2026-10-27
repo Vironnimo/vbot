@@ -28,6 +28,7 @@ from core.sessions import (
     SESSION_GOAL_NOTE_PREFIX,
     SessionAddress,
 )
+from core.utils.log_conditions import LoggedConditions
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -132,6 +133,7 @@ class GoalService:
         self._run_manager = run_manager
         self._chat_loop = chat_loop
         self._work_pending = work_pending
+        self._work_failures = LoggedConditions()
         self._run_relay: Callable[[Run, ReplySurface], Awaitable[None]] | None = None
         self._changed_callbacks: list[Callable[[SessionAddress, bool], None]] = []
         # Automatic Runs: only they count against the limit and must make progress.
@@ -564,9 +566,30 @@ class GoalService:
         if self._closed or self._queued(address):
             # Queued input goes first; its Run's end decides again.
             return
-        if wait_for_work and self._work_pending is not None and await self._work_pending(address):
-            self._defer(address)
-            return
+        if wait_for_work and self._work_pending is not None:
+            try:
+                pending = await self._work_pending(address)
+            except Exception as error:
+                if self._work_failures.started(address, type(error).__name__):
+                    _LOGGER.warning(
+                        "Goal pending work unavailable; continuation deferred "
+                        "(agent=%s session=%s cause=%s)",
+                        address.agent_id,
+                        address.session_id,
+                        type(error).__name__,
+                        exc_info=True,
+                    )
+                self._defer(address)
+                return
+            if self._work_failures.ended(address):
+                _LOGGER.info(
+                    "Goal pending work recovered (agent=%s session=%s)",
+                    address.agent_id,
+                    address.session_id,
+                )
+            if pending:
+                self._defer(address)
+                return
         reply_surface = await self._latest_reply_surface(address)
         async with self._lock(address):
             run, paused = await self._admit_continuation(address, ended, reply_surface)

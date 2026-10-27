@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
@@ -113,37 +113,9 @@ async def _fetch_json_payload(
     fatal statuses propagate without another auth recovery attempt.
     """
 
-    async def _request() -> Any:
-        request_headers = await headers() if callable(headers) else headers
-        async with httpx.AsyncClient(timeout=60.0, verify=shared_ssl_context()) as client:
-            try:
-                response = await client.get(url, headers=request_headers)
-            except httpx.TransportError as exc:
-                raise wrap_network_error(exc) from exc
-            if auth_recovery is not None:
-                auth_recovery.record_response(
-                    response.status_code,
-                    request_headers,
-                    response.text if response.status_code >= 400 else "",
-                )
-            if response.status_code >= 400:
-                error_body = response.text
-                detail = (
-                    f"{response.status_code} {error_body}".strip()
-                    if error_body
-                    else str(response.status_code)
-                )
-                classify_http_status(
-                    response.status_code,
-                    idempotent=True,
-                    detail=detail,
-                    response_headers=response.headers,
-                )
-            return response.json()
-
-    if auth_recovery is not None:
-        return await auth_recovery.run(lambda: retry_async(_request))
-    return await retry_async(_request)
+    return await _request_json_payload(
+        "GET", url, headers, idempotent=True, auth_recovery=auth_recovery
+    )
 
 
 async def _post_json_payload(
@@ -161,11 +133,27 @@ async def _post_json_payload(
     work; the method-agnostic transient statuses retain their shared behavior.
     """
 
+    return await _request_json_payload(
+        "POST", url, headers, idempotent=False, payload=payload, auth_recovery=auth_recovery
+    )
+
+
+async def _request_json_payload(
+    method: Literal["GET", "POST"],
+    url: str,
+    headers: _HeaderSource,
+    *,
+    idempotent: bool,
+    payload: dict[str, Any] | None = None,
+    auth_recovery: OAuthRequestRecovery | None = None,
+) -> Any:
+    """Execute one discovery request with the caller's explicit retry safety."""
+
     async def _request() -> Any:
         request_headers = await headers() if callable(headers) else headers
         async with httpx.AsyncClient(timeout=60.0, verify=shared_ssl_context()) as client:
             try:
-                response = await client.post(url, headers=request_headers, json=payload)
+                response = await client.request(method, url, headers=request_headers, json=payload)
             except httpx.TransportError as exc:
                 raise wrap_network_error(exc) from exc
             if auth_recovery is not None:
@@ -183,7 +171,7 @@ async def _post_json_payload(
                 )
                 classify_http_status(
                     response.status_code,
-                    idempotent=False,
+                    idempotent=idempotent,
                     detail=detail,
                     response_headers=response.headers,
                 )

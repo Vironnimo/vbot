@@ -864,6 +864,9 @@ async def test_empty_old_string_creates_a_missing_or_empty_file(tmp_path) -> Non
         {"file_path": "a.py", "old_string": "x = 1", "new_string": "x = 3"},
         {"filePath": "a.py", "oldString": "x = 1", "newString": "x = 3", "replaceAll": False},
         {"filename": "a.py", "old_str": "x = 1", "new_str": "x = 3"},
+        {"target_file": "a.py", "search": "x = 1", "replace": "x = 3", "global": "false"},
+        {"path": "a.py", "edits": [{"find": "x = 1", "replacement": "x = 3", "all": False}]},
+        {"edits": [{"relative_path": "a.py", "original": "x = 1", "replace_with": "x = 3"}]},
         {"path": "a.py", "edits": [{"oldText": "x = 1", "newText": "x = 3"}]},
         {"path": "a.py", "edits": [{"old_text": "x = 1", "new_text": "x = 3"}]},
         {"path": "a.py", "edits": '[{"old_string": "x = 1", "new_string": "x = 3"}]'},
@@ -1612,6 +1615,12 @@ async def test_a_failed_edit_names_the_lines_and_edits_its_text_came_from(
             {"path": "a.txt", "edits": [{"old_string": "a", "new_string": "b", "oldText": "c"}]},
             "edits item 1 gives old_string twice with different values; send one.",
             id="item-conflict",
+        ),
+        pytest.param(
+            "edit",
+            {"path": "a.txt", "edits": [{"old_string": "one", "search": "two", "replace": "x"}]},
+            None,
+            id="replacement-alias-conflict",
         ),
         pytest.param(
             "edit",

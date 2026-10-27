@@ -57,4 +57,4 @@ asyncio Task names follow the same rules: they appear in asyncio's own log lines
 
 Read these only when your task matches - not by default.
 
-- Changing `core/utils/logging.py` (`LogManager`, retention, crash logs, the formatter's Session-id pseudonymization, uvicorn and third-party routing) or managed-server console logging (`VBOT_LOG_STDIO`), or diagnosing a server end without a stop line -> `logging/pipeline.md`
+- Changing `core/utils/logging.py` (`LogManager`, retention, the formatter's Session-id pseudonymization, uvicorn and third-party routing), `core/utils/crash_logging.py`, or managed-server console logging (`VBOT_LOG_STDIO`), or diagnosing a server end without a stop line -> `logging/pipeline.md`

@@ -207,6 +207,9 @@ async def test_patch_spellings_and_wrappers_apply_the_patch_as_sent(tmp_path, ar
         {"patch": "*** Begin Patch\n*** Edit File: a.py\n@@\n-x = 1\n+x = 3\n*** End Patch"},
         {"path": "a.py", "patch": "@@\n-x = 1\n+x = 3"},
         {"path": "a.py", "search": "x = 1", "replace": "x = 3"},
+        {"target_file": "a.py", "search": "x = 1", "replace": "x = 3", "global": "false"},
+        {"path": "a.py", "edits": [{"find": "x = 1", "replacement": "x = 3", "all": False}]},
+        {"edits": [{"relative_path": "a.py", "original": "x = 1", "replace_with": "x = 3"}]},
         # The MCP filesystem server's edit_file; its preview switch is off.
         {"path": "a.py", "edits": [{"oldText": "x = 1", "newText": "x = 3"}], "dryRun": False},
         # A header repeated before Begin Patch names the same single change.

@@ -21,6 +21,7 @@ from core.agents import (
     AgentStore,
     BuiltinAgentError,
     InvalidAgentIdError,
+    InvalidAgentOrderError,
     is_librarian,
     validate_agent_file,
 )
@@ -768,6 +769,63 @@ def test_reorder_persists_complete_roster_with_revision(store: AgentStore) -> No
     assert reordered.order_revision == initial.order_revision + 1
     assert reordered.order_changed is True
     assert [agent.id for agent in store.list()] == ["beta", "alpha"]
+    order_path = store.data_dir / "agents" / "order.json"
+    original = order_path.read_bytes()
+    repeated = store.reorder(["beta", "alpha"], expected_revision=0)
+    assert (repeated.order_revision, repeated.order_changed) == (
+        reordered.order_revision,
+        False,
+    )
+    assert order_path.read_bytes() == original
+
+
+def test_empty_roster_reorder_materializes_an_order_with_revision_check(store: AgentStore) -> None:
+    order_path = store.data_dir / "agents" / "order.json"
+    with pytest.raises(AgentOrderConflictError) as refused:
+        store.reorder([], expected_revision=1)
+    assert refused.value.current_revision == 0
+    assert not order_path.exists()
+
+    first = store.reorder([], expected_revision=0)
+    assert (first.agents, first.order_revision, first.order_changed) == ((), 1, True)
+    original = order_path.read_bytes()
+    repeated = store.reorder([], expected_revision=0)
+    assert (repeated.order_revision, repeated.order_changed) == (1, False)
+    assert order_path.read_bytes() == original
+
+
+@pytest.mark.parametrize(
+    ("ids", "revision"),
+    [
+        (["alpha"], True),
+        (["alpha"], -1),
+        (["alpha"], "0"),
+        ("alpha", 0),
+        ([1], 0),
+        (["../alpha"], 0),
+        (["alpha", "alpha"], 0),
+    ],
+    ids=[
+        "boolean-revision",
+        "negative-revision",
+        "text-revision",
+        "scalar",
+        "nonstring",
+        "id",
+        "duplicate",
+    ],
+)
+def test_reorder_rejects_malformed_requests_before_changing_order(
+    store: AgentStore, ids: Any, revision: Any
+) -> None:
+    store.create("alpha", "Alpha Agent")
+    order_path = store.data_dir / "agents" / "order.json"
+    original = order_path.read_bytes()
+
+    with pytest.raises(InvalidAgentOrderError):
+        store.reorder(ids, expected_revision=revision)
+
+    assert order_path.read_bytes() == original
 
 
 @pytest.mark.parametrize("conflict", ["stale-revision", "roster-changed"])
@@ -868,8 +926,23 @@ def test_agent_written_by_a_newer_vbot_is_refused_and_left_unchanged(
         ('{"format_version": 2, "revision": 9, "agent_ids": ["alpha", "beta"]}', False),
         # An order that cannot even be checked is not missing.
         ('{"format_version": 1, "revision": 9, "agent_ids": ["alpha", "beta"]}', True),
+        ('{"format_version": 1, "revision": true, "agent_ids": ["alpha", "beta"]}', False),
+        ('{"format_version": 1, "agent_ids": ["alpha", "beta"]}', False),
+        ('{"format_version": 1, "revision": 9, "agent_ids": ["alpha", "alpha"]}', False),
+        ('{"format_version": 1, "revision": 9, "agent_ids": ["../alpha"]}', False),
+        ('{"format_version": 1, "revision": 9, "agent_ids": [1]}', False),
+        ('{"format_version": 1, "revision": 9, "agent_ids": "alpha"}', False),
     ],
-    ids=["newer-format", "unreadable"],
+    ids=[
+        "newer-format",
+        "unreadable",
+        "boolean-revision",
+        "missing-revision",
+        "duplicate",
+        "unsafe-id",
+        "nonstring",
+        "scalar",
+    ],
 )
 def test_invalid_agent_order_is_never_overwritten(
     store: AgentStore,

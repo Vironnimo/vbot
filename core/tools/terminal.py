@@ -27,7 +27,11 @@ from core.tools.contracts import ToolContractError
 from core.tools.model_names import BASH_TOOL_NAME
 from core.tools.scratch_areas import ScratchAreas, ScratchUnavailableError
 from core.tools.shell_environment import scratch_environment, terminal_environment
-from core.tools.terminal_backend import UnpassableArgumentError, default_terminal_argv
+from core.tools.terminal_backend import (
+    UnpassableArgumentError,
+    default_terminal_argv,
+    split_terminal_command,
+)
 from core.tools.terminal_manager import (
     TERMINAL_DEFAULT_COLUMNS,
     TERMINAL_DEFAULT_ROWS,
@@ -109,7 +113,6 @@ from ._terminal_results import (
     _reply_pending_text,
     _screen_result,
     _short_program,
-    _split_command_line,
     _terminal_facts,
     _terminal_info,
     _terminals_text,
@@ -356,7 +359,7 @@ async def _handle_start(
     else:
         command = required_string(raw_command, field_name="command")
         argv = [command, *args]
-        words = _split_command_line(command, environment)
+        words = split_terminal_command(command, environment)
         if words is not None:
             argv = [*words, *args]
             notes.append(

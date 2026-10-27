@@ -137,6 +137,12 @@ class _SubAgents:
     async def parent_link(self, address: SessionAddress) -> SubAgentLink | None:
         return self.links.get(address)
 
+    async def child_sessions(self, address: SessionAddress) -> list[SessionAddress]:
+        return [link.session for link in self.links.values() if link.parent == address]
+
+    async def parent_answer_pending(self, address: SessionAddress) -> bool:
+        return False
+
     def forwarded(self, address: SessionAddress) -> None:
         self.forwarding.discard(address)
         for callback in list(self.callbacks):
@@ -154,7 +160,9 @@ class _World:
     changes: list[tuple[SessionAddress, SessionActivityState, FinishedWork | None]]
     gates: dict[str, asyncio.Event] = field(default_factory=dict)
 
-    async def start(self, address: SessionAddress, *, contributes: bool = True) -> Run:
+    async def start(
+        self, address: SessionAddress, *, contributes: bool = True, publish: bool = True
+    ) -> Run:
         gate = asyncio.Event()
 
         async def execute(_run: Run) -> str:
@@ -165,7 +173,8 @@ class _World:
             address, execute, admission=RunAdmission(contributes_to_agent_activity=contributes)
         )
         self.gates[run.id] = gate
-        await _turns()
+        if publish:
+            await _turns()
         return run
 
     async def finish(self, run: Run) -> None:
@@ -218,16 +227,20 @@ async def test_a_session_waits_for_its_commands_and_results_and_ends_one_span(
     waiting = SessionActivityState("waiting", START, WaitingFor(commands=1))
     assert world.activity.state(PARENT) == waiting
     assert world.activity.snapshot() == [(PARENT, waiting)]
+    assert await world.activity.pending_wakes(PARENT) == WaitingFor(commands=1)
     # Its result reaches completion delivery, which holds it until it wakes the Session.
     world.completions.set(PARENT, 1)
     world.commands.set("cmd", PARENT, 0)
     await _turns()
     assert world.activity.state(PARENT).waiting_for == WaitingFor(results=1)
+    assert await world.activity.pending_wakes(PARENT) == WaitingFor(results=1)
 
     world.clock.seconds = 45
     world.completions.set(PARENT, 0)
     await _turns()
     world.clock.seconds = 46
+    # Fresh admission queries do not inherit the display's settle period.
+    assert not await world.activity.pending_wakes(PARENT)
     # Idle only after the settle period, confirmed by a recheck.
     assert world.activity.state(PARENT).state == "waiting"
     await world.clock.settle()
@@ -293,15 +306,21 @@ async def test_a_parent_waits_for_sub_agents_answering_it_until_their_answers_ar
     world.subagents.link(CHILD, PARENT, "parent")
     world.subagents.link(GRANDCHILD, CHILD, "parent")
     world.subagents.link(DIRECT, PARENT, "user")
+    direct_run = await world.start(DIRECT, publish=False)
+    assert world.activity.state(DIRECT) == IDLE
+    assert not await world.activity.pending_wakes(PARENT)
+    grandchild_run = await world.start(GRANDCHILD, publish=False)
+    # No activity worker has learned the intermediate Parent link yet.
+    assert world.activity.state(CHILD) == IDLE
+    assert await world.activity.pending_wakes(PARENT) == WaitingFor(subagents=1)
     parent_run = await world.start(PARENT)
-    grandchild_run = await world.start(GRANDCHILD)
-    direct_run = await world.start(DIRECT)
     await world.finish(parent_run)
 
     # The grandchild works for the child, which waits for it and so keeps the
     # Parent waiting; a Sub-Agent answering the user does not count.
     assert world.activity.state(CHILD).waiting_for == WaitingFor(subagents=1)
     assert world.activity.state(PARENT).waiting_for == WaitingFor(subagents=1)
+    assert await world.activity.pending_wakes(PARENT) == WaitingFor(subagents=1)
     await world.finish(direct_run)
     await world.clock.settle()
     assert world.activity.state(DIRECT) == IDLE
@@ -312,14 +331,17 @@ async def test_a_parent_waits_for_sub_agents_answering_it_until_their_answers_ar
     await world.clock.settle()
     assert world.activity.state(GRANDCHILD) == IDLE
     assert world.activity.state(CHILD).waiting_for == WaitingFor(subagents=1)
+    assert await world.activity.pending_wakes(PARENT) == WaitingFor(subagents=1)
     # The answer reaches the child's completion delivery.
     world.completions.set(CHILD, 1)
     world.subagents.forwarded(GRANDCHILD)
     await _turns()
     assert world.activity.state(CHILD).waiting_for == WaitingFor(results=1)
     assert world.activity.state(PARENT).state == "waiting"
+    assert await world.activity.pending_wakes(PARENT) == WaitingFor(subagents=1)
 
     world.completions.set(CHILD, 0)
+    assert not await world.activity.pending_wakes(PARENT)
     await _turns()
     await world.clock.settle()
     assert world.activity.state(CHILD) == IDLE
@@ -328,3 +350,53 @@ async def test_a_parent_waits_for_sub_agents_answering_it_until_their_answers_ar
     await world.clock.settle()
     assert world.activity.state(PARENT) == IDLE
     assert world.states(PARENT)[-1] == "idle"
+
+
+async def test_pending_wakes_rechecks_related_changes_during_link_reads(
+    world: _World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world.subagents.link(CHILD, PARENT, "parent")
+    world.subagents.link(DIRECT, PARENT, "parent")
+    child_run = await world.start(CHILD)
+    entered, release = asyncio.Event(), asyncio.Event()
+    child_sessions = world.subagents.child_sessions
+
+    async def blocked_links(address: SessionAddress) -> list[SessionAddress]:
+        links = await child_sessions(address)
+        if address == DIRECT and not release.is_set():
+            entered.set()
+            await release.wait()
+        return links
+
+    monkeypatch.setattr(world.subagents, "child_sessions", blocked_links)
+    pending = asyncio.create_task(world.activity.pending_wakes(PARENT))
+    await entered.wait()
+    # CHILD was counted before reading DIRECT's subtree. Its Run ends during
+    # that read, so the old count must be discarded despite its UI settle.
+    await world.finish(child_run)
+    release.set()
+    assert not await pending
+
+
+async def test_pending_wakes_ignores_unrelated_activity_and_propagates_unreadable_links(
+    world: _World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reads = 0
+    child_sessions = world.subagents.child_sessions
+
+    async def changing_unrelated(address: SessionAddress) -> list[SessionAddress]:
+        nonlocal reads
+        reads += 1
+        world.completions.set(DIRECT, reads)
+        return await child_sessions(address)
+
+    monkeypatch.setattr(world.subagents, "child_sessions", changing_unrelated)
+    assert not await world.activity.pending_wakes(PARENT)
+    assert reads == 1
+
+    async def unavailable(_address: SessionAddress) -> list[SessionAddress]:
+        raise PermissionError("Session metadata unavailable")
+
+    monkeypatch.setattr(world.subagents, "child_sessions", unavailable)
+    with pytest.raises(PermissionError):
+        await world.activity.pending_wakes(PARENT)

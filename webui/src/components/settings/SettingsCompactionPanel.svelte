@@ -16,6 +16,7 @@
   import { createSettingsDraft } from '$lib/settingsSave.js';
   import {
     buildModelSelectOptions,
+    createModelCatalogLoader,
     modelSelectionValue,
     parseModelSelectionValue,
     selectModelValue,
@@ -43,6 +44,14 @@
   });
   let availableModels = $state([]);
   let availableConnections = $state([]);
+  const modelCatalogLoader = createModelCatalogLoader({
+    listModels,
+    listConnections,
+    applyCatalogs: (catalogs) => {
+      availableModels = catalogs.models;
+      availableConnections = catalogs.connections;
+    },
+  });
   let lastModelsRefreshToken = null;
   let summaryModelOptions = $derived(
     buildModelSelectOptions({
@@ -69,6 +78,7 @@
   );
 
   onDestroy(() => {
+    modelCatalogLoader.invalidate();
     unregisterCompactionAutosave();
     compactionAutosave.cancelPendingTimer();
   });
@@ -98,16 +108,7 @@
 
   async function loadModelCatalogs() {
     try {
-      const [modelsResult, connectionsResult] = await Promise.all([
-        listModels(),
-        listConnections(),
-      ]);
-      availableModels = Array.isArray(modelsResult?.models)
-        ? modelsResult.models
-        : [];
-      availableConnections = Array.isArray(connectionsResult?.connections)
-        ? connectionsResult.connections
-        : [];
+      await modelCatalogLoader.load();
     } catch (error) {
       onError(`${t('settings.models.loadError')} ${error.message}`);
     }
@@ -146,6 +147,7 @@
     {summaryModelOptions}
     {summaryModelSelectValue}
     onSummaryModelSelect={selectSummaryModel}
+    onSummaryModelOpenChange={modelCatalogLoader.trackPickerOpen}
   />
 </div>
 
