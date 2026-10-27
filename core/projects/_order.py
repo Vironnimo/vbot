@@ -10,7 +10,6 @@ therefore returns to its old place until a reorder drops it.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -18,13 +17,9 @@ from typing import Any
 from core.config_validation import (
     JsonDiagnostic,
     JsonValidationReport,
-    add_error,
     error_diagnostic,
     load_validated_json_file,
     validate_json_file,
-    validate_positive_integer,
-    validate_required_fields,
-    validate_string_list,
     warn_unknown_keys,
 )
 from core.json_documents import (
@@ -36,6 +31,7 @@ from core.json_documents import (
 )
 from core.projects.projects import Project, ProjectError
 from core.settings import is_valid_project_id
+from core.utils.user_order import validate_order_fields
 
 PROJECT_ORDER_FILENAME = "order.json"
 PROJECT_ORDER_FORMAT_VERSION = 1
@@ -85,22 +81,13 @@ def validate_project_order_data(data: Any) -> list[JsonDiagnostic]:
         return diagnostics
 
     warn_unknown_keys(diagnostics, "$", data, PROJECT_ORDER_SHAPE.fields, "project order field")
-    validate_required_fields(diagnostics, "$", data, _PROJECT_ORDER_FIELDS)
-    if "revision" in data:
-        validate_positive_integer(diagnostics, "$.revision", data["revision"], required=True)
-    project_ids = data.get("project_ids")
-    if "project_ids" in data:
-        validate_string_list(diagnostics, "$.project_ids", project_ids)
-    if isinstance(project_ids, list):
-        seen: set[str] = set()
-        for index, project_id in enumerate(project_ids):
-            if not isinstance(project_id, str):
-                continue
-            if not is_valid_project_id(project_id):
-                add_error(diagnostics, f"$.project_ids[{index}]", "must be a valid Project id")
-            if project_id in seen:
-                add_error(diagnostics, f"$.project_ids[{index}]", "must be unique")
-            seen.add(project_id)
+    validate_order_fields(
+        diagnostics,
+        data,
+        ids_field="project_ids",
+        valid_id=is_valid_project_id,
+        item_label="Project",
+    )
     return diagnostics
 
 
@@ -132,33 +119,3 @@ def write_project_order(order_path: Path, order: ProjectOrder) -> None:
         {"revision": order.revision, "project_ids": list(order.project_ids)},
         PROJECT_ORDER_FORMAT,
     )
-
-
-def apply_project_order(
-    projects: Sequence[Project], order: ProjectOrder | None
-) -> tuple[Project, ...]:
-    """Arrange id-sorted ``projects`` by ``order``; Projects it does not name follow."""
-    if order is None:
-        return tuple(projects)
-    by_id = {project.project_id: project for project in projects}
-    ordered = [by_id[project_id] for project_id in order.project_ids if project_id in by_id]
-    placed = {project.project_id for project in ordered}
-    ordered.extend(project for project in projects if project.project_id not in placed)
-    return tuple(ordered)
-
-
-def validated_reorder_request(project_ids: Any, expected_revision: Any) -> list[str]:
-    """Check the shape of a reorder request; returns the requested ids."""
-    if (
-        isinstance(expected_revision, bool)
-        or not isinstance(expected_revision, int)
-        or expected_revision < 0
-    ):
-        raise InvalidProjectOrderError("expected_revision must be a non-negative integer")
-    if not isinstance(project_ids, list) or not all(
-        isinstance(project_id, str) for project_id in project_ids
-    ):
-        raise InvalidProjectOrderError("project_ids must be a list of strings")
-    if len(project_ids) != len(set(project_ids)):
-        raise InvalidProjectOrderError("project_ids must not contain duplicates")
-    return project_ids

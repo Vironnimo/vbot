@@ -30,4 +30,6 @@ Mutable-field validation lives server/core-side: effort vocabulary `null|""|none
 
 ## Roster order
 
-`<data_dir>/agents/order.json` holds `{revision, agent_ids}` collection metadata: missing preserves id-sort until first materialization, absent valid agents append, stale ids filter out, malformed files never hide agents (`doctor config` reports; explicit reorder replaces). A listing never rewrites an `order.json` it could not load, an unreadable one or one that cannot be checked included.
+`<data_dir>/agents/order.json` holds `{revision, agent_ids}` collection metadata: missing preserves id-sort until first materialization, absent valid agents append, stale ids filter out, malformed files never hide agents (`doctor config` reports). A listing or reorder never rewrites an `order.json` it could not load, an unreadable one or one that cannot be checked included.
+
+Pure order validation, projection and reorder decisions share `core/utils/user_order.py` with Projects; `_roster.py` retains Agent-only read repair and materialization. Unlike Projects, Agent reorder also validates id syntax and requires a matching revision to materialize a missing order even when the requested ids already match.

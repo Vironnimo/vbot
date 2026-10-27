@@ -14,7 +14,7 @@ from threading import Event
 import pytest
 
 from core.database import write_bootstrap_marker
-from core.projects._order import ProjectOrderConflictError
+from core.projects._order import InvalidProjectOrderError, ProjectOrderConflictError
 from core.projects.paths import cwd_exists
 from core.projects.projects import (
     PROJECT_DEFAULT_ALLOWED_TOOLS,
@@ -834,6 +834,9 @@ def test_list_returns_valid_projects_sorted_by_id(data_dir: Path, tmp_path: Path
 
     assert _ids(store) == ["alpha", "mid", "zeta"]
     assert store.list_with_order().order_revision == 0
+    repeated = store.reorder(["alpha", "mid", "zeta"], expected_revision=99)
+    assert (repeated.order_revision, repeated.order_changed) == (0, False)
+    assert not (data_dir / "projects" / "order.json").exists()
 
 
 def test_reorder_keeps_the_users_order_for_every_later_listing(
@@ -843,6 +846,8 @@ def test_reorder_keeps_the_users_order_for_every_later_listing(
     _create_projects(store, tmp_path, "alpha", "mid", "zeta")
 
     result = store.reorder(["zeta", "alpha", "mid"], expected_revision=0)
+    order_path = data_dir / "projects" / "order.json"
+    original = order_path.read_bytes()
     _create_projects(store, tmp_path, "beta", "new")
     with store.archive_files("alpha", _payload(data_dir)):
         pass
@@ -851,6 +856,7 @@ def test_reorder_keeps_the_users_order_for_every_later_listing(
     # New Projects follow in id order; an archived one leaves its place.
     assert _ids(store) == ["zeta", "mid", "beta", "new"]
     assert store.list_with_order().order_revision == 1
+    assert order_path.read_bytes() == original
     # The next order stores exactly the current Projects.
     store.reorder(["new", "zeta", "mid", "beta"], expected_revision=1)
     stored = json.loads((data_dir / "projects" / "order.json").read_text(encoding="utf-8"))
@@ -881,14 +887,70 @@ def test_reorder_refuses_a_stale_view_and_keeps_the_stored_order(
     assert store.reorder(["alpha", "mid"], expected_revision=0).order_changed is False
 
 
-def test_an_invalid_order_document_falls_back_to_id_order(data_dir: Path, tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("ids", "revision"),
+    [
+        (["alpha"], True),
+        (["alpha"], -1),
+        (["alpha"], "0"),
+        ("alpha", 0),
+        ([1], 0),
+        (["alpha", "alpha"], 0),
+    ],
+    ids=[
+        "boolean-revision",
+        "negative-revision",
+        "text-revision",
+        "scalar",
+        "nonstring",
+        "duplicate",
+    ],
+)
+def test_reorder_rejects_malformed_requests_before_writing_an_order(
+    data_dir: Path, tmp_path: Path, ids: object, revision: object
+) -> None:
+    store = ProjectStore(data_dir)
+    _create_projects(store, tmp_path, "alpha")
+
+    with pytest.raises(InvalidProjectOrderError):
+        store.reorder(ids, expected_revision=revision)  # type: ignore[arg-type]
+
+    assert not (data_dir / "projects" / "order.json").exists()
+
+
+@pytest.mark.parametrize(
+    "original",
+    [
+        "{ not json",
+        '{"format_version": 1, "revision": true, "project_ids": ["alpha", "mid"]}',
+        '{"format_version": 1, "project_ids": ["alpha", "mid"]}',
+        '{"format_version": 1, "revision": 9, "project_ids": ["alpha", "alpha"]}',
+        '{"format_version": 1, "revision": 9, "project_ids": ["../alpha"]}',
+        '{"format_version": 1, "revision": 9, "project_ids": [1]}',
+        '{"format_version": 1, "revision": 9, "project_ids": "alpha"}',
+    ],
+    ids=[
+        "invalid-json",
+        "boolean-revision",
+        "missing-revision",
+        "duplicate",
+        "unsafe-id",
+        "nonstring",
+        "scalar",
+    ],
+)
+def test_an_invalid_order_document_falls_back_to_id_order(
+    data_dir: Path, tmp_path: Path, original: str
+) -> None:
     store = ProjectStore(data_dir)
     _create_projects(store, tmp_path, "alpha", "mid")
-    (data_dir / "projects" / "order.json").write_text("{ not json", encoding="utf-8")
+    order_path = data_dir / "projects" / "order.json"
+    order_path.write_text(original, encoding="utf-8")
 
     assert _ids(store) == ["alpha", "mid"]
     with pytest.raises(ProjectError):
         store.reorder(["mid", "alpha"], expected_revision=0)
+    assert order_path.read_text(encoding="utf-8") == original
 
 
 @pytest.mark.parametrize(

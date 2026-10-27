@@ -40,12 +40,11 @@ from core.json_documents import (
 )
 from core.projects._order import (
     PROJECT_ORDER_FILENAME,
+    InvalidProjectOrderError,
     ProjectListResult,
     ProjectOrder,
     ProjectOrderConflictError,
-    apply_project_order,
     load_project_order,
-    validated_reorder_request,
     write_project_order,
 )
 from core.projects.paths import cwd_identity_key
@@ -71,6 +70,7 @@ from core.utils.ids import has_id_entry, is_reserved_name, reserved_name_message
 from core.utils.logging import get_logger
 from core.utils.timestamps import utc_now_timestamp
 from core.utils.tree_move import move_tree
+from core.utils.user_order import apply_order, reorder_state, validated_reorder_request
 
 if TYPE_CHECKING:
     from core.sessions import ChatSessionManager
@@ -282,7 +282,11 @@ class ProjectStore:
         with self._write_lock:
             order = self._load_order()
             return ProjectListResult(
-                projects=apply_project_order(self._list_by_id(), order),
+                projects=apply_order(
+                    self._list_by_id(),
+                    order.project_ids if order is not None else (),
+                    item_id=lambda project: project.project_id,
+                ),
                 order_revision=order.revision if order is not None else 0,
             )
 
@@ -294,18 +298,29 @@ class ProjectStore:
         ``project_ids`` must name exactly the registered Projects. Repeating the
         current order changes nothing and needs no current revision.
         """
-        project_ids = validated_reorder_request(project_ids, expected_revision)
+        try:
+            project_ids = validated_reorder_request(
+                project_ids, expected_revision, ids_field="project_ids"
+            )
+        except ValueError as error:
+            raise InvalidProjectOrderError(str(error)) from error
         with self._change():
             current = self.list_with_order()
             current_ids = [project.project_id for project in current.projects]
-            if sorted(project_ids) != sorted(current_ids):
+            state = reorder_state(
+                project_ids,
+                current_ids,
+                expected_revision=expected_revision,
+                current_revision=current.order_revision,
+            )
+            if state == "membership_conflict":
                 raise ProjectOrderConflictError(
                     "The Project list changed; reload it before reordering",
                     current_revision=current.order_revision,
                 )
-            if project_ids == current_ids:
+            if state == "unchanged":
                 return current
-            if expected_revision != current.order_revision:
+            if state == "revision_conflict":
                 raise ProjectOrderConflictError(
                     "The Project order changed; reload it before reordering",
                     current_revision=current.order_revision,

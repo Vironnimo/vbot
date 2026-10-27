@@ -10,7 +10,6 @@ from core.agents._config import (
     AGENT_ORDER_FORMAT,
     AGENT_ORDER_SHAPE,
     _agent_order_document,
-    _apply_agent_order,
     _apply_defaults,
     validate_agent_order_data,
 )
@@ -33,6 +32,7 @@ from core.json_documents import (
 from core.settings import is_valid_agent_id
 from core.utils.file_status import exists_strict
 from core.utils.logging import get_logger
+from core.utils.user_order import apply_order, reorder_state, validated_reorder_request
 
 if TYPE_CHECKING:
     from core.agents.agents import AgentStore
@@ -104,7 +104,9 @@ class AgentRoster:
                 _LOGGER.warning("Skipping invalid Agent config %s: %s", agent_path, error)
 
         order = self._load_agent_order()
-        ordered_agents = _apply_agent_order(agents, order)
+        ordered_agents = apply_order(
+            agents, order.agent_ids if order is not None else (), item_id=lambda agent: agent.id
+        )
         if not agents and order is None:
             return AgentListResult(
                 agents=(),
@@ -151,31 +153,35 @@ class AgentRoster:
     ) -> AgentListResult:
         """Atomically replace the canonical order when roster and revision match."""
         with self._owner._change():
-            if isinstance(expected_revision, bool) or not isinstance(expected_revision, int):
-                raise InvalidAgentOrderError("expected_revision must be a non-negative integer")
-            if expected_revision < 0:
-                raise InvalidAgentOrderError("expected_revision must be a non-negative integer")
-            if not isinstance(agent_ids, list) or not all(
-                isinstance(agent_id, str) for agent_id in agent_ids
-            ):
-                raise InvalidAgentOrderError("agent_ids must be a list of strings")
-            if any(not is_valid_agent_id(agent_id) for agent_id in agent_ids):
-                raise InvalidAgentOrderError("agent_ids must contain only valid Agent ids")
-            if len(agent_ids) != len(set(agent_ids)):
-                raise InvalidAgentOrderError("agent_ids must not contain duplicates")
+            try:
+                agent_ids = validated_reorder_request(
+                    agent_ids,
+                    expected_revision,
+                    ids_field="agent_ids",
+                    valid_id=is_valid_agent_id,
+                    item_label="Agent",
+                )
+            except ValueError as error:
+                raise InvalidAgentOrderError(str(error)) from error
 
             current = self.list_with_order()
             current_ids = [agent.id for agent in current.agents]
-            if len(agent_ids) != len(current_ids) or set(agent_ids) != set(current_ids):
+            state = reorder_state(
+                agent_ids,
+                current_ids,
+                expected_revision=expected_revision,
+                current_revision=current.order_revision,
+                repair_required=self._load_agent_order() is None,
+            )
+            if state == "membership_conflict":
                 raise AgentOrderConflictError(
                     "Identity Agent roster changed; reload it before reordering",
                     current_revision=current.order_revision,
                 )
 
-            order_needs_repair = self._load_agent_order() is None
-            if agent_ids == current_ids and not order_needs_repair:
+            if state == "unchanged":
                 return current
-            if expected_revision != current.order_revision:
+            if state == "revision_conflict":
                 raise AgentOrderConflictError(
                     "Identity Agent order changed; reload it before reordering",
                     current_revision=current.order_revision,
