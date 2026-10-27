@@ -12,24 +12,21 @@
       "canonical": "openai/gpt-6.1-sol",
       "connections": ["api-key", "subscription"],
       "connection_context_windows": {
-        "api-key": 1050000,
-        "subscription": 272000
+        "api-key": 1050000
       }
     },
     "gpt-6-luna": {
       "canonical": "openai/gpt-6-luna",
       "connections": ["api-key", "subscription"],
       "connection_context_windows": {
-        "api-key": 1050000,
-        "subscription": 272000
+        "api-key": 1050000
       }
     },
     "gpt-6-sol": {
       "canonical": "openai/gpt-6-sol",
       "connections": ["api-key", "subscription"],
       "connection_context_windows": {
-        "api-key": 1050000,
-        "subscription": 272000
+        "api-key": 1050000
       }
     },
     "gpt-5.6": {
@@ -58,22 +55,19 @@
     "gpt-5.6-luna": {
       "connections": ["api-key", "subscription"],
       "connection_context_windows": {
-        "api-key": 1050000,
-        "subscription": 272000
+        "api-key": 1050000
       }
     },
     "gpt-5.6-sol": {
       "connections": ["api-key", "subscription"],
       "connection_context_windows": {
-        "api-key": 1050000,
-        "subscription": 272000
+        "api-key": 1050000
       }
     },
     "gpt-5.6-terra": {
       "connections": ["api-key", "subscription"],
       "connection_context_windows": {
-        "api-key": 1050000,
-        "subscription": 272000
+        "api-key": 1050000
       }
     },
     "tts-1": {
