@@ -571,14 +571,26 @@ class ConnectionManagement:
         ]
         if problems:
             raise ValueError("Cannot import " + "; ".join(problems))
-        host = self._service._host()
+        self._service._check_import_credentials(
+            credential.name
+            for draft, _ in chosen
+            for credential in draft.credentials
+            if credential.state != "reference"
+        )
         imported = []
         for draft, item in chosen:
-            for credential in draft.credentials:
-                if credential.state == "provided" and credential.value:
-                    host.set_credential(credential.name, credential.value)
             connection = {**draft.connection, "enabled": item["enabled"]}
-            imported.append(await self._service._save(connection, replace=False))
+            imported.append(
+                await self._service._save(
+                    connection,
+                    replace=False,
+                    credentials={
+                        credential.name: credential.value
+                        for credential in draft.credentials
+                        if credential.state != "reference"
+                    },
+                )
+            )
         stored = [
             credential
             for draft, _ in chosen

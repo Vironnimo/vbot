@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -10,6 +11,7 @@ from typing import Any
 
 import pytest
 
+from resources.extensions.mcp._management import register_management
 from resources.extensions.mcp.client import ConnectionRunner
 from tests.resources.extensions.mcp.mcp_test_support import start_service
 
@@ -307,8 +309,9 @@ async def test_preview_reads_each_client_format_without_saving(host, monkeypatch
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("competing_id", ["race", "race_api"])
 async def test_import_stores_secrets_as_credentials_and_never_replaces_a_connection(
-    host, monkeypatch, caplog
+    host, monkeypatch, caplog, competing_id
 ):
     started: list[str] = []
     monkeypatch.setattr(ConnectionRunner, "start", lambda runner: started.append(runner.id))
@@ -356,12 +359,175 @@ async def test_import_stores_secrets_as_credentials_and_never_replaces_a_connect
         assert started == ["github", "notion_remote"]
         assert _TOKEN not in json.dumps(saved) + json.dumps(result) + caplog.text
         assert "MCP connections imported" in caplog.text
+
+        # A competing import that loses the connection name must not change
+        # the credentials of the import that saved it.
+        saving, release, competing = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        store_connections = service._store_connections
+
+        async def blocked_save(records):
+            saving.set()
+            await release.wait()
+            await store_connections(records)
+
+        monkeypatch.setattr(service, "_store_connections", blocked_save)
+
+        async def import_competing(value, *, announce=False):
+            if announce:
+                competing.set()
+            identifier = competing_id if announce else "race"
+            variable = "KEY" if identifier == "race_api" else "API_KEY"
+            return await service.management.manage(
+                "import",
+                {
+                    "source": json.dumps(
+                        {
+                            "mcpServers": {
+                                identifier: {"command": "unused", "env": {variable: value}}
+                            }
+                        }
+                    ),
+                    "apply": True,
+                },
+            )
+
+        first = asyncio.create_task(import_competing("accepted-secret"))
+        await saving.wait()
+        second = asyncio.create_task(import_competing("rejected-secret", announce=True))
+        await competing.wait()
+        release.set()
+        outcomes = await asyncio.gather(first, second, return_exceptions=True)
+        assert isinstance(outcomes[0], dict)
+        assert isinstance(outcomes[1], ValueError)
+        assert host.resolve_credential("MCP_RACE_API_KEY") == "accepted-secret"
     finally:
         await service.close()
 
 
 def _server_status(result: dict[str, Any], identifier: str) -> dict[str, Any]:
     return next(item for item in result["imported"] if item["id"] == identifier)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("occupied", ["value", "binding", "batch"])
+async def test_import_generated_credentials_do_not_share_an_occupied_name(
+    host, monkeypatch, occupied
+):
+    monkeypatch.setattr(ConnectionRunner, "start", lambda runner: None)
+    service, _registry = await start_service(host)
+    register_management(service.api, service.management.manage)
+    invoke = service.api.operations.invoke
+    name = "MCP_TEAM_SERVICE_API_KEY"
+    servers = {"team_service": {"command": "unused", "env": {"API_KEY": "new-secret"}}}
+    try:
+        if occupied == "value":
+            host.set_credential(name, "existing-secret")
+        elif occupied == "binding":
+            await invoke(
+                "save",
+                {
+                    "connection": {
+                        "id": "kept",
+                        "transport": "stdio",
+                        "command": "unused",
+                        "credential_environment": {"TOKEN": name},
+                        "enabled": False,
+                    }
+                },
+            )
+        else:
+            servers["team"] = {"command": "unused", "env": {"SERVICE_API_KEY": "other-secret"}}
+        assert service.store is not None
+        before = service.store.load()
+        secret_before = host.resolve_credential(name)
+        with pytest.raises(ValueError):
+            await invoke("import", {"source": json.dumps({"mcpServers": servers}), "apply": True})
+        assert service.store.load() == before
+        assert host.resolve_credential(name) == secret_before
+
+        # Explicit references opt into sharing and remain valid, including a
+        # missing value that the user will supply later.
+        await invoke(
+            "import",
+            {
+                "source": json.dumps(
+                    {
+                        "mcpServers": {
+                            "alias": {
+                                "command": "unused",
+                                "env": {"API_KEY": "${env:" + name + "}"},
+                            }
+                        }
+                    }
+                ),
+                "apply": True,
+            },
+        )
+        assert service.store.load()["alias"]["credential_environment"] == {"API_KEY": name}
+        assert host.resolve_credential(name) == secret_before
+    finally:
+        await service.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["store", "credential", "committed", "cancelled", "changed"])
+async def test_failed_import_cleans_only_uncommitted_unchanged_credentials(
+    host, monkeypatch, failure
+):
+    monkeypatch.setattr(ConnectionRunner, "start", lambda runner: None)
+    set_credential = host.set_credential
+
+    def set_value(name, value):
+        set_credential(name, value)
+        if failure == "credential" and name.endswith("CLIENT_SECRET") and value:
+            raise OSError("test-owned credential failure after writing")
+
+    service, _registry = await start_service(replace(host, set_credential=set_value))
+    source = json.dumps(
+        {
+            "mcpServers": {
+                "retry": {
+                    "command": "unused",
+                    "env": {"API_KEY": "key-secret", "CLIENT_SECRET": "client-secret"},
+                }
+            }
+        }
+    )
+    store_connections = service._store_connections
+
+    async def fail_save(records):
+        if failure in {"committed", "cancelled"}:
+            # Model a worker that commits before returning an error or deferred
+            # cancellation, leaving the service's in-memory projection behind.
+            assert service.store is not None
+            service.store.save(records)
+        elif failure == "changed":
+            set_credential("MCP_RETRY_API_KEY", "newer-external-value")
+        if failure == "cancelled":
+            raise asyncio.CancelledError
+        raise OSError("test-owned store failure")
+
+    monkeypatch.setattr(service, "_store_connections", fail_save)
+    try:
+        with pytest.raises(asyncio.CancelledError if failure == "cancelled" else OSError):
+            await service.management.manage("import", {"source": source, "apply": True})
+        assert service.store is not None
+        saved = service.store.load()
+        committed = failure in {"committed", "cancelled"}
+        assert ("retry" in saved) is committed
+        assert host.resolve_credential("MCP_RETRY_CLIENT_SECRET") == (
+            "client-secret" if committed else ""
+        )
+        assert host.resolve_credential("MCP_RETRY_API_KEY") == (
+            "key-secret" if committed else "newer-external-value" if failure == "changed" else ""
+        )
+        if failure in {"store", "credential"}:
+            service.host = host
+            monkeypatch.setattr(service, "_store_connections", store_connections)
+            await service.management.manage("import", {"source": source, "apply": True})
+            assert "retry" in service.store.load()
+    finally:
+        await service.close()
 
 
 @pytest.mark.asyncio

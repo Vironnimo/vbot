@@ -29,7 +29,20 @@ Warnings are `{code, message}`: `env_file_ignored`, `ignored_fields`, `directory
 Arguments: `source` (string with `contentMediaType: text/plain`, at most 200000 characters), optional `apply`, `servers` (names) and `ids` (name -> connection id).
 
 - Preview (no `apply`) stores nothing and returns `{servers: [...]}`, each `{name, id, connection, error, conflict, selected, enabled, unresolved, disabled, credentials, warnings}`. Credentials are `{name, kind, target, state, description}` with `state` `provided`, `set` (a referenced credential the host already has) or `missing`; values never leave the server. `selected`: no `error`, no `conflict`, no exposed secret. `enabled`: no missing credential, no unresolved placeholder, not turned off by the text.
-- Apply parses `source` again and takes the named `servers` (an unknown name fails) or else the `selected` ones; an empty choice fails, and a chosen server with an `error` or `conflict` fails the whole call before anything is stored. Per server it stores `provided` credentials (`host.set_credential`), then saves with `replace=False` and the preview's `enabled`, so a connection waiting for a credential or a placeholder is saved disabled. Servers are saved one after another, not atomically. One INFO line `MCP connections imported (connections=<ids> credentials=<count>)` names no value; the result is `{imported: [<saved records>]}`.
+- Apply parses `source` again and takes the named `servers` (an unknown name fails) or else the `selected` ones; an empty choice fails, and a chosen server with an `error` or `conflict` fails the whole call before anything is stored. Generated credential names must be free across the selected drafts, saved connections (even when their value is still missing), and host credentials. A collision fails with the credential name and asks for another connection id; explicit environment references still share their named credential. Per server it saves with `replace=False` and the preview's `enabled`, so a connection waiting for a credential or a placeholder is saved disabled. The protected save rechecks that the id and generated credential names are free before storing its `provided` credentials (`host.set_credential`); a competing import, including one with a different id, cannot overwrite the accepted import's credentials. Servers are saved one after another, not atomically. One INFO line `MCP connections imported (connections=<ids> credentials=<count>)` names no value; the result is `{imported: [<saved records>]}`.
+
+An unsuccessful per-server save clears only newly written credential values that
+remain unchanged and unreferenced. If persistence was attempted, cleanup reads the
+saved connections first: a post-commit error or deferred cancellation must retain
+the credentials the saved connection uses. If that read fails, cleanup keeps the
+values rather than guessing. A failure before persistence therefore remains
+retryable without reserving its generated names (`test_mcp_import.py`).
+
+## Agent-facing text
+
+| Text | Reason |
+|---|---|
+| `MCP import credential {name} is already in use; choose a different connection id` | Prevents a literal imported secret from changing another connection's credential. `team` / `SERVICE_API_KEY` and `team_service` / `API_KEY` both produce `MCP_TEAM_SERVICE_API_KEY`; the key names the collision without exposing either value, and another connection id gives the import its own key. Explicit `${env:NAME}` sharing remains available (`test_mcp_import.py`). |
 
 ## Accessors
 
