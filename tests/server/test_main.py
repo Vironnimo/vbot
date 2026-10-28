@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import signal
 import socket
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -32,6 +34,7 @@ from core.utils.server_control import (
     SHUTDOWN_FAILED_EXIT_CODE,
     STARTUP_FAILED_EXIT_CODE,
     create_server_control,
+    offline_data_change,
 )
 from core.utils.version import BuildIdentity
 from server import main as server_main
@@ -493,6 +496,56 @@ def test_main_serves_the_access_mode_its_flags_or_bind_host_select(
     # The data directory records what it served for the next start without flags.
     recorded = read_server_access(tmp_path / "data")
     assert recorded == RecordedServerAccess(calls[0]["app"]["access"], host)
+
+
+@pytest.mark.parametrize("changed", ["settings", "access", "port"])
+def test_main_uses_configuration_loaded_after_its_server_claim(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    changed: str,
+) -> None:
+    calls = _patch_serving(monkeypatch, _serve_until("control"))
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    settings = data_dir / "settings.json"
+    settings.write_text(json.dumps({"format_version": 1, "server_port": 8765, "timezone": "UTC"}))
+    monkeypatch.delenv("VBOT_SERVER_PORT", raising=False)
+    claim = server_main.server_control_claim
+    restored_access = RecordedServerAccess(access_config("lan"), "0.0.0.0")
+
+    @contextmanager
+    def restore_then_claim(root: Path, port: int) -> Iterator[Any]:
+        with offline_data_change(root):
+            if changed == "access":
+                write_server_access(root, restored_access)
+            else:
+                settings.write_text(
+                    json.dumps(
+                        {
+                            "format_version": 1,
+                            "server_port": 8766 if changed == "port" else 8765,
+                            "timezone": "Europe/Berlin",
+                        }
+                    )
+                )
+        with claim(root, port) as previous:
+            yield previous
+
+    monkeypatch.setattr(server_main, "server_control_claim", restore_then_claim)
+    if changed == "port":
+        with pytest.raises(SystemExit) as exited:
+            main(["--data-dir", str(data_dir)])
+        assert exited.value.code == STARTUP_FAILED_EXIT_CODE and calls == []
+        assert "configured port changed" in capsys.readouterr().err
+    else:
+        main(["--data-dir", str(data_dir)])
+        if changed == "access":
+            assert calls[0]["app"]["access"] == restored_access.access
+            assert calls[0]["host"] == restored_access.host
+            assert read_server_access(data_dir) == restored_access
+        else:
+            assert calls[0]["app"]["config"].get("timezone") == "Europe/Berlin"
 
 
 def test_main_serves_what_the_data_directory_records_until_access_flags_replace_it(

@@ -39,7 +39,7 @@ from core.database import (
     unregister_database,
 )
 from core.utils.errors import StorageError
-from core.utils.server_control import live_server_ports
+from core.utils.server_control import live_server_ports, offline_data_change
 
 if TYPE_CHECKING:
     from core.database import DatabaseSpec
@@ -112,7 +112,8 @@ def data_store_unregister(instance: ServerInstance, name: str, confirm: bool) ->
     if isinstance(health, CommandResult):
         return health
     try:
-        released = unregister_database(instance.data_dir, name)
+        with offline_data_change(instance.data_dir):
+            released = unregister_database(instance.data_dir, name)
     except (OSError, ValueError, DatabaseError) as exc:
         return CommandResult(ok=False, message=str(exc), instance=instance, health=health)
     return CommandResult(
@@ -524,7 +525,8 @@ def _change_credential_locally(
             health=health,
         )
     try:
-        result = change(StorageManager(instance.data_dir))
+        with offline_data_change(instance.data_dir):
+            result = change(StorageManager(instance.data_dir))
     except (OSError, StorageError) as exc:
         return CommandResult(ok=False, message=str(exc), instance=instance, health=health)
     return CommandResult(
@@ -905,7 +907,8 @@ def _change_while_stopped(
             health=stopped.health,
         )
     try:
-        described = change()
+        with offline_data_change(instance.data_dir):
+            described = change()
     except (OSError, ValueError, DatabaseError, StorageError) as exc:
         # The server stays stopped: the data directory may be part-way changed.
         return CommandResult(

@@ -16,6 +16,7 @@ from core.utils.server_control import (
     create_server_control,
     is_authorized_control_token,
     live_server_ports,
+    offline_data_change,
     process_started,
     read_server_control,
     remove_server_control,
@@ -128,8 +129,39 @@ def test_live_server_ports_reports_only_held_claims(tmp_path: Path) -> None:
         assert live_server_ports(tmp_path) == (8420,)
         with server_control_claim(tmp_path, 8421):
             assert live_server_ports(tmp_path) == (8420, 8421)
+            with pytest.raises(OSError), offline_data_change(tmp_path):
+                pytest.fail("offline data changes must refuse every live server")
 
     assert live_server_ports(tmp_path) == ()
+
+
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_offline_data_changes_exclude_new_claims_until_they_finish(
+    tmp_path: Path, interrupted: bool
+) -> None:
+    class InterruptedError(Exception):
+        pass
+
+    try:
+        with offline_data_change(tmp_path):
+            assert live_server_ports(tmp_path) == ()
+            with pytest.raises(RuntimeError), server_control_claim(tmp_path, 8420):
+                pytest.fail("a server must not start while its data is changing")
+            assert not (tmp_path / "runtime/server-8420.lock").exists()
+            with pytest.raises(OSError), offline_data_change(tmp_path):
+                pytest.fail("offline changes must not overlap")
+            if interrupted:
+                raise InterruptedError
+    except InterruptedError:
+        pass
+
+    with server_control_claim(tmp_path, 8420):
+        assert live_server_ports(tmp_path) == (8420,)
+
+    missing = tmp_path / "missing"
+    with pytest.raises(FileNotFoundError), offline_data_change(missing):
+        pytest.fail("offline admission must not initialize a data directory")
+    assert not missing.exists()
 
 
 def test_process_exit_releases_claim_without_replacing_record(tmp_path: Path) -> None:

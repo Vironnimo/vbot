@@ -11,6 +11,8 @@ How a server resolves and records its Access Mode at start, the access records, 
   4. Only a data directory without a record lets the mode follow `--host` (loopback -> `local`, otherwise `lan`, never `authenticated`); the result is recorded.
   An unreadable data-directory record refuses the start. The record is written inside the server control claim, before serving; a failed write refuses the start. The start line carries `access=<mode>` (`server.md`).
 
+Startup resolves Access/TLS again under its server control claim before writing the access record or constructing the app. The earlier preflight only refuses invalid startup options before creating a data root; its result cannot overwrite configuration changed before admission (`server/process-lifecycle.md`).
+
 ## Data directory access record
 
 - Generation 1 document `access/server.json` (kind `access_server`, `json-documents.md`), owner-only, fields `{host, mode, allow_networks, allow_hosts, public_url, trusted_proxies, tls_cert, tls_key}`. `vbot server start|restart` and scheduled restarts pass only `--host/--port/--data-dir`, so the record keeps the mode; the CLI retargets its start to the recorded bind host (`cli/server-lifecycle.md` -> Commands).
