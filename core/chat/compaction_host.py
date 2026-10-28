@@ -578,6 +578,25 @@ class ChatCompactionHost:
         the projected request whose Tool pin starts the new epoch. The prompt-cache
         affinity id stays the Session's.
         """
+        return await _finish_visible_boundary(
+            self._commit_automatic_checkpoint(
+                context,
+                checkpoint,
+                prompt_refresh=prompt_refresh,
+                request_state=request_state,
+            ),
+            context.run,
+            True,
+        )
+
+    async def _commit_automatic_checkpoint(
+        self,
+        context: Any,
+        checkpoint: ChatMessage,
+        *,
+        prompt_refresh: object | None,
+        request_state: RequestState,
+    ) -> bool:
         refresh = cast(_CompactionPromptRefresh | None, prompt_refresh)
         session = context.session
         async with self.sessions.write_lock(session.address):

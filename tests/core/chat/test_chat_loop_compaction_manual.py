@@ -122,8 +122,9 @@ async def test_compact_session_commits_the_checkpoint_and_closes_the_adapter(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("automatic", [False, True], ids=["manual", "automatic"])
 async def test_stop_during_the_checkpoint_commit_reports_the_stored_checkpoint(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, automatic: bool
 ) -> None:
     runtime = compaction_runtime(tmp_path)
     session = runtime.chat_sessions.create("coder", session_id="session-one")
@@ -133,20 +134,26 @@ async def test_stop_during_the_checkpoint_commit_reports_the_stored_checkpoint(
 
     def slow_commit(self: ChatSession, *args: Any, **kwargs: Any) -> Any:
         writing.set()
-        release.wait(5)
+        assert release.wait(5)
         return commit(self, *args, **kwargs)
 
     monkeypatch.setattr(ChatSession, "commit_compaction", slow_commit)
     loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
 
-    reply = asyncio.create_task(loop.compact_session("coder", session.id))
+    reply = None
+    if automatic:
+        run = await loop.start_run("coder", "Continue", session_id=session.id)
+    else:
+        reply = asyncio.create_task(loop.compact_session("coder", session.id))
     assert await asyncio.to_thread(writing.wait, 5)
     run = runtime.chat_runs.active_run(agent_id="coder", session_id=session.id, project_id=None)
     assert run is not None
-    await runtime.chat_runs.cancel(run.id, reason="user")
+    # Do not wait for terminal state before releasing the write it must finish.
+    run.request_cancel(reason="user")
     release.set()
 
-    assert await reply == "Context compacted."
+    if reply is not None:
+        assert await reply == "Context compacted."
     with pytest.raises(RunCancelledError):
         await run.wait()
     assert "compaction_checkpoint" in persisted_roles(session.load())
