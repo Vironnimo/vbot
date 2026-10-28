@@ -6,6 +6,7 @@ import asyncio
 import json
 from datetime import timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -81,9 +82,9 @@ async def test_notifications_survive_restart_without_repeating_a_completed_run(
         original_send = recovered_chats.send
 
         async def send(
-            channel_id: str, message: str, platform_target: str, *, thread_id: str | None = None
+            channel_id: str, message: str, platform_target: str, **kwargs: str | None
         ) -> None:
-            await original_send(channel_id, message, platform_target, thread_id=thread_id)
+            await original_send(channel_id, message, platform_target, **kwargs)
             delivered.set()
 
         monkeypatch.setattr(recovered_chats, "send", send)
@@ -153,8 +154,9 @@ async def test_failure_alerts_retry_after_stop_and_a_failed_claim_never_sends(
 
 
 @pytest.mark.asyncio
-async def test_deleting_a_job_while_its_notification_claim_saves_prevents_the_send(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("change", ["delete", "agent"])
+async def test_a_destination_changed_while_its_notification_claim_saves_prevents_the_send(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
 ) -> None:
     service, trigger = make_service(tmp_path)
     chats = FakeChats()
@@ -181,11 +183,19 @@ async def test_deleting_a_job_while_its_notification_claim_saves_prevents_the_se
     delivery = asyncio.create_task(service._notifications.flush())
     await claimed.wait()
     try:
-        await service.delete_job(job.id)
+        if change == "delete":
+            await service.delete_job(job.id)
+        else:
+            chats.owners["tg-main"] = "agent-two"
     finally:
         finish_claim.set()
     await delivery
-    assert service.list_jobs() == []
+    if change == "delete":
+        assert service.list_jobs() == []
+    else:
+        [pending] = service.get_job(job.id).notifications
+        assert pending.state == "pending"
+        assert pending.error is not None
     assert chats.sent == [] and chats.notes == []
     await service.aclose()
 
@@ -201,11 +211,11 @@ async def test_slow_delivery_never_holds_a_cron_run_slot(
     original_send = chats.send
 
     async def send(
-        channel_id: str, message: str, platform_target: str, *, thread_id: str | None = None
+        channel_id: str, message: str, platform_target: str, **kwargs: str | None
     ) -> None:
         entered.set()
         await release.wait()
-        await original_send(channel_id, message, platform_target, thread_id=thread_id)
+        await original_send(channel_id, message, platform_target, **kwargs)
 
     monkeypatch.setattr(chats, "send", send)
     service._run_slots = asyncio.Semaphore(1)
@@ -243,11 +253,11 @@ async def test_a_waiting_notification_holds_back_only_its_own_chat(
     original_send = chats.send
 
     async def send(
-        channel_id: str, message: str, platform_target: str, *, thread_id: str | None = None
+        channel_id: str, message: str, platform_target: str, **kwargs: str | None
     ) -> None:
         if channel_id in stopped:
             raise ChannelError("Channel is stopped", possibly_delivered=False)
-        await original_send(channel_id, message, platform_target, thread_id=thread_id)
+        await original_send(channel_id, message, platform_target, **kwargs)
 
     monkeypatch.setattr(chats, "send", send)
     job = await service.create_job(
@@ -334,8 +344,9 @@ async def test_an_agent_rename_takes_the_waiting_notifications_along(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("overflow_during_lookup", [False, True])
 async def test_a_job_keeps_a_bounded_backlog_and_the_next_sent_message_counts_the_dropped(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, overflow_during_lookup: bool
 ) -> None:
     monkeypatch.setattr(cron_notifications, "MAX_RETAINED_NOTIFICATIONS", 3)
     service, trigger = make_service(tmp_path)
@@ -355,8 +366,24 @@ async def test_a_job_keeps_a_bounded_backlog_and_the_next_sent_message_counts_th
         (RunStatus.COMPLETED, long_answer),
     )
     service.set_chat_delivery(None)
-    for _ in range(4):
+    for _ in range(3):
         assert (await service._execution._trigger_job_run(job)).succeeded
+
+    lookup_started, lookup_resume = asyncio.Event(), asyncio.Event()
+    get_channel = chats.get_channel
+
+    async def held_lookup(channel_id: str) -> SimpleNamespace:
+        lookup_started.set()
+        await lookup_resume.wait()
+        return await get_channel(channel_id)
+
+    flushing = None
+    if overflow_during_lookup:
+        monkeypatch.setattr(chats, "get_channel", held_lookup)
+        service.set_chat_delivery(chats)
+        flushing = asyncio.create_task(service._notifications.flush())
+        await lookup_started.wait()
+    assert (await service._execution._trigger_job_run(job)).succeeded
 
     stored = make_service(tmp_path)[0].get_job(job.id)
     assert stored.delivery_progress()["waiting"] == 3
@@ -366,6 +393,9 @@ async def test_a_job_keeps_a_bounded_backlog_and_the_next_sent_message_counts_th
     assert len(kept) <= CHAT_MESSAGE_MAX_CHARS < len(long_answer)
     assert kept.endswith("in vBot.]")
 
+    if flushing is not None:
+        lookup_resume.set()
+        await flushing
     service.set_chat_delivery(chats)
     await service._notifications.flush()
     texts = [text for _, text, *_ in chats.sent]

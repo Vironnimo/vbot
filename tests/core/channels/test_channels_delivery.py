@@ -63,7 +63,18 @@ async def test_send_reaches_the_running_adapter_after_validating_buttons(
     rows = [[InteractionButton(label="Milk ⬜", data="chk:milk")]]
     try:
         await service.send("tg-assistant", "Hello", "12345")
-        await service.send("tg-assistant", "Shopping", "12345", buttons=rows)
+        await service.send(
+            "tg-assistant",
+            "Shopping",
+            "12345",
+            buttons=rows,
+            expected_agent_id="assistant",
+        )
+        with pytest.raises(ChannelConfigError) as changed:
+            await service.send(
+                "tg-assistant", "stale destination", "12345", expected_agent_id="another"
+            )
+        assert not changed.value.possibly_delivered
         # Empty data, and 65 bytes of data (one over Telegram's 64-byte cap),
         # fail on every platform before the adapter is reached.
         for data in ("", "d" * 65):

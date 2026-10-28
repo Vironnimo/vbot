@@ -55,7 +55,13 @@ class ChatDelivery(Protocol):
     async def get_channel(self, channel_id: str) -> ChannelOwner: ...
 
     async def send(
-        self, channel_id: str, message: str, platform_target: str, *, thread_id: str | None = None
+        self,
+        channel_id: str,
+        message: str,
+        platform_target: str,
+        *,
+        thread_id: str | None = None,
+        expected_agent_id: str | None = None,
     ) -> None: ...
 
     async def record_outbound_note(

@@ -15,7 +15,7 @@ from core.automation.cron import (
     CronWatch,
 )
 from core.calendar import CalendarService
-from core.channels import ChannelNotFoundError
+from core.channels import ChannelConfigError, ChannelNotFoundError
 from core.permissions import PermissionCeiling, PermissionRefusal
 from core.runs import RunStatus
 from core.secrets import KeyFileProtection, SecretStore
@@ -106,8 +106,16 @@ class FakeChats:
         self.relayed.append((run, channel_id, platform_target, thread_id))
 
     async def send(
-        self, channel_id: str, message: str, platform_target: str, *, thread_id: str | None = None
+        self,
+        channel_id: str,
+        message: str,
+        platform_target: str,
+        *,
+        thread_id: str | None = None,
+        expected_agent_id: str | None = None,
     ) -> None:
+        if expected_agent_id is not None and self.owners[channel_id] != expected_agent_id:
+            raise ChannelConfigError("Channel Agent changed")
         self.sent.append((channel_id, message, platform_target, thread_id))
 
     async def record_outbound_note(

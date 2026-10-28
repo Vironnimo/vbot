@@ -557,6 +557,15 @@ class ChannelConversationEngine:
         except WaitingWorkLimitError:
             return False
 
+        # Stop may overtake the context write below. Record the addressed turn's
+        # owed answer first so the next engine can still account for its admission.
+        pending = (
+            None
+            if isinstance(queued, _QueuedObservedMessage)
+            else self._replies.owe_admitted(
+                queued, self._routing._reply_plan_for(queued.conversation)
+            )
+        )
         observations = (
             (queued,)
             if isinstance(queued, _QueuedObservedMessage)
@@ -574,6 +583,10 @@ class ChannelConversationEngine:
             self._observation_recordings.add(recording)
             try:
                 await asyncio.shield(recording)
+            except Exception:
+                self._trigger_service.release_waiting_work(admission)
+                await self._replies.settle_admitted(pending)
+                raise
             except BaseException:
                 self._trigger_service.release_waiting_work(admission)
                 raise
@@ -589,13 +602,6 @@ class ChannelConversationEngine:
             queue = deque()
             self._chat_queues[platform_target] = queue
 
-        pending = (
-            None
-            if isinstance(queued, _QueuedObservedMessage)
-            else self._replies.owe_admitted(
-                queued, self._routing._reply_plan_for(queued.conversation)
-            )
-        )
         queue.append(replace(queued, admission=admission, pending=pending))
 
         worker = self._chat_workers.get(platform_target)
@@ -633,6 +639,12 @@ class ChannelConversationEngine:
                         error,
                         exc_info=(type(error), error, error.__traceback__),
                     )
+                    if queued.pending is not None and not queued.pending.taken:
+                        await self._replies.answer_admitted(
+                            queued.pending,
+                            self._routing._reply_plan_for(queued.conversation),
+                            _FAILED_REPLY,
+                        )
                 finally:
                     self._trigger_service.release_waiting_work(queued.admission)
                 # Handled without a Run taking the item over: its notice is not owed.

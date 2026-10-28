@@ -19,6 +19,7 @@ from core.sessions import SessionAddress
 from .engine_test_support import (
     SESSION_ID,
     FakeTransport,
+    channel_state,
     drain,
     make_cancelled_run,
     make_completed_run,
@@ -133,22 +134,28 @@ async def test_each_run_outcome_becomes_one_reply(
 
 
 @pytest.mark.asyncio
-async def test_trigger_exception_sends_failure_without_leaking_internals(
+@pytest.mark.parametrize("failure_at", ["routing", "trigger"])
+async def test_processing_exception_sends_failure_without_leaking_internals(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_at: str,
 ) -> None:
     trigger_mock = AsyncMock(side_effect=RuntimeError("internal stack trace"))
     engine, _sessions, _trigger, transport = make_engine(tmp_path, trigger_run=trigger_mock)
+    if failure_at == "routing":
+        monkeypatch.setattr(engine._routing, "_prepare_inbound_route_async", trigger_mock)
     caplog.set_level(logging.ERROR, logger="vbot.channels.engine")
 
     await engine.handle_inbound_text(make_conversation(), "hello")
     await drain(engine, 12345)
 
     assert transport.sent_texts == [engine_module._FAILED_REPLY]
-    records = [r for r in caplog.records if r.message.startswith("Channel trigger run failed")]
+    records = [r for r in caplog.records if r.levelno == logging.ERROR]
     assert len(records) == 1
     assert records[0].exc_info is not None
     await engine.stop()
+    assert channel_state(tmp_path).take_pending_replies(engine.config.id, "next") == ([], 0)
 
 
 @pytest.mark.asyncio

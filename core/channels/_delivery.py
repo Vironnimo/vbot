@@ -123,6 +123,7 @@ async def send(
     thread_id: str | None = None,
     buttons: list[list[InteractionButton]] | None = None,
     run_origin: RouteFacts | None = None,
+    expected_agent_id: str | None = None,
 ) -> None:
     """Delegate an outbound send to a running channel adapter."""
     normalized_id = _normalize_channel_id(channel_id)
@@ -159,6 +160,12 @@ async def send(
     sending = False
     try:
         adapter = service._connections.active_adapter(normalized_id)
+        if expected_agent_id is not None:
+            # Capture and validate the transport's own immutable config without an
+            # await between them: an earlier caller preflight may have gone stale.
+            config = service._connections.active_engine(normalized_id).config
+            if config.agent_id != expected_agent_id:
+                raise ChannelConfigError("The Channel now belongs to another Agent")
         outbound_buttons = normalized_buttons
         if run_origin is not None and normalized_buttons is not None:
             # One hop per database: the origin check on the Session database's

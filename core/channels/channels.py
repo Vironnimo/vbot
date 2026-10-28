@@ -279,6 +279,7 @@ class ChannelService:
         thread_id: str | None = None,
         buttons: list[list[InteractionButton]] | None = None,
         run_origin: RouteFacts | None = None,
+        expected_agent_id: str | None = None,
     ) -> None:
         """Delegate an outbound send to a running channel adapter."""
         await _delivery.send(
@@ -290,6 +291,7 @@ class ChannelService:
             thread_id=thread_id,
             buttons=buttons,
             run_origin=run_origin,
+            expected_agent_id=expected_agent_id,
         )
 
     async def relay_completion_run(self, run: Run, reply_surface: ReplySurface) -> None:
