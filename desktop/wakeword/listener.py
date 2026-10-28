@@ -110,8 +110,8 @@ class ListenerSession:
             target=client.prepare_transcription, name="vbot-voice-prepare", daemon=True
         )
         self.threads = [known for known in self.threads if known.is_alive()]
-        self.threads.append(thread)
         thread.start()
+        self.threads.append(thread)
 
 
 class ListenerEvents(MockEvents, Protocol):

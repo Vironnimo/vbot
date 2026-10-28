@@ -770,6 +770,10 @@ class AudioCapture:
         try:
             # Held-back audio is dropped: a close ends the stretch it belonged to.
             self._stage.flush()
+        except Exception:
+            logger.warning("Echo stage did not flush cleanly", exc_info=True)
+            self._drop_borrowed_stage(self._stage)
+        try:
             self._stage.close()
         except Exception:
             logger.warning("Echo stage did not close cleanly", exc_info=True)

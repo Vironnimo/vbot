@@ -640,7 +640,6 @@ class VoiceController:
                 )
                 self._recording = recording
                 self._emit_recording_locked(voice.EVENT_RECORDING_STARTED, recording)
-                session.prepare_transcription()
             self._commit_locked()
         if live_mode is not None:
             self._live_requests(live_mode, voice.LIVE_REQUEST_SOURCE)
@@ -660,23 +659,29 @@ class VoiceController:
             RecordingResult,
         )
 
-        assert session.capture is not None and session.recorder is not None
-        after_index = detection.pre_roll[-1].index if detection.pre_roll else None
-        subscription = session.capture.subscribe(
-            max_seconds=SUBSCRIPTION_SECONDS, after_index=after_index
-        )
-        started = session.recorder.start(
-            detection.pre_roll,
-            subscription,
-            lambda result: self._on_recording_done(generation, recording, result),
-        )
-        if not started:
-            subscription.close()
-            self._on_recording_done(
-                generation,
-                recording,
-                RecordingResult(OUTCOME_FAILED, error_code=voice.ERROR_PIPELINE_FAILED),
+        subscription = None
+        try:
+            assert session.capture is not None and session.recorder is not None
+            session.prepare_transcription()
+            after_index = detection.pre_roll[-1].index if detection.pre_roll else None
+            subscription = session.capture.subscribe(
+                max_seconds=SUBSCRIPTION_SECONDS, after_index=after_index
             )
+            if session.recorder.start(
+                detection.pre_roll,
+                subscription,
+                lambda result: self._on_recording_done(generation, recording, result),
+            ):
+                return
+        except Exception:
+            logger.exception("Voice command recording could not start")
+        if subscription is not None:
+            subscription.close()
+        self._on_recording_done(
+            generation,
+            recording,
+            RecordingResult(OUTCOME_FAILED, error_code=voice.ERROR_PIPELINE_FAILED),
+        )
 
     def _on_recording_done(
         self, generation: int, recording: voice._Recording, result: RecordingResult

@@ -27,8 +27,9 @@ import pytest
 
 from desktop import settings as desktop_settings
 from desktop.speech import server_client as speech_server_client
-from desktop.speech.capture import AudioCapture, CaptureStatus
+from desktop.speech.capture import AudioCapture, CaptureStatus, CaptureSubscription
 from desktop.speech.microphone import MicrophoneService
+from desktop.wakeword.commands import CommandRecorder
 from desktop.wakeword.config import PhraseConfig, VoiceConfigError
 from desktop.wakeword.contracts import VoiceControlError
 from desktop.wakeword.controller import VoiceController
@@ -577,6 +578,67 @@ def test_a_failing_command_keeps_listening(voice_rig: Callable[..., Rig]) -> Non
         "error_code": "target_agent_unavailable",
     }
     assert rig.state() == ("listening", None)
+
+
+@pytest.mark.parametrize(
+    ("failure", "next_command"),
+    [
+        ("prepare", True),
+        ("prepare", False),
+        ("subscribe", True),
+        ("recorder", True),
+        ("busy", True),
+    ],
+)
+def test_a_failed_recording_start_releases_the_recording_and_keeps_listening(
+    voice_rig: Callable[..., Rig],
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+    next_command: bool,
+) -> None:
+    rig = voice_rig()
+    rig.wait_ready()
+    subscriptions: list[CaptureSubscription] = []
+    original_subscribe = AudioCapture.subscribe
+    original_start = threading.Thread.start
+
+    def subscribe(capture: AudioCapture, **kwargs: Any) -> CaptureSubscription:
+        if failure == "subscribe":
+            raise RuntimeError("subscription could not start")
+        subscription = original_subscribe(capture, **kwargs)
+        subscriptions.append(subscription)
+        return subscription
+
+    def start(thread: threading.Thread) -> None:
+        if thread.name == f"vbot-voice-{failure}":
+            raise RuntimeError("thread could not start")
+        original_start(thread)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(AudioCapture, "subscribe", subscribe)
+        patch.setattr(threading.Thread, "start", start)
+        if failure == "busy":
+            patch.setattr(CommandRecorder, "start", lambda *args, **kwargs: False)
+        rig.wake()
+        failed = rig.sink.wait_for_event("command_failed")
+        assert rig.voice.status()["recording"] is None
+
+    assert failed["error_code"] == "pipeline_failed"
+    assert failed["command_id"] == "c1"
+    assert rig.sink.kinds() == [
+        "detected",
+        "recording_started",
+        "recording_ended",
+        "command_failed",
+    ]
+    assert len(subscriptions) == (1 if failure in {"recorder", "busy"} else 0)
+    assert all(subscription.closed for subscription in subscriptions)
+    assert rig.server.uploads == []
+    assert rig.state() == ("listening", None)
+    if next_command:
+        rig.say_command()
+        assert rig.sink.wait_for_event("sent")["command_id"] == "c2"
+    rig.voice.close()
 
 
 @pytest.mark.parametrize(

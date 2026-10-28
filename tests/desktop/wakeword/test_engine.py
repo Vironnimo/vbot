@@ -456,6 +456,11 @@ def test_engine_rejects_an_unsupported_detector_kind_and_releases_features(
             [True, *[False] * REFRACTORY_CHUNKS, True, True, True],
             [0.9, *[None] * (REFRACTORY_CHUNKS + 2), 0.9],
         ),
+        (
+            [0.8, *[0.7] * REFRACTORY_CHUNKS, 0.1, 0.55, 0.55],
+            [True] * (REFRACTORY_CHUNKS + 4),
+            [0.8, *[None] * (REFRACTORY_CHUNKS + 2), 0.55],
+        ),
     ],
     ids=[
         "confident-single-window",
@@ -468,6 +473,7 @@ def test_engine_rejects_an_unsupported_detector_kind_and_releases_features(
         "no-refire-within-the-refractory-period",
         "rearms-after-the-score-drops",
         "rearms-on-raw-scores-across-a-gated-pause",
+        "rearm-discards-confirmations-from-before-the-dip",
     ],
 )
 def test_engine_confirms_marginal_scores_and_rearms_after_a_phrase(
@@ -527,19 +533,24 @@ def test_engine_rearms_each_phrase_independently(
     ]
 
 
+@pytest.mark.parametrize("next_model", [OKAY, HEY])
 def test_engine_rearms_overlapping_phrases_together(
-    catalog: WakewordModelCatalog, models: ScriptedModels
+    catalog: WakewordModelCatalog, models: ScriptedModels, next_model: str
 ) -> None:
-    models.heads[OKAY] = ScriptedHead([0.1, 0.9, 0.9, *[0.1] * REFRACTORY_CHUNKS, 0.9])
-    models.heads[HEY] = ScriptedHead([0.9, *[0.1] * (REFRACTORY_CHUNKS + 3)])
+    for model_id, initial in [(OKAY, 0.1), (HEY, 0.9)]:
+        next_score = 0.55 if model_id == next_model else 0.1
+        models.heads[model_id] = ScriptedHead(
+            [initial, *[0.8] * REFRACTORY_CHUNKS, 0.1, next_score, next_score]
+        )
     engine = _started(catalog, [PhraseConfig(OKAY), PhraseConfig(HEY)])
 
     # One utterance: hey peaks first, then okay rises before both are quiet.
-    # A window with both below their thresholds re-arms the pair.
+    # A window with both below their thresholds re-arms the pair and clears
+    # both histories: either model needs two fresh marginal crossings.
     assert [engine.detect(b"audio") for _ in range(REFRACTORY_CHUNKS + 4)] == [
         WakewordMatch(HEY, 0.9, 0.5),
         *[None] * (REFRACTORY_CHUNKS + 2),
-        WakewordMatch(OKAY, 0.9, 0.5),
+        WakewordMatch(next_model, 0.55, 0.5),
     ]
 
 

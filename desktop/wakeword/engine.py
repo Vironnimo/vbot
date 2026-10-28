@@ -553,8 +553,15 @@ class MultiWakewordEngine:
         if self._score_listener is not None:
             self._score_listener(scores)
         for group, below_threshold in groups_below_threshold.items():
-            if below_threshold and self._chunk >= self._rearm_at.get(group, 0):
+            if (
+                not self._armed[group]
+                and below_threshold
+                and self._chunk >= self._rearm_at.get(group, 0)
+            ):
                 self._armed[group] = True
+                for model_id, arm_group in self._arm_groups.items():
+                    if arm_group == group:
+                        self._recent_scores[model_id].clear()
         if best_match is not None:
             group = self._arm_groups[best_match.model_id]
             self._armed[group] = False

@@ -681,7 +681,10 @@ def test_a_stage_still_lent_out_is_never_shared(start_capture: Callable[..., Run
     assert held.log == []
 
 
-def test_a_stage_that_failed_is_never_lent_again(start_capture: Callable[..., Running]) -> None:
+@pytest.mark.parametrize("failure", ["process", "flush", "close"])
+def test_a_stage_that_failed_is_never_lent_again(
+    start_capture: Callable[..., Running], monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
     failing, fresh = FakeEchoStage(), FakeEchoStage()
     pool, calls = pool_of(failing, fresh)
     subscriptions: list[CaptureSubscription] = []
@@ -692,8 +695,16 @@ def test_a_stage_that_failed_is_never_lent_again(start_capture: Callable[..., Ru
         subscribe=subscribe_to(subscriptions),
     )
     read_items(subscriptions[0], 1)
-    failing.fail_process = True
-    wait_until(lambda: run.capture.status.echo_state == "unavailable")
+    if failure == "process":
+        failing.fail_process = True
+        wait_until(lambda: run.capture.status.echo_state == "unavailable")
+    else:
+
+        def fail() -> None:
+            failing.log.append(f"stage.{failure}")
+            raise RuntimeError("echo stage teardown failed")
+
+        monkeypatch.setattr(failing, failure, fail)
     run.stop.set()
     assert run.capture.join(5)
 
@@ -704,6 +715,8 @@ def test_a_stage_that_failed_is_never_lent_again(start_capture: Callable[..., Ru
     assert fresh.log[0] == "stage.open:16000"
     assert failing.log.count("stage.open:16000") == 1
     assert "stage.close" in failing.log
+    if failure == "flush":
+        assert failing.log.index("stage.flush") < failing.log.index("stage.close")
 
 
 def test_a_slow_echo_canceller_does_not_hold_back_listening(
