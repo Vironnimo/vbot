@@ -15,7 +15,7 @@ from PIL import Image
 
 from core.attachments import AttachmentStore
 from core.attachments.images import ImageConverter
-from core.chat.block_resolver import ContentBlockResolver
+from core.chat.block_resolver import AttachmentResolveError, ContentBlockResolver
 from core.chat.file_mentions import file_mention_request_text
 from core.tools.read import render_text_file
 from tests.core.chat.block_resolver_test_support import (
@@ -157,21 +157,56 @@ def test_image_reference_numbers_the_image_label(tmp_path: Path) -> None:
             TEXT_IMAGE_PDF,
             "[File: gone.pdf (application/pdf) — file no longer available]",
         ),
+        (
+            "gone.txt",
+            b"critical user context",
+            "file",
+            TEXT_ONLY,
+            "[File: gone.txt (text/plain) — file no longer available]",
+        ),
     ],
-    ids=["image", "video", "pdf"],
+    ids=["image", "video", "pdf", "text"],
 )
-def test_deleted_attachment_degrades_to_an_unavailable_note(
+@pytest.mark.parametrize("failure", ["missing", "blob-stat", "blob-read", "metadata"])
+def test_attachment_missing_degrades_but_io_failure_aborts(
     tmp_path: Path,
     filename: str,
     payload: bytes,
     block_type: str,
     modalities: frozenset[str],
     note: str,
+    failure: str,
+    deny_access,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Turns stay in every later request, so a removed blob must not fail the Run.
     store = AttachmentStore(tmp_path)
     record = store.store(filename, payload)
-    store.delete(record.id)
+    if failure == "missing":
+        store.delete(record.id)
+    elif failure == "blob-stat":
+        deny_access(Path(record.file_path))
+    elif failure == "metadata":
+        deny_access(Path(record.file_path).with_suffix(".json"))
+    else:
+        read_bytes = Path.read_bytes
+
+        def failing_read(path: Path) -> bytes:
+            if path == Path(record.file_path):
+                raise OSError("temporary blob read failure")
+            return read_bytes(path)
+
+        monkeypatch.setattr(Path, "read_bytes", failing_read)
+
+    if failure != "missing":
+        with pytest.raises(AttachmentResolveError):
+            resolve(
+                ContentBlockResolver(store),
+                [attachment_message(record, block_type=block_type)],
+                input_modalities=modalities,
+                wire_media_types=IMAGE_PDF_WIRE | {"video/mp4"},
+            )
+        return
 
     resolved = resolve(
         ContentBlockResolver(store),

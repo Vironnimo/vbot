@@ -8,7 +8,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any, Protocol
 
-from core.attachments import AttachmentStore
+from core.attachments import AttachmentError, AttachmentStore
 from core.attachments.images import ImageConversionError, ImageConverter, ImageTarget
 from core.chat.content_blocks import ContentBlock, MediaBlock
 from core.chat.errors import ChatError
@@ -437,8 +437,7 @@ class ContentBlockResolver:
         record = await _ATTACHMENT_WORKERS.run(self._load_record_or_none, attachment_id)
 
         if record is None:
-            # Metadata unreadable: degrade to a path note (renders "file no longer
-            # available") instead of aborting the run.
+            # Missing or invalid metadata degrades like other removed attachments.
             return [await self._path_note("Audio", attachment_id, filename, media_type)]
 
         if transcription is not None:
@@ -492,7 +491,11 @@ class ContentBlockResolver:
         return transcribed
 
     async def _audio_transcription(self, block: MediaBlock) -> str | None:
-        record = await _ATTACHMENT_WORKERS.run(self._load_record_or_none, block.attachment_id)
+        try:
+            record = await _ATTACHMENT_WORKERS.run(self._load_record_or_none, block.attachment_id)
+        except AttachmentResolveError as exc:
+            _LOGGER.warning("Cannot read audio %s for speech-to-text: %s", block.filename, exc)
+            return None
         if record is None:
             return None
         if isinstance(record.transcription, str):
@@ -651,11 +654,11 @@ class ContentBlockResolver:
         attachment_id = self._require_string(block, "attachment_id")
         filename = self._require_string(block, "filename")
         media_type = self._require_string(block, "media_type")
-        path_note = self._path_note_block("File", attachment_id, filename, media_type)
-        try:
-            raw = self._read_attachment_bytes(attachment_id)
-        except AttachmentResolveError:
-            return [path_note], None
+        record = self._load_record_or_none(attachment_id)
+        if record is None:
+            return [self._path_note_block("File", attachment_id, filename, media_type)], None
+        path_note = self._record_path_note("File", record, filename, media_type)
+        raw = self._read_attachment_bytes(attachment_id)
 
         content = render_text_file(raw)
         rendered = [path_note]
@@ -688,7 +691,11 @@ class ContentBlockResolver:
     def _load_record_or_none(self, attachment_id: str) -> Any | None:
         try:
             return self._attachment_store.get(attachment_id)
-        except Exception:
+        except (AttachmentError, OSError) as exc:
+            if isinstance(exc, OSError) or isinstance(exc.__cause__, OSError):
+                raise AttachmentResolveError(
+                    f"Failed to load attachment metadata for id '{attachment_id}'"
+                ) from exc
             return None
 
     def _read_attachment_record(self, attachment_id: str) -> Any:

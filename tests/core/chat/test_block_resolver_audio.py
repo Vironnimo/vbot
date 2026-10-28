@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from core.attachments import AttachmentStore
-from core.chat.block_resolver import ContentBlockResolver
+from core.chat.block_resolver import AttachmentResolveError, ContentBlockResolver
 from core.chat.content_blocks import MediaBlock, TextBlock
 from core.model_tasks import SpeechExecutionError
 from tests.core.chat.block_resolver_test_support import (
@@ -206,16 +206,26 @@ def test_audio_request_renders_its_transcription_native_audio_or_a_path_note(
         assert transcriber.calls == []
 
 
-def test_audio_with_unreadable_metadata_degrades_to_an_unavailable_note(
+@pytest.mark.parametrize("unreadable", [False, True], ids=["missing", "unreadable"])
+def test_audio_transcription_is_best_effort_but_request_rejects_io_failure(
     tmp_path: Path,
+    unreadable: bool,
+    deny_access,
 ) -> None:
     store = AttachmentStore(tmp_path)
     record = store.store("gone.wav", WAV_BYTES)
-    store.delete(record.id)
+    if unreadable:
+        deny_access(Path(record.file_path).with_suffix(".json"))
+    else:
+        store.delete(record.id)
     resolver = ContentBlockResolver(store, transcriber=_StubTranscriber("unused"))
     audio = MediaBlock("media", record.id, record.filename, record.media_type)
 
     assert asyncio.run(resolver.transcribe_audio([audio])) == [audio]
+    if unreadable:
+        with pytest.raises(AttachmentResolveError):
+            resolve(resolver, [attachment_message(record)], input_modalities=TEXT_IMAGE_AUDIO)
+        return
     resolved = resolve(resolver, [attachment_message(record)], input_modalities=TEXT_IMAGE_AUDIO)
 
     assert resolved[0]["content"] == [
