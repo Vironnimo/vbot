@@ -87,7 +87,9 @@ class FakeChats:
     A Channel whose id starts with ``mail-`` is an email Channel.
     """
 
-    owners: dict[str, str] = field(default_factory=lambda: {"tg-main": "agent-one"})
+    owners: dict[str, str] = field(
+        default_factory=lambda: {"tg-main": "agent-one", "mail-main": "agent-one"}
+    )
     relayed: list[tuple[Any, str, str, str | None]] = field(default_factory=list)
     sent: list[tuple[str, str, str, str | None]] = field(default_factory=list)
     notes: list[tuple[str, str, str, str | None, str | None]] = field(default_factory=list)

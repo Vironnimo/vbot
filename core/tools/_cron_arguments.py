@@ -39,6 +39,7 @@ from core.tools._cron_call import (
 from core.tools._cron_schedule_arguments import (
     _AGENT_TURN_KINDS,
     CLOCK_SCHEDULE,
+    EMAIL_SCHEDULE,
     EVENT_REPEAT_REFUSAL,
     EVENT_TIME_STAND_IN,
     WEBHOOK_SCHEDULE,
@@ -104,6 +105,9 @@ _CHANGE_FIELDS = (
     "notification_policy",
     "watch",
     WATCH_RUNS_FIELD,
+    "email_channel",
+    "email_from",
+    "email_subject",
     ENABLED_FIELD,
 )
 _LATE_START = (
@@ -294,6 +298,19 @@ _WEBHOOK_SECRET_KEYS = frozenset(
         "hooktoken",
     }
 )
+# Names of an email job's fields, read only next to schedule "email".
+_EMAIL_FIELD_KEYS = {
+    "email_channel": frozenset(
+        {"emailchannel", "emailchannelid", "channel", "channelid", "mailbox", "inbox", "account"}
+    ),
+    "email_from": frozenset(
+        {"emailfrom", "from", "sender", "senders", "fromaddress", "emailsenders", "fromfilter"}
+    ),
+    "email_subject": frozenset(
+        {"emailsubject", "subject", "subjectcontains", "subjectfilter", "emailsubjectcontains"}
+    ),
+}
+_EMAIL_SEPARATORS = re.compile(r"[\s,;]+")
 _DESCRIPTION_KEYS = frozenset({"description", "desc", "summary", "details"})
 # Accepted without effect: vBot jobs always persist, and list always shows every job.
 _IGNORED_KEYS = frozenset({"durable", "persist", "persistent", "includedisabled", "reason"})
@@ -365,6 +382,7 @@ def normalize_cron_arguments(contract: ToolContract, arguments: Any) -> Any:
     _read_session(normalized, problems)
     _read_delivery(normalized, problems)
     _read_webhook(normalized, problems)
+    _read_email(normalized)
     late_limits = take_late_limits(normalized, _LATE_START)
     _read_extras(normalized)
     _omit_placeholders(normalized, problems)
@@ -744,6 +762,26 @@ def _read_webhook(arguments: dict[str, Any], problems: _Problems) -> None:
             item = arguments.pop(key)
             if not is_placeholder(item):
                 arguments[WEBHOOK_SECRET_FIELD] = key
+
+
+def _read_email(arguments: dict[str, Any]) -> None:
+    """Read an email job's fields under the names other harnesses and Models use.
+
+    Short names such as ``channel`` or ``from`` count only next to schedule
+    ``email``; senders sent as one text are split at commas and spaces.
+    """
+    email_job = arguments.get("schedule") == EMAIL_SCHEDULE
+    for key in list(arguments):
+        word = spelling(key)
+        for name, words in _EMAIL_FIELD_KEYS.items():
+            if key == name or (word in words and (email_job or word == spelling(name))):
+                item = arguments.pop(key)
+                if name == "email_from" and isinstance(item, str):
+                    item = [part for part in _EMAIL_SEPARATORS.split(item) if part]
+                if name in arguments or (name == "email_channel" and is_placeholder(item)):
+                    continue
+                arguments[name] = item
+                break
 
 
 def _read_extras(arguments: dict[str, Any]) -> None:
