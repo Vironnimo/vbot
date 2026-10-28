@@ -111,9 +111,13 @@ jobs:
         env:
           # Tests isolate HOME; keep the provisioned PDF browser discoverable.
           PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/pdf-browser
+          VBOT_TEST_CRASH_LOG_DIR: ${{ runner.temp }}/vbot-test-crashes
         run: |
           status=0
           python -m pytest --durations=25 || status=$?
+          if [ -d "$VBOT_TEST_CRASH_LOG_DIR" ]; then
+            find "$VBOT_TEST_CRASH_LOG_DIR" -type f -name '*.log' -size +0c -print -exec cat {} \;
+          fi
           if [ "$status" -ne 1 ]; then exit "$status"; fi
           python -c 'import json; print(*sorted(json.load(open(".pytest_cache/v/cache/lastfailed", encoding="utf-8"))), sep="\n")' > failed.txt
           if [ ! -s failed.txt ]; then exit 1; fi

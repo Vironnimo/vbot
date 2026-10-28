@@ -20,6 +20,8 @@ Async tests and fixtures on a worker share one session-scoped Event Loop, so a t
 
 ## Process-wide caches
 
+- **Native crash diagnosis:** `VBOT_TEST_CRASH_LOG_DIR` makes the root test hooks write faulthandler traces to one persistent file per Python process and restore that handler before each test. CI prints nonempty files immediately after the suite, before diagnostic retries; a dead xdist worker otherwise loses its captured traceback. Empty files are removed on clean shutdown.
+
 - **Token estimation encoding:** production loads tiktoken's encoding on a background thread and counts with the character fallback until it is loaded (`providers/request-policy.md`), so a test that started with a cold encoding saw two counts for the same text when the load finished mid-test. The root `tests/conftest.py` loads it once per worker before the first test. A test that replaces or clears it restores the loaded one afterwards, as the fixture of `tests/core/utils/test_tokens.py` does; a test that needs the fallback patches `core.utils.tokens._load_estimation_encoding` for itself.
 
 ## Filesystem isolation

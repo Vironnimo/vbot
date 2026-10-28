@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import faulthandler
 import itertools
 import logging
 import os
@@ -15,12 +16,48 @@ import zlib
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 import pytest
 
 from core.utils import config, tokens
 from tests import cpu_pool
+
+_CRASH_LOG = pytest.StashKey[TextIO]()
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_sessionstart(session: pytest.Session) -> None:
+    """Keep native crash traces after xdist loses a worker and its captured output."""
+    directory = os.environ.get("VBOT_TEST_CRASH_LOG_DIR")
+    if directory is None:
+        return
+    root = Path(directory).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    stream = (root / f"python-{os.getpid()}.log").open("w", encoding="utf-8")
+    session.config.stash[_CRASH_LOG] = stream
+    faulthandler.enable(file=stream, all_threads=True)
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_protocol(item: pytest.Item) -> None:
+    # Tests of application crash logging can replace the process-wide handler.
+    # Reinstall ours before the next test, outside that test's monkeypatches.
+    stream = item.config.stash.get(_CRASH_LOG, None)
+    if stream is not None:
+        faulthandler.enable(file=stream, all_threads=True)
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_unconfigure(config: pytest.Config) -> None:
+    stream = config.stash.get(_CRASH_LOG, None)
+    if stream is not None:
+        faulthandler.disable()
+        stream.close()
+        path = Path(stream.name)
+        if path.stat().st_size == 0:
+            path.unlink()
+
 
 # Tests run git in temporary repositories. Started from a git hook, pytest inherits
 # variables such as GIT_DIR and GIT_INDEX_FILE that would point those git calls at
