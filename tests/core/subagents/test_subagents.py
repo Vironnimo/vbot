@@ -38,6 +38,7 @@ from core.sessions import (
     SUBAGENT_PARENT_META_KEY,
     SUBAGENT_REPLY_TARGET_META_KEY,
     SessionAddress,
+    SubagentLinkSnapshot,
 )
 from core.subagents._constants import (
     FACTS_NO_SIBLINGS_PENDING_TEXT,
@@ -584,7 +585,7 @@ async def test_every_answer_reaches_the_parent_with_what_is_still_running(
                 raise DatabaseUnavailableError("temporary metadata failure")
 
             return read_link(
-                cast(Any, SimpleNamespace(get_metadata=unavailable)), args[1], **kwargs
+                cast(Any, SimpleNamespace(subagent_link_metadata=unavailable)), args[1], **kwargs
             )
         return read_link(*args, **kwargs)
 
@@ -981,7 +982,7 @@ async def test_cancel_stops_the_whole_tree_before_waiting_for_cleanup(
     old_sessions = [address("parent", f"old-child-{index}") for index in range(historical_children)]
     old_addresses = set(old_sessions)
     session_children = harness.sessions.subagent_children
-    session_metadata = harness.sessions.get_metadata
+    session_metadata = harness.sessions.subagent_link_metadata
 
     def children_with_history(parent: SessionAddress) -> list[SessionAddress]:
         if parent in old_addresses:
@@ -989,20 +990,23 @@ async def test_cancel_stops_the_whole_tree_before_waiting_for_cleanup(
         children = session_children(parent)
         return [*old_sessions, *children] if parent == outer_session else children
 
-    def metadata_with_history(target: SessionAddress) -> dict[str, Any]:
+    def metadata_with_history(target: SessionAddress) -> SubagentLinkSnapshot | None:
         if target not in old_addresses:
             return session_metadata(target)
-        return {
-            SUBAGENT_PARENT_META_KEY: {
-                "id": f"sub_{target.session_id}",
-                "agent_id": outer_session.agent_id,
-                "session_id": outer_session.session_id,
-                "project_id": outer_session.project_id,
+        return SubagentLinkSnapshot(
+            metadata={
+                SUBAGENT_PARENT_META_KEY: {
+                    "id": f"sub_{target.session_id}",
+                    "agent_id": outer_session.agent_id,
+                    "session_id": outer_session.session_id,
+                    "project_id": outer_session.project_id,
+                },
             },
-        }
+            parent_generation_id=None,
+        )
 
     monkeypatch.setattr(harness.sessions, "subagent_children", children_with_history)
-    monkeypatch.setattr(harness.sessions, "get_metadata", metadata_with_history)
+    monkeypatch.setattr(harness.sessions, "subagent_link_metadata", metadata_with_history)
     cleanup_entered, release_cleanup = asyncio.Event(), asyncio.Event()
 
     async def cleanup() -> None:
@@ -1293,14 +1297,14 @@ async def test_work_snapshot_refuses_unreadable_tree_instead_of_reporting_idle(
     child = await harness.spawn("child")
     await harness.settle()
     child_session = harness.subagent_session(child["id"])
-    original = harness.sessions.get_metadata
+    original = harness.sessions.subagent_link_metadata
 
-    def read_metadata(target: SessionAddress) -> dict[str, Any]:
+    def read_metadata(target: SessionAddress) -> SubagentLinkSnapshot | None:
         if target == child_session:
             raise DatabaseUnavailableError("injected busy read")
         return original(target)
 
-    monkeypatch.setattr(harness.sessions, "get_metadata", read_metadata)
+    monkeypatch.setattr(harness.sessions, "subagent_link_metadata", read_metadata)
     with pytest.raises(DatabaseUnavailableError):
         await harness.coordinator.work_snapshot(harness.parent)
 

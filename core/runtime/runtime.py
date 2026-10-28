@@ -227,9 +227,16 @@ class Runtime(RuntimeServiceGraph):
         content: str,
         notice_ids: tuple[str, ...],
         on_persisted: Any,
+        *,
+        expected_session_generation_id: str | None = None,
     ) -> Any:
         return await self._host_operations()._start_owned_completion(
-            address, owner, content, notice_ids, on_persisted
+            address,
+            owner,
+            content,
+            notice_ids,
+            on_persisted,
+            expected_session_generation_id=expected_session_generation_id,
         )
 
     def set_extension_change_publisher(

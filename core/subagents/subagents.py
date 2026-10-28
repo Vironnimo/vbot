@@ -310,6 +310,7 @@ class SubAgentCoordinator:
             parent,
             notice_id=delivery_id,
             origin_run_id=context.run_id,
+            expected_session_generation_id=link.parent_generation_id,
             body=PARENT_MESSAGE_SECTION_TEMPLATE.format(
                 id=link.id,
                 title=link.title or link.id,

@@ -11,16 +11,28 @@ from typing import Any, override
 import pytest
 
 from core.activity import SessionActivity
+from core.agents import TemporaryAgentConfig, TemporaryAgentRegistry
+from core.agents.temporary_execution import TemporaryExecutionGroups
 from core.automation import TriggerService
 from core.chat import ChatMessage
 from core.permissions import PermissionBoundary
 from core.projects import AgentOverrides
-from core.runs import SILENT_ANSWER, ChatRunManager, Run, RunAdmission, RunKind, RunNotFoundError
+from core.runs import (
+    SILENT_ANSWER,
+    ChatRunManager,
+    Run,
+    RunAdmission,
+    RunExecutionOwner,
+    RunKind,
+    RunNotFoundError,
+)
 from core.sessions import SessionAddress
+from core.sessions.errors import SessionNotFoundError
 from core.storage import TemporaryFileManager
 from core.subagents import SubAgentCoordinator
 from core.subagents.links import link_session
 from core.tools import ToolContext
+from core.tools.availability import ToolAccess
 from tests.core.chat.chat_loop_support import StubAdapter, StubAgent, StubRuntime, build_chat_loop
 
 
@@ -51,6 +63,134 @@ class _SteeringAdapter(StubAdapter):
             self.second_entered.set()
             await self.second_release.wait()
         return await super().send(messages, model_id=model_id, **kwargs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("delivery_kind", ["message", "owned_message", "answer", "reply_notice"])
+async def test_parent_replacement_after_link_read_never_receives_child_delivery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, delivery_kind: str
+) -> None:
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=StubAgent(id="coder", model="openai/gpt-5.2"),
+        adapter=StubAdapter([]),
+    )
+    runtime.storage.temporary_files = TemporaryFileManager(tmp_path)
+    runtime.terminal_manager = runtime.command_manager = None
+    sessions, manager = runtime.chat_sessions, runtime.chat_run_manager
+    parent = sessions.create("coder", session_id="parent")
+    child = sessions.create("coder", session_id="child")
+    link_session(
+        sessions,
+        child.address,
+        subagent_id="sub_generation",
+        parent=parent.address,
+        run_id="old-parent-run",
+        tool_call_id=None,
+        tool_call_index=None,
+    )
+    if delivery_kind == "reply_notice":
+        sessions.mutate_metadata(
+            child.address, lambda metadata: metadata.update(subagent_reply_target="user")
+        )
+    runtime.chat_loop = build_chat_loop(runtime)
+    service = TriggerService(runtime.chat_loop, manager, runtime, sessions=sessions)
+    groups = None
+    execution_owner = None
+    if delivery_kind == "owned_message":
+        identity = SimpleNamespace(name="fixture", epoch="registration")
+        groups = TemporaryExecutionGroups(
+            TemporaryAgentRegistry(sessions),
+            runtime.chat_loop,
+            lambda current: current is identity,
+            identity,
+            run_manager=manager,
+        )
+        binding = await groups.create(
+            "group",
+            "participant",
+            TemporaryAgentConfig(
+                model="openai/gpt-5.2",
+                cwd=tmp_path,
+                tool_access=ToolAccess(mode="selected", allowed=()),
+                allowed_skills=[],
+                tools={},
+                name="Owner",
+            ),
+        )
+        handle = await groups.open_group("group")
+        execution_owner = RunExecutionOwner(
+            "fixture", "group", "participant", binding.generation_id, handle.epoch
+        )
+        service.set_owned_completion_validator(
+            lambda target, owner: groups.validate(target, RunAdmission(owner=owner))
+        )
+        service.set_owned_completion_starter(groups.continue_completion)
+    coordinator = SubAgentCoordinator(runtime, service)
+    submitted: asyncio.Queue[asyncio.Future[None]] = asyncio.Queue()
+    submit, run_async = service.submit_completion, sessions.run_async
+    replaced = False
+
+    def record_submission(*args: Any, **kwargs: Any) -> asyncio.Future[None]:
+        delivery = submit(*args, **kwargs)
+        submitted.put_nowait(delivery)
+        return delivery
+
+    async def replace_after_parent_check(function: Any, *args: Any, **kwargs: Any) -> Any:
+        nonlocal replaced
+        result = await run_async(function, *args, **kwargs)
+        if function == sessions.exists and args == (parent.address,) and not replaced:
+            replaced = True
+            async with manager.session_admission_guard(parent.address):
+                await sessions.archive(parent.address)
+                sessions.create("coder", session_id=parent.id)
+        return result
+
+    monkeypatch.setattr(service, "submit_completion", record_submission)
+    monkeypatch.setattr(sessions, "run_async", replace_after_parent_check)
+    try:
+        if delivery_kind in {"message", "owned_message"}:
+            result = await coordinator.message_parent(
+                ToolContext(
+                    agent_id="coder",
+                    session_id=child.id,
+                    run_id="user-run-without-parent-provenance",
+                    tool_name="message_parent",
+                    tool_call_id="message-parent",
+                    tool_call_index=0,
+                    workspace=tmp_path,
+                    vbot_root=tmp_path,
+                    data_root=tmp_path,
+                    permissions=PermissionBoundary.UNRESTRICTED,
+                    execution_owner=execution_owner,
+                ),
+                {"content": "OLD_PARENT_MESSAGE"},
+            )
+            assert result["ok"]
+        elif delivery_kind == "answer":
+            coordinator.install(manager)
+
+            async def answer(_run: Run) -> ChatMessage:
+                return ChatMessage.assistant(content="OLD_PARENT_ANSWER", model="fixture/model")
+
+            run = await manager.start(
+                child.address, answer, admission=RunAdmission(run_kind=RunKind.SUBAGENT)
+            )
+            await run.wait()
+        else:
+            coordinator.subagent_reply_to_user(child.address, "user-message")
+        delivery = await asyncio.wait_for(submitted.get(), timeout=2)
+        with pytest.raises(SessionNotFoundError):
+            await asyncio.wait_for(delivery, timeout=2)
+        assert replaced
+        assert sessions.get(parent.address).load() == []
+    finally:
+        if groups is not None:
+            await groups.quiesce()
+        await manager.aclose()
+        await service.aclose()
+        await coordinator.drain_activity()
+        sessions.close()
 
 
 @pytest.mark.asyncio

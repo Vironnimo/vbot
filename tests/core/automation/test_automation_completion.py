@@ -626,10 +626,10 @@ async def test_closing_during_a_reminder_write_persists_it_once(
     await manager.aclose()
 
 
-@pytest.mark.parametrize("stale_generation", [False, True])
+@pytest.mark.parametrize("stale_generation", [None, "continuation", "expected"])
 async def test_completion_start_failure_persists_system_reminder_without_run(
     tmp_path: Path,
-    stale_generation: bool,
+    stale_generation: str | None,
 ) -> None:
     run_manager = ChatRunManager()
     sessions = ChatSessionManager(tmp_path)
@@ -658,9 +658,10 @@ async def test_completion_start_failure_persists_system_reminder_without_run(
                 expected_session_generation_id="retired",
                 schedule_id="schedule",
             ).capture_continuation_source()
-            if stale_generation
+            if stale_generation == "continuation"
             else None
         ),
+        expected_session_generation_id="retired" if stale_generation == "expected" else None,
     )
     if stale_generation:
         with pytest.raises(SessionNotFoundError):

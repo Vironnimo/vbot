@@ -380,12 +380,15 @@ def move(connection: sqlite3.Connection, source: SessionAddress, target: Session
         connection, source=state, target_key=session_key, same_scope=_same_scope(source, target)
     )
     # Parent links store the public address, unlike history and fork relations.
-    # Move the live children's links in the same transaction as their Parent.
+    # Archived children follow too, so restoring them cannot resurrect the old
+    # address. A replacement at that address never claims another generation's
+    # children; legacy links without provenance keep their address-based behavior.
     connection.execute(
         "UPDATE sessions SET subagent_parent_project_id = ?, subagent_parent_agent_id = ?, "
         "subagent_parent_session_id = ?, state_revision = state_revision + 1 "
-        "WHERE state = 'live' AND subagent_parent_project_id IS ? "
-        "AND subagent_parent_agent_id = ? AND subagent_parent_session_id = ?",
+        "WHERE subagent_parent_project_id IS ? "
+        "AND subagent_parent_agent_id = ? AND subagent_parent_session_id = ? "
+        "AND COALESCE(subagent_parent_generation_id, '') IN ('', ?)",
         (
             target.project_id,
             target.agent_id,
@@ -393,6 +396,7 @@ def move(connection: sqlite3.Connection, source: SessionAddress, target: Session
             source.project_id,
             source.agent_id,
             source.session_id,
+            state["generation_id"],
         ),
     )
 

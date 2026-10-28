@@ -18,6 +18,29 @@ pytestmark = pytest.mark.asyncio
 
 
 @pytest.mark.parametrize("replace", [False, True], ids=["archived", "replaced"])
+async def test_a_missing_parent_generation_receives_no_children_or_answers(
+    harness: SubAgentHarness, replace: bool
+) -> None:
+    harness.loop.hold("review")
+    child = await harness.spawn("review")
+    child_address = harness.subagent_session(child["id"])
+    async with harness.manager.session_admission_guard(harness.parent):
+        await harness.sessions.archive(harness.parent)
+        if replace:
+            harness.sessions.create(
+                harness.parent.agent_id,
+                harness.parent.session_id,
+                project_id=harness.parent.project_id,
+            )
+
+    assert await harness.coordinator.parent_link(child_address) is None
+    assert await harness.coordinator.child_sessions(harness.parent) == []
+    assert not (await harness.message_parent("old child's message", child_address))["ok"]
+    await harness.finished("review")
+    assert harness.triggers.notices == []
+
+
+@pytest.mark.parametrize("replace", [False, True], ids=["archived", "replaced"])
 async def test_run_does_not_recreate_a_generation_archived_before_admission(
     harness: SubAgentHarness, monkeypatch: pytest.MonkeyPatch, replace: bool
 ) -> None:

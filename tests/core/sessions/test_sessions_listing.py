@@ -570,6 +570,8 @@ def test_history_versions_report_live_sessions_across_scopes(manager) -> None:
 def test_subagent_links_find_live_children_of_a_parent_and_a_session_by_its_id(manager) -> None:
     parent = _address("parent", "root")
     project_parent = _address("parent", "root", "alpha")
+    manager.get_or_create(parent)
+    manager.get_or_create(project_parent)
 
     def child(session_id: str, subagent_id: str, linked_to: SessionAddress) -> SessionAddress:
         address: SessionAddress = manager.create("worker", session_id=session_id).address
@@ -593,7 +595,7 @@ def test_subagent_links_find_live_children_of_a_parent_and_a_session_by_its_id(m
     in_project = child("project-child", "sa_p", project_parent)
     child("other-child", "sa_o", _address("parent", "other"))
     gone = child("gone-child", "sa_gone", parent)
-    manager.create("worker", session_id="unlinked")
+    unlinked = manager.create("worker", session_id="unlinked")
     manager.get(gone).delete()
 
     assert manager.subagent_children(parent) == [second, first]
@@ -603,6 +605,30 @@ def test_subagent_links_find_live_children_of_a_parent_and_a_session_by_its_id(m
     assert manager.subagent_session("sa_p") == in_project
     assert manager.subagent_session("sa_gone") is None
     assert manager.subagent_session("sa_missing") is None
+    assert manager.subagent_link_metadata(unlinked.address) is None
+    original_metadata = manager.get_metadata(first)
+    original_link = manager.subagent_link_metadata(first)
+    assert original_link is not None
+    assert original_link.metadata == original_metadata
+    assert original_link.parent_generation_id == manager.get(parent).generation_id
+
+    archived_parent = asyncio.run(manager.archive(parent))
+    assert manager.subagent_children(parent) == []
+    assert manager.subagent_link_metadata(first) is None
+    manager.get_or_create(parent)
+    assert manager.subagent_children(parent) == []
+    assert manager.subagent_link_metadata(first) is None
+    assert manager.get_metadata(first) == original_metadata
+
+    manager.archive_ledger.begin_restore(archived_parent.entry_id, {"target_id": "restored"})
+    manager.archive_ledger.commit_restore(archived_parent.entry_key, session_id="restored")
+    restored_parent = _address("parent", "restored")
+    assert manager.subagent_children(restored_parent) == [second, first]
+    restored_metadata = manager.subagent_link_metadata(first)
+    assert restored_metadata is not None
+    assert restored_metadata.metadata[SUBAGENT_PARENT_META_KEY]["session_id"] == "restored"
+    assert restored_metadata.parent_generation_id == original_link.parent_generation_id
+    assert manager.subagent_children(project_parent) == [in_project]
 
 
 def test_all_history_revisions_list_every_live_session_of_every_scope(manager) -> None:

@@ -250,6 +250,7 @@ class SubAgentForwarding:
             notice_id=f"subagent:{run.id}",
             origin_run_id=run.id,
             continuation_source=run.capture_continuation_source(),
+            expected_session_generation_id=link.parent_generation_id,
             body=body,
             execution_owner=run.execution_owner,
         )
@@ -337,6 +338,7 @@ class SubAgentForwarding:
             parent,
             notice_id=f"subagent-user-reply:{message_id}",
             origin_run_id=f"subagent-user-reply:{message_id}",
+            expected_session_generation_id=link.parent_generation_id,
             body=REPLY_TO_USER_NOTICE_TEMPLATE.format(id=link.id, title=link.title or link.id),
             wake=False,
         )

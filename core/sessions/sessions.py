@@ -42,6 +42,7 @@ from core.sessions._types import (
     SessionSearchOrder,
     SessionSearchResult,
     SessionWorkingProject,
+    SubagentLinkSnapshot,
     TemporarySessionBinding,
     ToolResultFacts,
     WorkingProjectChoice,
@@ -279,6 +280,15 @@ class ChatSessionManager:
     def subagent_session(self, subagent_id: str) -> SessionAddress | None:
         """Return the live Sub-Agent Session with this public Sub-Agent id, if any."""
         return self._store.subagent_session(subagent_id)
+
+    def subagent_link_metadata(self, address: SessionAddress) -> SubagentLinkSnapshot | None:
+        """Return a link snapshot unless its known Parent generation is no longer live.
+
+        The link and Parent are read in one snapshot, and the generation is
+        retained for later delivery admission. Canonical metadata stays unchanged;
+        legacy links without provenance retain address-based lookup.
+        """
+        return self._store.subagent_link_metadata(address)
 
     def live_addresses_with_metadata_field(
         self, key: str, field: str, value: str

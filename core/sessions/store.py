@@ -60,6 +60,7 @@ if TYPE_CHECKING:
         SessionReadCursor,
         SessionRunRecord,
         SessionWorkingProject,
+        SubagentLinkSnapshot,
         ToolResultFacts,
     )
 
@@ -266,6 +267,11 @@ class SessionStore:
     def subagent_session(self, subagent_id: str) -> SessionAddress | None:
         return self._read(
             lambda connection: _store_queries.subagent_session(connection, subagent_id)
+        )
+
+    def subagent_link_metadata(self, address: SessionAddress) -> SubagentLinkSnapshot | None:
+        return self._read(
+            lambda connection: _store_queries.subagent_link_metadata(connection, address)
         )
 
     def live_addresses_with_metadata_field(
