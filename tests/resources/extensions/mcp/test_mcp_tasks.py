@@ -503,6 +503,7 @@ async def test_removed_connection_cannot_persist_a_delayed_old_task(host, monkey
     from resources.extensions.mcp._recovery import TASK_SCHEMA, TaskRecovery
 
     connection = sqlite3.connect(":memory:")
+    connection.row_factory = sqlite3.Row
     connection.executescript(TASK_SCHEMA)
     entered = asyncio.Event()
     release = asyncio.Event()
@@ -536,6 +537,40 @@ async def test_removed_connection_cannot_persist_a_delayed_old_task(host, monkey
         # Re-adding the same connection admits only the new runner's invocation.
         await recovery.remember(replacement, context(host), {"name": "long"}, run)
         assert connection.execute("SELECT COUNT(*) FROM pending_tasks").fetchone()[0] == 1
+
+        # A fresh registration may already be reading recovery rows when removal
+        # deletes them. Re-adding the same id must not recover those old tasks.
+        reading, read_release = asyncio.Event(), asyncio.Event()
+
+        async def read(callback):
+            rows = callback(connection)
+            reading.set()
+            await read_release.wait()
+            return rows
+
+        restarted = TaskRecovery(host, logging.getLogger("test"))
+        restarted.database = SimpleNamespace(write_async=write, read_async=read)
+        recovered = []
+
+        async def recover(runner, row):
+            recovered.append((runner, row["receipt_id"]))
+
+        monkeypatch.setattr(restarted, "_recover", recover)
+        runners = {replacement.id: replacement}
+        resuming = asyncio.create_task(restarted.resume(runners))
+        try:
+            await reading.wait()
+            await restarted.stop_connection(replacement.id, runner=replacement, remove=True)
+            runners[replacement.id] = runner_for(host, server, monkeypatch)
+            read_release.set()
+            await resuming
+            await asyncio.gather(*tuple(restarted._workers.values()))
+            assert not recovered
+            assert connection.execute("SELECT COUNT(*) FROM pending_tasks").fetchone()[0] == 0
+        finally:
+            resuming.cancel()
+            await asyncio.gather(resuming, return_exceptions=True)
+            await restarted.close()
     finally:
         remembering.cancel()
         await asyncio.gather(remembering, return_exceptions=True)

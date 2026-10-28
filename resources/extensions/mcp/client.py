@@ -723,8 +723,10 @@ class ConnectionRunner:
                 return
             self._settle_interrupted(call, final=True)
             self._calls.discard(call)
-            if not self._calls and owner is self._task:
+            if not self._closing and not self._calls and owner is self._task:
                 # Inputs a finished call's server still waits for have no one to answer.
+                # Close already cancelled this runner's inputs; a late callback
+                # must not cancel those of a replacement with the same id.
                 self.inputs.cancel_connection(self.id)
 
         call.result.add_done_callback(cancel)

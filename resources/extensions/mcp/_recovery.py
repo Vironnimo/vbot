@@ -146,8 +146,9 @@ class TaskRecovery:
             )
 
     async def resume(self, runners: dict[str, ConnectionRunner]) -> None:
-        if self.database is None:
+        if self.database is None or self._closed:
             return
+        selected = dict(runners)
         rows = await self.database.read_async(
             lambda connection: [
                 dict(row)
@@ -158,6 +159,8 @@ class TaskRecovery:
             ]
         )
         for row in rows:
+            if self._closed:
+                return
             receipt = row["receipt_id"]
             if receipt in self._workers or receipt in self._live_receipts:
                 continue
@@ -168,9 +171,11 @@ class TaskRecovery:
                 ):
                     await self.forget(receipt)
                 continue
-            runner = runners.get(row["connection_id"])
+            runner = selected.get(row["connection_id"])
             if (
                 runner is None
+                or runners.get(row["connection_id"]) is not runner
+                or runner in self._retired
                 or not runner.config["enabled"]
                 or configuration_hash(runner.config) != row["configuration_hash"]
             ):
