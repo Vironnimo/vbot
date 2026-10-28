@@ -108,6 +108,8 @@ class FakeServer:
         # Answer "Teil <n>" per upload that holds sound, "" for silence.
         self.numbered = False
         self.budget_bytes = 10_000_000
+        self.release_budget = threading.Event()
+        self.release_budget.set()
 
     def client(self, server_url: str, cancel: threading.Event) -> Any:
         self.urls.append(server_url)
@@ -125,6 +127,7 @@ class _FakeClient:
         return "loaded"
 
     def upload_budget_bytes(self) -> int:
+        assert self.server.release_budget.wait(5)
         return self.server.budget_bytes
 
     def transcribe(self, audio: bytes, *, filename: str) -> str:
@@ -231,7 +234,7 @@ class Rig:
 def make_rig(tmp_path: Path) -> Iterator[Any]:
     rigs: list[Rig] = []
 
-    def make(*, mode: str = "toggle", server_url: str = SERVER_URL, **options: Any) -> Rig:
+    def make(*, mode: object = "toggle", server_url: str = SERVER_URL, **options: Any) -> Rig:
         path = tmp_path / "settings.json"
         path.write_text(
             json.dumps(
@@ -277,6 +280,7 @@ def make_rig(tmp_path: Path) -> Iterator[Any]:
 
     yield make
     for rig in rigs:
+        rig.server.release_budget.set()
         rig.sd.can_open.set()
         rig.server.release_transcription.set()
         rig.controller.stop()
@@ -457,23 +461,27 @@ def test_a_take_that_cannot_run_ends_by_itself_with_an_error_cue(
 
 
 @pytest.mark.parametrize(
-    ("options", "budget", "script", "whole_words"),
+    ("options", "budget", "script", "whole_words", "budget_ready"),
     [
         (
             {"piece_target_seconds": 0.5, "piece_search_seconds": 1.0},
             10_000_000,
             [WORD, silence(0.5, RATE), WORD, silence(0.5, RATE), WORD],
             True,
+            "immediate",
         ),
         (
             {"piece_target_seconds": 0.5, "piece_search_seconds": 0.3},
             10_000_000,
             [tone(2.0, RATE)],
             False,
+            "immediate",
         ),
-        ({}, 44 + RATE, [tone(2.0, RATE)], False),
+        ({}, 44 + RATE, [tone(2.0, RATE)], False, "immediate"),
+        ({}, 44 + RATE, [tone(2.0, RATE)], False, "while-recording"),
+        ({}, 44 + RATE, [tone(2.0, RATE)], False, "after-recording"),
     ],
-    ids=["cut-at-pauses", "no-pause", "upload-limit"],
+    ids=["cut-at-pauses", "no-pause", "upload-limit", "late-limit", "limit-after-stop"],
 )
 def test_a_long_take_is_transcribed_in_pieces_and_inserted_as_one_text(
     make_rig: Any,
@@ -481,17 +489,27 @@ def test_a_long_take_is_transcribed_in_pieces_and_inserted_as_one_text(
     budget: int,
     script: list[np.ndarray],
     whole_words: bool,
+    budget_ready: str,
 ) -> None:
     """No length limit: pieces keep every upload within the server's limit and lose no audio."""
     rig = make_rig(server_url="http://other.lan:8420", **options)
     rig.server.numbered = True
     rig.server.budget_bytes = budget
+    if budget_ready != "immediate":
+        rig.server.release_budget.clear()
     rig.sd.feed(LEAD_IN, *script)
     rig.controller.set_server_url(SERVER_URL)
 
     rig.press()
-    wait_until(lambda: rig.sd.drained and len(rig.server.uploads) >= 2)
-    rig.press()
+    if budget_ready != "immediate":
+        wait_until(lambda: rig.sd.drained)
+        if budget_ready == "after-recording":
+            rig.press()
+            wait_until(lambda: rig.controller.status()["state"] == "transcribing")
+        rig.server.release_budget.set()
+    if budget_ready != "after-recording":
+        wait_until(lambda: rig.sd.drained and len(rig.server.uploads) >= 2)
+        rig.press()
     rig.wait_idle()
 
     heard = [upload for upload in rig.server.uploads if _energy(upload) > 0]
@@ -521,10 +539,12 @@ def test_a_piece_that_cannot_be_transcribed_ends_the_take_at_once(make_rig: Any)
     assert rig.controller.status()["last_failure"]["code"] == "transcription_failed"
 
 
+@pytest.mark.parametrize("stored_mode", ["toggle", "push", [], {}])
 def test_settings_persist_mode_and_shortcut_and_reject_invalid_changes(
     make_rig: Any,
+    stored_mode: object,
 ) -> None:
-    rig = make_rig()
+    rig = make_rig(mode=stored_mode)
     assert rig.controller.status() == {
         "supported": True,
         "enabled": True,
@@ -539,11 +559,15 @@ def test_settings_persist_mode_and_shortcut_and_reject_invalid_changes(
     assert len(rig.apis) == 1  # a mode change keeps the registration
     assert rig.controller.update({"key": "KeyJ", "shift": True})["hotkey"]["key"] == "KeyJ"
     assert len(rig.apis) == 2
-    invalid_mode = rig.controller.update({"mode": "push", "key": "KeyK"})
+    invalid_modes: tuple[object, ...] = ("push", [], {})
+    for invalid_mode in invalid_modes:
+        assert (
+            rig.controller.update({"mode": invalid_mode, "key": "KeyK"})["error_code"]
+            == "dictation_config_invalid"
+        )
     invalid_key = rig.controller.update({"mode": "toggle", "key": "Enter"})
     not_an_object = rig.controller.update(["mode"])
 
-    assert invalid_mode["error_code"] == "dictation_config_invalid"
     assert invalid_key["error_code"] == "hotkey_invalid"
     assert not_an_object["error_code"] == "dictation_config_invalid"
     stored = json.loads(rig.path.read_text(encoding="utf-8"))["dictation"]
