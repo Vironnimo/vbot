@@ -14,6 +14,8 @@ work on the Session database's pool (``ChatSessionManager.run_async``).
 
 from __future__ import annotations
 
+import hashlib
+import re
 from typing import TYPE_CHECKING, Any
 
 from core.channels.adapter import (
@@ -32,13 +34,44 @@ if TYPE_CHECKING:
 
 _LOGGER = get_logger("channels.routing")
 
+_PLAIN_PLATFORM_ID = re.compile(r"[A-Za-z0-9-]+")
+# SESSION_ID_PATTERN's length bound.
+_SESSION_ID_MAX_LENGTH = 128
+
 
 class _ForeignAnchorError(Exception):
     """The derived anchor id names another Channel's own conversation Session."""
 
 
 def _conversation_anchor(channel_id: str, chat_id: str) -> str:
-    return f"ch-{channel_id}-{chat_id}"
+    return _anchor(channel_id, _anchor_part(chat_id))
+
+
+def _anchor(channel_id: str, part: str) -> str:
+    """Return ``ch-<channel>-<part>``, or a digest form where that exceeds a Session id."""
+    anchor = f"ch-{channel_id}-{part}"
+    if len(anchor) <= _SESSION_ID_MAX_LENGTH:
+        return anchor
+    return f"ch-{channel_id}-h{hashlib.sha256(part.encode('utf-8')).hexdigest()}"
+
+
+def _anchor_part(platform_id: object) -> str:
+    """Encode a platform id for a Session id, which allows only ``[A-Za-z0-9_-]``.
+
+    Ids of ``[A-Za-z0-9-]`` only (every Telegram, Discord, Slack, Mattermost and
+    WhatsApp id) stay unchanged, so their anchors keep their stable form. In any
+    other id, such as an email address, every byte of a character outside that
+    set, ``_`` included, becomes ``_`` and two lowercase hex digits.
+    """
+    text = str(platform_id)
+    if _PLAIN_PLATFORM_ID.fullmatch(text):
+        return text
+    return "".join(
+        character
+        if _PLAIN_PLATFORM_ID.fullmatch(character)
+        else "".join(f"_{byte:02x}" for byte in character.encode("utf-8"))
+        for character in text
+    )
 
 
 def _session_address(agent_id: str, session_id: str) -> SessionAddress:
@@ -231,9 +264,12 @@ class ChannelSessionRouting:
         if scope == "main":
             return main_conversation_id(self._config.id)
         if scope == "per_peer":
-            return f"ch-{self._config.id}-u{conversation.user_id}"
+            return _anchor(self._config.id, f"u{_anchor_part(conversation.user_id)}")
         if scope == "per_account_channel_peer":
-            return f"ch-{self._config.id}-{conversation.chat_id}-u{conversation.user_id}"
+            return _anchor(
+                self._config.id,
+                f"{_anchor_part(conversation.chat_id)}-u{_anchor_part(conversation.user_id)}",
+            )
         return _conversation_anchor(self._config.id, conversation.chat_id)
 
     def _group_conversation_key(self, chat_id: str) -> str:
