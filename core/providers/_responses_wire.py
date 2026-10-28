@@ -242,21 +242,15 @@ def _safe_response_output_items(
     """Replace raw function items when canonical calls cannot replay them verbatim."""
 
     tool_calls = _mapping_list(raw_tool_calls)
-    if not any(
-        TOOL_CALL_REJECTION_FIELD in tool_call
-        or TOOL_CALL_ARGUMENT_SEQUENCE_INDEX_FIELD in tool_call
-        for tool_call in tool_calls
-    ) and all(
-        item.get("type") != "function_call" or _has_json_object_arguments(item.get("arguments"))
-        for item in response_output
-    ):
-        return [_replay_item(item) for item in response_output]
-
     safe_items: list[dict[str, Any]] = []
     tool_call_index = 0
     for item in response_output:
-        if item.get("type") != "function_call" or tool_call_index >= len(tool_calls):
+        if item.get("type") != "function_call":
             safe_items.append(_replay_item(item))
+            continue
+        if tool_call_index >= len(tool_calls):
+            # A broken stream can leave an unstarted trailing Call in its
+            # native snapshot. Only canonical Calls have correlated Results.
             continue
         tool_call = tool_calls[tool_call_index]
         argument_sequence = _argument_sequence_at(tool_calls, tool_call_index)
@@ -277,18 +271,27 @@ def _safe_response_output_items(
 
 
 def _replay_function_item(item: Mapping[str, Any], tool_call: Mapping[str, Any]) -> dict[str, Any]:
-    """Keep valid wire arguments verbatim; replay intake repairs as valid JSON.
+    """Keep matching wire arguments verbatim; replay the Call that actually ran.
 
     Empty arguments and unambiguous bare values normalize without a rejection,
     but their original strings are not valid Responses input. Preserve the
-    item's identity and other Provider fields while repairing only that field.
+    item's identity and other Provider fields while repairing that field. A
+    later snapshot may contradict already dispatched deltas; the frozen
+    canonical Call, not the snapshot, describes the Tool Result that follows.
     """
 
-    if _has_json_object_arguments(item.get("arguments")):
+    canonical = _tool_call_to_function_call(tool_call)
+    if (
+        item.get("call_id") == canonical["call_id"]
+        and _function_call_name(item) == canonical["name"]
+        and _has_json_object_arguments(item.get("arguments"))
+        and json.dumps(json.loads(item["arguments"]), sort_keys=True)
+        == json.dumps(json.loads(canonical["arguments"]), sort_keys=True)
+    ):
         return dict(item)
     return {
         **item,
-        "arguments": _serialize_tool_arguments(_function_call_arguments(tool_call)),
+        **canonical,
     }
 
 

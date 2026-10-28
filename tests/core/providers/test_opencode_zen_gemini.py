@@ -13,7 +13,12 @@ import respx
 
 from core.chat.streaming import StreamingAccumulator
 from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
-from core.providers.errors import NetworkError, ProviderError, ProviderRequestTooLargeError
+from core.providers.errors import (
+    NetworkError,
+    ProviderError,
+    ProviderRateLimitError,
+    ProviderRequestTooLargeError,
+)
 from core.providers.wire_profiles import WireProfiles, bundled_wire_profile_files
 from core.tools import tool_failure, tool_success
 from core.utils.retry import caller_owns_retries
@@ -508,6 +513,56 @@ async def test_gemini_stream_hands_over_every_part_without_a_snapshot_per_text_c
     assert snapshots[-1] == {"gemini_parts": [signed, *texts]}
 
 
+@pytest.mark.parametrize("with_ids", [False, True], ids=["generated-ids", "provider-ids"])
+@pytest.mark.asyncio
+async def test_broken_gemini_tool_stream_replays_only_dispatched_calls(with_ids: bool) -> None:
+    adapter = zen_adapter()
+    parts = [
+        {
+            "functionCall": {
+                "name": "search",
+                "args": {"q": query},
+                **({"id": f"call_{index}"} if with_ids else {}),
+            },
+            **({"thoughtSignature": "opaque"} if index == 0 else {}),
+        }
+        for index, query in enumerate(["first", "second"])
+    ]
+    accumulator = StreamingAccumulator()
+    started: list[dict[str, Any]] = []
+    with respx.mock:
+        respx.post(GEMINI_STREAM_URL).mock(
+            return_value=httpx.Response(
+                200,
+                text=gemini_sse(
+                    *[
+                        {"responseId": "reply", "candidates": [{"content": {"parts": [part]}}]}
+                        for part in parts
+                    ]
+                ),
+            )
+        )
+        with pytest.raises(NetworkError):
+            async for delta in adapter.stream([], model_id=GEMINI_MODEL):
+                accumulator.add_delta(delta)
+                started.extend(accumulator.take_completed_tool_calls())
+        fields = accumulator.finalize_partial_fields()
+        assert len(started) == 1
+        assert fields.tool_calls == started
+        messages = [
+            {"role": "assistant", **fields.to_response_dict()},
+            {"role": "tool", "tool_call_id": started[0]["id"], "content": "found"},
+        ]
+        before = json.dumps(messages)
+        continuation = respx.post(GEMINI_URL).mock(return_value=httpx.Response(200, json=_DONE))
+        await adapter.send(messages, model_id=GEMINI_MODEL)
+
+    payload = json.loads(continuation.calls.last.request.content)
+    assert payload["contents"][0] == {"role": "model", "parts": parts[:1]}
+    assert payload["contents"][1]["parts"][0]["functionResponse"]["id"] == started[0]["id"]
+    assert json.dumps(messages) == before
+
+
 @pytest.mark.parametrize(
     ("raw_usage", "expected"),
     [
@@ -722,14 +777,41 @@ async def test_gemini_stream_prompt_block_matches_completed_response() -> None:
 
 
 @pytest.mark.parametrize(
-    "error",
+    ("error", "expected_type", "retryable"),
     [
-        pytest.param("failed-after-stop", id="text"),
-        pytest.param({"message": "failed-after-stop"}, id="object"),
+        pytest.param("failed-after-stop", ProviderError, False, id="text"),
+        pytest.param({"message": "failed-after-stop"}, ProviderError, False, id="object"),
+        pytest.param(
+            {"code": 503, "status": "UNAVAILABLE", "message": "failed-after-stop"},
+            ProviderError,
+            True,
+            id="unavailable",
+        ),
+        pytest.param(
+            {"code": 500, "status": "INTERNAL", "message": "failed-after-stop"},
+            ProviderError,
+            False,
+            id="non-idempotent-internal",
+        ),
+        pytest.param(
+            {"code": 429, "status": "RESOURCE_EXHAUSTED", "message": "failed-after-stop"},
+            ProviderRateLimitError,
+            True,
+            id="rate-limit",
+        ),
+        pytest.param(
+            {"code": 400, "status": "INVALID_ARGUMENT", "message": "failed-after-stop"},
+            ProviderError,
+            False,
+            id="invalid-request",
+        ),
     ],
 )
+@pytest.mark.parametrize("finished", [False, True], ids=["before-finish", "after-finish"])
 @pytest.mark.asyncio
-async def test_gemini_stream_error_after_stop_cannot_become_success(error: Any) -> None:
+async def test_gemini_stream_errors_keep_their_classification(
+    error: Any, expected_type: type[ProviderError], retryable: bool, finished: bool
+) -> None:
     adapter = zen_adapter()
     received: list[dict[str, Any]] = []
 
@@ -744,7 +826,7 @@ async def test_gemini_stream_error_after_stop_cannot_become_success(error: Any) 
                             "candidates": [
                                 {
                                     "content": {"parts": [{"text": "partial"}]},
-                                    "finishReason": "STOP",
+                                    **({"finishReason": "STOP"} if finished else {}),
                                 }
                             ]
                         },
@@ -753,12 +835,12 @@ async def test_gemini_stream_error_after_stop_cannot_become_success(error: Any) 
                 ),
             )
         )
-        with pytest.raises(ProviderError) as caught:
+        with pytest.raises(expected_type) as caught:
             async for delta in adapter.stream([], model_id=GEMINI_MODEL):
                 received.append(delta)
 
-    assert {"type": "finish", "reason": "stop"} in received
-    assert caught.value.retryable is False
+    assert ({"type": "finish", "reason": "stop"} in received) is finished
+    assert caught.value.retryable is retryable
     assert "failed-after-stop" in str(caught.value)
     assert route.call_count == 1
 

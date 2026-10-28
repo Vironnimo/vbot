@@ -176,6 +176,16 @@ _FAIL = StreamRecoveryAction.FAIL
     ("error", "state", "action"),
     [
         (NetworkError("no terminator"), {"finish_received": True}, _ACCEPT),
+        (
+            ProviderError("explicit failure", retryable=False),
+            {"finish_received": True, "has_partial_content": True},
+            _FAIL,
+        ),
+        (
+            ProviderError("explicit overload", retryable=True),
+            {"finish_received": True, "has_partial_content": True},
+            _PRESERVE,
+        ),
         (ProviderStreamingUnsupportedError("no streaming"), {}, _FALLBACK),
         (NetworkError("dropped"), {}, _RESTART),
         (StreamingChunkTimeoutError("stalled"), {}, _RESTART),
@@ -190,6 +200,8 @@ _FAIL = StreamRecoveryAction.FAIL
     ],
     ids=[
         "finished-stream",
+        "fatal-after-finish",
+        "retryable-after-finish",
         "unsupported-before-text",
         "drop-before-text",
         "stall-before-text",
