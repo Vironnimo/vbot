@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Callable
-from functools import wraps
+from functools import update_wrapper
 from typing import Any
 
 from core.tools._tool_context import (
@@ -39,6 +39,21 @@ def _invoke_sync_tool_handler(
     return handler(context, arguments)
 
 
+class _OffloadedToolHandler:
+    """Keep the blocking entry available to the registry's worker admission gate."""
+
+    __wrapped__: ToolHandler
+
+    def __init__(self, handler: ToolHandler) -> None:
+        update_wrapper(self, handler)
+
+    async def __call__(self, context: ToolContext, arguments: JsonObject) -> JsonObject:
+        result = await run_tool_worker(self.__wrapped__, context, arguments)
+        if inspect.isawaitable(result):
+            return await result
+        return result
+
+
 def offload_tool_handler(handler: ToolHandler) -> ToolHandler:
     """Run one blocking Tool implementation in a worker without unsafe cancellation.
 
@@ -47,11 +62,4 @@ def offload_tool_handler(handler: ToolHandler) -> ToolHandler:
     callers never treat an in-flight filesystem mutation as completed or abandoned.
     """
 
-    @wraps(handler)
-    async def offloaded(context: ToolContext, arguments: JsonObject) -> JsonObject:
-        result = await run_tool_worker(handler, context, arguments)
-        if inspect.isawaitable(result):
-            return await result
-        return result
-
-    return offloaded
+    return _OffloadedToolHandler(handler)

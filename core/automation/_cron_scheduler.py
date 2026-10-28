@@ -250,6 +250,7 @@ class CronScheduler:
         # Nothing due through this instant is owed until the calendar changes:
         # catch-up windows only close as time passes.
         settled: datetime | None = None
+        failed_admissions = 0
         while True:
             current = self._owner._jobs.get(job.id)
             if current is None or current.status != "active" or current.schedule_type != "event":
@@ -265,7 +266,7 @@ class CronScheduler:
                 )
             )
             if owed is not None:
-                await self._owner._execution._trigger_job_run(
+                outcome = await self._owner._execution._trigger_job_run(
                     current,
                     event_due=owed,
                 )
@@ -274,6 +275,11 @@ class CronScheduler:
                 settled = None
                 if job.id in self._owner._pending_restarts:
                     return
+                if outcome.retry_admission:
+                    failed_admissions += 1
+                    await _timing._sleep(_timing._once_retry_delay(failed_admissions))
+                else:
+                    failed_admissions = 0
                 continue
             settled = now
             upcoming = (

@@ -27,7 +27,7 @@ from core.projects import (
     ResolutionProjectNotFoundError,
     format_agent_address,
 )
-from core.runs import RunCancelledError, RunKind
+from core.runs import RunCancelledError, RunKind, WaitingWorkLimitError
 from core.sessions import AGENT_DEFAULT_PROJECT, SessionNotFoundError
 from core.utils.logging import get_logger
 from core.utils.workers import settle_before_cancelling
@@ -44,6 +44,7 @@ class CronRunOutcome:
 
     succeeded: bool
     admitted: bool
+    retry_admission: bool = False
 
 
 class CronExecution:
@@ -80,6 +81,7 @@ class CronExecution:
         admitted = False
         queue: CronInbox[Any] | None = self._owner._inbox_of(job) if inbox else None
         batch: InboxBatch[Any] | None = None
+        event_claim: tuple[CronJob, CronJob] | None = None
         self._owner._executing_jobs.add(job.id)
         try:
             async with self._owner._run_slots:
@@ -93,10 +95,12 @@ class CronExecution:
                     return CronRunOutcome(succeeded=False, admitted=admitted)
 
                 if event_due is not None:
+                    before_claim = self._owner._clone_job(latest)
                     prepared = await self._owner._scheduler._prepare_event_fire(latest)
                     if prepared is None:
                         return CronRunOutcome(succeeded=False, admitted=admitted)
                     latest, event_due = prepared
+                    event_claim = before_claim, self._owner._clone_job(latest)
                     owed = _schedule.OwedFire(due_at=event_due.due_at)
                 else:
                     latest.last_attempt_at = _timing._utc_now_iso()
@@ -245,6 +249,16 @@ class CronExecution:
                         # or a shutdown window must not burn a recurring job's
                         # five-strike execution-failure budget; once jobs keep their
                         # own fire-claim retry via the False return either way.
+                        retry_admission = event_claim is not None and isinstance(
+                            error, WaitingWorkLimitError
+                        )
+                        if retry_admission:
+                            assert event_claim is not None
+                            # The Queue refused the work: no Run can have acted on
+                            # this occurrence. Keep it owed within its existing window.
+                            await settle_before_cancelling(
+                                self._owner._scheduler._withdraw_event_fire(*event_claim)
+                            )
                         await self._record_trigger_failure(job.id, error)
                         _LOGGER.error(
                             "Cron job trigger failed before admission for job=%s: %s",
@@ -252,7 +266,9 @@ class CronExecution:
                             error,
                             exc_info=(type(error), error, error.__traceback__),
                         )
-                        return CronRunOutcome(succeeded=False, admitted=admitted)
+                        return CronRunOutcome(
+                            succeeded=False, admitted=admitted, retry_admission=retry_admission
+                        )
                     baseline = self._failure_baseline(job.id)
                     await self._record_run_failure(job.id, error)
                     await self._finalize_exhausted_job(job.id)

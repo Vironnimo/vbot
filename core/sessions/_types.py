@@ -261,6 +261,7 @@ class AccessorInputRecord:
     live: bool
     run_status: str | None = None
     attachment_ids: tuple[str, ...] = ()
+    fallback_notes: tuple[ChatMessage, ...] = ()
 
 
 @dataclass(frozen=True)

@@ -30,6 +30,7 @@ from core.providers.errors import (
     ProviderAuthError,
     ProviderRateLimitError,
     ProviderStreamingUnsupportedError,
+    ProviderTimeoutError,
     ProviderUsageLimitError,
 )
 from core.providers.reasoning import merge_reasoning_meta, split_inline_reasoning
@@ -135,8 +136,9 @@ def decide_stream_recovery(
 
     A normalized finish delta is the provider's logical completion boundary. A
     later transport error therefore cannot turn the completed response back into
-    a partial one; the accumulated response is accepted as complete. Before
-    answer text a drop can otherwise be replayed cleanly: a
+    a partial one; the accumulated response is accepted as complete. Other
+    Provider failures still follow their normal recovery policy after a finish.
+    Before answer text a drop can otherwise be replayed cleanly: a
     streaming-unsupported error falls back to a non-streaming request, a
     restartable transient (transport/timeout drop or chunk stall) replays the
     whole stream while restarts remain and interrupts when that budget is
@@ -152,7 +154,13 @@ def decide_stream_recovery(
     same-model restarts: quota pressure rarely clears within seconds. On the
     last route the Chat budget and Retry-After backoff apply.
     """
-    if finish_received:
+    if finish_received and isinstance(
+        error,
+        NetworkError
+        | ProviderTimeoutError
+        | StreamingChunkTimeoutError
+        | StreamingProgressTimeoutError,
+    ):
         return StreamRecoveryAction.ACCEPT_COMPLETE
     if not has_partial_content and not tools_started:
         if _is_streaming_fallback_error(error):

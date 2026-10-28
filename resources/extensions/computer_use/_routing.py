@@ -32,6 +32,7 @@ class ComputerRouting:
         self.host = host
         self.computers: ComputerRegistry | None = getattr(host, "computers", None)
         self._remotes: dict[str, _Remote] = {}
+        self._closing: set[asyncio.Task[None]] = set()
         self._lock = asyncio.Lock()
         self._unsubscribe = self.computers.subscribe(self._event) if self.computers else None
 
@@ -104,6 +105,14 @@ class ComputerRouting:
 
             target.on_control_changed = changed
             await service.start(self.host)
+            try:
+                # Registration can be removed while native readiness waits.
+                self.computers.get(computer.id)
+            except ComputerError:
+                target.close()
+                await service.close()
+                await target.drain()
+                raise
             self._remotes[computer.id] = _Remote(computer.instance_id, service, target)
             return service
 
@@ -112,7 +121,14 @@ class ComputerRouting:
         if remote is None:
             return
         service = remote.service
-        if event == "disconnected":
+        if event == "removed":
+            del self._remotes[computer_id]
+            # Fence old queued controls before a later registration can appear.
+            remote.target.close()
+            task = asyncio.create_task(self._retire(remote), name=f"computer-close:{computer_id}")
+            self._closing.add(task)
+            task.add_done_callback(self._closing.discard)
+        elif event == "disconnected":
             remote.target.set_hotkey_available(False)
             service.stop(source="connection_lost")
             service.sessions.clear()
@@ -127,6 +143,13 @@ class ComputerRouting:
                 service._unready = None
         elif event == "stopped" and data.get("capability") == "computer_use":
             service.stop(data.get("control_id"), source="double_escape")
+
+    async def _retire(self, remote: _Remote) -> None:
+        try:
+            await remote.service.close()
+            await remote.target.drain()
+        except Exception:
+            self.local.api.logger.exception("Computer Use removed-desktop cleanup failed")
 
     def pending_inputs(self) -> list[dict[str, Any]]:
         return [
@@ -164,3 +187,5 @@ class ComputerRouting:
             await remote.service.close()
             await remote.target.drain()
         self._remotes.clear()
+        if self._closing:
+            await asyncio.gather(*tuple(self._closing))

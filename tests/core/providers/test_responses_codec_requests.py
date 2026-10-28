@@ -275,7 +275,7 @@ def _image_input(data: str) -> dict[str, str]:
                     "content": "A reconstructed copy that must not be used.",
                     "phase": "final_answer",
                     "reasoning_meta": {"response_output": _COMPLETE_OUTPUT},
-                    "tool_calls": [{"id": "duplicate", "name": "search", "arguments": {}}],
+                    "tool_calls": [{"id": "call_1", "name": "search", "arguments": {"q": "docs"}}],
                 },
                 _SEARCH_RESULT,
             ],
@@ -360,6 +360,13 @@ def _image_input(data: str) -> dict[str, str]:
                 ("empty-arguments-without-rejection", "", {}, "{}"),
                 ("null-arguments-without-rejection", None, {}, "{}"),
                 ("bare-value-repaired-at-intake", '{"q": *.py}', {"q": "*.py"}, '{"q":"*.py"}'),
+                (
+                    "snapshot-cannot-change-executed-arguments",
+                    '{"q":"corrected"}',
+                    {"q": "original"},
+                    '{"q":"original"}',
+                ),
+                ("snapshot-cannot-change-json-value-type", '{"q":1}', {"q": True}, '{"q":true}'),
                 (
                     "valid-raw-argument-format-preserved",
                     ' { "q" : "docs" }\n',

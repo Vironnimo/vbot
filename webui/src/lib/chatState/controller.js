@@ -56,7 +56,10 @@ import { truncateSessionForEdit } from './history.js';
 import { startRun } from './runEvents.js';
 import { takeSessionInvalidations } from '../sessionInvalidation.js';
 import { resolveMoveActionFromResponse } from './addressing.js';
-import { createChatSubmissions } from './submissions.js';
+import {
+  createChatSubmissions,
+  isSlashCommandCandidate,
+} from './submissions.js';
 
 function defaultChatOperations() {
   return {
@@ -867,6 +870,7 @@ export function createChatController({
 // Whether `content` starts with a command of the loaded catalog, the way
 // the server recognizes one: its only text begins with `/<name>`.
 function namesKnownCommand(content, availableSkills) {
+  if (!isSlashCommandCandidate(content)) return false;
   const texts =
     typeof content === 'string'
       ? [content]

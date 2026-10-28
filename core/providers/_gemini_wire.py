@@ -14,6 +14,7 @@ from core.providers.adapter import (
     TERMINAL_OUTCOME_STOP,
     TERMINAL_OUTCOME_TOOL_CALLS,
     TERMINAL_OUTCOME_UNKNOWN,
+    TOOL_CALL_ARGUMENT_SEQUENCE_INDEX_FIELD,
     TerminalOutcome,
     neutralize_system_reminder_tags,
     normalize_tool_call_candidates,
@@ -110,9 +111,25 @@ def _to_gemini_content(
     if role == "assistant":
         replay = message.get("reasoning_meta")
         if isinstance(replay, Mapping) and isinstance(replay.get("gemini_parts"), list):
-            replay_parts = [
-                _replay_part(part) for part in replay["gemini_parts"] if isinstance(part, Mapping)
-            ]
+            # On a broken stream Chat retains the prefix of Calls already
+            # dispatched. Native snapshots can also contain the next, unstarted
+            # Call; replaying it would require a Result that does not exist.
+            # Keep retained signed parts verbatim, including their positions.
+            remaining_calls = sum(
+                1
+                for call in message.get("tool_calls") or []
+                if isinstance(call, Mapping)
+                and call.get(TOOL_CALL_ARGUMENT_SEQUENCE_INDEX_FIELD, 0) == 0
+            )
+            replay_parts = []
+            for part in replay["gemini_parts"]:
+                if not isinstance(part, Mapping):
+                    continue
+                if isinstance(part.get("functionCall"), Mapping):
+                    if remaining_calls == 0:
+                        continue
+                    remaining_calls -= 1
+                replay_parts.append(_replay_part(part))
             if replay_parts:
                 return {"role": "model", "parts": replay_parts}, 0
         parts: list[dict[str, Any]] = []

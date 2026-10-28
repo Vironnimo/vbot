@@ -31,6 +31,7 @@ from core.database.marker import begin_maintenance, read_maintenance
 from core.database.recovery import incident_path
 from core.secrets import CREDENTIALS, KeyFileProtection, SecretStore
 from core.sessions import ChatSessionManager, SessionAddress
+from core.utils.server_control import server_control_claim
 from tests.cli.cli_test_support import FakeRpc, RunCli
 from tests.core.database.database_test_support import notes_spec
 
@@ -537,8 +538,9 @@ def test_restore_refuses_an_unknown_snapshot_before_stopping_the_server(
 
 
 @pytest.mark.parametrize("stop_succeeds", [True, False])
+@pytest.mark.parametrize("other_server", [False, True])
 def test_restore_checks_process_shutdown_even_after_listener_closed(
-    tmp_path: Path, monkeypatch, stop_succeeds: bool
+    tmp_path: Path, monkeypatch, stop_succeeds: bool, other_server: bool
 ) -> None:
     instance = _instance(tmp_path)
     write_bootstrap_marker(tmp_path)
@@ -550,6 +552,9 @@ def test_restore_checks_process_shutdown_even_after_listener_closed(
 
     def restore(*_args, check_only: bool = False, **_kwargs):
         calls.append("check" if check_only else "restore")
+        if not check_only:
+            with pytest.raises(RuntimeError), server_control_claim(tmp_path, 8422):
+                pytest.fail("a server must not start between stop and restore")
         return SnapshotRestore("snapshot")
 
     _classified(monkeypatch, "absent")
@@ -561,10 +566,14 @@ def test_restore_checks_process_shutdown_even_after_listener_closed(
         lambda *_args: pytest.fail("an already stopped target must remain stopped"),
     )
 
-    result = data_store_management.data_store_snapshot_restore(instance, "snapshot", True)
+    with ExitStack() as stack:
+        if other_server:
+            stack.enter_context(server_control_claim(tmp_path, 8421))
+        result = data_store_management.data_store_snapshot_restore(instance, "snapshot", True)
 
-    assert result.ok is stop_succeeds
-    assert calls == (["check", "stop", "restore"] if stop_succeeds else ["check", "stop"])
+    changes = stop_succeeds and not other_server
+    assert result.ok is changes
+    assert calls == (["check", "stop", "restore"] if changes else ["check", "stop"])
 
 
 def _registered_extension(tmp_path: Path) -> Path:
@@ -677,19 +686,29 @@ def _core_database(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("prepare", "name", "live_ports", "reason"),
+    ("prepare", "name", "live_ports", "late_server", "reason"),
     [
         pytest.param(
             _registered_extension,
             _EXTENSION,
             (8421,),
+            False,
             "a vBot server is running on the data directory (port 8421)",
             id="server-running-on-the-data-directory",
+        ),
+        pytest.param(
+            _registered_extension,
+            _EXTENSION,
+            (),
+            True,
+            "A vBot server still uses this data directory (port 8421)",
+            id="server-started-after-initial-check",
         ),
         pytest.param(
             _core_database,
             "sessions",
             (),
+            False,
             "sessions is a core vBot database and cannot be unregistered",
             id="core-database",
         ),
@@ -701,6 +720,7 @@ def test_local_unregister_refuses_and_keeps_the_registration(
     prepare: Callable[[Path], object],
     name: str,
     live_ports: tuple[int, ...],
+    late_server: bool,
     reason: str,
 ) -> None:
     instance = _instance(tmp_path)
@@ -708,7 +728,10 @@ def test_local_unregister_refuses_and_keeps_the_registration(
     _stopped_server(monkeypatch, instance)
     monkeypatch.setattr(data_store_management, "live_server_ports", lambda _data_dir: live_ports)
 
-    result = data_store_management.data_store_unregister(instance, name, True)
+    with ExitStack() as stack:
+        if late_server:
+            stack.enter_context(server_control_claim(tmp_path, 8421))
+        result = data_store_management.data_store_unregister(instance, name, True)
 
     assert not result.ok
     assert reason in result.message
@@ -1101,6 +1124,14 @@ def test_secrets_set_and_unset_go_through_the_server_or_write_locally_while_none
     assert SecretStore(tmp_path).entry(CREDENTIALS, "GH_TOKEN") == "ghp-x"
 
     monkeypatch.setattr(data_store_management, "live_server_ports", lambda _data_dir: ())
+    # A start between the initial check and local mutation is also refused.
+    with server_control_claim(tmp_path, 8421):
+        late_set = data_store_management.data_store_secrets_set(instance, "GH_TOKEN", "ghp-y")
+        late_unset = data_store_management.data_store_secrets_unset(instance, "GH_TOKEN")
+    assert not late_set.ok and "port 8421" in late_set.message
+    assert not late_unset.ok and "port 8421" in late_unset.message
+    assert SecretStore(tmp_path).entry(CREDENTIALS, "GH_TOKEN") == "ghp-x"
+
     removed = data_store_management.data_store_secrets_unset(instance, "GH_TOKEN")
     assert json.loads(removed.message) == {"name": "GH_TOKEN", "removed": True, "local": True}
     assert SecretStore(tmp_path).entry_names(CREDENTIALS) == ()

@@ -323,10 +323,14 @@ async def test_streaming_unsupported_after_output_continues_the_partial_without_
 
 
 @pytest.mark.asyncio
-async def test_generic_provider_error_fails_without_a_plain_request(tmp_path: Path) -> None:
+@pytest.mark.parametrize("finished", [False, True], ids=["before-output", "after-finish"])
+async def test_generic_provider_error_fails_without_a_plain_request(
+    tmp_path: Path, finished: bool
+) -> None:
+    failure = ProviderError("provider failed", retryable=False)
     adapter = StubAdapter(
         [{"content": "Should not use", "tool_calls": None}],
-        stream_responses=[ProviderError("provider failed", retryable=False)],
+        stream_responses=[[*answer("Visible answer"), failure] if finished else failure],
     )
     runtime = stream_runtime(tmp_path, adapter)
 
@@ -335,8 +339,16 @@ async def test_generic_provider_error_fails_without_a_plain_request(tmp_path: Pa
 
     messages = history(runtime)
     assert last_run(runtime).status == RunStatus.FAILED
-    assert persisted_roles(messages) == ["user", "error"]
-    assert messages[1].error_kind == "provider_fatal"
+    assert persisted_roles(messages) == (
+        ["user", "assistant", "error"] if finished else ["user", "error"]
+    )
+    assert (
+        next(message for message in messages if message.role == "error").error_kind
+        == "provider_fatal"
+    )
+    if finished:
+        assert messages[1].content == "Visible answer"
+        assert messages[1].interrupted
     assert (len(adapter.stream_requests), len(adapter.requests)) == (1, 0)
 
 

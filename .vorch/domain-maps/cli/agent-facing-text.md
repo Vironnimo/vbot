@@ -6,6 +6,7 @@ Bundled `vbot-docs` Skill (`resources/skills/vbot-docs/`), the Agents' guide to 
 
 | Text | Reason |
 |---|---|
+| Offline data refusal: `A vBot server still uses this data directory (port ...); stop it before changing the data` | The selected port can already be stopped while another server still uses the same files; the refusal identifies the remaining claim and prevents a destructive retry against live data. |
 | `vbot-docs` task row `Automations: scheduled Runs, change checks and Webhooks` | Makes the reference discoverable when the task is an external event rather than a timed schedule. |
 | `references/cron.md`: `For new Sessions of an Identity Agent, --working-project ...` through `Project ids come from vbot project list.` | Distinguishes a fixed Working Project or explicit Workspace from the one-time capture of the Agent default, and prevents conflicting Project selection for pinned Sessions or Project Agents. |
 | `references/cron.md`: `--model ... and --thinking-effort ... override only this automation's Runs ...` through `changing one leaves the other unchanged.` | Teaches Run scope, supported effort values, inheritance and per-field clearing without making an Agent alter the user's Session settings or resend unrelated overrides. |

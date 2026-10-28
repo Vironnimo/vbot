@@ -37,6 +37,7 @@ from core.json_documents import (
 from core.storage.layout import DataDirectoryLayout
 from core.utils.atomic import atomic_write_text, write_new_bytes
 from core.utils.errors import VBotError
+from core.utils.file_status import is_file_strict
 from core.utils.ids import is_safe_id, new_id
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
@@ -340,8 +341,13 @@ class AttachmentStore:
             )
 
         blob_path = self._blob_path(normalized_id, metadata["media_type"])
-        if require_blob and not blob_path.is_file():
-            raise AttachmentNotFoundError(f"Attachment blob not found: {normalized_id}")
+        if require_blob:
+            try:
+                blob_exists = is_file_strict(blob_path)
+            except OSError as exc:
+                raise AttachmentError(f"Cannot check attachment blob {blob_path}: {exc}") from exc
+            if not blob_exists:
+                raise AttachmentNotFoundError(f"Attachment blob not found: {normalized_id}")
 
         return AttachmentRecord(
             id=normalized_id,

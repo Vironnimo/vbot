@@ -18,7 +18,7 @@ import asyncio
 import copy
 import importlib
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from http import HTTPStatus
@@ -73,6 +73,7 @@ from ._management import (
     JOBS_RESOURCE,
     ConnectionManagement,
     ManagementJobs,
+    _credential_names,
     register_management,
 )
 from ._recovery import TaskRecovery
@@ -737,7 +738,13 @@ class MCPService:
         result, artifacts = await self.content.present(payload, context, runner.id, source=source)
         return tool_success(result, artifacts=artifacts)
 
-    async def _save(self, value: dict[str, Any], *, replace: bool = True) -> dict[str, Any]:
+    async def _save(
+        self,
+        value: dict[str, Any],
+        *,
+        replace: bool = True,
+        credentials: dict[str, str | None] | None = None,
+    ) -> dict[str, Any]:
         config = validate_connection(value)
         identifier = config["id"]
         # The connection's lock spans the replacement of its runner; the saved
@@ -748,7 +755,23 @@ class MCPService:
                 previous = self.connections.get(identifier)
                 if previous is not None and not replace:
                     raise ValueError(f"MCP connection {identifier} already exists")
-                await self._store_connections({**self.connections, identifier: config})
+                # Import credentials belong to the admitted connection save.
+                # A competing import that loses this id must leave them alone.
+                if credentials:
+                    self._check_import_credentials(credentials)
+                written: dict[str, str] = {}
+                saving = False
+                try:
+                    for name, secret in (credentials or {}).items():
+                        if secret:
+                            written[name] = secret
+                            self._host().set_credential(name, secret)
+                    saving = True
+                    await self._store_connections({**self.connections, identifier: config})
+                except BaseException:
+                    if written:
+                        await self._rollback_import_credentials(written, check_saved=saving)
+                    raise
             runner = self.runners.get(identifier)
             if (
                 runner is not None
@@ -770,6 +793,48 @@ class MCPService:
             await self.recovery.resume(self.runners)
         self.api.logger.info("MCP connection configured (connection=%s)", identifier)
         return self.management._status(identifier)
+
+    def _check_import_credentials(self, names: Iterable[str]) -> None:
+        """Refuse generated names that would share another connection's credential."""
+        used = {name for config in self.connections.values() for name in _credential_names(config)}
+        host = self._host()
+        for name in names:
+            if name in used or host.resolve_credential(name):
+                raise ValueError(
+                    f"MCP import credential {name} is already in use; "
+                    "choose a different connection id"
+                )
+            used.add(name)
+
+    async def _rollback_import_credentials(
+        self, written: dict[str, str], *, check_saved: bool
+    ) -> None:
+        """Clear only newly written, unreferenced values after a failed import save."""
+        records = self.connections
+        if check_saved:
+            # A worker may have committed before raising or propagating cancellation.
+            # The durable references decide which credentials must be retained.
+            assert self.store is not None
+            try:
+                records = await run_tool_worker(self.store.load)
+            except Exception as error:
+                self.api.logger.warning(
+                    "MCP import credentials kept: saved connections could not be checked "
+                    "(error_type=%s)",
+                    type(error).__name__,
+                )
+                return
+        used = {name for config in records.values() for name in _credential_names(config)}
+        for name, secret in written.items():
+            try:
+                host = self._host()
+                if name not in used and host.resolve_credential(name) == secret:
+                    host.set_credential(name, "")
+            except Exception as error:
+                self.api.logger.warning(
+                    "MCP unused import credential could not be cleared (error_type=%s)",
+                    type(error).__name__,
+                )
 
     async def _mutate(self, operation: str, original: dict[str, Any]) -> dict[str, Any]:
         identifier = original["id"]

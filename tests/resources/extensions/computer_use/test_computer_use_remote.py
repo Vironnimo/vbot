@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from contextlib import asynccontextmanager
 from typing import Any
 
 import pytest
@@ -156,7 +157,7 @@ async def test_remote_calls_keep_policy_images_and_input_on_the_selected_compute
 
 
 async def test_reconnect_stops_the_old_run_and_invalidates_its_screen_references(
-    computer: Harness,
+    computer: Harness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     link = NativeLink(computer.computers)
     await link.connect()
@@ -164,6 +165,34 @@ async def test_reconnect_stops_the_old_run_and_invalidates_its_screen_references
         context = remote_context(computer)
         assert (await computer.call("computer", {"action": "screenshot"}, context))["ok"]
         screenshot_id = context.result_media[-1]["filename"].removesuffix(".png")
+        assert computer.service._routing is not None
+        service = computer.service._routing._remotes["pc_laptop"].service
+        queued = asyncio.Event()
+        active_call = service._active_call
+
+        @asynccontextmanager
+        async def observe_queue(context, desktop):
+            queued.set()
+            async with active_call(context, desktop):
+                yield
+
+        monkeypatch.setattr(service, "_active_call", observe_queue)
+        await service._lock.acquire()
+        pending = asyncio.create_task(
+            computer.call(
+                "computer",
+                {"action": "type", "text": "must not survive reconnect"},
+                remote_context(computer, run_id="queued_run"),
+            )
+        )
+        try:
+            await queued.wait()
+            await link.disconnect()
+        finally:
+            # Hold admission until the same native instance has reconnected.
+            await link.connect()
+            service._lock.release()
+        assert (await pending)["error"]["code"] == "computer_use_interrupted"
         await link.disconnect()
         offline = await computer.call(
             "computer", {"action": "type", "text": "no"}, remote_context(computer)
@@ -185,5 +214,12 @@ async def test_reconnect_stops_the_old_run_and_invalidates_its_screen_references
             "computer", {"action": "screenshot"}, remote_context(computer, run_id="next_run")
         )
         assert fresh["ok"]
+        await link.disconnect()
+        await computer.computers.forget("pc_laptop")
+        routing = computer.service._routing
+        await asyncio.gather(*tuple(routing._closing))
+        assert "pc_laptop" not in routing._remotes
+        assert service._closed
+        assert service._executor is not None and service._executor._shutdown
     finally:
         await link.close(computer)

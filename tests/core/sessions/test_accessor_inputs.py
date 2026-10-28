@@ -163,10 +163,8 @@ async def test_receipts_follow_generation_moves_and_never_transfer_to_forks_or_r
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("user_written", [False, True])
-async def test_restart_preserves_accepted_carrier_before_its_first_user_append(
-    manager, user_written
-):
+@pytest.mark.parametrize("written", ["none", "notes", "user"])
+async def test_restart_preserves_accepted_carrier_before_its_first_user_append(manager, written):
     session = manager.create("coder")
     original = ChatMessage.user("before edit", input_origin="speech_transcription")
     await manager.accept_accessor_input_async(
@@ -195,7 +193,9 @@ async def test_restart_preserves_accepted_carrier_before_its_first_user_append(
         "opaque_execution_format": 43
     }
     await manager.start_run(_run(session.address, "interrupted", "input"))
-    if user_written:
+    if written == "notes":
+        await session.for_run("interrupted").append_many_async([note])
+    elif written == "user":
         # Normal preparation can choose a new canonical Message identity.
         carrier = ChatMessage.user(carrier.content, input_origin=carrier.input_origin)
         await session.for_run("interrupted").append_many_async([note, carrier])

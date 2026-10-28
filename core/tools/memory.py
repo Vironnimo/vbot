@@ -26,8 +26,8 @@ from core.tools.tools import (
     ToolDisplay,
     ToolDisplayPart,
     ToolRegistry,
+    offload_tool_handler,
     result_count_fact_builder,
-    run_tool_worker,
     tool_failure,
     tool_success,
 )
@@ -169,12 +169,10 @@ def make_memory_handler(memory_service: MemoryService, projects: ProjectStore | 
 
     tracker = _MemoryThrashTracker()
 
-    async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
-        return await run_tool_worker(
-            memory_handler, context, arguments, memory_service, tracker, projects
-        )
+    def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        return memory_handler(context, arguments, memory_service, tracker, projects)
 
-    return handler
+    return offload_tool_handler(handler)
 
 
 def memory_handler(

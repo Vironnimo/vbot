@@ -7,9 +7,11 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
+from core.channels import _conversation_replies as replies_module
 from core.channels._observations import ChannelObservationInbox
 from core.sessions import ChatSessionManager, SessionAddress
 
@@ -22,9 +24,56 @@ from .engine_test_support import (
     make_conversation,
     make_engine,
     make_new_only_dispatcher,
+    settle_replies,
 )
 
 _ADDRESS = SessionAddress(project_id=None, agent_id="assistant", session_id=SESSION_ID)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("media", [False, True], ids=["text", "media"])
+async def test_stopping_during_context_admission_keeps_the_addressed_turn_owed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, media: bool
+) -> None:
+    engine, _, trigger, first = make_engine(tmp_path)
+    entered, release = asyncio.Event(), asyncio.Event()
+    record = engine._observation_inbox.record
+
+    async def held_record(*args: Any, **kwargs: Any) -> Any:
+        entered.set()
+        await release.wait()
+        return await record(*args, **kwargs)
+
+    monkeypatch.setattr(engine._observation_inbox, "record", held_record)
+    conversation = make_conversation(kind="group", mentioned_bot=True)
+    context = [(make_conversation(kind="group"), "earlier context")]
+    admission = asyncio.create_task(
+        engine.handle_inbound_media(
+            conversation, (SimpleNamespace(caption="please answer"),), observed_context=context
+        )
+        if media
+        else engine.handle_inbound_text(conversation, "please answer", observed_context=context)
+    )
+    await entered.wait()
+    stopping = asyncio.create_task(engine.stop())
+    # The pending reply is already recorded, but stop must still drain this
+    # context admission before ending its engine.
+    while not engine._stopped:
+        await asyncio.sleep(0)
+    release.set()
+    assert await admission
+    await stopping
+    trigger.assert_not_awaited()
+    assert first.sent == []
+
+    successor, _, _, transport = make_engine(tmp_path)
+    try:
+        successor.start()
+        await settle_replies(successor)
+        assert transport.sent_texts == [replies_module._UNANSWERED_MESSAGE_REPLY]
+        assert channel_state(tmp_path).take_pending_replies(engine.config.id, "later") == ([], 0)
+    finally:
+        await successor.stop()
 
 
 @asynccontextmanager

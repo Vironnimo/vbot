@@ -57,6 +57,8 @@ class RemoteDesktopTarget:
             timeout = max(timeout, len(str(params.get("text", ""))) * 0.06 + 15)
 
         async def perform() -> dict[str, Any]:
+            if self._closed:
+                raise TargetError("This desktop connection has ended.", "computer_offline")
             try:
                 return await self.computers.call(
                     self.computer_id,
@@ -175,7 +177,8 @@ class RemoteDesktopTarget:
         self._call("type", text=text)
 
     def release_all(self) -> None:
-        self._call("release")
+        if not self._closed:
+            self._call("release")
 
     def set_stop_event(self, event: threading.Event) -> None:
         self._stop = event

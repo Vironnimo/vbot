@@ -180,7 +180,7 @@ class CronNotifications:
     ) -> bool:
         """Record ``item``'s new state; ``persist=False`` keeps the change in memory only."""
         job = self._owner._jobs.get(job_id)
-        if job is None:
+        if job is None or not any(old.id == item.id for old in job.notifications):
             return False
         # Only an Agent rename changes a message's Agent; one it made meanwhile stays.
         job.notifications = tuple(
@@ -238,7 +238,13 @@ class CronNotifications:
         if drops:
             text = f"{dropped_messages_line(drops)}\n\n{text}"
         try:
-            await chats.send(item.channel_id, text, item.platform_target, thread_id=item.thread_id)
+            await chats.send(
+                item.channel_id,
+                text,
+                item.platform_target,
+                thread_id=item.thread_id,
+                expected_agent_id=item.agent_id,
+            )
         except ChannelError as error:
             if not error.possibly_delivered:
                 await self._defer(job_id, item, error)

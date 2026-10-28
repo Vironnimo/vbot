@@ -93,6 +93,10 @@ class Sessions:
     def clear(self) -> None:
         self._states.clear()
 
+    def current(self, key: SessionKey, state: SessionState) -> bool:
+        """Whether a prepared call still holds this Session's live state."""
+        return self._states.get(key) is state
+
 
 @dataclass(frozen=True)
 class Resolution:

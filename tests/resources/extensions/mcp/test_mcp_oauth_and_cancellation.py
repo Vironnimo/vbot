@@ -891,11 +891,13 @@ async def test_a_lost_connection_settles_its_calls_and_reconnects(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("outcome", ["close", "slow_close", "lost", "drain"])
+@pytest.mark.parametrize("outcome", ["close", "slow_close", "late_call", "lost", "drain"])
 async def test_full_queue_producers_settle_with_their_connection(host, monkeypatch, outcome):
     # One call at a time, so the others wait in the queue or for room in it.
     monkeypatch.setattr(mcp_client, "CONNECTION_CONCURRENCY", 1)
     monkeypatch.setattr(mcp_client, "CONNECTION_QUEUE_LIMIT", 2)
+    if outcome == "late_call":
+        monkeypatch.setattr(mcp_client, "CALL_STOP_SECONDS", 0)
     runner = ConnectionRunner(
         validate_connection({"id": "example", "transport": "stdio", "command": "unused"}),
         host,
@@ -937,7 +939,12 @@ async def test_full_queue_producers_settle_with_their_connection(host, monkeypat
     async def perform(operation, arguments, context):
         performed.append(arguments["index"])
         entered.set()
-        await release.wait()
+        while not release.is_set():
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                if outcome != "late_call":
+                    raise
         return arguments
 
     monkeypatch.setattr(mcp_client, "Client", Client)
@@ -961,7 +968,8 @@ async def test_full_queue_producers_settle_with_their_connection(host, monkeypat
         await asyncio.wait_for(asyncio.gather(*(event.wait() for event in started)), 1)
         assert runner._queue.full()
         assert all(not task.done() for task in calls)
-        if outcome == "close":
+        active = tuple(runner._calls)
+        if outcome in {"close", "late_call"}:
             await runner.close()
         elif outcome == "slow_close":
             # Close keeps waiting while SDK teardown is stuck in the Client exit;
@@ -991,7 +999,26 @@ async def test_full_queue_producers_settle_with_their_connection(host, monkeypat
             assert all(isinstance(result, InvocationNotSentError) for result in results[1:])
             assert performed == [0]
         assert runner._queue.empty()
+        if outcome == "late_call":
+            # The replacement uses the same input registry and connection id.
+            # An old call may finish after the bounded close has returned.
+            input_added = asyncio.Event()
+            monkeypatch.setattr(runner.inputs, "_on_change", lambda _: input_added.set())
+            pending = asyncio.create_task(
+                runner.inputs.request("example", "sampling", {"message": "new-runner"})
+            )
+            try:
+                await input_added.wait()
+                release.set()
+                await asyncio.gather(*(call.task for call in active))
+                [request] = runner.inputs.list()
+                runner.inputs.respond(request["id"], {"action": "accept"})
+                assert await pending == {"action": "accept"}
+            finally:
+                pending.cancel()
+                await asyncio.gather(pending, return_exceptions=True)
     finally:
+        release.set()
         cleanup_release.set()
         for task in calls:
             task.cancel()

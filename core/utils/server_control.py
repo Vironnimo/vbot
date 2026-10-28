@@ -18,6 +18,7 @@ import psutil  # type: ignore[import-untyped]
 
 from core.utils.atomic import atomic_write_bytes
 from core.utils.file_lock import acquire_file_lock, release_file_lock
+from core.utils.file_status import is_dir_strict
 
 CONTROL_DIRECTORY_NAME = "runtime"
 CONTROL_TOKEN_HEADER = "X-VBot-Control-Token"
@@ -66,6 +67,41 @@ def _unlock_claim(handle: IO[bytes]) -> None:
 
 
 @contextmanager
+def _server_admission_lock(data_dir: str | Path) -> Iterator[None]:
+    """Serialize new lifetime claims with offline data changes, without waiting."""
+    directory = Path(data_dir).expanduser().resolve() / CONTROL_DIRECTORY_NAME
+    directory.mkdir(parents=True, exist_ok=True)
+    with (directory / "server-admission.lock").open("a+b") as handle:
+        acquire_file_lock(handle.fileno())
+        try:
+            yield
+        finally:
+            _unlock_claim(handle)
+
+
+@contextmanager
+def offline_data_change(data_dir: str | Path) -> Iterator[None]:
+    """Keep every server off this directory while an offline mutation settles.
+
+    The caller stops its intended server first and restarts it after leaving.
+    A live claim on any port or an unavailable claim inventory refuses before
+    yielding. New servers cannot acquire their lifetime claims until this ends.
+    """
+    root = Path(data_dir).expanduser().resolve()
+    if not is_dir_strict(root):
+        raise FileNotFoundError(f"The data directory does not exist: {root}")
+    with _server_admission_lock(root):
+        ports = live_server_ports(root)
+        if ports:
+            raise OSError(
+                "A vBot server still uses this data directory (port "
+                + ", ".join(str(port) for port in ports)
+                + "); stop it before changing the data"
+            )
+        yield
+
+
+@contextmanager
 def server_control_claim(data_dir: str | Path, port: int) -> Iterator[ServerControlRecord | None]:
     """Hold the OS-owned lifetime claim for one data-directory/port authority.
 
@@ -74,13 +110,14 @@ def server_control_claim(data_dir: str | Path, port: int) -> Iterator[ServerCont
     its shutdown. ``None`` when no earlier record was left behind.
     """
     record_path = control_record_path(data_dir, port)
-    record_path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = record_path.with_suffix(".lock")
-    handle = lock_path.open("a+b")
+    handle: IO[bytes] | None = None
     locked = False
     try:
-        acquire_file_lock(handle.fileno())
-        locked = True
+        with _server_admission_lock(data_dir):
+            handle = lock_path.open("a+b")
+            acquire_file_lock(handle.fileno())
+            locked = True
         existing = read_server_control(data_dir, port)
         stale: ServerControlRecord | None = None
         if existing is not None and existing.pid != os.getpid():
@@ -98,12 +135,13 @@ def server_control_claim(data_dir: str | Path, port: int) -> Iterator[ServerCont
         yield stale
     except OSError as exc:
         if not locked:
-            raise RuntimeError("Another server process holds this control authority") from exc
+            raise RuntimeError("Could not reserve server control authority") from exc
         raise
     finally:
-        if locked:
-            _unlock_claim(handle)
-        handle.close()
+        if handle is not None:
+            if locked:
+                _unlock_claim(handle)
+            handle.close()
 
 
 def live_server_ports(data_dir: str | Path) -> tuple[int, ...]:
@@ -296,6 +334,7 @@ __all__ = [
     "is_authorized_control_token",
     "live_server_ports",
     "normalize_stop_initiator",
+    "offline_data_change",
     "read_server_control",
     "remove_server_control",
     "server_control_claim",

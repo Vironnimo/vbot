@@ -178,6 +178,19 @@ def main(argv: list[str] | None = None) -> None:
         # marker; an existing root without that marker is refused at startup.
         initialize_data_directory(config.data_dir)
     with server_control_claim(config.data_dir, server_bind["listen_port"]) as previous:
+        # An offline change may have completed after the preflight reads. Only
+        # configuration loaded under our lifetime claim can govern this server.
+        config = Config(data_dir=config.data_dir)
+        current_bind = resolve_server_bind(config, host=DEFAULT_HOST, explicit_port=args.port)
+        if current_bind["listen_port"] != port_bind["listen_port"]:
+            _refuse_start("the configured port changed during startup; start the server again")
+        try:
+            served = _resolve_access(args, config.data_dir, current_bind["listen_port"])
+            tls = _tls_holder(served.access)
+        except AccessConfigError as exc:
+            _refuse_start(str(exc))
+        access = served.access
+        server_bind = {**current_bind, "listen_host": served.host}
         if served.record is not None:
             try:
                 write_server_access(config.data_dir, served.record)

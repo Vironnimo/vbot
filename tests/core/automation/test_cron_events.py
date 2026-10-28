@@ -23,7 +23,7 @@ from core.automation.cron import (
 )
 from core.calendar import BoundJob, CalendarService, EventJobTargetMissingError
 from core.projects import ResolutionAgentNotFoundError, ResolutionProjectNotFoundError
-from core.runs import RunKind
+from core.runs import RunKind, WaitingWorkLimitError
 from tests.core.automation.cron_test_support import make_service
 
 _ZONE = "Europe/Berlin"
@@ -458,14 +458,16 @@ async def test_saved_coverage_reopens_only_occurrences_with_matching_progress(
 
 
 @pytest.mark.asyncio
-async def test_a_failed_event_claim_leaves_its_occurrences_owed_and_retries_once_saved(
-    services: _Services, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("failure", ["claim", "queue", "queue-until-expired"])
+async def test_an_unadmitted_event_stays_owed_and_retries_only_inside_its_window(
+    services: _Services, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
     event = services.calendar.create_event(**(_DAILY | {"rrule": "FREQ=DAILY;COUNT=2"}))
     job = await _event_job(services, event.id)
     await services.calendar.update_occurrence(f"{event.id}_20300111T0900", start="2030-01-10T09:00")
     write = services.cron._write_jobs
     failed = False
+    admitted: list[str] = []
 
     def fail_first_claim(jobs: list[Any]) -> None:
         nonlocal failed
@@ -474,16 +476,29 @@ async def test_a_failed_event_claim_leaves_its_occurrences_owed_and_retries_once
             raise CronStorageError("temporary write failure")
         write(jobs)
 
+    async def trigger(*_args: Any, **_kwargs: Any) -> Any:
+        nonlocal failed
+        if failure != "claim" and not failed:
+            failed = True
+            raise WaitingWorkLimitError("Queue is full")
+        run_id = f"run-{len(admitted)}"
+        admitted.append(run_id)
+        return SimpleNamespace(id=run_id)
+
     delays: list[float] = []
 
     async def retry_delay(delay: float) -> None:
         delays.append(delay)
-        services.trigger.trigger_run.assert_not_awaited()
+        assert admitted == []
         stored = make_service(tmp_path, tz=_ZONE, calendar=services.calendar)[0].get_job(job.id)
         assert (stored.covered_until, stored.event_progress) == (None, None)
         assert services.cron.can_fire(stored)
+        if failure == "queue-until-expired":
+            services.clock.now = _local("2030-01-10T10:00")
 
-    monkeypatch.setattr(services.cron, "_write_jobs", fail_first_claim)
+    if failure == "claim":
+        monkeypatch.setattr(services.cron, "_write_jobs", fail_first_claim)
+    services.trigger.trigger_run.side_effect = trigger
     monkeypatch.setattr(cron_timing, "_sleep", retry_delay)
     parked = _park_idle_scheduler(monkeypatch)
     services.clock.now = _local("2030-01-10T09:00")
@@ -491,7 +506,8 @@ async def test_a_failed_event_claim_leaves_its_occurrences_owed_and_retries_once
     try:
         await parked.wait()
         assert len(delays) == 1
-        assert services.trigger.trigger_run.await_count == 2
+        assert len(admitted) == (0 if failure == "queue-until-expired" else 2)
+        assert services.trigger.trigger_run.await_count == len(admitted) + (failure != "claim")
         assert services.cron.can_fire(services.cron.get_job(job.id)) is False
     finally:
         await services.cron.aclose()

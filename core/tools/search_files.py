@@ -98,7 +98,7 @@ from core.tools.tools import (
     ToolRegistry,
     display_notice,
     display_text,
-    run_tool_worker,
+    offload_tool_handler,
     tool_failure,
     tool_success,
 )
@@ -876,10 +876,6 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
     return tool_success(data)
 
 
-async def _search_files_async(context: ToolContext, arguments: JsonObject) -> JsonObject:
-    return await run_tool_worker(search_files_handler, context, arguments)
-
-
 def _display_parts(arguments: JsonObject) -> list[ToolDisplayPart]:
     parts = []
     for name in ("pattern", "path", "glob", "args"):
@@ -925,7 +921,7 @@ def register_search_files_tool(registry: ToolRegistry) -> None:
         SEARCH_FILES_TOOL_NAME,
         SEARCH_FILES_TOOL_DESCRIPTION,
         SEARCH_FILES_TOOL_PARAMETERS,
-        _search_files_async,
+        offload_tool_handler(search_files_handler),
         summary="Search file contents or find files by name.",
         family="files",
         result_schema={"type": "object"},

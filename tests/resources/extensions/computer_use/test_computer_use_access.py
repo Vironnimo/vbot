@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from dataclasses import replace
 
 import pytest
 
+from core.tools.availability import ToolAccess
 from tests.resources.extensions.computer_use.computer_use_test_support import (
     CHROME,
     GRAY,
@@ -21,6 +23,43 @@ from tests.resources.extensions.computer_use.computer_use_test_support import (
 )
 
 pytestmark = pytest.mark.asyncio
+
+
+@pytest.mark.parametrize("changed", ["tool", "apps"])
+@pytest.mark.parametrize(
+    ("tool", "arguments"),
+    [
+        ("computer", {"action": "type", "text": "must not arrive"}),
+        ("computer_batch", {"actions": [{"action": "type", "text": "must not arrive"}]}),
+        ("computer_apps", {"action": "open", "app": "Notepad"}),
+    ],
+)
+async def test_waiting_input_rechecks_the_current_tool_and_app_permissions(
+    computer: Harness, monkeypatch: pytest.MonkeyPatch, changed: str, tool: str, arguments: dict
+) -> None:
+    queued = asyncio.Event()
+    active_call = computer.service._active_call
+
+    @asynccontextmanager
+    async def observe_queue(context, desktop):
+        queued.set()
+        async with active_call(context, desktop):
+            yield
+
+    monkeypatch.setattr(computer.service, "_active_call", observe_queue)
+    async with computer.service._lock:
+        pending = asyncio.create_task(computer.call(tool, arguments))
+        await queued.wait()
+        if changed == "tool":
+            computer.agent.tool_access = ToolAccess(mode="none")
+        else:
+            computer.ask_per_app()
+    result = await pending
+    assert result["error"]["code"] == (
+        "tool_not_allowed" if changed == "tool" else "access_required"
+    )
+    assert computer.target.inputs == []
+    assert computer.target.opened == []
 
 
 async def test_by_default_every_app_takes_input_without_approval(computer: Harness) -> None:
@@ -68,7 +107,10 @@ async def test_elevated_windows_refuse_input(computer: Harness, ask: bool) -> No
     assert computer.target.inputs == []
 
 
-async def test_accepted_request_approves_apps_for_the_session(computer: Harness) -> None:
+@pytest.mark.parametrize("revoked", [False, True])
+async def test_accepted_request_approves_apps_for_the_session(
+    computer: Harness, revoked: bool
+) -> None:
     computer.ask_per_app()
     task = asyncio.ensure_future(
         computer.call(
@@ -97,11 +139,18 @@ async def test_accepted_request_approves_apps_for_the_session(computer: Harness)
         },
         "session_id": "session",
     }
+    if revoked:
+        computer.agent.tool_access = ToolAccess(mode="none")
     answer = await computer.api.operations.invoke(
         "respond", {"request_id": request["id"], "response": {"action": "accept"}}
     )
     assert answer == {"id": request["id"], "answered": True}
     result = await task
+    if revoked:
+        assert result["error"]["code"] == "tool_not_allowed"
+        assert computer.service.sessions.use((None, "agent", "session")).grants == []
+        assert computer.api.operations.pending_inputs() == []  # type: ignore[misc]
+        return
     assert model_text(result).startswith(
         "The user approved Notepad, Google Chrome in this Session.\nNext: bring the app to the "
         'front with computer_apps {"action":"open","app":"Notepad"}'

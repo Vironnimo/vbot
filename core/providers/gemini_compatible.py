@@ -29,7 +29,7 @@ from core.providers._wire_learning import (
     execute_learning_from_rejections,
     stream_learning_from_rejections,
 )
-from core.providers.errors import NetworkError, ProviderError
+from core.providers.errors import NetworkError, ProviderError, in_band_error_text
 from core.providers.http import (
     PreparedRequest,
     RequestPlan,
@@ -179,6 +179,26 @@ class GeminiCompatibleAdapter(OpenAICompatibleAdapter):
                             "Gemini provider sent non-object JSON in stream",
                             retryable=False,
                         )
+                    error = raw.get("error")
+                    if isinstance(error, Mapping):
+                        code = error.get("code")
+                        if (
+                            isinstance(code, int)
+                            and not isinstance(code, bool)
+                            and 400 <= code <= 599
+                        ):
+                            # Gemini can report its HTTP-like error code after
+                            # the SSE response has already opened with 200.
+                            # Apply the owning Provider's normal access/retry
+                            # policy just as for an establishment failure.
+                            message = error.get("message")
+                            self._classify_http_status(
+                                code,
+                                detail=in_band_error_text(
+                                    message if isinstance(message, str) else None, error
+                                ),
+                                response_headers=response.headers,
+                            )
                     for delta in decoder.normalize(raw):
                         yield delta
                 if not decoder.finished:

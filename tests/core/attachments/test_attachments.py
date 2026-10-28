@@ -517,13 +517,21 @@ def test_get_refuses_a_corrupt_sidecar(tmp_path: Path, corrupt: Callable[[bytes]
         store.get(record.id)
 
 
-def test_get_rejects_missing_blob_with_existing_sidecar(tmp_path: Path) -> None:
+@pytest.mark.parametrize("unreadable", [False, True], ids=["missing", "unreadable"])
+def test_get_rejects_unavailable_blob_with_existing_sidecar(
+    tmp_path: Path, unreadable: bool, deny_access
+) -> None:
     store = AttachmentStore(tmp_path)
     record = store.store("notes.txt", b"missing blob")
-    Path(record.file_path).unlink()
+    if unreadable:
+        deny_access(Path(record.file_path))
+    else:
+        Path(record.file_path).unlink()
 
-    with pytest.raises(AttachmentNotFoundError):
+    with pytest.raises(AttachmentError) as failed:
         store.get(record.id)
+    assert isinstance(failed.value, AttachmentNotFoundError) != unreadable
+    assert isinstance(failed.value.__cause__, OSError) == unreadable
 
 
 def test_get_accepts_uppercase_attachment_id(tmp_path: Path) -> None:
