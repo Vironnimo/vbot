@@ -388,6 +388,73 @@ describe('cron form payloads and history projection', () => {
     });
   });
 
+  it('keeps an email job on its Channel and filters and lists its mails', () => {
+    const job = {
+      id: 'job-mail',
+      agent_id: 'main',
+      name: 'Answer invoices',
+      prompt: 'Answer the mail',
+      schedule_type: 'email',
+      remaining_runs: null,
+      status: 'active',
+      next_fire_at: null,
+      email: {
+        channel_id: 'mail-main',
+        senders: ['ann@example.com', '@partner.org'],
+        subject: 'Invoice',
+        last_received_at: '2026-07-18T16:00:00+00:00',
+        waiting: 2,
+        dropped: 1,
+      },
+    };
+    const [listed] = visibleCronJobs([job], 'Europe/Berlin');
+    expect(listed.email).toMatchObject({
+      channel_id: 'mail-main',
+      senders: ['ann@example.com', '@partner.org'],
+      subject: 'Invoice',
+      waiting: 2,
+      dropped: 1,
+    });
+    expect(listed.email.last_received_at_display).toContain('18:00');
+    expect(visibleCronJobs([listed])[0].email.senders).toEqual(
+      listed.email.senders,
+    );
+    expect(visibleCronJobs([{ ...job, email: null }])[0].email).toBe(null);
+
+    // The senders are edited as one text; saving sends them as a list.
+    const form = createCronFormValues(job);
+    expect(form.frequency).toBe('email');
+    expect(form.email_senders).toBe('ann@example.com, @partner.org');
+    form.email_senders = 'ann@example.com;  bob@example.com';
+    form.email_subject = '  ';
+    expect(buildUpdateCronPayload(form)).toMatchObject({
+      schedule_type: 'email',
+      watch: null,
+      repeat: null,
+      email: {
+        channel_id: 'mail-main',
+        senders: ['ann@example.com', 'bob@example.com'],
+      },
+    });
+
+    const draft = createCronFormValues();
+    draft.agent_id = 'main';
+    draft.prompt = 'Answer the mail';
+    updateCronSchedule(draft, { frequency: 'email' });
+    draft.email_channel_id = 'mail-main';
+    expect(buildCreateCronPayload(draft)).toEqual({
+      agent_id: 'main',
+      prompt: 'Answer the mail',
+      schedule_type: 'email',
+      notification_policy: 'all',
+      delivery: { kind: 'app' },
+      email: { channel_id: 'mail-main' },
+    });
+    // Leaving the email schedule sends no email trigger.
+    updateCronSchedule(draft, { frequency: 'daily' });
+    expect(buildCreateCronPayload(draft)).not.toHaveProperty('email');
+  });
+
   it('uses the prompt as a readable fallback for legacy payloads without a name', () => {
     const [job] = visibleCronJobs([
       {

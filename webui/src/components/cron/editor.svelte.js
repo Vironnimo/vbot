@@ -11,6 +11,7 @@ import {
   CRON_SCHEDULE_TYPE_INTERVAL,
   CRON_SCHEDULE_TYPE_ONCE,
   CRON_SCHEDULE_TYPE_WEBHOOK,
+  CRON_SCHEDULE_TYPE_EMAIL,
   CRON_WATCH_COMMAND,
   CRON_WATCH_URL,
   applyCronListResponse,
@@ -150,6 +151,10 @@ export function createCronEditor(context) {
 
   let isWebhookSchedule = $derived(
     formValues.schedule_type === CRON_SCHEDULE_TYPE_WEBHOOK,
+  );
+
+  let isEmailSchedule = $derived(
+    formValues.schedule_type === CRON_SCHEDULE_TYPE_EMAIL,
   );
 
   // The readable sentence for the cron expression being edited; empty for
@@ -339,6 +344,12 @@ export function createCronEditor(context) {
         eventTimeText(formValues) !== '';
     } else if (isWebhookSchedule) {
       // Requests start its Runs; it keeps no time.
+      hasScheduleValue = true;
+    } else if (isEmailSchedule) {
+      if (!(formValues.email_channel_id ?? '').trim()) {
+        formErrorMessage = t('cron.errors.emailChannel');
+        return false;
+      }
       hasScheduleValue = true;
     }
     const repeat = formValues.repeat.trim();
@@ -694,6 +705,9 @@ export function createCronEditor(context) {
     },
     get isWebhookSchedule() {
       return isWebhookSchedule;
+    },
+    get isEmailSchedule() {
+      return isEmailSchedule;
     },
     get webhookSecret() {
       return webhookSecret;

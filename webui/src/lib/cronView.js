@@ -10,6 +10,9 @@ export const CRON_SCHEDULE_TYPE_EVENT = 'event';
 // A webhook job runs whenever a request that proves its secret reaches its
 // URL; it keeps no time of its own.
 export const CRON_SCHEDULE_TYPE_WEBHOOK = 'webhook';
+// An email job runs whenever an email Channel of its Agent receives a mail
+// that matches its filters; it keeps no time of its own.
+export const CRON_SCHEDULE_TYPE_EMAIL = 'email';
 
 // The schedule planner offers readable frequencies instead of raw cron syntax.
 // `once` and `interval` map to their own schedule types; hourly, daily, weekly
@@ -28,6 +31,8 @@ export const CRON_FREQUENCY_CUSTOM = 'custom';
 export const CRON_FREQUENCY_EVENT = 'event';
 // Runs on each webhook request, as its own schedule type.
 export const CRON_FREQUENCY_WEBHOOK = 'webhook';
+// Runs on each matching mail, as its own schedule type.
+export const CRON_FREQUENCY_EMAIL = 'email';
 
 // Seconds per interval unit, in display order.
 export const CRON_INTERVAL_UNIT_SECONDS = {
@@ -168,6 +173,10 @@ export function updateCronSchedule(formValues, patch) {
   }
   if (frequency === CRON_FREQUENCY_WEBHOOK) {
     formValues.schedule_type = CRON_SCHEDULE_TYPE_WEBHOOK;
+    return;
+  }
+  if (frequency === CRON_FREQUENCY_EMAIL) {
+    formValues.schedule_type = CRON_SCHEDULE_TYPE_EMAIL;
     return;
   }
 
@@ -396,6 +405,7 @@ export function createCronFormValues(job = null, systemTimezone = 'UTC') {
       notification_policy: 'all',
       ...deliveryFormFields({ kind: CRON_DELIVERY_APP }),
       ...watchFormFields(null),
+      ...emailFormFields(null),
       original_run_at: '',
       system_timezone: systemTimezone,
     };
@@ -411,6 +421,8 @@ export function createCronFormValues(job = null, systemTimezone = 'UTC') {
     schedule.frequency = CRON_FREQUENCY_EVENT;
   } else if (normalized.schedule_type === CRON_SCHEDULE_TYPE_WEBHOOK) {
     schedule.frequency = CRON_FREQUENCY_WEBHOOK;
+  } else if (normalized.schedule_type === CRON_SCHEDULE_TYPE_EMAIL) {
+    schedule.frequency = CRON_FREQUENCY_EMAIL;
   }
 
   return {
@@ -445,6 +457,7 @@ export function createCronFormValues(job = null, systemTimezone = 'UTC') {
     notification_policy: normalized.notification_policy,
     ...deliveryFormFields(normalized.delivery),
     ...watchFormFields(normalized.watch),
+    ...emailFormFields(normalized.email),
     original_run_at: normalized.run_at ?? '',
     system_timezone: systemTimezone,
   };
@@ -484,6 +497,43 @@ function watchFormFields(watch) {
     watch_target: watch?.target ?? '',
     watch_always: watch?.always === true,
   };
+}
+
+// The senders are edited as one text of addresses and @domains.
+function emailFormFields(email) {
+  return {
+    email_channel_id: email?.channel_id ?? '',
+    email_senders: (email?.senders ?? []).join(', '),
+    email_subject: email?.subject ?? '',
+  };
+}
+
+// The addresses and @domains a senders text names, in its order.
+export function emailSenders(text) {
+  return asText(text)
+    .split(/[\s,;]+/)
+    .filter(Boolean);
+}
+
+// The `email` param of `cron.create` and `cron.update` the form describes:
+// the email Channel and the filters it sets; null for another schedule.
+function cronEmailPayload(formValues) {
+  if (
+    normalizeScheduleType(formValues?.schedule_type) !==
+    CRON_SCHEDULE_TYPE_EMAIL
+  ) {
+    return null;
+  }
+  const email = { channel_id: requiredText(formValues?.email_channel_id) };
+  const senders = emailSenders(formValues?.email_senders);
+  if (senders.length) {
+    email.senders = senders;
+  }
+  const subject = optionalText(formValues?.email_subject);
+  if (subject !== null) {
+    email.subject = subject;
+  }
+  return email;
 }
 
 // Only cron and interval schedules repeat at times of their own, so only
@@ -580,6 +630,7 @@ export function cronFormFingerprint(formValues) {
     notification_policy: values.notification_policy ?? 'all',
     delivery: cronDeliveryPayload(values),
     watch: cronWatchPayload(values),
+    email: cronEmailPayload(values),
   });
 }
 
@@ -684,6 +735,10 @@ export function buildCreateCronPayload(formValues) {
   if (watch !== null) {
     payload.watch = watch;
   }
+  const email = cronEmailPayload(formValues);
+  if (email !== null) {
+    payload.email = email;
+  }
 
   return payload;
 }
@@ -715,6 +770,8 @@ export function buildUpdateCronPayload(formValues) {
     return payload;
   } else if (scheduleType === CRON_SCHEDULE_TYPE_ONCE) {
     payload.run_at = resolveOnceRunAtValue(formValues);
+  } else if (scheduleType === CRON_SCHEDULE_TYPE_EMAIL) {
+    payload.email = cronEmailPayload(formValues);
   }
   const repeat = optionalPositiveInteger(formValues?.repeat);
   payload.repeat = repeat;
@@ -821,6 +878,8 @@ function normalizeCronJob(job, systemTimezone = 'UTC') {
     created_at: optionalText(job?.created_at),
     // A webhook job's URL and requests; null for another schedule.
     webhook: normalizeWebhook(job?.webhook, systemTimezone),
+    // An email job's Channel, filters and mails; null for another schedule.
+    email: normalizeEmail(job?.email, systemTimezone),
     schedule_description: deriveScheduleDescription(
       scheduleType,
       cronExpression,
@@ -855,6 +914,30 @@ function normalizeWebhook(webhook, systemTimezone) {
     last_received_at_display: formatTimestamp(lastReceivedAt, systemTimezone),
     waiting: Number.isInteger(webhook.waiting) ? webhook.waiting : 0,
     dropped: Number.isInteger(webhook.dropped) ? webhook.dropped : 0,
+  };
+}
+
+// `senders` are addresses or @domains, `subject` the text the subject
+// contains, or null. `waiting` mails wait for the next Run; `dropped` ones
+// were dropped unseen since the last Run started. A normalized email stays as
+// it is.
+function normalizeEmail(email, systemTimezone) {
+  const channelId = optionalText(email?.channel_id);
+  if (channelId === null) {
+    return null;
+  }
+  const lastReceivedAt = optionalText(email.last_received_at);
+  return {
+    channel_id: channelId,
+    senders: Array.isArray(email.senders)
+      ? email.senders.map(asText).filter(Boolean)
+      : [],
+    subject: optionalText(email.subject),
+    error: optionalText(email.error),
+    last_received_at: lastReceivedAt,
+    last_received_at_display: formatTimestamp(lastReceivedAt, systemTimezone),
+    waiting: Number.isInteger(email.waiting) ? email.waiting : 0,
+    dropped: Number.isInteger(email.dropped) ? email.dropped : 0,
   };
 }
 
@@ -938,7 +1021,8 @@ function deriveScheduleDescription(
   }
   if (
     scheduleType === CRON_SCHEDULE_TYPE_EVENT ||
-    scheduleType === CRON_SCHEDULE_TYPE_WEBHOOK
+    scheduleType === CRON_SCHEDULE_TYPE_WEBHOOK ||
+    scheduleType === CRON_SCHEDULE_TYPE_EMAIL
   ) {
     return '';
   }
@@ -1029,7 +1113,8 @@ function normalizeScheduleType(value) {
   if (
     value === CRON_SCHEDULE_TYPE_INTERVAL ||
     value === CRON_SCHEDULE_TYPE_EVENT ||
-    value === CRON_SCHEDULE_TYPE_WEBHOOK
+    value === CRON_SCHEDULE_TYPE_WEBHOOK ||
+    value === CRON_SCHEDULE_TYPE_EMAIL
   ) {
     return value;
   }

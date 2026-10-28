@@ -1013,6 +1013,7 @@
             {#if !editor.isWebhookSchedule}
               <CronTimingSettings
                 {editor}
+                {channels}
                 systemTimezone={viewState.systemTimezone}
               />
             {/if}

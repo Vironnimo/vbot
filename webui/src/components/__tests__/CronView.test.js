@@ -1187,6 +1187,51 @@ describe('CronView', () => {
     );
   });
 
+  it('runs a job on each new email to an email Channel of its Agent', async () => {
+    rpcMock.mockImplementation(
+      createAgentListRpcMock(defaultAgents(), [
+        { id: 'mail-alpha', platform: 'email', agent_id: 'agent-alpha' },
+        { id: 'tg-alpha', platform: 'telegram', agent_id: 'agent-alpha' },
+        { id: 'mail-beta', platform: 'email', agent_id: 'agent-beta' },
+      ]),
+    );
+    listCronJobsMock.mockResolvedValue({ jobs: [cronJob({ id: 'job-app' })] });
+    mountView();
+    await waitForCondition(() => document.getElementById('cron-job-frequency'));
+
+    // Only the Agent's own email Channel is offered, and it is preselected.
+    chooseOption('cron-job-frequency', t('cron.frequency.email'));
+    document.getElementById('cron-job-email-channel').click();
+    flushSync();
+    const channelOptions = [
+      ...document.querySelectorAll('.dropdown-option'),
+    ].map((option) => option.textContent.trim());
+    expect(channelOptions).toEqual(['mail-alpha']);
+    document.getElementById('cron-job-email-channel').click();
+    flushSync();
+
+    inputById('cron-job-email-senders').value = 'ann@example.com, @partner.org';
+    inputById('cron-job-email-senders').dispatchEvent(
+      new Event('input', { bubbles: true }),
+    );
+    flushSync();
+    buttonByText(t('common.save')).click();
+    await waitForCondition(() => updateCronJobMock.mock.calls.length === 1);
+    expect(updateCronJobMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'job-app',
+        schedule_type: 'email',
+        email: {
+          channel_id: 'mail-alpha',
+          senders: ['ann@example.com', '@partner.org'],
+        },
+      }),
+    );
+    expect(updateCronJobMock.mock.calls[0][0]).not.toHaveProperty(
+      'cron_expression',
+    );
+  });
+
   it('offers no chat delivery to a job of a Project Agent', async () => {
     listCronJobsMock.mockResolvedValue({
       jobs: [
