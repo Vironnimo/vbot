@@ -215,6 +215,40 @@ describe('Projects controller loading', () => {
     expect(state.selectedProjectId).toBe('project-one');
     expect(state.expandedMembers).toEqual({ reviewer: true });
   });
+
+  it('retains incomplete Permission Rule drafts across Project refreshes', async () => {
+    const scan = { team: [{ agent_id: 'builder' }] };
+    const {
+      controller,
+      state,
+      operations: projectOperations,
+    } = await loadedController(
+      {},
+      {
+        showProject: vi.fn().mockResolvedValue({ scan }),
+      },
+    );
+    controller.selectProject('demo', scan);
+    const rules = { deny: ['Read()'] };
+    controller.updateOverrideDraft('builder', 'permission_rules', rules);
+
+    await controller.loadProjects({ reload: true });
+
+    expect(state.overrideDrafts.builder.permission_rules).toEqual(rules);
+    expect(controller.pendingOverrideChanges()).toEqual([
+      { agentId: 'builder', field: 'permission_rules', value: rules },
+    ]);
+    expect(controller.pendingOverrideChanges({ completeOnly: true })).toEqual(
+      [],
+    );
+    await expect(
+      controller.savePendingOverrides({ completeOnly: true }),
+    ).resolves.toBe(true);
+    await expect(controller.savePendingOverrides()).resolves.toBe(false);
+    expect(projectOperations.setOverride).not.toHaveBeenCalled();
+    expect(controller.flushPendingProjects()).toBe(false);
+    controller.destroy();
+  });
 });
 
 describe('Projects controller editing', () => {

@@ -72,6 +72,9 @@
   let pendingToolAccessOverrides = $derived(
     projectsController.pendingOverrideChanges(),
   );
+  let automaticOverrides = $derived(
+    projectsController.pendingOverrideChanges({ completeOnly: true }),
+  );
   const autosaveContext = useAutosaveContext();
   const projectAutosave = createAutosaveParticipant({
     cancelPending: () => {
@@ -90,14 +93,16 @@
       hasManageChanges(projectsController.pendingChanges()) ||
       projectsState.pendingOverrideReset !== null ||
       projectsController.pendingOverrideChanges().length > 0,
-    save: async () => {
+    save: async (reason) => {
       if (
         hasManageChanges(projectsController.pendingChanges()) &&
         !(await projectsController.saveSelectedProject())
       ) {
         return false;
       }
-      return projectsController.savePendingOverrides();
+      return projectsController.savePendingOverrides({
+        completeOnly: reason === 'auto',
+      });
     },
   });
   const unregisterProjectAutosave = autosaveContext.register(projectAutosave);
@@ -158,7 +163,7 @@
     if (
       projectsState.editSaving ||
       (!hasManageChanges(pendingChanges) &&
-        pendingToolAccessOverrides.length === 0 &&
+        automaticOverrides.length === 0 &&
         !projectsState.pendingOverrideReset)
     )
       return;

@@ -824,14 +824,17 @@ export function createProjectsController({
       return normalizeToolLoading(draft.tool_loading) !== null;
     }
     if (field === 'permission_rules') {
-      return normalizePermissionRules(draft.permission_rules) !== null;
+      return (
+        normalizePermissionRules(draft.permission_rules) !== null &&
+        permissionRulesComplete(draft.permission_rules)
+      );
     }
     if (field === 'project_memory_enabled')
       return typeof draft.project_memory_enabled === 'boolean';
     return typeof draft.thinking_effort === 'string';
   }
 
-  function pendingOverrideChanges() {
+  function pendingOverrideChanges({ completeOnly = false } = {}) {
     return state.activeTeam.flatMap((member) => {
       const draft = state.overrideDrafts[member.agent_id];
       if (!draft) return [];
@@ -839,8 +842,10 @@ export function createProjectsController({
       return Object.keys(saved).flatMap((field) => {
         if (JSON.stringify(draft[field]) === JSON.stringify(saved[field]))
           return [];
-        // A rule still being typed has no pattern; it waits until it does.
+        // Incomplete rules stay dirty for refreshes and navigation, while
+        // automatic writes wait until every rule has a pattern.
         if (
+          completeOnly &&
           field === 'permission_rules' &&
           !permissionRulesComplete(draft[field])
         )
@@ -856,7 +861,7 @@ export function createProjectsController({
     });
   }
 
-  async function savePendingOverrides() {
+  async function savePendingOverrides({ completeOnly = false } = {}) {
     clearToolAccessOverrideAutoSave({ flushPending: false });
     const reset = state.pendingOverrideReset;
     if (reset) {
@@ -873,11 +878,11 @@ export function createProjectsController({
     }
     // Keep only field identities across awaits. A previous response can
     // update inheritance, and the user can edit a later field meanwhile.
-    for (const { agentId, field } of pendingOverrideChanges()) {
+    for (const { agentId, field } of pendingOverrideChanges({ completeOnly })) {
       if (
         (state.pendingOverrideReset?.agentId === agentId &&
           state.pendingOverrideReset.field === field) ||
-        !pendingOverrideChanges().some(
+        !pendingOverrideChanges({ completeOnly }).some(
           (change) => change.agentId === agentId && change.field === field,
         )
       )

@@ -425,6 +425,65 @@ describe('ProjectsView Team', () => {
     },
   );
 
+  it('keeps incomplete Permission Rules pending until completed or discarded', async () => {
+    const rules = { deny: ['Read(.env)'] };
+    const demo = serveProject(
+      {},
+      {
+        team: [
+          member({
+            agent_id: 'builder',
+            overrides: { permission_rules: rules },
+          }),
+        ],
+      },
+    );
+    const other = project({ project_id: 'other', display_name: 'Other' });
+    listProjectsMock.mockResolvedValue({ projects: [demo, other] });
+    const coordinator = createAutosaveCoordinator();
+    const navigation = createStandaloneNavigation(['demo']);
+    const navigate = navigation.navigate;
+    let transition;
+    navigation.navigate = (...args) => {
+      transition = coordinator
+        .flushPending()
+        .then((saved) => (saved ? navigate(...args) : false));
+      return transition;
+    };
+    view.mount({ navigation }, coordinator);
+    await expandMember('builder');
+    vi.useFakeTimers();
+    const pattern = memberDetail('builder').querySelector(
+      '[data-permission-list="deny"] input',
+    );
+    expect(pattern.value).toBe('.env');
+    pattern.value = '';
+    pattern.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+
+    await vi.advanceTimersByTimeAsync(1000);
+    flushSync();
+    expect(setOverrideMock).not.toHaveBeenCalled();
+    expect(coordinator.hasPending()).toBe(true);
+    buttonByTestId('project-toggle-other').click();
+    await expect(transition).resolves.toBe(false);
+    flushSync();
+    expect(navigation.place).toEqual(['demo']);
+    expect(pattern.isConnected).toBe(true);
+    expect(pattern.value).toBe('');
+    expect(setOverrideMock).not.toHaveBeenCalled();
+
+    // Returning to the saved rule clears the draft and permits navigation.
+    pattern.value = '.env';
+    pattern.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    buttonByTestId('project-toggle-other').click();
+    await expect(transition).resolves.toBe(true);
+    flushSync();
+    expect(navigation.place).toEqual(['other']);
+    expect(setOverrideMock).not.toHaveBeenCalled();
+  });
+
   it('sets a sampling override with the comma-tolerant value', async () => {
     serveProject(
       {},
