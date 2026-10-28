@@ -26,6 +26,7 @@ from core.archive import (
     _purge,
     _retention,
 )
+from core.chat import ChatMessage
 from core.sessions import ARCHIVE_KIND_FILES, ARCHIVE_TREE_FILES, ArchiveEntryFilter, ArchiveTree
 from core.utils.timestamps import format_canonical_timestamp
 from tests.core.archive.archive_test_support import (
@@ -422,10 +423,20 @@ async def test_a_failing_purge_warns_once_until_it_succeeds(
 
 @pytest.mark.asyncio
 async def test_a_sweep_deletes_idle_ephemeral_sessions_and_keeps_fresh_busy_and_normal_ones(
-    world: ArchiveWorld, timer: _Timer, caplog: pytest.LogCaptureFixture
+    world: ArchiveWorld,
+    timer: _Timer,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     agent_with_session(world, "coder")
-    idle_hours = {"idle": 25, "fresh": 23, "busy": 30, "normal": 30}
+    idle_hours = {
+        "idle": 25,
+        "fresh": 23,
+        "busy": 30,
+        "normal": 30,
+        "resumed": 30,
+        "retained": 30,
+    }
     addresses = {}
     for session_id, hours in idle_hours.items():
         metadata = {} if session_id == "normal" else {"ephemeral": True}
@@ -439,6 +450,19 @@ async def test_a_sweep_deletes_idle_ephemeral_sessions_and_keeps_fresh_busy_and_
                 (format_canonical_timestamp(_NOW - timedelta(hours=hours)), session_id),
             )
     caplog.set_level(logging.INFO, logger="vbot.archive")
+    select_expired = world.sessions.expired_ephemeral_addresses
+
+    def resume_after_selection(before: str, *, limit: int):
+        selected = select_expired(before, limit=limit)
+        world.sessions.get(addresses["resumed"]).append(
+            ChatMessage.user("Continue", timestamp=_NOW)
+        )
+        world.sessions.mutate_metadata(
+            addresses["retained"], lambda metadata: metadata.update(ephemeral=False)
+        )
+        return selected
+
+    monkeypatch.setattr(world.sessions, "expired_ephemeral_addresses", resume_after_selection)
 
     # Without a retention period too: the lifetime is the Session's own.
     async with world.runs.session_admission_guard(addresses["busy"]):
@@ -446,7 +470,7 @@ async def test_a_sweep_deletes_idle_ephemeral_sessions_and_keeps_fresh_busy_and_
 
     assert {
         session_id for session_id, address in addresses.items() if world.sessions.exists(address)
-    } == {"fresh", "busy", "normal"}
+    } == {"fresh", "busy", "normal", "resumed", "retained"}
     # Deleted permanently: no row and no archive entry is left.
     assert ("idle", "live") not in world.session_rows("coder")
     assert not world.sessions.archive_ledger.page(ArchiveEntryFilter()).entries
