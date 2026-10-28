@@ -381,6 +381,87 @@ async def test_bodies_reach_the_run_rendered_and_cut(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stage,ping", [("proof", False), ("proof", True), ("state", False), ("state-error", False)]
+)
+async def test_rotation_refuses_old_proofs_still_waiting_for_admission(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stage: str, ping: bool
+) -> None:
+    service, _trigger = make_service(tmp_path)
+    service.set_webhook_secrets(secret_store(tmp_path))
+    job_id, secret = await _webhook_job(service)
+    checked, finish_check = asyncio.Event(), asyncio.Event()
+    worker_run = cron_webhooks._WEBHOOK_WORKERS.run
+    read_state = service._webhooks._state
+
+    async def delayed_check(function: Any, *args: Any, **kwargs: Any) -> Any:
+        result = await worker_run(function, *args, **kwargs)
+        if stage == "proof" and function is cron_webhooks._events.accept_request:
+            checked.set()
+            await finish_check.wait()
+        return result
+
+    async def delayed_state(target: str) -> WebhookState:
+        result = await read_state(target)
+        if stage in {"state", "state-error"}:
+            checked.set()
+            await finish_check.wait()
+            if stage == "state-error":
+                raise CronStorageError("temporarily unavailable")
+        return result
+
+    monkeypatch.setattr(cron_webhooks._WEBHOOK_WORKERS, "run", delayed_check)
+    monkeypatch.setattr(service._webhooks, "_state", delayed_state)
+    headers = _bearer(secret, **({"x-github-event": "ping"} if ping else {}))
+    receiving = asyncio.create_task(service.receive_webhook(job_id, headers, b"payload"))
+    try:
+        await checked.wait()
+        await service.rotate_webhook_secret(job_id)
+        finish_check.set()
+        assert await receiving == "refused"
+        status = service.webhook_status(service.get_job(job_id))
+        assert status is not None and status.waiting == 0
+    finally:
+        finish_check.set()
+        await asyncio.gather(receiving, return_exceptions=True)
+        await service.aclose()
+
+
+@pytest.mark.asyncio
+async def test_webhook_retries_remain_bounded_through_a_long_storage_outage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, trigger = make_service(tmp_path)
+    service.set_webhook_secrets(secret_store(tmp_path))
+    job_id, secret = await _webhook_job(service)
+    assert await service.receive_webhook(job_id, _bearer(secret), b"waiting") == "accepted"
+    scripted_runs(trigger, (RunStatus.COMPLETED, "Done."))
+    waiting = service._webhooks.waiting
+    delays: list[float] = []
+
+    async def unavailable(target: str) -> int:
+        if len(delays) < 1100:
+            raise CronStorageError("temporarily unavailable")
+        return await waiting(target)
+
+    async def record_delay(delay: float) -> None:
+        delays.append(delay)
+
+    monkeypatch.setattr(service._webhooks, "waiting", unavailable)
+    monkeypatch.setattr(cron_timing, "_sleep", record_delay)
+    service.start()
+    try:
+        await _until(service, lambda: service.get_job(job_id).last_outcome == "success")
+        assert trigger.trigger_run.await_count == 1
+        assert len(delays) == 1100
+        assert delays[:3] == [60, 120, 240]
+        assert delays[-1] == max(delays) == 3600
+        assert _records(_webhook_note(trigger))[0]["body"] == "waiting"
+    finally:
+        await service.aclose()
+
+
+@pytest.mark.asyncio
 async def test_the_secret_lives_in_the_secret_store_and_follows_the_job(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
