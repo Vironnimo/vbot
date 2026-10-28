@@ -22,13 +22,13 @@
   let email = $derived(channelFormValues.platform === 'email');
   // The email account's text rows: [field, label key, placeholder].
   const EMAIL_TEXT_ROWS = [
-    ['email_address', 'settings.channels.email.address', 'me@example.com'],
-    ['email_username', 'settings.channels.email.username', ''],
-    ['imap_host', 'settings.channels.email.imap_host', 'imap.example.com'],
-    ['imap_port', 'settings.channels.email.imap_port', '993'],
-    ['smtp_host', 'settings.channels.email.smtp_host', 'smtp.example.com'],
-    ['smtp_port', 'settings.channels.email.smtp_port', '465'],
-    ['email_folders', 'settings.channels.email.folders', 'INBOX'],
+    ['email_address', 'address', 'me@example.com'],
+    ['email_username', 'username', ''],
+    ['imap_host', 'imap_host', 'imap.example.com'],
+    ['imap_port', 'imap_port', '993'],
+    ['smtp_host', 'smtp_host', 'smtp.example.com'],
+    ['smtp_port', 'smtp_port', '465'],
+    ['email_folders', 'folders', 'INBOX'],
   ];
 </script>
 
@@ -192,11 +192,11 @@
   {/if}
 
   {#if email}
-    {#each EMAIL_TEXT_ROWS as [field, labelKey, placeholder] (field)}
+    {#each EMAIL_TEXT_ROWS as [field, label, placeholder] (field)}
       <div class="s-row">
         <div class="s-row-info">
           <label class="s-row-label" for={`channel-${field}-input`}>
-            {t(labelKey)}
+            {t(`settings.channels.email.${label}`)}
           </label>
           {#if field === 'email_username'}
             <div class="s-row-desc">
@@ -216,7 +216,7 @@
             inputmode={field.endsWith('_port') ? 'numeric' : undefined}
             {placeholder}
             value={channelFormValues[field]}
-            ariaLabel={t(labelKey)}
+            ariaLabel={t(`settings.channels.email.${label}`)}
             onInput={(next) => setChannelFormField(field, next)}
           />
         </div>
