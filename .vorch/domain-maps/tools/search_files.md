@@ -53,7 +53,8 @@ leaves out, from ripgrep's `--debug` skip reports). They call
 keep the picker on the same selection as the Tool, `__pycache__` exclusion
 included (the picker marks cache directories as ignored). `core/tools/_path_suggestions.py`
 (shared with `read`) suggests similar paths. The async handler runs the whole
-operation through `run_tool_worker`.
+operation through `offload_tool_handler`, with the shared live dispatch checks
+at worker admission (`tools/registry-dispatch.md`).
 
 ## Call Interpretation
 

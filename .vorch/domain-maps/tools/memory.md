@@ -12,6 +12,7 @@ Model-facing editing of pinned personal and shared Project Memory entries (stora
 - `scope="project"` requires both the Agent's `project_memory_enabled` and the Project's `memory_enabled`. Its target is one of the Run's Working Project and explicitly loaded Project Context (`working_project_id`, `skill_project_id`), never a directory inference or an arbitrary registered id. `project_id` selects among these; omission resolves only one unique active Project and otherwise refuses. The Project owner's configuration guard covers its live enablement check, Memory anchor resolution and complete operation, so archive and disabling cannot detach a write. Personal mode `off` does not prevent an enabled Project scope.
 - `entry_id` is an unadvertised parameter: positional ids copied from older results are refused with the entry currently at that position and the corrected `old_text` call, unless `old_text` names the same entry. The RPC surface still uses positional ids (`memory.md`).
 - `parallel_safe=False`: same-turn memory calls apply in written order, so "free space, then add" works in one message and text matching never races a sibling change.
+- The whole handler uses `offload_tool_handler`, so shared dispatch checks run again at worker admission before Memory reads or mutations (`tools/registry-dispatch.md`).
 - Changes to the description, `scope` or `project_id` are announced through Chat's existing Tool-change mechanism so an existing prompt epoch can use the Project scope without waiting for Compaction.
 
 ## Argument Repair

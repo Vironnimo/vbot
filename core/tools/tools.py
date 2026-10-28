@@ -101,7 +101,7 @@ from core.tools._tool_results import (
     with_call_note,
 )
 from core.tools._tool_workers import DEFAULT_TOOL_WORKER_LIMIT as DEFAULT_TOOL_WORKER_LIMIT
-from core.tools._tool_workers import _invoke_sync_tool_handler
+from core.tools._tool_workers import _invoke_sync_tool_handler, _OffloadedToolHandler
 from core.tools._tool_workers import offload_tool_handler as offload_tool_handler
 from core.tools._tool_workers import run_tool_worker as run_tool_worker
 from core.tools.availability import (
@@ -724,6 +724,10 @@ class ToolRegistry:
             tool.requires_opt_in and context.tool_name not in (allowed_tools or ())
         ) or not self._is_allowed(context.tool_name, allowed_tools, internal=tool.internal):
             raise ToolNotAllowedError(f"Tool not allowed: {model_tool_name(context.tool_name)}.")
+        if context.tool_denial_resolver is not None:
+            denial = context.tool_denial_resolver(context.tool_name)
+            if denial is not None:
+                raise ToolNotAllowedError(denial)
         return tool
 
     async def dispatch(
@@ -739,44 +743,50 @@ class ToolRegistry:
         # not-ready tool. Re-evaluate live and return a clean failure envelope
         # instead of running the handler (no exception, so the model just gets a
         # normal failed result naming the cause).
-        if not tool_is_ready(tool):
-            return tool_failure(
-                "tool_not_ready",
-                tool.readiness_hint
-                or f"tool '{model_tool_name(context.tool_name)}' is not available: "
-                "its extension is not configured",
-                retryable=tool.readiness_retryable,
-            )
+        if unavailable := self._readiness_failure(tool):
+            return unavailable
         normalized_arguments, ignored = _checked_arguments(
             tool, context.input_contract or tool.contract, arguments
         )
         note = ignored_fields_note(context.tool_name, ignored) if ignored else None
         if tool.secret_sinks and self._secrets is not None:
             try:
-                normalized_arguments = await self._substitute_secrets(
-                    context, tool, normalized_arguments
+                normalized_arguments, unavailable = await self._substitute_secrets(
+                    context, tool, normalized_arguments, allowed_tools
                 )
             except SecretUseError as error:
                 return tool_failure(
                     "secret_unavailable", f"{model_tool_name(tool.name)} was not run: {error}"
                 )
+            # A Secret Source can wait for a password manager while live Run
+            # authority or the registered Tool changes. Prepared values belong
+            # only to this exact handler, and preparation grants no authority.
+            if unavailable is not None:
+                return unavailable
+
+        handler = tool.handler
+        offloaded = isinstance(handler, _OffloadedToolHandler)
+        if isinstance(handler, _OffloadedToolHandler):
+            handler = handler.__wrapped__
+
+        def invoke() -> Any:
+            # Blocking handlers may wait for worker admission after preparation.
+            # Check on that worker before entering their actual implementation.
+            unavailable = self._authorize_prepared(context, tool, arguments, allowed_tools)
+            if unavailable is not None:
+                return unavailable
+            return _invoke_sync_tool_handler(handler, context, normalized_arguments)
+
         # From here on the handler runs: only a ToolContractError it raises
         # still means nothing happened; any other exception leaves the call's
         # effects unknown (``tool_failure_for_exception``).
         try:
-            if tool.extension is not None and not inspect.iscoroutinefunction(tool.handler):
-                result = await run_tool_worker(
-                    _invoke_sync_tool_handler,
-                    tool.handler,
-                    context,
-                    normalized_arguments,
-                )
+            if offloaded or (
+                tool.extension is not None and not inspect.iscoroutinefunction(handler)
+            ):
+                result = await run_tool_worker(invoke)
             else:
-                result = _invoke_sync_tool_handler(
-                    tool.handler,
-                    context,
-                    normalized_arguments,
-                )
+                result = invoke()
             if inspect.isawaitable(result):
                 result = await result
         except ToolContractError as error:
@@ -786,9 +796,36 @@ class ToolRegistry:
         result = self.validate_result(context.tool_name, result, contract=tool.contract)
         return result if note is None else with_call_note(result, note)
 
+    def _authorize_prepared(
+        self,
+        context: ToolContext,
+        tool: Tool,
+        arguments: JsonObject,
+        allowed_tools: Sequence[str] | None,
+    ) -> JsonObject | None:
+        if self.authorize(context, arguments, allowed_tools) is not tool:
+            raise ToolNotAllowedError(f"Tool not allowed: {model_tool_name(context.tool_name)}.")
+        return self._readiness_failure(tool)
+
+    @staticmethod
+    def _readiness_failure(tool: Tool) -> JsonObject | None:
+        if tool_is_ready(tool):
+            return None
+        return tool_failure(
+            "tool_not_ready",
+            tool.readiness_hint
+            or f"tool '{model_tool_name(tool.name)}' is not available: "
+            "its extension is not configured",
+            retryable=tool.readiness_retryable,
+        )
+
     async def _substitute_secrets(
-        self, context: ToolContext, tool: Tool, arguments: JsonObject
-    ) -> JsonObject:
+        self,
+        context: ToolContext,
+        tool: Tool,
+        arguments: JsonObject,
+        allowed_tools: Sequence[str] | None,
+    ) -> tuple[JsonObject, JsonObject | None]:
         """The handler's copy of ``arguments`` with sink references replaced by values.
 
         Only declared sink arguments change; the persisted call, its events and
@@ -801,9 +838,9 @@ class ToolRegistry:
             if name in arguments and has_reference_or_escape(arguments[name])
         }
         if secrets is None or not sinks:
-            return arguments
+            return arguments, None
 
-        def substitute() -> tuple[JsonObject, list[SecretUse]]:
+        def substitute() -> tuple[JsonObject, list[SecretUse], JsonObject | None]:
             changed = dict(arguments)
             uses: list[SecretUse] = []
             for name, sink in sinks.items():
@@ -816,17 +853,20 @@ class ToolRegistry:
                     literals=context.secret_literals if sink == "files" else None,
                 )
                 uses.extend(use for use in found if use not in uses)
+            # Refused preparation must not spend a one-time grant.
+            if unavailable := self._authorize_prepared(context, tool, arguments, allowed_tools):
+                return changed, [], unavailable
             secrets.consume(
                 SessionAddress(context.project_id, context.agent_id, context.session_id),
                 uses,
                 passed_only=context.subagent_session,
             )
-            return changed, uses
+            return changed, uses, None
 
-        changed, uses = await run_tool_worker(substitute)
+        changed, uses, unavailable = await run_tool_worker(substitute)
         if uses:
             context.record_secret_uses(describe_uses(uses))
-        return changed
+        return changed, unavailable
 
     def _unknown_tool_message(
         self, context: ToolContext, allowed_tools: Sequence[str] | None, arguments: Any

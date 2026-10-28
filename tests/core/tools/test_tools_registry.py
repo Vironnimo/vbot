@@ -26,11 +26,16 @@ from core.tools import (
     tool_success,
     tool_summary,
 )
+from core.tools import _tool_workers as worker_module
+from core.tools import tools as registry_module
+from core.tools.tools import offload_tool_handler
+from core.utils.workers import BoundedWorkerPool
 from tests.core.secrets.secrets_test_support import data_directory
 from tests.core.secrets.test_agent_secrets import FakeSource
 from tests.core.tools.tools_test_support import (
     READ_FILE_SCHEMA,
     JsonObject,
+    dispatch_as_executor,
     make_context,
     read_file_handler,
     register_read_file,
@@ -639,3 +644,159 @@ async def test_parallel_dispatch_spends_a_once_secret_in_only_one_call(tmp_path:
         next(result for result in results if not result["ok"])["error"]["code"]
         == "secret_unavailable"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changed", ["denial", "removed", "replaced", "readiness"])
+async def test_secret_preparation_cannot_outlive_the_tools_dispatch_authority(
+    tmp_path: Path, changed: str
+) -> None:
+    entered = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+
+    class Source(FakeSource):
+        @override
+        def resolve(self, reference: str, field_name: str) -> str:
+            loop.call_soon_threadsafe(entered.set)
+            assert release.wait(5)
+            return super().resolve(reference, field_name)
+
+    store = SecretStore(
+        data_directory(tmp_path),
+        protections=(KeyFileProtection(directories=(tmp_path / "keys",)),),
+    )
+    secrets = AgentSecrets(store, clock=lambda: datetime.now(UTC))
+    secrets.replace_sources([Source({"value": "prepared-credential"})])
+    secret = secrets.create(
+        name="api",
+        kind="token",
+        values={},
+        actor="user",
+        agents=["agent-1"],
+        lifetime="once",
+        session_id="session-1",
+        source=SourceBinding("vault", "entry"),
+        source_fields={"value": "value"},
+    )
+    called: list[str] = []
+    registry = ToolRegistry()
+    registry.set_secrets(secrets)
+    ready = True
+
+    def register(label: str) -> None:
+        def handler(_context: ToolContext, _arguments: JsonObject) -> JsonObject:
+            called.append(label)
+            return tool_success({})
+
+        registry.register(
+            "fixture",
+            "Fixture",
+            {"type": "object"},
+            handler,
+            open_input_schema=True,
+            secret_sinks={"content": "files"},
+            ready=lambda: ready,
+            readiness_retryable=True,
+        )
+
+    register("original")
+    denied = False
+    context = make_context(
+        "fixture", tool_denial_resolver=lambda _name: "test-revoked" if denied else None
+    )
+    pending = asyncio.create_task(
+        dispatch_as_executor(registry, context, {"content": "{{secret:API}}"})
+    )
+    try:
+        await entered.wait()
+        if changed == "denial":
+            denied = True
+        elif changed == "readiness":
+            ready = False
+        else:
+            registry.unregister("fixture")
+            if changed == "replaced":
+                register("replacement")
+    finally:
+        release.set()
+    result = await pending
+    expected = {"removed": "tool_not_found", "readiness": "tool_not_ready"}
+    assert result["error"]["code"] == expected.get(changed, "tool_not_allowed")
+    if changed == "readiness":
+        assert result["error"]["retryable"] is True
+    assert called == []
+    assert secrets.get(secret.id) is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changed", ["denial", "removed", "replaced", "readiness"])
+@pytest.mark.parametrize("offloaded", [False, True], ids=["extension", "builtin"])
+async def test_tool_worker_admission_rechecks_authority_and_readiness(
+    monkeypatch: pytest.MonkeyPatch, changed: str, offloaded: bool
+) -> None:
+    pool = BoundedWorkerPool(name="test-tool-admission", max_workers=1)
+    occupied = asyncio.Event()
+    queued = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+
+    def occupy() -> None:
+        loop.call_soon_threadsafe(occupied.set)
+        assert release.wait(5)
+
+    async def on_worker(function, *arguments, **keywords):
+        queued.set()
+        return await pool.run(function, *arguments, **keywords)
+
+    monkeypatch.setattr(registry_module, "run_tool_worker", on_worker)
+    monkeypatch.setattr(worker_module, "run_tool_worker", on_worker)
+    registry = ToolRegistry()
+    called: list[str] = []
+    ready = True
+    denied = False
+
+    def register(label: str) -> None:
+        def handler(_context: ToolContext, _arguments: JsonObject) -> JsonObject:
+            called.append(label)
+            return tool_success({})
+
+        registry.register(
+            "fixture",
+            "Fixture",
+            {"type": "object"},
+            offload_tool_handler(handler) if offloaded else handler,
+            extension=None if offloaded else "test",
+            ready=lambda: ready,
+            readiness_retryable=True,
+        )
+
+    register("original")
+    blocker = asyncio.create_task(pool.run(occupy))
+    await occupied.wait()
+    context = make_context(
+        "fixture", tool_denial_resolver=lambda _name: "test-revoked" if denied else None
+    )
+    pending = asyncio.create_task(dispatch_as_executor(registry, context, {}))
+    try:
+        await queued.wait()
+        if changed == "denial":
+            denied = True
+        elif changed == "readiness":
+            ready = False
+        else:
+            registry.unregister("fixture")
+            if changed == "replaced":
+                register("replacement")
+    finally:
+        release.set()
+        await blocker
+    try:
+        result = await pending
+        expected = {"removed": "tool_not_found", "readiness": "tool_not_ready"}
+        assert result["error"]["code"] == expected.get(changed, "tool_not_allowed")
+        if changed == "readiness":
+            assert result["error"]["retryable"] is True
+        assert called == []
+    finally:
+        pool.shutdown()
