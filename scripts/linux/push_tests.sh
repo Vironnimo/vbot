@@ -65,19 +65,29 @@ except (OSError, ValueError):
     pass'
 }
 
-# One worker keeps the full suite's retained state below this run's memory high
-# watermark. Two workers can spend most of the run reclaiming memory instead of
-# testing. The complete suite and the shared core pool still apply.
+# Reuse CI's disjoint test shards, sequentially, so each process releases its
+# retained state before the next group. Running the whole suite in one process
+# can spend most of its time reclaiming memory under the WSL scope's budget.
+workers=$("$python" -c 'from tests import cpu_pool; print(min(cpu_pool.LOCAL_AUTO_WORKERS, cpu_pool.pool_size()))') \
+    || fail "the test core pool size could not be read"
+run_shard() {
+    local status=0 failed rerun=0 still
+    echo "linux tests: shard $1/4"
+    VBOT_TEST_SHARD="$1/4" "$python" -m pytest -n "$workers" --cache-clear -rfE -q --no-header || status=$?
+    [ "$status" -eq 1 ] || return "$status"
+    failed=$(last_failed)
+    [ -n "$failed" ] || return 1
+    echo "linux tests: running the $(echo "$failed" | wc -l) failed tests again, alone"
+    "$python" -m pytest --last-failed --last-failed-no-failures none -n 0 -rfE -q --no-header || rerun=$?
+    still=$(last_failed)
+    while read -r test; do
+        if [ "$rerun" -eq 0 ] || ! grep -qxF -- "$test" <<<"$still"; then echo "flaky: $test"; fi
+    done <<<"$failed"
+    return "$status"
+}
+
 status=0
-"$python" -m pytest -n 1 -rfE -q --no-header || status=$?
-[ "$status" -eq 1 ] || exit "$status"
-failed=$(last_failed)
-[ -n "$failed" ] || exit 1
-echo "linux tests: running the $(echo "$failed" | wc -l) failed tests again, alone"
-rerun=0
-"$python" -m pytest --last-failed --last-failed-no-failures none -n 0 -rfE -q --no-header || rerun=$?
-still=$(last_failed)
-while read -r test; do
-    if [ "$rerun" -eq 0 ] || ! grep -qxF -- "$test" <<<"$still"; then echo "flaky: $test"; fi
-done <<<"$failed"
+for shard in 1 2 3 4; do
+    run_shard "$shard" || status=$?
+done
 exit "$status"
