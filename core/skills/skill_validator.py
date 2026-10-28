@@ -43,7 +43,11 @@ SKILL_NAME_CHARSET_FRAGMENT = rf"[A-Za-z0-9][A-Za-z0-9_-]{{0,{MAX_SKILL_NAME_LEN
 SKILL_NAME_TRIGGER_PATTERN = re.compile(f"^{SKILL_NAME_CHARSET_FRAGMENT}$")
 # ``/name`` at the very start of a message, and ``$name`` anywhere in it.
 SKILL_SLASH_TRIGGER_PATTERN = re.compile(rf"^/({SKILL_NAME_CHARSET_FRAGMENT})(?=\s|$)")
-SKILL_INLINE_TRIGGER_PATTERN = re.compile(rf"\$({SKILL_NAME_CHARSET_FRAGMENT})")
+# Match whole names, never a prefix of a PowerShell scoped variable ($env:NAME).
+# A colon followed by whitespace/punctuation can still end a prose Skill mention.
+SKILL_INLINE_TRIGGER_PATTERN = re.compile(
+    rf"\$({SKILL_NAME_CHARSET_FRAGMENT})(?![A-Za-z0-9_-]|:[A-Za-z0-9_])"
+)
 # Charset only, no length bound, so a name that is merely too long is not also (and
 # misleadingly) reported as having bad characters by the warning below.
 _SKILL_NAME_SAFE_CHARSET_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")

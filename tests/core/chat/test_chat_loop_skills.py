@@ -77,8 +77,12 @@ def _contents(request_messages: list[JsonObject]) -> list[str]:
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "trigger",
-    ["/debugging fix this", "Please use $debugging on this issue"],
-    ids=["slash", "inline"],
+    [
+        "/debugging fix this",
+        "Please use $debugging on this issue",
+        '$debugging: check "$env:LOCALAPPDATA/app.exe" and $script:state',
+    ],
+    ids=["slash", "inline", "powershell-variables"],
 )
 async def test_skill_trigger_places_its_content_under_the_input_for_later_requests(
     tmp_path: Path, trigger: str
@@ -98,6 +102,7 @@ async def test_skill_trigger_places_its_content_under_the_input_for_later_reques
         assert all("skill_package" not in message for message in request_messages)
         assert request_messages[1]["content"] == trigger
         assert request_messages[2]["content"].startswith(SKILL_CONTENT)
+        assert all("<system-reminder>" not in content for content in _contents(request_messages))
     assert second[-1]["content"] == "continue"
     assert all("[skill-context]" not in content for content in _contents(second))
     visible = [message for message in history(runtime) if message.role != "note"]
