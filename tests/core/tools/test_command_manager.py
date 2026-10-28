@@ -1513,12 +1513,11 @@ async def _printed(manager: CommandManager, command_id: str, count: int) -> list
     raise AssertionError(f"the command printed fewer than {count} words")
 
 
-def _alive(pid: int) -> bool:
-    try:
-        status: str = psutil.Process(pid).status()
-    except psutil.Error:
-        return False
-    return bool(status != psutil.STATUS_ZOMBIE)
+async def _assert_processes_exited(processes: list[psutil.Process]) -> None:
+    # Job accounting and pipe EOF can precede Windows' final process-handle signal.
+    # Keep the observed identities and wait off the Event Loop for that signal.
+    _gone, alive = await asyncio.to_thread(psutil.wait_procs, processes, timeout=5)
+    assert not alive
 
 
 # The root starts a child at once, which starts a grandchild at once; each prints
@@ -1571,11 +1570,12 @@ async def test_a_stop_kills_every_process_the_job_contains(
     manager, _sink = real_manager
     command_id, root = await _launch_real(manager, tmp_path, _PYTHON, "-c", _CHAIN)
     pids = [root, *map(int, await _printed(manager, command_id, 2))]
+    processes = [psutil.Process(pid) for pid in pids]
 
     report = await manager.stop(command_id, "user")
 
     assert (report.status, report.finished) == ("stopped", True)
-    assert not [pid for pid in pids if _alive(pid)]
+    await _assert_processes_exited(processes)
 
 
 @windows_only
@@ -1587,6 +1587,7 @@ async def test_a_tree_kill_from_outside_ends_the_command_like_any_end(
     command_id, root = await _launch_real(manager, tmp_path, _PYTHON, "-c", _CHAIN)
     manager.to_background(command_id, deliver=True)
     pids = [root, *map(int, await _printed(manager, command_id, 2))]
+    processes = [psutil.Process(pid) for pid in pids]
 
     killed = await asyncio.to_thread(
         subprocess.run, ["taskkill", "/PID", str(root), "/T", "/F"], capture_output=True
@@ -1596,7 +1597,7 @@ async def test_a_tree_kill_from_outside_ends_the_command_like_any_end(
     assert await manager.wait(command_id, seconds=30) == "ended"
     report = manager.report(command_id)
     assert (report.status, report.exit_code, report.stop_reason) == ("failed", 1, None)
-    assert not [pid for pid in pids if _alive(pid)]
+    await _assert_processes_exited(processes)
     assert sink.bodies == [format_report(report)]
 
 
@@ -1609,6 +1610,7 @@ async def test_an_orphan_the_tree_kill_misses_is_reported_and_stopped(
     command_id, root = await _launch_real(manager, tmp_path, _PYTHON, "-c", _ORPHANING)
     printed, _orphaned = await _printed(manager, command_id, 2)
     orphan = int(printed)
+    orphan_process = psutil.Process(orphan)
 
     await asyncio.to_thread(
         subprocess.run, ["taskkill", "/PID", str(root), "/T", "/F"], capture_output=True
@@ -1619,4 +1621,5 @@ async def test_an_orphan_the_tree_kill_misses_is_reported_and_stopped(
     assert (report.exit_code, report.finished) == (1, False)
     assert [process.pid for process in report.still_running] == [orphan]
     report = await manager.stop(command_id, "agent")
-    assert report.finished and not _alive(orphan)
+    assert report.finished
+    await _assert_processes_exited([orphan_process])
