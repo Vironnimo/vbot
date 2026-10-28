@@ -151,7 +151,12 @@ def is_automatic(message: Message, sender: str) -> bool:
 
 
 def conversation_text(mail: ParsedMail) -> str:
-    """The text a conversation receives: the subject line, a blank line, the body."""
+    """The text a conversation receives: the subject line, a blank line, the body.
+
+    A body that starts with a Command (``/new``) stays alone, so the Command runs.
+    """
+    if mail.text.lstrip().startswith("/"):
+        return mail.text.strip()
     subject = mail.subject or "(no subject)"
     return f"Subject: {subject}\n\n{mail.text}".rstrip()
 

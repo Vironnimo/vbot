@@ -237,7 +237,7 @@ class EmailChannelAdapter(ChannelAdapter):
     async def _handle_mail(
         self, raw: bytes, header_only: bool, folder: str, uid_validity: int, uid: int
     ) -> bool:
-        """Route one mail; False when its conversation or triggers could not take it yet."""
+        """Route one mail; False when its triggers could not take it yet."""
         folder_key = hashlib.sha256(folder.encode("utf-8")).hexdigest()[:12]
         mail: ParsedMail = await _IO_POOL.run(
             parse_mail,
@@ -306,7 +306,10 @@ class EmailChannelAdapter(ChannelAdapter):
             admitted = await self._engine.handle_inbound_text(facts, text)
         if admitted:
             await self._received.record_received(self._config.id, mail.message_id)
-        return admitted
+        # A mail the conversation could not queue got the busy reply, like a
+        # message on any other platform; handing it over again would mail that
+        # reply once per retry.
+        return True
 
     # -- Conversation transport -------------------------------------------------------
 

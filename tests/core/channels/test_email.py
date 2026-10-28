@@ -333,25 +333,43 @@ async def test_mail_carries_its_facts_to_the_conversation_and_the_triggers(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("destination", ["conversation", "triggers"])
-async def test_watermark_holds_a_mail_until_it_is_taken(harness: Harness, destination: str) -> None:
-    if destination == "conversation":
-        harness.engine.admit = [False]
-        raw = make_mail()
-    else:
-        harness.sink.failures = 1
-        raw = make_mail(sender="stranger@example.com")
+async def test_watermark_holds_a_mail_until_its_triggers_take_it(harness: Harness) -> None:
+    harness.sink.failures = 1
 
-    await harness.deliver(raw)
+    await harness.deliver(make_mail(sender="stranger@example.com"))
     assert harness.watermark() == MailboxWatermark("imap.example.com/bot@example.com", 1, 1)
     assert harness.clock.delays[-1] == email_module.RETRY_SECONDS[0]
 
     await harness.clock.tick()
     assert harness.watermark() == MailboxWatermark("imap.example.com/bot@example.com", 1, 2)
-    taken = harness.engine.inbound if destination == "conversation" else harness.sink.mails
-    assert len(taken) == (2 if destination == "conversation" else 1)
+    assert len(harness.sink.mails) == 1
     # Back to the normal wait once the mail is taken.
     assert harness.clock.delays[-1] == email_module.POLL_SECONDS
+
+
+@pytest.mark.asyncio
+async def test_a_conversation_mail_the_queue_rejects_is_not_handed_over_again(
+    harness: Harness,
+) -> None:
+    # The engine answered it with its busy reply; a retry would mail that reply again.
+    harness.engine.admit = [False]
+
+    await harness.deliver(make_mail())
+    await harness.clock.tick()
+
+    assert len(harness.engine.inbound) == 1
+    assert harness.watermark() == MailboxWatermark("imap.example.com/bot@example.com", 1, 2)
+    assert harness.clock.delays[-1] == email_module.POLL_SECONDS
+
+
+@pytest.mark.asyncio
+async def test_a_mail_that_starts_with_a_command_reaches_the_conversation_without_its_subject(
+    harness: Harness,
+) -> None:
+    await harness.deliver(make_mail(subject="Re: Plan", text="/new\n\n> quoted"))
+
+    [(_facts, text, _media)] = harness.engine.inbound
+    assert text == "/new\n\n> quoted"
 
 
 @pytest.mark.asyncio
