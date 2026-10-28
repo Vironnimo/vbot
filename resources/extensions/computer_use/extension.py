@@ -495,11 +495,10 @@ class ComputerUseService:
         self._control_timer = loop.call_later(CONTROL_IDLE_SECONDS, lapse)
 
     @asynccontextmanager
-    async def _active_call(self, context: ToolContext) -> AsyncIterator[None]:
+    async def _active_call(self, context: ToolContext, desktop: Desktop) -> AsyncIterator[None]:
         """Hold the desktop for one call under desktop control, interruptible."""
         async with self._lock:
-            if self._closed:
-                raise TargetError("Computer Use has stopped.", "computer_use_unavailable")
+            self._admit(context, desktop)
             owner = new_id("call")
             run_id = context.run_id or ""
             self._loop = asyncio.get_running_loop()
@@ -517,6 +516,9 @@ class ComputerUseService:
                     await settle_before_cancelling(asyncio.to_thread(hotkey.close))
                     raise
                 self._hotkey = hotkey
+            # Native hook startup and the desktop lock can both wait while the
+            # user revokes access or the selected desktop disconnects.
+            self._admit(context, desktop)
             with self._control_lock:
                 stopped_by = self._stopped_runs.get(run_id)
                 if stopped_by is not None:
@@ -545,6 +547,14 @@ class ComputerUseService:
                         self._active = None
                         self._control_changed()
                 self._call_done()
+
+    def _admit(self, context: ToolContext, desktop: Desktop) -> None:
+        """Recheck authority at desktop admission, after every preparation wait."""
+        self._authorize(context, context.tool_name)
+        key = (context.project_id, context.agent_id, context.session_id)
+        if not self.sessions.current(key, desktop.state):
+            raise InputInterrupted()
+        desktop.access = Access(desktop.state, ask=self.asks_per_app())
 
     def _check_stop(self) -> None:
         if self._stop.is_set():
@@ -611,6 +621,21 @@ class ComputerUseService:
 
     async def _begin(self, context: ToolContext, tool: str) -> tuple[SessionState, Any]:
         """Refuse the call unless Computer Use is ready and this Agent may use *tool*."""
+        self._authorize(context, tool)
+        key = (context.project_id, context.agent_id, context.session_id)
+        state = self.sessions.use(key)
+        assert self._target is not None
+        reason = await self._on_worker(self._target.readiness)
+        agent = self._authorize(context, tool)
+        if not self.sessions.current(key, state):
+            raise InputInterrupted()
+        self._readiness(reason)
+        if reason is not None:
+            raise CallRefusedError("computer_use_unavailable", reason)
+        return state, agent
+
+    def _authorize(self, context: ToolContext, tool: str) -> Any:
+        """Read the calling Agent's current policy without yielding."""
         registry = self.api.operations.tool_registry
         stopped = "Computer Use has stopped. Retry after Extensions have reloaded."
         if self._closed:
@@ -649,12 +674,7 @@ class ComputerUseService:
             raise CallRefusedError(
                 "computer_use_interrupted", "The Run was cancelled. Nothing was done."
             )
-        reason = await self._on_worker(self._target.readiness)
-        self._readiness(reason)
-        if reason is not None:
-            raise CallRefusedError("computer_use_unavailable", reason)
-        key = (context.project_id, context.agent_id, context.session_id)
-        return self.sessions.use(key), agent
+        return agent
 
     async def computer(self, context: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
         if self._routing is not None:
@@ -664,7 +684,7 @@ class ComputerUseService:
 
         async def work(access: Access, agent: Any, desktop: Desktop) -> str:
             action = parse_action(arguments)
-            async with self._active_call(context):
+            async with self._active_call(context, desktop):
                 return await self._computer(context, desktop, action)
 
         return await self._handle(context, "computer", work)
@@ -743,7 +763,7 @@ class ComputerUseService:
                     actions.append(parse_action(item))
                 except ActionError as error:
                     raise ActionError(f"Action {number}: {error} Nothing was run.") from None
-            async with self._active_call(context):
+            async with self._active_call(context, desktop):
                 return await self._batch(context, desktop, actions)
 
         return await self._handle(context, "computer_batch", work)
@@ -878,7 +898,12 @@ class ComputerUseService:
                 f"The user declined access to {listed}. Continue without these apps or ask the "
                 "user how to proceed; do not request them again unless the user asks you to.",
             )
-        state = self.sessions.use((context.project_id, context.agent_id, context.session_id))
+        self._authorize(context, "computer_apps")
+        if not self.sessions.current(
+            (context.project_id, context.agent_id, context.session_id), access.state
+        ):
+            raise InputInterrupted()
+        state = access.state
         for app in new:
             state.add(app)
         return (
@@ -934,13 +959,13 @@ class ComputerUseService:
         match = resolve_app(name, await self._on_worker(self._target.apps))
         if isinstance(match, str):
             raise ActionError(match)
-        if not access.allows(match):
-            raise CallRefusedError(
-                "access_required",
-                f"The user has not approved {match.name} in this Session. Ask for it first "
-                f"with {request_call(match.name)}.",
-            )
-        async with self._active_call(context):
+        async with self._active_call(context, desktop):
+            if not desktop.access.allows(match):
+                raise CallRefusedError(
+                    "access_required",
+                    f"The user has not approved {match.name} in this Session. Ask for it first "
+                    f"with {request_call(match.name)}.",
+                )
             try:
                 desktop.input_started = True
                 started = await self._on_worker(self._target.open, match, interrupt_on_cancel=True)
