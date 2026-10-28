@@ -227,6 +227,6 @@ Owners live in `webui/src/lib/chatState.js`, `chatRunStream.js`, `api.js`, `chat
 
 ### Notification settings and selected Schedule results
 
-The Session information panel autosaves `all`, `errors` or `muted` through `SessionNotificationSettings.svelte`. These settings filter Chat/Agent badges and desktop toasts; the Session's local unread marker remains independent. Schedule results use their Schedule's rule, even in a Session that also contains manual Runs.
+The Session information panel autosaves `all`, `errors` or `muted` through `SessionNotificationSettings.svelte`. The setting is rarely changed, so it stays folded behind an "Advanced" row in the Session card; a policy other than `all` shows on that folded row, and a failed save keeps the fold open. The fold lives in this component, not in the panel, so its autosave participant stays registered while folded. These settings filter Chat/Agent badges and desktop toasts; the Session's local unread marker remains independent. Schedule results use their Schedule's rule, even in a Session that also contains manual Runs.
 
 A Schedule result link carries `runId` in App navigation state. `chat.timeline {focus_run_id}` reads that Run into an independent History viewport; the live Session remains attached for current work controls and the composer. The read effect acknowledges only this viewport's loaded terminal Runs. Older-page loading stays in the viewport. `Show latest messages` or sending a message returns to the live conversation. Late focus responses cannot replace a newer selection.

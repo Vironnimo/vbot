@@ -3,6 +3,8 @@ export default Object.freeze({
   'notifications.all': 'All results',
   'notifications.errors': 'Errors only',
   'notifications.muted': 'Muted',
+  'notifications.advanced': 'Advanced',
+  'notifications.hint': 'Notifications: {policy}',
   'notifications.sessionHelp':
     'Controls badges and desktop notifications for this Session. Scheduled Runs use their Schedule’s setting. Unread results remain marked here.',
   'notifications.scheduleHelp':

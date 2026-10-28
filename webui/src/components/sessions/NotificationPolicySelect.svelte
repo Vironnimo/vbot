@@ -1,12 +1,26 @@
+<script module>
+  import { t } from '$lib/i18n.js';
+
+  const LABELS = {
+    all: () => t('notifications.all'),
+    errors: () => t('notifications.errors'),
+    muted: () => t('notifications.muted'),
+  };
+
+  export function policyLabel(value) {
+    return LABELS[value]?.() ?? value;
+  }
+</script>
+
 <script>
   import Dropdown from '../Dropdown.svelte';
-  import { t } from '$lib/i18n.js';
   let { value = 'all', onChange = () => {} } = $props();
-  const options = $derived([
-    { value: 'all', label: t('notifications.all') },
-    { value: 'errors', label: t('notifications.errors') },
-    { value: 'muted', label: t('notifications.muted') },
-  ]);
+  const options = $derived(
+    Object.keys(LABELS).map((policy) => ({
+      value: policy,
+      label: policyLabel(policy),
+    })),
+  );
 </script>
 
 <Dropdown
