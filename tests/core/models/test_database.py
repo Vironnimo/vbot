@@ -65,6 +65,11 @@ def test_manifest_round_trips_refresh_provenance(tmp_path: Path) -> None:
             {"catalogs": {"../openai.json": "2026-07-21T00:00:00+00:00"}}, id="path-record"
         ),
         pytest.param({"catalogs": {"openai.json": "2026-07-21T00:00:00"}}, id="naive-record"),
+        pytest.param({"refreshed_at": "0001-01-01T00:00:00+01:00"}, id="root-time-underflows-utc"),
+        pytest.param(
+            {"catalogs": {"openai.json": "9999-12-31T23:59:59-01:00"}},
+            id="catalog-time-overflows-utc",
+        ),
     ],
 )
 def test_invalid_manifest_makes_the_root_incompatible(
