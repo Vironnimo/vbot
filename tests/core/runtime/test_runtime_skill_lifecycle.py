@@ -249,6 +249,9 @@ async def test_lifecycle_cancellation_preserves_admission_and_invalidation(
 async def test_merge_keeps_its_access_check_with_deletion(
     config: Config, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str
 ) -> None:
+    # This concurrency contract uses only the two private Skills below. Loading
+    # the shipped Model catalogs and Skill trees adds unrelated work under load.
+    config._data["RESOURCES_PATH"] = str(tmp_path / "resources")
     runtime = Runtime(config, safe_startup_mode="test")
     runtime.start()
     release = threading.Event()
