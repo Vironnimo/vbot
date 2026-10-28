@@ -228,7 +228,13 @@ class RemoteTerminalAdapter:
 
     def _connection_changed(self, computer_id: str, event: str, _data: dict[str, Any]) -> None:
         """Retry only cleanup of an ended process, pinned to its native instance."""
-        if computer_id != self.computer_id or event != "connected":
+        if computer_id != self.computer_id:
+            return
+        if event == "removed":
+            # No registration remains that can receive deferred cleanup.
+            self._unsubscribe()
+            return
+        if event != "connected":
             return
         if not self._same_instance():
             self._unsubscribe()

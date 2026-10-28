@@ -252,13 +252,18 @@ async def test_pending_native_spawn_is_owned_during_reconnect_and_close(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("transient", ["computer_timeout", "computer_closing"])
+@pytest.mark.parametrize(
+    ("transient", "remove"),
+    [("computer_timeout", False), ("computer_closing", False), ("computer_timeout", True)],
+)
 async def test_remote_io_recovers_safe_reads_and_does_not_replay_unconfirmed_input(
     remote: tuple[TerminalManager, Link, AdapterFactory],
     tmp_path: Path,
     transient: str,
+    remove: bool,
 ) -> None:
     manager, link, factory = remote
+    listeners = len(link.registry._listeners)
     context = _context(tmp_path)
     started = await call(manager, context, {"action": "start", "command": "editor"})
     terminal_id = started["data"]["terminal_id"]
@@ -285,8 +290,13 @@ async def test_remote_io_recovers_safe_reads_and_does_not_replay_unconfirmed_inp
     # only after the controlled failure, or the first release can fail on the new link.
     await eventually(lambda: "release" not in link.fail_next)
     assert link.native._processes  # the failed release did not abort the server's exit state
-    await link.connect()
-    await eventually(lambda: not link.native._processes)
+    if remove:
+        link.registry.disconnect(link.connection)
+        await link.registry.forget("pc_laptop")
+    else:
+        await link.connect()
+        await eventually(lambda: not link.native._processes)
+    await eventually(lambda: len(link.registry._listeners) == listeners)
 
 
 @pytest.mark.asyncio
