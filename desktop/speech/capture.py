@@ -79,6 +79,22 @@ ECHO_STAGE_WAIT_SECONDS = 0.5
 ECHO_RECORDING_SAMPLE_RATE = 48000
 """Stable recording rate while the WebRTC echo stage initializes."""
 
+SILENCE_RESTART_SECONDS = 5.0
+"""Digital silence after which the microphone is released and reopened.
+
+A live microphone always carries a noise floor. A wireless headset dongle can
+keep delivering exact zeros after its radio link dropped, without Windows
+seeing a device change, until every client closes the stream. Capture holds the
+stream for hours, so it releases the device itself; Desktop dictation and other
+applications on the same microphone recover with it.
+"""
+
+MAX_SILENCE_RESTART_SECONDS = 60.0
+"""Longest silence between reopens while the microphone stays silent (doubling)."""
+
+_SILENCE_RELEASE_SECONDS = 0.5  # closed long enough for the device to stop its stream
+_DIGITAL_SILENCE_PEAK = 2  # int16 sample magnitude a noise floor exceeds
+
 _MAX_CONSECUTIVE_READ_FAILURES = 3
 
 CAPTURE_OPENING = "opening"
@@ -404,6 +420,7 @@ class AudioCapture:
         block_seconds: float = BLOCK_SECONDS,
         history_seconds: float = HISTORY_SECONDS,
         echo_stage_wait: float = ECHO_STAGE_WAIT_SECONDS,
+        silence_restart_seconds: float = SILENCE_RESTART_SECONDS,
     ) -> None:
         self._requested = microphone.to_dict() if microphone is not None else None
         self._echo_cancellation = echo_cancellation
@@ -416,6 +433,7 @@ class AudioCapture:
         self._clock = clock
         self._block_seconds = block_seconds
         self._history_seconds = history_seconds
+        self._silence_restart_seconds = silence_restart_seconds
         self._thread: threading.Thread | None = None
 
         self._lock = threading.Lock()
@@ -538,6 +556,8 @@ class AudioCapture:
     def _read_until_failure(self) -> bool:
         """Read until stopped (``True``) or until the microphone disconnects (``False``)."""
         failures = 0
+        silent_seconds = 0.0
+        silence_limit = self._silence_restart_seconds
         while not self._stop.is_set():
             if self._awaiting_stage:
                 self._attach_ready_stage()
@@ -556,6 +576,26 @@ class AudioCapture:
                 continue
             failures = 0
             self._process(samples, arrival)
+            if not _is_digital_silence(samples):
+                silent_seconds = 0.0
+                silence_limit = self._silence_restart_seconds
+                continue
+            assert self._format is not None
+            silent_seconds += len(samples) / self._format.sample_rate
+            if silent_seconds < silence_limit:
+                continue
+            logger.warning(
+                "Microphone delivered digital silence for %.0f s; reopening it", silent_seconds
+            )
+            self._end_segment(GAP_READ_FAILED)
+            self._close_stream()
+            if self._stop.wait(_SILENCE_RELEASE_SECONDS):
+                return True
+            if not self._open_stream():
+                self._disconnect(ERROR_MICROPHONE_READ_FAILED)
+                return False
+            silent_seconds = 0.0
+            silence_limit = min(silence_limit * 2, MAX_SILENCE_RESTART_SECONDS)
         return True
 
     def _read_block(self) -> tuple[np.ndarray, float]:
@@ -822,6 +862,10 @@ def _read_available(stream: Any) -> int:
         return max(0, int(stream.read_available))
     except Exception:
         return 0
+
+
+def _is_digital_silence(samples: np.ndarray) -> bool:
+    return not samples.size or int(np.abs(samples.astype(np.int32)).max()) <= _DIGITAL_SILENCE_PEAK
 
 
 def _to_int16(samples: np.ndarray, dtype: str) -> np.ndarray:

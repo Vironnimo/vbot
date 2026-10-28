@@ -357,6 +357,30 @@ def test_repeated_read_failures_disconnect_until_the_microphone_returns(
     assert sd.events[refresh + 1 : refresh + 3] == ["initialize", "stream.open"]
 
 
+@pytest.mark.parametrize(
+    ("idle_level", "reopened"), [(0, True), (3, False)], ids=["digital-silence", "noise-floor"]
+)
+def test_a_microphone_delivering_digital_silence_is_reopened(
+    start_capture: Callable[..., Running], idle_level: int, reopened: bool
+) -> None:
+    sd = FakeSoundDevice()
+    sd.idle_level = idle_level
+    subscriptions: list[CaptureSubscription] = []
+
+    run = start_capture(sd, silence_restart_seconds=0.2, subscribe=subscribe_to(subscriptions))
+    items = read_items(subscriptions[0], 12)
+
+    if reopened:
+        # A dongle that lost its headset link sends zeros until every client lets go.
+        assert CaptureGap("read_failed") in items
+        assert len(sd.streams) >= 2
+        assert sd.streams[0].closed
+        assert run.capture.status.state == "capturing"
+    else:
+        assert all(isinstance(item, AudioBlock) for item in items)
+        assert len(sd.streams) == 1
+
+
 def test_a_microphone_missing_at_start_is_retried_after_a_refresh(
     start_capture: Callable[..., Running],
 ) -> None:

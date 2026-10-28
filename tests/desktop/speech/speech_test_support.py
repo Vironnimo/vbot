@@ -96,8 +96,8 @@ class FakeSoundDevice:
 
     ``feed`` queues int16 sample arrays, :class:`Overflow` markers and
     exceptions; reads consume samples across array boundaries. Once the script
-    is empty, reads return silence after ``pace`` seconds so capture threads
-    run at a bounded rate instead of spinning.
+    is empty, reads return ``idle_level`` (digital silence by default) after
+    ``pace`` seconds so capture threads run at a bounded rate instead of spinning.
     """
 
     def __init__(
@@ -123,6 +123,7 @@ class FakeSoundDevice:
         self.rates = set(rates) if rates is not None else None
         self.dtypes = set(dtypes)
         self.pace = pace
+        self.idle_level = 0
         self.read_available = 0
         self.open_failures = 0
         self.open_attempts: list[int] = []
@@ -215,7 +216,7 @@ class FakeSoundDevice:
             taken, self._samples = self._samples[:frames], self._samples[frames:]
         if not scripted:
             time.sleep(self.pace)
-        block = np.zeros(frames, dtype=np.int16)
+        block = np.full(frames, self.idle_level, dtype=np.int16)
         block[: taken.size] = taken
         if stream.dtype == "float32":
             return (block.astype(np.float32) / 32768.0).reshape(-1, 1), overflowed
