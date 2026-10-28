@@ -8,6 +8,7 @@ OpenAI-compatible gateway with per-Model protocol/request profiles across **four
 - Adapter selector: `opencode_go`
 - Adapter class: `OpenCodeGoAdapter`
 - Gemini transport and codec: `core/providers/gemini_compatible.py` and `_gemini_wire.py`, shared with Zen
+- Gemini Tool JSON Schema transport and dated Go/Zen probe evidence: `opencode-zen.md` -> Limits, Sampling, Tools, and Media
 - Default runtime endpoint: OpenAI-compatible `POST /chat/completions`
 - Alternate runtime endpoint for selected models: `POST /messages` through an internal `AnthropicCompatibleAdapter`
 - Alternate runtime endpoint for selected models: `POST /responses` through the shared stateless Responses machinery (`core/providers/_responses_wire.py`, same shape the OpenRouter adapter uses for its GPT-5.6 ids)

@@ -74,9 +74,14 @@ def gemini_input_payload(
     if tools:
         if not isinstance(tools, Sequence) or isinstance(tools, str | bytes):
             raise ProviderError("Gemini tools must be a list", retryable=False)
+        declarations = render_tool_definitions(tools, profile="omit_strict")
+        for declaration in declarations:
+            # Google's typed `parameters` accepts only an OpenAPI subset.
+            # The JSON Schema field preserves canonical keywords such as uniqueItems.
+            declaration["parametersJsonSchema"] = declaration.pop("parameters")
         payload["tools"] = [
             {
-                "functionDeclarations": render_tool_definitions(tools, profile="omit_strict"),
+                "functionDeclarations": declarations,
             }
         ]
     return payload

@@ -312,7 +312,8 @@ async def test_no_wire_enables_strict_tool_schemas(wire: str, model_id: str, url
         assert all("strict" not in tool["function"] for tool in rendered)
     elif wire == "gemini":
         assert all("strict" not in tool for tool in rendered)
-        assert rendered[0]["parameters"] == CLOSED_TOOL["parameters"]
+        assert rendered[0]["parametersJsonSchema"] == CLOSED_TOOL["parameters"]
+        assert all("parameters" not in tool for tool in rendered)
     else:
         # The Responses wire carries the non-strict invariant explicitly.
         assert all(tool["type"] == "function" and tool["strict"] is False for tool in rendered)
