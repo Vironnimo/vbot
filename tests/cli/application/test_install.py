@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -121,15 +122,56 @@ def test_install_rejects_overlapping_payload_before_mutations(
     assert not (root / "application.json").exists()
 
 
-def test_a_nonempty_destination_is_refused_before_any_change(tmp_path: Path) -> None:
+@pytest.mark.parametrize("at_admission", [False, True])
+@pytest.mark.parametrize("existing_install", [False, True])
+def test_a_nonempty_destination_is_refused_before_any_change(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    at_admission: bool,
+    existing_install: bool,
+) -> None:
     destination = tmp_path / "checkout"
-    destination.mkdir()
-    (destination / "pyproject.toml").write_text("[project]", encoding="utf-8")
+    payload = _payload(tmp_path, "desktop-client")
+    previous = _payload(tmp_path / "previous", "desktop-client")
+    manifest_path = previous / "release.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["version_id"] = "v0_existing"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    original: dict[Path, bytes] = {}
+    original_exclusive = install.exclusive
 
-    with pytest.raises(ApplicationError, match="destination is not empty"):
-        install_payload(destination, _payload(tmp_path), shape="server", data_dir=tmp_path / "data")
+    def contents() -> dict[Path, bytes]:
+        return {
+            path.relative_to(destination): path.read_bytes()
+            for path in destination.rglob("*")
+            if path.is_file() and path.name != ".operation.lock"
+        }
 
-    assert [path.name for path in destination.iterdir()] == ["pyproject.toml"]
+    def populate() -> None:
+        if existing_install:
+            with monkeypatch.context() as patch:
+                patch.setattr(install, "exclusive", original_exclusive)
+                install_payload(destination, previous, shape="desktop-client", channel="main")
+        else:
+            destination.mkdir(exist_ok=True)
+            (destination / "pyproject.toml").write_text("[project]", encoding="utf-8")
+        original.update(contents())
+
+    @contextmanager
+    def admission(root: Path):
+        populate()
+        with original_exclusive(root):
+            yield
+
+    if at_admission:
+        monkeypatch.setattr(install, "exclusive", admission)
+    else:
+        populate()
+    with pytest.raises(ApplicationError):
+        install_payload(destination, payload, shape="desktop-client")
+
+    assert contents() == original
+    assert not (destination / "versions" / "v1_test").exists()
 
 
 @pytest.mark.parametrize("relationship", ["same", "child", "parent", "normalized-child"])

@@ -6,7 +6,7 @@ import json
 import logging
 import threading
 from collections.abc import Callable
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -883,6 +883,42 @@ def test_worker_holds_operation_lock_for_the_entire_transaction(
         release.set()
         thread.join(timeout=_THREAD_COORDINATION_TIMEOUT_SECONDS)
     assert not thread.is_alive()
+
+
+@pytest.mark.parametrize("changed", ["completed", "owner", "unreadable"])
+def test_worker_rechecks_its_saved_authority_after_waiting_for_the_operation_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, changed: str
+) -> None:
+    install = _install(tmp_path, shape="desktop-client")
+    operation = Operation(id="upd_waiting", previous_version="rel_old")
+    operation.save(install)
+    expected: bytes = b""
+
+    @contextmanager
+    def admit(root: Path, name: str = "operation", **kwargs):
+        nonlocal expected
+        if name == "operation":
+            latest = load_operation(install, operation.id)
+            if changed == "completed":
+                latest.phase = "completed"
+            else:
+                latest.worker_pid = 987654
+            latest.save(install)
+            path = install.root / "operations" / f"{operation.id}.json"
+            if changed == "unreadable":
+                path.write_bytes(b"incomplete record")
+            expected = path.read_bytes()
+        with exclusive(root, name, **kwargs):
+            yield
+
+    monkeypatch.setattr(worker, "exclusive", admit)
+    monkeypatch.setattr(worker, "execute", lambda *_args: pytest.fail("stale worker executed"))
+    if changed == "unreadable":
+        with pytest.raises(ApplicationError):
+            worker.run(install, operation.id)
+    else:
+        worker.run(install, operation.id)
+    assert (install.root / "operations" / f"{operation.id}.json").read_bytes() == expected
 
 
 def test_a_completed_update_deletes_retired_versions_after_releasing_the_lock(

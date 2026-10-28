@@ -48,23 +48,42 @@ def test_wait_returns_the_saved_terminal_human_result(tmp_path: Path):
 
 
 @pytest.mark.parametrize("release_version", [None, "1.2.3"])
+@pytest.mark.parametrize("inspectable", [False, True])
 def test_request_coalesces_a_live_operation_and_recovers_an_orphan(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, release_version: str | None
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    release_version: str | None,
+    inspectable: bool,
 ):
     install = _install(tmp_path)
-    pending = Operation(id="upd_pending", phase="preparing", release_version=release_version)
+    pending = Operation(
+        id="upd_pending",
+        phase="preparing",
+        release_version=release_version,
+        worker_pid=123,
+        worker_created=456.0,
+    )
     spawned: list[str] = []
     monkeypatch.setattr(operations, "operations", lambda _install: [pending])
     monkeypatch.setattr(
         operations, "spawn_worker", lambda _install, operation: spawned.append(operation.id)
     )
 
-    monkeypatch.setattr(operations, "worker_alive", lambda _operation: True)
+    def process(_pid):
+        if not inspectable:
+            raise psutil.AccessDenied(_pid)
+        return SimpleNamespace(create_time=lambda: 456.0, is_running=lambda: True)
+
+    monkeypatch.setattr(operations.psutil, "Process", process)
     selector = f"v{release_version}" if release_version else None
     assert operations.request_update(install, release_version=selector) is pending
+    operations.recover_operations(install)
     assert spawned == []
 
-    monkeypatch.setattr(operations, "worker_alive", lambda _operation: False)
+    def gone(_pid):
+        raise psutil.NoSuchProcess(_pid)
+
+    monkeypatch.setattr(operations.psutil, "Process", gone)
     assert operations.request_update(install, release_version=selector) is pending
     assert spawned == [pending.id]
     operations.recover_operations(install)

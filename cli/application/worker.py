@@ -726,10 +726,21 @@ def run(install: Installation, operation_id: str) -> None:
         operation.worker_created = current_created
         operation.save(install)
     retired: list[Path] = []
+    admitted = False
     try:
         # This lifetime lock also excludes manual lifecycle mutations.
         # Dispatch uses its separate short lock so callers can observe/coalesce work.
         with exclusive(install.root, "operation", timeout=3600):
+            # A prior worker can finish or publish a newer owner while this
+            # process waits for the lifetime lock. Never replay the stale copy.
+            operation = load_operation(install, operation_id)
+            if operation.terminal or (
+                operation.worker_pid != current_pid
+                or operation.worker_created is None
+                or abs(operation.worker_created - current_created) >= 0.001
+            ):
+                return
+            admitted = True
             execute(install, operation)
             if operation.phase == "completed":
                 retired = retire_unneeded(install)
@@ -745,6 +756,9 @@ def run(install: Installation, operation_id: str) -> None:
                         exc_info=True,
                     )
     except Exception as exc:
+        if not admitted:
+            # No authoritative transaction was admitted; preserve its record.
+            raise
         _LOGGER.exception("Application update failed (operation=%s)", operation.id)
         operation.error = str(exc)
         attention = operation.phase in {"stopping", "activating", "verifying"}

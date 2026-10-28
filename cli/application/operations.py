@@ -91,6 +91,7 @@ def child_environment(install: Installation) -> dict[str, str]:
 
 
 def worker_alive(operation: Operation) -> bool:
+    """Recover only when the recorded worker is proven gone or replaced."""
     if type(operation.worker_pid) is not int or not isinstance(
         operation.worker_created, (float, int)
     ):
@@ -101,8 +102,11 @@ def worker_alive(operation: Operation) -> bool:
             abs(process_started(process) - operation.worker_created) < 0.001
             and process.is_running()
         )
-    except psutil.Error:
+    except psutil.NoSuchProcess:
         return False
+    except psutil.Error:
+        # An inaccessible process is not evidence that its transaction ended.
+        return True
 
 
 def spawn_worker(install: Installation, operation: Operation) -> None:

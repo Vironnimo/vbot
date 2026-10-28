@@ -29,6 +29,7 @@ from core.access.config import (
 )
 from core.utils.atomic import atomic_write_text
 from core.utils.config import DEFAULT_PORT
+from core.utils.file_status import exists_strict
 
 #: Global Agent defaults a new data directory starts with. An install-time seed,
 #: not a Runtime fallback: an existing data directory keeps its settings.
@@ -74,12 +75,6 @@ def install_payload(
     manifest = validate_release(
         payload, shape=shape, platform=current_platform(), access=server_access
     )
-    if (root / "application.json").exists():
-        install = load_installation(root)
-        raise ApplicationError(
-            f"An application is already installed at {install.root}; "
-            "use vbot update --package to update it"
-        )
     if public_key:
         try:
             if len(base64.b64decode(public_key, validate=True)) != 32:
@@ -88,17 +83,7 @@ def install_payload(
             raise ApplicationError(
                 "Release public key must be base64 raw Ed25519 public key"
             ) from exc
-    allowed = {"vBot.exe", "vBot.GUI.exe", "vbot", ".operation.lock"}
-    if root.exists() and any(
-        path.name not in allowed
-        and not (
-            path.stem.startswith("unins")
-            and path.stem[5:].isdigit()
-            and path.suffix.lower() in {".exe", ".dat", ".msg"}
-        )
-        for path in root.iterdir()
-    ):
-        raise ApplicationError("The application destination is not empty")
+    _require_new_destination(root)
     resolved_data = (data_dir or Path.home() / ".vbot").expanduser().resolve()
     if shape != "desktop-client" and (
         resolved_data == root
@@ -118,6 +103,8 @@ def install_payload(
     )
     root.mkdir(parents=True, exist_ok=True)
     with exclusive(root):
+        # Another installer can finish after our preflight and before this lock.
+        _require_new_destination(root)
         destination = install.version(manifest["version_id"])
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(payload, destination)
@@ -132,6 +119,27 @@ def install_payload(
         install.save()
         install.activate(manifest["version_id"])
     return install
+
+
+def _require_new_destination(root: Path) -> None:
+    """Refuse existing content, including changes completed before admission."""
+    if exists_strict(root / "application.json"):
+        install = load_installation(root)
+        raise ApplicationError(
+            f"An application is already installed at {install.root}; "
+            "use vbot update --package to update it"
+        )
+    allowed = {"vBot.exe", "vBot.GUI.exe", "vbot", ".operation.lock"}
+    if exists_strict(root) and any(
+        path.name not in allowed
+        and not (
+            path.stem.startswith("unins")
+            and path.stem[5:].isdigit()
+            and path.suffix.lower() in {".exe", ".dat", ".msg"}
+        )
+        for path in root.iterdir()
+    ):
+        raise ApplicationError("The application destination is not empty")
 
 
 def _server_access(
