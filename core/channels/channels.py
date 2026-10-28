@@ -31,6 +31,7 @@ from core.channels.config import (
     _normalize_channel_id,
 )
 from core.channels.engine import ChannelConversationEngine
+from core.channels.mail import InboundMailSink
 from core.channels.state import RUN_BUTTON_PRUNE_BATCH_SIZE, ChannelStateStore
 from core.channels.storage import ChannelStorage
 from core.chat.messages import ReplySurface
@@ -126,6 +127,11 @@ class ChannelService:
             recover_observations=self._recover_observations,
         )
         self._notify_tool_registration_changed_hook: Callable[[], None] = lambda: None
+        self._mail_sink: InboundMailSink | None = None
+
+    def set_mail_sink(self, sink: InboundMailSink | None) -> None:
+        """Bind where email Channels hand the mails no conversation takes (Cron)."""
+        self._mail_sink = sink
 
     def start(self) -> None:
         self._connections.start()

@@ -42,6 +42,12 @@ if TYPE_CHECKING:
         validate_channel_document,
         validate_channel_file,
     )
+    from core.channels.mail import (
+        MAIL_TEXT_MAX_CHARS,
+        InboundMail,
+        InboundMailSink,
+        MailAttachment,
+    )
     from core.channels.storage import ChannelStorage
 
 
@@ -63,6 +69,10 @@ _EXPORT_MODULES = {
     "ConversationFacts": "core.channels.adapter",
     "DeniedChatFacts": "core.channels.adapter",
     "DeniedChatLog": "core.channels.adapter",
+    "InboundMail": "core.channels.mail",
+    "InboundMailSink": "core.channels.mail",
+    "MAIL_TEXT_MAX_CHARS": "core.channels.mail",
+    "MailAttachment": "core.channels.mail",
     "MessageFacts": "core.channels.adapter",
     "QuotedMessageFacts": "core.channels.adapter",
     "ReplyPlanFacts": "core.channels.adapter",
@@ -105,6 +115,10 @@ __all__ = [
     "ConversationFacts",
     "DeniedChatFacts",
     "DeniedChatLog",
+    "InboundMail",
+    "InboundMailSink",
+    "MAIL_TEXT_MAX_CHARS",
+    "MailAttachment",
     "MessageFacts",
     "QuotedMessageFacts",
     "ReplyPlanFacts",
