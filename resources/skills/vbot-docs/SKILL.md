@@ -30,7 +30,7 @@ For a question about a past conversation, use `session_search` first; read `refe
 | Write or change an Extension: its Tools, hooks, Commands, settings | `references/extensions.md`; for a page or its own Sessions, then `references/extension-pages.md` |
 | Use bundled Swarm or Computer Use, or connect KeePassXC or 1Password as a source for Agent Secrets | `references/extension-usage.md` |
 | MCP installation, Tool access, discovery and application operations | `references/mcp.md` |
-| Channels (Telegram, Discord, Slack, Mattermost, WhatsApp): first setup, tokens, allowed chats, group access | `references/channels.md` |
+| Channels (Telegram, Discord, Slack, Mattermost, WhatsApp, email): first setup, tokens, allowed chats, group access | `references/channels.md` |
 | Automations: scheduled Runs, change checks and Webhooks | `references/cron.md` |
 | Runs after startup, including restart continuation | `references/bootstrap.md` |
 | Install a Skill from a link, archive or folder; inspect, author, share, disable or pin Skills; review their history; restore deleted Skills; Librarian passes over an Agent's own Skills | `references/skills.md` |

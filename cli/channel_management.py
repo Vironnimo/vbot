@@ -23,6 +23,15 @@ CHANNEL_UPDATE_FLAGS = (
     "--observe-unaddressed",
     "--app-token-env",
     "--server-url",
+    "--email-address",
+    "--email-username",
+    "--imap-host",
+    "--imap-port",
+    "--smtp-host",
+    "--smtp-port",
+    "--smtp-security",
+    "--email-folder",
+    "--require-sender-authentication",
 )
 
 
@@ -41,6 +50,7 @@ def channel_add(
     app_token_env: str | None = None,
     server_url: str | None = None,
     disabled: bool = False,
+    email: Mapping[str, Any] | None = None,
 ) -> CommandResult:
     """Create a channel configuration via `channel.create` RPC."""
 
@@ -55,6 +65,8 @@ def channel_add(
         params["app_token_env_var"] = app_token_env
     if server_url:
         params["server_url"] = server_url
+    if email:
+        params["email"] = dict(email)
     if platform == "whatsapp" or disabled:
         params["enabled"] = False
     if token is not None:
@@ -478,6 +490,14 @@ def _format_channel_row(channel: object) -> str:
     for key in ("app_token_env_var", "server_url"):
         if channel.get(key):
             fields.append(f" {key}={channel[key]}")
+    email = channel.get("email")
+    if isinstance(email, Mapping):
+        fields.append(
+            f" email={email.get('address')}"
+            f" imap={email.get('imap_host')}:{email.get('imap_port')}"
+            f" smtp={email.get('smtp_host')}:{email.get('smtp_port')}/{email.get('smtp_security')}"
+            f" folders={_format_allowed_chat_ids(email.get('folders'))}"
+        )
     return record_fields(fields, separator="")
 
 

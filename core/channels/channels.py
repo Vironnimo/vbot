@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
-from collections.abc import Awaitable, Callable, Iterator, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, nullcontext
 from dataclasses import replace
 from pathlib import Path
@@ -487,6 +487,9 @@ class ChannelService:
             if fields.get("platform", "email") != "email" and "email" not in fields:
                 # The mail account belongs to the email platform only.
                 fields = {**fields, "email": None}
+            elif isinstance(fields.get("email"), Mapping) and config.email is not None:
+                # An email update changes only the account fields it names.
+                fields = {**fields, "email": config.email.updated(fields["email"])}
             updated = replace(config, **fields)
             updated.validate()
             self._validate_agent_exists(updated.agent_id)

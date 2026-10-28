@@ -52,6 +52,7 @@ def _add_channel_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
     add_parser.add_argument("--dm-scope", default="per_conversation", choices=CHANNEL_DM_SCOPES)
     add_parser.add_argument("--app-token-env", help="Slack Socket Mode app-token variable name")
     add_parser.add_argument("--server-url", help="Mattermost server URL")
+    _add_email_arguments(add_parser)
     add_parser.add_argument(
         "--disabled", action="store_true", help="Save without starting the connection"
     )
@@ -84,6 +85,7 @@ def _add_channel_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
     update_parser.add_argument("--token-env", metavar="<env-var>")
     update_parser.add_argument("--app-token-env", metavar="<env-var>")
     update_parser.add_argument("--server-url", metavar="<url>")
+    _add_email_arguments(update_parser)
     update_parser.add_argument("--dm-scope", choices=CHANNEL_DM_SCOPES)
     update_parser.add_argument(
         "--allow",
@@ -189,6 +191,36 @@ def _add_channel_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
             metavar="<user-id>",
             help="Stable platform user id",
         )
+
+
+def _add_email_arguments(parser: argparse.ArgumentParser) -> None:
+    group = parser.add_argument_group(
+        "email account",
+        "For --platform email; the password is the token. On update, only the named fields change.",
+    )
+    group.add_argument("--email-address", metavar="<address>", help="The account's address")
+    group.add_argument("--email-username", metavar="<user>", help="Login name if not the address")
+    group.add_argument("--imap-host", metavar="<host>")
+    group.add_argument("--imap-port", type=int, metavar="<port>", help="Default 993")
+    group.add_argument("--smtp-host", metavar="<host>")
+    group.add_argument("--smtp-port", type=int, metavar="<port>", help="Default 465")
+    group.add_argument(
+        "--smtp-security",
+        choices=("ssl", "starttls"),
+        help="Default ssl on port 465, otherwise starttls",
+    )
+    group.add_argument(
+        "--email-folder",
+        dest="email_folders",
+        nargs="+",
+        metavar="<folder>",
+        help="Folders to watch; default INBOX",
+    )
+    group.add_argument(
+        "--require-sender-authentication",
+        choices=("true", "false"),
+        help="Answer only mails whose sender domain the server verified; default true",
+    )
 
 
 def _add_channel_policy_arguments(

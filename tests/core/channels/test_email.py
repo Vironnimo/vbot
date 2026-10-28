@@ -380,7 +380,7 @@ async def test_replies_thread_and_own_mails_are_skipped(harness: Harness) -> Non
     await harness.adapter.send_text(_ME, "Done.", reply_to_message_id="<m1@example.com>")
     await harness.adapter.send(
         "## **Weekly** report\nAll green.",
-        "You@Mail.Example.com",
+        "Anna <You@Mail.Example.com>",
         files=[FileData(filename="a.txt", data=b"hi", media_type="text/plain")],
     )
 

@@ -16,6 +16,7 @@ import hashlib
 import imaplib
 from collections.abc import Callable
 from dataclasses import replace
+from email.utils import parseaddr
 from typing import Any, override
 
 from core.attachments import AttachmentStore
@@ -418,7 +419,15 @@ class EmailChannelAdapter(ChannelAdapter):
 
 
 def _recipient(platform_target: str) -> str:
-    address = normalize_email_address(platform_target)
+    """The address of a target, also written as ``mailto:<address>`` or ``Name <address>``."""
+    text = platform_target.strip()
+    if text[:7].lower() == "mailto:":
+        text = text[7:]
+    _name, parsed = parseaddr(text)
+    address = normalize_email_address(parsed) if parsed else None
     if address is None:
-        raise ChannelConfigError("An email target must be an email address")
+        raise ChannelConfigError(
+            f'"{platform_target}" is not an email address. '
+            "Use the recipient's address, such as name@example.com."
+        )
     return address

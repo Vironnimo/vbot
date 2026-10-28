@@ -22,6 +22,7 @@ from core.channels import (
     validate_channel_data,
     validate_channel_document,
 )
+from core.channels.config import EmailSettings
 from tests.core.channels.channels_test_support import make_config, make_service
 
 pytestmark = pytest.mark.usefixtures("current_format_data_directory")
@@ -195,6 +196,16 @@ def test_email_config_fills_its_defaults_and_round_trips(tmp_path: Path) -> None
         "folders": ["INBOX"],
         "require_sender_authentication": True,
     }
+    # An update changes the fields it names; derived defaults follow their source.
+    assert config.email is not None
+    moved = EmailSettings.from_dict(
+        config.email.updated({"address": "new@example.com", "smtp_port": 465})
+    )
+    assert (moved.username, moved.smtp_security, moved.imap_host) == (
+        "new@example.com",
+        "ssl",
+        "imap.example.com",
+    )
     # Leaving the email platform drops the mail account with it.
     other = replace(config, platform="telegram", email=None, allowed_chat_ids=[])
     assert "email" not in other.to_dict()

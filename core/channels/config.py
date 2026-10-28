@@ -368,6 +368,21 @@ class EmailSettings:
             "require_sender_authentication": self.require_sender_authentication,
         }
 
+    def updated(self, changes: Mapping[str, Any]) -> dict[str, Any]:
+        """These settings with ``changes`` applied, as data for validation.
+
+        A derived value that still has its default follows its source: the
+        username follows a changed address, the security a changed SMTP port.
+        """
+        base = self.to_dict()
+        if "address" in changes and self.username == self.address:
+            base.pop("username")
+        if "smtp_port" in changes and self.smtp_security == (
+            "ssl" if self.smtp_port == 465 else "starttls"
+        ):
+            base.pop("smtp_security")
+        return {**base, **changes}
+
 
 def _email_payload(value: EmailSettings | Mapping[str, Any] | None) -> Any:
     return value.to_dict() if isinstance(value, EmailSettings) else value

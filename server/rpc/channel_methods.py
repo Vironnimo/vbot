@@ -76,6 +76,7 @@ async def _create_channel_admitted(state: Any, params: JsonObject) -> JsonObject
         "app_token_env_var",
         "app_token",
         "server_url",
+        "email",
     }
     _reject_unsupported(params, supported_fields, "channel.create")
 
@@ -94,6 +95,7 @@ async def _create_channel_admitted(state: Any, params: JsonObject) -> JsonObject
         observe_unaddressed=_optional_bool(params, "observe_unaddressed", default=False),
         app_token_env_var=_channel_app_token_key(params, channel_id),
         server_url=_channel_optional_text(params, "server_url"),
+        email=_channel_email(params),
     )
 
     credential_result: JsonObject | None = None
@@ -157,6 +159,7 @@ async def _update_channel(state: Any, params: JsonObject) -> JsonObject:
         "observe_unaddressed",
         "app_token_env_var",
         "server_url",
+        "email",
     }
     _reject_unsupported(params, supported_fields, "channel.update")
 
@@ -183,6 +186,8 @@ async def _update_channel(state: Any, params: JsonObject) -> JsonObject:
         updates["mention_patterns"] = _required_string_list(params, "mention_patterns")
     if "observe_unaddressed" in params:
         updates["observe_unaddressed"] = _required_bool(params, "observe_unaddressed")
+    if "email" in params:
+        updates["email"] = _channel_email(params)
 
     previous_config = await _channel_config_if_available(state.runtime.channel_service, channel_id)
 
@@ -399,7 +404,7 @@ def _channel_status_facts(channel_service: Any, config: ChannelConfig) -> JsonOb
         "denied_chats": [entry.to_dict() for entry in channel_service.denied_chats(config.id)],
         **(
             channel_service.connection_status(config.id)
-            if config.platform in {"slack", "mattermost", "whatsapp"}
+            if config.platform in {"slack", "mattermost", "whatsapp", "email"}
             else {}
         ),
     }
@@ -509,6 +514,14 @@ def _channel_optional_text(params: JsonObject, key: str) -> str:
     if not isinstance(value, str):
         raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{key} must be a string")
     return value.strip()
+
+
+def _channel_email(params: JsonObject) -> Any:
+    """The email account object as sent; Channel validation reports its fields."""
+    value = params.get("email")
+    if value is not None and not isinstance(value, dict):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.email must be an object")
+    return value
 
 
 def _channel_app_token_key(params: JsonObject, channel_id: str) -> str:

@@ -64,6 +64,7 @@ _PLATFORM_NAMES = {
     "slack": "Slack",
     "mattermost": "Mattermost",
     "whatsapp": "WhatsApp",
+    "email": "Email",
 }
 
 
