@@ -288,12 +288,24 @@ def test_archive_retention_null_disables_it_and_unset_restores_the_default() -> 
     assert build_effective_settings(cleared)["archive"] == {"retention_days": 30}
 
 
-def test_unset_prunes_empty_nested_task_options() -> None:
+@pytest.mark.parametrize(
+    ("options", "option_path", "remaining"),
+    [
+        ({"audio": {"voice": "echo"}}, '["audio"]["voice"]', None),
+        ({"target": "speaker", "voice": "echo"}, '["target"]', {"voice": "echo"}),
+        (
+            {"audio": {"target": "speaker", "voice": "echo"}},
+            '["audio"]["target"]',
+            {"audio": {"voice": "echo"}},
+        ),
+    ],
+)
+def test_unset_prunes_only_empty_task_option_containers(options, option_path, remaining) -> None:
     original = {
         "model_tasks": {
             "text_to_speech": {
                 "target": "openai/tts-1",
-                "options": {"audio": {"voice": "echo"}},
+                "options": options,
             }
         }
     }
@@ -301,11 +313,14 @@ def test_unset_prunes_empty_nested_task_options() -> None:
     updated, _changed = apply_settings_patch(
         original,
         parse_patch_operations(
-            [{"op": "unset", "path": 'model_tasks["text_to_speech"].options["audio"]["voice"]'}]
+            [{"op": "unset", "path": f'model_tasks["text_to_speech"].options{option_path}'}]
         ),
     )
 
-    assert updated == {"model_tasks": {"text_to_speech": {"target": "openai/tts-1"}}}
+    expected = {"target": "openai/tts-1"}
+    if remaining is not None:
+        expected["options"] = remaining
+    assert updated == {"model_tasks": {"text_to_speech": expected}}
 
 
 def test_unset_prunes_empty_extension_config() -> None:

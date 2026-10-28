@@ -281,7 +281,8 @@ def apply_settings_patch(
             for key in PORT_SETTING_KEYS:
                 candidate.pop(key, None)
         elif (
-            operation.resolved.path.values[0] == "model_tasks"
+            len(operation.resolved.path.values) == 3
+            and operation.resolved.path.values[0] == "model_tasks"
             and operation.resolved.path.values[-1] == "target"
         ):
             _delete_nested(candidate, raw_path[:-1], preservation_source=source)
