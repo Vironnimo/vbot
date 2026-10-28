@@ -42,6 +42,8 @@ def parse_schedule(
     normalized = " ".join(schedule.split())
     if normalized.casefold() == "webhook":
         return ParsedSchedule(schedule_type="webhook")
+    if normalized.casefold() == "email":
+        return ParsedSchedule(schedule_type="email")
     reference_utc = _as_utc(reference_time or now)
 
     relative_prefix, separator, duration_text = normalized.partition(" ")
@@ -70,7 +72,7 @@ def parse_schedule(
     if "T" not in normalized and " " not in normalized:
         raise CronJobValidationError(
             "schedule must be an ISO 8601 timestamp, 'in <duration>', "
-            "'every <duration>', a five-field cron expression, or 'webhook'"
+            "'every <duration>', a five-field cron expression, 'webhook' or 'email'"
         )
     try:
         parsed = _parse_iso_datetime(
@@ -81,7 +83,7 @@ def parse_schedule(
     except CronJobValidationError as error:
         raise CronJobValidationError(
             "schedule must be an ISO 8601 timestamp, 'in <duration>', "
-            "'every <duration>', a five-field cron expression, or 'webhook'"
+            "'every <duration>', a five-field cron expression, 'webhook' or 'email'"
         ) from error
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone)
@@ -91,8 +93,8 @@ def parse_schedule(
 # Earlier missed fires are counted up to this many; a count at the cap means "at least".
 MAX_COUNTED_MISSED_FIRES = 100
 
-# Schedule types whose fires no clock decides: calendar events and webhook requests.
-_UNTIMED_SCHEDULE_TYPES = frozenset(("event", "webhook"))
+# Schedule types whose fires no clock decides: calendar events, webhook requests and mails.
+_UNTIMED_SCHEDULE_TYPES = frozenset(("event", "webhook", "email"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -255,8 +257,8 @@ def format_schedule(job: CronJob) -> str:
         )
     if job.schedule_type == "event":
         return format_event_time(job.event_edge, job.event_offset_minutes)
-    if job.schedule_type == "webhook":
-        return "webhook"
+    if job.schedule_type in {"webhook", "email"}:
+        return job.schedule_type
     return job.run_at or ""
 
 
@@ -485,13 +487,17 @@ def _next_interval_fire_at(
 
 
 def normalize_job_schedule(timezone: ZoneInfo, now: datetime, job: CronJob) -> None:
+    if job.schedule_type != "email":
+        job.email = None
+    elif job.email is None:
+        raise CronJobValidationError("an email schedule needs email.channel_id: the email Channel")
     if job.schedule_type == "event":
         _normalize_event_schedule(job)
         return
     job.event_id = None
     job.event_edge = None
     job.event_offset_minutes = None
-    if job.schedule_type == "webhook":
+    if job.schedule_type in {"webhook", "email"}:
         job.cron_expression = None
         job.interval_seconds = None
         job.interval_anchor_at = None

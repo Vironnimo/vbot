@@ -20,6 +20,11 @@ CRON_UPDATE_FLAGS = (
     "--at",
     "--event",
     "--webhook",
+    "--email",
+    "--email-from",
+    "--clear-email-from",
+    "--email-subject",
+    "--clear-email-subject",
     "--event-time",
     "--repeat",
     "--session",
@@ -106,7 +111,7 @@ def cron_update(
     watch = changes.get("watch")
     if isinstance(watch, dict) and ("always" not in watch or len(watch) == 1):
         # The RPC replaces the whole watch: keep what this call does not name.
-        stored, refusal = _stored_watch(instance, job_id)
+        stored, refusal = _stored_field(instance, job_id, "watch")
         if refusal is not None:
             return refusal
         if len(watch) == 1 and "always" in watch:
@@ -120,6 +125,20 @@ def cron_update(
             changes["watch"] = {**stored, "always": watch["always"]}
         elif stored is not None and stored.get("always") is True:
             changes["watch"] = {**watch, "always": True}
+    email = changes.get("email")
+    if isinstance(email, dict) and set(email) != {"channel_id", "senders", "subject"}:
+        # The RPC replaces the whole email trigger: keep what this call does not name.
+        stored_email, refusal = _stored_field(instance, job_id, "email")
+        if refusal is not None:
+            return refusal
+        if stored_email is None and "channel_id" not in email:
+            return CommandResult(
+                ok=False,
+                message=f"--email-from and --email-subject narrow an email job, and cron job "
+                f"{job_id} runs on no mail; add --email <channel-id>. Nothing was changed.",
+                instance=instance,
+            )
+        changes["email"] = {**(stored_email or {}), **email}
     payload = _rpc_call(instance, "cron.update", {"id": job_id, **changes})
     if not payload.ok:
         return payload.to_command_result()
@@ -129,15 +148,20 @@ def cron_update(
     return CommandResult(ok=True, message=message, instance=instance)
 
 
-def _stored_watch(
-    instance: ServerInstance, job_id: str
+def _stored_field(
+    instance: ServerInstance, job_id: str, name: str
 ) -> tuple[dict[str, Any] | None, CommandResult | None]:
-    """The job's stored watch, or the result that refuses the update."""
+    """The job's stored ``watch`` or ``email``, or the result that refuses the update."""
     shown = cron_show(instance, job_id)
     if not shown.ok:
         return None, shown
-    watch = json.loads(shown.message).get("watch")
-    return (watch if isinstance(watch, dict) else None), None
+    value = json.loads(shown.message).get(name)
+    if not isinstance(value, dict):
+        return None, None
+    if name == "email":
+        # The payload adds the mails' status to the trigger.
+        value = {key: value[key] for key in ("channel_id", "senders", "subject") if key in value}
+    return value, None
 
 
 def cron_delete(instance: ServerInstance, job_id: str) -> CommandResult:
@@ -325,7 +349,25 @@ def _format_schedule(job: Mapping[str, Any]) -> str:
         webhook = job.get("webhook")
         address = (webhook.get("url") or webhook.get("path")) if isinstance(webhook, dict) else None
         return f"webhook[{_string_or_default(address, '?')}]"
+    if schedule_type == "email":
+        return f"email[{_format_email(job.get('email'))}]"
     return "?"
+
+
+def _format_email(email: object) -> str:
+    """An email trigger as ``<channel> from=<senders> subject=<text>``."""
+    if not isinstance(email, dict):
+        return "?"
+    parts = [_string_or_default(email.get("channel_id"), "?")]
+    senders = email.get("senders")
+    if isinstance(senders, list) and senders:
+        parts.append("from=" + ",".join(str(sender) for sender in senders))
+    if isinstance(email.get("subject"), str):
+        parts.append("subject=" + json.dumps(email["subject"], ensure_ascii=False))
+    waiting = email.get("waiting")
+    if isinstance(waiting, int) and waiting:
+        parts.append(f"mails_waiting={waiting}")
+    return " ".join(parts)
 
 
 def _format_delivery(delivery: object) -> str:

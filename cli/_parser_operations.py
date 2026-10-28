@@ -82,6 +82,7 @@ def _add_cron_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
     _add_cron_session_argument(create_parser)
     _add_cron_execution_arguments(create_parser, update=False)
     _add_cron_delivery_arguments(create_parser, update=False)
+    _add_cron_email_filter_arguments(create_parser, update=False)
     create_parser.add_argument("--watch", metavar="<command-or-url>", help=_CRON_WATCH_HELP)
     create_parser.add_argument(
         "--watch-runs",
@@ -125,6 +126,7 @@ def _add_cron_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
     )
     _add_cron_execution_arguments(update_parser, update=True)
     _add_cron_delivery_arguments(update_parser, update=True)
+    _add_cron_email_filter_arguments(update_parser, update=True)
     watch_group = update_parser.add_mutually_exclusive_group()
     watch_group.add_argument(
         "--watch",
@@ -200,6 +202,47 @@ def _add_cron_schedule_arguments(group: argparse._MutuallyExclusiveGroup) -> Non
             "headers and body. The output shows the URL and the secret requests send"
         ),
     )
+    group.add_argument(
+        "--email",
+        metavar="<channel-id>",
+        help=(
+            "Run whenever this email Channel of the Agent receives a mail; each Run gets the "
+            "mail. Narrow it with --email-from and --email-subject; vbot channel list shows "
+            "the Channels"
+        ),
+    )
+
+
+def _add_cron_email_filter_arguments(parser: argparse.ArgumentParser, *, update: bool) -> None:
+    """Which mails start the Runs of an --email job."""
+    keep = "Omit to keep the current filter" if update else None
+    senders = parser.add_mutually_exclusive_group() if update else parser
+    senders.add_argument(
+        "--email-from",
+        action="append",
+        metavar="<address-or-@domain>",
+        help=(
+            "For --email jobs: start Runs only for mails from this address, or from any "
+            "address of a domain such as @example.com; repeat for several. "
+            + (keep or "Omit for any sender")
+        ),
+    )
+    subject = parser.add_mutually_exclusive_group() if update else parser
+    subject.add_argument(
+        "--email-subject",
+        metavar="<text>",
+        help=(
+            "For --email jobs: start Runs only for mails whose subject contains this text, "
+            "ignoring case. " + (keep or "Omit for any subject")
+        ),
+    )
+    if update:
+        senders.add_argument(
+            "--clear-email-from", action="store_true", help="Start Runs for mails from any sender"
+        )
+        subject.add_argument(
+            "--clear-email-subject", action="store_true", help="Start Runs for any subject"
+        )
 
 
 _CRON_WATCH_HELP = (

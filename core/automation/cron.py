@@ -16,8 +16,15 @@ from core.automation import _cron_events as _events
 from core.automation import _cron_schedule as _schedule
 from core.automation import _cron_timing as _timing
 from core.automation._cron_binding import CronEventBinding
-from core.automation._cron_delivery import ChatDelivery, CronFailureAlert, check_chat_delivery
+from core.automation._cron_delivery import (
+    ChatDelivery,
+    CronFailureAlert,
+    check_chat_delivery,
+    check_email_channel,
+)
+from core.automation._cron_email import CronEmails
 from core.automation._cron_execution import CronExecution, _missing_session_text
+from core.automation._cron_inbox import CronInbox, InboxCounts
 from core.automation._cron_jobs import (
     _MUTABLE_FIELDS,
     _RESTART_FIELDS,
@@ -33,6 +40,7 @@ from core.automation._cron_jobs import (
     MIN_INTERVAL_SECONDS,
     TERMINAL_CRON_JOB_STATUSES,
     CronDelivery,
+    CronEmailTrigger,
     CronJob,
     CronJobInPastError,
     CronJobNotFoundError,
@@ -111,6 +119,7 @@ from core.utils.workers import OrderedWorker, settle_before_cancelling
 if TYPE_CHECKING:
     from core.automation.automation import TriggerService
     from core.calendar import CalendarEvent
+    from core.channels import InboundMail
     from core.projects import AgentResolver
     from core.secrets import SecretStore
     from core.sessions import ChatSessionManager
@@ -121,6 +130,7 @@ __all__ = [
     "ChatDelivery",
     "CronAlert",
     "CronDelivery",
+    "CronEmailTrigger",
     "CronFailureAlert",
     "CronJob",
     "CronJobInPastError",
@@ -139,6 +149,7 @@ __all__ = [
     "CronWatch",
     "DeliveryKind",
     "EventCalendar",
+    "InboxCounts",
     "LAST_RESULT_MAX_CHARS",
     "MAX_ACTIVE_CRON_JOBS",
     "MAX_CONCURRENT_CRON_RUNS",
@@ -209,6 +220,11 @@ class CronService:
     Runtime wires in (``set_webhook_secrets``); the server tells the service
     its address (``bind_webhook_url``) and hands it each request
     (``receive_webhook``).
+
+    An ``email`` job runs when an email Channel of its Identity Agent receives
+    a mail that matches its filters (``_cron_email``). The service is the
+    Channels' mail sink: they hand it each mail no conversation takes
+    (``accept_mail``).
     """
 
     def __init__(
@@ -259,6 +275,7 @@ class CronService:
         self._event_binding: CronEventBinding = CronEventBinding(self)
         self._watcher: CronWatcher = CronWatcher(self)
         self._webhooks: CronWebhooks = CronWebhooks(self)
+        self._emails: CronEmails = CronEmails(self)
         if calendar is not None:
             calendar.add_changed_callback(self._event_binding._on_calendar_changed)
 
@@ -336,6 +353,25 @@ class CronService:
         """
         return await self._webhooks.receive(job_id, headers, body)
 
+    async def accept_mail(self, mail: InboundMail) -> None:
+        """Store a mail for every active email job of its Channel whose filters match.
+
+        Returns once each such job holds it durably; raises ``CronStorageError``
+        when it could not be stored, so the Channel hands it over again. A job
+        takes each ``message_id`` at most once.
+        """
+        await self._emails.accept_mail(mail)
+
+    def email_status(self, job: CronJob) -> InboxCounts | None:
+        """The mails an email job received and keeps for its next Run; None for any other job."""
+        if job.schedule_type != "email":
+            return None
+        return self._emails.counts(job.id)
+
+    def _inbox_of(self, job: CronJob) -> CronInbox[Any]:
+        """Where the webhook requests or mails of a job that runs on arrivals wait."""
+        return self._emails if job.schedule_type == "email" else self._webhooks
+
     def _webhook_job(self, job_id: str) -> CronJob:
         self._ensure_jobs_loaded()
         job = self._jobs.get(job_id)
@@ -398,6 +434,7 @@ class CronService:
         delivery: CronDelivery | None = None,
         notification_policy: str = "all",
         watch: CronWatch | None = None,
+        email: CronEmailTrigger | None = None,
         permission_ceiling: dict[str, Any] | None = None,
         actor: str = _DEFAULT_ACTOR,
     ) -> CronJob:
@@ -409,7 +446,9 @@ class CronService:
         are not owed. ``delivery`` says where each Run's final answer goes; a
         chat must belong to a Channel of the job's Identity Agent. ``watch``
         makes a recurring job run only when the output of its check changed;
-        an active job checks it at once (:meth:`await_first_check`).
+        an active job checks it at once (:meth:`await_first_check`). An
+        ``email`` job names in ``email`` an email Channel of its Agent and the
+        filters its mails must match.
         ``permission_ceiling`` is the creating Session's boundary
         (``PermissionBoundary.to_ceiling_dict(source="cron")``); every fire
         runs under it.
@@ -450,6 +489,7 @@ class CronService:
                 delivery=delivery,
                 notification_policy=notification_policy,
                 watch=watch,
+                email=email,
                 permission_ceiling=permission_ceiling,
             )
             self._validate_job(job, validate_references=False)
@@ -457,7 +497,9 @@ class CronService:
             if job.schedule_type == "webhook":
                 self._webhooks.check_available()
             self._event_binding._check_event_binding(job)
-            await self._validate_references_async(job, check_delivery=True, snapshot_new=True)
+            await self._validate_references_async(
+                job, check_delivery=True, check_email=True, snapshot_new=True
+            )
             self._reject_past_once_run(job)
             self._validate_capacity(job)
             self._jobs[job.id] = job
@@ -855,6 +897,9 @@ class CronService:
                     await self._validate_references_async(
                         candidate,
                         check_delivery=bool({"delivery", "agent_id"} & set(changed_fields)),
+                        check_email=bool(
+                            {"email", "agent_id", "schedule_type"} & set(changed_fields)
+                        ),
                         snapshot_new=snapshot_target,
                     )
                     if snapshot_target:
@@ -904,6 +949,11 @@ class CronService:
         await settle_before_cancelling(self._save_edit(undo))
         if job.schedule_type == "webhook" and candidate.schedule_type != "webhook":
             await settle_before_cancelling(self._webhooks.discard(job_id))
+        if job.email is not None and (
+            candidate.email is None or candidate.email.channel_id != job.email.channel_id
+        ):
+            # Mails of another Channel are not this job's any more.
+            await settle_before_cancelling(self._emails.discard(job_id))
         if _new_check(job, candidate, rename=rename):
             await self._renew_watch(candidate)
 
@@ -1150,6 +1200,8 @@ class CronService:
                 self._watcher.forget(job_id)
                 if removed.schedule_type == "webhook":
                     await self._webhooks.discard(job_id)
+                if removed.schedule_type == "email":
+                    await self._emails.discard(job_id)
 
             await settle_before_cancelling(save())
         _LOGGER.info("Cron job deleted (job=%s actor=%s)", job_id, actor)
@@ -1402,12 +1454,18 @@ class CronService:
         _schedule.normalize_job_schedule(self._timezone, _timing._utc_now(), job)
 
     async def _validate_references_async(
-        self, job: CronJob, *, check_delivery: bool = False, snapshot_new: bool = False
+        self,
+        job: CronJob,
+        *,
+        check_delivery: bool = False,
+        check_email: bool = False,
+        snapshot_new: bool = False,
     ) -> None:
         """Event-Loop-safe :meth:`_validate_references`: its reads use the Session pool.
 
         With ``check_delivery``, a chat delivery's Channel must exist and belong
-        to the job's Agent.
+        to the job's Agent; with ``check_email``, so must an email job's email
+        Channel.
         """
         validate = (
             partial(self._validate_references, snapshot_new=True)
@@ -1420,6 +1478,8 @@ class CronService:
             await self._sessions.run_async(validate, job)
         if check_delivery:
             await check_chat_delivery(job, self._chats)
+        if check_email:
+            await check_email_channel(job, self._chats)
 
     def _validate_references(self, job: CronJob, *, snapshot_new: bool = False) -> None:
         """Refuse a job whose target Agent or selected Session is unavailable. Blocking."""

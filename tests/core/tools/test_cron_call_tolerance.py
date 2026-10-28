@@ -699,6 +699,37 @@ def test_webhook_spellings_create_a_webhook_job(tool: CronTool, fields: dict[str
     assert "note" not in text
 
 
+@pytest.mark.parametrize(
+    "fields",
+    [
+        pytest.param({"schedule": "Email", "email_channel": "mail-main"}, id="schedule"),
+        pytest.param(
+            {"type": "mail", "channel": "mail-main", "from": "ann@example.com, @partner.org"},
+            id="type-and-short-names",
+        ),
+        pytest.param(
+            {"schedule": "on_email", "email_channel_id": "mail-main", "subject": "Invoice"},
+            id="subject",
+        ),
+        # An email job keeps no time, so a time zone changes nothing.
+        pytest.param(
+            {"schedule": "email", "email_channel": "mail-main", "timezone": "America/New_York"},
+            id="zone",
+        ),
+    ],
+)
+def test_email_spellings_create_an_email_job(tool: CronTool, fields: dict[str, Any]) -> None:
+    job, text = tool.created({"action": "create", "prompt": JOB_PROMPT, **fields})
+
+    assert job.schedule_type == "email"
+    assert job.email is not None and job.email.channel_id == "mail-main"
+    if "from" in fields:
+        assert job.email.senders == ("ann@example.com", "@partner.org")
+    if "subject" in fields:
+        assert job.email.subject == "Invoice"
+    assert "note" not in text
+
+
 def test_a_webhook_route_of_another_harness_keeps_vbots_secret_and_no_event_filter(
     tool: CronTool,
 ) -> None:

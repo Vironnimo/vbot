@@ -53,7 +53,7 @@ from core.settings import is_valid_agent_id, is_valid_project_id
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
 
-ScheduleType = Literal["cron", "interval", "once", "event", "webhook"]
+ScheduleType = Literal["cron", "interval", "once", "event", "webhook", "email"]
 
 EventEdge = Literal["start", "end"]
 
@@ -65,7 +65,7 @@ DeliveryKind = Literal["none", "chat", "app"]
 
 WatchKind = Literal["command", "url"]
 
-_ALLOWED_SCHEDULE_TYPES = frozenset(("cron", "interval", "once", "event", "webhook"))
+_ALLOWED_SCHEDULE_TYPES = frozenset(("cron", "interval", "once", "event", "webhook", "email"))
 
 # The schedule types a watch applies to: a check needs a time to repeat at.
 WATCH_SCHEDULE_TYPES = frozenset(("cron", "interval"))
@@ -73,6 +73,10 @@ WATCH_SCHEDULE_TYPES = frozenset(("cron", "interval"))
 WATCH_COMMAND_MAX_CHARS = 4000
 
 WATCH_URL_MAX_CHARS = 2048
+
+# How many sender filters an email job takes, and how long its subject filter is.
+EMAIL_SENDERS_MAX = 20
+EMAIL_SUBJECT_MAX_CHARS = 200
 
 _ALLOWED_EVENT_EDGES = frozenset(("start", "end"))
 
@@ -151,6 +155,7 @@ _MUTABLE_FIELDS = frozenset(
         "run_overrides",
         "delivery",
         "watch",
+        "email",
         "permission_ceiling",
         "notification_policy",
     )
@@ -186,6 +191,7 @@ _DELIVERY_FIELDS = frozenset(("kind", "channel_id", "platform_target", "thread_i
 _LAST_RESULT_FIELDS = frozenset(("text", "at", "run_id"))
 _WATCH_KINDS = ("command", "url")
 _WATCH_FIELDS = frozenset((*_WATCH_KINDS, "always"))
+_EMAIL_FIELDS = frozenset(("channel_id", "senders", "subject"))
 RUN_OVERRIDE_FIELDS = frozenset(("model", "thinking_effort", "thinking_effort_default"))
 CRON_JOB_SHAPE = json_object(
     _CRON_JOB_FIELDS,
@@ -194,6 +200,7 @@ CRON_JOB_SHAPE = json_object(
         "delivery": json_object(_DELIVERY_FIELDS),
         "last_result": json_object(_LAST_RESULT_FIELDS),
         "watch": json_object(_WATCH_FIELDS),
+        "email": json_object(_EMAIL_FIELDS),
         "run_overrides": json_object(RUN_OVERRIDE_FIELDS),
         "notifications": json_list(json_object(NOTIFICATION_FIELDS), key="id"),
         "unread_alert": json_object(ALERT_FIELDS),
@@ -507,6 +514,7 @@ def _validate_cron_job_data(diagnostics: list[JsonDiagnostic], item_path: str, i
         ("delivery", CronDelivery.from_dict, _DELIVERY_FIELDS, "delivery"),
         ("last_result", CronResult.from_dict, _LAST_RESULT_FIELDS, "last result"),
         ("watch", CronWatch.from_dict, _WATCH_FIELDS, "watch"),
+        ("email", CronEmailTrigger.from_dict, _EMAIL_FIELDS, "email"),
     )
     for field_name, parse, known, label in nested:
         value = item.get(field_name)
@@ -681,6 +689,8 @@ class CronJob:
     last_changed_at: str | None = None
     # Why the latest check failed; the next successful check clears it.
     last_check_error: str | None = None
+    # Which mails of which email Channel start the Runs of an ``email`` job.
+    email: CronEmailTrigger | None = None
     notifications: tuple[CronNotification, ...] = ()
     last_delivered_at: str | None = None
     # Chat messages dropped unsent because the job held too many; the next sent one says so.
@@ -740,7 +750,7 @@ class CronJob:
     def to_dict(self) -> dict[str, Any]:
         """Serialize one CronJob to a JSON-compatible payload.
 
-        Delivery, result and watch fields appear only when set, so jobs without
+        Delivery, result, watch and email fields appear only when set, so jobs without
         them keep the format earlier versions wrote.
         """
         data: dict[str, Any] = {
@@ -782,6 +792,8 @@ class CronJob:
             data["last_run_silent"] = True
         if self.watch is not None:
             data["watch"] = self.watch.to_dict()
+        if self.email is not None:
+            data["email"] = self.email.to_dict()
         for field_name in ("last_checked_at", "last_changed_at", "last_check_error"):
             value = getattr(self, field_name)
             if value is not None:
@@ -878,6 +890,11 @@ class CronJob:
             last_checked_at=payload.get("last_checked_at"),
             last_changed_at=payload.get("last_changed_at"),
             last_check_error=payload.get("last_check_error"),
+            email=(
+                None
+                if payload.get("email") is None
+                else CronEmailTrigger.from_dict(payload["email"])
+            ),
             notifications=tuple(
                 CronNotification.from_dict(item) for item in payload.get("notifications", [])
             ),
@@ -1100,6 +1117,87 @@ class CronWatch:
         return cls.parse(kinds[0], value[kinds[0]], always=always)
 
 
+@dataclass(frozen=True, slots=True)
+class CronEmailTrigger:
+    """Which mails start the Runs of an ``email`` job.
+
+    The mails an email Channel of the job's Identity Agent receives and no
+    conversation takes. ``senders`` are lowercase full addresses or
+    ``@domain`` suffixes, one of which the sender address must match;
+    ``subject`` must occur in the subject, ignoring case. An omitted filter
+    matches every mail.
+    """
+
+    channel_id: str
+    senders: tuple[str, ...] = ()
+    subject: str | None = None
+
+    @classmethod
+    def parse(
+        cls, channel_id: object, senders: object = None, subject: object = None
+    ) -> CronEmailTrigger:
+        """Validate one email trigger; text is trimmed and senders lowercased."""
+        if not isinstance(channel_id, str) or not channel_id.strip():
+            raise CronJobValidationError("email.channel_id must name an email Channel")
+        if senders is None:
+            senders = []
+        if isinstance(senders, str) or not isinstance(senders, list | tuple):
+            raise CronJobValidationError("email.senders must be a list of addresses or @domains")
+        parsed: list[str] = []
+        for sender in senders:
+            text = sender.strip().casefold() if isinstance(sender, str) else ""
+            local, at, domain = text.rpartition("@")
+            if (
+                not at
+                or not domain
+                or "@" in local
+                or any(character.isspace() for character in text)
+                or (not local and not text.startswith("@"))
+            ):
+                raise CronJobValidationError(
+                    f"email.senders: {sender!r} is neither an address such as "
+                    "name@example.com nor a domain such as @example.com"
+                )
+            if text not in parsed:
+                parsed.append(text)
+        if len(parsed) > EMAIL_SENDERS_MAX:
+            raise CronJobValidationError(f"email.senders takes at most {EMAIL_SENDERS_MAX} entries")
+        if subject is not None and not isinstance(subject, str):
+            raise CronJobValidationError("email.subject must be text or null")
+        subject_text = subject.strip() if subject is not None else ""
+        if len(subject_text) > EMAIL_SUBJECT_MAX_CHARS:
+            raise CronJobValidationError(
+                f"email.subject must be at most {EMAIL_SUBJECT_MAX_CHARS} characters"
+            )
+        return cls(
+            channel_id=channel_id.strip(), senders=tuple(parsed), subject=subject_text or None
+        )
+
+    def matches(self, sender: str, subject: str) -> bool:
+        """Whether a mail from ``sender`` with ``subject`` starts the job's Run."""
+        address = sender.strip().casefold()
+        if self.senders and not any(
+            address.endswith(entry) if entry.startswith("@") else address == entry
+            for entry in self.senders
+        ):
+            return False
+        return self.subject is None or self.subject.casefold() in subject.casefold()
+
+    def to_dict(self) -> dict[str, Any]:
+        data: dict[str, Any] = {"channel_id": self.channel_id}
+        if self.senders:
+            data["senders"] = list(self.senders)
+        if self.subject is not None:
+            data["subject"] = self.subject
+        return data
+
+    @classmethod
+    def from_dict(cls, value: Any) -> CronEmailTrigger:
+        if not isinstance(value, dict):
+            raise CronJobValidationError("email must be an object or null")
+        return cls.parse(value.get("channel_id"), value.get("senders"), value.get("subject"))
+
+
 def _derive_cron_job_name(prompt: object) -> str:
     """Derive the stable name of a new job created without one."""
     for line in str(prompt).splitlines():
@@ -1208,7 +1306,7 @@ def normalize_job_fields(job: CronJob) -> None:
 
     if job.schedule_type not in _ALLOWED_SCHEDULE_TYPES:
         raise CronJobValidationError(
-            "schedule_type must be 'cron', 'interval', 'once', 'event' or 'webhook'"
+            "schedule_type must be 'cron', 'interval', 'once', 'event', 'webhook' or 'email'"
         )
 
     if job.status not in _ALLOWED_STATUSES:
@@ -1305,6 +1403,12 @@ def normalize_job_fields(job: CronJob) -> None:
         raise CronJobValidationError(
             "a job of a Project Agent cannot deliver to a chat: Channels belong to Identity Agents"
         )
+    if job.email is not None and not isinstance(job.email, CronEmailTrigger):
+        raise CronJobValidationError("email must name an email Channel and its filters, or null")
+    if job.schedule_type == "email" and job.project_id is not None:
+        raise CronJobValidationError(
+            "a job of a Project Agent cannot run on email: Channels belong to Identity Agents"
+        )
     if job.last_check_error is not None:
         if not isinstance(job.last_check_error, str):
             raise CronJobValidationError("last_check_error must be a string when provided")
@@ -1315,7 +1419,7 @@ def normalize_job_fields(job: CronJob) -> None:
         if job.schedule_type not in WATCH_SCHEDULE_TYPES:
             raise CronJobValidationError(
                 "watch applies only to a repeating schedule (a cron expression or an "
-                "interval), not to a one-time, event or webhook schedule"
+                "interval), not to a one-time, event, webhook or email schedule"
             )
 
 

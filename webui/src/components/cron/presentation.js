@@ -10,11 +10,13 @@ import {
   CRON_FREQUENCY_MONTHLY,
   CRON_FREQUENCY_ONCE,
   CRON_FREQUENCY_WEEKLY,
+  CRON_FREQUENCY_EMAIL,
   CRON_STATUS_ACTIVE,
   CRON_SCHEDULE_TYPE_EVENT,
   CRON_SCHEDULE_TYPE_INTERVAL,
   CRON_SCHEDULE_TYPE_ONCE,
   CRON_SCHEDULE_TYPE_WEBHOOK,
+  CRON_SCHEDULE_TYPE_EMAIL,
   CRON_STATUS_COMPLETED,
   CRON_STATUS_MISSED,
   CRON_WATCH_COMMAND,
@@ -41,6 +43,7 @@ export function frequencyOptions() {
     { value: CRON_FREQUENCY_WEEKLY, label: t('cron.frequency.weekly') },
     { value: CRON_FREQUENCY_MONTHLY, label: t('cron.frequency.monthly') },
     { value: CRON_FREQUENCY_CUSTOM, label: t('cron.frequency.custom') },
+    { value: CRON_FREQUENCY_EMAIL, label: t('cron.frequency.email') },
   ];
 }
 
@@ -50,6 +53,27 @@ export function webhookReachText(reach) {
   if (reach === 'network') return t('cron.webhook.reach.network');
   if (reach === 'computer') return t('cron.webhook.reach.computer');
   return '';
+}
+
+// An email job's latest mail and the mails it holds for its next Run.
+export function emailMailsText(job, timezone, now = new Date()) {
+  const email = job?.email;
+  if (email?.error) return email.error;
+  if (!email?.last_received_at) {
+    return t('cron.email.noMail');
+  }
+  const parts = [compactTimestamp(email.last_received_at, timezone, now)];
+  if (email.waiting === 1) {
+    parts.push(t('cron.email.waitingOne'));
+  } else if (email.waiting > 1) {
+    parts.push(t('cron.email.waitingMany', { count: email.waiting }));
+  }
+  if (email.dropped === 1) {
+    parts.push(t('cron.webhook.droppedOne'));
+  } else if (email.dropped > 1) {
+    parts.push(t('cron.webhook.droppedMany', { count: email.dropped }));
+  }
+  return parts.join(' · ');
 }
 
 // A webhook job's latest request and the requests it holds for its next
@@ -265,6 +289,11 @@ export function scheduleSummary(job) {
   if (job.schedule_type === CRON_SCHEDULE_TYPE_WEBHOOK) {
     return t('cron.schedule.webhook');
   }
+  if (job.schedule_type === CRON_SCHEDULE_TYPE_EMAIL) {
+    return t('cron.schedule.email', {
+      channel: job.email?.channel_id || t('cron.notAvailable'),
+    });
+  }
   if (job.schedule_type === CRON_SCHEDULE_TYPE_EVENT) {
     // A gone or unreadable event is named by its id.
     return t('cron.schedule.event', {
@@ -285,7 +314,8 @@ export function scheduleTechnicalValue(job) {
   if (
     job?.schedule_type === CRON_SCHEDULE_TYPE_INTERVAL ||
     job?.schedule_type === CRON_SCHEDULE_TYPE_EVENT ||
-    job?.schedule_type === CRON_SCHEDULE_TYPE_WEBHOOK
+    job?.schedule_type === CRON_SCHEDULE_TYPE_WEBHOOK ||
+    job?.schedule_type === CRON_SCHEDULE_TYPE_EMAIL
   ) {
     return '';
   }
@@ -454,14 +484,16 @@ function waitingText(job) {
     : t('cron.detail.waitingForFirstRun');
 }
 
-// When a job runs next: its next due time, or for an active webhook job the
-// next request.
+// When a job runs next: its next due time, or for an active webhook or email
+// job the next request or matching mail.
 export function nextRunText(job) {
-  if (
-    job?.schedule_type === CRON_SCHEDULE_TYPE_WEBHOOK &&
-    job.status === CRON_STATUS_ACTIVE
-  ) {
-    return t('cron.detail.nextRequest');
+  if (job?.status === CRON_STATUS_ACTIVE) {
+    if (job.schedule_type === CRON_SCHEDULE_TYPE_WEBHOOK) {
+      return t('cron.detail.nextRequest');
+    }
+    if (job.schedule_type === CRON_SCHEDULE_TYPE_EMAIL) {
+      return t('cron.detail.nextMail');
+    }
   }
   return displayValue(job?.next_fire_at_display);
 }
@@ -609,6 +641,16 @@ export function scheduleRowDetails(
           ? momentText(
               job.webhook.last_received_at_display,
               job.webhook.last_received_at,
+              nowMs,
+            )
+          : '',
+      },
+      {
+        label: t('cron.email.lastMail'),
+        value: job.email?.last_received_at
+          ? momentText(
+              job.email.last_received_at_display,
+              job.email.last_received_at,
               nowMs,
             )
           : '',

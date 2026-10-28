@@ -607,6 +607,7 @@ export default Object.freeze({
   'cron.time.yesterday': 'Yesterday {time}',
   'cron.schedule.once': 'Once',
   'cron.schedule.webhook': 'On each webhook request',
+  'cron.schedule.email': 'On each new email to {channel}',
   'cron.schedule.event': 'Event: {title} — {timing}',
   'cron.schedule.everyMinute': 'Every minute',
   'cron.schedule.everyMinutes': 'Every {count} minutes',
@@ -667,6 +668,7 @@ export default Object.freeze({
   'cron.detail.waitingForChange': 'Waiting for the check to find a change',
   'cron.detail.waitingForRequest': 'Waiting for the first webhook request',
   'cron.detail.nextRequest': 'With the next request',
+  'cron.detail.nextMail': 'With the next matching email',
   'cron.detail.lastCheck': 'Last check',
   'cron.detail.lastChange': 'Last change',
   'cron.card.watch': 'Checks',
@@ -727,6 +729,23 @@ export default Object.freeze({
   'cron.webhook.waitingMany': '{count} requests wait for the next Run',
   'cron.webhook.droppedOne': '1 dropped unseen',
   'cron.webhook.droppedMany': '{count} dropped unseen',
+  'cron.email.channel': 'Email Channel',
+  'cron.email.channelHelp':
+    'Each mail this Channel receives that matches the filters below starts a Run with the mail.',
+  'cron.email.channelPlaceholder': 'Select an email Channel',
+  'cron.email.channelNone':
+    'This Agent has no email Channel. Add one under Settings → Channels.',
+  'cron.email.senders': 'From',
+  'cron.email.sendersHelp':
+    'Addresses or domains such as @example.com, separated by commas. Leave empty for any sender.',
+  'cron.email.sendersPlaceholder': 'Any sender',
+  'cron.email.subject': 'Subject contains',
+  'cron.email.subjectHelp': 'Ignores case. Leave empty for any subject.',
+  'cron.email.subjectPlaceholder': 'Any subject',
+  'cron.email.lastMail': 'Last mail',
+  'cron.email.noMail': 'No mail yet',
+  'cron.email.waitingOne': '1 mail waits for the next Run',
+  'cron.email.waitingMany': '{count} mails wait for the next Run',
   'cron.sections.watch': 'Change check',
   'cron.sections.watchSubtitle':
     'Check a command or a web page before each Run. The Run gets the output and the changes since the last check; it starts only when the output changed, or at every due time. A failed check counts as a failed Run.',
@@ -767,6 +786,7 @@ export default Object.freeze({
   'cron.frequency.weekly': 'Weekly',
   'cron.frequency.monthly': 'Monthly',
   'cron.frequency.custom': 'Custom (cron expression)',
+  'cron.frequency.email': 'On each new email',
   'cron.form.interval': 'Every',
   'cron.form.intervalHelp': 'Counted from when the schedule starts.',
   'cron.form.intervalUnit': 'Interval unit',
@@ -844,6 +864,8 @@ export default Object.freeze({
   'cron.errors.delete': 'Automation could not be deleted.',
   'cron.errors.toggle': 'Automation status could not be updated.',
   'cron.errors.chatDelivery': 'A chat delivery needs a Channel and a chat ID.',
+  'cron.errors.emailChannel':
+    'Choose the email Channel whose mails start the Runs.',
   'cron.errors.secret': 'The secret could not be shown.',
   'cron.errors.rotate': 'The secret could not be replaced.',
   'cron.errors.watch':

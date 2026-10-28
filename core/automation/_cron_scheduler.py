@@ -106,9 +106,14 @@ class CronScheduler:
             self._owner._notify_changed()
 
         self._owner._notifications.start()
-        self._owner._webhooks.load_states(
-            [job.id for job in self._owner._jobs.values() if job.schedule_type == "webhook"]
-        )
+        for queue in (self._owner._webhooks, self._owner._emails):
+            queue.load_states(
+                [
+                    job.id
+                    for job in self._owner._jobs.values()
+                    if job.schedule_type == queue.schedule_type
+                ]
+            )
         for job in self._owner._jobs.values():
             if job.status == "active" and job.id not in held_job_ids:
                 self._start_job_task(job)
@@ -149,9 +154,9 @@ class CronScheduler:
             task = asyncio.create_task(self._run_once_job(job), name=f"cron-job:{job.id}:once")
         elif job.schedule_type == "event":
             task = asyncio.create_task(self._run_event_job(job), name=f"cron-job:{job.id}:event")
-        elif job.schedule_type == "webhook":
+        elif job.schedule_type in {"webhook", "email"}:
             task = asyncio.create_task(
-                self._run_webhook_job(job), name=f"cron-job:{job.id}:webhook"
+                self._run_inbox_job(job), name=f"cron-job:{job.id}:{job.schedule_type}"
             )
         else:
             task = asyncio.create_task(
@@ -282,30 +287,34 @@ class CronScheduler:
             if not reached:
                 settled = None
 
-    async def _run_webhook_job(self, job: CronJob) -> None:
-        """Start a Run whenever requests to the job's webhook wait, one Run at a time.
+    async def _run_inbox_job(self, job: CronJob) -> None:
+        """Start a Run whenever webhook requests or mails wait for the job, one Run at a time.
 
-        Requests that arrive while a Run is active wait and start one follow-up
-        Run together. A Run that could not start leaves its requests waiting and
-        is tried again after the once-job backoff; a target that stays missing
+        Arrivals during an active Run wait and start one follow-up Run
+        together. A Run that could not start leaves its arrivals waiting and is
+        tried again after the once-job backoff; a target that stays missing
         counts toward the failure stop.
         """
-        webhooks = self._owner._webhooks
+        queue = self._owner._inbox_of(job)
         failed_attempts = 0
         while True:
             current = self._owner._jobs.get(job.id)
-            if current is None or current.status != "active" or current.schedule_type != "webhook":
+            if (
+                current is None
+                or current.status != "active"
+                or current.schedule_type != job.schedule_type
+            ):
                 return
-            wake = webhooks.wake(job.id)
+            wake = queue.wake(job.id)
             wake.clear()
             try:
-                if not await webhooks.waiting(job.id):
+                if not await queue.waiting(job.id):
                     await wake.wait()
                     continue
-                outcome = await self._owner._execution._trigger_job_run(current, webhook=True)
+                outcome = await self._owner._execution._trigger_job_run(current, inbox=True)
                 if job.id in self._owner._pending_restarts:
                     return
-                if outcome.admitted or not await webhooks.waiting(job.id):
+                if outcome.admitted or not await queue.waiting(job.id):
                     failed_attempts = 0
                     continue
                 failed_attempts += 1

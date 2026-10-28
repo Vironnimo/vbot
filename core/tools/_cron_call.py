@@ -37,6 +37,9 @@ _CALL_ORDER = (
     "notification_policy",
     "watch",
     "watch_runs",
+    "email_channel",
+    "email_from",
+    "email_subject",
 )
 
 

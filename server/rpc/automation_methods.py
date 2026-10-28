@@ -6,6 +6,7 @@ from typing import Any
 
 from core.automation.cron import (
     CronDelivery,
+    CronEmailTrigger,
     CronJobValidationError,
     CronService,
     CronWatch,
@@ -27,7 +28,7 @@ from server.rpc.validation import (
 )
 
 JsonObject = dict[str, Any]
-CRON_SCHEDULE_TYPES = frozenset(("cron", "interval", "once", "event", "webhook"))
+CRON_SCHEDULE_TYPES = frozenset(("cron", "interval", "once", "event", "webhook", "email"))
 CRON_JOB_STATUSES = frozenset(("active", "paused"))
 BOOTSTRAP_MODES = frozenset(("once", "always"))
 
@@ -50,6 +51,7 @@ async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
         "delivery",
         "notification_policy",
         "watch",
+        "email",
     }
     _reject_unsupported(params, supported_fields, "cron.create")
 
@@ -75,6 +77,7 @@ async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
     # Omitted, a job delivers nowhere; the WebUI form chooses app for new jobs.
     delivery = _optional_delivery(params)
     watch = _optional_watch(params)
+    email = _optional_email(params)
     event_fields: JsonObject = {}
 
     if schedule_type == "event":
@@ -107,8 +110,14 @@ async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
             )
         cron_expression = None
         run_at = None
-    elif schedule_type == "webhook":
-        # Requests to the job's URL start its Runs; it keeps no time.
+    elif schedule_type in {"webhook", "email"}:
+        # Requests to the job's URL, or mails to its email Channel, start its Runs;
+        # it keeps no time.
+        if schedule_type == "email" and email is None:
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                "params.email is required when params.schedule_type is 'email'",
+            )
         cron_expression = None
         interval_seconds = None
         run_at = None
@@ -142,6 +151,7 @@ async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
                 delivery=delivery,
                 notification_policy=params.get("notification_policy", "all"),
                 watch=watch,
+                email=email,
                 actor="rpc",
                 **_execution_fields(params, creating=True),
                 **event_fields,
@@ -258,6 +268,7 @@ async def _cron_update(state: Any, params: JsonObject) -> JsonObject:
         "delivery",
         "notification_policy",
         "watch",
+        "email",
         "status",
     }
     _reject_unsupported(params, supported_fields, "cron.update")
@@ -317,6 +328,8 @@ async def _cron_update(state: Any, params: JsonObject) -> JsonObject:
         updates["delivery"] = _optional_delivery(params)
     if "watch" in params:
         updates["watch"] = _optional_watch(params)
+    if "email" in params:
+        updates["email"] = _optional_email(params)
     if "status" in params:
         status = _required_string(params, "status")
         if status not in CRON_JOB_STATUSES:
@@ -449,6 +462,23 @@ def _optional_watch(params: JsonObject) -> CronWatch | None:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{error}") from error
 
 
+def _optional_email(params: JsonObject) -> CronEmailTrigger | None:
+    """``params.email`` as a job keeps it: ``{"channel_id", "senders"?, "subject"?}``; null: none.
+
+    ``senders`` lists addresses or ``@domain`` suffixes; ``subject`` is text the
+    subject contains. Omitted filters match every mail.
+    """
+    value = params.get("email")
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        _reject_unsupported(value, {"channel_id", "senders", "subject"}, "params.email")
+    try:
+        return CronEmailTrigger.from_dict(value)
+    except CronJobValidationError as error:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{error}") from error
+
+
 def _event_time_fields(event_time: str) -> JsonObject:
     """The job fields of an event time such as ``start - 30m``."""
     try:
@@ -517,6 +547,8 @@ def _cron_job_response(cron_service: Any, job: Any) -> JsonObject:
         "created_at": job.created_at,
         # A webhook job's URL and requests; null for another schedule.
         "webhook": _webhook_response(cron_service, job),
+        # An email job's Channel, filters and mails; null for another schedule.
+        "email": _email_response(cron_service, job),
     }
 
 
@@ -548,6 +580,24 @@ def _webhook_response(cron_service: Any, job: Any) -> JsonObject | None:
         "url": status.url,
         "path": status.path,
         "reach": status.reach,
+        "last_received_at": status.last_received_at,
+        **({"error": status.error} if status.error else {}),
+        "waiting": status.waiting,
+        "dropped": status.dropped,
+    }
+
+
+def _email_response(cron_service: Any, job: Any) -> JsonObject | None:
+    """The job's ``email`` trigger with its mails: ``waiting`` ones wait for the next Run and
+    ``dropped`` ones were dropped unseen since the last Run started; ``error`` says why
+    waiting mails cannot be read."""
+    if job.email is None:
+        return None
+    status = cron_service.email_status(job)
+    if status is None:
+        return None
+    return {
+        **job.email.to_dict(),
         "last_received_at": status.last_received_at,
         **({"error": status.error} if status.error else {}),
         "waiting": status.waiting,

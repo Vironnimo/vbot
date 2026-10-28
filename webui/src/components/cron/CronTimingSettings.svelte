@@ -8,6 +8,7 @@
     CRON_FREQUENCY_DAILY,
   } from '$lib/cronView.js';
   import {
+    emailMailsText,
     frequencyOptions,
     intervalUnitOptions,
     weekdayOptions,
@@ -22,7 +23,36 @@
   import TimeField from '../ui/TimeField.svelte';
   import Dropdown from '../Dropdown.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
-  let { editor, systemTimezone } = $props();
+  // `channels` are the Channels `channel.list` returned; an email job offers
+  // the email Channels of its Agent.
+  let { editor, channels = [], systemTimezone } = $props();
+  let emailChannelOptions = $derived.by(() => {
+    const values = editor.formValues;
+    const options = channels
+      .filter(
+        (channel) =>
+          channel.agent_id === values.agent_id && channel.platform === 'email',
+      )
+      .map((channel) => ({ value: channel.id, label: channel.id }));
+    // A stored Channel that is not offered stays selectable, so the form shows
+    // what is saved and the save names the cause.
+    const stored = values.email_channel_id;
+    if (stored && !options.some((option) => option.value === stored)) {
+      options.push({ value: stored, label: stored });
+    }
+    return options;
+  });
+  // Choosing email preselects the Agent's only email Channel.
+  function chooseFrequency(frequency) {
+    editor.updateSchedule({ frequency });
+    if (
+      editor.isEmailSchedule &&
+      !editor.formValues.email_channel_id &&
+      emailChannelOptions.length === 1
+    ) {
+      editor.updateFormField('email_channel_id', emailChannelOptions[0].value);
+    }
+  }
   const scheduleFrequencies = frequencyOptions();
   const intervalUnits = intervalUnitOptions();
   const weekdays = weekdayOptions();
@@ -184,13 +214,89 @@
               disabled={editor.isCreating && editor.submittingForm}
               triggerClass="cron-dropdown"
               listClass="cron-dropdown-list"
-              onValueChange={(frequency) =>
-                editor.updateSchedule({ frequency })}
+              onValueChange={chooseFrequency}
             />
           </div>
         </div>
 
-        {#if editor.isOnceSchedule}
+        {#if editor.isEmailSchedule}
+          <div class="s-row">
+            <div class="s-row-info">
+              <label class="s-row-label" for="cron-job-email-channel">
+                {t('cron.email.channel')}
+                <span class="cron-required" aria-hidden="true">*</span>
+              </label>
+              <div class="s-row-desc">
+                {emailChannelOptions.length === 0
+                  ? t('cron.email.channelNone')
+                  : t('cron.email.channelHelp')}
+              </div>
+            </div>
+            <div class="s-row-control">
+              <Dropdown
+                id="cron-job-email-channel"
+                value={editor.formValues.email_channel_id}
+                options={emailChannelOptions}
+                placeholder={t('cron.email.channelPlaceholder')}
+                ariaLabel={t('cron.email.channel')}
+                disabled={emailChannelOptions.length === 0 ||
+                  (editor.isCreating && editor.submittingForm)}
+                triggerClass="cron-dropdown"
+                listClass="cron-dropdown-list"
+                onValueChange={(next) =>
+                  editor.updateFormField('email_channel_id', next)}
+              />
+            </div>
+          </div>
+          <div class="s-row">
+            <div class="s-row-info">
+              <label class="s-row-label" for="cron-job-email-senders">
+                {t('cron.email.senders')}
+              </label>
+              <div class="s-row-desc">{t('cron.email.sendersHelp')}</div>
+            </div>
+            <div class="s-row-control">
+              <TextField
+                id="cron-job-email-senders"
+                value={editor.formValues.email_senders}
+                placeholder={t('cron.email.sendersPlaceholder')}
+                disabled={editor.isCreating && editor.submittingForm}
+                onInput={(next) =>
+                  editor.updateFormField('email_senders', next)}
+              />
+            </div>
+          </div>
+          <div class="s-row">
+            <div class="s-row-info">
+              <label class="s-row-label" for="cron-job-email-subject">
+                {t('cron.email.subject')}
+              </label>
+              <div class="s-row-desc">{t('cron.email.subjectHelp')}</div>
+            </div>
+            <div class="s-row-control">
+              <TextField
+                id="cron-job-email-subject"
+                value={editor.formValues.email_subject}
+                placeholder={t('cron.email.subjectPlaceholder')}
+                disabled={editor.isCreating && editor.submittingForm}
+                onInput={(next) =>
+                  editor.updateFormField('email_subject', next)}
+              />
+            </div>
+          </div>
+          {#if !editor.isCreating && editor.selectedJob?.email}
+            <div class="s-row">
+              <div class="s-row-info">
+                <span class="s-row-label">{t('cron.email.lastMail')}</span>
+              </div>
+              <div class="s-row-control">
+                <span data-testid="cron-email-mails"
+                  >{emailMailsText(editor.selectedJob, systemTimezone)}</span
+                >
+              </div>
+            </div>
+          {/if}
+        {:else if editor.isOnceSchedule}
           <div class="s-row">
             <div class="s-row-info">
               <label class="s-row-label" for="cron-job-run-at">

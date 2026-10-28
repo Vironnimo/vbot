@@ -33,8 +33,8 @@ from core.utils.logging import get_logger
 from core.utils.workers import settle_before_cancelling
 
 if TYPE_CHECKING:
+    from core.automation._cron_inbox import CronInbox, InboxBatch
     from core.automation._cron_watch import WatchChange
-    from core.automation._cron_webhook_events import WebhookBatch
     from core.automation.cron import CronService
 
 
@@ -65,19 +65,21 @@ class CronExecution:
         owed: _schedule.OwedFire | None = None,
         event_due: _events.EventDue | None = None,
         change: WatchChange | None = None,
-        webhook: bool = False,
+        inbox: bool = False,
     ) -> CronRunOutcome:
         """Start the job's Run and record its outcome.
 
         ``owed`` is the due time a late Run is told about; ``change`` is the
         watched output that started the Run (the watcher passes ``owed`` only
         for a watch with ``always``, whose Run the due time starts). With
-        ``webhook`` the Run takes the requests waiting for the job once it holds
-        a Run slot and starts only when some wait; they are forgotten once it is
-        admitted and wait for the next attempt otherwise.
+        ``inbox`` (webhook and email jobs) the Run takes the arrivals waiting
+        for the job once it holds a Run slot and starts only when some wait;
+        they are forgotten once it is admitted and wait for the next attempt
+        otherwise.
         """
         admitted = False
-        batch: WebhookBatch | None = None
+        queue: CronInbox[Any] | None = self._owner._inbox_of(job) if inbox else None
+        batch: InboxBatch[Any] | None = None
         self._owner._executing_jobs.add(job.id)
         try:
             async with self._owner._run_slots:
@@ -114,8 +116,8 @@ class CronExecution:
                 # Capacity and claim persistence can delay even an on-time fire.
                 # Keep its due-time evidence until all pre-admission waits settle.
                 late = _context.late_fire(owed, self._owner._timezone) if owed is not None else None
-                if webhook:
-                    batch = await self._owner._webhooks.take(job.id)
+                if queue is not None:
+                    batch = await queue.take(job.id)
                     latest = self._owner._jobs.get(job.id)
                     if (
                         batch is None
@@ -142,8 +144,9 @@ class CronExecution:
                         else ""
                     ),
                     (
-                        f" webhook_requests={len(batch.requests)} webhook_dropped={batch.dropped}"
-                        if batch is not None
+                        f" {queue.kind.log_fields[0]}={len(batch.items)}"
+                        f" {queue.kind.log_fields[1]}={batch.dropped}"
+                        if queue is not None and batch is not None
                         else ""
                     ),
                 )
@@ -153,7 +156,8 @@ class CronExecution:
                     late=late,
                     event_due=event_due,
                     change=change,
-                    webhook=batch,
+                    webhook=batch if latest.schedule_type == "webhook" else None,
+                    email=batch if latest.schedule_type == "email" else None,
                 )
                 run: Any | None = None
                 result: Any = None
@@ -183,8 +187,8 @@ class CronExecution:
                         **_execution_kwargs(latest),
                     )
                     admitted = True
-                    if batch is not None:
-                        await settle_before_cancelling(self._owner._webhooks.consume(job.id, batch))
+                    if queue is not None and batch is not None:
+                        await settle_before_cancelling(queue.consume(job.id, batch))
                     if firing_once_at is not None:
                         self._admitted_once_runs[job.id] = firing_once_at
                     latest = self._owner._jobs.get(job.id)
@@ -295,8 +299,8 @@ class CronExecution:
                     succeeded=saved or not latest.notifications, admitted=admitted
                 )
         finally:
-            if batch is not None and not admitted:
-                self._owner._webhooks.release(job.id, batch)
+            if queue is not None and batch is not None and not admitted:
+                queue.release(job.id, batch)
             self._admitted_once_runs.pop(job.id, None)
             self._owner._executing_jobs.discard(job.id)
 

@@ -12,6 +12,7 @@ import pytest
 
 import core.tools.cron as cron_tool_module
 from core.automation.cron import CronDelivery, CronJobStatus, WatchCheckError
+from core.channels import InboundMail
 from core.chat import ReplySurface
 from core.permissions import BoundaryContext, PermissionBoundary, normalize_permission_rules
 from core.projects import (
@@ -58,6 +59,9 @@ def test_schema_advertises_only_the_canonical_fields() -> None:
         "notification_policy",
         "watch",
         "watch_runs",
+        "email_channel",
+        "email_from",
+        "email_subject",
     ]
     assert properties["deliver"]["enum"] == ["here", "app", "none"]
     assert properties["action"]["enum"] == [
@@ -1174,6 +1178,74 @@ def test_a_webhook_job_shows_its_url_and_hands_out_its_secret_once(tmp_path: Pat
     assert "requests_waiting: 1" in listed
     assert re.search(rf"^last_request: {BERLIN_TIME}$", listed, re.MULTILINE)
     assert secret not in listed
+
+
+def test_an_email_job_names_its_channel_and_filters_and_shows_its_mails(tmp_path: Path) -> None:
+    tool = cron_tool(tmp_path)
+    timed_id = tool.add_job()
+
+    created = tool.succeeded(
+        {
+            "action": "create",
+            "prompt": PROMPT,
+            "schedule": "email",
+            "email_channel": "mail-main",
+            "email_from": ["Ann@Example.com", "@partner.org"],
+            "email_subject": "invoice",
+        }
+    )
+    job_id = tool.service.list_jobs()[-1].id
+    asyncio.run(
+        tool.service.accept_mail(
+            InboundMail(
+                channel_id="mail-main",
+                message_id="<m1@example.com>",
+                received_at="2026-10-20T12:00:00+00:00",
+                folder="INBOX",
+                sender="ann@example.com",
+                sender_name="Ann",
+                sender_authenticated=True,
+                recipients=(),
+                subject="Invoice 7",
+                sent_at=None,
+                text="Hello",
+                text_cut=False,
+            )
+        )
+    )
+    listed = tool.succeeded({"action": "list", "id": job_id})
+    # An update keeps the filters it does not send; [] and "" remove one.
+    tool.succeeded({"action": "update", "id": job_id, "email_subject": ""})
+    kept = tool.service.get_job(job_id).email
+    switched = tool.succeeded(
+        {"action": "update", "id": timed_id, "schedule": "email", "email_channel": "mail-main"}
+    )
+
+    assert "schedule: email\nemail_channel: mail-main\n" in created
+    assert "email_from: ann@example.com, @partner.org\nemail_subject: invoice\n" in created
+    assert "next_run" not in created
+    assert "mails_waiting: 1" in listed
+    assert re.search(rf"^last_mail: {BERLIN_TIME}$", listed, re.MULTILINE)
+    assert kept is not None and (kept.senders, kept.subject) == (
+        ("ann@example.com", "@partner.org"),
+        None,
+    )
+    assert "email_channel: mail-main" in switched
+    missing = _error(tool.call({"action": "create", "prompt": PROMPT, "schedule": "email"})[0])
+    assert "needs email_channel" in missing["message"]
+    assert '"email_channel":"<email Channel id>"' in missing["message"]
+    telegram = tool.refused(
+        {"action": "create", "prompt": PROMPT, "schedule": "email", "email_channel": "tg-main"}
+    )
+    assert "not an email Channel" in telegram
+    sender = tool.refused({"action": "update", "id": job_id, "email_from": ["ann"]})
+    assert "email_from: 'ann' is neither an address" in sender
+    # Leaving the email schedule drops the trigger; its fields no longer apply.
+    tool.succeeded({"action": "update", "id": job_id, "schedule": "every 2h"})
+    assert tool.service.get_job(job_id).email is None
+    timed = tool.refused({"action": "update", "id": job_id, "email_subject": "x"})
+    assert 'apply only to a job that runs on mails, schedule "email"' in timed
+    assert '"schedule":"email"' in timed
 
 
 def test_notification_policy_controls_app_attention_independently_of_delivery(tmp_path: Path):

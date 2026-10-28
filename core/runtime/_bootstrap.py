@@ -848,6 +848,7 @@ def bootstrap(runtime: Runtime) -> None:
         )
         runtime._goal_service.set_run_relay(runtime._channel_service.relay_completion_run)
         runtime._cron_service.set_chat_delivery(runtime._channel_service)
+        runtime._channel_service.set_mail_sink(runtime._cron_service)
         runtime._watch_checks = WatchCheckRunner(
             agent_resolver=runtime._agent_resolver,
             sessions=runtime._chat_sessions,

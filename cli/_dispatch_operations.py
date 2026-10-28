@@ -508,6 +508,8 @@ def _cron_create_fields_from_args(args: argparse.Namespace) -> dict[str, Any]:
             fields["event_time"] = args.event_time
     elif args.webhook:
         fields["schedule_type"] = "webhook"
+    elif args.email is not None:
+        fields["schedule_type"] = "email"
     else:
         fields["schedule_type"] = "once"
         fields["run_at"] = args.at
@@ -542,6 +544,8 @@ def _cron_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
         changes["event_id"] = args.event
     elif args.webhook:
         changes["schedule_type"] = "webhook"
+    elif args.email is not None:
+        changes["schedule_type"] = "email"
     if args.event_time is not None:
         changes["event_time"] = args.event_time
     if args.repeat is not None:
@@ -629,6 +633,30 @@ def _add_cron_delivery_and_watch(args: argparse.Namespace, fields: dict[str, Any
     if watch_runs is not None:
         # On update without --watch, cron_update completes it with the stored target.
         fields.setdefault("watch", {})["always"] = watch_runs == "always"
+    return _add_cron_email(args, fields)
+
+
+def _add_cron_email(args: argparse.Namespace, fields: dict[str, Any]) -> str | None:
+    """Add ``email`` as the cron RPCs take it; on update, cron_update completes what is left out."""
+    email: dict[str, Any] = {}
+    if args.email is not None:
+        email["channel_id"] = args.email
+    if args.email_from is not None:
+        email["senders"] = args.email_from
+    elif getattr(args, "clear_email_from", False):
+        email["senders"] = []
+    if args.email_subject is not None:
+        email["subject"] = args.email_subject
+    elif getattr(args, "clear_email_subject", False):
+        email["subject"] = None
+    if not email:
+        return None
+    if args.command == "create" and args.email is None:
+        return (
+            "--email-from and --email-subject narrow an --email <channel-id> job, the email "
+            "Channel whose mails start the Runs. Nothing was changed."
+        )
+    fields["email"] = email
     return None
 
 

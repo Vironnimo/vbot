@@ -58,6 +58,13 @@ _TYPE_KEYS = frozenset({"scheduletype", "schedulekind", "kind", "type"})
 WEBHOOK_SCHEDULE = "webhook"
 """The ``schedule`` of a job that runs when a request reaches its webhook URL."""
 _WEBHOOK_WORDS = frozenset({"webhook", "webhooks", "hook", "hooks", "onwebhook"})
+EMAIL_SCHEDULE = "email"
+"""The ``schedule`` of a job that runs when its email Channel receives a matching mail."""
+_EMAIL_WORDS = frozenset(
+    {"email", "emails", "mail", "mails", "onemail", "onmail", "newemail", "newmail", "inbox"}
+)
+# Schedules that keep no time: their type alone is the schedule.
+_UNTIMED_SCHEDULES = {WEBHOOK_SCHEDULE: _WEBHOOK_WORDS, EMAIL_SCHEDULE: _EMAIL_WORDS}
 _TYPE_WORDS = {
     "cron": frozenset({"cron", "crontab", "cronexpression", "expression", "expr"}),
     "once": frozenset(
@@ -65,6 +72,7 @@ _TYPE_WORDS = {
     ),
     "interval": frozenset({"interval", "every", "recurring", "repeating", "periodic"}),
     WEBHOOK_SCHEDULE: _WEBHOOK_WORDS,
+    EMAIL_SCHEDULE: _EMAIL_WORDS,
 }
 _UNIT_BY_KEY_SUFFIX = (("ms", 0.001), ("seconds", 1), ("minutes", 60), ("hours", 3600))
 
@@ -117,10 +125,11 @@ _EVENT_PHRASE = re.compile(
 
 
 def schedule_kind(schedule: str) -> str:
-    """Classify a canonical schedule string: ``once``, ``interval``, ``cron`` or ``webhook``."""
+    """Classify a canonical schedule string: ``once``, ``interval``, ``cron``, ``webhook``
+    or ``email``."""
     text = schedule.strip()
-    if text == WEBHOOK_SCHEDULE:
-        return WEBHOOK_SCHEDULE
+    if text in _UNTIMED_SCHEDULES:
+        return text
     if text.startswith("every "):
         return "interval"
     if text.startswith("in "):
@@ -152,9 +161,9 @@ def _read_schedule(arguments: dict[str, Any], problems: _Problems) -> None:
                 candidates.append((key, text))
     texts = list(dict.fromkeys(text for _key, text in candidates if text))
     if not texts:
-        if type_hint == WEBHOOK_SCHEDULE:
-            # A webhook job keeps no time: its type alone is its schedule.
-            arguments["schedule"] = WEBHOOK_SCHEDULE
+        if type_hint in _UNTIMED_SCHEDULES:
+            # A webhook or email job keeps no time: its type alone is its schedule.
+            arguments["schedule"] = type_hint
         return
     if len(texts) > 1 and type_hint is not None:
         typed = list(dict.fromkeys(text for text in texts if schedule_kind(text) == type_hint))
@@ -264,8 +273,9 @@ def _schedule_text(value: Any, hint: str | None, key: str, problems: _Problems) 
     """Return the canonical schedule string for one supplied schedule value."""
     text = " ".join(str(value).split())
     lowered = text.casefold()
-    if spelling(text) in _WEBHOOK_WORDS:
-        return WEBHOOK_SCHEDULE
+    for untimed, words in _UNTIMED_SCHEDULES.items():
+        if spelling(text) in words:
+            return untimed
     if lowered in _CRON_MACROS:
         return _CRON_MACROS[lowered]
     if lowered.startswith("at "):

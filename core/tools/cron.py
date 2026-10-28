@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 from core.automation.cron import (
     MAX_CONSECUTIVE_CRON_FAILURES,
     CronDelivery,
+    CronEmailTrigger,
     CronJobInPastError,
     CronJobNotFoundError,
     CronJobValidationError,
@@ -81,10 +82,13 @@ SessionAncestors = Callable[[SessionAddress], Awaitable[list[SessionAddress]]]
 CRON_TOOL_NAME = "cron"
 CRON_TOOL_DESCRIPTION = (
     "Schedule jobs that run an instruction later: once, repeatedly, before, at or after a "
-    "calendar event, or when the job's webhook URL receives a request."
+    "calendar event, when the job's webhook URL receives a request, or when an email Channel "
+    "receives a mail."
 )
 
 CRON_ACTIONS = frozenset(("create", "list", "update", "delete", "enable", "disable"))
+# Which mails start the runs of a job on schedule email.
+EMAIL_FIELDS = ("email_channel", "email_from", "email_subject")
 
 _ID_ACTIONS = frozenset({"update", "delete", "enable", "disable"})
 _UPDATE_FIELDS = (
@@ -100,6 +104,7 @@ _UPDATE_FIELDS = (
     "notification_policy",
     "watch",
     WATCH_RUNS_FIELD,
+    *EMAIL_FIELDS,
     ENABLED_FIELD,
 )
 _SCHEDULE_FORMS = (
@@ -168,7 +173,8 @@ CRON_TOOL_PARAMETERS: JsonObject = {
                 "weekday), e.g. '0 9 * * 1-5' for weekdays at 09:00; 'every 30m', 'every 2h' "
                 "or 'every 1d'; or once with 'in 45m' or '2030-08-07T09:00'; or 'webhook' to "
                 "run whenever a request reaches the job's URL, and each run gets the request's "
-                "headers and body. Required on create."
+                "headers and body; or 'email' to run whenever email_channel receives a matching "
+                "mail, and each run gets the mail. Required on create."
             ),
         },
         "event_id": {
@@ -257,6 +263,26 @@ CRON_TOOL_PARAMETERS: JsonObject = {
                 "the last check. Omit to keep the current mode, or on create for on_change."
             ),
         },
+        "email_channel": {
+            "type": "string",
+            "minLength": 1,
+            "description": "For schedule email: id of the email Channel whose mails start runs.",
+        },
+        "email_from": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1},
+            "description": (
+                "For schedule email: senders whose mails start runs, as addresses or domains "
+                "such as @example.com. Omit for any sender; on update, [] removes the filter."
+            ),
+        },
+        "email_subject": {
+            "type": "string",
+            "description": (
+                "For schedule email: text the subject must contain, ignoring case. Omit for any "
+                'subject; on update, "" removes the filter.'
+            ),
+        },
     },
     "required": ["action"],
 }
@@ -322,7 +348,7 @@ def register_cron_tool(
         handler,
         summary=(
             "Schedule an instruction to run later, around a calendar event, or on a webhook "
-            "request."
+            "request or an incoming email."
         ),
         open_input_schema=True,
         argument_normalizer=_normalize_cron_arguments,
@@ -462,6 +488,7 @@ async def _handle_create(
         session_ancestors, context, arguments, (project_id, agent_id, session_id)
     )
     delivery, delivery_note = _delivery(context, arguments, agent_id, project_id)
+    email = _email_trigger(arguments, parsed.schedule_type, None)
     watch = _watch(arguments)
     if watch is None and WATCH_RUNS_FIELD in arguments:
         raise CronCallRefusedError(_watch_runs_without_watch(arguments))
@@ -500,6 +527,7 @@ async def _handle_create(
             else {}
         ),
         watch=watch,
+        email=email,
         permission_ceiling=ceiling,
         **execution,
         actor="tool",
@@ -542,7 +570,8 @@ async def _handle_update(
             refusal(
                 "update needs a field to change: name, prompt, schedule, event_id, repeat, "
                 "target, session, working_project, model, thinking_effort, deliver, "
-                "notification_policy, watch or watch_runs. "
+                "notification_policy, watch, watch_runs, email_channel, email_from or "
+                "email_subject. "
                 "To pause or resume the job, use "
                 "disable or "
                 "enable.",
@@ -577,6 +606,12 @@ async def _handle_update(
             updates["remaining_runs"] = 1
     if "repeat" in arguments:
         updates["remaining_runs"] = arguments["repeat"]
+    stored = cron_service.get_job(job_id)
+    email = _email_trigger(
+        arguments, updates.get("schedule_type", stored.schedule_type), stored.email
+    )
+    if email is not None and email != stored.email:
+        updates["email"] = email
     if "session" in arguments or "deliver" in arguments:
         # Both are read against the Agent that runs the job after this update.
         current = cron_service.get_job(job_id)
@@ -656,6 +691,54 @@ async def _new_webhook_secret(
             "show it in vBot's Automations."
         )
         return None
+
+
+def _email_trigger(
+    arguments: JsonObject, schedule_type: str, stored: CronEmailTrigger | None
+) -> CronEmailTrigger | None:
+    """Which mails start the runs of the job a call leaves on schedule email; else None.
+
+    An update keeps the stored Channel and filters the call does not send.
+    """
+    sent = [name for name in EMAIL_FIELDS if name in arguments]
+    if schedule_type != "email":
+        if sent:
+            raise CronCallRefusedError(
+                refusal(
+                    f'{", ".join(sent)} apply only to a job that runs on mails, schedule "email".',
+                    arguments,
+                    schedule="email",
+                )
+            )
+        return None
+    channel_id = arguments.get("email_channel", stored.channel_id if stored else None)
+    if channel_id is None:
+        raise CronCallRefusedError(
+            refusal(
+                'schedule "email" needs email_channel, the id of the email Channel whose mails '
+                "start the runs.",
+                arguments,
+                email_channel="<email Channel id>",
+            )
+        )
+    senders = arguments.get("email_from", list(stored.senders) if stored else None)
+    subject = arguments.get("email_subject", stored.subject if stored else None)
+    try:
+        return CronEmailTrigger.parse(channel_id, senders, subject)
+    except CronJobValidationError as error:
+        detail = _email_detail(str(error).rstrip(". "))
+        raise CronCallRefusedError(refusal(f"{detail}.", arguments)) from error
+
+
+def _email_detail(detail: str) -> str:
+    """A CronService email message in the Tool's parameter names."""
+    for stored, name in (
+        ("email.channel_id", "email_channel"),
+        ("email.senders", "email_from"),
+        ("email.subject", "email_subject"),
+    ):
+        detail = detail.replace(stored, name)
+    return detail
 
 
 def _sent_secret_note(name: str, *, shown: bool) -> str:
@@ -1044,6 +1127,12 @@ def _validation_message(
             alternatives.append({"watch": OMIT})
         calls = " or ".join(render_call(arguments, **fields) for fields in alternatives)
         return f"{REFUSAL_PREFIX}{text}: {calls}"
+    if detail.startswith(("email Channel", "Channel ", "an email schedule")):
+        return refusal(
+            f"{detail}. email_channel names an email Channel of the Agent that runs the job.",
+            arguments,
+            email_channel="<email Channel id>",
+        )
     if "Completed or missed jobs" in detail:
         return (
             f"cron was not run: {detail}. The job has finished; create a new job instead, or "
@@ -1088,8 +1177,14 @@ def _job_fields(cron_service: CronService, job: CronJob, zone: ZoneInfo) -> Json
         data["url"] = webhook.url or f"{webhook.path} on vBot's server address"
         if webhook.reach is not None:
             data["reachable_from"] = _WEBHOOK_REACH[webhook.reach]
-    # A one-time schedule is its own next run; a webhook job has none.
-    if job.schedule_type not in {"once", "webhook"}:
+    if job.email is not None:
+        data["email_channel"] = job.email.channel_id
+        if job.email.senders:
+            data["email_from"] = ", ".join(job.email.senders)
+        if job.email.subject is not None:
+            data["email_subject"] = job.email.subject
+    # A one-time schedule is its own next run; webhook and email jobs have none.
+    if job.schedule_type not in {"once", "webhook", "email"}:
         data["next_run"] = _local_time(cron_service.next_fire_at(job), zone)
     if job.schedule_type == "event" and job.status == "active" and data["next_run"] is None:
         data["next_run"] = "none; no occurrence of the event lies ahead"
@@ -1111,6 +1206,11 @@ def _job_fields(cron_service: CronService, job: CronJob, zone: ZoneInfo) -> Json
         data["last_request"] = _local_time(webhook.last_received_at, zone)
     if webhook is not None and webhook.waiting:
         data["requests_waiting"] = webhook.waiting
+    mails = cron_service.email_status(job)
+    if mails is not None and mails.last_received_at:
+        data["last_mail"] = _local_time(mails.last_received_at, zone)
+    if mails is not None and mails.waiting:
+        data["mails_waiting"] = mails.waiting
     last_run = job.last_fired_at or job.last_attempt_at
     if last_run:
         data["last_run"] = _local_time(last_run, zone)
