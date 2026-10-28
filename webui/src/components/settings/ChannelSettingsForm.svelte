@@ -4,6 +4,7 @@
   import Banner from '../ui/Banner.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
   import TextField from '../ui/TextField.svelte';
+  import Toggle from '../ui/Toggle.svelte';
   import Dropdown from '../Dropdown.svelte';
   let {
     channelFormMode,
@@ -14,9 +15,21 @@
     channelAgentOptions,
     channelAgents,
     channelDmScopeOptions,
+    channelSmtpSecurityOptions,
     setChannelFormField,
   } = $props();
   let creating = $derived(channelFormMode === CHANNEL_FORM_MODE_CREATE);
+  let email = $derived(channelFormValues.platform === 'email');
+  // The email account's text rows: [field, label key, placeholder].
+  const EMAIL_TEXT_ROWS = [
+    ['email_address', 'settings.channels.email.address', 'me@example.com'],
+    ['email_username', 'settings.channels.email.username', ''],
+    ['imap_host', 'settings.channels.email.imap_host', 'imap.example.com'],
+    ['imap_port', 'settings.channels.email.imap_port', '993'],
+    ['smtp_host', 'settings.channels.email.smtp_host', 'smtp.example.com'],
+    ['smtp_port', 'settings.channels.email.smtp_port', '465'],
+    ['email_folders', 'settings.channels.email.folders', 'INBOX'],
+  ];
 </script>
 
 <!-- The Channel settings as label/control rows. Creating shows them in their
@@ -106,11 +119,19 @@
   <div class="s-row">
     <div class="s-row-info">
       <label class="s-row-label" for="channel-allowed-chat-ids-input">
-        {t('settings.channels.allowed_chat_ids')}
-        <InfoHint text={t('settings.channels.allowed_chat_ids.help')} />
+        {email
+          ? t('settings.channels.email.allowed')
+          : t('settings.channels.allowed_chat_ids')}
+        <InfoHint
+          text={email
+            ? t('settings.channels.email.allowed.help')
+            : t('settings.channels.allowed_chat_ids.help')}
+        />
       </label>
       <div class="s-row-desc">
-        {t('settings.channels.allowed_chat_ids.description')}
+        {email
+          ? t('settings.channels.email.allowed.description')
+          : t('settings.channels.allowed_chat_ids.description')}
       </div>
     </div>
     <div class="s-row-control">
@@ -119,7 +140,9 @@
         code
         value={channelFormValues.allowed_chat_ids}
         disabled={channelBusy && creating}
-        placeholder={t('settings.channels.allowed_chat_ids.placeholder')}
+        placeholder={email
+          ? 'you@example.com'
+          : t('settings.channels.allowed_chat_ids.placeholder')}
         ariaLabel={t('settings.channels.allowed_chat_ids')}
         onInput={(next) => setChannelFormField('allowed_chat_ids', next)}
       />
@@ -168,12 +191,91 @@
     </div>
   {/if}
 
+  {#if email}
+    {#each EMAIL_TEXT_ROWS as [field, labelKey, placeholder] (field)}
+      <div class="s-row">
+        <div class="s-row-info">
+          <label class="s-row-label" for={`channel-${field}-input`}>
+            {t(labelKey)}
+          </label>
+          {#if field === 'email_username'}
+            <div class="s-row-desc">
+              {t('settings.channels.email.username.description')}
+            </div>
+          {:else if field === 'email_folders'}
+            <div class="s-row-desc">
+              {t('settings.channels.email.folders.description')}
+            </div>
+          {/if}
+        </div>
+        <div class="s-row-control">
+          <TextField
+            id={`channel-${field}-input`}
+            code
+            required={field === 'email_address' || field.endsWith('_host')}
+            inputmode={field.endsWith('_port') ? 'numeric' : undefined}
+            {placeholder}
+            value={channelFormValues[field]}
+            ariaLabel={t(labelKey)}
+            onInput={(next) => setChannelFormField(field, next)}
+          />
+        </div>
+      </div>
+    {/each}
+
+    <div class="s-row">
+      <div class="s-row-info">
+        <label class="s-row-label" for="channel-smtp-security-select">
+          {t('settings.channels.email.smtp_security')}
+        </label>
+      </div>
+      <div class="s-row-control">
+        <Dropdown
+          id="channel-smtp-security-select"
+          value={channelFormValues.smtp_security}
+          options={channelSmtpSecurityOptions}
+          ariaLabel={t('settings.channels.email.smtp_security')}
+          triggerClass="settings-view__dropdown"
+          listClass="settings-view__thinking-list"
+          onValueChange={(value) => setChannelFormField('smtp_security', value)}
+        />
+      </div>
+    </div>
+
+    <div class="s-row">
+      <div class="s-row-info">
+        <span class="s-row-label">
+          {t('settings.channels.email.require_sender_authentication')}
+          <InfoHint
+            text={t(
+              'settings.channels.email.require_sender_authentication.help',
+            )}
+          />
+        </span>
+      </div>
+      <div class="s-row-control">
+        <Toggle
+          checked={channelFormValues.require_sender_authentication}
+          ariaLabel={t('settings.channels.email.require_sender_authentication')}
+          onChange={(next) =>
+            setChannelFormField('require_sender_authentication', next)}
+        />
+      </div>
+    </div>
+  {/if}
+
   {#if channelFormValues.platform !== 'whatsapp'}
     <div class="s-row">
       <div class="s-row-info">
         <label class="s-row-label" for="channel-token-env-input">
-          {t('settings.channels.token_env_var')}
-          <InfoHint text={t('settings.channels.token_env_var.help')} />
+          {email
+            ? t('settings.channels.email.password_env_var')
+            : t('settings.channels.token_env_var')}
+          <InfoHint
+            text={email
+              ? t('settings.channels.email.password_env_var.help')
+              : t('settings.channels.token_env_var.help')}
+          />
         </label>
       </div>
       <div class="s-row-control">

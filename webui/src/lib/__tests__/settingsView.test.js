@@ -25,6 +25,7 @@ import {
   connectionReachability,
   connectionSupportsAddAccount,
   createAppearanceUpdatePayload,
+  createChannelFormValues,
   createChannelPanelState,
   createSkillDirectoriesUpdatePayload,
   deriveAccountCredentialKey,
@@ -798,5 +799,51 @@ describe('channels', () => {
     expect(buildChannelUpdatePayload(baseline, baseline)).toEqual({
       id: 'tg-assistant',
     });
+  });
+
+  it('edits the email account as form fields and sends it whole', () => {
+    const account = {
+      address: 'bot@example.com',
+      username: 'bot@example.com',
+      imap_host: 'imap.example.com',
+      imap_port: 993,
+      smtp_host: 'smtp.example.com',
+      smtp_port: 465,
+      smtp_security: 'ssl',
+      folders: ['INBOX', 'Invoices'],
+      require_sender_authentication: true,
+    };
+    const [saved] = applyChannelPanelList(createChannelPanelState(), {
+      channels: [
+        {
+          id: 'mail',
+          platform: 'email',
+          agent_id: 'assistant',
+          token_env_var: 'MAIL_PASSWORD',
+          allowed_chat_ids: ['me@example.com'],
+          email: account,
+        },
+      ],
+    }).channels;
+    const form = createChannelFormValues(saved);
+    // Values the server derives show empty, so they keep following their source.
+    expect(form).toMatchObject({
+      email_address: 'bot@example.com',
+      email_username: '',
+      smtp_port: '465',
+      smtp_security: '',
+      email_folders: 'INBOX, Invoices',
+    });
+    expect(buildChannelCreatePayload(form).email).toEqual(account);
+
+    expect(
+      buildChannelUpdatePayload({ ...form, smtp_port: '587' }, form),
+    ).toEqual({
+      id: 'mail',
+      email: { ...account, smtp_port: 587, smtp_security: 'starttls' },
+    });
+    expect(() =>
+      buildChannelUpdatePayload({ ...form, imap_port: '99999' }, form),
+    ).toThrow(/imap_port/u);
   });
 });

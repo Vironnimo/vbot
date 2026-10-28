@@ -21,6 +21,7 @@ import {
   CHANNEL_FORM_MODE_CREATE,
   CHANNEL_FORM_MODE_EDIT,
   CHANNEL_PLATFORMS,
+  EMAIL_SMTP_SECURITIES,
   applyChannelPanelList,
   buildChannelCreatePayload,
   buildChannelUpdatePayload,
@@ -43,6 +44,8 @@ export function channelPlatformLabel(platformId) {
       return t('settings.channels.platform.mattermost');
     case 'whatsapp':
       return t('settings.channels.platform.whatsapp');
+    case 'email':
+      return t('settings.channels.platform.email');
     default:
       return platformId;
   }
@@ -111,6 +114,17 @@ export function createChannelsSettings(context) {
     CHANNEL_DM_SCOPES.map((scopeId) => ({
       value: scopeId,
       label: channelDmScopeLabel(scopeId),
+    })),
+  );
+  let channelSmtpSecurityOptions = $derived(
+    EMAIL_SMTP_SECURITIES.map((security) => ({
+      value: security,
+      label:
+        security === 'ssl'
+          ? t('settings.channels.email.smtp_security.ssl')
+          : security === 'starttls'
+            ? t('settings.channels.email.smtp_security.starttls')
+            : t('settings.channels.email.smtp_security.auto'),
     })),
   );
   let channelAgentOptions = $derived(
@@ -687,6 +701,9 @@ export function createChannelsSettings(context) {
     },
     get channelDmScopeOptions() {
       return channelDmScopeOptions;
+    },
+    get channelSmtpSecurityOptions() {
+      return channelSmtpSecurityOptions;
     },
     get channelAgentOptions() {
       return channelAgentOptions;
