@@ -94,6 +94,26 @@ def test_channel_add_sends_the_connection_and_prints_the_channel_frame(
             ("response_mode=all",),
             id="group-response-policy",
         ),
+        pytest.param(
+            "email",
+            (
+                "--token-env", "MAIL_PASSWORD", "--email-address", "bot@example.com",
+                "--imap-host", "imap.example.com", "--smtp-host", "smtp.example.com",
+                "--smtp-port", "587", "--email-folder", "INBOX", "Invoices",
+            ),
+            {
+                "token_env_var": "MAIL_PASSWORD",
+                "email": {
+                    "address": "bot@example.com",
+                    "imap_host": "imap.example.com",
+                    "smtp_host": "smtp.example.com",
+                    "smtp_port": 587,
+                    "folders": ["INBOX", "Invoices"],
+                },
+            },
+            ("email=bot@example.com",),
+            id="email",
+        ),
     ],
 )  # fmt: skip
 def test_channel_add_sends_the_platform_connection_options(
@@ -323,6 +343,11 @@ def test_channel_status_lists_the_denied_chats(
                 "observe_unaddressed": True,
             },
             id="group-response-policy",
+        ),
+        pytest.param(
+            ("--smtp-port", "587", "--require-sender-authentication", "false"),
+            {"email": {"smtp_port": 587, "require_sender_authentication": False}},
+            id="email-account",
         ),
     ],
 )  # fmt: skip

@@ -24,7 +24,9 @@ from core.channels import (
     ChannelStorage,
 )
 from core.channels.adapter import DeniedChatLog, RouteFacts, RunButtonBinding
+from core.channels.config import EmailSettings
 from core.channels.discord import DiscordChannelAdapter
+from core.channels.email import EmailChannelAdapter
 from core.channels.telegram import TelegramChannelAdapter
 from core.database import DatabaseUnavailableError
 from core.utils.timestamps import format_canonical_timestamp
@@ -104,8 +106,22 @@ async def test_create_and_update_refuse_invalid_changes(tmp_path: Path) -> None:
             "DISCORD_BOT_TOKEN_DC_ASSISTANT",
             DiscordChannelAdapter,
         ),
+        (
+            replace(
+                make_config("mail-assistant"),
+                platform="email",
+                token_env_var="EMAIL_PASSWORD_MAIL_ASSISTANT",
+                email=EmailSettings(
+                    address="bot@example.com",
+                    imap_host="imap.example.com",
+                    smtp_host="smtp.example.com",
+                ),
+            ),
+            "EMAIL_PASSWORD_MAIL_ASSISTANT",
+            EmailChannelAdapter,
+        ),
     ],
-    ids=["telegram", "discord"],
+    ids=["telegram", "discord", "email"],
 )
 def test_channel_service_builds_the_adapter_of_the_configured_platform(
     tmp_path: Path,

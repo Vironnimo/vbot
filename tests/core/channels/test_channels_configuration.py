@@ -22,11 +22,17 @@ from core.channels import (
     validate_channel_data,
     validate_channel_document,
 )
+from core.channels.config import EmailSettings
 from tests.core.channels.channels_test_support import make_config, make_service
 
 pytestmark = pytest.mark.usefixtures("current_format_data_directory")
 
 _AGENT_ID_SLUG_ERROR = "must be 1-64 characters using only letters, numbers, hyphen, or underscore"
+_EMAIL = {
+    "address": "bot@example.com",
+    "imap_host": "imap.example.com",
+    "smtp_host": "smtp.example.com",
+}
 
 
 def make_config_payload(**overrides: Any) -> dict[str, Any]:
@@ -104,6 +110,30 @@ def test_channel_config_defaults_and_round_trips_gating_fields() -> None:
             "$",
             "WhatsApp uses linked-device pairing, not tokens or a server URL",
         ),
+        ({"platform": "email"}, "$.email", None),
+        (
+            {"platform": "email", "email": {**_EMAIL, "address": "no-address"}},
+            "$.email.address",
+            "must be an email address",
+        ),
+        ({"platform": "email", "email": {**_EMAIL, "imap_port": 0}}, "$.email.imap_port", None),
+        (
+            {"platform": "email", "email": {**_EMAIL, "smtp_host": "smtp host"}},
+            "$.email.smtp_host",
+            None,
+        ),
+        (
+            {"platform": "email", "email": {**_EMAIL, "smtp_security": "tls"}},
+            "$.email.smtp_security",
+            None,
+        ),
+        ({"platform": "email", "email": {**_EMAIL, "folders": []}}, "$.email.folders", None),
+        (
+            {"platform": "email", "email": _EMAIL, "allowed_chat_ids": ["12345"]},
+            "$.allowed_chat_ids[0]",
+            "must be an email address",
+        ),
+        ({"email": _EMAIL}, "$.email", "is only valid for the email platform"),
     ],
 )
 def test_channel_config_validation_agrees_across_all_entry_points(
@@ -140,6 +170,45 @@ def test_channel_config_validation_normalizes_accepted_values_consistently(tmp_p
     assert storage.get("tg-assistant").to_dict() == config.to_dict()
     assert config.agent_id == "assistant"
     assert config.allowed_chat_ids == ["123", "456"]
+
+
+def test_email_config_fills_its_defaults_and_round_trips(tmp_path: Path) -> None:
+    payload = make_config_payload(
+        platform="email",
+        email={**_EMAIL, "address": " Bot@Example.com ", "smtp_port": 587},
+        allowed_chat_ids=[" Me@Example.COM "],
+    )
+    assert not any(item.severity == "error" for item in validate_channel_data(payload))
+    config = ChannelConfig.from_dict(payload)
+    storage = ChannelStorage(tmp_path)
+    storage.save(config)
+
+    assert storage.get("tg-assistant") == config
+    assert config.allowed_chat_ids == ["me@example.com"]
+    assert config.to_dict()["email"] == {
+        "address": "bot@example.com",
+        "username": "bot@example.com",
+        "imap_host": "imap.example.com",
+        "imap_port": 993,
+        "smtp_host": "smtp.example.com",
+        "smtp_port": 587,
+        "smtp_security": "starttls",
+        "folders": ["INBOX"],
+        "require_sender_authentication": True,
+    }
+    # An update changes the fields it names; derived defaults follow their source.
+    assert config.email is not None
+    moved = EmailSettings.from_dict(
+        config.email.updated({"address": "new@example.com", "smtp_port": 465})
+    )
+    assert (moved.username, moved.smtp_security, moved.imap_host) == (
+        "new@example.com",
+        "ssl",
+        "imap.example.com",
+    )
+    # Leaving the email platform drops the mail account with it.
+    other = replace(config, platform="telegram", email=None, allowed_chat_ids=[])
+    assert "email" not in other.to_dict()
 
 
 def test_channel_storage_crud_round_trip(tmp_path: Path) -> None:

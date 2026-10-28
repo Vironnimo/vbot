@@ -76,6 +76,9 @@ def dispatch_channel_command(
             connection_options["app_token_env"] = args.app_token_env
         if args.server_url:
             connection_options["server_url"] = args.server_url
+        email = _email_from_args(args)
+        if email:
+            connection_options["email"] = email
         return add_channel(
             instance,
             args.id,
@@ -142,12 +145,35 @@ def dispatch_channel_command(
     raise ValueError(f"Unsupported channel command: {args.command}")
 
 
+def _email_from_args(args: argparse.Namespace) -> dict[str, Any]:
+    """The email account fields the command names."""
+    email: dict[str, Any] = {}
+    for key, value in (
+        ("address", args.email_address),
+        ("username", args.email_username),
+        ("imap_host", args.imap_host),
+        ("imap_port", args.imap_port),
+        ("smtp_host", args.smtp_host),
+        ("smtp_port", args.smtp_port),
+        ("smtp_security", args.smtp_security),
+        ("folders", args.email_folders),
+    ):
+        if value is not None:
+            email[key] = value
+    if args.require_sender_authentication is not None:
+        email["require_sender_authentication"] = args.require_sender_authentication == "true"
+    return email
+
+
 def _channel_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
     changes: dict[str, Any] = {}
     if args.app_token_env is not None:
         changes["app_token_env_var"] = args.app_token_env
     if args.server_url is not None:
         changes["server_url"] = args.server_url
+    email = _email_from_args(args)
+    if email:
+        changes["email"] = email
     if args.platform is not None:
         changes["platform"] = args.platform
     if args.agent is not None:

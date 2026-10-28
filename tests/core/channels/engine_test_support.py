@@ -229,7 +229,7 @@ def make_config(
 
 def make_conversation(
     *,
-    chat_id: int = 12345,
+    chat_id: int | str = 12345,
     user_id: int | str = 50,
     kind: str = "direct",
     user_display_name: str | None = None,

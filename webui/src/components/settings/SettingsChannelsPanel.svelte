@@ -117,6 +117,7 @@
         channelAgentOptions={channels.channelAgentOptions}
         channelAgents={channels.channelAgents}
         channelDmScopeOptions={channels.channelDmScopeOptions}
+        channelSmtpSecurityOptions={channels.channelSmtpSecurityOptions}
         setChannelFormField={channels.setChannelFormField}
       />
       <div class="s-channel-form-actions">
@@ -259,6 +260,7 @@
                 channelAgentOptions={channels.channelAgentOptions}
                 channelAgents={channels.channelAgents}
                 channelDmScopeOptions={channels.channelDmScopeOptions}
+                channelSmtpSecurityOptions={channels.channelSmtpSecurityOptions}
                 setChannelFormField={channels.setChannelFormField}
               />
             </form>

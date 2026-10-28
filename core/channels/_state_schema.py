@@ -2,8 +2,9 @@
 
 ``channels.db`` holds the durable Channel state that is not configuration:
 group access, conversation routing pointers, Run-button origin bindings,
-inbound receipts, the replies a Channel still owes its conversations and the
-Telegram polling watermark. ``channel.json`` stays the
+inbound receipts, the replies a Channel still owes its conversations, the
+Telegram polling watermark and the email mailbox watermarks and recent mails.
+``channel.json`` stays the
 configuration document. Routing/access/reply tables reference the ``channels``
 registry and leave with it in one cascading delete. The transient observation
 inbox survives removing that transport until accepted context reached Sessions.
@@ -176,6 +177,37 @@ CREATE TABLE channel_polling (
   updated_at TEXT NOT NULL,
   FOREIGN KEY (channel_id) REFERENCES channels (channel_id) ON DELETE CASCADE
 ) STRICT, WITHOUT ROWID;
+
+-- An email Channel's processed-mail watermark per folder: the last UID it
+-- handled within the folder's UIDVALIDITY, for the mail account it names
+-- (account: IMAP host and user name).
+CREATE TABLE channel_email_mailboxes (
+  channel_id TEXT NOT NULL,
+  folder TEXT NOT NULL,
+  account TEXT NOT NULL,
+  uid_validity INTEGER NOT NULL CHECK (uid_validity > 0),
+  last_uid INTEGER NOT NULL CHECK (last_uid >= 0),
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (channel_id, folder),
+  FOREIGN KEY (channel_id) REFERENCES channels (channel_id) ON DELETE CASCADE
+) STRICT, WITHOUT ROWID;
+
+-- Recent mails of an email Channel's conversations, by Message-ID, so a reply
+-- threads (subject, References); outbound marks the mails it sent itself.
+CREATE TABLE channel_email_messages (
+  channel_id TEXT NOT NULL,
+  message_id TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  reference_ids TEXT NOT NULL,
+  outbound INTEGER NOT NULL,
+  recorded_at TEXT NOT NULL,
+  PRIMARY KEY (channel_id, message_id),
+  FOREIGN KEY (channel_id) REFERENCES channels (channel_id) ON DELETE CASCADE
+) STRICT, WITHOUT ROWID;
+
+-- Reader: the FIFO prune after each recorded mail (EmailMailState.record_message).
+CREATE INDEX channel_email_messages_by_time
+  ON channel_email_messages (channel_id, recorded_at);
 """
 
 # Owner facts every data snapshot records for the Channel member and

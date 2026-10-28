@@ -65,6 +65,7 @@ def test_profile_offers_the_fields_of_the_agents_platforms_without_naming_channe
         ("slack", {"channel_id", "message", "platform_target", "thread_id", "file_paths"}),
         ("mattermost", {"channel_id", "message", "platform_target", "thread_id", "file_paths"}),
         ("whatsapp", {"channel_id", "message", "platform_target", "file_paths"}),
+        ("email", {"channel_id", "message", "platform_target", "file_paths"}),
     ],
 )
 def test_each_platform_offers_the_fields_it_delivers(

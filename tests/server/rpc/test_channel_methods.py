@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, Mock, call
 import pytest
 
 from core.channels import ChannelConfig, ChannelConfigError, ChannelNotFoundError, DeniedChatFacts
+from core.channels.config import EmailSettings
 from server.events import ServerEventBus
 from server.rpc import secret_methods
 from tests.server.rpc_test_support import resource_changes, rpc_error, rpc_result
@@ -29,6 +30,11 @@ _TELEGRAM = {
     "platform": "telegram",
     "agent_id": "assistant",
     "token_env_var": _TOKEN_KEY,
+}
+_EMAIL = {
+    "address": "bot@example.com",
+    "imap_host": "imap.example.com",
+    "smtp_host": "smtp.example.com",
 }
 
 
@@ -174,8 +180,25 @@ async def test_channel_list_returns_serialized_channels() -> None:
             {**_TELEGRAM, "id": "dc-assistant", "platform": "discord", "token_env_var": "DC_KEY"},
             _channel_config(channel_id="dc-assistant", platform="discord", token_env_var="DC_KEY"),
         ),
+        (
+            {
+                **_TELEGRAM,
+                "id": "mail",
+                "platform": "email",
+                "token_env_var": "MAIL_KEY",
+                "allowed_chat_ids": ["Me@Example.com"],
+                "email": _EMAIL,
+            },
+            _channel_config(
+                channel_id="mail",
+                platform="email",
+                token_env_var="MAIL_KEY",
+                allowed_chat_ids=["me@example.com"],
+                email=EmailSettings.from_dict(_EMAIL),
+            ),
+        ),
     ],
-    ids=["telegram", "discord"],
+    ids=["telegram", "discord", "email"],
 )
 async def test_channel_create_saves_the_config_and_reloads_the_channel_tool(
     params: JsonObject, expected: ChannelConfig

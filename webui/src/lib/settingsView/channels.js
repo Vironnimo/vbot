@@ -9,7 +9,12 @@ export const CHANNEL_PLATFORMS = Object.freeze([
   'slack',
   'mattermost',
   'whatsapp',
+  'email',
 ]);
+
+const EMAIL_IMAP_PORT = 993;
+const EMAIL_SMTP_PORT = 465;
+export const EMAIL_SMTP_SECURITIES = Object.freeze(['', 'ssl', 'starttls']);
 
 export const CHANNEL_DM_SCOPE_PER_CONVERSATION = 'per_conversation';
 export const CHANNEL_DM_SCOPE_MAIN = 'main';
@@ -42,7 +47,43 @@ export function createChannelFormValues(channel = null) {
     app_token_env_var: textOrEmpty(channel?.app_token_env_var),
     server_url: textOrEmpty(channel?.server_url),
     allowed_chat_ids: formatAllowedChatIds(channel?.allowed_chat_ids),
+    ...emailFormValues(channel?.email),
   };
+}
+
+// The email account as flat form fields. A value that equals what the server
+// derives (username = address, security from the port) shows empty, so it
+// keeps following its source when that changes.
+function emailFormValues(email) {
+  const source = isPlainObject(email) ? email : {};
+  const address = textOrEmpty(source.address);
+  const username = textOrEmpty(source.username);
+  const smtpPort = Number.isSafeInteger(source.smtp_port)
+    ? source.smtp_port
+    : EMAIL_SMTP_PORT;
+  const security = textOrEmpty(source.smtp_security);
+  return {
+    email_address: address,
+    email_username: username === address ? '' : username,
+    imap_host: textOrEmpty(source.imap_host),
+    imap_port: String(
+      Number.isSafeInteger(source.imap_port)
+        ? source.imap_port
+        : EMAIL_IMAP_PORT,
+    ),
+    smtp_host: textOrEmpty(source.smtp_host),
+    smtp_port: String(smtpPort),
+    smtp_security: security === defaultSmtpSecurity(smtpPort) ? '' : security,
+    email_folders: Array.isArray(source.folders)
+      ? source.folders.filter((folder) => typeof folder === 'string').join(', ')
+      : 'INBOX',
+    require_sender_authentication:
+      source.require_sender_authentication !== false,
+  };
+}
+
+function defaultSmtpSecurity(port) {
+  return port === EMAIL_SMTP_PORT ? 'ssl' : 'starttls';
 }
 
 export function getAgentItems(result) {
@@ -272,6 +313,11 @@ export function buildChannelUpdatePayload(form, baseline = null) {
     }
   }
 
+  if (source.platform === 'email' && hasOwn(source, 'email_address')) {
+    payload.email = emailSettings(source);
+    hasUpdates = true;
+  }
+
   if (hasOwn(source, 'enabled')) {
     payload.enabled = requiredBoolean(source.enabled, 'enabled');
     hasUpdates = true;
@@ -337,6 +383,7 @@ function normalizeChannel(channel) {
     token_env_var: asOptionalText(channel?.token_env_var) ?? '',
     app_token_env_var: asOptionalText(channel?.app_token_env_var) ?? '',
     server_url: asOptionalText(channel?.server_url) ?? '',
+    email: isPlainObject(channel?.email) ? channel.email : null,
     enabled: booleanWithDefault(channel?.enabled, true),
     running: optionalBoolean(channel?.running),
   };
@@ -460,7 +507,41 @@ function connectionFields(source) {
     );
   if (source.platform === 'mattermost')
     fields.server_url = requiredText(source.server_url, 'server_url');
+  if (source.platform === 'email') fields.email = emailSettings(source);
   return fields;
+}
+
+// The complete email account object; empty optional fields take their defaults.
+function emailSettings(source) {
+  const address = requiredText(source.email_address, 'email_address');
+  const smtpPort = portNumber(source.smtp_port, EMAIL_SMTP_PORT, 'smtp_port');
+  const folders = String(source.email_folders ?? '')
+    .split(/[\n,]/u)
+    .map((folder) => folder.trim())
+    .filter((folder) => folder.length > 0);
+  return {
+    address,
+    username: asOptionalText(source.email_username) ?? address,
+    imap_host: requiredText(source.imap_host, 'imap_host'),
+    imap_port: portNumber(source.imap_port, EMAIL_IMAP_PORT, 'imap_port'),
+    smtp_host: requiredText(source.smtp_host, 'smtp_host'),
+    smtp_port: smtpPort,
+    smtp_security:
+      asOptionalText(source.smtp_security) ?? defaultSmtpSecurity(smtpPort),
+    folders: folders.length > 0 ? folders : ['INBOX'],
+    require_sender_authentication:
+      source.require_sender_authentication !== false,
+  };
+}
+
+function portNumber(value, fallback, fieldName) {
+  const text = String(value ?? '').trim();
+  if (!text) return fallback;
+  const port = Number(text);
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65535) {
+    throw new TypeError(`${fieldName} must be a port number from 1 to 65535`);
+  }
+  return port;
 }
 
 function requiredBoolean(value, fieldName) {

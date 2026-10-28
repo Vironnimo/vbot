@@ -12,4 +12,9 @@ ALLOWED_CHANNEL_DM_SCOPES = frozenset(
 ALLOWED_CHANNEL_RESPONSE_MODES = frozenset(("mention", "all"))
 
 
-ALLOWED_CHANNEL_PLATFORMS = frozenset(("discord", "telegram", "slack", "mattermost", "whatsapp"))
+ALLOWED_CHANNEL_PLATFORMS = frozenset(
+    ("discord", "telegram", "slack", "mattermost", "whatsapp", "email")
+)
+
+
+ALLOWED_EMAIL_SMTP_SECURITY = frozenset(("ssl", "starttls"))

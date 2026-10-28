@@ -202,6 +202,7 @@ _CHANNEL_PROFILE_FIELDS: dict[str, tuple[str, ...]] = {
     "slack": ("channel_id", "message", "platform_target", "thread_id", "file_paths"),
     "mattermost": ("channel_id", "message", "platform_target", "thread_id", "file_paths"),
     "whatsapp": ("channel_id", "message", "platform_target", "file_paths"),
+    "email": ("channel_id", "message", "platform_target", "file_paths"),
 }
 
 
@@ -243,6 +244,8 @@ def _channel_send_definition_profile(platforms: list[str]) -> ToolDefinitionProf
         properties["platform_target"]["description"] += " For a Discord thread, use its id here."
     if "whatsapp" in platforms:
         properties["platform_target"]["description"] += " WhatsApp can send only to your self chat."
+    if "email" in platforms:
+        properties["platform_target"]["description"] += " For Email, use the email address."
     return ToolDefinitionProfile(
         key=f"platforms:{','.join(platforms)}",
         description=CHANNEL_SEND_TOOL_DESCRIPTION,

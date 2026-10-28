@@ -1,9 +1,9 @@
 # Messaging Channels
 
-A Channel connects an Agent to Telegram, Discord, Slack, Mattermost or WhatsApp. For a first Telegram setup, follow "Set up Telegram" below.
+A Channel connects an Agent to Telegram, Discord, Slack, Mattermost, WhatsApp or an email account. For a first Telegram setup, follow "Set up Telegram" below.
 
 ```bash
-vbot channel add <channel-id> --platform telegram|discord|slack|mattermost|whatsapp --agent <agent-id> (--token-stdin | --token-env <ENV_VAR>) [--dm-scope <scope>] [--allow <chat-id>...] [--disabled] [group flags]
+vbot channel add <channel-id> --platform telegram|discord|slack|mattermost|whatsapp|email --agent <agent-id> (--token-stdin | --token-env <ENV_VAR>) [--dm-scope <scope>] [--allow <chat-id>...] [--disabled] [group flags]
 vbot channel list
 vbot channel status <channel-id>
 vbot channel update <channel-id> [--platform ...] [--agent ...] [--token-env ...] [--dm-scope ...] [--allow <chat-id>...] [--enabled true|false] [group flags]
@@ -29,7 +29,7 @@ Read `channel list` for the saved configuration and `channel status <channel-id>
 
 - An empty `--allow`, also an omitted one on `add`, denies every inbound chat. On `update`, `--allow` replaces the whole list: pass every id that stays allowed. All other `update` flags change only their own field.
 - To find a chat's id, have the user send the bot a message, then read the denied chats (id, kind, name, last seen) from `channel status` and allow the id with `update --allow`. The denied list holds the last 20 chats and is cleared when the Channel restarts, which every `channel update` does.
-- Telegram entries are chat ids: direct chats positive, groups negative (`-100123456789`). Discord entries are channel or thread ids, not server ids, and the bot needs the Message Content Intent in the Discord Developer Portal. Slack and Mattermost entries are conversation ids, not user, team or workspace ids. Keep ids as strings.
+- Telegram entries are chat ids: direct chats positive, groups negative (`-100123456789`). Discord entries are channel or thread ids, not server ids, and the bot needs the Message Content Intent in the Discord Developer Portal. Slack and Mattermost entries are conversation ids, not user, team or workspace ids. Email entries are sender addresses. Keep ids as strings.
 - `--dm-scope` decides which direct messages share a Session: `per_conversation` (default), `main`, `per_peer` or `per_account_channel_peer`.
 
 ## Groups
@@ -90,3 +90,15 @@ The Slack app needs Socket Mode with an app-level token with `connections:write`
 Mattermost needs `--server-url <https://server[/subpath]>`, without `/api/v4`, credentials, query or fragment, and a bot token through `--token-stdin` or `--token-env`. When the bot cannot connect or sees no messages, the server administrator enables bot accounts and adds the bot to the teams and channels.
 
 For both, `channel status` also reports `connected`; `running=yes` alone means only that the listener started. In groups set to `mention`, also in threads, the bot answers only when mentioned or woken by a pattern. A thread shares its parent conversation's Session. They support text and files, but no buttons, typing indicators, missed-message history or quoted-message content. Disable a running Channel and wait until it stopped before you remove it.
+
+## Email
+
+An email Channel reads one mail account over IMAP and sends over SMTP; the password is its token. Most providers need an app password, which the user creates in the account's security settings: Gmail requires 2-step verification for it; GMX and web.de also need IMAP access switched on in the mailbox settings. Outlook.com and Microsoft 365 accept only OAuth2 sign-in, which vBot does not support.
+
+```bash
+vbot channel add mail-main --platform email --agent assistant --email-address me@gmx.de --imap-host imap.gmx.net --smtp-host mail.gmx.net --smtp-port 587 --allow user@example.com --token-stdin
+```
+
+Gmail uses `imap.gmail.com` and `smtp.gmail.com` (port 465), web.de `imap.web.de` and `smtp.web.de` (port 587). SMTP security defaults to SSL on port 465 and STARTTLS otherwise.
+
+Each allowed address gets its own conversation. vBot answers a mail only when the receiving server verified the sender's domain (DKIM or DMARC); an allowed sender whose mail was not verified appears among the denied chats in `channel status`. `--require-sender-authentication false` turns this check off for a server that does not verify senders. Mails from other senders, automatic replies and mailing lists start no conversation; Cron jobs with an email trigger can act on them. vBot never marks, moves or deletes mails and starts with the mails that arrive after the Channel first connects. `--email-folder INBOX <folder>...` watches further folders. Replies thread under the mail they answer, and the Agent can write to any address. On `update`, the email flags change only the account fields they name.

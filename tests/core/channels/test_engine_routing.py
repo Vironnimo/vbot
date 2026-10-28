@@ -43,10 +43,24 @@ _ADDRESS = SessionAddress(project_id=None, agent_id="assistant", session_id=SESS
         ("per_peer", "direct", 12345, "ch-tg-assistant-u987"),
         ("per_account_channel_peer", "direct", 12345, "ch-tg-assistant-12345-u987"),
         ("main", "group", -10001, "ch-tg-assistant--10001"),
+        # Ids with other characters (email addresses) are encoded byte by byte.
+        (
+            "per_conversation",
+            "direct",
+            "bo_b.smith@exämple.com",
+            "ch-tg-assistant-bo_5fb_2esmith_40ex_c3_a4mple_2ecom",
+        ),
+        # An anchor longer than a Session id allows names a digest instead.
+        (
+            "per_conversation",
+            "direct",
+            "x" * 120 + "@example.com",
+            "ch-tg-assistant-h9d5616a35eab34e8851c5410608ab614a0df915c85b45253139912fbf84c7dfe",
+        ),
     ],
 )
 async def test_the_dm_scope_derives_the_routed_session(
-    tmp_path: Path, dm_scope: str, kind: str, chat_id: int, expected: str
+    tmp_path: Path, dm_scope: str, kind: str, chat_id: int | str, expected: str
 ) -> None:
     engine, _sessions, _trigger, _transport = make_engine(tmp_path, dm_scope=dm_scope)
     try:

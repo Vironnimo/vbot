@@ -1069,7 +1069,7 @@ Background work such as Subagents, Channel replies and reflections never notifie
 
 ## Channels
 
-Telegram, Discord, Slack, Mattermost and WhatsApp Channels route inbound messages to one Identity Agent. Project Agents cannot own a Channel. A Channel names its bot credentials by variable name rather than holding the token itself, for example `TELEGRAM_BOT_TOKEN_MAIN` or `DISCORD_BOT_TOKEN_MAIN`. The value comes from the server's process environment or from the data directory's Secret Store, where `vbot channel token set <channel-id> --stdin` saves it.
+Telegram, Discord, Slack, Mattermost, WhatsApp and email Channels route inbound messages to one Identity Agent. Project Agents cannot own a Channel. A Channel names its bot credentials by variable name rather than holding the token itself, for example `TELEGRAM_BOT_TOKEN_MAIN` or `DISCORD_BOT_TOKEN_MAIN`. The value comes from the server's process environment or from the data directory's Secret Store, where `vbot channel token set <channel-id> --stdin` saves it.
 
 Create and manage a Channel in Settings or with positional Channel ids in the CLI:
 
@@ -1159,6 +1159,28 @@ vbot channel update mm-main --allow <conversation-id>
 ```
 
 Send a DM or channel message to discover its ID through denied chats. Allowlist entries are Mattermost conversation IDs, not team IDs or usernames. Group mention policy and thread behavior match the Slack behavior described above.
+
+### Email
+
+An email Channel reads one mail account over IMAP and answers over SMTP. vBot never marks, moves or deletes mails: it opens folders read-only and remembers per folder which mails it has handled. On its first connection it starts with the mails that arrive from then on; an older backlog is not read.
+
+The Channel's token is the account password. Most providers require an **app password** for IMAP/SMTP access:
+
+- **Gmail:** turn on 2-step verification, then create an app password under Google Account > Security > App passwords. Servers: `imap.gmail.com` and `smtp.gmail.com` (port 465).
+- **GMX** and **web.de:** enable IMAP/POP3 access in the mailbox settings (and create an app password if 2-factor authentication is on). Servers: `imap.gmx.net` and `mail.gmx.net`, or `imap.web.de` and `smtp.web.de` (port 587 with STARTTLS).
+- **Outlook.com and Microsoft 365** accept only OAuth2 sign-in for IMAP/SMTP, which vBot does not support.
+
+In Settings choose Email and fill in the address and servers, or use the CLI with the password on stdin:
+
+```bash
+vbot channel add mail-main --platform email --agent assistant --email-address me@gmx.de --imap-host imap.gmx.net --smtp-host mail.gmx.net --smtp-port 587 --allow me@example.com --token-stdin
+vbot channel status mail-main
+vbot channel update mail-main --email-folder INBOX Invoices
+```
+
+The SMTP security defaults to SSL on port 465 and STARTTLS on other ports (`--smtp-security`); the login name defaults to the address (`--email-username`). On `update`, the email flags change only the fields they name.
+
+Allowed chats are sender addresses. Each allowed sender gets its own conversation; a reply threads under the mail it answers. vBot answers a mail only when your mail server verified the sender's domain (DKIM or DMARC in its `Authentication-Results` header), so nobody can write in an allowed person's name; an allowed sender whose mail was not verified appears among the denied chats. If your server does not verify senders, `--require-sender-authentication false` turns the check off. Mails from other senders, automatic replies, bounces and mailing-list mails start no conversation; Cron jobs with an email trigger can act on them. The Agent can write to any address with `channel_send`. Commands such as `/new` do not work by mail.
 
 ### Initial integration coverage
 

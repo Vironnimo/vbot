@@ -1201,6 +1201,7 @@ export default Object.freeze({
   'settings.channels.platform.slack': 'Slack',
   'settings.channels.platform.mattermost': 'Mattermost',
   'settings.channels.platform.whatsapp': 'WhatsApp',
+  'settings.channels.platform.email': 'Email',
   'settings.channels.platform.help':
     'Changing the platform of an existing Channel clears its own identity and group access, because user and group IDs from one platform mean nothing on another.',
   'settings.channels.agent': 'Agent',
@@ -1230,7 +1231,7 @@ export default Object.freeze({
   'settings.channels.failed': 'Failed',
   'settings.channels.empty': 'No Channels yet',
   'settings.channels.emptyHint':
-    'Talk to your Agents from Telegram, Discord, Slack, Mattermost or WhatsApp.',
+    'Talk to your Agents from Telegram, Discord, Slack, Mattermost, WhatsApp or email.',
   'settings.channels.delete_confirm_title': 'Delete channel “{id}”?',
   'settings.channels.delete_confirm':
     'vBot stops listening on it and removes its configuration.',
@@ -1281,6 +1282,33 @@ export default Object.freeze({
   'settings.channels.app_token_help':
     'Slack needs a second token for Socket Mode. Enter the name of the variable holding the xapp token with connections:write permission.',
   'settings.channels.server_url': 'Mattermost server URL',
+  'settings.channels.email.address': 'Email address',
+  'settings.channels.email.username': 'Login name',
+  'settings.channels.email.username.description':
+    'Leave empty when it is the email address.',
+  'settings.channels.email.imap_host': 'IMAP server',
+  'settings.channels.email.imap_port': 'IMAP port',
+  'settings.channels.email.smtp_host': 'SMTP server',
+  'settings.channels.email.smtp_port': 'SMTP port',
+  'settings.channels.email.smtp_security': 'SMTP security',
+  'settings.channels.email.smtp_security.auto': 'Automatic (SSL on port 465)',
+  'settings.channels.email.smtp_security.ssl': 'SSL',
+  'settings.channels.email.smtp_security.starttls': 'STARTTLS',
+  'settings.channels.email.folders': 'Folders',
+  'settings.channels.email.folders.description':
+    'Folders to watch, separated by commas. vBot never marks, moves or deletes mails.',
+  'settings.channels.email.require_sender_authentication':
+    'Require verified senders',
+  'settings.channels.email.require_sender_authentication.help':
+    'Answer a mail only when your mail server verified the sender’s domain (DKIM or DMARC), so nobody can write in an allowed person’s name. Turn this off only if your server does not verify senders.',
+  'settings.channels.email.allowed': 'Allowed senders',
+  'settings.channels.email.allowed.description':
+    'Separate addresses with commas. An empty list answers nobody.',
+  'settings.channels.email.allowed.help':
+    'Mails from these addresses start a conversation with the Agent, one per sender. Other mails, automatic replies and mailing lists start none; Cron jobs with an email trigger can act on them.\n\nAn allowed sender whose mail was not verified is listed under Blocked chats.',
+  'settings.channels.email.password_env_var': 'Password env var',
+  'settings.channels.email.password_env_var.help':
+    'Name of the variable that holds the mail account’s password, usually an app password from the provider’s security settings; only the name goes here. vBot reads it from the server environment, or else from its encrypted Secret Store, where vbot channel token set <channel-id> --stdin saves it. Outlook.com and Microsoft 365 need OAuth2 sign-in, which vBot does not support.',
   'settings.channels.whatsapp.help':
     'Link your existing WhatsApp account and talk to vBot in your self chat: send a message to yourself to reach this Channel’s Agent. Other conversations cannot trigger Runs.\n\nThis uses an unofficial linked-device connection; WhatsApp may restrict the account.\n\nRequires Node.js 22 or newer on the vBot server.',
   'settings.channels.whatsapp.helpAria': 'About WhatsApp linking',
