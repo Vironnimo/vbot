@@ -202,7 +202,7 @@ def _deny_listing(folder: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         matches = (
             os.path.samestat(os.fstat(path), original)
             if isinstance(path, int)
-            else Path(os.path.abspath(os.fsdecode(path))) == folder
+            else os.path.samestat(os.stat(path), original)
         )
         if denied and matches:
             raise PermissionError(errno.EACCES, "Access is denied", str(folder))
@@ -211,7 +211,7 @@ def _deny_listing(folder: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def restore(path: Path | str) -> None:
         nonlocal denied
         real_restore(path)
-        if Path(path) == folder:
+        if os.path.samestat(os.stat(path), original):
             denied = False
 
     monkeypatch.setattr(os, "scandir", scandir)
@@ -239,6 +239,15 @@ def test_remove_tree_deletes_only_inside_its_root_and_never_follows_links(
     within = tmp_path / "archive"
     tree = make_tree(within / "entry" / "agent")
     _link_directory(tree / "linked", outside)
+    if sys.platform == "win32":
+        # These exact names can be created by native programs. Ordinary Win32
+        # paths silently trim them, so rmtree otherwise leaves a nonempty tree.
+        exact_tree = Path("\\\\?\\" + str(tree))
+        for suffix in (".", " "):
+            (exact_tree / f"file{suffix}").write_text("probe", encoding="utf-8")
+            folder = exact_tree / f"folder{suffix}"
+            folder.mkdir()
+            (folder / "nested.txt").write_text("probe", encoding="utf-8")
     read_only = tree / "sub" / "nested.txt"
     read_only.chmod(stat.S_IREAD)
     (tree / "denied" / "inner").mkdir(parents=True)

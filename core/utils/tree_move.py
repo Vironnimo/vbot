@@ -130,6 +130,7 @@ def remove_tree(path: Path, *, within: Path, stop: Callable[[], None] | None = N
     target = Path(path).parent.resolve() / Path(path).name
     if target == root or not target.is_relative_to(root) or Path(path).name in ("", ".", ".."):
         raise ValueError(f"refusing to remove {path}: it is not inside {within}")
+    target = _exact_windows_path(target)
     try:
         status = os.lstat(target)
     except FileNotFoundError:
@@ -201,7 +202,19 @@ def _remove_tree(path: Path) -> None:
         else:
             raise error
 
-    shutil.rmtree(path, onexc=repair)
+    shutil.rmtree(_exact_windows_path(path), onexc=repair)
+
+
+def _exact_windows_path(path: Path) -> Path:
+    """Keep enumerated names exact instead of stripping trailing dots or spaces."""
+    if sys.platform != "win32":
+        return path
+    absolute = os.path.abspath(path)
+    if absolute.startswith("\\\\?\\"):
+        return Path(absolute)
+    if absolute.startswith("\\\\"):
+        return Path("\\\\?\\UNC\\" + absolute[2:])
+    return Path("\\\\?\\" + absolute)
 
 
 def _restore_owner_access(path: Path | str) -> None:

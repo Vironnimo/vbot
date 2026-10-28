@@ -58,6 +58,11 @@ When run-local Model fallback begins, Chat rebuilds request state with the fallb
 
 ## Skills and prompt-cache stability
 
+Inline triggers match whole Skill names. PowerShell scoped variables such as
+`$env:LOCALAPPDATA` and `$script:state` are not triggers; a prose mention such as
+`$skill: explanation` still is. Activation and automation reference/rename checks
+share this grammar in `core/skills/skill_validator.py`.
+
 Announcement planning and successful Compaction prompt refresh require `SkillRegistry.filter_allowed`; an empty catalog is a valid empty baseline.
 
 Pure-text `/skill-name` at the start and `$skill-name` anywhere are deterministic Skill activation hints; `$` never routes to a built-in command. The original user message stays unchanged. Only allowed, loadable, currently available Skills activate. An identical name+content activation deduplicates within the current Compaction epoch, while committing a changed package permits the same Skill name to activate again and keeps latest content. A committed checkpoint removes full trigger carriers and compacts loading `skill` Tool Results from its Projection, then adds one names-only reminder for activations since the preceding checkpoint; the instructions and Skill environment grants are inactive until the Model explicitly reloads a still-relevant Skill. Aborted Compaction changes nothing, and a later checkpoint never carries the prior names reminder forward.
