@@ -80,6 +80,27 @@ def _webhook(reach: str = "internet") -> dict[str, Any]:
             id="event",
         ),
         pytest.param(
+            (
+                "--email",
+                "mail-main",
+                "--email-from",
+                "ann@example.com",
+                "--email-from",
+                "@partner.org",
+                "--email-subject",
+                "Invoice",
+            ),
+            {
+                "schedule_type": "email",
+                "email": {
+                    "channel_id": "mail-main",
+                    "senders": ["ann@example.com", "@partner.org"],
+                    "subject": "Invoice",
+                },
+            },
+            id="email",
+        ),
+        pytest.param(
             ("--cron", "0 9 * * *", "--deliver", "app", "--watch", "https://example.com/status"),
             {
                 "schedule_type": "cron",
@@ -443,6 +464,56 @@ def test_cron_update_keeps_what_the_watch_options_leave_out(
     assert rpc.calls[-1] == ("cron.update", {"id": "job-1", "watch": watch})
 
 
+@pytest.mark.parametrize(
+    ("options", "email"),
+    [
+        pytest.param(
+            ("--email-subject", "Invoice"),
+            {"channel_id": "mail-main", "senders": ["ann@example.com"], "subject": "Invoice"},
+            id="subject-keeps-channel-and-senders",
+        ),
+        pytest.param(
+            ("--email", "mail-other", "--clear-email-from"),
+            {"channel_id": "mail-other", "senders": [], "subject": "Bill"},
+            id="channel-and-any-sender",
+        ),
+    ],
+)
+def test_cron_update_keeps_what_the_email_options_leave_out(
+    rpc: FakeRpc, run_cli: RunCli, options: tuple[str, ...], email: dict[str, Any]
+) -> None:
+    stored = {
+        "channel_id": "mail-main",
+        "senders": ["ann@example.com"],
+        "subject": "Bill",
+        "waiting": 2,
+    }
+    rpc.reply("cron.list", {"jobs": [{"id": "job-1", "email": stored}]})
+    rpc.reply(
+        "cron.update",
+        {"id": "job-1", "schedule_type": "email", "email": {**email, "waiting": 2}},
+    )
+
+    code, out, _err = run_cli("cron", "update", "job-1", *options)
+
+    assert code == 0
+    assert rpc.calls[-1][1]["email"] == email
+    assert f"schedule=email[{email['channel_id']}" in out
+    assert "mails_waiting=2" in out
+
+
+def test_email_filters_need_an_email_job(rpc: FakeRpc, run_cli: RunCli) -> None:
+    rpc.reply("cron.list", {"jobs": [{"id": "job-1", "email": None}]})
+
+    created, created_out, _err = run_cli(*CREATE, "--every", "15", "--email-subject", "Bill")
+    updated, updated_out, _err = run_cli("cron", "update", "job-1", "--email-from", "@a.org")
+
+    assert (created, updated) == (1, 1)
+    assert "narrow an --email <channel-id> job" in created_out
+    assert "cron job job-1 runs on no mail; add --email <channel-id>" in updated_out
+    assert [method for method, _params in rpc.calls] == ["cron.list"]
+
+
 def test_watch_runs_needs_a_watch(rpc: FakeRpc, run_cli: RunCli) -> None:
     rpc.reply("cron.list", {"jobs": [{"id": "job-1", "watch": None}]})
 
@@ -469,6 +540,7 @@ def test_cron_update_without_changes_names_every_option(rpc: FakeRpc, run_cli: R
         "--at",
         "--event",
         "--webhook",
+        "--email",
         "--event-time",
         "--repeat",
         "--session",
