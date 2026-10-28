@@ -18,9 +18,11 @@ from core.automation import CronService
 from core.automation.cron import (
     CronAlert,
     CronDelivery,
+    CronEmailTrigger,
     CronJob,
     CronResult,
     CronWatch,
+    InboxCounts,
     WebhookStatus,
 )
 from core.projects import (
@@ -52,6 +54,7 @@ _CREATE_DEFAULTS: JsonObject = {
     "project_id": None,
     "delivery": None,
     "watch": None,
+    "email": None,
     "actor": "rpc",
 }
 _CHAT: JsonObject = {"kind": "chat", "channel_id": "tg-main", "platform_target": "chat-42"}
@@ -75,6 +78,9 @@ def _cron_state(cron_service: Any | None = None, *, resolver: Any | None = None)
             last_received_at=None,
             waiting=0,
             dropped=0,
+        )
+        cron_service.email_status.return_value = InboxCounts(
+            last_received_at="2026-05-14T09:30:00+00:00", waiting=2, dropped=1
         )
         for edit in (
             "create_job",
@@ -426,6 +432,38 @@ async def test_bootstrap_list_projects_each_job() -> None:
             },
             id="webhook",
         ),
+        # An email job names its email Channel and filters; its mails come back with it.
+        pytest.param(
+            {
+                "agent_id": "main",
+                "prompt": "Answer the mail",
+                "schedule_type": "email",
+                "email": {"channel_id": "mail-main", "senders": ["Ann@Example.com"]},
+            },
+            _cron_job(
+                name="Answer the mail",
+                schedule_type="email",
+                cron_expression=None,
+                email=CronEmailTrigger("mail-main", ("ann@example.com",)),
+            ),
+            {
+                "agent_id": "main",
+                "schedule_type": "email",
+                "email": CronEmailTrigger("mail-main", ("ann@example.com",)),
+            },
+            {
+                "schedule": "email",
+                "webhook": None,
+                "email": {
+                    "channel_id": "mail-main",
+                    "senders": ["ann@example.com"],
+                    "last_received_at": "2026-05-14T09:30:00+00:00",
+                    "waiting": 2,
+                    "dropped": 1,
+                },
+            },
+            id="email",
+        ),
     ],
 )
 async def test_cron_create_passes_the_normalized_job_to_the_service(
@@ -530,6 +568,7 @@ async def test_cron_list_projects_each_job_with_its_next_fire_time() -> None:
                 "next_fire_at": "2026-05-14T10:05:00+00:00",
                 "created_at": "2026-05-14T09:00:00+00:00",
                 "webhook": None,
+                "email": None,
             }
         ],
         "system_timezone": "Europe/Berlin",
@@ -582,6 +621,11 @@ async def test_cron_list_projects_each_job_with_its_next_fire_time() -> None:
             id="watch-always",
         ),
         pytest.param({"watch": None}, {"watch": None}, id="no-watch"),
+        pytest.param(
+            {"email": {"channel_id": "mail-main", "subject": " Invoice "}},
+            {"email": CronEmailTrigger("mail-main", subject="Invoice")},
+            id="email",
+        ),
         pytest.param({"working_project_id": None}, {"working_project_id": None}, id="workspace"),
         pytest.param(
             {"working_project_id": "vbot"}, {"working_project_id": "vbot"}, id="working-project"
@@ -708,6 +752,9 @@ async def test_a_jobs_unread_alert_is_returned_until_acknowledged() -> None:
         ("cron.update", {"id": "job-1", "watch": {"command": "ls", "url": "https://a.example"}}),
         ("cron.update", {"id": "job-1", "watch": {"url": "ftp://files.example/status"}}),
         ("cron.update", {"id": "job-1", "watch": {"command": "ls", "always": "yes"}}),
+        ("cron.create", {**_CRON_PARAMS, "schedule_type": "email"}),
+        ("cron.update", {"id": "job-1", "email": {"channel_id": "mail-main", "folder": "INBOX"}}),
+        ("cron.update", {"id": "job-1", "email": {"channel_id": "mail-main", "senders": ["ann"]}}),
         ("cron.create", {**_CRON_PARAMS, "working_project_id": "../invalid"}),
         ("cron.update", {"id": "job-1", "run_overrides": {"temperature": 0.2}}),
         ("cron.update", {"id": "job-1", "run_overrides": {"model": ""}}),
