@@ -692,7 +692,10 @@ async def test_cancel_during_a_steering_append_starts_a_successor_only_for_kept_
         await manager.aclose()
 
 
-async def test_removing_second_steer_during_first_append_does_not_deliver_it() -> None:
+@pytest.mark.parametrize("accepted", [False, True], ids=["transient", "accepted"])
+async def test_removing_second_steer_during_first_append_does_not_deliver_it(
+    accepted: bool,
+) -> None:
     manager = ChatRunManager()
     release = asyncio.Event()
     address = SessionAddress(project_id=None, agent_id="coder", session_id="one")
@@ -704,7 +707,12 @@ async def test_removing_second_steer_during_first_append_does_not_deliver_it() -
     run = await manager.start(address, execute)
     await asyncio.sleep(0)
     first = await manager.enqueue(address, execute, steerable=True)
-    second = await manager.enqueue(address, execute, steerable=True)
+    second = await manager.enqueue(
+        address,
+        execute,
+        steerable=True,
+        admission=RunAdmission(accessor_input_id="second-input" if accepted else None),
+    )
     for item in [first, second]:
         manager.steer_queued("coder", "one", item.item_id, project_id=None)
     delivered = []

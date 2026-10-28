@@ -300,6 +300,47 @@ async def test_a_run_inside_the_settle_period_continues_the_span(
     assert world.changes[-1][2] == FinishedWork(START, START + timedelta(seconds=20), 20_000)
 
 
+@pytest.mark.parametrize("removal", ["remove", "clear", "steer", "abandon"])
+async def test_queued_input_contributes_until_it_leaves_the_queue(
+    world: _World, removal: str
+) -> None:
+    run = await world.start(PARENT, contributes=False)
+
+    async def execute(_run: Run) -> None:
+        raise AssertionError("The queued input must leave the Queue before starting")
+
+    item = await world.runs.enqueue(PARENT, execute, steerable=True)
+    await _turns()
+    assert world.activity.state(PARENT).contributes_to_agent_activity
+
+    if removal == "remove":
+        assert world.runs.remove_queued(
+            PARENT.agent_id, PARENT.session_id, item.item_id, project_id=PARENT.project_id
+        )
+    elif removal == "clear":
+        assert (
+            await world.runs.clear_queued_async(
+                PARENT.agent_id, PARENT.session_id, project_id=PARENT.project_id
+            )
+            == 1
+        )
+    elif removal == "steer":
+        world.runs.steer_queued(
+            PARENT.agent_id, PARENT.session_id, item.item_id, project_id=PARENT.project_id
+        )
+
+        async def persist(_item: object) -> None:
+            pass
+
+        assert await world.runs.deliver_steering(run, persist)
+    else:
+        item.future.cancel()
+    await _turns()
+    assert world.activity.state(PARENT) == SessionActivityState(
+        "working", START, contributes_to_agent_activity=False
+    )
+
+
 async def test_a_parent_waits_for_sub_agents_answering_it_until_their_answers_arrive(
     world: _World,
 ) -> None:

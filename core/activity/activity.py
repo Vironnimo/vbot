@@ -113,6 +113,10 @@ class RunSource(Protocol):
 
     def add_run_finished_callback(self, callback: Callable[[Run], None]) -> Callable[[], None]: ...
 
+    def add_queue_changed_callback(
+        self, callback: Callable[[SessionAddress], None]
+    ) -> Callable[[], None]: ...
+
     def active_run(
         self, *, agent_id: str, session_id: str, project_id: str | None
     ) -> Run | None: ...
@@ -227,6 +231,7 @@ class SessionActivity:
         self._unsubscribers = [
             runs.add_run_started_callback(self._on_run),
             runs.add_run_finished_callback(self._on_run),
+            runs.add_queue_changed_callback(self._mark),
             commands.add_changed_callback(self._on_command),
             completions.add_completion_changed_callback(self._mark),
             subagents.add_forwarded_callback(self._on_forwarded),

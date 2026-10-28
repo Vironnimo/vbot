@@ -154,6 +154,7 @@ class ChatRunManager:
         self._run_started_callbacks: list[Callable[[Run], None]] = []
         self._run_finished_callbacks: list[Callable[[Run], None]] = []
         self._input_queued_callbacks: list[Callable[[SessionAddress], None]] = []
+        self._queue_changed_callbacks: list[Callable[[SessionAddress], None]] = []
         self._completed_run_retention_limit = completed_run_retention_limit
         self._run_event_retention_limit = run_event_retention_limit
         self._waiting_work_limit = waiting_work_limit
@@ -240,6 +241,15 @@ class ChatRunManager:
         The callback is synchronous and does not change queue ownership.
         """
         return _subscribe(self._input_queued_callbacks, callback)
+
+    def add_queue_changed_callback(
+        self, callback: Callable[[SessionAddress], None]
+    ) -> Callable[[], None]:
+        """Observe Queue membership changes after their live projection changes."""
+        return _subscribe(self._queue_changed_callbacks, callback)
+
+    def _notify_queue_changed(self, address: SessionAddress) -> None:
+        _notify(self._queue_changed_callbacks, address, "Queue change callback failed")
 
     @asynccontextmanager
     async def session_admission_guard(
@@ -445,6 +455,7 @@ class ChatRunManager:
             finally:
                 self._pending_waiting_scopes.pop()
             _notify(self._input_queued_callbacks, address, "Queued input callback failed")
+            self._notify_queue_changed(address)
             _LOGGER.debug(
                 "Run queued for busy session (agent=%s session=%s queue_depth=%d)",
                 address.agent_id,
@@ -510,6 +521,7 @@ class ChatRunManager:
                 item.future.set_result(run)
             else:
                 self._queues.setdefault(address, deque()).append(item)
+                self._notify_queue_changed(address)
 
     @asynccontextmanager
     async def queued_input_mutation(self) -> AsyncIterator[None]:
@@ -573,6 +585,7 @@ class ChatRunManager:
                 item.future.cancel()
             if not queue:
                 self._queues.pop(address, None)
+            self._notify_queue_changed(address)
             return True
         return False
 
@@ -672,8 +685,13 @@ class ChatRunManager:
     ) -> bool:
         """Keep input queued until its append succeeds, without locking across I/O."""
         delivered = False
+        address = _session_address(run.project_id, run.agent_id, run.session_id)
         for item in self.pending_steering(run):
             # Another selected item can be removed while the previous append awaits I/O.
+            # An accepted input's cancelled waiter does not withdraw it, so only
+            # its continued Queue membership proves that it still needs delivery.
+            if item not in self._queues.get(address, ()):
+                continue
             if item.future.done() and item.admission.accessor_input_id is None:
                 continue
             run.raise_if_cancelled()
@@ -683,12 +701,12 @@ class ChatRunManager:
                 # A new Parent input replaces its predecessor's continuation
                 # source only once Chat has durably accepted the steering.
                 run.parent_source = item.admission.parent_source
-                address = _session_address(run.project_id, run.agent_id, run.session_id)
                 queue = self._queues.get(address)
                 if queue is not None and item in queue:
                     queue.remove(item)
                     if not queue:
                         self._queues.pop(address, None)
+                    self._notify_queue_changed(address)
                 if not item.future.done():
                     item.future.set_result(run)
                 delivered = True
@@ -706,6 +724,7 @@ class ChatRunManager:
             queue.remove(item)
             if not queue:
                 self._queues.pop(address, None)
+            self._notify_queue_changed(address)
         if not item.future.done():
             item.future.cancel()
 
@@ -777,7 +796,10 @@ class ChatRunManager:
                     for item in queue:
                         if not item.future.done():
                             item.future.cancel()
+                queued_addresses = tuple(self._queues)
                 self._queues.clear()
+                for address in queued_addresses:
+                    self._notify_queue_changed(address)
                 self._waiting_work_admissions.clear()
                 active_runs = list(self._active_by_session.values())
         for run in active_runs:
@@ -1041,6 +1063,8 @@ class ChatRunManager:
             for item in closed_queue:
                 if not item.future.done():
                     item.future.cancel()
+            if closed_queue:
+                self._notify_queue_changed(address)
             return
         active_run = self._active_by_session.get(address)
         if active_run is not None and active_run.status == RunStatus.RUNNING:
@@ -1059,6 +1083,7 @@ class ChatRunManager:
             self._queues[address] = queue
         while queue:
             item = queue.popleft()
+            self._notify_queue_changed(address)
             # The cancellation callback normally removes an abandoned item
             # immediately. This guard closes the same-tick race where the
             # active Run drains before that callback gets its event-loop turn.
