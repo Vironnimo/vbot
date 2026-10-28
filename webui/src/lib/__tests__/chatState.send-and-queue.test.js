@@ -27,29 +27,47 @@ import {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('send and edit admission', () => {
-  it('retries an uncertain acknowledgment once with identical prepared input', async () => {
-    const startChatRun = vi
-      .fn()
-      .mockRejectedValueOnce(
-        new ApiClientError('network_error', 'Disconnected'),
-      )
-      .mockResolvedValue({ run_id: 'once', sse_url: '/events/once' });
-    const { chatState, controller } = setupController({
-      operationOverrides: { startChatRun },
-    });
-    const session = ensureSessionState(chatState, 'alpha', 'one');
+  it.each(
+    [
+      'Inspect',
+      [
+        { type: 'text', text: '/compact' },
+        {
+          type: 'file',
+          attachment_id: 'att_notes',
+          filename: 'notes.txt',
+          media_type: 'text/plain',
+        },
+      ],
+    ].map((content) => [content]),
+  )(
+    'retries an uncertain acknowledgment once with identical prepared input: %j',
+    async (content) => {
+      const startChatRun = vi
+        .fn()
+        .mockRejectedValueOnce(
+          new ApiClientError('network_error', 'Disconnected'),
+        )
+        .mockResolvedValue({ run_id: 'once', sse_url: '/events/once' });
+      const { chatState, controller } = setupController({
+        operationOverrides: { startChatRun },
+      });
+      const session = ensureSessionState(chatState, 'alpha', 'one');
 
-    expect(
-      await controller.sendMessage(session, 'Inspect', {
-        fileMentions: ['notes.md'],
-      }),
-    ).toMatchObject({ kind: 'started', runId: 'once' });
-    expect(startChatRun).toHaveBeenCalledTimes(2);
-    expect(startChatRun.mock.calls[0][0]).toEqual(
-      startChatRun.mock.calls[1][0],
-    );
-    expect(startChatRun.mock.calls[0][0].input_id).toEqual(expect.any(String));
-  });
+      expect(
+        await controller.sendMessage(session, content, {
+          fileMentions: ['notes.md'],
+        }),
+      ).toMatchObject({ kind: 'started', runId: 'once' });
+      expect(startChatRun).toHaveBeenCalledTimes(2);
+      expect(startChatRun.mock.calls[0][0]).toEqual(
+        startChatRun.mock.calls[1][0],
+      );
+      expect(startChatRun.mock.calls[0][0].input_id).toEqual(
+        expect.any(String),
+      );
+    },
+  );
 
   it('retains an uncertain new-session input across page restoration without resubmitting it', async () => {
     const values = new Map();
@@ -91,23 +109,81 @@ describe('send and edit admission', () => {
     expect(values.size).toBe(0);
   });
 
-  it('keeps changed input distinct and never retries slash Commands', async () => {
+  it.each(
+    [
+      '/secret credential -- sensitive',
+      [
+        { type: 'text', text: '/secret credential -- sensitive' },
+        {
+          type: 'file',
+          attachment_id: 'att_notes',
+          filename: 'notes.txt',
+          media_type: 'text/plain',
+        },
+      ],
+    ].map((content) => [content]),
+  )(
+    'keeps changed input distinct and never retries slash Commands: %j',
+    async (secretContent) => {
+      const values = new Map();
+      vi.stubGlobal('sessionStorage', {
+        getItem: (key) => values.get(key) ?? null,
+        setItem: (key, value) => values.set(key, value),
+        removeItem: (key) => values.delete(key),
+      });
+      const startChatRun = vi
+        .fn()
+        .mockRejectedValue(new ApiClientError('network_error', 'Disconnected'));
+      const { chatState, controller } = setupController({
+        operationOverrides: { startChatRun },
+      });
+      const session = ensureSessionState(chatState, 'alpha', 'changed');
+      await controller.sendMessage(session, 'First');
+      await controller.sendMessage(session, 'Changed');
+      await controller.sendMessage(session, secretContent);
+
+      expect(startChatRun).toHaveBeenCalledTimes(5);
+      expect(startChatRun.mock.calls[0][0].input_id).not.toBe(
+        startChatRun.mock.calls[2][0].input_id,
+      );
+      expect(startChatRun.mock.calls[4][0].input_id).toEqual(
+        expect.any(String),
+      );
+      expect([...values.values()].join('')).not.toContain('sensitive');
+    },
+  );
+
+  it('keeps an ordinary slash message identity for explicit retry without replaying or persisting Commands', async () => {
+    const values = new Map();
+    vi.stubGlobal('sessionStorage', {
+      getItem: (key) => values.get(key) ?? null,
+      setItem: (key, value) => values.set(key, value),
+      removeItem: (key) => values.delete(key),
+    });
     const startChatRun = vi
       .fn()
-      .mockRejectedValue(new ApiClientError('network_error', 'Disconnected'));
+      .mockRejectedValueOnce(
+        new ApiClientError('network_error', 'Acknowledgment lost'),
+      )
+      .mockResolvedValue({ accepted: true, session_available: false });
     const { chatState, controller } = setupController({
       operationOverrides: { startChatRun },
     });
-    const session = ensureSessionState(chatState, 'alpha', 'changed');
-    await controller.sendMessage(session, 'First');
-    await controller.sendMessage(session, 'Changed');
-    await controller.sendMessage(session, '/secret credential -- sensitive');
-
-    expect(startChatRun).toHaveBeenCalledTimes(5);
-    expect(startChatRun.mock.calls[0][0].input_id).not.toBe(
-      startChatRun.mock.calls[2][0].input_id,
+    const session = ensureSessionState(chatState, 'alpha', 'slash');
+    const content = '/tmp/file explain this path';
+    expect(await controller.sendMessage(session, content)).toEqual({
+      kind: 'failed',
+    });
+    expect(startChatRun).toHaveBeenCalledTimes(1);
+    expect(values.size).toBe(0);
+    expect(await controller.sendMessage(session, content)).toMatchObject({
+      kind: 'accepted',
+    });
+    expect(startChatRun.mock.calls[0][0].input_id).toEqual(expect.any(String));
+    expect(startChatRun.mock.calls[1][0]).toEqual(
+      startChatRun.mock.calls[0][0],
     );
-    expect(startChatRun.mock.calls[4][0]).not.toHaveProperty('input_id');
+    expect(values.size).toBe(0);
   });
 
   it('retains separate pending identities for two Chat areas across page restoration', async () => {
@@ -219,57 +295,81 @@ describe('send and edit admission', () => {
     );
   });
 
-  it('sends changed widget states with a message and settles them only once it is accepted', async () => {
-    resetWidgetStates();
-    const startChatRun = vi
-      .fn()
-      .mockResolvedValueOnce({
-        command_handled: true,
-        output: 'transient',
-        reply: 'Status',
-        data: { command: 'status' },
-      })
-      .mockRejectedValueOnce(
-        new ApiClientError('invalid_request', 'Unknown widget'),
-      )
-      .mockResolvedValueOnce({ run_id: 'run-one', sse_url: '/events/run-one' });
-    const { chatState, controller } = setupController({
-      operationOverrides: { startChatRun },
-    });
-    chatState.availableSkills = [{ name: 'status', type: 'command' }];
-    const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
-    reportWidgetState(sessionState.key, 'w1', {
-      state: { size: 1 },
-      initial: true,
-    });
-    reportWidgetState(sessionState.key, 'w1', { state: { size: 2 } });
-    const widgetStates = pendingWidgetStates(sessionState.key);
+  it.each(
+    [
+      'Apply',
+      [
+        { type: 'text', text: '/status' },
+        {
+          type: 'file',
+          attachment_id: 'att_notes',
+          filename: 'notes.txt',
+          media_type: 'text/plain',
+        },
+      ],
+    ].map((content) => [content]),
+  )(
+    'sends changed widget states with a message and settles them only once it is accepted: %j',
+    async (content) => {
+      resetWidgetStates();
+      const startChatRun = vi
+        .fn()
+        .mockResolvedValueOnce({
+          command_handled: true,
+          output: 'transient',
+          reply: 'Status',
+          data: { command: 'status' },
+        })
+        .mockRejectedValueOnce(
+          new ApiClientError('invalid_request', 'Unknown widget'),
+        )
+        .mockResolvedValueOnce({
+          run_id: 'run-one',
+          sse_url: '/events/run-one',
+        });
+      const { chatState, controller } = setupController({
+        operationOverrides: { startChatRun },
+      });
+      chatState.availableSkills = [{ name: 'status', type: 'command' }];
+      const sessionState = ensureSessionState(
+        chatState,
+        'alpha',
+        'session-one',
+      );
+      reportWidgetState(sessionState.key, 'w1', {
+        state: { size: 1 },
+        initial: true,
+      });
+      reportWidgetState(sessionState.key, 'w1', { state: { size: 2 } });
+      const widgetStates = pendingWidgetStates(sessionState.key);
 
-    // A command carries no widget states; the server would refuse them.
-    await controller.sendMessage(sessionState, '/status', { widgetStates });
-    expect(startChatRun).toHaveBeenLastCalledWith({
-      agent_id: 'alpha',
-      session_id: 'session-one',
-      content: '/status',
-    });
-    expect(changedWidgetStates(sessionState.key)).toHaveLength(1);
+      // A command carries no widget states; the server would refuse them.
+      await controller.sendMessage(sessionState, '/status', { widgetStates });
+      expect(startChatRun).toHaveBeenLastCalledWith({
+        agent_id: 'alpha',
+        session_id: 'session-one',
+        content: '/status',
+        input_id: expect.any(String),
+      });
+      expect(changedWidgetStates(sessionState.key)).toHaveLength(1);
 
-    expect(
-      await controller.sendMessage(sessionState, 'Apply', { widgetStates }),
-    ).toEqual({ kind: 'failed' });
-    expect(changedWidgetStates(sessionState.key)).toHaveLength(1);
+      expect(
+        await controller.sendMessage(sessionState, content, { widgetStates }),
+      ).toEqual({ kind: 'failed' });
+      expect(changedWidgetStates(sessionState.key)).toHaveLength(1);
 
-    await controller.sendMessage(sessionState, 'Apply', { widgetStates });
-    expect(startChatRun).toHaveBeenLastCalledWith({
-      agent_id: 'alpha',
-      session_id: 'session-one',
-      content: 'Apply',
-      input_id: expect.any(String),
-      widget_states: [{ widget_id: 'w1', state: { size: 2 } }],
-    });
-    expect(changedWidgetStates(sessionState.key)).toEqual([]);
-    resetWidgetStates();
-  });
+      await controller.sendMessage(sessionState, content, { widgetStates });
+      expect(startChatRun).toHaveBeenLastCalledWith({
+        agent_id: 'alpha',
+        session_id: 'session-one',
+        content,
+        input_id: expect.any(String),
+        widget_states: [{ widget_id: 'w1', state: { size: 2 } }],
+      });
+      expect(changedWidgetStates(sessionState.key)).toEqual([]);
+      resetWidgetStates();
+    },
+  );
 
   it('creates the Session of a draft with its first send and announces it before the Run attaches', async () => {
     const startChatRun = vi

@@ -74,6 +74,7 @@ describe('ChatView slash commands', () => {
         agent_id: 'alpha',
         session_id: 'session-1',
         content: '/stop',
+        input_id: expect.any(String),
       });
       expect(subscribeRunEventsMock).not.toHaveBeenCalled();
     });
@@ -249,6 +250,7 @@ describe('ChatView slash commands', () => {
           agent_id: 'alpha',
           session_id: 'session-1',
           content,
+          input_id: expect.any(String),
         });
         expect(rpcMock).toHaveBeenCalledWith('chat.timeline', {
           agent_id: agentId,
@@ -313,7 +315,12 @@ describe('ChatView slash commands', () => {
         sendComposerMessage('First draft message');
         await waitForCondition(() => alphaSessionId() === 'created-alpha');
         expect(rpcCalls('chat.stream')).toEqual([
-          { agent_id: 'alpha', session_id: 'session-1', content: '/new' },
+          {
+            agent_id: 'alpha',
+            session_id: 'session-1',
+            content: '/new',
+            input_id: expect.any(String),
+          },
           {
             agent_id: 'alpha',
             new_session: {
@@ -324,6 +331,7 @@ describe('ChatView slash commands', () => {
               },
             },
             content: '/status',
+            input_id: expect.any(String),
           },
           {
             agent_id: 'alpha',

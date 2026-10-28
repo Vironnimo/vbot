@@ -4,6 +4,7 @@ import {
   RPC_ERROR_NETWORK,
   RPC_ERROR_RESPONSE,
 } from '../api/transport.js';
+import { holdsSecretArgument, isBareSecretCommand } from '../agentSecrets.js';
 
 const STORAGE_KEY = 'vbot.pending-chat-inputs';
 const MAX_PENDING_INPUTS = 32;
@@ -32,17 +33,22 @@ export function createChatSubmissions(send, storage = browserStorage()) {
   }
 
   return async function submit(scope, params) {
-    // Slash input can execute Commands, including a Secret command. It has no
-    // automatic replay contract and never enters browser submission storage.
-    if (isSlashInput(params.content)) return send(params);
+    // Slash input can execute Commands, including a Secret command. Retain its
+    // identity only in memory for an explicit retry: ordinary slash text is
+    // deduplicated by admission, while Commands ignore the id as before.
+    // Neither automatic replay nor browser persistence is safe for Commands.
+    const commandCandidate = isSlashCommandCandidate(params.content);
     const request = JSON.stringify(params);
-    let record = [...pending, ...readPending(storage)].find(
-      (entry) => entry.scope === scope && entry.request === request,
-    );
+    let record = [
+      ...pending,
+      ...(commandCandidate ? [] : readPending(storage)),
+    ].find((entry) => entry.scope === scope && entry.request === request);
     if (!record) {
       record = { scope, request, inputId: newInputId() };
       pending = [...pending.slice(-(MAX_PENDING_INPUTS - 1)), record];
-      persist([...readPending(storage), record].slice(-MAX_PENDING_INPUTS));
+      if (!commandCandidate) {
+        persist([...readPending(storage), record].slice(-MAX_PENDING_INPUTS));
+      }
     } else if (!pending.some((entry) => entry.inputId === record.inputId)) {
       pending = [...pending.slice(-(MAX_PENDING_INPUTS - 1)), record];
     }
@@ -53,6 +59,10 @@ export function createChatSubmissions(send, storage = browserStorage()) {
     for (let attempt = 0; ; attempt += 1) {
       try {
         const response = await send(prepared);
+        if (commandCandidate && response?.command_handled === true) {
+          forget(record);
+          return response;
+        }
         if (
           !response ||
           (response.accepted !== true &&
@@ -69,7 +79,7 @@ export function createChatSubmissions(send, storage = browserStorage()) {
       } catch (error) {
         const uncertain = uncertainAcknowledgment(error);
         if (!uncertain) forget(record);
-        if (uncertain && attempt === 0) continue;
+        if (uncertain && attempt === 0 && !commandCandidate) continue;
         throw error;
       }
     }
@@ -85,13 +95,27 @@ function uncertainAcknowledgment(error) {
   );
 }
 
-function isSlashInput(content) {
-  const text =
+export function isSlashCommandCandidate(content) {
+  const texts =
     typeof content === 'string'
-      ? content
+      ? [content]
       : Array.isArray(content)
-        ? (content.find((block) => block?.type === 'text')?.text ?? '')
-        : '';
+        ? content
+            .filter((block) => block?.type === 'text')
+            .map((block) => block.text)
+        : [];
+  if (texts.length !== 1) return false;
+  const text = texts[0];
+  // CommandDispatcher accepts mixed content only for /secret. An ordinary
+  // slash-prefixed message with attachments needs the same retry identity as
+  // other user input; a Secret value must never enter submission storage.
+  if (
+    Array.isArray(content) &&
+    content.length !== 1 &&
+    !isBareSecretCommand(text) &&
+    !holdsSecretArgument(text)
+  )
+    return false;
   return typeof text === 'string' && text.trimStart().startsWith('/');
 }
 

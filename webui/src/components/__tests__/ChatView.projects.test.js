@@ -855,6 +855,7 @@ describe('ChatView Projects', () => {
           agent_id: 'alpha',
           session_id: 'shared-session',
           content: '/agent builder@vbot',
+          input_id: expect.any(String),
         },
       ]);
       expect(rpcCalls('session.create')).toEqual([]);
@@ -899,6 +900,7 @@ describe('ChatView Projects', () => {
           agent_id: 'builder@vbot',
           session_id: 'builder-session',
           content: '/agent alpha',
+          input_id: expect.any(String),
         },
       ]);
       await waitForCondition(() => selectedAgentName() === 'Alpha');
