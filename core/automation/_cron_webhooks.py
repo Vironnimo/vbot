@@ -1,29 +1,25 @@
-"""Webhook jobs: their secrets, the requests they accept and the batch each Run takes."""
+"""Webhook jobs: their secrets and the requests they accept for their Runs."""
 
 from __future__ import annotations
 
-import asyncio
+import dataclasses
 import hashlib
 import re
-from contextlib import suppress
 from dataclasses import dataclass
-from functools import partial
-from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, override
 
 from core.automation import _cron_timing as _timing
 from core.automation import _cron_webhook_events as _events
+from core.automation._cron_inbox import CronInbox, InboxWriteError
 from core.automation._cron_jobs import CronJob, CronJobValidationError, CronStorageError
 from core.automation._cron_webhook_events import (
+    WEBHOOK_INBOX,
     WEBHOOK_PATH_PREFIX,
-    WEBHOOK_STATE_DIR_NAME,
-    WebhookBatch,
-    WebhookState,
+    WebhookRequest,
 )
 from core.secrets import WEBHOOK_SECRETS, SecretStoreError
-from core.utils.log_conditions import LoggedConditions
 from core.utils.logging import get_logger
-from core.utils.workers import BoundedWorkerPool, settle_before_cancelling
+from core.utils.workers import BoundedWorkerPool
 
 if TYPE_CHECKING:
     from core.automation.cron import CronService
@@ -62,38 +58,22 @@ class WebhookStatus:
     error: str | None = None
 
 
-class CronWebhooks:
+class CronWebhooks(CronInbox[WebhookRequest]):
     """Secrets, accepted requests and Run batches of webhook jobs.
 
     A request is checked against the job's secret from the Secret Store and,
-    once accepted, stored in the job's state file before the sender is
-    answered; a request that cannot be stored is not accepted. The job's task
-    (``_cron_scheduler``) starts a Run while requests wait; the Run takes them
-    all once it holds a Run slot and forgets them once it is admitted, so
-    requests that arrive while a Run is active start one follow-up Run. A Run
-    that is not admitted leaves its requests waiting for the next attempt. A
-    process that stops after admission but before the requests were forgotten
-    on disk runs them again after the restart.
+    once accepted, stored for the job's next Run before the sender is
+    answered (``_cron_inbox``); a request that cannot be stored is not accepted.
     """
 
     def __init__(self, owner: CronService) -> None:
-        self._owner = owner
+        super().__init__(owner, WEBHOOK_INBOX)
         self._store: SecretStore | None = None
         self._base_url: str | None = None
         self._reach: WebhookReach | None = None
-        self._states: dict[str, WebhookState] = {}
-        self._state_errors: dict[str, str] = {}
         self._secrets: dict[str, str] = {}
-        self._locks: dict[str, asyncio.Lock] = {}
-        self._wakes: dict[str, asyncio.Event] = {}
-        self._taken: dict[str, WebhookBatch] = {}
         # Refused requests for unknown jobs cost the same check as a wrong secret.
         self._decoy_secret = _events.new_secret()
-        self._conditions = LoggedConditions()
-
-    @property
-    def state_dir(self) -> Path:
-        return self._owner._cron_dir / WEBHOOK_STATE_DIR_NAME
 
     @property
     def available(self) -> bool:
@@ -109,31 +89,16 @@ class CronWebhooks:
 
     def status(self, job: CronJob) -> WebhookStatus:
         path = f"{WEBHOOK_PATH_PREFIX}{job.id}"
-        state = self._states.get(job.id)
-        taken = self._taken_seqs(job.id)
+        counts = self.counts(job.id)
         return WebhookStatus(
             url=None if self._base_url is None else f"{self._base_url}{path}",
             path=path,
             reach=self._reach,
-            last_received_at=None if state is None else state.last_received_at,
-            waiting=0 if state is None else len(state.waiting(taken=taken)),
-            dropped=0 if state is None else state.dropped,
-            error=self._state_errors.get(job.id),
+            last_received_at=counts.last_received_at,
+            waiting=counts.waiting,
+            dropped=counts.dropped,
+            error=counts.error,
         )
-
-    def load_states(self, job_ids: list[str]) -> None:
-        """Read the stored requests of these jobs before their tasks start. Blocking."""
-        for job_id in job_ids:
-            with suppress(CronStorageError):
-                self._states[job_id] = self._read_state(job_id)
-
-    def wake(self, job_id: str) -> asyncio.Event:
-        """The event a job's task waits on; set when a request is accepted."""
-        return self._wakes.setdefault(job_id, asyncio.Event())
-
-    async def waiting(self, job_id: str) -> int:
-        state = await self._state(job_id)
-        return len(state.waiting(taken=self._taken_seqs(job_id)))
 
     # -- secrets --------------------------------------------------------------------------
 
@@ -174,20 +139,13 @@ class CronWebhooks:
             secret = self._secrets.setdefault(job_id, secret)
         return secret
 
+    @override
     async def discard(self, job_id: str, *, keep_secret: bool = False) -> None:
         """Forget what the job kept as a webhook: its waiting requests and its secret.
 
         Failures are logged; a secret left behind belongs to no job and opens nothing.
         """
-        async with self._lock(job_id):
-            self._states.pop(job_id, None)
-            self._state_errors.pop(job_id, None)
-            self._taken.pop(job_id, None)
-            await self._owner._writer.call_async(
-                partial(_events.remove_state, self.state_dir, job_id)
-            )
-        self._wakes.pop(job_id, None)
-        self._locks.pop(job_id, None)
+        await super().discard(job_id)
         if not keep_secret:
             await self.discard_secret(job_id)
 
@@ -234,87 +192,38 @@ class CronWebhooks:
             # GitHub's check that a new webhook reaches its URL starts no Run.
             _LOGGER.debug("Cron webhook ping acknowledged (job=%s)", job_id)
             return "accepted"
-        async with self._lock(job_id):
+
+        def wanted() -> bool:
             latest = self._owner._jobs.get(job_id)
-            if latest is None or latest.schedule_type != "webhook" or latest.status != "active":
-                return "refused"
-            try:
-                state = await self._state(job_id)
-            except CronStorageError:
-                return "unavailable"
-            updated = state.copy()
-            updated.add(
-                _events.WebhookRequest(
-                    state.next_seq, request.received_at, request.headers, request.body, request.cut
-                ),
-                taken=self._taken_seqs(job_id),
+            return (
+                latest is not None
+                and latest.schedule_type == "webhook"
+                and latest.status == "active"
             )
-            try:
-                await settle_before_cancelling(self._commit_received(updated))
-            except CronStorageError as error:
-                _LOGGER.error(
-                    "Cron webhook request not stored; the sender was told to retry (job=%s): %s",
-                    job_id,
-                    error,
-                )
-                return "unavailable"
+
+        try:
+            added, state = await self.add(
+                job_id, lambda seq: dataclasses.replace(request, seq=seq), wanted=wanted
+            )
+        except InboxWriteError as error:
+            _LOGGER.error(
+                "Cron webhook request not stored; the sender was told to retry (job=%s): %s",
+                job_id,
+                error,
+            )
+            return "unavailable"
+        except CronStorageError:
+            return "unavailable"
+        if added != "added" or state is None:
+            return "refused"
         _LOGGER.debug(
             "Cron webhook request accepted (job=%s bytes=%d waiting=%d dropped=%d)",
             job_id,
             len(body),
-            len(updated.waiting(taken=self._taken_seqs(job_id))),
-            updated.dropped,
+            len(state.waiting(taken=self._taken_seqs(job_id))),
+            state.dropped,
         )
         return "accepted"
-
-    async def _commit_received(self, state: WebhookState) -> None:
-        """Persist and publish an admitted request before honoring caller cancellation."""
-        await self._write(state)
-        self._states[state.job_id] = state
-        self.wake(state.job_id).set()
-        self._owner._notify_changed()
-
-    async def take(self, job_id: str) -> WebhookBatch | None:
-        """Take the waiting requests for a Run about to start; None when none wait."""
-        async with self._lock(job_id):
-            state = await self._state(job_id)
-            waiting = state.waiting(taken=self._taken_seqs(job_id))
-            if not waiting:
-                return None
-            batch = WebhookBatch(tuple(waiting), state.dropped)
-            self._taken[job_id] = batch
-            return batch
-
-    def release(self, job_id: str, batch: WebhookBatch) -> None:
-        """Give back the requests of a Run that was not admitted; they wait for the next one."""
-        if self._taken.get(job_id) is batch:
-            self._taken.pop(job_id, None)
-
-    async def consume(self, job_id: str, batch: WebhookBatch) -> None:
-        """Forget the requests of an admitted Run. A failed write is logged.
-
-        Memory moves on at once; the requests stay on disk only until the next
-        successful write, or run again after a restart.
-        """
-        async with self._lock(job_id):
-            if self._taken.get(job_id) is batch:
-                self._taken.pop(job_id, None)
-            state = self._states.get(job_id)
-            if state is None:
-                return
-            updated = state.copy()
-            updated.consume(batch)
-            self._states[job_id] = updated
-            try:
-                await self._write(updated)
-            except CronStorageError as error:
-                _LOGGER.error(
-                    "Cron webhook requests of a started Run not removed; they run again after "
-                    "a restart (job=%s): %s",
-                    job_id,
-                    error,
-                )
-        self._owner._notify_changed()
 
     async def _secret_for_request(self, job_id: str) -> str | None:
         try:
@@ -334,46 +243,6 @@ class CronWebhooks:
                 "Cron webhook requests refused: the job has no secret; rotate it (job=%s)", job_id
             )
         return secret
-
-    async def _state(self, job_id: str) -> WebhookState:
-        state = self._states.get(job_id)
-        if state is None:
-            previous_error = self._state_errors.get(job_id)
-            try:
-                state = await self._owner._writer.call_async(partial(self._read_state, job_id))
-            finally:
-                if previous_error != self._state_errors.get(job_id):
-                    self._owner._notify_changed()
-            # Another caller may have loaded or changed it meanwhile.
-            state = self._states.setdefault(job_id, state)
-        return state
-
-    def _read_state(self, job_id: str) -> WebhookState:
-        try:
-            state = _events.read_state(self.state_dir, job_id)
-        except CronStorageError as error:
-            self._state_errors[job_id] = str(error)
-            if self._conditions.started(("state", job_id)):
-                _LOGGER.warning(
-                    "Cron webhook requests unavailable; retained for retry (job=%s)", job_id
-                )
-            raise
-        self._state_errors.pop(job_id, None)
-        if self._conditions.ended(("state", job_id)):
-            _LOGGER.info("Cron webhook requests readable again (job=%s)", job_id)
-        return state
-
-    async def _write(self, state: WebhookState) -> None:
-        await self._owner._writer.call_async(
-            partial(_events.write_state, self.state_dir, state.job_id, state.to_dict())
-        )
-
-    def _taken_seqs(self, job_id: str) -> frozenset[int]:
-        batch = self._taken.get(job_id)
-        return frozenset() if batch is None else batch.seqs
-
-    def _lock(self, job_id: str) -> asyncio.Lock:
-        return self._locks.setdefault(job_id, asyncio.Lock())
 
     def _require_store(self) -> SecretStore:
         self.check_available()

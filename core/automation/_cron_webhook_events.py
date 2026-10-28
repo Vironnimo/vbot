@@ -8,11 +8,8 @@ secret with ``Authorization: Bearer <secret>`` or with GitHub's
 An accepted request is stored, rendered for its Run, before the sender gets its
 answer: selected headers and the body, pretty-printed when it is JSON and cut
 after ``WEBHOOK_BODY_MAX_CHARS``. The requests waiting for a Run live in
-``cron/webhook-events/<sha256 of job id>.json``: runtime state outside the JSON
-document contract, like once-fire claims and watch baselines, so it carries no
-``format_version``. At most ``WEBHOOK_WAITING_MAX_REQUESTS`` requests and
-``WEBHOOK_WAITING_MAX_CHARS`` characters wait; the oldest are dropped first and
-counted, and the next Run is told how many it does not see.
+``cron/webhook-events/<sha256 of job id>.json`` under ``requests``, kept and
+capped like every job's arrivals (``_cron_inbox``).
 """
 
 from __future__ import annotations
@@ -22,16 +19,15 @@ import hashlib
 import hmac
 import json
 import secrets
-from dataclasses import dataclass, field
-from pathlib import Path
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import parse_qsl
 from zoneinfo import ZoneInfo
 
 from core.automation._cron_delivery import _local
-from core.automation._cron_jobs import CronStorageError, _parse_utc_timestamp
-from core.utils.atomic import atomic_write_text
-from core.utils.logging import get_logger
+from core.automation._cron_inbox import InboxBatch, InboxKind, InboxState
+from core.automation._cron_inbox import state_path as state_path
+from core.automation._cron_jobs import _parse_utc_timestamp
 
 #: The path of a job's webhook is this prefix and the job id.
 WEBHOOK_PATH_PREFIX = "/api/hooks/"
@@ -43,10 +39,6 @@ WEBHOOK_BODY_MAX_BYTES = 256 * 1024
 
 #: How much of one request's rendered body its Run receives.
 WEBHOOK_BODY_MAX_CHARS = 16_000
-
-#: How many requests, and how many characters of them, wait for one Run.
-WEBHOOK_WAITING_MAX_REQUESTS = 10
-WEBHOOK_WAITING_MAX_CHARS = 16_000
 
 #: Every secret starts with this prefix, so a leaked one is recognizable.
 WEBHOOK_SECRET_PREFIX = "vbw_"
@@ -87,8 +79,6 @@ _CREDENTIAL_HEADER_WORDS = (
 )
 _MAX_KEPT_HEADERS = 8
 _HEADER_VALUE_MAX_CHARS = 200
-
-_LOGGER = get_logger("automation.cron")
 
 
 def new_secret() -> str:
@@ -148,71 +138,18 @@ class WebhookRequest:
         return cls(seq, received_at, dict(headers), data.get("body"), cut)
 
 
-@dataclass(frozen=True, slots=True)
-class WebhookBatch:
-    """The requests one Run receives and how many earlier ones it does not see."""
+#: What webhook jobs keep of the requests waiting for their Runs.
+WEBHOOK_INBOX = InboxKind(
+    schedule_type="webhook",
+    label="webhook requests",
+    dir_name=WEBHOOK_STATE_DIR_NAME,
+    items_key="requests",
+    parse_item=WebhookRequest.from_dict,
+    log_fields=("webhook_requests", "webhook_dropped"),
+)
 
-    requests: tuple[WebhookRequest, ...]
-    dropped: int
-
-    @property
-    def seqs(self) -> frozenset[int]:
-        return frozenset(request.seq for request in self.requests)
-
-
-@dataclass(slots=True)
-class WebhookState:
-    """What a webhook job keeps between requests and Runs."""
-
-    job_id: str
-    next_seq: int = 0
-    last_received_at: str | None = None
-    dropped: int = 0
-    """Requests dropped unseen since the last Run started."""
-    requests: list[WebhookRequest] = field(default_factory=list)
-    """The requests waiting for a Run, oldest first."""
-
-    def copy(self) -> WebhookState:
-        return WebhookState(
-            self.job_id, self.next_seq, self.last_received_at, self.dropped, list(self.requests)
-        )
-
-    def add(self, request: WebhookRequest, *, taken: frozenset[int] = frozenset()) -> None:
-        """Queue an accepted request, dropping the oldest waiting ones beyond the caps.
-
-        ``taken`` are the requests a starting Run already took; they never count
-        toward the caps and are never dropped here. The newest request is always kept.
-        """
-        self.requests.append(request)
-        self.next_seq = max(self.next_seq, request.seq + 1)
-        self.last_received_at = request.received_at
-        while True:
-            waiting = [item for item in self.requests if item.seq not in taken]
-            if len(waiting) <= 1 or (
-                len(waiting) <= WEBHOOK_WAITING_MAX_REQUESTS
-                and sum(item.size for item in waiting) <= WEBHOOK_WAITING_MAX_CHARS
-            ):
-                return
-            self.requests.remove(waiting[0])
-            self.dropped += 1
-
-    def waiting(self, *, taken: frozenset[int] = frozenset()) -> list[WebhookRequest]:
-        return [item for item in self.requests if item.seq not in taken]
-
-    def consume(self, batch: WebhookBatch) -> None:
-        """Forget the requests of a Run that started; later drops stay counted."""
-        seqs = batch.seqs
-        self.requests = [item for item in self.requests if item.seq not in seqs]
-        self.dropped = max(self.dropped - batch.dropped, 0)
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "job_id": self.job_id,
-            "next_seq": self.next_seq,
-            "last_received_at": self.last_received_at,
-            "dropped": self.dropped,
-            "requests": [request.to_dict() for request in self.requests],
-        }
+type WebhookBatch = InboxBatch[WebhookRequest]
+type WebhookState = InboxState[WebhookRequest]
 
 
 def accept_request(
@@ -296,7 +233,7 @@ def render_body(content_type: str, body: bytes) -> tuple[Any, bool]:
 
 def webhook_note(batch: WebhookBatch, timezone: ZoneInfo) -> str:
     """The part of a Run's context note that says which requests started it, with the data."""
-    count = len(batch.requests)
+    count = len(batch.items)
     if count == 1:
         sentences = [
             "This run started because the job's webhook received a request.",
@@ -320,7 +257,7 @@ def webhook_note(batch: WebhookBatch, timezone: ZoneInfo) -> str:
             "one run takes."
         )
     records = []
-    for request in batch.requests:
+    for request in batch.items:
         received = _local(
             _parse_utc_timestamp(request.received_at, field_name="received_at"), timezone
         )
@@ -336,69 +273,6 @@ def webhook_note(batch: WebhookBatch, timezone: ZoneInfo) -> str:
             record["body"] = request.body
         records.append(_escaped(_pretty(record)))
     return " ".join(sentences) + "\n" + "\n".join(records)
-
-
-def state_path(directory: Path, job_id: str) -> Path:
-    digest = hashlib.sha256(job_id.encode("utf-8")).hexdigest()
-    return directory / f"{digest}.json"
-
-
-def read_state(directory: Path, job_id: str) -> WebhookState:
-    """Read accepted requests; only a missing file means an empty queue."""
-    path = state_path(directory, job_id)
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        return _parse_state(payload, job_id)
-    except FileNotFoundError:
-        return WebhookState(job_id)
-    except (OSError, UnicodeError, ValueError, TypeError) as error:
-        raise CronStorageError(
-            "Waiting webhook requests could not be read; retrying without replacing them."
-        ) from error
-
-
-def write_state(directory: Path, job_id: str, payload: dict[str, Any]) -> None:
-    """Persist ``payload``, a ``WebhookState.to_dict``, atomically.
-
-    Blocking; raises ``CronStorageError``.
-    """
-    path = state_path(directory, job_id)
-    serialized = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    try:
-        directory.mkdir(parents=True, exist_ok=True)
-        atomic_write_text(path, serialized)
-    except OSError as error:
-        raise CronStorageError(f"Cannot write {path}: {error}") from error
-
-
-def remove_state(directory: Path, job_id: str) -> None:
-    path = state_path(directory, job_id)
-    try:
-        path.unlink(missing_ok=True)
-    except OSError as error:
-        _LOGGER.warning("Cannot remove Cron webhook requests for job=%s: %s", job_id, error)
-
-
-def _parse_state(payload: Any, job_id: str) -> WebhookState:
-    if not isinstance(payload, dict) or payload.get("job_id") != job_id:
-        raise ValueError("job_id mismatch")
-    next_seq, dropped = payload.get("next_seq"), payload.get("dropped")
-    last_received_at = payload.get("last_received_at")
-    for name, value in (("next_seq", next_seq), ("dropped", dropped)):
-        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-            raise ValueError(f"{name} must be a whole number")
-    if last_received_at is not None:
-        if not isinstance(last_received_at, str):
-            raise ValueError("last_received_at must be a timestamp or null")
-        _parse_utc_timestamp(last_received_at, field_name="last_received_at")
-    requests = payload.get("requests")
-    if not isinstance(requests, list):
-        raise ValueError("requests must be a list")
-    parsed = [WebhookRequest.from_dict(item) for item in requests]
-    assert isinstance(next_seq, int) and isinstance(dropped, int)
-    if any(request.seq >= next_seq for request in parsed):
-        raise ValueError("a request's seq is not below next_seq")
-    return WebhookState(job_id, next_seq, last_received_at, dropped, parsed)
 
 
 def _kept_header(name: str) -> bool:

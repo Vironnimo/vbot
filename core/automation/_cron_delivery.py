@@ -45,6 +45,9 @@ class ChannelOwner(Protocol):
     @property
     def agent_id(self) -> str: ...
 
+    @property
+    def platform(self) -> str: ...
+
 
 class ChatDelivery(Protocol):
     """What Cron needs from Channels to deliver to a chat."""
@@ -162,6 +165,29 @@ async def check_chat_delivery(job: CronJob, chats: ChatDelivery | None) -> None:
         )
 
 
+async def check_email_channel(job: CronJob, chats: ChatDelivery | None) -> None:
+    """Refuse an email job whose Channel is missing, not an email Channel, or another Agent's."""
+    if job.schedule_type != "email" or job.email is None:
+        return
+    channel_id = job.email.channel_id
+    if chats is None:
+        raise CronJobValidationError("an email schedule is unavailable: Channels are not running")
+    try:
+        channel = await chats.get_channel(channel_id)
+    except Exception as error:
+        raise CronJobValidationError(
+            f"email Channel {channel_id} is not available: {error}"
+        ) from error
+    if channel.platform != "email":
+        raise CronJobValidationError(
+            f"Channel {channel_id} is a {channel.platform} Channel, not an email Channel"
+        )
+    if channel.agent_id != job.agent_id:
+        raise CronJobValidationError(
+            f"email Channel {channel_id} belongs to Agent {channel.agent_id}, not to {job.agent_id}"
+        )
+
+
 def delivery_note(delivery: CronDelivery | None) -> str:
     """The part of a Run's context note that says where its final answer goes."""
     if delivery is None:
@@ -260,6 +286,11 @@ def failure_alert(
         elif job.schedule_type == "webhook":
             follow_up = (
                 "It keeps running when its webhook receives a request and stops after "
+                f"{MAX_CONSECUTIVE_CRON_FAILURES} failures in a row."
+            )
+        elif job.schedule_type == "email":
+            follow_up = (
+                "It keeps running when its email Channel receives a matching mail and stops after "
                 f"{MAX_CONSECUTIVE_CRON_FAILURES} failures in a row."
             )
         else:

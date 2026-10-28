@@ -1,7 +1,8 @@
 """The context note before a Cron Run's input, read by the Agent as a System Reminder.
 
 It says why the Run starts when that is not simply its due time (an event, a
-late start, a change of what the job watches, requests to its webhook), where
+late start, a change of what the job watches, requests to its webhook, mails
+to its email Channel), where
 the final answer goes, and carries the job's previous answer as data.
 """
 
@@ -12,6 +13,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from core.automation import _cron_delivery as _delivery
+from core.automation import _cron_email as _email
 from core.automation import _cron_events as _events
 from core.automation import _cron_schedule as _schedule
 from core.automation import _cron_timing as _timing
@@ -32,11 +34,12 @@ def run_context(
     event_due: _events.EventDue | None = None,
     change: _watch.WatchChange | None = None,
     webhook: _webhook_events.WebhookBatch | None = None,
+    email: _email.EmailBatch | None = None,
 ) -> str:
     """The note before the Run's input.
 
-    It names the event the job is due for, any lateness, the change or the
-    webhook requests that started the Run, says where the final answer goes,
+    It names the event the job is due for, any lateness, the change, the
+    webhook requests or the mails that started the Run, says where the final answer goes,
     and carries the previous answer as data.
     """
     parts = []
@@ -48,6 +51,8 @@ def run_context(
         parts.append(_watch.change_note(change, timezone))
     if webhook is not None:
         parts.append(_webhook_events.webhook_note(webhook, timezone))
+    if email is not None and job.email is not None:
+        parts.append(_email.email_note(email, job.email.channel_id, timezone))
     parts.append(_delivery.delivery_note(job.delivery))
     if job.last_result is not None:
         parts.append(_delivery.previous_result_note(job.last_result, timezone))

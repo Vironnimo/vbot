@@ -259,7 +259,7 @@ async def test_requests_during_a_run_start_one_follow_up_run_dropping_the_oldest
 
     await send("first")
     run = asyncio.create_task(
-        service._execution._trigger_job_run(service.get_job(job_id), webhook=True)
+        service._execution._trigger_job_run(service.get_job(job_id), inbox=True)
     )
     await asyncio.wait_for(admitted.wait(), timeout=_TIMEOUT_SECONDS)
     # While the Run is active, requests wait; beyond the cap the oldest go first.
@@ -274,7 +274,7 @@ async def test_requests_during_a_run_start_one_follow_up_run_dropping_the_oldest
     finish.clear()
     admitted.clear()
     follow_up = asyncio.create_task(
-        service._execution._trigger_job_run(service.get_job(job_id), webhook=True)
+        service._execution._trigger_job_run(service.get_job(job_id), inbox=True)
     )
     await asyncio.wait_for(admitted.wait(), timeout=_TIMEOUT_SECONDS)
     note = _webhook_note(trigger_service)
@@ -305,7 +305,7 @@ async def test_waiting_requests_survive_a_run_that_could_not_start_and_a_restart
     trigger_service.trigger_run.side_effect = RuntimeError("Queue is full")
     assert await service.receive_webhook(job_id, _bearer(secret), b"one") == "accepted"
 
-    outcome = await service._execution._trigger_job_run(service.get_job(job_id), webhook=True)
+    outcome = await service._execution._trigger_job_run(service.get_job(job_id), inbox=True)
     assert outcome.admitted is False
     assert service.get_job(job_id).last_error == "Queue is full"
 
@@ -362,7 +362,7 @@ async def test_bodies_reach_the_run_rendered_and_cut(tmp_path: Path) -> None:
     async def run_with(content_type: str, body: bytes) -> list[Any]:
         headers = _bearer(secret, **{"content-type": content_type})
         assert await service.receive_webhook(job_id, headers, body) == "accepted"
-        await service._execution._trigger_job_run(service.get_job(job_id), webhook=True)
+        await service._execution._trigger_job_run(service.get_job(job_id), inbox=True)
         return _records(_webhook_note(trigger_service))
 
     form = b"payload=%7B%22zen%22%3A%22Keep+it+logically+awesome.%22%7D"
@@ -391,7 +391,7 @@ async def test_the_secret_lives_in_the_secret_store_and_follows_the_job(
     with pytest.raises(CronJobValidationError, match="webhook is unavailable"):
         await _webhook_job(service)
     service.set_webhook_secrets(store)
-    with pytest.raises(CronJobValidationError, match="not to a one-time, event or webhook"):
+    with pytest.raises(CronJobValidationError, match="not to a one-time, event, webhook or email"):
         await _webhook_job(service, watch=CronWatch.parse("url", "https://example.com"))
 
     job_id, secret = await _webhook_job(service)

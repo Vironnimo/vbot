@@ -82,7 +82,10 @@ def scripted_runs(trigger_service: SimpleNamespace, *outcomes: tuple[RunStatus, 
 
 @dataclass
 class FakeChats:
-    """Channels as Cron sees them: owners by Channel id, and what reached chats."""
+    """Channels as Cron sees them: owners by Channel id, and what reached chats.
+
+    A Channel whose id starts with ``mail-`` is an email Channel.
+    """
 
     owners: dict[str, str] = field(default_factory=lambda: {"tg-main": "agent-one"})
     relayed: list[tuple[Any, str, str, str | None]] = field(default_factory=list)
@@ -92,7 +95,8 @@ class FakeChats:
     async def get_channel(self, channel_id: str) -> SimpleNamespace:
         if channel_id not in self.owners:
             raise ChannelNotFoundError(f"Channel not found: {channel_id}")
-        return SimpleNamespace(agent_id=self.owners[channel_id])
+        platform = "email" if channel_id.startswith("mail-") else "telegram"
+        return SimpleNamespace(agent_id=self.owners[channel_id], platform=platform)
 
     async def relay_run_to_chat(
         self, run: Any, channel_id: str, platform_target: str, *, thread_id: str | None = None
