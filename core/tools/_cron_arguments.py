@@ -270,7 +270,7 @@ _HERE_WORDS = frozenset(
 )
 _APP_WORDS = frozenset({"app", "vbot", "desktop", "notification", "webui", "inbox"})
 _NO_DELIVERY_WORDS = frozenset({"none", "local", "off", "silent", "false", "no", "nowhere"})
-_PLATFORM_WORDS = frozenset({"telegram", "discord", "slack", "mattermost", "whatsapp", "email"})
+_PLATFORM_WORDS = frozenset({"telegram", "discord", "slack", "mattermost", "whatsapp"})
 _DELIVERY_FORMS = (
     "A job delivers each run's answer to this conversation (here), to vBot (app) or nowhere (none):"
 )
