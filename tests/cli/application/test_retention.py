@@ -157,12 +157,19 @@ def test_an_uninspectable_vbot_process_keeps_every_version(
     assert _versions(install) == {"rel_active", "rel_unused"}
 
 
+@pytest.mark.parametrize("unreadable", ["record", "inventory"])
 def test_an_unreadable_record_keeps_every_version(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    deny_access: Callable[[Path], None],
+    unreadable: str,
 ) -> None:
     install = _install(tmp_path, ["rel_active", "rel_unused"], active="rel_active")
     (tmp_path / "operations").mkdir()
     (tmp_path / "operations" / "upd_broken.json").write_text("{", encoding="utf-8")
+    if unreadable == "inventory":
+        deny_access(tmp_path / "operations")
     _processes(monkeypatch)
 
     with caplog.at_level(logging.INFO, logger="vbot.application.retention"):

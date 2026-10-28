@@ -90,6 +90,7 @@ class _CompletionNotice:
     # Display record of a ``message_parent`` message; the delivering note carries it.
     subagent_message: SubAgentMessage | None = None
     schedule_options: dict[str, Any] = field(default_factory=dict)
+    expected_session_generation_id: str | None = None
 
     @property
     def read(self) -> bool:
@@ -193,6 +194,7 @@ class _CompletionDeliveryCoordinator:
         wake: bool = True,
         subagent_message: SubAgentMessage | None = None,
         continuation_source: RunContinuationSource | None = None,
+        expected_session_generation_id: str | None = None,
     ) -> asyncio.Future[None]:
         """Submit one result and return a Future resolved after durable delivery."""
         if self._closed or (
@@ -247,6 +249,7 @@ class _CompletionDeliveryCoordinator:
             id=notice_id,
             origin_run_id=origin_run_id,
             schedule_options=schedule_options,
+            expected_session_generation_id=expected_session_generation_id,
             # Results carry command output and terminal screens: every path
             # into the Session (note, Run input, owned Run) takes this body.
             body=self._secret_masker().mask(body),
@@ -416,6 +419,7 @@ class _CompletionDeliveryCoordinator:
                 settings = pending[0].schedule_options.get("run_overrides")
                 schedule_id = pending[0].schedule_options.get("schedule_id")
                 continuation_source = pending[0].schedule_options.get("continuation_source")
+                expected_generation = pending[0].expected_session_generation_id
                 # Neither direct settings nor a Sub-Agent's captured Parent
                 # ancestry may be borrowed by a different completion source.
                 pending = [
@@ -423,6 +427,7 @@ class _CompletionDeliveryCoordinator:
                     for notice in pending
                     if notice.schedule_options.get("run_overrides") == settings
                     and notice.schedule_options.get("continuation_source") == continuation_source
+                    and notice.expected_session_generation_id == expected_generation
                     and (
                         settings is None
                         or notice.schedule_options.get("schedule_id") == schedule_id
@@ -442,6 +447,11 @@ class _CompletionDeliveryCoordinator:
                             message,
                             tuple(notice.id for notice in pending),
                             self._acknowledgement_callback(address, bucket, pending),
+                            **(
+                                {"expected_session_generation_id": expected_generation}
+                                if expected_generation is not None
+                                else {}
+                            ),
                         )
                     else:
                         subagent_messages = _subagent_messages(pending)
@@ -463,6 +473,7 @@ class _CompletionDeliveryCoordinator:
                                 address, bucket, pending
                             ),
                             run_kind=RunKind.SYSTEM,
+                            expected_session_generation_id=expected_generation,
                             **schedule_options,
                             # An empty note never reaches the Model; it carries
                             # the display record ahead of the input note.
@@ -770,7 +781,9 @@ class _CompletionDeliveryCoordinator:
             source: RunContinuationSource | None = notice.schedule_options.get(
                 "continuation_source"
             )
-            if source is not None and source.generation_id not in (None, generation_id):
+            if notice.expected_session_generation_id not in (None, generation_id) or (
+                source is not None and source.generation_id not in (None, generation_id)
+            ):
                 stale.append(notice)
         self._fail(bucket, stale, SessionNotFoundError("The completion's Session was replaced"))
         return [notice for notice in notices if notice not in stale]

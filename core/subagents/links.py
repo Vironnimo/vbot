@@ -38,6 +38,7 @@ class SubAgentLink:
     parent: SessionAddress
     title: str
     reply_target: str
+    parent_generation_id: str | None = None
 
 
 def read_link(
@@ -49,14 +50,18 @@ def read_link(
     decisions must distinguish that absence from a failed metadata read.
     """
     try:
-        metadata = sessions.get_metadata(address)
+        snapshot = sessions.subagent_link_metadata(address)
     except SessionNotFoundError:
         return None
     except Exception:
         if strict:
             raise
         return None
-    return _link_from_metadata(address, metadata)
+    if snapshot is None:
+        return None
+    return _link_from_metadata(
+        address, snapshot.metadata, parent_generation_id=snapshot.parent_generation_id
+    )
 
 
 def find_link(sessions: ChatSessionManager, subagent_id: str) -> SubAgentLink | None:
@@ -156,7 +161,12 @@ def _link_metadata(
     }
 
 
-def _link_from_metadata(address: SessionAddress, metadata: dict[str, Any]) -> SubAgentLink | None:
+def _link_from_metadata(
+    address: SessionAddress,
+    metadata: dict[str, Any],
+    *,
+    parent_generation_id: str | None = None,
+) -> SubAgentLink | None:
     raw = metadata.get(SUBAGENT_PARENT_META_KEY)
     if not isinstance(raw, dict):
         return None
@@ -182,6 +192,7 @@ def _link_from_metadata(address: SessionAddress, metadata: dict[str, Any]) -> Su
             "",
         ),
         reply_target="user" if metadata.get(SUBAGENT_REPLY_TARGET_META_KEY) == "user" else "parent",
+        parent_generation_id=parent_generation_id,
     )
 
 

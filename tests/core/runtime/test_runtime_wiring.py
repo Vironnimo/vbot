@@ -23,7 +23,12 @@ from core.providers.providers import ProviderRegistry
 from core.runs import Run, RunAdmission, RunKind
 from core.runtime._configuration import _VBOT_ROOT
 from core.runtime.runtime import Runtime
-from core.sessions import SUBAGENT_REPLY_TARGET_META_KEY, ChatSessionManager, SessionAddress
+from core.sessions import (
+    SUBAGENT_REPLY_TARGET_META_KEY,
+    ChatSessionManager,
+    SessionAddress,
+    SubagentLinkSnapshot,
+)
 from core.skills.skills import SkillRegistry
 from core.statistics import StatisticsIndex
 from core.storage.layout import DATA_DIRECTORY_RELATIVE_PATHS
@@ -282,15 +287,15 @@ async def test_scratch_retention_keeps_busy_tree_when_ancestry_is_unavailable(
     os.utime(marker, (1, 1))
     run = Run(run_id="run_child", agent_id="main", session_id=child.session_id)
     monkeypatch.setattr(runtime.chat_runs, "active_runs", lambda: [run])
-    original = sessions.get_metadata
+    original = sessions.subagent_link_metadata
 
-    def unavailable_metadata(address: SessionAddress) -> dict[str, Any]:
+    def unavailable_metadata(address: SessionAddress) -> SubagentLinkSnapshot | None:
         if address.session_id == unreadable:
             raise PermissionError("Session metadata unavailable")
         return original(address)
 
     with monkeypatch.context() as unavailable:
-        unavailable.setattr(sessions, "get_metadata", unavailable_metadata)
+        unavailable.setattr(sessions, "subagent_link_metadata", unavailable_metadata)
         with pytest.raises(PermissionError):
             await runtime.scratch_areas.sweep()
         with pytest.raises(ScratchUnavailableError):

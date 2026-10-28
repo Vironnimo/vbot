@@ -55,6 +55,7 @@ from core.sessions import (
     ARCHIVE_STATE_ARCHIVED,
     ARCHIVE_STATE_PURGING,
     EPHEMERAL_SESSION_LIFETIME,
+    SESSION_EPHEMERAL_META_KEY,
     ArchiveEntry,
     ArchiveEntryCursor,
     ArchiveEntryFilter,
@@ -87,6 +88,10 @@ _PURGE_PAGE = 200
 _EPHEMERAL_PAGE = 100
 # Actor and purge reason of an expired Ephemeral Session in the owner log lines.
 _EPHEMERAL_ACTOR = "ephemeral"
+
+
+class _EphemeralSessionKeptError(Exception):
+    """A selected expiry candidate no longer qualifies under its admission guard."""
 
 
 def _utc_now() -> datetime:
@@ -214,6 +219,7 @@ class ArchiveService:
                 ArchiveSubjectInUseError,
                 RunAdmissionBlockedError,
                 SessionNotFoundError,
+                _EphemeralSessionKeptError,
             ) as exc:
                 _LOGGER.debug(
                     "Expired Ephemeral Session stays for a later sweep (agent=%s session=%s "
@@ -477,6 +483,17 @@ class ArchiveService:
                     [reference.to_dict() for reference in references],
                 )
             await sessions.get_async(address)
+            if ephemeral_expiry:
+                # The candidate list can predate a completed Run. Check again
+                # while admission is blocked, before closing any retained work.
+                summary = await sessions.run_async(sessions.summary, address)
+                before = format_canonical_timestamp(services.clock() - EPHEMERAL_SESSION_LIFETIME)
+                if (
+                    summary is None
+                    or summary["last_active_at"] >= before
+                    or not await sessions.metadata_value_async(address, SESSION_EPHEMERAL_META_KEY)
+                ):
+                    raise _EphemeralSessionKeptError
 
             def current_members() -> dict[str, str]:
                 removed: dict[str, str] = {}

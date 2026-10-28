@@ -343,6 +343,7 @@ class ChatLoop:
         notification_policy: Callable[[], str] | None = None,
         source_session_id: str | None = None,
         continuation_source: RunContinuationSource | None = None,
+        expected_session_generation_id: str | None = None,
         context_note: str | ChatMessage | None = None,
         permission_ceiling: PermissionCeiling | None = None,
     ) -> Run:
@@ -402,6 +403,7 @@ class ChatLoop:
             notification_policy=notification_policy,
             source_session_id=source_session_id,
             continuation_source=continuation_source,
+            expected_session_generation_id=expected_session_generation_id,
             context_note=context_note,
             permission_ceiling=permission_ceiling,
         )
@@ -737,6 +739,7 @@ class ChatLoop:
         edit_message_id: str | None = None,
         source_session_id: str | None = None,
         continuation_source: RunContinuationSource | None = None,
+        expected_session_generation_id: str | None = None,
         context_note: str | ChatMessage | None = None,
         permission_ceiling: PermissionCeiling | None = None,
     ) -> Run:
@@ -760,6 +763,10 @@ class ChatLoop:
                     raise
         if session_id is not None:
             await self._reject_owner_managed_session(project_id, agent_id, session_id)
+        if expected_session_generation_id is not None and (
+            session is None or session.generation_id != expected_session_generation_id
+        ):
+            raise SessionNotFoundError("The completion's Session was replaced")
         if (
             continuation_source is not None
             and continuation_source.generation_id is not None
@@ -861,9 +868,9 @@ class ChatLoop:
                         continuation_source.parent_source if continuation_source else None
                     ),
                     expected_session_generation_id=(
-                        continuation_source.generation_id
-                        if continuation_source and continuation_source.generation_id is not None
-                        else session.generation_id
+                        expected_session_generation_id
+                        or (continuation_source.generation_id if continuation_source else None)
+                        or session.generation_id
                     ),
                 ),
             )
@@ -953,6 +960,8 @@ class ChatLoop:
         content: str,
         input_id: str,
         input_persisted_hook: Callable[[], None] | None = None,
+        *,
+        expected_session_generation_id: str | None = None,
     ) -> Run:
         """Continue a normal Session under an Extension-owned descendant Run."""
         if not isinstance(content, str) or not content:
@@ -984,12 +993,14 @@ class ChatLoop:
         )
         provider_id, _connection_id = _resolve_agent_connection(self._dependencies, agent)
         _ensure_provider_exists(self._dependencies.providers, provider_id)
-        await self._get_session_async(
+        session = await self._get_session_async(
             address.agent_id,
             address.session_id,
             create_missing=False,
             project_id=address.project_id,
         )
+        if expected_session_generation_id not in (None, session.generation_id):
+            raise SessionNotFoundError("The completion's Session was replaced")
         request = _RunRequest(
             content=content,
             internal=True,
@@ -1005,6 +1016,9 @@ class ChatLoop:
                 contributes_to_agent_activity=False,
                 owner=owner,
                 input_id=input_id,
+                expected_session_generation_id=(
+                    expected_session_generation_id or session.generation_id
+                ),
             ),
         )
 

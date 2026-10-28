@@ -52,7 +52,12 @@ from desktop.dictation.insertion import (
     ClipboardTextInserter,
     TextInserter,
 )
-from desktop.dictation.pieces import PIECE_SEARCH_SECONDS, PIECE_TARGET_SECONDS, PieceCutter
+from desktop.dictation.pieces import (
+    PIECE_SEARCH_SECONDS,
+    PIECE_TARGET_SECONDS,
+    PieceCutter,
+    upload_pieces,
+)
 from desktop.hotkey import (
     HOTKEY_ERROR_INVALID,
     HotkeyApi,
@@ -290,7 +295,8 @@ class DictationController:
         non-object ``dictation_config_invalid``; neither persists anything.
         """
         if not isinstance(changes, Mapping) or (
-            _MODE_KEY in changes and changes[_MODE_KEY] not in MODES
+            _MODE_KEY in changes
+            and (not isinstance(changes[_MODE_KEY], str) or changes[_MODE_KEY] not in MODES)
         ):
             return self._compose(self._hotkey.status(), ERROR_DICTATION_CONFIG_INVALID)
         hotkey_changes = {name: changes[name] for name in _HOTKEY_FIELDS if name in changes}
@@ -313,7 +319,7 @@ class DictationController:
     def _read_mode(self) -> str:
         section = desktop_settings.read_section(desktop_settings.DICTATION_KEY, self._settings_path)
         mode = section.get(_MODE_KEY)
-        return mode if mode in MODES else MODE_TOGGLE
+        return mode if isinstance(mode, str) and mode in MODES else MODE_TOGGLE
 
     def _compose(
         self, hotkey_status: Mapping[str, Any], error_code: str | None = None
@@ -598,23 +604,29 @@ class _Transcriber:
             if self._take.server_problem is not None:
                 self.failure = self._take.server_problem
                 return
-            pcm, rate, seconds = item
-            number += 1
-            try:
-                text = self._client.transcribe(encode_wav(pcm, rate), filename="dictation.wav")
-            except SpeechRequestCancelled:
-                return
-            except SpeechServerError as exc:
-                self.failure = exc.error_code
-                return
-            except Exception:
-                logger.exception("Dictation could not transcribe piece %d", number)
-                self.failure = ERROR_DICTATION_FAILED
-                return
-            if self._stopped.is_set() or self._take.cancelled.is_set():
-                return
-            logger.info("Dictation piece %d transcribed (%.1f s)", number, seconds)
-            self._texts.append(text.strip())
+            pcm, rate, _seconds = item
+            budget = self._take.budget_bytes or DEFAULT_UPLOAD_BUDGET_BYTES
+            for piece in upload_pieces(pcm, rate, budget):
+                if self._stopped.is_set() or self._take.cancelled.is_set():
+                    return
+                number += 1
+                try:
+                    text = self._client.transcribe(
+                        encode_wav(piece.pcm, piece.rate), filename="dictation.wav"
+                    )
+                except SpeechRequestCancelled:
+                    return
+                except SpeechServerError as exc:
+                    self.failure = exc.error_code
+                    return
+                except Exception:
+                    logger.exception("Dictation could not transcribe piece %d", number)
+                    self.failure = ERROR_DICTATION_FAILED
+                    return
+                if self._stopped.is_set() or self._take.cancelled.is_set():
+                    return
+                logger.info("Dictation piece %d transcribed (%.1f s)", number, piece.seconds)
+                self._texts.append(text.strip())
 
 
 def _prepare_server(take: _Take, client: SpeechServerClient) -> None:

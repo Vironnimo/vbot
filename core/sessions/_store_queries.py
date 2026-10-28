@@ -20,6 +20,7 @@ from core.sessions._types import (
     SessionListPage,
     SessionProjectGrouping,
     SessionWorkingProject,
+    SubagentLinkSnapshot,
 )
 from core.sessions.errors import SessionNotFoundError
 
@@ -89,8 +90,13 @@ def subagent_children(
     rows = connection.execute(
         "SELECT project_id, agent_id, session_id FROM sessions WHERE state = 'live' "
         "AND subagent_parent_agent_id = ? AND subagent_parent_session_id = ? "
-        "AND subagent_parent_project_id IS ? ORDER BY created_at, session_key",
-        (parent.agent_id, parent.session_id, parent.project_id),
+        "AND subagent_parent_project_id IS ? "
+        "AND (COALESCE(subagent_parent_generation_id, '') = '' "
+        "OR subagent_parent_generation_id = (SELECT generation_id FROM sessions AS parent "
+        "WHERE parent.project_id = ? AND parent.agent_id = ? "
+        "AND parent.session_id = ? AND parent.state = 'live')) "
+        "ORDER BY created_at, session_key",
+        (parent.agent_id, parent.session_id, parent.project_id, *_store_values._scope(parent)),
     ).fetchall()
     return [_store_values._address(row) for row in rows]
 
@@ -103,6 +109,35 @@ def subagent_session(connection: sqlite3.Connection, subagent_id: str) -> Sessio
         (subagent_id,),
     ).fetchone()
     return _store_values._address(row) if row is not None else None
+
+
+def subagent_link_metadata(
+    connection: sqlite3.Connection, address: SessionAddress
+) -> SubagentLinkSnapshot | None:
+    """Read a Parent link and its live generation in the same canonical snapshot."""
+    row = _store_values._live_metadata_row(connection, address)
+    if row["subagent_parent_session_id"] is None:
+        return None
+    generation = row["subagent_parent_generation_id"]
+    if (
+        generation
+        and connection.execute(
+            "SELECT 1 FROM sessions WHERE generation_id = ? AND state = 'live' "
+            "AND project_id = ? AND agent_id = ? AND session_id = ?",
+            (
+                generation,
+                row["subagent_parent_project_id"] or "",
+                row["subagent_parent_agent_id"],
+                row["subagent_parent_session_id"],
+            ),
+        ).fetchone()
+        is None
+    ):
+        return None
+    return SubagentLinkSnapshot(
+        metadata=_store_values._session_metadata_from_state(row),
+        parent_generation_id=str(generation) if generation else None,
+    )
 
 
 def live_addresses_with_metadata_field(

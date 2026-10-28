@@ -68,7 +68,10 @@ def test_get_or_create_reads_an_existing_session_without_a_write(manager, monkey
 
 
 @pytest.mark.parametrize("project_id", [None, "project-b"])
-def test_move_updates_the_composite_address_without_losing_history(manager, project_id) -> None:
+@pytest.mark.parametrize("child_state", ["live", "archived", "previous-parent"])
+def test_move_updates_the_composite_address_without_losing_history(
+    manager, project_id, child_state
+) -> None:
     source = manager.create("coder", session_id="session-one", project_id=project_id)
     message = ChatMessage.user("hello")
     source.append(message)
@@ -87,21 +90,37 @@ def test_move_updates_the_composite_address_without_losing_history(manager, proj
     unrelated = manager.create("worker", session_id="unrelated")
     other_parent = {**parent, "project_id": "other-project"}
     manager.set_metadata(unrelated.address, {"subagent_parent": other_parent})
+    archived_child = None
+    if child_state == "archived":
+        archived_child = asyncio.run(manager.archive(child.address))
+    elif child_state == "previous-parent":
+        asyncio.run(manager.archive(source.address))
+        source = manager.get_or_create(source.address)
+        source.append(message)
+        assert manager.subagent_children(source.address) == []
 
     moved = asyncio.run(manager.move(source.address, target))
+
+    if archived_child is not None:
+        manager.archive_ledger.begin_restore(archived_child.entry_id, {"target_id": None})
+        manager.archive_ledger.commit_restore(archived_child.entry_key)
 
     assert not manager.exists(source.address)
     assert manager.exists(target)
     assert moved.address == target
     assert moved.load() == [message]
     assert manager.subagent_children(source.address) == []
-    assert manager.subagent_children(target) == [child.address]
-    assert manager.metadata_value(child.address, "subagent_parent") == {
-        **parent,
-        "agent_id": target.agent_id,
-        "project_id": target.project_id,
-        "session_id": target.session_id,
-    }
+    if child_state == "previous-parent":
+        assert manager.subagent_children(target) == []
+        assert manager.metadata_value(child.address, "subagent_parent") == parent
+    else:
+        assert manager.subagent_children(target) == [child.address]
+        assert manager.metadata_value(child.address, "subagent_parent") == {
+            **parent,
+            "agent_id": target.agent_id,
+            "project_id": target.project_id,
+            "session_id": target.session_id,
+        }
     assert manager.metadata_value(unrelated.address, "subagent_parent") == other_parent
 
 

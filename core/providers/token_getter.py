@@ -259,11 +259,15 @@ class OAuthTokenGetter:
                 response_data = await self._post_refresh_token(stored_refresh_token)
             else:
                 response_data = await retry_async(self._post_refresh_token, stored_refresh_token)
-            if (
-                self._oauth_config.device_flow == MINIMAX_OAUTH_DEVICE_FLOW
-                and response_data.get("status") != "success"
-            ):
-                raise ProviderAuthError("OAuth token refresh failed — please reconnect")
+            if self._oauth_config.device_flow == MINIMAX_OAUTH_DEVICE_FLOW:
+                status = response_data.get("status")
+                if status == "error":
+                    raise ProviderAuthError("OAuth token refresh failed — please reconnect")
+                if status != "success":
+                    raise ProviderError(
+                        "OAuth token endpoint response did not contain a valid status",
+                        retryable=False,
+                    )
             access_token = _required_token_string(response_data.get("access_token"))
             refresh_token = response_data.get("refresh_token")
             extra = dict(token.extra)
@@ -460,9 +464,9 @@ def _parse_oauth_expiry(data: dict[str, object], now: datetime) -> datetime:
 def _token_response_object(response: httpx.Response) -> dict[str, object]:
     """Decode a successful token-endpoint reply without leaking parser errors.
 
-    A non-JSON 2xx body (for example an intercepting proxy page) is malformed
-    Provider output: non-retryable and not an authentication failure, so a
-    rotating Account token is not quarantined because of it.
+    A non-JSON or non-object 2xx body is malformed Provider output:
+    non-retryable and not an authentication failure, so a rotating Account
+    token is not quarantined because of it.
     """
 
     try:
@@ -473,13 +477,19 @@ def _token_response_object(response: httpx.Response) -> dict[str, object]:
             retryable=False,
         ) from exc
     if not isinstance(data, dict):
-        raise ProviderAuthError("OAuth token refresh failed — please reconnect")
+        raise ProviderError(
+            "OAuth token endpoint response must be a JSON object",
+            retryable=False,
+        )
     return data
 
 
 def _required_token_string(value: object) -> str:
     if not isinstance(value, str) or not value:
-        raise ProviderAuthError("OAuth token refresh failed — please reconnect")
+        raise ProviderError(
+            "OAuth token endpoint response did not contain a usable access token",
+            retryable=False,
+        )
     return value
 
 

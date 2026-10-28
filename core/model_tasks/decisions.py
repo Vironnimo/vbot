@@ -18,6 +18,7 @@ from core.model_tasks.task_execution import TaskUsage, TaskUsageContext
 from core.providers.errors import NetworkError, ProviderError, ProviderRequestTooLargeError
 from core.providers.task_client import TaskClientRuntime
 from core.usage import UsageRecorder, last_request_usage
+from core.utils.errors import VBotError
 from core.utils.tokens import estimate_json_tokens
 from core.utils.workers import BoundedWorkerPool
 
@@ -51,19 +52,24 @@ class DecisionService:
         self._usage_recorder = usage_recorder
 
     def available(self) -> bool:
-        if not self._model_tasks.binding_is_usable("decision"):
+        try:
+            self._target()
+        except DecisionError:
             return False
-        ref = parse_task_model_target_id(self._model_tasks.binding_for("decision").target)
-        return ref.provider_id == "openrouter"
+        return True
 
     def _target(self) -> _Target:
-        if not self.available():
+        try:
+            binding = self._model_tasks.binding_for("decision")
+            self._model_tasks.validate_execution_target(binding)
+            ref = parse_task_model_target_id(binding.target)
+        except (VBotError, ValueError) as exc:
+            raise DecisionError(NOT_CONFIGURED_MESSAGE, code="not_configured") from exc
+        if ref.provider_id != "openrouter":
             raise DecisionError(NOT_CONFIGURED_MESSAGE, code="not_configured")
-        target = self._model_tasks.binding_for("decision").target
-        ref = parse_task_model_target_id(target)
         model = self._model_tasks.model_for_target(ref)
         window = model.context_window_for(ref.local_connection_id) if model is not None else None
-        return _Target(target, window if isinstance(window, int) and window > 0 else None)
+        return _Target(binding.target, window if isinstance(window, int) and window > 0 else None)
 
     async def classify(
         self,
@@ -91,10 +97,10 @@ class DecisionService:
             )
         if context is not None and (not isinstance(context, str) or not context.strip()):
             raise DecisionError("context must be non-empty text.")
-        states = [item if context is None else {"context": context, "item": item} for item in items]
-        for state in states:
-            if not isinstance(state, str | dict | list):
+        for item in items:
+            if not isinstance(item, str | dict | list):
                 raise DecisionError("Each item must be text, a JSON object, or a JSON array.")
+        states = [item if context is None else {"context": context, "item": item} for item in items]
         resolved = await _DECISION_SETUP_WORKERS.run(self._target)
         target = resolved.target
         slots = asyncio.Semaphore(_ITEM_CONCURRENCY)

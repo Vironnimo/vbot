@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
@@ -66,6 +67,7 @@ class FakeProcess:
         exit_code: int | None = None,
         create_time: float = 1000.25,
         clock: list[float] | None = None,
+        parents: tuple[FakeProcess, ...] = (),
     ) -> None:
         self.pid = pid
         self.calls: list[Any] = []
@@ -74,12 +76,16 @@ class FakeProcess:
         self._exit_code = exit_code
         self._create_time = create_time
         self._clock = clock
+        self._parents = parents
 
     def poll(self) -> int | None:
         return self._exit_code
 
     def create_time(self) -> float:
         return self._create_time
+
+    def parents(self) -> list[FakeProcess]:
+        return list(self._parents)
 
     def terminate(self) -> None:
         self.calls.append("terminate")
@@ -104,12 +110,20 @@ def answer_health(monkeypatch: pytest.MonkeyPatch, *answers: HealthProbeResult) 
         monkeypatch.setattr(server_management, probe, lambda _instance: next(remaining))
 
 
-def record_server(monkeypatch: pytest.MonkeyPatch, *, recorded: bool = True) -> None:
+def record_server(
+    monkeypatch: pytest.MonkeyPatch, *, recorded: bool = True, process: FakeProcess | None = None
+) -> None:
     """Publish the target's control record naming one live server process, or none."""
 
-    record = SimpleNamespace(pid=456, process_create_time=1000.25) if recorded else None
+    process = process or FakeProcess()
+    record = (
+        SimpleNamespace(pid=process.pid, process_create_time=process.create_time())
+        if recorded
+        else None
+    )
     monkeypatch.setattr(server_management, "read_server_control", lambda *_args: record)
-    monkeypatch.setattr(server_management.psutil, "Process", lambda _pid: FakeProcess(pid=456))
+    monkeypatch.setattr(server_management.psutil, "Process", lambda _pid: process)
+    monkeypatch.setattr(server_management, "find_listening_process", lambda _instance: process)
 
 
 def script_busy_listener(
@@ -275,8 +289,12 @@ def test_start_server_never_spawns_a_duplicate_next_to_a_busy_listener(
 
 
 @pytest.mark.parametrize("data_dir_exists", [False, True], ids=["missing-root", "existing-root"])
+@pytest.mark.parametrize("launcher", [False, True], ids=["direct-interpreter", "venv-launcher"])
 def test_start_server_waits_for_health_and_logs_its_lifecycle(
-    instance: ServerInstance, monkeypatch: pytest.MonkeyPatch, data_dir_exists: bool
+    instance: ServerInstance,
+    monkeypatch: pytest.MonkeyPatch,
+    data_dir_exists: bool,
+    launcher: bool,
 ) -> None:
     if data_dir_exists:
         instance.data_dir.mkdir()
@@ -286,7 +304,10 @@ def test_start_server_waits_for_health_and_logs_its_lifecycle(
         # The server refuses an existing root without the bootstrap marker, so a root the
         # CLI creates must carry the marker before the child starts.
         markers_at_spawn.append(read_marker(target.data_dir))
-        return FakeProcess(pid=4321)
+        process = FakeProcess(pid=4321)
+        recorded = FakeProcess(pid=4322, parents=(process,)) if launcher else process
+        record_server(monkeypatch, process=recorded)
+        return process
 
     answer_health(monkeypatch, UNREACHABLE, UNREACHABLE, VBOT)
     monkeypatch.setattr(
@@ -328,7 +349,9 @@ def test_start_server_targets_the_bind_address_its_data_directory_records(
 
     def spawn(target: ServerInstance) -> FakeProcess:
         spawned.append(target)
-        return FakeProcess(pid=4321)
+        process = FakeProcess(pid=4321)
+        record_server(monkeypatch, process=process)
+        return process
 
     answer_health(monkeypatch, UNREACHABLE, VBOT)
     monkeypatch.setattr(
@@ -377,11 +400,15 @@ def test_confined_start_server_leaves_the_foreign_job_or_warns_whose_job_holds_i
             raise OSError("Windows Management Instrumentation refused: access denied")
         assert kwargs["env"][CONSOLE_LOGGING_ENV_VAR] == "0"
         brokered.append(argv)
-        return FakeProcess(pid=777)
+        process = FakeProcess(pid=777)
+        record_server(monkeypatch, process=process)
+        return process
 
     def spawn(target: ServerInstance) -> FakeProcess:
         spawned.append(target)
-        return FakeProcess(pid=4321)
+        process = FakeProcess(pid=4321)
+        record_server(monkeypatch, process=process)
+        return process
 
     answer_health(monkeypatch, UNREACHABLE, VBOT)
     monkeypatch.setattr(
@@ -450,6 +477,30 @@ def test_confined_start_server_leaves_the_foreign_job_or_warns_whose_job_holds_i
             [],
             id="child-exits",
         ),
+        pytest.param(
+            1.0,
+            [VBOT],
+            {},
+            UNRECORDED_SERVER_MESSAGE,
+            TERMINATED,
+            id="another-vbot-appears",
+        ),
+        pytest.param(
+            1.0,
+            [VBOT],
+            {"recorded_pid": 987},
+            UNRECORDED_SERVER_MESSAGE,
+            TERMINATED,
+            id="another-recorded-vbot-appears",
+        ),
+        pytest.param(
+            1.0,
+            [VBOT],
+            {"exit_code": 1},
+            "server process exited before readiness",
+            [],
+            id="child-exits-while-another-vbot-answers",
+        ),
     ],
 )
 def test_start_server_cleans_up_a_child_that_never_became_ready(
@@ -462,10 +513,23 @@ def test_start_server_cleans_up_a_child_that_never_became_ready(
     calls: list[Any],
 ) -> None:
     process = FakeProcess(
-        pid=654, timeout_error=lambda seconds: subprocess.TimeoutExpired("server", seconds), **child
+        pid=654,
+        timeout_error=lambda seconds: subprocess.TimeoutExpired("server", seconds),
+        **{key: value for key, value in child.items() if key != "recorded_pid"},
     )
     answer_health(monkeypatch, UNREACHABLE, *later_health)
-    monkeypatch.setattr(server_management, "start_server_process", lambda _instance: process)
+
+    def spawn(_instance: ServerInstance) -> FakeProcess:
+        if "recorded_pid" in child:
+            record_server(monkeypatch, process=FakeProcess(pid=child["recorded_pid"]))
+        return process
+
+    monkeypatch.setattr(server_management, "start_server_process", spawn)
+    monkeypatch.setattr(
+        server_management,
+        "kill_process_tree",
+        lambda owned: owned.calls.append(("kill_tree", owned.pid)),
+    )
 
     result = start_server(instance, startup_timeout_seconds=timeout, probe_interval_seconds=0.0)
 
@@ -473,7 +537,7 @@ def test_start_server_cleans_up_a_child_that_never_became_ready(
     assert result.health == (later_health or [UNREACHABLE])[-1]
     assert result.instance is instance
     assert result.log_path == instance.log_path
-    assert process.calls == calls
+    assert process.calls == ([("kill_tree", 654)] if sys.platform == "win32" and calls else calls)
     if message == "server readiness timed out":
         # The failure names the child it stops, so the log shows which process ended.
         log_lines = instance.log_path.read_text(encoding="utf-8").splitlines()

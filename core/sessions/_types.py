@@ -468,6 +468,14 @@ class SessionWorkingProject:
 
 
 @dataclass(frozen=True)
+class SubagentLinkSnapshot:
+    """Parent-link metadata and its validated generation from one read snapshot."""
+
+    metadata: JsonObject
+    parent_generation_id: str | None
+
+
+@dataclass(frozen=True)
 class SessionDescriptorSource:
     """What a Recall result needs to describe one live Session."""
 

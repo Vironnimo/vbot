@@ -584,8 +584,14 @@ def load_operation(install: Installation, operation_id: str) -> Operation:
 
 def operations(install: Installation) -> list[Operation]:
     directory = contained(install.root, "operations")
+    try:
+        entries = list(directory.iterdir())
+    except FileNotFoundError:
+        return []
+    # glob suppresses enumeration errors. An unavailable inventory must not
+    # look empty to update admission, uninstall, or fallback-version retention.
     return sorted(
-        (load_operation(install, path.stem) for path in directory.glob("*.json")),
+        (load_operation(install, path.stem) for path in entries if path.match("*.json")),
         key=lambda value: value.created_at,
         reverse=True,
     )

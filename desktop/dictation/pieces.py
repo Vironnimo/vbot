@@ -18,7 +18,7 @@ imported on first use, so importing this module keeps Desktop startup light.
 from __future__ import annotations
 
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 
 from desktop.speech.server_client import WAV_HEADER_BYTES
@@ -42,6 +42,29 @@ class Piece:
     pcm: bytes
     rate: int
     seconds: float
+
+
+def upload_pieces(pcm: bytes, rate: int, budget_bytes: int) -> Iterator[Piece]:
+    """Fit previously recorded audio to the budget learned during server preparation.
+
+    Capture starts before that request finishes. A queued piece may therefore
+    have been cut against the larger fallback budget; recut it at pauses with
+    the actual limit before uploading, retaining every PCM sample.
+    """
+    if len(pcm) + WAV_HEADER_BYTES <= budget_bytes:
+        yield Piece(pcm, rate, len(pcm) / (2 * rate))
+        return
+    payload_bytes = (budget_bytes - WAV_HEADER_BYTES) // 2 * 2
+    if payload_bytes < 2:
+        raise ValueError("The upload budget cannot hold one audio sample")
+    block_bytes = min(max(2, round(rate * 0.02) * 2), payload_bytes)
+    cutter = PieceCutter(budget_bytes=lambda: budget_bytes)
+    for start in range(0, len(pcm), block_bytes):
+        block = pcm[start : start + block_bytes]
+        yield from cutter.add(block, rate, len(block) / (2 * rate))
+    last = cutter.finish()
+    if last is not None:
+        yield last
 
 
 @dataclass

@@ -8,7 +8,8 @@ import respx
 from core.model_tasks.constants import TASK_DECISION
 from core.model_tasks.decision_types import DecisionError
 from core.model_tasks.decisions import ITEM_LIMIT, NOT_CONFIGURED_MESSAGE, DecisionService
-from core.model_tasks.model_tasks import TaskModelService
+from core.model_tasks.model_tasks import TaskModelService, TaskModelValidationError
+from core.models import ModelRegistry
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.providers.token_getter import StaticTokenGetter
 from tests.core.model_tasks.model_tasks_test_support import (
@@ -16,6 +17,7 @@ from tests.core.model_tasks.model_tasks_test_support import (
     _model,
     _Models,
     _Providers,
+    _registry_model,
     _Storage,
     task_http_transport,
 )
@@ -32,9 +34,15 @@ def service(
     Its runtime reaches the real OpenRouter wire, which tests mock with respx.
     """
     model = SimpleNamespace(context_window_for={"api_key": window}.get)
+
+    def validate_execution_target(binding):
+        if not usable:
+            raise TaskModelValidationError("Unavailable target")
+
     bindings = SimpleNamespace(
         binding_is_usable=lambda task: usable,
         binding_for=lambda task: SimpleNamespace(target=f"{provider}/typesafe/jev-1.13::api_key"),
+        validate_execution_target=validate_execution_target,
         model_for_target=lambda ref: model,
     )
     connection = ConnectionConfig(
@@ -217,6 +225,7 @@ async def test_reported_input_tokens_correct_the_size_check(monkeypatch, final):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("context", [None, "the task"])
 @pytest.mark.parametrize(
     ("owner", "items", "questions", "code"),
     [
@@ -248,7 +257,7 @@ async def test_reported_input_tokens_correct_the_size_check(monkeypatch, final):
     ],
 )
 async def test_invalid_calls_and_missing_bindings_send_nothing(
-    monkeypatch, owner, items, questions, code
+    monkeypatch, owner, items, questions, code, context
 ):
     async def evaluate(*args, **kwargs):
         raise AssertionError("no request may be sent")
@@ -256,9 +265,38 @@ async def test_invalid_calls_and_missing_bindings_send_nothing(
     monkeypatch.setattr(owner, "_evaluate", evaluate)
 
     with pytest.raises(DecisionError) as error:
-        await owner.classify(items, questions)
+        await owner.classify(items, questions, context=context)
 
     assert error.value.code == code
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("replacement", [None, "openrouter/cloudflare/clef::api-key"])
+async def test_execution_keeps_the_binding_snapshot_it_validated(monkeypatch, replacement):
+    target = "openrouter/typesafe/jev-1.13::api-key"
+    storage = _Storage({TASK_DECISION: {"target": target, "options": {}}})
+    original_load = storage.load_model_task_settings
+
+    def load_and_change_binding():
+        snapshot = original_load()
+        storage.update_model_task_settings({TASK_DECISION: {"target": replacement or ""}})
+        return snapshot
+
+    monkeypatch.setattr(storage, "load_model_task_settings", load_and_change_binding)
+    model = _registry_model("typesafe/jev-1.13", "Jev", task_types=(TASK_DECISION,))
+    models = ModelRegistry({("openrouter", model.model_id): model})
+    model_tasks = TaskModelService(_Providers(), models, _Credentials(), storage)
+    owner = DecisionService(model_tasks, cast(Any, None))
+    sent = []
+
+    async def evaluate(resolved, state, questions, *, usage_context=None):
+        sent.append(resolved.target)
+        return {"answers": {}}
+
+    monkeypatch.setattr(owner, "_evaluate", evaluate)
+
+    assert await owner.classify(["item"], QUESTIONS) == [{"answers": {}}]
+    assert sent == [target]
 
 
 @pytest.mark.asyncio

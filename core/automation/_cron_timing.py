@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from datetime import UTC, datetime
 
 # Recheck wall time after bounded monotonic sleeps so NTP corrections do not
@@ -21,7 +22,13 @@ _sleep = asyncio.sleep
 
 def _once_retry_delay(attempt: int) -> float:
     """Backoff delay in seconds for the Nth (1-based) failed once-job fire."""
-    exponent = max(attempt - 1, 0)
+    maximum_exponent = math.ceil(
+        math.log(
+            _ONCE_RETRY_MAX_DELAY_SECONDS / _ONCE_RETRY_DELAY_SECONDS,
+            _ONCE_RETRY_BACKOFF_FACTOR,
+        )
+    )
+    exponent = min(max(attempt - 1, 0), maximum_exponent)
     delay = _ONCE_RETRY_DELAY_SECONDS * (_ONCE_RETRY_BACKOFF_FACTOR**exponent)
     return min(delay, _ONCE_RETRY_MAX_DELAY_SECONDS)
 

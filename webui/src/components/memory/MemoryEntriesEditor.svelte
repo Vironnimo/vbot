@@ -111,6 +111,17 @@
     };
   }
 
+  function applyMemoryMutation(result) {
+    // Reads begun while the write was pending may still hold the old list.
+    // The completed mutation supersedes them, including delayed failures.
+    memoryRequestId += 1;
+    memoriesLoading = false;
+    memoryError = '';
+    pendingMemoryResponse = null;
+    applyMemoryResponse(result);
+    memoriesLoaded = true;
+  }
+
   function normalizeMemoryEntries(entries, scope) {
     if (!Array.isArray(entries)) {
       return [];
@@ -191,10 +202,8 @@
       if (destroyed) {
         return;
       }
-      applyMemoryResponse(result);
+      applyMemoryMutation(result);
       historyRefresh += 1;
-      pendingMemoryResponse = null;
-      memoriesLoaded = true;
       memoryDrafts[scope] = '';
       onToast(t('memory.saved'));
     } catch (error) {
@@ -238,10 +247,8 @@
       if (destroyed) {
         return;
       }
-      applyMemoryResponse(result);
+      applyMemoryMutation(result);
       historyRefresh += 1;
-      pendingMemoryResponse = null;
-      memoriesLoaded = true;
       editingMemory = null;
       onToast(t('memory.updated'));
     } catch (error) {
@@ -284,10 +291,8 @@
       if (destroyed) {
         return;
       }
-      applyMemoryResponse(result);
+      applyMemoryMutation(result);
       historyRefresh += 1;
-      pendingMemoryResponse = null;
-      memoriesLoaded = true;
       if (
         editingMemory?.scope === target.scope &&
         editingMemory?.id === target.id
@@ -515,10 +520,7 @@
               pendingMemoryResponse = null;
             }
           }}
-          onReverted={(result) => {
-            applyMemoryResponse(result);
-            pendingMemoryResponse = null;
-          }}
+          onReverted={applyMemoryMutation}
         />
       {/if}
     </div>

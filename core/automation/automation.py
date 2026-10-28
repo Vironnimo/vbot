@@ -126,6 +126,7 @@ class TriggerService:
         wake: bool = True,
         subagent_message: SubAgentMessage | None = None,
         continuation_source: RunContinuationSource | None = None,
+        expected_session_generation_id: str | None = None,
     ) -> asyncio.Future[None]:
         """Coalesce one background result at the target Session's next Run boundary.
 
@@ -145,6 +146,7 @@ class TriggerService:
             wake=wake,
             subagent_message=subagent_message,
             continuation_source=continuation_source,
+            expected_session_generation_id=expected_session_generation_id,
         )
 
     def set_owned_completion_starter(self, starter: Callable[..., Awaitable[Run]]) -> None:

@@ -445,11 +445,9 @@ def _parse_timestamp(value: Any) -> datetime | None:
         return None
     try:
         timestamp = datetime.fromisoformat(value)
-    except ValueError:
+        return timestamp.astimezone(UTC) if timestamp.tzinfo is not None else None
+    except OverflowError, ValueError:
         return None
-    if timestamp.tzinfo is None:
-        return None
-    return timestamp.astimezone(UTC)
 
 
 def _skip_legacy_raw_dumps(_directory: str, names: list[str]) -> set[str]:

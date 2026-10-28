@@ -230,18 +230,21 @@ class CronWebhooks:
             if secret is not None:
                 _LOGGER.debug("Cron webhook request refused: wrong secret (job=%s)", job_id)
             return "refused"
-        if _is_github_ping(headers):
-            # GitHub's check that a new webhook reaches its URL starts no Run.
-            _LOGGER.debug("Cron webhook ping acknowledged (job=%s)", job_id)
-            return "accepted"
         async with self._lock(job_id):
-            latest = self._owner._jobs.get(job_id)
-            if latest is None or latest.schedule_type != "webhook" or latest.status != "active":
+            if not self._still_accepts(job_id, secret):
+                # Rotation or a schedule change may have retired the proof
+                # while its worker checked and rendered the request.
                 return "refused"
+            if _is_github_ping(headers):
+                # GitHub's check that a new webhook reaches its URL starts no Run.
+                _LOGGER.debug("Cron webhook ping acknowledged (job=%s)", job_id)
+                return "accepted"
             try:
                 state = await self._state(job_id)
             except CronStorageError:
-                return "unavailable"
+                return "unavailable" if self._still_accepts(job_id, secret) else "refused"
+            if not self._still_accepts(job_id, secret):
+                return "refused"
             updated = state.copy()
             updated.add(
                 _events.WebhookRequest(
@@ -266,6 +269,16 @@ class CronWebhooks:
             updated.dropped,
         )
         return "accepted"
+
+    def _still_accepts(self, job_id: str, secret: str) -> bool:
+        """Whether the active job still accepts the proof checked before an await."""
+        latest = self._owner._jobs.get(job_id)
+        return (
+            latest is not None
+            and latest.schedule_type == "webhook"
+            and latest.status == "active"
+            and self._secrets.get(job_id) == secret
+        )
 
     async def _commit_received(self, state: WebhookState) -> None:
         """Persist and publish an admitted request before honoring caller cancellation."""

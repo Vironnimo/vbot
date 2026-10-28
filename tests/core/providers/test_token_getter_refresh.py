@@ -511,28 +511,73 @@ async def test_delayed_refresh_cannot_revive_or_remove_replaced_credentials(
 @respx.mock
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("config", "stored", "reply", "auth_failure"),
+    ("config", "stored", "reply"),
     [
         pytest.param(
             github_oauth_config(token_exchange=True),
             COPILOT_TOKEN,
             httpx.Response(200, text="<html>captive portal</html>"),
-            False,
             id="copilot-exchange-not-json",
         ),
         pytest.param(
             xai_oauth_config(),
             expired_token(),
             httpx.Response(200, text="<html>captive portal</html>"),
-            False,
             id="rotating-refresh-not-json",
         ),
         pytest.param(
             openai_oauth_config(),
             expired_token(),
             httpx.Response(200, json=["not", "an", "object"]),
-            True,
             id="json-that-is-not-an-object",
+        ),
+        pytest.param(
+            xai_oauth_config(),
+            expired_token(),
+            httpx.Response(200, json=[]),
+            id="rotating-refresh-not-an-object",
+        ),
+        pytest.param(
+            xai_oauth_config(),
+            expired_token(),
+            httpx.Response(200, json={}),
+            id="rotating-refresh-missing-access-token",
+        ),
+        pytest.param(
+            xai_oauth_config(),
+            expired_token(),
+            httpx.Response(200, json={"access_token": ""}),
+            id="rotating-refresh-empty-access-token",
+        ),
+        pytest.param(
+            github_oauth_config(token_exchange=True),
+            COPILOT_TOKEN,
+            httpx.Response(200, json={}),
+            id="copilot-exchange-missing-token",
+        ),
+        pytest.param(
+            minimax_oauth_config(),
+            expired_token(),
+            httpx.Response(200, json={"status": "success"}),
+            id="minimax-missing-access-token",
+        ),
+        pytest.param(
+            minimax_oauth_config(),
+            expired_token(),
+            httpx.Response(200, json={}),
+            id="minimax-missing-status",
+        ),
+        pytest.param(
+            minimax_oauth_config(),
+            expired_token(),
+            httpx.Response(200, json={"status": "pending"}),
+            id="minimax-pending-status",
+        ),
+        pytest.param(
+            minimax_oauth_config(),
+            expired_token(),
+            httpx.Response(200, json={"status": "unexpected"}),
+            id="minimax-unknown-status",
         ),
     ],
 )
@@ -541,9 +586,8 @@ async def test_malformed_token_endpoint_json_is_fatal_provider_error_and_keeps_t
     config: OAuthConfig,
     stored: OAuthToken,
     reply: httpx.Response,
-    auth_failure: bool,
 ) -> None:
-    """A non-JSON 2xx reply is malformed output: not replayed and never a quarantine."""
+    """A malformed 2xx reply is not proof that the stored login was rejected."""
 
     store.save(Account("provider", "oauth"), stored)
     route = respx.route(url=config.token_exchange_url or config.token_url).mock(return_value=reply)
@@ -552,10 +596,8 @@ async def test_malformed_token_endpoint_json_is_fatal_provider_error_and_keeps_t
     with pytest.raises(ProviderError) as caught:
         await getter()
 
-    assert isinstance(caught.value, ProviderAuthError) is auth_failure
+    assert not isinstance(caught.value, ProviderAuthError)
     assert caught.value.retryable is False
-    if not auth_failure:
-        assert isinstance(caught.value.__cause__, ValueError)
     assert route.call_count == 1
     assert store.load(Account("provider", "oauth")) == stored
 

@@ -42,7 +42,7 @@ from core.storage.layout import initialize_data_directory
 from core.utils.config import DEFAULT_HOST
 from core.utils.logging import CONSOLE_LOGGING_ENV_VAR, LogManager
 from core.utils.outside_job import Confinement, start_outside_foreign_job
-from core.utils.processes import outside_service_unit, subprocess_creation_flags
+from core.utils.processes import kill_process_tree, outside_service_unit, subprocess_creation_flags
 from core.utils.server_control import (
     CONTROL_INITIATOR_HEADER,
     CONTROL_SHUTDOWN_PATH,
@@ -240,7 +240,21 @@ def start_server(
         result: CommandResult | None = None
         while time.monotonic() < deadline:
             health = probe_health(instance)
-            if health.is_vbot:
+            if process.poll() is not None:
+                logger.error(
+                    "CLI-managed background server process %s exited before readiness at %s",
+                    process.pid,
+                    instance.url,
+                )
+                return CommandResult(
+                    ok=False,
+                    message="server process exited before readiness",
+                    instance=instance,
+                    health=health,
+                    log_path=instance.log_path,
+                    process_id=process.pid,
+                )
+            if health.is_vbot and _spawned_server_is_ready(instance, process):
                 logger.info(
                     "CLI-managed background server started (pid=%s url=%s ready=%.1fs)",
                     process.pid,
@@ -265,33 +279,20 @@ def start_server(
                     ),
                 )
             if health.reachable:
-                logger.error(
-                    "CLI-managed background server startup hit a non-vBot responder at %s",
+                message = UNRECORDED_SERVER_MESSAGE if health.is_vbot else NON_VBOT_LISTENER_MESSAGE
+                logger.warning(
+                    "CLI-managed background server startup hit another responder at %s",
                     instance.url,
                 )
                 result = CommandResult(
                     ok=False,
-                    message=NON_VBOT_LISTENER_MESSAGE,
+                    message=message,
                     instance=instance,
                     health=health,
                     log_path=instance.log_path,
                     process_id=process.pid,
                 )
                 break
-            if process.poll() is not None:
-                logger.error(
-                    "CLI-managed background server process %s exited before readiness at %s",
-                    process.pid,
-                    instance.url,
-                )
-                return CommandResult(
-                    ok=False,
-                    message="server process exited before readiness",
-                    instance=instance,
-                    health=health,
-                    log_path=instance.log_path,
-                    process_id=process.pid,
-                )
             time.sleep(probe_interval_seconds)
 
         if result is None:
@@ -370,10 +371,23 @@ def _cleanup_spawned_process(
     *,
     timeout_seconds: float,
 ) -> bool:
-    """Terminate a just-spawned child with bounded kill fallback."""
+    """Stop a just-spawned child, including a Windows launcher's interpreter."""
 
     if process.poll() is not None:
         return False
+
+    if sys.platform == "win32":
+        # Terminating the launcher first would orphan its interpreter before
+        # the shared owner can capture the tree's exact process identities.
+        try:
+            kill_process_tree(process)
+        except OSError:
+            logging.getLogger(f"vbot.{CLI_SERVER_LOGGER_NAME}").error(
+                "Spawned server process tree could not be stopped (pid=%s)",
+                process.pid,
+                exc_info=True,
+            )
+        return True
 
     process.terminate()
     try:
@@ -528,6 +542,26 @@ def _stop_without_listener(
             pass
         return _stopped(instance, health, process)
     return _kill_stuck_process(instance, health, process, timeout_seconds=shutdown_timeout_seconds)
+
+
+def _spawned_server_is_ready(
+    instance: ServerInstance, process: subprocess.Popen[bytes] | Any
+) -> bool:
+    """The answering recorded server belongs to the still-live child we started.
+
+    On Windows a virtual environment's Python launcher stays alive while its
+    child interpreter owns the listener and publishes the control record.
+    """
+    recorded = _resolve_control_process(instance)
+    listener = find_listening_process(instance)
+    if recorded is None or listener is None or recorded.pid != listener.pid:
+        return False
+    if recorded.pid == process.pid:
+        return True
+    try:
+        return any(parent.pid == process.pid for parent in recorded.parents())
+    except psutil.Error, OSError:
+        return False
 
 
 def _listens_as_recorded(instance: ServerInstance, process: psutil.Process | Any) -> bool:

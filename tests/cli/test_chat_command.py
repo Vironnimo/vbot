@@ -579,11 +579,14 @@ def test_chat_prints_a_slash_command_reply(
     assert ("Continue:" in err) is bool(session)
 
 
+@pytest.mark.parametrize("silent", [False, True], ids=["answer", "silent-ending"])
 def test_chat_json_reports_the_run_as_one_object(
-    rpc: FakeRpc, run_stream: FakeRunStream, run_cli: RunCli
+    rpc: FakeRpc, run_stream: FakeRunStream, run_cli: RunCli, silent: bool
 ) -> None:
     reply_run(rpc, "s-new")
-    run_stream.connection(*TOOL_RUN)
+    run_stream.connection(
+        *TOOL_RUN[:-1], *([answer(9, " [SILENT] ")] if silent else []), completed(10)
+    )
 
     code, out, _err = run_cli("chat", "--json", "--model", MODEL, "What is vBot?")
 
@@ -596,7 +599,7 @@ def test_chat_json_reports_the_run_as_one_object(
         "run_id": RUN_ID,
         "status": "completed",
         "model": MODEL,
-        "message": "The answer.",
+        "message": "" if silent else "The answer.",
         "tool_calls": [
             {
                 "id": "call-1",
@@ -652,8 +655,9 @@ def test_chat_retries_only_ordinary_unknown_submissions(
 
 
 @pytest.mark.parametrize(("run_id", "available"), [(None, True), (RUN_ID, True), (RUN_ID, False)])
+@pytest.mark.parametrize("answer_text", ["Earlier answer", "[SILENT]"])
 def test_chat_reconciles_a_historical_receipt_without_new_work(
-    rpc: FakeRpc, run_cli: RunCli, run_id: str | None, available: bool
+    rpc: FakeRpc, run_cli: RunCli, run_id: str | None, available: bool, answer_text: str
 ) -> None:
     rpc.respond("chat.stream", [])
     receipt: dict[str, Any] = {
@@ -665,9 +669,7 @@ def test_chat_reconciles_a_historical_receipt_without_new_work(
     }
     if run_id:
         receipt["run_id"] = run_id
-        rpc.reply(
-            "chat.run_result", {"found": True, "content": "Earlier answer", "truncated": True}
-        )
+        rpc.reply("chat.run_result", {"found": True, "content": answer_text, "truncated": True})
     rpc.reply("chat.stream", receipt)
     rpc.reply("chat.timeline", {"items": []})
     rpc.reply("chat.queue_list", {"items": []})
@@ -690,7 +692,10 @@ def test_chat_reconciles_a_historical_receipt_without_new_work(
     assert report["session_available"] is available
     if available:
         assert rpc.params("chat.timeline")["agent_id"] == "renamed"
-    assert report["message"] == ("Earlier answer" if run_id and available else "")
+    assert report["message"] == (
+        answer_text if run_id and available and answer_text != "[SILENT]" else ""
+    )
+    assert "[SILENT]" not in out
     assert report["truncated"] is bool(run_id and available)
 
 
@@ -735,11 +740,23 @@ def test_chat_reports_tool_calls_errors_and_retries_as_progress_on_stderr(
     assert "Tool read_file failed: not_found: No such file" in err
 
 
+@pytest.mark.parametrize(
+    ("fragments", "text"),
+    [
+        (("Done.",), "Done."),
+        ((" [", "SI", "LENT", "]\n"), " [SILENT]\n"),
+        (("[SILENT]", " is a marker."), "[SILENT] is a marker."),
+        (("[SI",), "[SI"),
+    ],
+    ids=["answer", "silent", "marker-in-text", "partial-marker"],
+)
 def test_chat_streams_answer_text_on_a_terminal_without_repeating_it(
     rpc: FakeRpc,
     run_stream: FakeRunStream,
     run_cli: RunCli,
     monkeypatch: pytest.MonkeyPatch,
+    fragments: tuple[str, ...],
+    text: str,
 ) -> None:
     monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
     reply_run(rpc, "s-new")
@@ -747,15 +764,18 @@ def test_chat_streams_answer_text_on_a_terminal_without_repeating_it(
         event(3, "assistant_output_delta", {"content_delta": "Let me "}),
         event(4, "assistant_output_delta", {"content_delta": "check."}),
         answer(5, "Let me check."),
-        event(6, "assistant_output_delta", {"content_delta": "Done."}),
-        answer(7, "Done."),
-        completed(8),
+        *(
+            event(6 + index, "assistant_output_delta", {"content_delta": fragment})
+            for index, fragment in enumerate(fragments)
+        ),
+        answer(6 + len(fragments), text),
+        completed(7 + len(fragments)),
     )
 
     code, out, _err = run_cli("chat", "Check it")
 
     assert code == 0
-    assert out == "Let me check.\nDone.\n"
+    assert out == "Let me check.\n" + ("" if text.strip() == "[SILENT]" else text + "\n")
 
 
 def test_chat_reconnects_to_the_run_after_the_stream_closes_early(
@@ -782,21 +802,31 @@ def test_chat_reconnects_to_the_run_after_the_stream_closes_early(
         ),
     ],
 )
+@pytest.mark.parametrize("prefix", ["", "[SI", "[SILENT]"])
 def test_chat_reports_a_lost_run_stream_without_resending(
     rpc: FakeRpc,
     run_stream: FakeRunStream,
     run_cli: RunCli,
     script: Callable[[FakeRunStream], object],
     connections: int,
+    prefix: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
     reply_run(rpc, "s-new")
+    if prefix:
+        run_stream.connection(event(3, "assistant_output_delta", {"content_delta": prefix}))
     script(run_stream)
 
     code, out, err = run_cli("chat", "Hello")
 
     assert code == 1
-    assert out == ""
-    assert run_stream.queries == [{"after_sequence": 2}] * connections
+    assert out == ("[SI\n" if prefix == "[SI" else "")
+    assert (
+        run_stream.queries
+        == ([{"after_sequence": 2}] if prefix else [])
+        + [{"after_sequence": 3 if prefix else 2}] * connections
+    )
     assert rpc.methods == ["chat.stream"]
     assert f"lost the event stream of Run {RUN_ID}" in err
     assert "check it with vbot chat --session s-new " in err
@@ -865,18 +895,26 @@ def test_chat_followup_preserves_the_resolved_target(
     )
 
 
+@pytest.mark.parametrize("prefix", ["", "[SI", "[SILENT]"])
 def test_chat_ctrl_c_cancels_the_run_and_exits_130(
-    rpc: FakeRpc, run_stream: FakeRunStream, run_cli: RunCli
+    rpc: FakeRpc,
+    run_stream: FakeRunStream,
+    run_cli: RunCli,
+    prefix: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
     reply_run(rpc, "s-new")
     rpc.reply("chat.cancel", {"run_id": RUN_ID, "status": "cancelled"})
     run_stream.connection(
-        event(3, "provider_request_status", {"state": "waiting", "model": MODEL}), interrupt=True
+        event(3, "provider_request_status", {"state": "waiting", "model": MODEL}),
+        *([event(4, "assistant_output_delta", {"content_delta": prefix})] if prefix else []),
+        interrupt=True,
     )
 
     code, out, err = run_cli("chat", "Hello")
 
     assert code == 130
-    assert out == ""
+    assert out == ("[SI\n" if prefix == "[SI" else "")
     assert rpc.params("chat.cancel") == {"run_id": RUN_ID, "reason": "user"}
     assert f"requested cancellation of Run {RUN_ID}" in err

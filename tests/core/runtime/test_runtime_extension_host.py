@@ -24,6 +24,7 @@ from core.permissions import (
 from core.runs import RunAdmission, RunAdmissionBlockedError, RunExecutionOwner
 from core.runtime.runtime import Runtime
 from core.sessions import SessionAddress, ToolResultFacts, ToolResultPayload
+from core.sessions.errors import SessionNotFoundError
 from core.tools import ToolContext
 from core.tools.availability import ToolAccess
 from core.tools.terminal_manager import TerminalOwner
@@ -417,6 +418,18 @@ async def test_owner_groups_run_observably_and_reject_completions_after_close(
         validate = service._completion_delivery._owned_completion_validator  # noqa: SLF001
         assert validate is not None
         validate(binding.address, owner)  # the live group admits its owner
+
+        stale = service.submit_completion(
+            binding.address,
+            notice_id="stale-generation",
+            origin_run_id="old-origin",
+            body="old-generation result",
+            execution_owner=owner,
+            expected_session_generation_id="replaced-generation",
+        )
+        with pytest.raises(SessionNotFoundError):
+            await stale
+        assert runtime.chat_sessions.get(binding.address).load() == []
 
         await groups.close_group("group")
 

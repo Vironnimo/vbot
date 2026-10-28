@@ -35,10 +35,12 @@ from core.runs import (
     MODEL_FALLBACK_ACTIVATED_EVENT,
     MODEL_STEP_USAGE_EVENT,
     PROVIDER_REQUEST_STATUS_EVENT,
+    SILENT_ANSWER,
     STREAM_ATTEMPT_RESTARTED_EVENT,
     TERMINAL_EVENT_TYPES,
     TOOL_CALL_RESULT_EVENT,
     TOOL_CALL_STARTED_EVENT,
+    is_silent_answer,
 )
 from core.sessions import EPHEMERAL_SESSION_LIFETIME
 from core.utils.ids import new_id
@@ -379,6 +381,8 @@ def _accepted_receipt(
     if run_id and available:
         reads["result"] = _rpc_call(instance, "chat.run_result", {**params, "run_id": run_id})
     result = reads.get("result")
+    if result and result.ok and is_silent_answer(result.data.get("content")):
+        result.data = {**result.data, "content": ""}
     message = _text(result.data.get("content")) if result and result.ok else None
     truncated = bool(result and result.ok and result.data.get("truncated"))
     if request.json_output:
@@ -469,6 +473,8 @@ def _run_outcome(
     timeline: _RunTimeline,
     lost: str | None,
 ) -> CommandResult:
+    if lost is not None:
+        timeline.finish_text()
     terminal = timeline.terminal or {}
     status = timeline.status if lost is None else "unknown"
     error = _run_error(timeline) if status in {"failed", "interrupted"} else lost
@@ -555,7 +561,7 @@ def _chat_command(instance: ServerInstance, agent: str, session_id: str, *tail: 
 
 def _cancel_after_interrupt(instance: ServerInstance, run_id: str, timeline: _RunTimeline) -> None:
     """Ctrl-C stops the Run too, not only the local reporting."""
-    timeline.end_text_line()
+    timeline.finish_text()
     payload = _rpc_call(instance, "chat.cancel", {"run_id": run_id, "reason": "user"})
     if payload.ok:
         note = f"chat: requested cancellation of Run {run_id}"
@@ -643,6 +649,7 @@ class _RunTimeline:
         self._request_model: str | None = None
         # Whether the current Model step's text reached stdout through deltas.
         self._step_streamed = False
+        self._pending_text = ""
         self._line_open = False
 
     @property
@@ -665,10 +672,15 @@ class _RunTimeline:
         payload = payload if isinstance(payload, dict) else {}
         if kind == ASSISTANT_OUTPUT_DELTA_EVENT:
             text = payload.get("content_delta")
-            if isinstance(text, str) and text:
-                self._step_streamed = True
-                if self.stream_text:
+            if isinstance(text, str) and text and self.stream_text:
+                if self._step_streamed:
                     self._write(text)
+                else:
+                    self._pending_text += text
+                    if not SILENT_ANSWER.startswith(self._pending_text.strip()):
+                        self._write(self._pending_text)
+                        self._pending_text = ""
+                        self._step_streamed = True
         elif kind == ASSISTANT_OUTPUT_EVENT:
             self._assistant_output(payload.get("message"))
         elif kind == STREAM_ATTEMPT_RESTARTED_EVENT:
@@ -677,6 +689,7 @@ class _RunTimeline:
                     "warning", "The Model restarted its response; the partial text above is void"
                 )
             self._step_streamed = False
+            self._pending_text = ""
         elif kind == TOOL_CALL_STARTED_EVENT:
             self._tool_call_started(payload)
         elif kind == TOOL_CALL_RESULT_EVENT:
@@ -708,8 +721,15 @@ class _RunTimeline:
             self.terminal = payload
             status = payload.get("status")
             self.status = status if isinstance(status, str) else str(kind).removeprefix("run_")
-            self.end_text_line()
+            self.finish_text()
         return self.finished
+
+    def finish_text(self) -> None:
+        """Preserve an unfinished ordinary prefix when following this Run ends."""
+        if self._pending_text and not is_silent_answer(self._pending_text):
+            self._write(self._pending_text)
+        self._pending_text = ""
+        self.end_text_line()
 
     def end_text_line(self) -> None:
         """Finish a partly written line of streamed text."""
@@ -722,11 +742,14 @@ class _RunTimeline:
             if isinstance(model, str) and model:
                 self._answer_model = model
             text = _message_text(message.get("content"))
-            if text:
+            if is_silent_answer(text):
+                self.message = ""
+            elif text:
                 self.message = text
                 if self.stream_text and not self._step_streamed:
                     self._write(text)
         self._step_streamed = False
+        self._pending_text = ""
         self.end_text_line()
 
     def _tool_call_started(self, payload: JsonObject) -> None:

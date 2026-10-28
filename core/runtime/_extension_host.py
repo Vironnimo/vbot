@@ -814,7 +814,16 @@ class ExtensionHostFactory:
         content: str,
         notice_ids: tuple[str, ...],
         on_persisted: Any,
+        *,
+        expected_session_generation_id: str | None = None,
     ) -> Any:
         self._validate_owned_completion(address, owner)
         groups = next(groups for groups in self._temporary_groups if groups.owns(owner))
-        return await groups.continue_completion(address, owner, content, notice_ids, on_persisted)
+        return await groups.continue_completion(
+            address,
+            owner,
+            content,
+            notice_ids,
+            on_persisted,
+            expected_session_generation_id=expected_session_generation_id,
+        )

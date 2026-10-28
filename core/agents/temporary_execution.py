@@ -29,6 +29,7 @@ from core.sessions import (
     SessionChatHistorySnapshot,
     TemporarySessionBinding,
 )
+from core.sessions.errors import SessionNotFoundError
 from core.utils.ids import new_id
 
 if TYPE_CHECKING:
@@ -546,6 +547,8 @@ class TemporaryExecutionGroups:
         content: str,
         notice_ids: tuple[str, ...],
         on_persisted: Callable[[], None],
+        *,
+        expected_session_generation_id: str | None = None,
     ) -> Run:
         """Continue exact lifetime-owned work through the normal admission boundary."""
         self.validate(address, RunAdmission(owner=owner))
@@ -553,6 +556,8 @@ class TemporaryExecutionGroups:
         binding = state.bindings[owner.participant_id]
         request_id = hashlib.sha256("\0".join(sorted(notice_ids)).encode()).hexdigest()
         if address == binding.address:
+            if expected_session_generation_id not in (None, binding.generation_id):
+                raise SessionNotFoundError("The completion's Session was replaced")
             handle = TemporaryGroupHandle(
                 owner.extension, owner.group_id, self._identity.epoch, owner.epoch
             )
@@ -571,6 +576,7 @@ class TemporaryExecutionGroups:
                 content,
                 input_id=f"completion:{request_id}",
                 input_persisted_hook=on_persisted,
+                expected_session_generation_id=expected_session_generation_id,
             ),
         )
 
