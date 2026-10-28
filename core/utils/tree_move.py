@@ -18,7 +18,7 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 
-from core.utils.file_status import is_link_status
+from core.utils.file_status import exists_strict, is_link_status
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("utils.tree_move")
@@ -42,7 +42,7 @@ def move_tree(source: Path, destination: Path) -> None:
     deletion that fails leaves the renamed leftovers next to ``source`` and a
     warning in the log; the move itself has succeeded.
     """
-    if os.path.lexists(destination):
+    if exists_strict(destination, follow_symlinks=False):
         raise FileExistsError(errno.EEXIST, "The destination already exists", str(destination))
     if destination.resolve().is_relative_to(source.resolve()):
         raise OSError(errno.EINVAL, "Cannot move a directory into itself", str(destination))
@@ -58,8 +58,11 @@ def move_tree(source: Path, destination: Path) -> None:
 def _move_across_volumes(source: Path, destination: Path) -> None:
     # A same-directory rename is the one step guaranteed to stay on the source's volume.
     retired = source.with_name(f".{source.name}.moved-{uuid.uuid4().hex}")
+    # Claim the target before cleanup can remove it. Another writer may have
+    # created it after move_tree's check or while the first rename was attempted.
+    destination.mkdir()
     try:
-        copy_tree(source, destination)
+        _copy_tree_contents(source, destination)
         _replace(source, retired)
     except BaseException:
         # ``source`` is intact, so the destination is only a duplicate, whole or partial.
@@ -76,8 +79,14 @@ def copy_tree(source: Path, destination: Path) -> None:
     of the copy and recreated with their targets afterwards instead.
     A failed copy can leave a partial destination; its owner must clean it up.
     """
+    destination.mkdir()
+    _copy_tree_contents(source, destination)
+
+
+def _copy_tree_contents(source: Path, destination: Path) -> None:
+    """Copy into the empty destination the caller exclusively created."""
     if sys.platform != "win32":
-        shutil.copytree(source, destination, symlinks=True)
+        shutil.copytree(source, destination, symlinks=True, dirs_exist_ok=True)
         return
     import _winapi
 
@@ -91,7 +100,9 @@ def copy_tree(source: Path, destination: Path) -> None:
         )
         return left_out
 
-    shutil.copytree(source, destination, symlinks=True, ignore=leave_out_junctions)
+    shutil.copytree(
+        source, destination, symlinks=True, ignore=leave_out_junctions, dirs_exist_ok=True
+    )
     for relative, target in junctions:
         link = destination / relative
         # ``os.readlink`` spells the target with the ``\\?\`` prefix, which
