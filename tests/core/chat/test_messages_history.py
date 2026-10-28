@@ -40,16 +40,24 @@ def _tool_batch(
     return carrier, result
 
 
-def test_ordinals_derive_from_append_order() -> None:
+@pytest.mark.parametrize("reused_id", [False, True])
+def test_ordinals_derive_from_append_order(reused_id: bool) -> None:
     first = _checkpoint("First")
     second = _checkpoint("Second")
+    if reused_id:
+        second = replace(second, id=first.id)
     without_checkpoint = [ChatMessage.user("before")]
     messages = [*without_checkpoint, first, ChatMessage.user("between"), second]
 
     assert effective_compaction_messages(without_checkpoint) == without_checkpoint
-    assert checkpoint_ordinal(messages, first.id) == 1
+    assert checkpoint_ordinal(messages, first.id) == (2 if reused_id else 1)
     assert checkpoint_ordinal(messages, second.id) == 2
     assert checkpoint_ordinal(messages, "missing") is None
+    after = ChatMessage.user("after")
+    assert effective_compaction_messages([*messages, after]) == [
+        *[ChatMessage.from_dict(entry) for entry in second.projection or []],
+        after,
+    ]
 
 
 @pytest.mark.parametrize(

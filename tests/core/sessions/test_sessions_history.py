@@ -242,6 +242,10 @@ def test_edit_targets_only_an_own_plain_text_user_message_after_the_latest_takeo
     takeover = ChatMessage.agent_takeover(from_address="alpha", to_address="beta")
     with pytest.raises(ChatSessionError, match="takeover"):
         editable_session_message_index([first, takeover], first.id)
+    reused = replace(replacement, id=first.id)
+    # Public ids do not identify a unique sequence. The newest current User
+    # entry remains editable, matching the store even across a takeover.
+    assert editable_session_message_index([first, takeover, reused], first.id) == 2
 
 
 @pytest.mark.asyncio

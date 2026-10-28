@@ -29,8 +29,15 @@ if TYPE_CHECKING:
 def editable_session_message_index(messages: Sequence[ChatMessage], message_id: str | None) -> int:
     if not isinstance(message_id, str) or not message_id:
         raise ChatSessionError("history edit target must be a non-empty message id")
+    # Match the store's edit target: the newest current User entry with this
+    # public id. Imported/materialized ids are not a unique history position.
     index = next(
-        (index for index, message in enumerate(messages) if message.id == message_id), None
+        (
+            index
+            for index in range(len(messages) - 1, -1, -1)
+            if messages[index].id == message_id and messages[index].role == "user"
+        ),
+        None,
     )
     if index is None:
         raise ChatSessionError(f"history edit target is not active: {message_id}")

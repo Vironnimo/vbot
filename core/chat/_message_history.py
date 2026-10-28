@@ -234,13 +234,14 @@ def latest_compaction_checkpoint(
 def checkpoint_ordinal(messages: Sequence[_records.ChatMessage], checkpoint_id: str) -> int | None:
     """Return a checkpoint's one-based chronological ordinal."""
     ordinal = 0
+    matched = None
     for message in messages:
         if message.role != "compaction_checkpoint":
             continue
         ordinal += 1
         if message.id == checkpoint_id:
-            return ordinal
-    return None
+            matched = ordinal
+    return matched
 
 
 def finalize_checkpoint_guidance(
@@ -273,13 +274,17 @@ def effective_compaction_messages(
 ) -> list[_records.ChatMessage]:
     """Return Model context, excluding persisted programmatic Tool activity."""
     messages = [message for message in messages if not message.programmatic]
-    checkpoint = latest_compaction_checkpoint(messages)
-    if checkpoint is None:
-        return messages
     checkpoint_index = next(
-        (index for index, message in enumerate(messages) if message.id == checkpoint.id),
-        len(messages),
+        (
+            index
+            for index in range(len(messages) - 1, -1, -1)
+            if messages[index].role == "compaction_checkpoint"
+        ),
+        None,
     )
+    if checkpoint_index is None:
+        return messages
+    checkpoint = messages[checkpoint_index]
     if checkpoint.projection is None:
         raise ChatMessageValidationError("compaction checkpoints require a projection")
     projection = [
