@@ -186,10 +186,11 @@ def test_a_repetition_records_its_highest_score() -> None:
 @pytest.mark.parametrize(
     ("repetition", "expected"),
     [
-        ((0.08,), None),  # An isolated marginal peak cannot trigger the real engine.
-        ((0.08, 0.08), 0.95),  # Two marginal crossings do confirm.
-        ((0.21,), 0.95),  # A strong isolated peak confirms above threshold + 0.15.
-        ((0.4,), 0.8),
+        # Below the recommendable floor even where two crossings would confirm.
+        ((0.08, 0.08), None),
+        ((0.3,), None),  # Isolated, it confirms only below the floor.
+        ((0.3, 0.3), 0.8),  # Two marginal crossings do confirm.
+        ((0.6,), 0.7),  # A strong isolated peak confirms up to peak - 0.15.
     ],
 )
 def test_recommendation_respects_the_detectors_confirmation(
@@ -250,10 +251,9 @@ def test_percentile_interpolates_between_ordered_values() -> None:
 @pytest.mark.parametrize(
     ("noise_level", "phrase_peaks"),
     [
-        (0.0, [0.08, 0.1, 0.12, 0.09, 0.11]),
         (0.03, [0.6, 0.7, 0.8, 0.65, 0.75]),
         (0.31, [0.48, 0.55, 0.62, 0.50, 0.58]),
-        (0.0, [0.15, 0.9, 0.9, 0.9, 0.9]),
+        (0.0, [0.25, 0.9, 0.9, 0.9, 0.9]),
     ],
 )
 def test_recommended_threshold_uses_a_supported_step_between_noise_and_phrase(
@@ -265,13 +265,20 @@ def test_recommended_threshold_uses_a_supported_step_between_noise_and_phrase(
     threshold = 1.0 - sensitivity
 
     assert sensitivity / 0.05 == pytest.approx(round(sensitivity / 0.05))
-    assert threshold >= noise_level + 0.02 - 1e-9
+    assert threshold >= max(0.2, noise_level + 0.02) - 1e-9
     assert threshold <= min(phrase_peaks) - 0.02 + 1e-9
 
 
 @pytest.mark.parametrize(
     ("noise", "peaks"),
-    [(0.0, [0.05] * REQUIRED_SAMPLES), (0.4, [0.4] * REQUIRED_SAMPLES), (0.0, [])],
+    [
+        (0.0, [0.05] * REQUIRED_SAMPLES),
+        # A phrase the head barely recognizes; the floor refuses a threshold near 0.
+        (0.0, [0.08, 0.1, 0.12, 0.09, 0.11]),
+        (0.0, [0.15, 0.9, 0.9, 0.9, 0.9]),
+        (0.4, [0.4] * REQUIRED_SAMPLES),
+        (0.0, []),
+    ],
 )
 def test_no_recommendation_without_room_between_noise_and_phrase(
     noise: float, peaks: list[float]

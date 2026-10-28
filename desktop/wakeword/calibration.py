@@ -48,6 +48,10 @@ PHRASE_MARGIN = 0.02
 THRESHOLD_GAP_RATIO = 0.5
 SENSITIVITY_STEP = 0.05
 NOISE_WARNING_LEVEL = 0.30
+# Lowest threshold a calibration recommends. Below it, speech that only sounds
+# similar triggers: "hey nabu" alone scores 0.06 on the okay_nabu head, so a
+# phrase this weak cannot be told apart from related speech.
+MIN_RECOMMENDED_THRESHOLD = 0.20
 SUPPORTED_THRESHOLDS = tuple(round(step * SENSITIVITY_STEP, 2) for step in range(1, 20))
 
 
@@ -72,7 +76,8 @@ def recommended_sensitivity(
 
     The threshold keeps :data:`NOISE_MARGIN` above the noise level and
     :data:`PHRASE_MARGIN` below the weakest peak, never above the threshold
-    each repetition actually confirmed. Among the supported
+    each repetition actually confirmed and never below
+    :data:`MIN_RECOMMENDED_THRESHOLD`. Among the supported
     :data:`SENSITIVITY_STEP` steps in that window takes the one closest to the
     :data:`THRESHOLD_GAP_RATIO` point of the median gap. Returns ``1 - threshold``,
     or ``None`` when no supported threshold satisfies those constraints.
@@ -81,9 +86,8 @@ def recommended_sensitivity(
         return None
     reference_phrase = median(phrase_peaks)
     separation = max(0.0, reference_phrase - noise_level)
-    minimum_threshold = 1.0 - MAX_SENSITIVITY
     maximum_threshold = 1.0 - MIN_SENSITIVITY
-    minimum_reliable_threshold = max(minimum_threshold, noise_level + NOISE_MARGIN)
+    minimum_reliable_threshold = max(MIN_RECOMMENDED_THRESHOLD, noise_level + NOISE_MARGIN)
     maximum_reliable_threshold = min(
         maximum_threshold, min(phrase_peaks) - PHRASE_MARGIN, detection_limit
     )
