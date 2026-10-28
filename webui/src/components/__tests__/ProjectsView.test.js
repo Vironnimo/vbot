@@ -565,152 +565,187 @@ describe('ProjectsView list and selection', () => {
 describe('ProjectsView Project settings', () => {
   const view = setupProjectsViewSuite();
 
-  it('keeps shared Memory editable while disabled and reverts a Project revision', async () => {
-    const onToast = vi.fn();
-    let record = serveProject();
-    listProjectsMock.mockImplementation(async () => ({ projects: [record] }));
-    showProjectMock.mockImplementation(async () => ({
-      project: record,
-      scan: cleanScan(),
-    }));
-    let entries = [
-      { id: 1, scope: 'project', content: 'Discuss rollout first.' },
-    ];
-    const response = () => ({
-      project_id: 'demo',
-      scopes: { project: entries },
-    });
-    const catalogs = rpcMock.getMockImplementation();
-    rpcMock.mockImplementation(async (method, params) => {
-      if (!method.startsWith('memory.')) return catalogs(method, params);
-      expect(params.project_id).toBe('demo');
-      expect(params).not.toHaveProperty('agent_id');
-      if (method === 'memory.add')
-        entries = [
-          ...entries,
-          { id: 2, scope: 'project', content: params.content },
-        ];
-      if (method === 'memory.replace')
-        entries = entries.map((entry) =>
-          entry.id === params.entry_id
-            ? { ...entry, content: params.content }
-            : entry,
-        );
-      if (method === 'memory.remove')
-        entries = entries.filter((entry) => entry.id !== params.entry_id);
-      if (method === 'memory.revert')
-        entries = entries.filter((entry) => entry.id !== 2);
-      if (method === 'memory.history')
-        return {
-          project_id: 'demo',
-          total: 1,
-          revisions: [
-            {
-              id: 2,
-              at: '2026-10-25T12:00:00Z',
-              kind: 'edit',
-              changes: [
-                { op: 'added', text: 'Keep rollout approval explicit.' },
-              ],
-            },
-          ],
-        };
-      return response();
-    });
-    setProjectMock.mockImplementation(async (_id, changes) => {
-      record = { ...record, ...changes };
-      return { project: record, scan: cleanScan() };
-    });
-    view.mount({ onToast });
-    await selectDemo();
-    expect(
-      toggleByAriaLabel(t('memory.projectEnabled')).getAttribute(
-        'aria-checked',
-      ),
-    ).toBe('true');
-    expect(rpcCalls('memory.list')).toBe(0);
-    toggleByAriaLabel(t('memory.projectEnabled')).click();
-    flushSync();
-    await waitForCondition(() =>
-      document.querySelector('[data-testid="project-save-demo"]'),
-    );
-    buttonByTestId('project-save-demo').click();
-    await waitForCondition(() => setProjectMock.mock.calls.length === 1);
-    expect(setProjectMock).toHaveBeenCalledWith('demo', {
-      memory_enabled: false,
-    });
+  it.each(['late success', 'early failure'])(
+    'keeps shared Memory editable and reconciles a refresh with %s',
+    async (refreshOutcome) => {
+      const onToast = vi.fn();
+      const props = reactiveProps({ onToast, memoriesRefreshToken: 0 });
+      const replacing = Promise.withResolvers();
+      const refreshing = Promise.withResolvers();
+      let deferMemoryRead = false;
+      let record = serveProject();
+      listProjectsMock.mockImplementation(async () => ({ projects: [record] }));
+      showProjectMock.mockImplementation(async () => ({
+        project: record,
+        scan: cleanScan(),
+      }));
+      let entries = [
+        { id: 1, scope: 'project', content: 'Discuss rollout first.' },
+      ];
+      const response = () => ({
+        project_id: 'demo',
+        scopes: { project: entries },
+      });
+      const catalogs = rpcMock.getMockImplementation();
+      rpcMock.mockImplementation(async (method, params) => {
+        if (!method.startsWith('memory.')) return catalogs(method, params);
+        expect(params.project_id).toBe('demo');
+        expect(params).not.toHaveProperty('agent_id');
+        if (method === 'memory.list' && deferMemoryRead)
+          return refreshing.promise;
+        if (method === 'memory.add')
+          entries = [
+            ...entries,
+            { id: 2, scope: 'project', content: params.content },
+          ];
+        if (method === 'memory.replace') {
+          await replacing.promise;
+          entries = entries.map((entry) =>
+            entry.id === params.entry_id
+              ? { ...entry, content: params.content }
+              : entry,
+          );
+        }
+        if (method === 'memory.remove')
+          entries = entries.filter((entry) => entry.id !== params.entry_id);
+        if (method === 'memory.revert')
+          entries = entries.filter((entry) => entry.id !== 2);
+        if (method === 'memory.history')
+          return {
+            project_id: 'demo',
+            total: 1,
+            revisions: [
+              {
+                id: 2,
+                at: '2026-10-25T12:00:00Z',
+                kind: 'edit',
+                changes: [
+                  { op: 'added', text: 'Keep rollout approval explicit.' },
+                ],
+              },
+            ],
+          };
+        return response();
+      });
+      setProjectMock.mockImplementation(async (_id, changes) => {
+        record = { ...record, ...changes };
+        return { project: record, scan: cleanScan() };
+      });
+      view.mount(props);
+      await selectDemo();
+      expect(
+        toggleByAriaLabel(t('memory.projectEnabled')).getAttribute(
+          'aria-checked',
+        ),
+      ).toBe('true');
+      expect(rpcCalls('memory.list')).toBe(0);
+      toggleByAriaLabel(t('memory.projectEnabled')).click();
+      flushSync();
+      await waitForCondition(() =>
+        document.querySelector('[data-testid="project-save-demo"]'),
+      );
+      buttonByTestId('project-save-demo').click();
+      await waitForCondition(() => setProjectMock.mock.calls.length === 1);
+      expect(setProjectMock).toHaveBeenCalledWith('demo', {
+        memory_enabled: false,
+      });
 
-    buttonWithTextContent(t('memory.manage')).click();
-    await waitForCondition(() =>
-      document.querySelector('.agents-view__memory-entry-content'),
-    );
-    const scope = document.querySelector('.agents-view__memory-scope');
-    expect(
-      scope.classList.contains('agents-view__memory-scope--inactive'),
-    ).toBe(true);
-    buttonWithTextContent(t('common.edit'), scope).click();
-    flushSync();
-    const edit = scope.querySelector(
-      'textarea[aria-label="Edit Memory entry"]',
-    );
-    edit.value = 'Agree on rollout before deployment.';
-    edit.dispatchEvent(new Event('input', { bubbles: true }));
-    flushSync();
-    buttonWithTextContent(t('common.save'), scope).click();
-    await waitForCondition(() =>
-      scope.textContent.includes('Agree on rollout before deployment.'),
-    );
-    expect(rpcMock).toHaveBeenCalledWith('memory.replace', {
-      project_id: 'demo',
-      scope: 'project',
-      entry_id: 1,
-      content: 'Agree on rollout before deployment.',
-    });
+      buttonWithTextContent(t('memory.manage')).click();
+      await waitForCondition(() =>
+        document.querySelector('.agents-view__memory-entry-content'),
+      );
+      const scope = document.querySelector('.agents-view__memory-scope');
+      expect(
+        scope.classList.contains('agents-view__memory-scope--inactive'),
+      ).toBe(true);
+      buttonWithTextContent(t('common.edit'), scope).click();
+      flushSync();
+      const edit = scope.querySelector(
+        'textarea[aria-label="Edit Memory entry"]',
+      );
+      edit.value = 'Agree on rollout before deployment.';
+      edit.dispatchEvent(new Event('input', { bubbles: true }));
+      flushSync();
+      buttonWithTextContent(t('common.save'), scope).click();
+      // A refresh admitted while the write is pending must not later replace
+      // the mutation's authoritative result with its earlier list snapshot.
+      const staleResponse = structuredClone(response());
+      deferMemoryRead = true;
+      props.memoriesRefreshToken += 1;
+      flushSync();
+      await waitForCondition(() => rpcCalls('memory.list') === 2);
+      const editor = scope.closest('.memory-editor');
+      if (refreshOutcome === 'early failure') {
+        refreshing.reject(new Error('Read failed before the write completed'));
+        await waitForCondition(() => editor.querySelector('[role="alert"]'));
+      }
+      replacing.resolve();
+      await waitForCondition(() =>
+        scope.textContent.includes('Agree on rollout before deployment.'),
+      );
+      if (refreshOutcome === 'late success') refreshing.resolve(staleResponse);
+      deferMemoryRead = false;
+      await refreshing.promise.catch(() => {});
+      await wait(0);
+      flushSync();
+      expect(scope.textContent).toContain(
+        'Agree on rollout before deployment.',
+      );
+      expect(editor.querySelector('[role="alert"]')).toBeNull();
+      expect(rpcMock).toHaveBeenCalledWith('memory.replace', {
+        project_id: 'demo',
+        scope: 'project',
+        entry_id: 1,
+        content: 'Agree on rollout before deployment.',
+      });
 
-    const add = scope.querySelector(
-      'textarea[aria-label="New Project Memory entry"]',
-    );
-    add.value = 'Keep rollout approval explicit.';
-    add.dispatchEvent(new Event('input', { bubbles: true }));
-    flushSync();
-    buttonWithTextContent(t('memory.add'), scope).click();
-    await waitForCondition(
-      () => scope.querySelectorAll('.agents-view__memory-entry').length === 2,
-    );
-    buttonWithTextContent(t('memory.history.show')).click();
-    await waitForCondition(() =>
-      document.querySelector('.memory-history__revisions'),
-    );
-    buttonWithTextContent(t('memory.history.revert')).click();
-    flushSync();
-    confirmDialog(t('memory.history.revert'));
-    await waitForCondition(
-      () => scope.querySelectorAll('.agents-view__memory-entry').length === 1,
-    );
-    expect(rpcMock).toHaveBeenCalledWith('memory.revert', {
-      project_id: 'demo',
-      revisions: [2],
-    });
-    expect(scope.textContent).toContain('Agree on rollout before deployment.');
+      const add = scope.querySelector(
+        'textarea[aria-label="New Project Memory entry"]',
+      );
+      add.value = 'Keep rollout approval explicit.';
+      add.dispatchEvent(new Event('input', { bubbles: true }));
+      flushSync();
+      buttonWithTextContent(t('memory.add'), scope).click();
+      await waitForCondition(
+        () => scope.querySelectorAll('.agents-view__memory-entry').length === 2,
+      );
+      buttonWithTextContent(t('memory.history.show')).click();
+      await waitForCondition(() =>
+        document.querySelector('.memory-history__revisions'),
+      );
+      buttonWithTextContent(t('memory.history.revert')).click();
+      flushSync();
+      confirmDialog(t('memory.history.revert'));
+      await waitForCondition(
+        () => scope.querySelectorAll('.agents-view__memory-entry').length === 1,
+      );
+      expect(rpcMock).toHaveBeenCalledWith('memory.revert', {
+        project_id: 'demo',
+        revisions: [2],
+      });
+      expect(scope.textContent).toContain(
+        'Agree on rollout before deployment.',
+      );
 
-    buttonWithTextContent(t('common.delete'), scope).click();
-    flushSync();
-    confirmDialog(t('memory.deleteConfirmAction'));
-    await waitForCondition(
-      () => scope.querySelectorAll('.agents-view__memory-entry').length === 0,
-    );
-    expect(rpcMock).toHaveBeenCalledWith('memory.remove', {
-      project_id: 'demo',
-      scope: 'project',
-      entry_id: 1,
-    });
-    expect(onToast.mock.calls.map(([toast]) => toast)).toEqual([
-      { title: t('memory.updated'), variant: 'success' },
-      { title: t('memory.saved'), variant: 'success' },
-      { title: t('memory.history.reverted'), variant: 'success' },
-      { title: t('memory.deleted'), variant: 'success' },
-    ]);
-  });
+      buttonWithTextContent(t('common.delete'), scope).click();
+      flushSync();
+      confirmDialog(t('memory.deleteConfirmAction'));
+      await waitForCondition(
+        () => scope.querySelectorAll('.agents-view__memory-entry').length === 0,
+      );
+      expect(rpcMock).toHaveBeenCalledWith('memory.remove', {
+        project_id: 'demo',
+        scope: 'project',
+        entry_id: 1,
+      });
+      expect(onToast.mock.calls.map(([toast]) => toast)).toEqual([
+        { title: t('memory.updated'), variant: 'success' },
+        { title: t('memory.saved'), variant: 'success' },
+        { title: t('memory.history.reverted'), variant: 'success' },
+        { title: t('memory.deleted'), variant: 'success' },
+      ]);
+    },
+  );
 
   it('shows each Source in the section that uses it, keeps migrated Agent paths on a switch and expands them explicitly', async () => {
     const sources = [
