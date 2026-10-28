@@ -7,8 +7,8 @@ the result. There, in this order: whether this Python runs the SQLite the packag
 bundle, Ruff format check and lint, mypy for Windows and Linux as the commit hook
 runs it, the complete pytest suite on every core of the machine's test core pool,
 and the WebUI's format check, lint, Vitest and build.
-On Windows the complete pytest suite also runs on Linux in WSL, using the ordinary
-local worker budget inside a 3 GiB memory limit, alongside the WebUI checks
+On Windows the complete pytest suite also runs on Linux in WSL, using one worker
+inside a 3 GiB memory limit, alongside the WebUI checks
 (``scripts/linux/push_tests.sh``); without WSL and a systemd user manager it fails.
 Independent steps still run after a failure. Backend tests that fail run once more
 alone for diagnosis; a passing retry never clears the original failure.

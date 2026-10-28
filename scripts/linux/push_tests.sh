@@ -65,13 +65,11 @@ except (OSError, ValueError):
     pass'
 }
 
-# Each worker loads the full suite and its dependencies into the WSL VM. Use the
-# ordinary local worker budget (two), rather than multiplying that RAM by every
-# available core. The complete suite and the shared core pool still apply.
-workers=$("$python" -c 'from tests import cpu_pool; print(min(cpu_pool.LOCAL_AUTO_WORKERS, cpu_pool.pool_size()))') \
-    || fail "the test core pool size could not be read"
+# One worker keeps the full suite's retained state below this run's memory high
+# watermark. Two workers can spend most of the run reclaiming memory instead of
+# testing. The complete suite and the shared core pool still apply.
 status=0
-"$python" -m pytest -n "$workers" -rfE -q --no-header || status=$?
+"$python" -m pytest -n 1 -rfE -q --no-header || status=$?
 [ "$status" -eq 1 ] || exit "$status"
 failed=$(last_failed)
 [ -n "$failed" ] || exit 1
