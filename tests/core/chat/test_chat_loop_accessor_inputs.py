@@ -11,9 +11,10 @@ import pytest
 
 from core.activity import SessionActivity
 from core.chat.errors import ChatError
-from core.chat.messages import ReplySurface
+from core.chat.messages import ChatMessage, ReplySurface
 from core.chat.session_peers import SessionPeers
 from core.runs import ChatRunManager, RunAdmission, RunCancelledError, RunKind
+from core.sessions import ChatSession
 from core.sessions.errors import AccessorInputConflictError, SessionNotFoundError
 from core.tools import ToolRegistry
 from core.tools.session import register_session_tool
@@ -102,6 +103,85 @@ async def test_retried_new_session_input_reuses_the_session_and_run(tmp_path):
         history = runtime.chat_sessions.get(first.record.address).load()
         assert [message.content for message in history if message.role == "user"] == ["original"]
         assert len(adapter.requests) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("note_format", ["text", "prepared", "legacy-queued"])
+async def test_failed_input_append_preserves_accepted_input_and_its_context_once(
+    tmp_path, monkeypatch, note_format
+):
+    adapter = StubAdapter([{"content": "continued"}])
+    async with _harness(tmp_path, adapter) as (runtime, loop):
+        append = ChatSession.append_many_async
+        failed = False
+
+        async def fail_first_user_append(session, messages, **kwargs):
+            nonlocal failed
+            if not failed and any(message.role == "user" for message in messages):
+                failed = True
+                raise RuntimeError("input append failed")
+            return await append(session, messages, **kwargs)
+
+        monkeypatch.setattr(ChatSession, "append_many_async", fail_first_user_append)
+        note = "ACCEPTED_CONTEXT_SENTINEL"
+        if note_format == "legacy-queued":
+            session = runtime.chat_sessions.create("coder")
+            carrier = ChatMessage.user("accepted input")
+            saved_note = ChatMessage.note(note)
+            await runtime.chat_sessions.accept_accessor_input_async(
+                session.address,
+                "failed-input",
+                request_hash="original",
+                queue_id="legacy-queue",
+                payload={
+                    "format_version": 1,
+                    "message": carrier.to_dict(),
+                    "context_note": note,
+                    "reply_surface": None,
+                    "working_project_id": None,
+                    "steering": False,
+                },
+                fallback_input=carrier,
+                fallback_notes=(saved_note,),
+            )
+            await loop.restore_accessor_inputs()
+            restored = runtime.chat_runs.active_run(
+                agent_id="coder", session_id=session.id, project_id=None
+            )
+            assert restored is not None
+            await restored.wait_admitted()
+            submission = await loop.lookup_accessor_input("failed-input", request_hash="original")
+        else:
+            submission = await loop.submit_accessor_input(
+                "coder",
+                "accepted input",
+                input_id="failed-input",
+                request_hash="original",
+                new_session=True,
+                context_note=ChatMessage.note(note) if note_format == "prepared" else note,
+            )
+        assert submission is not None and submission.run is not None
+        with pytest.raises(RuntimeError):
+            await submission.run.wait()
+        session = runtime.chat_sessions.get(submission.record.address)
+        history = session.load_active()
+        assert [message.content for message in history if message.role == "user"] == [
+            "accepted input"
+        ]
+        assert [message.content for message in history if message.role == "note"] == [note]
+        if note_format == "legacy-queued":
+            assert (
+                next(message for message in history if message.role == "note").id == saved_note.id
+            )
+        retry = await loop.lookup_accessor_input("failed-input", request_hash="original")
+        assert retry is not None and retry.run is submission.run
+        assert retry.record.run_status == "failed"
+
+        # The next real request sees the accepted task and its context once.
+        result = await loop.send("coder", "continue", session_id=session.id)
+        assert result.content == "continued"
+        request = json.dumps(adapter.requests[0]["messages"])
+        assert request.count(note) == 1
 
 
 @pytest.mark.asyncio

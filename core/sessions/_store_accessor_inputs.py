@@ -11,7 +11,7 @@ import sqlite3
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
-from core.chat.errors import ChatSessionError
+from core.chat.errors import ChatMessageValidationError, ChatSessionError
 from core.sessions import _store_queries, _store_values
 from core.sessions._types import AccessorInputRecord, JsonObject, SessionAddress
 from core.sessions.errors import (
@@ -30,7 +30,7 @@ _COLUMNS = (
     "i.input_key, i.input_id, i.request_hash, i.queue_id, i.state AS input_state, "
     "i.created_at, i.run_key, p.payload_json, s.session_key, s.project_id, "
     "s.agent_id, s.session_id, s.generation_id, s.state AS session_state, "
-    "r.run_id, r.status AS run_status, "
+    "r.run_id, r.status AS run_status, c.notes_json AS fallback_notes_json, "
     "(SELECT json_group_array(a.attachment_id) FROM session_accessor_input_attachments AS a "
     "WHERE a.input_key = i.input_key) AS attachment_ids_json "
 )
@@ -39,6 +39,7 @@ _FROM = (
     "JOIN session_accessor_input_payloads AS p ON p.input_key = i.input_key "
     "JOIN sessions AS s ON s.session_key = i.session_key "
     "LEFT JOIN runs AS r ON r.run_key = i.run_key "
+    "LEFT JOIN session_accessor_input_carriers AS c ON c.input_key = i.input_key "
 )
 
 
@@ -90,7 +91,25 @@ def decode(row: sqlite3.Row) -> AccessorInputRecord:
         live=row["session_state"] == "live",
         run_status=None if row["run_status"] is None else str(row["run_status"]),
         attachment_ids=tuple(sorted(json.loads(str(row["attachment_ids_json"])))),
+        fallback_notes=_decode_notes(row["fallback_notes_json"]),
     )
+
+
+def _decode_notes(value: str | None) -> tuple[ChatMessage, ...]:
+    from core.chat.messages import ChatMessage
+
+    if value is None:
+        return ()
+    try:
+        records = json.loads(value)
+        if not isinstance(records, list):
+            raise ValueError("not a Note batch")
+        notes = tuple(ChatMessage.from_dict(record) for record in records)
+        if any(note.role != "note" for note in notes):
+            raise ValueError("not a Note carrier")
+    except (TypeError, ValueError, KeyError, ChatMessageValidationError) as exc:
+        raise SessionStoreCorruptError("Stored Accessor fallback Notes are invalid") from exc
+    return notes
 
 
 def accept(
@@ -356,11 +375,23 @@ def materialize_unwritten_input(
         message = ChatMessage.from_dict(json.loads(str(row["message_json"])))
         if message.role != "user":
             raise ValueError("not a User carrier")
-        notes = [ChatMessage.from_dict(value) for value in json.loads(str(row["notes_json"]))]
-        if any(note.role != "note" for note in notes):
-            raise ValueError("not a Note carrier")
+        saved_notes = _decode_notes(str(row["notes_json"]))
     except (TypeError, ValueError, KeyError) as exc:
         raise SessionStoreCorruptError("Stored Accessor fallback carrier is invalid") from exc
+    # Input preparation may have flushed its deferred Notes before failing to
+    # append the User carrier. Preserve them once when settling or recovering
+    # the Run, scoped to its actual membership rather than a public id alone.
+    notes = [
+        note
+        for note in saved_notes
+        if connection.execute(
+            "SELECT 1 FROM entries AS e JOIN runs AS r ON r.run_key = e.run_key "
+            "WHERE r.session_key = ? AND r.run_id = ? AND e.role = 'note' "
+            "AND e.entry_id = ? LIMIT 1",
+            (state["session_key"], run_id, note.id),
+        ).fetchone()
+        is None
+    ]
     _store_mutations.append_messages(connection, address, [*notes, message], run_id=run_id)
     return True
 

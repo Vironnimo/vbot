@@ -213,7 +213,11 @@ class AccessorInputs:
         _ensure_provider_exists(deps.providers, provider_id)
         content = masked_content(content, deps.secret_masker)
         if isinstance(context_note, str):
-            context_note = deps.secret_masker.mask(context_note)
+            # Execution and the crash/terminal fallback share the same Note
+            # identity, including when the input append itself never succeeds.
+            context_note = (
+                ChatMessage.note(deps.secret_masker.mask(context_note)) if context_note else None
+            )
         elif context_note is not None and isinstance(context_note.content, str):
             context_note = replace(
                 context_note, content=deps.secret_masker.mask(context_note.content)
@@ -299,7 +303,10 @@ class AccessorInputs:
         event_loop = asyncio.get_running_loop()
         # Decode every payload before starting any task: malformed durable data
         # fails recovery without dropping accepted work or partially admitting it.
-        prepared = [(record, _request(record.payload)) for record in records]
+        prepared = [
+            (record, _request(record.payload, fallback_notes=record.fallback_notes))
+            for record in records
+        ]
         prepared.sort(key=lambda pair: not bool(pair[0].payload.get("steering")))
         inputs: list[tuple[SessionAddress, QueuedRunItem]] = []
         for record, request in prepared:
@@ -457,7 +464,7 @@ def _payload(request: _RunRequest, working_project_id: str | None) -> dict[str, 
     }
 
 
-def _request(payload: dict[str, Any]) -> _RunRequest:
+def _request(payload: dict[str, Any], *, fallback_notes: Sequence[ChatMessage] = ()) -> _RunRequest:
     if payload.get("format_version") != 1:
         raise ChatError("unsupported accepted-input payload version")
     message = ChatMessage.from_dict(payload["message"])
@@ -467,6 +474,10 @@ def _request(payload: dict[str, Any]) -> _RunRequest:
     if surface not in (None, "webui", "tui"):
         raise ChatError("accepted input has an invalid reply surface")
     note = payload.get("context_note")
+    if isinstance(note, str):
+        # Older accepted inputs kept text here and the prepared Note only in
+        # their canonical fallback. Reuse that identity when restoring them.
+        note = next((saved for saved in fallback_notes if saved.content == note), note)
     return _RunRequest(
         content=message.content,
         sender=message.sender,
