@@ -16,6 +16,7 @@ from core.channels.config import (
     ChannelConfigError,
 )
 from core.channels.engine import ChannelConversationEngine
+from core.channels.mail import InboundMailSink
 from core.channels.state import ChannelStateStore
 from core.extensions import InteractionEvent, InteractionResponder
 
@@ -34,7 +35,20 @@ def create_adapter(
     chat_migration_persister: Callable[..., None],
     interaction_dispatcher: Callable[[InteractionEvent, InteractionResponder], Awaitable[bool]]
     | None,
+    mail_sink: Callable[[], InboundMailSink | None],
 ) -> ChannelAdapter:
+    if config.platform == "email":
+        from core.channels.email import EmailChannelAdapter
+
+        return EmailChannelAdapter(
+            config,
+            engine_for(config),
+            credential_resolver,
+            attachment_store=attachment_store,
+            received_messages=state,
+            mail_state=state.email,
+            mail_sink=mail_sink,
+        )
     if config.platform in {"slack", "mattermost", "whatsapp"}:
         from core.channels.mattermost import MattermostChannelAdapter
         from core.channels.slack import SlackChannelAdapter

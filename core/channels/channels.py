@@ -484,6 +484,9 @@ class ChannelService:
                 raise ChannelConfigError(f"Unsupported channel fields: {joined}")
             if not fields:
                 return
+            if fields.get("platform", "email") != "email" and "email" not in fields:
+                # The mail account belongs to the email platform only.
+                fields = {**fields, "email": None}
             updated = replace(config, **fields)
             updated.validate()
             self._validate_agent_exists(updated.agent_id)
@@ -691,13 +694,17 @@ class ChannelService:
             channel_root=self._channel_root,
             chat_migration_persister=self.record_chat_id_migration,
             interaction_dispatcher=self._interaction_dispatcher,
+            mail_sink=lambda: self._mail_sink,
         )
 
     def connection_status(self, channel_id: str) -> dict[str, Any]:
         from core.channels._network_adapter import NetworkChannelAdapter
+        from core.channels.email import EmailChannelAdapter
 
         adapter = self._connections.adapter(_normalize_channel_id(channel_id))
-        return adapter.connection_status() if isinstance(adapter, NetworkChannelAdapter) else {}
+        if isinstance(adapter, (NetworkChannelAdapter, EmailChannelAdapter)):
+            return adapter.connection_status()
+        return {}
 
     async def whatsapp_status(self, channel_id: str) -> dict[str, Any]:
         from core.channels._network_adapter import channel_io

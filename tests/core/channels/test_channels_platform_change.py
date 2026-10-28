@@ -16,6 +16,7 @@ from core.channels import (
     ChannelService,
     ChannelStorage,
 )
+from core.channels._email_state import MailboxWatermark, MailThread
 from core.channels.adapter import RunButtonBinding
 from core.channels.state import ChannelStateStore
 from core.utils.timestamps import utc_now_timestamp
@@ -39,6 +40,8 @@ _STATE_TABLES = (
     "channel_run_buttons",
     "channel_received",
     "channel_polling",
+    "channel_email_mailboxes",
+    "channel_email_messages",
 )
 _FILLED = {**dict.fromkeys(_STATE_TABLES, 1), "channel_conversations": 2}
 # After a platform change only the shared direct conversation keeps its pointer.
@@ -72,6 +75,8 @@ async def _fill(service: ChannelService) -> None:
     state.point_conversation(_CHANNEL, "ch-tg-assistant--100", "group", "ses_group")
     state.point_conversation(_CHANNEL, _MAIN, "direct", "ses_main")
     state.save_update_offset(_CHANNEL, _BOT, 42)
+    state.email.save_watermark(_CHANNEL, "INBOX", MailboxWatermark("imap/bot", 1, 7))
+    state.email.record_message(_CHANNEL, "<a@example.com>", MailThread("Hi", ()), outbound=False)
     state.save_run_button_binding(
         _CHANNEL,
         RunButtonBinding(

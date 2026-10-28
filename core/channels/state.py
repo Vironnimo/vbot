@@ -4,8 +4,9 @@
 configuration: the registry of known Channels with their own platform
 identity, per-group admins and seen participants, the conversation routing
 pointers, Run-button origin bindings, the inbound receipt window of the
-socket platforms, the replies a Channel still owes its conversations and the
-Telegram polling watermark.
+socket platforms, the replies a Channel still owes its conversations, the
+Telegram polling watermark and, through ``email``, the email mailbox
+watermarks and recent mails.
 
 Every state row belongs to a registered Channel. Writes for an unregistered
 Channel are refused, so a late save cannot recreate state after the Channel was
@@ -41,6 +42,7 @@ from core.channels._access_state import (
     _load_member_tools,
     _registered_self_user_id,
 )
+from core.channels._email_state import EmailMailState
 from core.channels._member_tools import DEFAULT_MEMBER_TOOLS, normalize_member_tools
 from core.channels._state_schema import DATABASE_NAME, channel_database_spec
 from core.channels.adapter import (
@@ -92,6 +94,8 @@ class ChannelStateStore:
         self._roles: dict[str, _AccessRoles] = {}
         self._run_button_claims_lock = threading.Lock()
         self._run_button_claims: dict[tuple[str, str], int] = {}
+        # Mailbox watermarks and recent mails of email Channels (_email_state.py).
+        self.email = EmailMailState(database)
         with database.read() as connection:
             self._roles = _load_all_roles(connection)
 

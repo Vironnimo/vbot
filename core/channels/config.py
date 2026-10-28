@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -11,6 +12,7 @@ from core.channels._choices import (
     ALLOWED_CHANNEL_DM_SCOPES,
     ALLOWED_CHANNEL_PLATFORMS,
     ALLOWED_CHANNEL_RESPONSE_MODES,
+    ALLOWED_EMAIL_SMTP_SECURITY,
 )
 from core.config_validation import (
     JsonConfigValidationError,
@@ -63,8 +65,31 @@ _MUTABLE_FIELDS = frozenset(
         "observe_unaddressed",
         "app_token_env_var",
         "server_url",
+        "email",
     )
 )
+
+
+_EMAIL_FIELDS = frozenset(
+    (
+        "address",
+        "username",
+        "imap_host",
+        "imap_port",
+        "smtp_host",
+        "smtp_port",
+        "smtp_security",
+        "folders",
+        "require_sender_authentication",
+    )
+)
+_DEFAULT_IMAP_PORT = 993
+_DEFAULT_SMTP_PORT = 465
+_DEFAULT_EMAIL_FOLDERS = ("INBOX",)
+# A practical address check, not RFC 5322: one @, no whitespace, no characters
+# that would break a header or an address list.
+_EMAIL_ADDRESS_PATTERN = re.compile(r"^[^@\s<>()\[\],;:\"\\]+@[^@\s<>()\[\],;:\"\\]+$")
+_HOST_PATTERN = re.compile(r"^[A-Za-z0-9.:-]+$")
 
 
 _CHANNEL_CONFIG_FIELDS = _MUTABLE_FIELDS | {"id"}
@@ -218,6 +243,15 @@ def validate_channel_data(data: Any) -> list[JsonDiagnostic]:
             add_error(
                 diagnostics, "$", "WhatsApp uses linked-device pairing, not tokens or a server URL"
             )
+    if data.get("platform") == "email":
+        _validate_email_settings(diagnostics, "$.email", data.get("email"))
+        for index, chat_id in enumerate(data.get("allowed_chat_ids", [])):
+            if isinstance(chat_id, str) and normalize_email_address(chat_id) is None:
+                add_error(diagnostics, f"$.allowed_chat_ids[{index}]", "must be an email address")
+        if data.get("app_token_env_var") or data.get("server_url"):
+            add_error(diagnostics, "$", "Email uses the email settings, not an app token or URL")
+    elif data.get("email") is not None:
+        add_error(diagnostics, "$.email", "is only valid for the email platform")
     if "enabled" in data and not isinstance(data["enabled"], bool):
         add_error(diagnostics, "$.enabled", "must be a boolean")
     if "observe_unaddressed" in data and not isinstance(data["observe_unaddressed"], bool):
@@ -230,6 +264,113 @@ def validate_channel_data(data: Any) -> list[JsonDiagnostic]:
     )
     _validate_regex_list(diagnostics, "$.mention_patterns", data.get("mention_patterns", []))
     return diagnostics
+
+
+def normalize_email_address(value: Any) -> str | None:
+    """Return the trimmed, lowercased address, or None when it is not an email address."""
+    if not isinstance(value, str):
+        return None
+    address = value.strip().lower()
+    if len(address) > 254 or _EMAIL_ADDRESS_PATTERN.fullmatch(address) is None:
+        return None
+    if any(ord(character) < 32 or ord(character) == 127 for character in address):
+        return None
+    return address
+
+
+def _validate_email_settings(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:
+    if not isinstance(value, dict):
+        add_error(diagnostics, path, "must be an object with the email account settings")
+        return
+    warn_unknown_keys(diagnostics, path, value, _EMAIL_FIELDS, "email field")
+    if normalize_email_address(value.get("address")) is None:
+        add_error(diagnostics, f"{path}.address", "must be an email address")
+    if "username" in value and (
+        not isinstance(value["username"], str) or not value["username"].strip()
+    ):
+        add_error(diagnostics, f"{path}.username", "must be a non-empty string")
+    for host_key, port_key in (("imap_host", "imap_port"), ("smtp_host", "smtp_port")):
+        host = value.get(host_key)
+        if not isinstance(host, str) or _HOST_PATTERN.fullmatch(host.strip()) is None:
+            add_error(diagnostics, f"{path}.{host_key}", "must be a host name or IP address")
+        port = value.get(port_key)
+        if port is not None and (
+            isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535
+        ):
+            add_error(diagnostics, f"{path}.{port_key}", "must be a port number from 1 to 65535")
+    if "smtp_security" in value:
+        validate_allowed_string(
+            diagnostics,
+            f"{path}.smtp_security",
+            value["smtp_security"],
+            ALLOWED_EMAIL_SMTP_SECURITY,
+        )
+    folders = value.get("folders", list(_DEFAULT_EMAIL_FOLDERS))
+    if (
+        not isinstance(folders, list)
+        or not folders
+        or not all(isinstance(folder, str) and folder.strip() for folder in folders)
+    ):
+        add_error(diagnostics, f"{path}.folders", "must be a non-empty list of folder names")
+    elif any(any(ord(character) < 32 for character in folder) for folder in folders):
+        add_error(diagnostics, f"{path}.folders", "must not contain control characters")
+    if "require_sender_authentication" in value and not isinstance(
+        value["require_sender_authentication"], bool
+    ):
+        add_error(diagnostics, f"{path}.require_sender_authentication", "must be a boolean")
+
+
+@dataclass(frozen=True, slots=True)
+class EmailSettings:
+    """The mail account of an email Channel; its password is the Channel credential."""
+
+    address: str
+    imap_host: str
+    smtp_host: str
+    username: str = ""
+    imap_port: int = _DEFAULT_IMAP_PORT
+    smtp_port: int = _DEFAULT_SMTP_PORT
+    smtp_security: str = ""
+    folders: tuple[str, ...] = _DEFAULT_EMAIL_FOLDERS
+    require_sender_authentication: bool = True
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> EmailSettings:
+        """Build normalized settings from schema-valid data, filling the defaults."""
+        address = normalize_email_address(payload.get("address")) or ""
+        smtp_port = int(payload.get("smtp_port") or _DEFAULT_SMTP_PORT)
+        return cls(
+            address=address,
+            username=str(payload.get("username") or address).strip(),
+            imap_host=str(payload.get("imap_host", "")).strip(),
+            imap_port=int(payload.get("imap_port") or _DEFAULT_IMAP_PORT),
+            smtp_host=str(payload.get("smtp_host", "")).strip(),
+            smtp_port=smtp_port,
+            smtp_security=str(
+                payload.get("smtp_security") or ("ssl" if smtp_port == 465 else "starttls")
+            ),
+            folders=tuple(
+                folder.strip() for folder in payload.get("folders") or _DEFAULT_EMAIL_FOLDERS
+            ),
+            require_sender_authentication=bool(payload.get("require_sender_authentication", True)),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "address": self.address,
+            "username": self.username,
+            "imap_host": self.imap_host,
+            "imap_port": self.imap_port,
+            "smtp_host": self.smtp_host,
+            "smtp_port": self.smtp_port,
+            "smtp_security": self.smtp_security,
+            "folders": list(self.folders),
+            "require_sender_authentication": self.require_sender_authentication,
+        }
+
+
+def _email_payload(value: EmailSettings | Mapping[str, Any] | None) -> Any:
+    return value.to_dict() if isinstance(value, EmailSettings) else value
 
 
 def _validate_channel_agent_id(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:
@@ -284,10 +425,12 @@ class ChannelConfig:
     observe_unaddressed: bool = False
     app_token_env_var: str = ""
     server_url: str = ""
+    # The mail account of an email Channel; None for every other platform.
+    email: EmailSettings | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize one channel config to JSON-compatible data."""
-        return {
+        payload = {
             "id": self.id,
             "platform": self.platform,
             "agent_id": self.agent_id,
@@ -301,6 +444,9 @@ class ChannelConfig:
             "app_token_env_var": self.app_token_env_var,
             "server_url": self.server_url,
         }
+        if self.email is not None:
+            payload["email"] = _email_payload(self.email)
+        return payload
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> ChannelConfig:
@@ -319,6 +465,11 @@ class ChannelConfig:
             observe_unaddressed=payload.get("observe_unaddressed", False),
             app_token_env_var=payload.get("app_token_env_var", ""),
             server_url=payload.get("server_url", ""),
+            email=(
+                EmailSettings.from_dict(payload["email"])
+                if isinstance(payload.get("email"), Mapping)
+                else None
+            ),
         )
         config.validate()
         return config
@@ -339,8 +490,16 @@ class ChannelConfig:
                 "observe_unaddressed": self.observe_unaddressed,
                 "app_token_env_var": self.app_token_env_var,
                 "server_url": self.server_url,
+                **({} if self.email is None else {"email": _email_payload(self.email)}),
             }
         )
+        if isinstance(self.email, Mapping):
+            # Accessors hand the settings in as their JSON object.
+            self.email = EmailSettings.from_dict(self.email)
+        if self.platform == "email":
+            self.allowed_chat_ids = [
+                normalize_email_address(value) or str(value) for value in self.allowed_chat_ids
+            ]
         self.id = self.id.strip()
         self.agent_id = self.agent_id.strip()
         self.token_env_var = self.token_env_var.strip()
