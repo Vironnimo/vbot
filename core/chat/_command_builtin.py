@@ -42,6 +42,7 @@ from core.sessions import (
     SessionAddress,
 )
 from core.tools.terminal_manager import TerminalManager, TerminalOwner
+from core.utils.workers import settle_before_cancelling
 
 if TYPE_CHECKING:
     from core.agents import AgentStore
@@ -419,139 +420,146 @@ async def _execute_agent(
     target_address = SessionAddress(
         project_id=target_project_id, agent_id=target_agent_id, session_id=context.session_id
     )
-    try:
-        # The reference lock keeps an automation from selecting this Session
-        # between the check below and the move.
-        async with (
-            references.lock,
-            chat_runs.session_admission_guard(source_address, target_address),
-        ):
-            metadata = await _command_session_io(
-                sessions,
-                "get_metadata_async",
-                "get_metadata",
-                source_address,
-            )
-            refusal = _session_move_block_reason(metadata)
-            if refusal is not None:
-                return _notice("agent", refusal)
-            # An automation addresses its Session by Agent and id: moving the
-            # Session would leave it pointing at nothing.
-            pinned = references.session_references(source_address)
-            if pinned:
-                return _notice("agent", _pinned_session_refusal(pinned))
 
-            # The Session row and both current-Session pointers move as one unit.
-            async with snapshot_barrier.compound_mutation_async():
-                await sessions.move(source_address, target_address)
-                async with sessions.write_lock(target_address):
-                    destination = await _command_session_io(
-                        sessions,
-                        "get_async",
-                        "get",
-                        target_address,
-                    )
-                    await _command_session_io(
-                        destination,
-                        "append_async",
-                        "append",
-                        ChatMessage.agent_takeover(
-                            from_address=source_display, to_address=target_display
-                        ),
-                    )
-                    await _command_session_io(
-                        destination,
-                        "add_note_async",
-                        "add_note",
-                        AGENT_TAKEOVER_NOTE.format(source=source_display),
-                    )
+    async def complete_takeover() -> CommandOutcome:
+        try:
+            # The reference lock keeps an automation from selecting this Session
+            # between the check below and the move.
+            async with (
+                references.lock,
+                chat_runs.session_admission_guard(source_address, target_address),
+            ):
+                metadata = await _command_session_io(
+                    sessions,
+                    "get_metadata_async",
+                    "get_metadata",
+                    source_address,
+                )
+                refusal = _session_move_block_reason(metadata)
+                if refusal is not None:
+                    return _notice("agent", refusal)
+                # An automation addresses its Session by Agent and id: moving the
+                # Session would leave it pointing at nothing.
+                pinned = references.session_references(source_address)
+                if pinned:
+                    return _notice("agent", _pinned_session_refusal(pinned))
 
-                if terminal_manager is not None:
-                    await terminal_manager.transfer_scope(
-                        TerminalOwner(
-                            context.project_id,
+                # The Session row and both current-Session pointers move as one unit.
+                async with snapshot_barrier.compound_mutation_async():
+                    await sessions.move(source_address, target_address)
+                    async with sessions.write_lock(target_address):
+                        destination = await _command_session_io(
+                            sessions,
+                            "get_async",
+                            "get",
+                            target_address,
+                        )
+                        await _command_session_io(
+                            destination,
+                            "append_async",
+                            "append",
+                            ChatMessage.agent_takeover(
+                                from_address=source_display, to_address=target_display
+                            ),
+                        )
+                        await _command_session_io(
+                            destination,
+                            "add_note_async",
+                            "add_note",
+                            AGENT_TAKEOVER_NOTE.format(source=source_display),
+                        )
+
+                    if terminal_manager is not None:
+                        await terminal_manager.transfer_scope(
+                            TerminalOwner(
+                                context.project_id,
+                                context.agent_id,
+                                context.session_id,
+                            ),
+                            TerminalOwner(
+                                target_project_id,
+                                target_agent_id,
+                                context.session_id,
+                            ),
+                        )
+                    if command_manager is not None:
+                        await command_manager.transfer_scope(source_address, target_address)
+
+                    if context.project_id is None:
+                        await _COMMAND_WORKERS.run(
+                            agents.reset_current_after_session_removed,
                             context.agent_id,
                             context.session_id,
-                        ),
-                        TerminalOwner(
-                            target_project_id,
+                        )
+                    if target_project_id is None:
+                        await _COMMAND_WORKERS.run(
+                            agents.update,
                             target_agent_id,
-                            context.session_id,
-                        ),
-                    )
-                if command_manager is not None:
-                    await command_manager.transfer_scope(source_address, target_address)
+                            current_session_id=context.session_id,
+                        )
+        except RunAdmissionBlockedError:
+            return _notice(
+                "agent", "This session can be moved once its source and destination are idle."
+            )
 
-                if context.project_id is None:
-                    await _COMMAND_WORKERS.run(
-                        agents.reset_current_after_session_removed,
-                        context.agent_id,
-                        context.session_id,
-                    )
-                if target_project_id is None:
-                    await _COMMAND_WORKERS.run(
-                        agents.update,
-                        target_agent_id,
-                        current_session_id=context.session_id,
-                    )
-    except RunAdmissionBlockedError:
-        return _notice(
-            "agent", "This session can be moved once its source and destination are idle."
+        if goals is not None:
+            # The goal was the source Agent's work; the target resumes it only on request.
+            await goals.pause_for_takeover(target_address)
+        source_change = _session_change(context.project_id, context.agent_id, context.session_id)
+        changes = [
+            CommandResourceChange(
+                kind="sessions",
+                scope={**source_change.scope, "moved_to_agent_id": target_display},
+            ),
+            _session_change(target_project_id, target_agent_id, context.session_id),
+        ]
+        if context.project_id is None or target_project_id is None:
+            changes.append(CommandResourceChange(kind="agents"))
+        for change in changes:
+            context.report_change(change)
+
+        _LOGGER.info(
+            "Session moved between Agents (session=%s source_agent=%s target_agent=%s)",
+            context.session_id,
+            source_display,
+            target_display,
         )
 
-    if goals is not None:
-        # The goal was the source Agent's work; the target resumes it only on request.
-        await goals.pause_for_takeover(target_address)
-    source_change = _session_change(context.project_id, context.agent_id, context.session_id)
-    changes = [
-        CommandResourceChange(
-            kind="sessions",
-            scope={**source_change.scope, "moved_to_agent_id": target_display},
-        ),
-        _session_change(target_project_id, target_agent_id, context.session_id),
-    ]
-    if context.project_id is None or target_project_id is None:
-        changes.append(CommandResourceChange(kind="agents"))
-    for change in changes:
-        context.report_change(change)
-
-    _LOGGER.info(
-        "Session moved between Agents (session=%s source_agent=%s target_agent=%s)",
-        context.session_id,
-        source_display,
-        target_display,
-    )
-
-    runs: tuple[CommandRun, ...] = ()
-    if parsed.task is not None:
-        trigger_service = _require_dependency(trigger_service, "TriggerService")
-        task_run = await trigger_service.trigger_run(
-            target_agent_id,
-            parsed.task,
-            session_id=context.session_id,
-            project_id=target_project_id,
-            internal=False,
-            reply_surface=context.reply_surface,
+        runs: tuple[CommandRun, ...] = ()
+        if parsed.task is not None:
+            triggers = _require_dependency(trigger_service, "TriggerService")
+            task_run = await triggers.trigger_run(
+                target_agent_id,
+                parsed.task,
+                session_id=context.session_id,
+                project_id=target_project_id,
+                internal=False,
+                reply_surface=context.reply_surface,
+            )
+            runs = (CommandRun(role="follow_up", run=task_run),)
+        reply = (
+            f"Session moved to {target_display}; it is now running your task."
+            if runs
+            else f"Session moved to {target_display}; it is waiting."
         )
-        runs = (CommandRun(role="follow_up", run=task_run),)
-    reply = (
-        f"Session moved to {target_display}; it is now running your task."
-        if runs
-        else f"Session moved to {target_display}; it is waiting."
-    )
-    return CommandOutcome(
-        command="agent",
-        feedback=CommandFeedback(kind="notice", text=reply),
-        facts={"session_id": context.session_id, "agent_id": target_display},
-        navigation=CommandNavigation(
-            kind="offer_session",
-            agent_id=target_agent_id,
-            session_id=context.session_id,
-            project_id=target_project_id,
-        ),
-        runs=runs,
-        resource_changes=tuple(changes),
-    )
+        return CommandOutcome(
+            command="agent",
+            feedback=CommandFeedback(kind="notice", text=reply),
+            facts={"session_id": context.session_id, "agent_id": target_display},
+            navigation=CommandNavigation(
+                kind="offer_session",
+                agent_id=target_agent_id,
+                session_id=context.session_id,
+                project_id=target_project_id,
+            ),
+            runs=runs,
+            resource_changes=tuple(changes),
+        )
+
+    # Once the move starts, finish its history, ownership and follow-up transition
+    # before reporting cancellation to the accessor. Individual worker writes
+    # settle themselves, but cannot finish the remaining command on their own.
+    return await settle_before_cancelling(complete_takeover())
 
 
 def _pinned_session_refusal(references: Sequence[AutomationReference]) -> str:

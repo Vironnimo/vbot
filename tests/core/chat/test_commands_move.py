@@ -399,13 +399,16 @@ async def test_move_of_a_session_an_automation_selects_is_refused_naming_it() ->
     ]
 
 
-async def test_move_guard_rejects_source_and_destination_runs_during_storage_wait() -> None:
+@pytest.mark.parametrize("cancel_accessor", [False, True])
+async def test_move_guard_rejects_source_and_destination_runs_during_storage_wait(
+    cancel_accessor: bool,
+) -> None:
     runs = ChatRunManager()
     harness = _MoveHarness(runs=runs)
     harness.sessions.move_started = asyncio.Event()
     harness.sessions.move_release = asyncio.Event()
 
-    move = asyncio.create_task(harness.move("/agent planner@vbot"))
+    move = asyncio.create_task(harness.move("/agent planner@vbot finish the task"))
     await asyncio.wait_for(harness.sessions.move_started.wait(), timeout=1)
 
     for address in (
@@ -415,9 +418,26 @@ async def test_move_guard_rejects_source_and_destination_runs_during_storage_wai
         with pytest.raises(RunAdmissionBlockedError):
             await runs.start(address, lambda _run: asyncio.sleep(0))
 
+    if cancel_accessor:
+        move.cancel()
     harness.sessions.move_release.set()
-    outcome = await asyncio.wait_for(move, timeout=1)
-    assert outcome.facts == {"session_id": "s1", "agent_id": "planner@vbot"}
+    if cancel_accessor:
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(move, timeout=1)
+    else:
+        outcome = await asyncio.wait_for(move, timeout=1)
+        assert outcome.facts == {"session_id": "s1", "agent_id": "planner@vbot"}
+
+    # Once storage moved the Session, cancellation cannot leave its History,
+    # background work, pointer or requested follow-up at the old owner.
+    assert [message.role for message in harness.sessions.destination.appended] == ["agent_takeover"]
+    assert harness.sessions.destination.notes
+    assert harness.agents.reset_calls == [("builder", "s1")]
+    assert len(harness.terminal_transfers) == len(harness.command_transfers) == 1
+    assert harness.trigger_calls[0]["message"] == "finish the task"
+    assert harness.trigger_calls[0]["agent_id"] == "planner"
+    assert harness.changes
+    assert not harness.references.lock.locked()
 
 
 @pytest.mark.parametrize(
