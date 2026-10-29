@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -275,6 +276,100 @@ async def test_a_mail_that_cannot_be_stored_raises_and_is_taken_on_the_next_hand
             await service.accept_mail(_mail())
     await service.accept_mail(_mail())
     assert len(_state(service, job_id)["mails"]) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("old_waiting", [False, True])
+async def test_changing_email_channel_discards_old_mail_and_keeps_receiving(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, old_waiting: bool
+) -> None:
+    service, trigger = _service(tmp_path)
+    service.set_chat_delivery(FakeChats(owners={"mail-main": "agent-one", "mail-new": "agent-one"}))
+    job_id = await _email_job(service)
+    if old_waiting:
+        await service.accept_mail(_mail())
+        # Older inbox files had no source binding.
+        path = state_path(service._cron_dir / EMAIL_STATE_DIR_NAME, job_id)
+        legacy = _state(service, job_id)
+        legacy.pop("binding", None)
+        path.write_text(json.dumps(legacy), encoding="utf-8")
+    saved = asyncio.Event()
+    finish_edit = asyncio.Event()
+    save_edit = service._save_edit
+
+    async def hold_edit(undo: Any) -> None:
+        await save_edit(undo)
+        saved.set()
+        await finish_edit.wait()
+
+    monkeypatch.setattr(service, "_save_edit", hold_edit)
+    scripted_runs(trigger, (RunStatus.COMPLETED, "[SILENT]"))
+    service.start()
+    edit = asyncio.create_task(service.update_job(job_id, email=CronEmailTrigger.parse("mail-new")))
+    try:
+        await asyncio.wait_for(saved.wait(), timeout=_TIMEOUT_SECONDS)
+        assert trigger.trigger_run.await_count == 0
+        if old_waiting:
+            # Snapshot the crash window: jobs.json names the new Channel, but
+            # the old inbox has not yet been removed.
+            assert _state(service, job_id)["binding"] == "mail-main"
+            restart_root = tmp_path / "restart"
+            shutil.copytree(service._cron_dir, restart_root / "cron")
+            restarted, restarted_trigger = _service(restart_root)
+            restarted.set_chat_delivery(
+                FakeChats(owners={"mail-main": "agent-one", "mail-new": "agent-one"})
+            )
+            scripted_runs(restarted_trigger, (RunStatus.COMPLETED, "[SILENT]"))
+            restarted.start()
+            try:
+                status = restarted.email_status(restarted.get_job(job_id))
+                assert status is not None and status.waiting == 0
+                await restarted.accept_mail(_mail(2, channel_id="mail-new"))
+                await _until(restarted, lambda: restarted.get_job(job_id).last_outcome == "success")
+                assert [record["text"] for record in _records(_note(restarted_trigger))] == [
+                    "Mail 2"
+                ]
+            finally:
+                await restarted.aclose()
+        finish_edit.set()
+        await edit
+        await service.accept_mail(_mail(2, channel_id="mail-new"))
+        await _until(service, lambda: service.get_job(job_id).last_outcome == "success")
+        assert trigger.trigger_run.await_count == 1
+        assert [record["text"] for record in _records(_note(trigger))] == ["Mail 2"]
+        assert "mail-new" in _note(trigger)
+    finally:
+        finish_edit.set()
+        await edit
+        await service.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["checkpoint", "job"])
+async def test_failed_email_channel_change_keeps_the_waiting_mail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    service, _trigger = _service(tmp_path)
+    service.set_chat_delivery(FakeChats(owners={"mail-main": "agent-one", "mail-new": "agent-one"}))
+    job_id = await _email_job(service)
+    await service.accept_mail(_mail())
+
+    def fail_write(_jobs: Any) -> None:
+        raise CronStorageError("disk full")
+
+    async def fail_checkpoint(_state: Any) -> None:
+        raise CronStorageError("disk full")
+
+    with monkeypatch.context() as broken:
+        if failure == "checkpoint":
+            broken.setattr(service._emails, "_write", fail_checkpoint)
+        else:
+            broken.setattr(service, "_write_jobs", fail_write)
+        with pytest.raises(CronStorageError):
+            await service.update_job(job_id, email=CronEmailTrigger.parse("mail-new"))
+    assert service.get_job(job_id).email == CronEmailTrigger.parse("mail-main")
+    assert [row["text"] for row in _state(service, job_id)["mails"]] == ["Mail 1"]
+    await service.aclose()
 
 
 @pytest.mark.asyncio

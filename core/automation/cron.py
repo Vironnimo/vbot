@@ -950,10 +950,16 @@ class CronService:
     ) -> None:
         """Apply a staged edit to memory and the job tasks at once, then save; undo on failure."""
         edited = self._clone_job(candidate)
-        self._jobs[job_id] = candidate
-        # Job tasks follow memory at once, so a fire in flight sees the edit.
-        if self._started and restart_task:
-            self._scheduler._restart_job_task(candidate)
+
+        def publish() -> None:
+            self._jobs[job_id] = candidate
+            # Job tasks follow memory at once, so a fire in flight sees the edit.
+            if self._started and restart_task:
+                self._scheduler._restart_job_task(candidate)
+
+        async def save() -> None:
+            publish()
+            await self._save_edit(undo)
 
         def undo() -> None:
             if self._jobs.get(job_id) is candidate:
@@ -963,14 +969,19 @@ class CronService:
                 if self._started and restart_task:
                     self._scheduler._restart_job_task(candidate)
 
-        await settle_before_cancelling(self._save_edit(undo))
+        reset_email = job.email is not None and (
+            candidate.email is None or candidate.email.channel_id != job.email.channel_id
+        )
+        if reset_email:
+            assert job.email is not None
+            await settle_before_cancelling(
+                self._emails.discard_after(job_id, save, previous_binding=job.email.channel_id)
+            )
+        else:
+            publish()
+            await settle_before_cancelling(self._save_edit(undo))
         if job.schedule_type == "webhook" and candidate.schedule_type != "webhook":
             await settle_before_cancelling(self._webhooks.discard(job_id))
-        if job.email is not None and (
-            candidate.email is None or candidate.email.channel_id != job.email.channel_id
-        ):
-            # Mails of another Channel are not this job's any more.
-            await settle_before_cancelling(self._emails.discard(job_id))
         if _new_check(job, candidate, rename=rename):
             await self._renew_watch(candidate)
 
