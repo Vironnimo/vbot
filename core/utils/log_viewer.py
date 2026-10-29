@@ -262,10 +262,8 @@ class LogViewer:
     async def aclose(self) -> None:
         async with self._watch_lock:
             watchers = list(self._watchers.values())
-            self._watchers.clear()
-
-        for watcher in watchers:
-            watcher.stop_event.set()
+            for watcher in watchers:
+                self._retire_locked(watcher)
 
         for watcher in watchers:
             if watcher.task is None:

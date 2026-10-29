@@ -938,8 +938,9 @@ async def test_cancel_watcher_task_logs_a_real_crash_before_suppressing(
 
 
 @pytest.mark.asyncio
-async def test_a_crashed_watcher_ends_its_streams_and_the_next_subscriber_gets_a_fresh_one(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+@pytest.mark.parametrize("ending", ["crash", "close"])
+async def test_an_ended_watcher_ends_its_streams_and_the_next_subscriber_gets_a_fresh_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, ending: str
 ) -> None:
     monkeypatch.setattr(log_viewer_module, "LOG_SUBSCRIBER_QUEUE_SIZE", 1)
     logs_dir = tmp_path / "logs"
@@ -967,7 +968,10 @@ async def test_a_crashed_watcher_ends_its_streams_and_the_next_subscriber_gets_a
         )
         watch.changes.put_nowait({(Change.modified, str(log_file))})
         await _until(crashed_queue.full)
-        watch.changes.put_nowait(RuntimeError("awatch exploded"))
+        if ending == "crash":
+            watch.changes.put_nowait(RuntimeError("awatch exploded"))
+        else:
+            await viewer.aclose()
         await _until(lambda: viewer.watcher_count == 0)
 
         # The stream ends, so the socket closes and the accessor reconnects,
@@ -999,9 +1003,10 @@ async def test_a_crashed_watcher_ends_its_streams_and_the_next_subscriber_gets_a
         for record in caplog.records
         if record.name == "vbot.log_viewer" and record.levelno == logging.ERROR
     ]
-    assert len(crash_records) == 1
-    assert crash_records[0].exc_info is not None
-    assert log_file.name in crash_records[0].getMessage()
+    assert len(crash_records) == (1 if ending == "crash" else 0)
+    if crash_records:
+        assert crash_records[0].exc_info is not None
+        assert log_file.name in crash_records[0].getMessage()
 
 
 @pytest.mark.asyncio
