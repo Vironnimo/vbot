@@ -543,12 +543,15 @@ class ChatLoop:
         context_note: str | ChatMessage | None = None,
         context_note_factory: Callable[[], str] | None = None,
         permission_ceiling: PermissionCeiling | None = None,
+        steering: bool = False,
     ) -> QueuedRunItem:
         """Queue one chat run for a busy session or start it immediately when idle.
 
         ``project_id`` scopes the session/run to a project anchor; ``None`` keeps
         today's identity behavior. ``max_tool_iterations`` and ``context_note``
         are as in :meth:`start_run`.
+        ``steering`` selects eligible input at admission. Live input can carry
+        its context note into the active Run with the same atomic append.
         """
         async with self._dependencies.run_manager.prepare_admission(
             agent_id, project_id=project_id, session_id=session_id
@@ -585,6 +588,18 @@ class ChatLoop:
                 input_persisted_hook=input_persisted_hook,
                 context_note=context_note,
             )
+            # Live input carries a conversation snapshot with each request. It
+            # can steer only when that snapshot is persisted with the input.
+            steering_request = (
+                replace(request, context_note=None) if run_kind == RunKind.LIVE else request
+            )
+            steerable = (
+                steering_request.supports_steering
+                and run_kind in {RunKind.USER, RunKind.LIVE}
+                and context_note_factory is None
+            )
+            if steering and not steerable:
+                raise ChatError("this queued input cannot steer a Run")
             if permission_ceiling is not None:
                 await self._dependencies.sessions.run_async(
                     resolver.join_session_ceiling, session.address, permission_ceiling
@@ -594,11 +609,8 @@ class ChatLoop:
                 _QueuedRunExecutor(self, request),
                 display_content=_display_content_preview(content),
                 editable=queue_content_is_editable(content),
-                steerable=(
-                    request.supports_steering
-                    and run_kind == RunKind.USER
-                    and context_note_factory is None
-                ),
+                steerable=steerable,
+                steering=steering,
                 internal=internal,
                 waiting_work_admission=waiting_work_admission,
                 admission=RunAdmission(

@@ -128,6 +128,14 @@ class WireProblem:
 
     code: str
     message: str
+    fatal: bool = False
+
+
+@dataclass(frozen=True)
+class WireConnection:
+    """The Provider control channel is reconnecting or has reattached."""
+
+    reconnecting: bool
 
 
 @dataclass(frozen=True)
@@ -151,6 +159,7 @@ WireEvent = (
     | WirePlaybackClear
     | WireUsage
     | WireProblem
+    | WireConnection
     | WireClosed
 )
 

@@ -6,7 +6,7 @@ Session: what the user and the voice model said, the updates vBot gave it, and
 every Tool call the voice model made, with the Agent's Tools. The binding's
 ``backend`` option says who answers what the voice model hands on:
 
-* ``vbot``: the built-in Live backend Agent, one Chat Run per request in a
+* ``vbot``: the built-in Live backend Agent, Chat Runs with live steering in a
   second Session of the call (``_live_backend.py``). The voice model reaches it
   through ``vbot_request`` or its Provider's native delegation.
 * ``openai``: OpenAI's hosted backend model, which calls the voice Agent's

@@ -147,6 +147,7 @@ export function createLiveVoiceState() {
     // The call is held (microphone and assistant audio off) for something
     // else that uses the microphone, independent of the user's mute.
     held: false,
+    reconnecting: false,
     closeReason: null,
     usage: null,
   };
@@ -277,6 +278,7 @@ export function createLiveVoice({
       callId: null,
       muted: false,
       held: false,
+      reconnecting: false,
       busy: false,
       activityLabel: null,
       speakerMuted: false,
@@ -663,6 +665,19 @@ export function createLiveVoice({
       case 'error':
         applyError(call, frame);
         break;
+      case 'connection': {
+        if (call.closing || typeof frame.reconnecting !== 'boolean') break;
+        if (state.reconnecting === frame.reconnecting) break;
+        state.reconnecting = frame.reconnecting;
+        if (frame.reconnecting) {
+          hold('provider_connection');
+          notify('reconnecting', 'warn');
+        } else {
+          release('provider_connection');
+          notify('reconnected', 'info');
+        }
+        break;
+      }
       case 'closed':
         applyClosed(call, frame);
         break;

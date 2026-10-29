@@ -45,6 +45,8 @@ export default Object.freeze({
   'live.state.connecting': 'Connecting…',
   'live.state.listening': 'Listening…',
   'live.state.closing': 'Stopping…',
+  'live.state.reconnecting': 'Connection interrupted; reconnecting…',
+  'live.notice.reconnected': 'Live voice reconnected.',
   'live.state.held': 'Paused for a voice command',
   'live.state.heldRecording': 'Paused while you record',
   'live.state.idle': 'Nobody is speaking; ends in {time}',

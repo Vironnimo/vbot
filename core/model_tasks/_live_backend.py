@@ -1,8 +1,8 @@
 """The vBot backend of a Live call: the Live backend Agent answers handed-on requests.
 
 The voice Model hands requests on through ``vbot_request`` (or its Provider's
-native delegation). Each request is one Chat Run of the built-in Live backend
-Agent, in a Session of its own for the call that the first request creates.
+native delegation). Requests start or steer Chat Runs of the built-in Live
+backend Agent, in a Session the first request creates for the call.
 A System Reminder before the request gives what happened in the call since the
 previous one. The answer the voice Model speaks ends with what vBot changed
 for the request, taken from the Run's Tool results, so the voice Model never
@@ -67,7 +67,7 @@ class BackendRequest:
 
 
 class LiveBackend:
-    """The backend Agent's Session of one call; requests run one at a time.
+    """The backend Agent's Session of one call, with one steerable active Run.
 
     *chat* is the Chat Loop and *sessions* the Session manager. The backend
     Session's Live Tool calls reach *host* through *hosts*; *on_session* is
@@ -97,6 +97,9 @@ class LiveBackend:
         self._session_id: str | None = None
         self._turn = asyncio.Lock()
         self._run: Run | None = None
+        self._pending: set[asyncio.Future[Run]] = set()
+        self._outcomes: dict[str, asyncio.Task[str]] = {}
+        self._waiters: dict[str, int] = {}
         self._closed = False
 
     @property
@@ -104,18 +107,27 @@ class LiveBackend:
         """The backend Session, once the first request created it."""
         return self._session_id
 
-    async def answer(self, prepare: Callable[[], Awaitable[BackendRequest]]) -> str:
+    async def answer(
+        self,
+        prepare: Callable[[], Awaitable[BackendRequest]],
+        *,
+        on_progress: Callable[[str], Awaitable[None]] | None = None,
+    ) -> str:
         """Answer one request for the voice Model; failures come back as text.
 
-        Requests wait for the previous one to finish; *prepare* then gathers
-        the request with what happened since the previous one.
+        New input steers an active Run at its next safe Model boundary.
+        Requests delivered to the same Run share its outcome and effects.
         """
         async with self._turn:
             if self._closed:
                 return _STOPPED
             request = await prepare()
+            if self._closed:
+                return _STOPPED
             session_id = await self._session()
-            run = await self._chat.start_run(
+            if self._closed:
+                return _STOPPED
+            item = await self._chat.queue_run(
                 LIVE_BACKEND_AGENT_ID,
                 request.request or UNWORDED_REQUEST,
                 session_id=session_id,
@@ -123,16 +135,51 @@ class LiveBackend:
                 run_kind=RunKind.LIVE,
                 contributes_to_agent_activity=False,
                 context_note=context_note(request),
+                steering=True,
             )
+            if self._closed:
+                if item.future.done() and not item.future.cancelled():
+                    run = item.future.result()
+                    run.request_cancel()
+                    await _settled(run)
+                else:
+                    item.future.cancel()
+                return _STOPPED
+            self._pending.add(item.future)
+        try:
+            run = await item.future
+        finally:
+            self._pending.discard(item.future)
+        if self._closed:
+            run.request_cancel()
+            return _STOPPED
+        outcome = self._outcomes.get(run.id)
+        if outcome is None:
             self._run = run
-            try:
-                return await self._outcome(run)
-            finally:
-                self._run = None
+            outcome = asyncio.create_task(
+                self._outcome(run, on_progress), name=f"live-backend-answer:{run.id}"
+            )
+            self._outcomes[run.id] = outcome
+            # At most four delegations can still be attaching to a Run.
+            for old_id, old in list(self._outcomes.items())[:-16]:
+                if old.done():
+                    del self._outcomes[old_id]
+        self._waiters[run.id] = self._waiters.get(run.id, 0) + 1
+        try:
+            return await asyncio.shield(outcome)
+        finally:
+            self._waiters[run.id] -= 1
+            if self._waiters[run.id] == 0:
+                del self._waiters[run.id]
+                if not outcome.done():
+                    outcome.cancel()
+                    await asyncio.gather(outcome, return_exceptions=True)
 
     async def aclose(self, *, finish_request: bool = False) -> None:
         """Release Live Tools, allowing a successful hangup's admitted batch to finish."""
         self._closed = True
+        for future in list(self._pending):
+            future.cancel()
         run = self._run
         try:
             if run is not None and finish_request:
@@ -151,6 +198,12 @@ class LiveBackend:
                 run.request_cancel()
             raise
         finally:
+            pending = {outcome for outcome in self._outcomes.values() if not outcome.done()}
+            if pending:
+                _, pending = await asyncio.wait(pending, timeout=_CLOSE_SECONDS)
+                for outcome in pending:
+                    outcome.cancel()
+            await asyncio.gather(*self._outcomes.values(), return_exceptions=True)
             if self._session_id is not None:
                 self._hosts.unbind(self._session_id, self._host)
 
@@ -166,15 +219,16 @@ class LiveBackend:
                 },
             )
             self._session_id = session.id
-            self._hosts.bind(session.id, self._host)
-            if self._on_session is not None:
-                self._on_session()
+            if not self._closed:
+                self._hosts.bind(session.id, self._host)
+                if self._on_session is not None:
+                    self._on_session()
         return self._session_id
 
-    async def _outcome(self, run: Run) -> str:
+    async def _outcome(self, run: Run, on_progress: Callable[[str], Awaitable[None]] | None) -> str:
         effects: list[str] = []
         hangup: list[str] = []
-        collector = asyncio.create_task(_collect_effects(run, effects, hangup))
+        collector = asyncio.create_task(_collect_effects(run, effects, hangup, on_progress))
         try:
             try:
                 async with asyncio.timeout(self._timeout):
@@ -204,6 +258,9 @@ class LiveBackend:
                 pass
         finally:
             collector.cancel()
+            await asyncio.gather(collector, return_exceptions=True)
+            if self._run is run:
+                self._run = None
         if answer == _NO_ANSWER and hangup:
             answer = hangup[-1]
         return f"{answer}\n{effects_line(effects)}"
@@ -237,7 +294,12 @@ def effects_line(effects: Sequence[str]) -> str:
     return f"{EFFECTS_LABEL} " + " | ".join(shown)
 
 
-async def _collect_effects(run: Run, effects: list[str], hangup: list[str]) -> None:
+async def _collect_effects(
+    run: Run,
+    effects: list[str],
+    hangup: list[str],
+    on_progress: Callable[[str], Awaitable[None]] | None,
+) -> None:
     async for event in run.subscribe():
         if event.type != TOOL_CALL_RESULT_EVENT:
             continue
@@ -248,6 +310,16 @@ async def _collect_effects(run: Run, effects: list[str], hangup: list[str]) -> N
             result = event.payload.get("result")
             if name == TOOL_END_CALL and isinstance(result, dict) and result.get("ok") is True:
                 hangup.append(effects[-1])
+            elif on_progress is not None:
+                try:
+                    await on_progress(effects_line([effects[-1]]))
+                except Exception as exc:
+                    _LOGGER.warning(
+                        "Live backend progress delivery failed (run=%s error_type=%s)",
+                        run.id,
+                        type(exc).__name__,
+                    )
+                    on_progress = None
 
 
 def _effect(name: str, result: Any) -> str:
