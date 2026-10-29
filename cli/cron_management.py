@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from typing import Any
 
-from cli.formatting import record_fields
+from cli.formatting import inline_text, record_fields
 from cli.formatting import string_or_default as _string_or_default
 from cli.rpc_client import rpc_call as _rpc_call
 from cli.server_management import CommandResult, ServerInstance
@@ -171,6 +172,40 @@ def cron_delete(instance: ServerInstance, job_id: str) -> CommandResult:
     if not payload.ok:
         return payload.to_command_result()
     return CommandResult(ok=True, message=f"deleted cron job {job_id}", instance=instance)
+
+
+def cron_retry_delivery(
+    instance: ServerInstance, job_id: str, fields: Mapping[str, Any], *, as_json: bool = False
+) -> CommandResult:
+    """Retry the original snapshots or explicitly repair only their blocked platform bindings."""
+    payload = _rpc_call(instance, "cron.retry_delivery", {"id": job_id, **fields})
+    if not payload.ok:
+        result = payload.to_command_result()
+        if as_json:
+            error: dict[str, Any] = {"message": result.message}
+            if result.failure is not None:
+                error.update(code=result.failure.code, request_state=result.failure.request_state)
+            return replace(result, message=json.dumps({"ok": False, "error": error}))
+        return result
+    if as_json:
+        message = json.dumps(payload.data, ensure_ascii=False, indent=2)
+    else:
+        if "delivery" in fields:
+            message = (
+                f"reselected destination for {payload.data.get('rebound_notifications', 0)} "
+                f"blocked notifications of cron job {inline_text(job_id)}\n"
+                "Note: Other messages and the job's future destination were unchanged."
+            )
+        else:
+            message = f"requested delivery retry for cron job {inline_text(job_id)}"
+        progress = payload.data.get("delivery_progress", {})
+        message += "\n" + record_fields(
+            [
+                f"{name}={inline_text(progress.get(name, 0))}"
+                for name in ("waiting", "uncertain", "platform_blocked")
+            ]
+        )
+    return CommandResult(ok=True, message=message, instance=instance)
 
 
 def cron_enable(instance: ServerInstance, job_id: str) -> CommandResult:

@@ -15,6 +15,45 @@ CREATED = {"agent_id": "assistant", "prompt": "Check the news", "name": "Morning
 HOOK_URL = "https://vbot.example.com/api/hooks/job-1"
 
 
+@pytest.mark.parametrize("mode", ["ordinary", "reselect", "incomplete", "missing"])
+def test_cron_retry_delivery_preserves_or_explicitly_reselects_the_destination(
+    rpc: FakeRpc, run_cli: RunCli, mode: str
+) -> None:
+    if mode == "missing":
+        rpc.fail("cron.retry_delivery", "cron_job_not_found", "Unknown job")
+    else:
+        rpc.reply(
+            "cron.retry_delivery",
+            {
+                "id": "job-1",
+                "status": "completed",
+                "rebound_notifications": 2,
+                "delivery_progress": {"waiting": 3, "uncertain": 1, "platform_blocked": 0},
+            },
+        )
+    options: tuple[str, ...] = (
+        ("--channel", "chosen", "--chat", "42", "--thread", "7") if mode == "reselect" else ()
+    )
+    if mode == "incomplete":
+        options = ("--channel", "chosen")
+    code, out, _err = run_cli("cron", "retry-delivery", "job-1", *options)
+    if mode == "incomplete":
+        assert code != 0 and rpc.calls == []
+        return
+    expected: dict[str, Any] = {"id": "job-1"}
+    if mode == "reselect":
+        expected["delivery"] = {
+            "kind": "chat",
+            "channel_id": "chosen",
+            "platform_target": "42",
+            "thread_id": "7",
+        }
+    assert rpc.calls == [("cron.retry_delivery", expected)]
+    assert code == (1 if mode == "missing" else 0)
+    if mode != "missing":
+        assert "job-1" in out and "waiting=3" in out and "uncertain=1" in out
+
+
 def _webhook(reach: str = "internet") -> dict[str, Any]:
     return {
         "url": HOOK_URL,

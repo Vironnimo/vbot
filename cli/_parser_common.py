@@ -135,7 +135,7 @@ AREA_HELP = {
     "task-model": "Inspect and manage specialized task-model bindings",
     "skill": "Inspect and manage skills, including the disable/share policy",
     "memory": "Inspect and manage one agent's pinned memory entries and their history",
-    "librarian": "Inspect and start Librarian passes that curate your agents' own skills",
+    "librarian": "Inspect, start and undo Librarian passes that curate your agents' skills",
     "extensions": "Inspect and toggle loaded extensions",
     "cron": "Inspect and manage scheduled cron jobs",
     "bootstrap": "Inspect and manage startup-triggered Agent Runs",
@@ -495,6 +495,7 @@ LIBRARIAN_HELP = {
         "Show the Librarian's recent passes, or one agent's passes, skill changes and next pass"
     ),
     "run": "Start a Librarian pass of an agent now, regardless of the interval",
+    "undo": "Undo every Skill change of one Librarian pass and show the resulting status",
 }
 
 

@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, cast
 
 import pytest
 
+from cli._recovery import format_command, target_options
+from cli.server_management import ServerInstance
 from tests.cli.cli_test_support import FakeRpc, RunCli
 
-_LAST_PASS = {
+_LAST_PASS: dict[str, Any] = {
     "started_at": "2026-09-30T10:00:00Z",
     "finished_at": "2026-09-30T10:02:00Z",
     "trigger": "schedule",
@@ -24,6 +27,7 @@ _LAST_PASS = {
 }
 _EARLIER_PASS = {
     **_LAST_PASS,
+    "started_at": "2026-09-23T10:00:00Z",
     "finished_at": "2026-09-23T10:01:00Z",
     "trigger": "manual",
     "archived": 0,
@@ -73,12 +77,21 @@ _STATUS = {
             "files": [],
             "reason": "inactive",
         },
+        {
+            "id": 7,
+            "at": "2026-09-30T10:00:00Z",
+            "skill": "deploy-api",
+            "skill_owner_id": "release",
+            "kind": "change",
+            "actor": "librarian",
+            "files": [],
+        },
     ],
 }
 
 
 def test_librarian_status_reports_the_passes_and_how_to_undo_the_last_one(
-    rpc: FakeRpc, run_cli: RunCli
+    rpc: FakeRpc, run_cli: RunCli, instance: ServerInstance
 ) -> None:
     failed = {**_LAST_PASS, "outcome": "failed", "consolidation": "failed"}
     rpc.reply("librarian.status", {**_STATUS, "passes": [_LAST_PASS, _EARLIER_PASS]})
@@ -94,31 +107,108 @@ def test_librarian_status_reports_the_passes_and_how_to_undo_the_last_one(
         "90 days unused; merging overlapping skills: on",
         "next scheduled pass: 2026-10-07T10:02:00Z (when the agent is idle)",
         "last pass: 2026-09-30T10:02:00Z (scheduled)",
+        "  started 2026-09-30T10:00:00Z",
         "  archived 1 unused skills",
         "  merge: merged and fixed overlapping skills (3 skills it may change)",
         "  created 0, changed 1, merged away 1",
         "  session lib-1, run r-9",
         "earlier passes, newest first:",
-        "- 2026-09-23T10:01:00Z; started by hand; archived 0; merge: skipped, no skill it may "
+        "- 2026-09-23T10:01:00Z; started by hand; started 2026-09-23T10:00:00Z; archived 0; "
+        "merge: skipped, no skill it may "
         "change has changed since the last merge",
-        "changes of the last pass: 2 revisions, newest first",
+        "recorded changes of the last pass: 3 revisions, newest first",
         "revision 9  2026-09-30T10:01:30Z  deploy-api  archived (merged into deploy-web) "
         "by librarian (session lib-1, run r-9)",
         "revision 7  2026-09-30T10:00:01Z  old-fix  archived (retired after long disuse) "
         "by librarian",
-        "undo them together with: vbot skill revert 9 7 --scope agent:assistant",
+        "revision 7  2026-09-30T10:00:00Z  deploy-api (release)  changed by librarian",
+        "Undo: "
+        + format_command(
+            (
+                "vbot",
+                "librarian",
+                "undo",
+                "assistant",
+                "--started-at",
+                _LAST_PASS["started_at"],
+                *target_options(instance),
+            )
+        ),
         _HINT_SESSION,
     ]
 
     # A pass that stopped early says so.
     code, out, _err = run_cli("librarian", "status", "assistant")
 
-    assert out.splitlines()[3:6] == [
+    assert out.splitlines()[3:7] == [
         "last pass: 2026-09-30T10:02:00Z (scheduled)",
+        "  started 2026-09-30T10:00:00Z",
         "  stopped early by an error",
         "  archived 1 unused skills",
     ]
     assert "  merge: did not finish (3 skills it may change)" in out.splitlines()
+
+
+@pytest.mark.parametrize("as_json", [False, True])
+def test_librarian_undo_addresses_one_pass_and_reports_its_result(
+    rpc: FakeRpc, run_cli: RunCli, as_json: bool
+) -> None:
+    rpc.reply("librarian.undo", _STATUS)
+    code, out, _err = run_cli(
+        "librarian",
+        "undo",
+        "assistant",
+        "--started-at",
+        _LAST_PASS["started_at"],
+        *(["--json"] if as_json else []),
+    )
+    assert code == 0
+    assert rpc.calls == [
+        ("librarian.undo", {"agent_id": "assistant", "started_at": _LAST_PASS["started_at"]})
+    ]
+    if as_json:
+        assert json.loads(out) == _STATUS
+    else:
+        assert "assistant" in out.splitlines()[0]
+        assert _LAST_PASS["started_at"] in out.splitlines()[0]
+        assert "deploy-api (release)" in out
+        assert "vbot skill revert" not in out
+
+
+@pytest.mark.parametrize("as_json", [False, True])
+def test_librarian_undo_preserves_the_server_refusal(
+    rpc: FakeRpc, run_cli: RunCli, as_json: bool
+) -> None:
+    conflict = {"store": "skill", "skill": "deploy-api", "skill_owner_id": "release"}
+    rpc.fail(
+        "librarian.undo",
+        "learning_undo_conflict",
+        "Nothing was undone: a later change blocks it",
+        data=conflict,
+    )
+    code, out, _err = run_cli(
+        "librarian",
+        "undo",
+        "assistant",
+        "--started-at",
+        _LAST_PASS["started_at"],
+        *(["--json"] if as_json else []),
+    )
+    assert code == 1
+    assert rpc.methods == ["librarian.undo"]
+    if as_json:
+        error = json.loads(out)["error"]
+        assert error["code"] == "learning_undo_conflict"
+        assert error["data"] == conflict
+    else:
+        assert "Nothing was undone" in out
+
+
+def test_librarian_undo_requires_an_exact_pass(rpc: FakeRpc, run_cli: RunCli) -> None:
+    with pytest.raises(SystemExit) as stopped:
+        run_cli("librarian", "undo", "assistant")
+    assert stopped.value.code == 2
+    assert rpc.calls == []
 
 
 @pytest.mark.parametrize(
@@ -227,9 +317,11 @@ def test_librarian_status_without_an_agent_lists_the_recent_passes_of_all_agents
         "90 days unused; merging overlapping skills: on",
         "a pass of coder is running; its session: lib-3",
         "recent passes, newest first:",
-        "- 2026-09-30T10:02:00Z; Assistant (assistant); scheduled; archived 1; merge: merged "
+        "- 2026-09-30T10:02:00Z; Assistant (assistant); scheduled; started 2026-09-30T10:00:00Z; "
+        "archived 1; merge: merged "
         "and fixed overlapping skills; created 0, changed 1, merged away 1; session lib-1",
-        "- 2026-09-23T10:01:00Z; coder; started by hand; archived 0; merge: skipped, no skill "
+        "- 2026-09-23T10:01:00Z; coder; started by hand; started 2026-09-23T10:00:00Z; "
+        "archived 0; merge: skipped, no skill "
         "it may change has changed since the last merge",
         "see an agent's passes and undo their changes with: vbot librarian status <agent-id>",
         _HINT_SESSION,

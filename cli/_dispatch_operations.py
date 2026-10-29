@@ -29,6 +29,7 @@ from cli.cron_management import (
     cron_disable,
     cron_enable,
     cron_list,
+    cron_retry_delivery,
     cron_secret,
     cron_show,
     cron_update,
@@ -47,7 +48,12 @@ from cli.device_management import (
     devices_rename,
     devices_revoke,
 )
-from cli.librarian_management import librarian_overview, librarian_run, librarian_status
+from cli.librarian_management import (
+    librarian_overview,
+    librarian_run,
+    librarian_status,
+    librarian_undo,
+)
 from cli.log_management import log_read
 from cli.memory_management import (
     memory_add,
@@ -358,6 +364,8 @@ def dispatch_librarian_command(
         return librarian_status(instance, args.agent)
     if args.command == "run":
         return librarian_run(instance, args.agent)
+    if args.command == "undo":
+        return librarian_undo(instance, args.agent, args.started_at, as_json=args.json)
     raise ValueError(f"Unsupported librarian command: {args.command}")
 
 
@@ -404,6 +412,12 @@ def dispatch_cron_command(
         return disable_cron_fn(instance, args.id)
     if args.command == "secret":
         return cron_secret(instance, args.id, rotate=args.rotate)
+    if args.command == "retry-delivery":
+        retry_fields: dict[str, Any] = {}
+        refusal = _add_cron_delivery(args, retry_fields)
+        if refusal is not None:
+            return CommandResult(ok=False, message=refusal, instance=instance)
+        return cron_retry_delivery(instance, args.id, retry_fields, as_json=args.json)
     raise ValueError(f"Unsupported cron command: {args.command}")
 
 
@@ -590,8 +604,8 @@ def _automation_prompt(args: argparse.Namespace) -> str | None:
     return prompt
 
 
-def _add_cron_delivery_and_watch(args: argparse.Namespace, fields: dict[str, Any]) -> str | None:
-    """Add ``delivery`` and ``watch`` as the cron RPCs take them; a text refuses the call."""
+def _add_cron_delivery(args: argparse.Namespace, fields: dict[str, Any]) -> str | None:
+    """Read the same explicit destination for configuration and retained-message repair."""
     chat = {
         "channel_id": args.channel,
         "platform_target": args.chat,
@@ -600,7 +614,7 @@ def _add_cron_delivery_and_watch(args: argparse.Namespace, fields: dict[str, Any
     flags = {"channel_id": "--channel", "platform_target": "--chat", "thread_id": "--thread"}
     named = [flags[name] for name, value in chat.items() if value]
     # A chat named alone is clear enough: it can only mean delivery to that chat.
-    kind = args.deliver or ("chat" if named else None)
+    kind = getattr(args, "deliver", None) or ("chat" if named else None)
     if kind == "chat":
         if not args.channel or not args.chat:
             return (
@@ -616,6 +630,14 @@ def _add_cron_delivery_and_watch(args: argparse.Namespace, fields: dict[str, Any
                 "Nothing was changed."
             )
         fields["delivery"] = {"kind": kind}
+    return None
+
+
+def _add_cron_delivery_and_watch(args: argparse.Namespace, fields: dict[str, Any]) -> str | None:
+    """Add ``delivery`` and ``watch`` as the cron RPCs take them; a text refuses the call."""
+    refusal = _add_cron_delivery(args, fields)
+    if refusal is not None:
+        return refusal
     watch_runs = getattr(args, "watch_runs", None)
     if args.watch is not None:
         target = args.watch.strip()

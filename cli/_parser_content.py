@@ -555,6 +555,17 @@ def _add_librarian_parsers(
         commands, "run", LIBRARIAN_HELP["run"], example="librarian run assistant"
     )
     run_parser.add_argument("agent", metavar="<agent-id>", help="Identity Agent id")
+    undo_parser = _add_command_parser(commands, "undo", LIBRARIAN_HELP["undo"])
+    undo_parser.add_argument("agent", metavar="<agent-id>", help="Identity Agent id")
+    undo_parser.add_argument(
+        "--started-at",
+        required=True,
+        metavar="<timestamp>",
+        help="Exact ISO 8601 start timestamp of the pass, printed by librarian status",
+    )
+    undo_parser.add_argument(
+        "--json", action="store_true", help="Print the resulting status as JSON"
+    )
 
 
 def _add_memory_agent_argument(

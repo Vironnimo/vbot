@@ -11,6 +11,7 @@ vbot cron enable <job-id>
 vbot cron disable <job-id>
 vbot cron delete <job-id>
 vbot cron secret <job-id> [--rotate]
+vbot cron retry-delivery <job-id> [--channel <channel-id> --chat <chat-id> [--thread <thread-id>]] [--json]
 ```
 
 Create requires exactly one schedule: `--cron` is minute/hour/day/month/weekday, `--every` is a positive whole-minute interval, `--at` is a one-time ISO timestamp, and `--event` is a calendar event id. Cron and offset-free timestamps use `vbot config get server.timezone`. Choose a future date for one-time jobs.
@@ -36,6 +37,8 @@ For new Sessions of an Identity Agent, `--working-project <project-id>` fixes th
 `--deliver` says where each Run's final answer goes: `app` shows the Run's Session as unread in vBot and notifies the user, `chat` sends it to a Channel chat named by `--channel` (an id from `vbot channel list`, a Channel of the job's Agent) and `--chat` (such as one of the Channel's `allowed_chat_ids`), optionally into `--thread`, and `none`, the default on create, leaves it in the Run's Session. A Run that answers exactly `[SILENT]` delivers nothing, so a prompt can say to stay silent when there is nothing to report. From the second failure in a row, failures are reported the same way; `none` reports nothing. On update, `--deliver chat` needs `--channel` and `--chat` again. Project Agents cannot deliver to a chat.
 
 `--watch` makes a `--cron` or `--every` job check something before each Run, without a Model, and start the Run only when the output changed since the last check: an `http://` or `https://` address is read as a page (its main text), anything else runs as a command in the host shell (PowerShell on Windows, bash elsewhere) in the job's Working Project directory or Workspace, including a pinned Session's context. The first check records the output without a Run; the Run receives what changed. A failing check counts like a failed Run. `--watch-runs always` starts the Run at every due time instead, with the output and any change. `--clear-watch` removes the watch.
+
+Chat destinations stay bound to the platform selected when they were saved. After a Channel platform change, select the job's future destination again with `update --channel ... --chat ...`. To deliver retained messages blocked by a changed or unknown platform, use `retry-delivery` with the selected `--channel` and `--chat`; this also works for completed jobs and leaves other messages and the job's future destination unchanged. Without destination flags, `retry-delivery` retries the original targets, including uncertain sends: check the chat first so a message already there is not sent twice.
 
 Write self-contained prompts stating the work, relevant constraints and expected report. Pass a long or multiline prompt with `--file <path>` instead of `--prompt`; the file is read on the CLI's computer. A Project-targeted job can block Project removal; retarget or delete it first.
 

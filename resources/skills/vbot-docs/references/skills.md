@@ -66,10 +66,12 @@ A scheduled pass for an Agent runs every `librarian.interval_days` days, once ne
 ```bash
 vbot librarian status [<agent-id>]
 vbot librarian run <agent-id>
+vbot librarian undo <agent-id> --started-at <timestamp>
 ```
 
-- `status` without an agent shows whether the Librarian is available, the schedule settings and the recent passes over all Agents with their Session ids. With an agent it shows that Agent's last and earlier passes with their Session ids, the next scheduled pass and the Skill revisions the last pass recorded; it ends with the `vbot skill revert` command that takes all of them back together. For an Agent that gets no scheduled pass, it names the one reason: the Librarian is unavailable (and how to fix that), the Librarian is off for this Agent, the Agent has no Skills of its own, or scheduled passes are off (`librarian.enabled`).
+- `status` without an agent shows whether the Librarian is available, the schedule settings and the recent passes over all Agents with their Session ids. With an agent it shows that Agent's last and earlier passes with their Session ids and start timestamps, the next scheduled pass and the Skill revisions the last pass recorded, naming the owner of shared Skills. Its `Undo:` command takes back the last pass. For an Agent that gets no scheduled pass, it names the one reason: the Librarian is unavailable (and how to fix that), the Librarian is off for this Agent, the Agent has no Skills of its own, or scheduled passes are off (`librarian.enabled`).
 - `run` starts a pass now, regardless of the interval and of `librarian.enabled`. It refuses while any pass runs, while the Agent or the Librarian has an active or queued Run, for an Agent whose Librarian is off (`vbot agent update <agent-id> --librarian true` turns it on), for an Agent without Skills of its own, and for the Librarian itself. The pass runs in the background; read its result with `status`.
+- `undo` takes back one pass's Skill changes from aging and consolidation, including shared Skills in other Agents' homes. Replace `<timestamp>` with that pass's exact start timestamp from `status`. A later conflicting change refuses the undo; repeating a completed undo changes nothing. Pass details remain a historical record after undo.
 - `librarian.enabled`, `librarian.interval_days`, `librarian.archive_after_days` and `librarian.consolidate` are Settings paths; read `references/configuration.md` before changing them.
 
 ## Disable and share policy
