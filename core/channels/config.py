@@ -81,6 +81,7 @@ _EMAIL_FIELDS = frozenset(
         "smtp_security",
         "folders",
         "require_sender_authentication",
+        "trusted_authserv_ids",
     )
 )
 _DEFAULT_IMAP_PORT = 993
@@ -318,6 +319,17 @@ def _validate_email_settings(diagnostics: list[JsonDiagnostic], path: str, value
         value["require_sender_authentication"], bool
     ):
         add_error(diagnostics, f"{path}.require_sender_authentication", "must be a boolean")
+    trusted = value.get("trusted_authserv_ids", [])
+    if not isinstance(trusted, list) or not all(
+        isinstance(item, str)
+        and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", item.strip()) is not None
+        for item in trusted
+    ):
+        add_error(
+            diagnostics,
+            f"{path}.trusted_authserv_ids",
+            "must be a list of trusted Authentication-Results authserv-id names",
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -333,6 +345,7 @@ class EmailSettings:
     smtp_security: str = ""
     folders: tuple[str, ...] = _DEFAULT_EMAIL_FOLDERS
     require_sender_authentication: bool = True
+    trusted_authserv_ids: tuple[str, ...] = ()
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> EmailSettings:
@@ -353,6 +366,11 @@ class EmailSettings:
                 folder.strip() for folder in payload.get("folders") or _DEFAULT_EMAIL_FOLDERS
             ),
             require_sender_authentication=bool(payload.get("require_sender_authentication", True)),
+            trusted_authserv_ids=tuple(
+                dict.fromkeys(
+                    item.strip().lower() for item in payload.get("trusted_authserv_ids", [])
+                )
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -366,6 +384,7 @@ class EmailSettings:
             "smtp_security": self.smtp_security,
             "folders": list(self.folders),
             "require_sender_authentication": self.require_sender_authentication,
+            "trusted_authserv_ids": list(self.trusted_authserv_ids),
         }
 
     def updated(self, changes: Mapping[str, Any]) -> dict[str, Any]:

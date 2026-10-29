@@ -32,6 +32,7 @@ CHANNEL_UPDATE_FLAGS = (
     "--smtp-security",
     "--email-folder",
     "--require-sender-authentication",
+    "--trusted-authserv-id",
 )
 
 
@@ -497,6 +498,7 @@ def _format_channel_row(channel: object) -> str:
             f" imap={email.get('imap_host')}:{email.get('imap_port')}"
             f" smtp={email.get('smtp_host')}:{email.get('smtp_port')}/{email.get('smtp_security')}"
             f" folders={_format_allowed_chat_ids(email.get('folders'))}"
+            f" trusted_authserv_ids={_format_allowed_chat_ids(email.get('trusted_authserv_ids'))}"
         )
     return record_fields(fields, separator="")
 

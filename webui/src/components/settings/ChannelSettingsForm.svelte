@@ -29,6 +29,7 @@
     ['smtp_host', 'smtp_host', 'smtp.example.com'],
     ['smtp_port', 'smtp_port', '465'],
     ['email_folders', 'folders', 'INBOX'],
+    ['email_trusted_authserv_ids', 'trusted_authserv_ids', 'mx.example.com'],
   ];
 </script>
 
@@ -205,6 +206,10 @@
           {:else if field === 'email_folders'}
             <div class="s-row-desc">
               {t('settings.channels.email.folders.description')}
+            </div>
+          {:else if field === 'email_trusted_authserv_ids'}
+            <div class="s-row-desc">
+              {t('settings.channels.email.trusted_authserv_ids.description')}
             </div>
           {/if}
         </div>

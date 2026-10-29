@@ -221,7 +221,9 @@ def send_smtp(settings: EmailSettings, password: str, message: EmailMessage) -> 
         except OSError, smtplib.SMTPServerDisconnected:
             raise ChannelError("The SMTP server closed the connection", retryable=True) from None
         try:
-            client.data(message.as_bytes())
+            code, _reply = client.data(message.as_bytes())
+            if code != 250:
+                raise _refused("message", code)
         except smtplib.SMTPDataError as error:
             raise _refused("message", error.smtp_code) from None
         except OSError, smtplib.SMTPException:

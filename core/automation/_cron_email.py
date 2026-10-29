@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, override
 from zoneinfo import ZoneInfo
 
 from core.automation._cron_delivery import _local
@@ -183,6 +183,11 @@ class CronEmails(CronInbox[WaitingMail]):
 
     def __init__(self, owner: CronService) -> None:
         super().__init__(owner, EMAIL_INBOX)
+
+    @override
+    def _binding(self, job_id: str) -> str | None:
+        job = self._owner._jobs.get(job_id)
+        return None if job is None or job.email is None else job.email.channel_id
 
     async def accept_mail(self, mail: InboundMail) -> None:
         """Store one mail for every active email job of its Channel whose filters match.

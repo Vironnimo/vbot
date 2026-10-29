@@ -116,6 +116,11 @@ class EmailChannelAdapter(ChannelAdapter):
         self._mailbox: MailboxConnection | None = None
         self._connected = False
         self._retries = 0
+        # Each mailbox can spend minutes in IDLE; it cannot occupy a shared
+        # parser/SMTP worker or prevent another Channel from connecting.
+        self._mailbox_pool = BoundedWorkerPool(
+            name=f"channel-email-mailbox-{config.id}", max_workers=1
+        )
 
     # -- Connection -------------------------------------------------------------------
 
@@ -132,7 +137,7 @@ class EmailChannelAdapter(ChannelAdapter):
 
         try:
             try:
-                await _IO_POOL.run(connect)
+                await self._mailbox_pool.run(connect)
             except ChannelError:
                 raise
             except Exception:
@@ -155,7 +160,8 @@ class EmailChannelAdapter(ChannelAdapter):
             self._mailbox = None
             if mailbox is not None:
                 with contextlib.suppress(Exception):
-                    await settle_before_cancelling(_IO_POOL.run(mailbox.close))
+                    await settle_before_cancelling(self._mailbox_pool.run(mailbox.close))
+            self._mailbox_pool.shutdown(wait=False)
 
     @override
     async def stop(self) -> None:
@@ -173,7 +179,7 @@ class EmailChannelAdapter(ChannelAdapter):
 
     async def _mailbox_io(self, mailbox: MailboxConnection, function: Any, *args: Any) -> Any:
         """Run one blocking mailbox call; a cancellation ends a blocking read at once."""
-        work = asyncio.ensure_future(_IO_POOL.run(function, *args))
+        work = asyncio.ensure_future(self._mailbox_pool.run(function, *args))
         try:
             return await asyncio.shield(work)
         except asyncio.CancelledError:
@@ -253,6 +259,7 @@ class EmailChannelAdapter(ChannelAdapter):
             parse_mail,
             raw,
             fallback_message_id=f"<{uid_validity}.{uid}.{folder_key}@{self._config.id}.vbot.invalid>",
+            trusted_authserv_ids=self._settings.trusted_authserv_ids,
         )
         if header_only:
             mail = replace(mail, text=_HEADER_ONLY_TEXT, text_cut=True, attachments=())

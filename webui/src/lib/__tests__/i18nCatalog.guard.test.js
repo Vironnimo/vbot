@@ -33,6 +33,7 @@ const REPO_DIR = join(
 const COMPOSED_KEYS = {
   // The email Channel's account rows (ChannelSettingsForm.svelte EMAIL_TEXT_ROWS).
   'settings.channels.email.*': [
+    'trusted_authserv_ids',
     'address',
     'username',
     'imap_host',

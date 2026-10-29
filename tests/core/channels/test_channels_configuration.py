@@ -129,6 +129,11 @@ def test_channel_config_defaults_and_round_trips_gating_fields() -> None:
         ),
         ({"platform": "email", "email": {**_EMAIL, "folders": []}}, "$.email.folders", None),
         (
+            {"platform": "email", "email": {**_EMAIL, "trusted_authserv_ids": ["bad; id"]}},
+            "$.email.trusted_authserv_ids",
+            None,
+        ),
+        (
             {"platform": "email", "email": _EMAIL, "allowed_chat_ids": ["12345"]},
             "$.allowed_chat_ids[0]",
             "must be an email address",
@@ -195,9 +200,14 @@ def test_email_config_fills_its_defaults_and_round_trips(tmp_path: Path) -> None
         "smtp_security": "starttls",
         "folders": ["INBOX"],
         "require_sender_authentication": True,
+        "trusted_authserv_ids": [],
     }
     # An update changes the fields it names; derived defaults follow their source.
     assert config.email is not None
+    trusted = EmailSettings.from_dict(
+        config.email.updated({"trusted_authserv_ids": [" MX.Example.com ", "mx.example.com"]})
+    )
+    assert trusted.trusted_authserv_ids == ("mx.example.com",)
     moved = EmailSettings.from_dict(
         config.email.updated({"address": "new@example.com", "smtp_port": 465})
     )

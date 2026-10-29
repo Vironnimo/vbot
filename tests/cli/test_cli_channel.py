@@ -100,6 +100,7 @@ def test_channel_add_sends_the_connection_and_prints_the_channel_frame(
                 "--token-env", "MAIL_PASSWORD", "--email-address", "bot@example.com",
                 "--imap-host", "imap.example.com", "--smtp-host", "smtp.example.com",
                 "--smtp-port", "587", "--email-folder", "INBOX", "Invoices",
+                "--trusted-authserv-id", "mx.example.com",
             ),
             {
                 "token_env_var": "MAIL_PASSWORD",
@@ -109,6 +110,7 @@ def test_channel_add_sends_the_connection_and_prints_the_channel_frame(
                     "smtp_host": "smtp.example.com",
                     "smtp_port": 587,
                     "folders": ["INBOX", "Invoices"],
+                    "trusted_authserv_ids": ["mx.example.com"],
                 },
             },
             ("email=bot@example.com",),
@@ -348,6 +350,11 @@ def test_channel_status_lists_the_denied_chats(
             ("--smtp-port", "587", "--require-sender-authentication", "false"),
             {"email": {"smtp_port": 587, "require_sender_authentication": False}},
             id="email-account",
+        ),
+        pytest.param(
+            ("--trusted-authserv-id",),
+            {"email": {"trusted_authserv_ids": []}},
+            id="clear-authentication-servers",
         ),
     ],
 )  # fmt: skip

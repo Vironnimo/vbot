@@ -22,7 +22,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
 from functools import partial
@@ -114,6 +114,9 @@ class InboxState[Item: InboxItem]:
     keys: list[str] = field(default_factory=list)
     """Keys of the latest arrivals taken, oldest first, at most ``INBOX_MAX_KEYS``."""
 
+    binding: str | None = None
+    """The source Channel of an email inbox; absent in older state files."""
+
     def copy(self) -> InboxState[Item]:
         return InboxState(
             self.job_id,
@@ -122,6 +125,7 @@ class InboxState[Item: InboxItem]:
             self.dropped,
             list(self.items),
             list(self.keys),
+            self.binding,
         )
 
     def add(
@@ -168,6 +172,8 @@ class InboxState[Item: InboxItem]:
         }
         if self.keys:
             data["keys"] = list(self.keys)
+        if self.binding is not None:
+            data["binding"] = self.binding
         return data
 
 
@@ -232,15 +238,45 @@ class CronInbox[Item: InboxItem]:
         """Read the stored arrivals of these jobs before their tasks start. Blocking."""
         for job_id in job_ids:
             with suppress(CronStorageError):
-                self._states[job_id] = self._read_state(job_id)
+                self._states[job_id] = self._bound_state(self._read_state(job_id))
 
     def wake(self, job_id: str) -> asyncio.Event:
         """The event a job's task waits on; set when an arrival is stored."""
         return self._wakes.setdefault(job_id, asyncio.Event())
 
     async def waiting(self, job_id: str) -> int:
-        state = await self._state(job_id)
-        return len(state.waiting(taken=self._taken_seqs(job_id)))
+        async with self._lock(job_id):
+            state = await self._state(job_id)
+            return len(state.waiting(taken=self._taken_seqs(job_id)))
+
+    async def discard_after(
+        self, job_id: str, commit: Callable[[], Awaitable[None]], *, previous_binding: str
+    ) -> None:
+        """Commit an edit, then reset its inbox before a replacement task can read it.
+
+        A failed edit keeps the old arrivals. Existing waiters retain their
+        wake event and lock; in-flight batches cannot consume later arrivals
+        because sequence numbers keep increasing across the reset.
+        """
+        async with self._lock(job_id):
+            # Bind even older untagged state before the job file can name a
+            # replacement Channel. A crash between that save and cleanup then
+            # cannot hand the old mail to the replacement after restart.
+            previous = await self._state(job_id)
+            checkpoint = previous.copy()
+            checkpoint.binding = previous_binding
+            await self._write(checkpoint)
+            self._states[job_id] = checkpoint
+            await commit()
+            self._states[job_id] = InboxState(
+                job_id, next_seq=checkpoint.next_seq, binding=self._binding(job_id)
+            )
+            self._state_errors.pop(job_id, None)
+            self._taken.pop(job_id, None)
+            await self._owner._writer.call_async(
+                partial(remove_state, self._kind, self.state_dir, job_id)
+            )
+            self.wake(job_id).set()
 
     async def discard(self, job_id: str) -> None:
         """Forget the job's waiting arrivals and the keys it took. A failed removal is logged."""
@@ -282,6 +318,7 @@ class CronInbox[Item: InboxItem]:
             if key is not None and key in state.keys:
                 return "duplicate", state
             updated = state.copy()
+            updated.binding = self._binding(job_id)
             updated.add(make(state.next_seq), taken=self._taken_seqs(job_id), key=key)
             await settle_before_cancelling(self._commit_added(updated))
         return "added", updated
@@ -350,6 +387,18 @@ class CronInbox[Item: InboxItem]:
                     self._owner._notify_changed()
             # Another caller may have loaded or changed it meanwhile.
             state = self._states.setdefault(job_id, state)
+        state = self._bound_state(state)
+        self._states[job_id] = state
+        return state
+
+    def _binding(self, job_id: str) -> str | None:
+        """The current source identity, if this inbox kind binds to one."""
+        return None
+
+    def _bound_state(self, state: InboxState[Item]) -> InboxState[Item]:
+        binding = self._binding(state.job_id)
+        if binding is not None and state.binding is not None and binding != state.binding:
+            return InboxState(state.job_id, next_seq=state.next_seq, binding=binding)
         return state
 
     def _read_state(self, job_id: str) -> InboxState[Item]:
@@ -448,8 +497,13 @@ def _parse_state[Item: InboxItem](
     keys = payload.get("keys", [])
     if not isinstance(keys, list) or not all(isinstance(key, str) for key in keys):
         raise ValueError("keys must be a list of text")
+    binding = payload.get("binding")
+    if binding is not None and not isinstance(binding, str):
+        raise ValueError("binding must be text or null")
     parsed = [kind.parse_item(item) for item in items]
     assert isinstance(next_seq, int) and isinstance(dropped, int)
     if any(item.seq >= next_seq for item in parsed):
         raise ValueError("an item's seq is not below next_seq")
-    return InboxState(job_id, next_seq, last_received_at, dropped, parsed, keys[-INBOX_MAX_KEYS:])
+    return InboxState(
+        job_id, next_seq, last_received_at, dropped, parsed, keys[-INBOX_MAX_KEYS:], binding
+    )

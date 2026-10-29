@@ -1173,14 +1173,16 @@ The Channel's token is the account password. Most providers require an **app pas
 In Settings choose Email and fill in the address and servers, or use the CLI with the password on stdin:
 
 ```bash
-vbot channel add mail-main --platform email --agent assistant --email-address me@gmx.de --imap-host imap.gmx.net --smtp-host mail.gmx.net --smtp-port 587 --allow me@example.com --token-stdin
+vbot channel add mail-main --platform email --agent assistant --email-address bot@example.com --imap-host imap.example.com --smtp-host smtp.example.com --trusted-authserv-id mx.example.com --allow user@example.com --token-stdin
 vbot channel status mail-main
 vbot channel update mail-main --email-folder INBOX Invoices
 ```
 
 The SMTP security defaults to SSL on port 465 and STARTTLS on other ports (`--smtp-security`); the login name defaults to the address (`--email-username`). On `update`, the email flags change only the fields they name.
 
-Allowed chats are sender addresses. Each allowed sender gets its own conversation; a reply threads under the mail it answers. vBot answers a mail only when your mail server verified the sender's domain (DKIM or DMARC in its `Authentication-Results` header), so nobody can write in an allowed person's name; an allowed sender whose mail was not verified appears among the denied chats. If your server does not verify senders, `--require-sender-authentication false` turns the check off. Mails from other senders, automatic replies, bounces and mailing-list mails start no conversation; Cron jobs with an email trigger can act on them. The Agent can write to any address with `channel_send`. Commands such as `/new` do not work by mail.
+Replace the example account, hosts and trusted authentication-server names with your own. Configure `--trusted-authserv-id` with the `Authentication-Results` names confirmed by your receiving server's administrator; the server must strip forged headers claiming those names. Never copy trusted names from an untrusted mail. An empty list authenticates no sender, including for existing Channels; Settings exposes the same list as Trusted authentication servers.
+
+Allowed chats are sender addresses. Each allowed sender gets its own conversation; a reply threads under the mail it answers. vBot answers a mail only when a trusted receiving server verified the sender's domain (DKIM or DMARC); this verifies the domain, not the individual mailbox's identity. An allowed sender whose mail was not verified appears among the denied chats. If your server does not verify senders, `--require-sender-authentication false` turns the check off. Mails from other senders, automatic replies, bounces and mailing-list mails start no conversation; Cron jobs with an email trigger can act on them. The Agent can write to any address with `channel_send`. A body starting with a Command such as `/new` executes that Command.
 
 ### Initial integration coverage
 

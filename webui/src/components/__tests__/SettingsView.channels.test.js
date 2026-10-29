@@ -657,6 +657,67 @@ describe('SettingsView Channels', () => {
     ).toBe('12345, 99999');
   });
 
+  it('edits email authentication servers without reverting another account edit', async () => {
+    await openChannels({
+      channels: [
+        channelConfig('mail', {
+          platform: 'email',
+          token_env_var: 'MAIL_PASSWORD',
+          email: {
+            address: 'bot@example.com',
+            username: 'bot@example.com',
+            imap_host: 'imap.example.com',
+            imap_port: 993,
+            smtp_host: 'smtp.example.com',
+            smtp_port: 465,
+            smtp_security: 'ssl',
+            folders: ['INBOX'],
+            require_sender_authentication: true,
+            trusted_authserv_ids: [],
+          },
+        }),
+      ],
+    });
+    buttonByAriaLabel('Edit channel mail').click();
+    flushSync();
+    const input = document.querySelector(
+      '#channel-email_trusted_authserv_ids-input',
+    );
+    expect(input.getAttribute('aria-label')).toBe(
+      t('settings.channels.email.trusted_authserv_ids'),
+    );
+    setInputValue(
+      '#channel-email_trusted_authserv_ids-input',
+      'mx.example.com',
+    );
+    await rpcMock('channel.update', {
+      id: 'mail',
+      email: {
+        smtp_host: 'smtp.changed.example.com',
+        require_sender_authentication: false,
+      },
+    });
+    buttonByText('Save').click();
+    await waitForCondition(() =>
+      callsTo('channel.update').some(
+        ([, params]) =>
+          params.email?.trusted_authserv_ids?.[0] === 'mx.example.com',
+      ),
+    );
+    expect(callsTo('channel.update').at(-1)[1]).toEqual({
+      id: 'mail',
+      email: { trusted_authserv_ids: ['mx.example.com'] },
+    });
+    await waitForCondition(
+      () =>
+        document.querySelector('#channel-smtp_host-input')?.value ===
+        'smtp.changed.example.com',
+    );
+    expect(
+      document.querySelector('#channel-email_trusted_authserv_ids-input'),
+    ).toBe(input);
+  });
+
   it('creates a channel from the inline form', async () => {
     await openChannels({ channels: [] });
 

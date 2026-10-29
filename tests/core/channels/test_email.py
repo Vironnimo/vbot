@@ -35,7 +35,12 @@ pytestmark = pytest.mark.usefixtures("current_format_data_directory")
 _CHANNEL = "mail"
 _ME = "me@example.com"
 _SETTINGS = EmailSettings.from_dict(
-    {"address": "bot@example.com", "imap_host": "imap.example.com", "smtp_host": "smtp.example.com"}
+    {
+        "address": "bot@example.com",
+        "imap_host": "imap.example.com",
+        "smtp_host": "smtp.example.com",
+        "trusted_authserv_ids": ["mx.example.net", "mx"],
+    }
 )
 _PASS = "mx.example.net; dkim=pass header.d=example.com; dmarc=pass header.from=example.com"
 
@@ -123,6 +128,7 @@ class FakeEngine:
     def __init__(self) -> None:
         self.inbound: list[tuple[ConversationFacts, str, int]] = []
         self.admit: list[bool] = []
+        self.media_payloads: list[tuple[Any, ...]] = []
 
     def attach(self, transport: object) -> None:
         pass
@@ -135,6 +141,7 @@ class FakeEngine:
         self, facts: ConversationFacts, raw_messages: tuple[Any, ...], *, companion_text: str
     ) -> bool:
         self.inbound.append((facts, companion_text, len(raw_messages)))
+        self.media_payloads.append(raw_messages)
         return self.admit.pop(0) if self.admit else True
 
 
@@ -252,6 +259,14 @@ async def harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
         (_ME, "mx; dkim=pass header.d=other.example.net", {}, False, True),
         (_ME, "mx; dmarc=fail header.from=example.com", {}, False, True),
         (_ME, None, {}, False, True),
+        (_ME, "attacker.invalid; dmarc=pass header.from=example.com", {}, False, True),
+        (
+            _ME,
+            "attacker.invalid; dmarc=pass header.from=example.com",
+            {"Authentication-Results": _PASS},
+            False,
+            True,
+        ),
         (_ME, _PASS, {"Auto-Submitted": "auto-replied"}, False, False),
         (_ME, _PASS, {"Precedence": "list"}, False, False),
         ("stranger@example.com", _PASS, {}, False, False),
@@ -262,6 +277,8 @@ async def harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
         "foreign-dkim",
         "dmarc-fail",
         "unauthenticated",
+        "untrusted-authserv",
+        "untrusted-before-trusted",
         "auto-reply",
         "list",
         "not-allowed",
@@ -291,6 +308,33 @@ async def test_mail_routes_to_the_conversation_only_from_an_allowed_authenticate
         [sender] if denied else []
     )
     assert harness.watermark() == MailboxWatermark("imap.example.com/bot@example.com", 1, 2)
+
+
+@pytest.mark.asyncio
+async def test_no_configured_authentication_server_trusts_no_sender(harness: Harness) -> None:
+    harness.adapter._settings = replace(harness.adapter._settings, trusted_authserv_ids=())
+    await harness.deliver(make_mail())
+    assert harness.engine.inbound == []
+    assert not harness.sink.mails[0].sender_authenticated
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid", ["charset", "date"])
+async def test_invalid_mail_metadata_does_not_block_later_mail(
+    harness: Harness, invalid: str
+) -> None:
+    raw = make_mail(sender="stranger@example.com")
+    if invalid == "charset":
+        raw = raw.replace(b'charset="utf-8"', b"charset=x-vbot-unknown")
+    else:
+        raw = raw.replace(b"Tue, 27 Oct 2026 10:00:00 +0100", b"Fri, 31 Dec 9999 23:59:59 -1200")
+    await harness.deliver(raw)
+    await harness.deliver(make_mail(message_id="<following@example.com>"))
+    assert harness.sink.mails[0].text == "Hello"
+    if invalid == "date":
+        assert harness.sink.mails[0].sent_at is None
+    assert len(harness.engine.inbound) == 1
+    assert harness.watermark() == MailboxWatermark("imap.example.com/bot@example.com", 1, 3)
 
 
 @pytest.mark.asyncio
@@ -331,6 +375,26 @@ async def test_mail_carries_its_facts_to_the_conversation_and_the_triggers(
         attachments=(MailAttachment("report.pdf", "application/pdf", len(report[1])),),
     )
     assert anonymous.message_id.endswith(f"@{_CHANNEL}.vbot.invalid>")
+    forwarded = BytesParser(policy=policy.default).parsebytes(
+        make_mail(sender="stranger@example.com", message_id="<forwarded@example.com>")
+    )
+    assert isinstance(forwarded, EmailMessage)
+    original = BytesParser(policy=policy.default).parsebytes(make_mail(attachment=report))
+    forwarded.add_attachment(original, filename="forwarded.eml")
+    await harness.deliver(forwarded.as_bytes())
+    assert [item.filename for item in harness.sink.mails[-1].attachments] == ["forwarded.eml"]
+    assert harness.sink.mails[-1].attachments[0].media_type == "message/rfc822"
+    assert harness.sink.mails[-1].attachments[0].size > len(report[1])
+    forwarded.replace_header("From", _ME)
+    forwarded.replace_header("Message-ID", "<forwarded-conversation@example.com>")
+    await harness.deliver(forwarded.as_bytes())
+    attached_mail = harness.engine.media_payloads[-1][0]["attachment"]
+    kept = BytesParser(policy=policy.default).parsebytes(attached_mail.data)
+    assert isinstance(kept, EmailMessage)
+    body = kept.get_body()
+    assert body is not None
+    assert body.get_content().strip() == "Hello"
+    assert [part.get_filename() for part in kept.iter_attachments()] == ["report.pdf"]
 
 
 @pytest.mark.asyncio
@@ -410,6 +474,8 @@ async def test_replies_thread_and_own_mails_are_skipped(harness: Harness) -> Non
         "<m1@example.com>",
     )
     assert reply["References"] == "<m0@example.com> <m1@example.com>"
+    assert reply["Auto-Submitted"] == "auto-replied"
+    assert report["Auto-Submitted"] == "auto-generated"
     assert str(reply["Message-ID"]).endswith("@example.com>")
     assert (report["To"], report["Subject"], report["In-Reply-To"]) == (
         "you@mail.example.com",
@@ -441,7 +507,7 @@ async def test_stop_closes_the_mailbox_and_interrupts_a_waiting_idle(
     loop = asyncio.get_running_loop()
     closing = asyncio.Event()
     allow_close = asyncio.Event()
-    run_io = email_module._IO_POOL.run
+    run_io = adapter._mailbox_pool.run
 
     async def wait_for_close(function: Any, *args: Any, **kwargs: Any) -> Any:
         if function == mailbox.close:
@@ -457,7 +523,7 @@ async def test_stop_closes_the_mailbox_and_interrupts_a_waiting_idle(
     if phase == "opening":
         monkeypatch.setattr(adapter, "_open_mailbox", connect)
     elif phase == "cleanup":
-        monkeypatch.setattr(email_module._IO_POOL, "run", wait_for_close)
+        monkeypatch.setattr(adapter._mailbox_pool, "run", wait_for_close)
     task = asyncio.create_task(adapter.start())
     try:
         if phase == "opening":
@@ -478,6 +544,33 @@ async def test_stop_closes_the_mailbox_and_interrupts_a_waiting_idle(
             await task
     assert mailbox.interrupted.is_set() is (phase != "opening")
     assert mailbox.closed
+
+
+@pytest.mark.asyncio
+async def test_idle_mailboxes_leave_shared_workers_available_for_sending(tmp_path: Path) -> None:
+    adapters = []
+    mailboxes = []
+    tasks = []
+    sent = []
+    try:
+        for index in range(email_module._IO_POOL.max_workers + 1):
+            mailbox = FakeMailbox({"INBOX": FakeFolder()}, supports_idle=True)
+            adapter, _state, _mailbox, _engine, _sink, messages = make_adapter(
+                tmp_path / str(index), mailbox=mailbox
+            )
+            adapters.append(adapter)
+            mailboxes.append(mailbox)
+            sent.append(messages)
+            tasks.append(asyncio.create_task(adapter.start()))
+        await wait_until(lambda: all(mailbox.idling.is_set() for mailbox in mailboxes), timeout=2)
+        async with asyncio.timeout(2):
+            await adapters[0].send("Still available.", _ME)
+        assert len(sent[0]) == 1
+        assert not any(mailbox.interrupted.is_set() for mailbox in mailboxes)
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 class FakeImapClient:
@@ -595,9 +688,12 @@ class FakeSmtp:
     def rcpt(self, recipient: str) -> tuple[int, bytes]:
         return self._code("rcpt")
 
-    def data(self, message: bytes) -> None:
+    def data(self, message: bytes) -> tuple[int, bytes]:
         self._step("data")
-        FakeSmtp.sent.append(message)
+        result = self._code("final-data")
+        if result[0] == 250:
+            FakeSmtp.sent.append(message)
+        return result
 
     def quit(self) -> None:
         self._step("quit")
@@ -616,6 +712,8 @@ class FakeSmtp:
         (("rcpt", 550), False, False),
         (("data", smtplib.SMTPDataError(554, b"spam")), False, False),
         (("data", smtplib.SMTPServerDisconnected("gone")), False, True),
+        (("final-data", 451), True, False),
+        (("final-data", 550), False, False),
     ],
     ids=[
         "connect",
@@ -625,6 +723,8 @@ class FakeSmtp:
         "recipient-5xx",
         "data-refused",
         "data-unconfirmed",
+        "final-data-4xx",
+        "final-data-5xx",
     ],
 )
 def test_send_smtp_classifies_its_failures_for_delivery(

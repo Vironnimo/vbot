@@ -157,6 +157,7 @@ def _email_from_args(args: argparse.Namespace) -> dict[str, Any]:
         ("smtp_port", args.smtp_port),
         ("smtp_security", args.smtp_security),
         ("folders", args.email_folders),
+        ("trusted_authserv_ids", args.trusted_authserv_ids),
     ):
         if value is not None:
             email[key] = value
