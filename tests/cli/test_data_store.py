@@ -29,6 +29,7 @@ from core.database import (
 )
 from core.database.marker import begin_maintenance, read_maintenance
 from core.database.recovery import incident_path
+from core.projects import PROJECT_FORMAT_VERSION
 from core.secrets import CREDENTIALS, KeyFileProtection, SecretStore
 from core.sessions import ChatSessionManager, SessionAddress
 from core.utils.server_control import server_control_claim
@@ -950,7 +951,8 @@ def test_convert_changes_older_documents_while_the_server_is_stopped(
     assert converted.ok, converted.message
     assert "projects/repo/project.json" in converted.message
     assert calls == ["stop", "start"]
-    assert json.loads(document.read_text(encoding="utf-8"))["format_version"] == 2
+    stored = json.loads(document.read_text(encoding="utf-8"))
+    assert stored["format_version"] == PROJECT_FORMAT_VERSION
 
 
 class _StatusPayload:

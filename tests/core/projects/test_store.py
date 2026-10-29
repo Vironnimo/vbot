@@ -17,7 +17,6 @@ from core.database import write_bootstrap_marker
 from core.projects._order import InvalidProjectOrderError, ProjectOrderConflictError
 from core.projects.paths import cwd_exists
 from core.projects.projects import (
-    PROJECT_DEFAULT_ALLOWED_TOOLS,
     PROJECT_FORMAT_VERSION,
     InvalidProjectIdError,
     Project,
@@ -35,7 +34,6 @@ _SEEDED_FIELDS = (
     "sources",
     "model_mappings",
     "auto_load",
-    "allowed_tools",
     "skills_bundled_enabled",
     "skills_global_enabled",
     "skills_project_disabled",
@@ -77,8 +75,7 @@ def test_create_writes_the_anchor_with_seeded_defaults(data_dir: Path, repo: Pat
         "model_mappings": {},
         # The main instruction file is found automatically; no file is listed.
         "auto_load": [],
-        # The base Tool Whitelist is the ceiling; Skill rule lists start empty.
-        "allowed_tools": list(PROJECT_DEFAULT_ALLOWED_TOOLS),
+        # Skill rule lists start empty.
         "skills_bundled_enabled": [],
         "skills_global_enabled": [],
         "skills_project_disabled": [],
@@ -379,7 +376,6 @@ def test_update_rebuilds_changed_fields_and_keeps_the_rest(
             {"id": "claude.agents", "enabled": True},
             {"id": "claude.skills", "enabled": True},
         ],
-        allowed_tools=["read", "grep"],
         skills_bundled_enabled=["frontend-design"],
         skills_project_disabled=["debugging"],
         default_temperature=0.1,
@@ -397,7 +393,6 @@ def test_update_rebuilds_changed_fields_and_keeps_the_rest(
             {"id": "claude.skills", "enabled": True},
         ],
         "model_mappings": {},
-        "allowed_tools": ["read", "grep"],
         "skills_bundled_enabled": ["frontend-design"],
         "skills_project_disabled": ["debugging"],
         "default_temperature": 0.1,
@@ -490,16 +485,6 @@ def test_update_clears_a_field_with_its_empty_value(
             "overrides['builder'].model must be a non-empty model string",
             id="empty-override-model",
         ),
-        # An opt-in grant cannot reach beyond the Project Tool Whitelist.
-        pytest.param(
-            lambda store, repos: store.set_override(
-                "vbot", "writer", "tool_access", {"mode": "all", "granted": ["computer"]}
-            ),
-            ProjectError,
-            "overrides['writer'].tool_access.granted contains Tools outside the Project "
-            "Tool Whitelist: computer",
-            id="grant-outside-ceiling",
-        ),
         pytest.param(
             lambda store, repos: store.set_override("missing", "builder", "model", "a/b"),
             ProjectNotFoundError,
@@ -563,10 +548,6 @@ def test_load_requires_the_tool_whitelist_but_defaults_skill_lists(
 
     assert reloaded.skills_bundled_enabled == []
     assert reloaded.skills_project_disabled == []
-    del payload["allowed_tools"]
-    config_path.write_text(json.dumps(payload), encoding="utf-8")
-    with pytest.raises(ProjectError, match=r"\$\.allowed_tools: is required"):
-        store.get("vbot")
 
 
 def test_project_update_keeps_unknown_fields_on_disk(data_dir: Path, repo: Path) -> None:
@@ -743,7 +724,6 @@ def test_get_defaults_optional_metadata_in_minimal_config(data_dir: Path, repo: 
                 "format_version": PROJECT_FORMAT_VERSION,
                 "project_id": "vbot",
                 "cwd": str(repo),
-                "allowed_tools": [],
             }
         ),
         encoding="utf-8",
@@ -763,7 +743,7 @@ def test_get_defaults_optional_metadata_in_minimal_config(data_dir: Path, repo: 
     [
         pytest.param(
             {"format_version": PROJECT_FORMAT_VERSION, "project_id": "vbot"},
-            "error $.cwd: is required; error $.allowed_tools: is required",
+            "error $.cwd: is required",
             id="missing-required-fields",
         ),
         pytest.param(
@@ -771,7 +751,6 @@ def test_get_defaults_optional_metadata_in_minimal_config(data_dir: Path, repo: 
                 "format_version": PROJECT_FORMAT_VERSION,
                 "project_id": "other",
                 "cwd": "/srv/other",
-                "allowed_tools": [],
             },
             "expected vbot, got other",
             id="id-disagrees-with-anchor",

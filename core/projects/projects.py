@@ -37,7 +37,6 @@ from core.config_validation import (
     validate_non_empty_string,
     validate_optional_string,
     validate_optional_string_list,
-    validate_required_fields,
     validate_string,
     warn_unknown_keys,
 )
@@ -58,7 +57,6 @@ from core.projects.paths import normalize_cwd
 from core.projects.sources.catalog import detect_sources, initial_sources, normalize_sources
 from core.projects.sources.profile import SourceSelection
 from core.settings import (
-    PROJECT_TOOL_ALLOWLIST_WILDCARD,
     SettingsValidationError,
     is_valid_project_id,
     validate_temperature,
@@ -83,29 +81,6 @@ DEFAULT_DEFAULT_MODEL = ""
 DEFAULT_DEFAULT_TEMPERATURE: float | None = None
 DEFAULT_DEFAULT_TOP_P: float | None = None
 DEFAULT_DEFAULT_THINKING_EFFORT: str | None = None
-
-# The project Tool Whitelist ceiling a new project starts with (decision 2 /
-# decision 10). This is the SINGLE source for the creation seed and the UI "reset
-# to defaults" — change the base list here and both move together. A persisted
-# ``project.json`` always carries ``allowed_tools``; there is no missing-field fallback.
-# The default-off-but-UI-toggleable Tools (``session_search``, ``generate_image``,
-# ``generate_speech``, ``cron``, ``channel_send``, the Home-Assistant tools) are
-# deliberately absent. Automatic and Identity-only Tools are never directly
-# configurable Project Tools; ``skill`` itself is directly configurable and default-on.
-PROJECT_DEFAULT_ALLOWED_TOOLS: tuple[str, ...] = (
-    "read",
-    "apply_patch",
-    "search_files",
-    "bash",
-    "terminal",
-    "web_fetch",
-    "web_search",
-    "status",
-    "subagent",
-    "skill",
-    "show_widget",
-    "portal",
-)
 
 
 def project_tool_configurability_reason(
@@ -143,7 +118,6 @@ OVERRIDE_FIELDS: frozenset[str] = frozenset(
 
 _PROJECT_CONFIG_FIELDS = frozenset(
     {
-        "allowed_tools",
         "auto_instructions",
         "auto_load",
         "context_commands",
@@ -167,9 +141,10 @@ _PROJECT_CONFIG_FIELDS = frozenset(
         "updated_at",
     }
 )
-# Version 2 changed the meaning of the instruction settings; version 1 documents
-# are converted by ``core/projects/conversion.py``, never read.
-PROJECT_FORMAT_VERSION = 2
+# Version 2 changed the meaning of the instruction settings and version 3 removed
+# the Project Tool Whitelist; older documents are converted by
+# ``core/projects/conversion.py``, never read.
+PROJECT_FORMAT_VERSION = 3
 
 
 @cache
@@ -306,16 +281,6 @@ def validate_project_data(data: Any) -> list[JsonDiagnostic]:
     for switch in ("auto_instructions", "folder_instructions", "memory_enabled"):
         if switch in data and not isinstance(data[switch], bool):
             add_error(diagnostics, f"$.{switch}", "must be true or false")
-    validate_required_fields(diagnostics, "$", data, frozenset({"allowed_tools"}))
-    validate_optional_string_list(diagnostics, "$.allowed_tools", data.get("allowed_tools"))
-    if isinstance(data.get("allowed_tools"), list):
-        for index, tool_name in enumerate(data["allowed_tools"]):
-            if tool_name == PROJECT_TOOL_ALLOWLIST_WILDCARD:
-                add_error(
-                    diagnostics,
-                    f"$.allowed_tools[{index}]",
-                    "the all-tools wildcard '*' is not allowed in a Project Tool Whitelist",
-                )
     validate_optional_string_list(
         diagnostics, "$.skills_bundled_enabled", data.get("skills_bundled_enabled")
     )
@@ -326,11 +291,6 @@ def validate_project_data(data: Any) -> list[JsonDiagnostic]:
         diagnostics, "$.skills_project_disabled", data.get("skills_project_disabled")
     )
     _validate_override_schema(diagnostics, "$.overrides", data.get("overrides"))
-    _validate_override_ceiling_diagnostics(
-        diagnostics,
-        data.get("overrides"),
-        data.get("allowed_tools"),
-    )
     validate_string(diagnostics, "$.created_at", data.get("created_at"), required=False)
     validate_string(diagnostics, "$.updated_at", data.get("updated_at"), required=False)
     return diagnostics
@@ -419,38 +379,6 @@ def _validate_one_override_schema(
             add_error(diagnostics, child_path(path, "permission_rules"), str(error))
 
 
-def _validate_override_ceiling_diagnostics(
-    diagnostics: list[JsonDiagnostic],
-    overrides: Any,
-    allowed_tools: Any,
-) -> None:
-    if not isinstance(overrides, Mapping) or not isinstance(allowed_tools, list):
-        return
-    ceiling = set(allowed_tools)
-    tool_access_shape = _override_shape().nested["tool_access"]
-    for agent_id, override in overrides.items():
-        if not isinstance(agent_id, str) or not isinstance(override, Mapping):
-            continue
-        raw_policy = override.get("tool_access")
-        try:
-            policy = (
-                _normalize_tool_access_policy(strip_unknown_fields(raw_policy, tool_access_shape))
-                if raw_policy is not None
-                else None
-            )
-        except ValueError:
-            continue
-        if policy is None:
-            continue
-        for policy_field in ("allowed", "granted"):
-            for tool_name in sorted(set(getattr(policy, policy_field)) - ceiling):
-                add_error(
-                    diagnostics,
-                    child_path(child_path("$.overrides", agent_id), f"tool_access.{policy_field}"),
-                    f"Tool is outside the Project Tool Whitelist: {tool_name}",
-                )
-
-
 @dataclass(frozen=True)
 class Project:
     """Persisted project configuration stored in ``project.json``.
@@ -481,10 +409,6 @@ class Project:
     # Shell lines every new Session working in this Project runs before its first
     # Model request (``core.utils.context_commands``); written only when set.
     context_commands: list[str]
-    # The Project Tool Whitelist — the hard ceiling for this project's config
-    # agents (GLOSSARY → Project Tool Whitelist). ``build_project`` defaults it to
-    # the base list; an explicit empty list is a real value (every tool off).
-    allowed_tools: list[str]
     # The Project Skill Whitelist as a rule, not a resolved set (decision 3): which
     # bundled and global skills are opted in, and which project skills are exceptionally
     # off. All empty by default → only the project's own scanned skills are active.
@@ -543,7 +467,6 @@ class Project:
             "sources": [source.to_dict() for source in self.sources],
             "model_mappings": dict(self.model_mappings),
             "auto_load": list(self.auto_load),
-            "allowed_tools": list(self.allowed_tools),
             "skills_bundled_enabled": list(self.skills_bundled_enabled),
             "skills_global_enabled": list(self.skills_global_enabled),
             "skills_project_disabled": list(self.skills_project_disabled),
@@ -585,7 +508,6 @@ def build_project(
     folder_instructions: bool = True,
     memory_enabled: bool = True,
     context_commands: list[str] | None = None,
-    allowed_tools: list[str] | None = None,
     skills_bundled_enabled: list[str] | None = None,
     skills_global_enabled: list[str] | None = None,
     skills_project_disabled: list[str] | None = None,
@@ -596,9 +518,7 @@ def build_project(
     """Validate fields and construct a :class:`Project` with normalized cwd.
 
     The ``cwd`` is resolved (symlinks, ``.``/``..``) and stored as an absolute
-    path; case is preserved. ``allowed_tools=None`` falls back to the base list
-    :data:`PROJECT_DEFAULT_ALLOWED_TOOLS` (an explicit ``[]`` is kept as "every
-    tool off"); the skill lists default to empty. Timestamps default to now (UTC
+    path; case is preserved. The skill lists default to empty. Timestamps default to now (UTC
     ISO 8601 with offset). Raises :class:`ProjectError` /
     :class:`InvalidProjectIdError` on bad input.
     """
@@ -624,7 +544,6 @@ def build_project(
     except ValueError as error:
         raise ProjectError(str(error)) from error
     validated_mappings = _validate_model_mappings({} if model_mappings is None else model_mappings)
-    validated_allowed_tools = _validate_allowed_tools(allowed_tools)
     validated_skills_bundled = _validate_string_list(
         "skills_bundled_enabled", skills_bundled_enabled
     )
@@ -633,7 +552,6 @@ def build_project(
         "skills_project_disabled", skills_project_disabled
     )
     validated_overrides = _validate_overrides(overrides)
-    _validate_tool_access_override_ceilings(validated_overrides, validated_allowed_tools)
     now = utc_now_timestamp()
     return Project(
         project_id=validated_id,
@@ -651,7 +569,6 @@ def build_project(
         folder_instructions=_validate_switch("folder_instructions", folder_instructions),
         memory_enabled=_validate_switch("memory_enabled", memory_enabled),
         context_commands=validated_context_commands,
-        allowed_tools=validated_allowed_tools,
         skills_bundled_enabled=validated_skills_bundled,
         skills_global_enabled=validated_skills_global,
         skills_project_disabled=validated_skills_disabled,
@@ -688,7 +605,6 @@ def project_from_dict(data: dict[str, Any]) -> Project:
         folder_instructions=data.get("folder_instructions", True),
         memory_enabled=data.get("memory_enabled", True),
         context_commands=normalize_context_commands(data.get("context_commands")),
-        allowed_tools=_allowed_tools_from_data(data.get("allowed_tools")),
         skills_bundled_enabled=list(cast("list[str]", data.get("skills_bundled_enabled") or [])),
         skills_global_enabled=list(cast("list[str]", data.get("skills_global_enabled") or [])),
         skills_project_disabled=list(cast("list[str]", data.get("skills_project_disabled") or [])),
@@ -705,14 +621,6 @@ def _normalize_project_display_name(project_id: str, value: Any) -> str:
     if not isinstance(value, str):
         raise ProjectError("display_name must be a string or null")
     return value if value.strip() else project_id
-
-
-def _allowed_tools_from_data(value: Any) -> list[str]:
-    """Return the persisted Tool Whitelist; an explicit empty list means every Tool off.
-
-    ``allowed_tools`` is required in ``project.json`` and validated before this.
-    """
-    return list(cast("list[str]", value))
 
 
 def _normalize_cwd(cwd: str | os.PathLike[str]) -> Any:
@@ -800,20 +708,6 @@ def _validate_auto_load(auto_load: list[str] | None) -> list[str]:
         if not isinstance(item, str) or not item.strip():
             raise ProjectError("auto_load entries must be non-empty strings")
     return list(auto_load)
-
-
-def _validate_allowed_tools(allowed_tools: list[str] | None) -> list[str]:
-    """Validate the Tool Whitelist; ``None`` falls back to the base list.
-
-    An explicit empty list is a valid value (every tool off) and is kept as-is,
-    so only ``None`` (caller said nothing) seeds the base ceiling.
-    """
-    if allowed_tools is None:
-        return list(PROJECT_DEFAULT_ALLOWED_TOOLS)
-    validated = _validate_string_list("allowed_tools", allowed_tools)
-    if PROJECT_TOOL_ALLOWLIST_WILDCARD in validated:
-        raise ProjectError("allowed_tools cannot contain the all-tools wildcard '*' for a Project")
-    return validated
 
 
 def _validate_string_list(field_name: str, values: list[str] | None) -> list[str]:
@@ -910,28 +804,6 @@ def _validate_override(agent_id: str, override: Any) -> dict[str, Any]:
         except ValueError as exc:
             raise ProjectError(f"overrides[{agent_id!r}].{exc}") from exc
     return validated
-
-
-def _validate_tool_access_override_ceilings(
-    overrides: Mapping[str, Mapping[str, Any]],
-    allowed_tools: list[str],
-) -> None:
-    """Reject selected Project Agent Tools outside the Project Tool Whitelist."""
-
-    ceiling = set(allowed_tools)
-    for agent_id, override in overrides.items():
-        raw_policy = override.get("tool_access")
-        if raw_policy is None:
-            continue
-        policy = _normalize_tool_access_policy(raw_policy)
-        for policy_field in ("allowed", "granted"):
-            outside = sorted(set(getattr(policy, policy_field)) - ceiling)
-            if outside:
-                names = ", ".join(outside)
-                raise ProjectError(
-                    f"overrides[{agent_id!r}].tool_access.{policy_field} contains Tools outside "
-                    f"the Project Tool Whitelist: {names}"
-                )
 
 
 def _validate_override_temperature(agent_id: str, value: Any) -> float:

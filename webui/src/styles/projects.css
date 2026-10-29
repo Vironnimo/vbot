@@ -119,8 +119,35 @@
   margin-bottom: 24px;
 }
 
-.projects-view .management-topic + .management-topic {
+/* Below the Repository section the page has two parts: the working context
+   every Agent in the Project shares, then the repository's Team. A part's
+   title stands above its sections; parts sit farther apart than sections. */
+.projects-view .management-topic + .projects-part,
+.projects-view .projects-part + .projects-part {
+  margin-top: 64px;
+}
+
+.projects-view .projects-part > * + * {
   margin-top: 44px;
+}
+
+.projects-view .projects-part > .projects-part__head + * {
+  margin-top: 20px;
+}
+
+.projects-view .projects-part__title {
+  margin: 0;
+  color: var(--text-hi);
+  font: 600 var(--fs-heading-md) / 1.4 var(--font-ui);
+  letter-spacing: -0.01em;
+}
+
+.projects-view .projects-part__desc {
+  max-width: 66ch;
+  margin: 2px 0 0;
+  color: var(--text-lo);
+  font-size: var(--fs-body-sm);
+  line-height: 1.5;
 }
 
 .projects-view .project-detail-scroll > .management-footer {

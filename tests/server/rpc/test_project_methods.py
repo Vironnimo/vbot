@@ -16,7 +16,6 @@ from typing import Any
 
 import pytest
 
-from core.projects.projects import PROJECT_DEFAULT_ALLOWED_TOOLS
 from core.runtime.runtime import Runtime
 from core.utils.config import Config
 from server.events import ServerEventBus
@@ -88,7 +87,7 @@ async def test_add_creates_the_project_with_seeded_defaults_and_a_scan_preview(
     assert (project["auto_instructions"], project["folder_instructions"]) == (True, True)
     assert project["auto_load"] == []
     assert project["instruction_status"] == {"main_file": "CLAUDE.md", "missing": []}
-    assert project["allowed_tools"] == list(PROJECT_DEFAULT_ALLOWED_TOOLS)
+    assert "allowed_tools" not in project
     assert project["skills_bundled_enabled"] == []
     assert project["skills_global_enabled"] == []
     assert project["skills_project_disabled"] == []
@@ -188,30 +187,12 @@ async def test_add_detects_mixed_sources(tmp_path: Path) -> None:
         ("project.show", {"project_id": "VBOT"}, "project_not_found", ""),
         ("project.set", {"project_id": "vbot"}, "invalid_request", ""),
         ("project.set", {"project_id": "vbot", "cwd": "{missing}"}, "invalid_request", ""),
+        # The Project Tool Whitelist is gone; Team members' Tools are per Agent.
         (
             "project.set",
-            {"project_id": "vbot", "allowed_tools": ["read", 7]},
+            {"project_id": "vbot", "allowed_tools": ["read"]},
             "invalid_request",
-            "",
-        ),
-        (
-            "project.set",
-            {"project_id": "vbot", "allowed_tools": ["read", "*"]},
-            "invalid_request",
-            "",
-        ),
-        (
-            "project.set",
-            {"project_id": "vbot", "allowed_tools": ["read", "missing_extension_tool"]},
-            "invalid_request",
-            "missing_extension_tool",
-        ),
-        # Registered, but not eligible for Projects.
-        (
-            "project.set",
-            {"project_id": "vbot", "allowed_tools": ["read", "memory"]},
-            "invalid_request",
-            "memory",
+            "allowed_tools",
         ),
         (
             "project.set",
@@ -267,24 +248,16 @@ async def test_a_refused_project_request_leaves_the_projects_unchanged(
         pytest.param({"display_name": None}, {"display_name": "vbot"}, id="clear-display-name"),
         pytest.param(
             {
-                "allowed_tools": ["read", "search_files"],
                 "skills_bundled_enabled": ["frontend-design"],
                 "skills_global_enabled": ["pdf"],
                 "skills_project_disabled": ["debugging"],
             },
             {
-                "allowed_tools": ["read", "search_files"],
                 "skills_bundled_enabled": ["frontend-design"],
                 "skills_global_enabled": ["pdf"],
                 "skills_project_disabled": ["debugging"],
             },
-            id="whitelists",
-        ),
-        pytest.param({"allowed_tools": []}, {"allowed_tools": []}, id="empty-tool-whitelist"),
-        pytest.param(
-            {"allowed_tools": ["read", "extension_tool"]},
-            {"allowed_tools": ["read", "extension_tool"]},
-            id="registered-extension-tool",
+            id="skill-whitelist",
         ),
         pytest.param(
             {"default_temperature": 0.2, "default_top_p": 0.9, "default_thinking_effort": "low"},
@@ -306,7 +279,6 @@ async def test_set_changes_project_fields(
     tmp_path: Path, changes: JsonObject, expected: JsonObject
 ) -> None:
     state, _repo = await _vbot_state(tmp_path, default_thinking_effort="high")
-    state.runtime.tools.names.add("extension_tool")
 
     updated = await rpc_result(state, "project.set", project_id="vbot", **changes)
     shown = await rpc_result(state, "project.show", project_id="vbot")
@@ -338,44 +310,6 @@ async def test_set_invalidates_the_skill_inventory_only_when_a_skill_field_chang
     await rpc_result(state, "project.set", project_id="vbot", **changes)
 
     assert [change["kind"] for change in resource_changes(state)] == invalidated
-
-
-@pytest.mark.asyncio
-async def test_a_stored_unavailable_tool_is_kept_and_reported_but_not_rejected(
-    tmp_path: Path,
-) -> None:
-    state, _repo = await _vbot_state(tmp_path)
-    state.runtime.projects.update("vbot", allowed_tools=["read", "disabled_extension_tool"])
-
-    shown = await rpc_result(state, "project.show", project_id="vbot")
-    edited = await rpc_result(
-        state,
-        "project.set",
-        project_id="vbot",
-        allowed_tools=["read", "search_files", "disabled_extension_tool"],
-    )
-
-    assert shown["project"]["allowed_tools"] == ["read", "disabled_extension_tool"]
-    assert shown["scan"]["report"] == {
-        "clean": False,
-        "findings": [
-            {
-                "type": "unavailable_tool",
-                "detail": (
-                    "Tool Whitelist entry 'disabled_extension_tool' is not a currently "
-                    "registered Project tool. It remains stored but grants no access "
-                    "unless the tool becomes available again."
-                ),
-                "agent_id": "",
-                "source_path": None,
-            }
-        ],
-    }
-    assert edited["project"]["allowed_tools"] == [
-        "read",
-        "search_files",
-        "disabled_extension_tool",
-    ]
 
 
 @pytest.mark.asyncio

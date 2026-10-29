@@ -413,7 +413,6 @@ class ProjectStore:
                 "folder_instructions",
                 "memory_enabled",
                 "context_commands",
-                "allowed_tools",
                 "skills_bundled_enabled",
                 "skills_global_enabled",
                 "skills_project_disabled",
@@ -442,7 +441,6 @@ class ProjectStore:
                 folder_instructions=changes.get("folder_instructions", project.folder_instructions),
                 memory_enabled=changes.get("memory_enabled", project.memory_enabled),
                 context_commands=changes.get("context_commands", list(project.context_commands)),
-                allowed_tools=changes.get("allowed_tools", list(project.allowed_tools)),
                 skills_bundled_enabled=changes.get(
                     "skills_bundled_enabled", list(project.skills_bundled_enabled)
                 ),
@@ -534,7 +532,6 @@ class ProjectStore:
             folder_instructions=project.folder_instructions,
             memory_enabled=project.memory_enabled,
             context_commands=list(project.context_commands),
-            allowed_tools=list(project.allowed_tools),
             skills_bundled_enabled=list(project.skills_bundled_enabled),
             skills_global_enabled=list(project.skills_global_enabled),
             skills_project_disabled=list(project.skills_project_disabled),

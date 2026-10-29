@@ -26,7 +26,6 @@ import {
   createProjectEditForm,
   createProjectsState,
   buildManageProjectPayload,
-  setListMembership,
   normalizeScanSkills,
   hasManageChanges,
   normalizeProject,
@@ -158,7 +157,6 @@ export function createProjectsController({
         folder_instructions: state.editForm.folder_instructions,
         memory_enabled: state.editForm.memory_enabled,
         context_commands: state.editForm.context_commands,
-        allowed_tools: state.editForm.allowed_tools,
         skills_bundled_enabled: state.editForm.skills_bundled_enabled,
         skills_global_enabled: state.editForm.skills_global_enabled,
         skills_project_disabled: state.editForm.skills_project_disabled,
@@ -420,11 +418,6 @@ export function createProjectsController({
         Array.isArray(toolsResult.value?.tools)
           ? toolsResult.value.tools
           : [],
-      defaultProjectTools:
-        toolsResult.status === 'fulfilled' &&
-        Array.isArray(toolsResult.value?.default_project_tools)
-          ? toolsResult.value.default_project_tools
-          : [],
     };
   }
 
@@ -434,7 +427,6 @@ export function createProjectsController({
       return;
     }
     state.toolCatalog = catalogs.tools;
-    state.defaultProjectTools = catalogs.defaultProjectTools;
     if (!catalogs.modelCatalogsAvailable) {
       return;
     }
@@ -642,15 +634,6 @@ export function createProjectsController({
     next.splice(to, 0, file);
     updateEditField('auto_load', next);
     return true;
-  }
-
-  function updateListField(field, name, enabled) {
-    state.editForm[field] = setListMembership(
-      state.editForm[field],
-      name,
-      enabled,
-    );
-    state.editError = '';
   }
 
   function replaceListField(field, values) {
@@ -1085,7 +1068,6 @@ export function createProjectsController({
     updateEditField,
     addSkillFolder,
     moveAutoLoadEntry,
-    updateListField,
     updateModelsRefreshToken,
     updateProjectsRefreshToken,
     updateOverrideDraft,

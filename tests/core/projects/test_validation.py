@@ -31,7 +31,6 @@ def _valid_project_data() -> dict[str, object]:
         "sources": [],
         "model_mappings": {},
         "auto_load": ["AGENTS.md", "PROJECT.md"],
-        "allowed_tools": ["read_file", "bash"],
         "created_at": "2026-06-18T10:00:00Z",
         "updated_at": "2026-06-18T10:00:00Z",
     }
@@ -57,8 +56,6 @@ def _diagnostics(data: object) -> list[tuple[str, str, str]]:
                 # "" is the explicit Provider default, not a missing value.
                 "default_thinking_effort": "",
                 "auto_load": [],
-                # An empty Tool Whitelist (every Tool off) is a value, not an error.
-                "allowed_tools": [],
             },
             id="empty-optional-values",
         ),
@@ -74,9 +71,6 @@ def _diagnostics(data: object) -> list[tuple[str, str, str]]:
                 "model_mappings": {},
                 "auto_instructions": False,
                 "folder_instructions": True,
-                # Registry membership is runtime state: a disabled Extension must not
-                # make its persisted Project unloadable.
-                "allowed_tools": ["read", "disabled_extension_tool"],
                 "skills_bundled_enabled": ["frontend-design"],
                 "skills_global_enabled": ["pdf"],
                 "skills_project_disabled": ["debugging"],
@@ -99,12 +93,11 @@ def test_validate_project_data_accepts_valid_configs(changes: dict[str, Any]) ->
     assert validate_project_data({**_valid_project_data(), **changes}) == []
 
 
-def test_validate_project_data_accepts_only_identity_cwd_and_tool_whitelist() -> None:
+def test_validate_project_data_accepts_only_identity_and_cwd() -> None:
     data = {
         "format_version": PROJECT_FORMAT_VERSION,
         "project_id": "scratch",
         "cwd": "/srv/repos/scratch",
-        "allowed_tools": [],
     }
 
     assert validate_project_data(data) == []
@@ -177,22 +170,6 @@ def test_validate_project_data_accepts_only_identity_cwd_and_tool_whitelist() ->
             {"folder_instructions": "off"},
             [("error", "$.folder_instructions", "must be true or false")],
             id="switch-not-a-bool",
-        ),
-        pytest.param(
-            {"allowed_tools": "read"},
-            [("error", "$.allowed_tools", "must be a list of strings")],
-            id="tools-not-a-list",
-        ),
-        pytest.param(
-            {"allowed_tools": ["read", "*"]},
-            [
-                (
-                    "error",
-                    "$.allowed_tools[1]",
-                    "the all-tools wildcard '*' is not allowed in a Project Tool Whitelist",
-                )
-            ],
-            id="tool-wildcard",
         ),
         pytest.param(
             {"skills_bundled_enabled": ["frontend-design", "  "]},
@@ -281,10 +258,9 @@ def test_validate_project_data_rejects_non_object_root() -> None:
     assert _diagnostics([1, 2, 3]) == [("error", "$", "Expected a JSON object, got list")]
 
 
-def test_validate_project_data_requires_only_cwd_and_tool_whitelist() -> None:
+def test_validate_project_data_requires_only_cwd() -> None:
     assert _diagnostics({"format_version": PROJECT_FORMAT_VERSION, "project_id": "vbot"}) == [
         ("error", "$.cwd", "is required"),
-        ("error", "$.allowed_tools", "is required"),
     ]
 
 

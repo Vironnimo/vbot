@@ -10,7 +10,6 @@ import pytest
 
 from core.agents.agents import AgentStore
 from core.database import write_bootstrap_marker
-from core.projects.projects import PROJECT_DEFAULT_ALLOWED_TOOLS
 from core.projects.resolver import (
     AgentOverrides,
     AgentResolutionError,
@@ -23,6 +22,7 @@ from core.projects.resolver import (
     resolve_skill_scope,
 )
 from core.projects.scan_report import FindingType
+from core.projects.sources import DEFAULT_PROFILE_TOOLS
 from core.projects.store import ProjectStore
 
 OPENCODE_AGENTS_SUBPATH = (".opencode", "agents")
@@ -278,7 +278,7 @@ __all__ = [
     "Any",
     "pytest",
     "AgentStore",
-    "PROJECT_DEFAULT_ALLOWED_TOOLS",
+    "DEFAULT_PROFILE_TOOLS",
     "AgentResolutionError",
     "AgentOverrides",
     "AgentResolver",

@@ -1,4 +1,4 @@
-"""The conversion of ``project.json`` format version 1 to version 2."""
+"""The conversion of ``project.json`` format versions 1 and 2 to the current version."""
 
 from __future__ import annotations
 
@@ -26,11 +26,11 @@ def data_dir(tmp_path: Path) -> Path:
     return directory
 
 
-def _write_v1(data_dir: Path, repo: Path, **fields: Any) -> Path:
+def _write_v1(data_dir: Path, repo: Path, *, version: int = 1, **fields: Any) -> Path:
     path = data_dir / "projects" / "repo" / "project.json"
     path.parent.mkdir(parents=True)
     document = {
-        "format_version": 1,
+        "format_version": version,
         "project_id": "repo",
         "cwd": str(repo),
         "allowed_tools": ["read"],
@@ -170,7 +170,9 @@ def test_conversion_keeps_the_instruction_files_a_project_loaded(
     assert project.instruction_files == loaded
 
 
-def test_conversion_changes_only_documents_of_version_1(data_dir: Path, tmp_path: Path) -> None:
+def test_conversion_changes_only_documents_of_older_versions(
+    data_dir: Path, tmp_path: Path
+) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "AGENTS.md").write_text("a", encoding="utf-8")
@@ -195,3 +197,47 @@ def test_conversion_changes_only_documents_of_version_1(data_dir: Path, tmp_path
     assert json.loads(newer.read_text(encoding="utf-8")) == {
         "format_version": PROJECT_FORMAT_VERSION + 1
     }
+
+
+def test_conversion_writes_the_tool_whitelist_into_tool_overrides(
+    data_dir: Path, tmp_path: Path
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    path = _write_v1(
+        data_dir,
+        repo,
+        version=2,
+        allowed_tools=["read", "bash", "portal"],
+        overrides={
+            # all meant the whitelist without the denied Tools; it stays exactly that.
+            "builder": {"tool_access": {"mode": "all", "denied": ["bash"], "future": 1}},
+            # A selected Tool outside the whitelist never ran.
+            "reviewer": {"tool_access": {"mode": "selected", "allowed": ["read", "cron"]}},
+            "silent": {"tool_access": {"mode": "none"}},
+            "planner": {"model": "openai/gpt-5.2"},
+        },
+    )
+
+    assert pending_project_documents(data_dir) == ("projects/repo/project.json",)
+    convert_project_documents(data_dir)
+
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    assert stored["format_version"] == PROJECT_FORMAT_VERSION
+    assert "allowed_tools" not in stored
+    assert stored["overrides"] == {
+        "builder": {
+            "tool_access": {
+                "mode": "selected",
+                "allowed": ["read", "portal"],
+                "denied": ["bash"],
+                "future": 1,
+            }
+        },
+        "reviewer": {"tool_access": {"mode": "selected", "allowed": ["read"]}},
+        "silent": {"tool_access": {"mode": "none"}},
+        "planner": {"model": "openai/gpt-5.2"},
+    }
+    assert ProjectStore(data_dir).get("repo").overrides["reviewer"]["tool_access"]["allowed"] == [
+        "read"
+    ]

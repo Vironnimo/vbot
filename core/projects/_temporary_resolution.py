@@ -86,11 +86,9 @@ class TemporaryResolution:
             else (self._owner._tool_names() if config.tool_access.mode == "all" else ())
         )
         owner_tools = tuple(name for name in owner_tools if name not in config.tool_access.denied)
-        # Team and temporary Agents use the same translation; the ceiling belongs
-        # to the Project for a Team member and to its owner for a participant.
-        access = _project_agent_tool_access(
-            replace(project, allowed_tools=list(owner_tools)), profile
-        )
+        # Team and temporary Agents use the same translation; a participant's
+        # owner bounds it with its own selection.
+        access = _project_agent_tool_access(project, profile, owner_tools)
         access = replace(
             access,
             allowed=tuple(name for name in access.allowed if name not in config.tool_access.denied),

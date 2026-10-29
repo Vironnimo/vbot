@@ -54,7 +54,6 @@ PROJECT_SET_FLAGS = (
     "--auto-instructions",
     "--folder-instructions",
     "--memory",
-    "--allowed-tools",
     "--enabled-bundled-skills",
     "--enabled-global-skills",
     "--disabled-project-skills",
@@ -359,7 +358,6 @@ def _project_config_lines(project: object) -> list[str]:
     if missing:
         lines.append(f"  auto_load_missing: {_format_string_list(missing)}")
     optional_fields = (
-        ("allowed_tools", "allowed_tools"),
         ("skills_bundled_enabled", "enabled_bundled_skills"),
         ("skills_global_enabled", "enabled_global_skills"),
         ("skills_project_disabled", "disabled_project_skills"),

@@ -78,8 +78,7 @@ def prepare_swarm(
     """Check the bundled Swarm Extension and save a profile of ``participants``.
 
     The profile works in the fixture Project and may use every catalog Tool
-    within the Project's Tool ceiling that needs no opt-in; the directive's
-    regular Tools must be among them.
+    that needs no opt-in; the directive's regular Tools must be among them.
     """
     extensions = rpc.call("extensions.list", {}).get("extensions") or []
     record = next((item for item in extensions if item.get("name") == SWARM_EXTENSION), None)
@@ -105,22 +104,12 @@ def prepare_swarm(
     if CATALOG_MODEL not in models:
         raise SwarmError(f"the Swarm catalog lacks the fake Provider Model {CATALOG_MODEL}")
     project_id = str(project["project_id"])
-    ceiling = next(
-        (
-            set(item.get("allowed_tools") or [])
-            for item in catalog.get("projects") or []
-            if item.get("id") == project_id
-        ),
-        None,
-    )
-    if ceiling is None:
+    if not any(item.get("id") == project_id for item in catalog.get("projects") or []):
         raise SwarmError(f"the Swarm catalog lacks the fixture Project {project_id}")
     allowed = tuple(
         str(item["name"])
         for item in catalog.get("tools") or []
-        if item.get("name") in ceiling
-        and not item.get("requires_opt_in")
-        and item.get("activation") != "session_grant"
+        if not item.get("requires_opt_in") and item.get("activation") != "session_grant"
     )
     regular = {split_tool_spec(spec)[0] for spec in tools if not is_swarm_tool(spec)}
     missing = sorted(regular - set(allowed))

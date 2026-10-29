@@ -709,7 +709,7 @@ SHA-256 digest for each platform's archive and executable.
 - **Packaging:** server packaging includes the executable and its notices; the
   desktop client excludes them.
 
-Only `search_files` is registered. New Project ceilings include it. A `grep` or
+Only `search_files` is registered; it is one of the Default Profile Tools. A `grep` or
 `glob` name left in a policy is an ordinary unknown Tool name. Claude/OpenCode
 scanner denials for either capability map to `search_files`. Historical chat rows
 remain readable.

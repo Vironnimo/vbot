@@ -11,7 +11,6 @@ import pytest
 
 from core.chat import CommandDispatcher, CommandOutcome
 from core.projects import AgentResolver, build_project
-from core.projects.projects import PROJECT_DEFAULT_ALLOWED_TOOLS
 from core.runs import ChatRunManager
 from core.sessions import SessionAddress, SessionNotFoundError, SessionWorkingProject
 from core.tools import ToolRegistry, tool_success
@@ -465,17 +464,6 @@ class _ToolRegistry:
         return list(self._tools)
 
 
-def test_tool_list_exposes_default_project_tools() -> None:
-    runtime = SimpleNamespace(tools=_ToolRegistry([_tool_stub("read"), _tool_stub("edit")]))
-    state = SimpleNamespace(runtime=runtime)
-
-    result = _list_tools(state, {})
-
-    assert [tool["name"] for tool in result["tools"]] == ["read", "edit"]
-    # The base project Tool Whitelist rides along as the editor's reset target.
-    assert result["default_project_tools"] == list(PROJECT_DEFAULT_ALLOWED_TOOLS)
-
-
 def test_tool_list_projects_server_owned_configurability_policy() -> None:
     runtime = SimpleNamespace(
         tools=_ToolRegistry(
@@ -531,7 +519,6 @@ def test_tool_list_includes_session_scoped_tools_with_activation_metadata() -> N
     assert inbox["session_scoped"] is True
     assert inbox["activation"] == "session_grant"
     assert inbox["project_configurable"] is False
-    assert result["default_project_tools"] == list(PROJECT_DEFAULT_ALLOWED_TOOLS)
 
 
 def test_tool_list_hides_tools_excluded_from_public_catalog() -> None:
@@ -580,7 +567,6 @@ def test_tool_list_returns_not_ready_tools_with_ready_false() -> None:
     ready_by_name = {tool["name"]: tool["ready"] for tool in result["tools"]}
     # The not-ready tool IS present, flagged ready == False; the ready ones True.
     assert ready_by_name == {"read": True, "edit": True, "ha_call_service": False}
-    assert result["default_project_tools"] == list(PROJECT_DEFAULT_ALLOWED_TOOLS)
 
 
 def test_tool_list_surfaces_ready_hint_and_extension_fields() -> None:
@@ -673,7 +659,6 @@ async def test_tool_list_returns_public_tools_sorted_with_their_full_projection(
                 ("z_tool", "Last tool"),
             )
         ],
-        "default_project_tools": list(PROJECT_DEFAULT_ALLOWED_TOOLS),
     }
 
 

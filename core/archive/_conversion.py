@@ -4,7 +4,7 @@ An archived Project keeps its Anchor, ``project.json`` included, under
 ``archive/`` and records the payload's format version in the entry's facts
 (``payload_format``), which decide whether it can be restored. The Projects
 converter rewrites the document; this module finds the archived Projects that
-still hold version 1 and records the new version once the payload is converted.
+still hold an older version and records the new version once the payload is converted.
 Run only where the Projects converter runs: an update's verification start and
 ``vbot data-store convert``.
 """
@@ -15,7 +15,7 @@ from pathlib import Path
 
 from core.projects import PROJECT_FORMAT_VERSION
 from core.projects.conversion import (
-    CONVERTED_PROJECT_FORMAT_VERSION,
+    CONVERTED_PROJECT_FORMAT_VERSIONS,
     convert_archived_project,
     project_file_needs_conversion,
 )
@@ -30,7 +30,7 @@ from core.sessions import (
 
 
 def convert_archived_projects(data_dir: Path, ledger: SessionArchiveLedger) -> tuple[str, ...]:
-    """Convert every archived Project recorded with format version 1; return their entry ids.
+    """Convert every archived Project recorded with an older format; return their entry ids.
 
     Idempotent: the payload is converted before its facts change, so a pass
     interrupted between the two converts nothing again and only records the
@@ -46,7 +46,7 @@ def convert_archived_projects(data_dir: Path, ledger: SessionArchiveLedger) -> t
             if (
                 entry.state != ARCHIVE_STATE_ARCHIVED
                 or isinstance(recorded, bool)
-                or recorded != CONVERTED_PROJECT_FORMAT_VERSION
+                or recorded not in CONVERTED_PROJECT_FORMAT_VERSIONS
             ):
                 continue
             for tree in entry.trees:
@@ -61,7 +61,7 @@ def convert_archived_projects(data_dir: Path, ledger: SessionArchiveLedger) -> t
 
 
 def archived_projects_need_conversion(data_dir: Path) -> bool:
-    """Whether a ``project.json`` of version 1 lies anywhere under ``archive/``.
+    """Whether a ``project.json`` of an older version lies anywhere under ``archive/``.
 
     A check without the Session database, for a caller that must decide before
     it stops the server; a file of another kind with that name only costs a

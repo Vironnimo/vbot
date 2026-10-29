@@ -114,7 +114,7 @@ describe('Tool Access Policy UI helpers', () => {
     });
   });
 
-  it('limits a Project Agent selection to the Project Tool Whitelist ceiling', () => {
+  it('limits a selection to the ceiling the editor is given', () => {
     expect(
       changeToolAccessMode({ mode: 'all' }, 'selected', catalog, ['read']),
     ).toEqual({

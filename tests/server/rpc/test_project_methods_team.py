@@ -246,8 +246,7 @@ _OVERRIDE = {"project_id": "vbot", "agent_id": "builder"}
             )
             for value in (
                 {"mode": "selected", "allowed": ["read"], "denied": ["read"]},
-                {"mode": "selected", "allowed": ["missing_tool"]},
-                {"mode": "all", "granted": ["computer"]},
+                {"mode": "selected", "allowed": "read"},
             )
         ),
         (

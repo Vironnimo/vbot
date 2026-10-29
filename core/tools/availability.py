@@ -194,7 +194,7 @@ def resolve_tool_access(
             and _constraints_allow(catalog[name], tool_access, workspace=workspace)
         }
 
-    # A whitelist (including a materialized Project ceiling) is never an opt-in.
+    # A Tool selection, also one an owner or the converter materialized, is never an opt-in.
     active = {
         name
         for name in active

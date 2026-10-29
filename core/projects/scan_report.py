@@ -14,7 +14,6 @@ class FindingType(StrEnum):
     SLUG_COLLISION = "slug_collision"
     UNSLUGIFIABLE_NAME = "unslugifiable_name"
     ORPHAN = "orphan"
-    UNAVAILABLE_TOOL = "unavailable_tool"
     INVALID_SOURCE = "invalid_source"
     SKILL_COLLISION = "skill_collision"
     SOURCE_SCOPE = "source_scope"
@@ -61,9 +60,8 @@ class ScanReport:
     def with_findings(self, findings: list[ScanFinding]) -> ScanReport:
         """Return a new report with findings from outside the scan appended.
 
-        The scan has no model/provider context, no Project Anchor and no live
-        Tool Registry, so the resolver (``BAD_MODEL``), the anchor-aware caller
-        (``ORPHAN`` pointers) and the server-facing Project preview
-        (``UNAVAILABLE_TOOL``) contribute those findings through this seam.
+        The scan has no model/provider context and no Project Anchor, so the
+        resolver (``BAD_MODEL``) and the anchor-aware caller (``ORPHAN`` pointers)
+        contribute those findings through this seam.
         """
         return ScanReport(findings=(*self.findings, *findings))

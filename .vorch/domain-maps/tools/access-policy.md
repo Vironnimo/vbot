@@ -1,6 +1,6 @@
 # Tool Access Policy and Visibility
 
-How `core/tools/availability.py` resolves a Tool Access Policy, how opt-in, followers, `fixed` and `live_call` behave, which flags hide a registered Tool from which surfaces, and how listing filters by readiness. The root rule (one resolver, `denied` absolute, opt-in needs a grant) lives in `tools.md` -> Contracts -> Policy resolution; per-Agent policy storage in `agent.md`, Project ceilings in `projects/resolution.md`.
+How `core/tools/availability.py` resolves a Tool Access Policy, how opt-in, followers, `fixed` and `live_call` behave, which flags hide a registered Tool from which surfaces, and how listing filters by readiness. The root rule (one resolver, `denied` absolute, opt-in needs a grant) lives in `tools.md` -> Contracts -> Policy resolution; per-Agent policy storage in `agent.md`, Project Agent policy in `projects/resolution.md`.
 
 ## Policy resolution
 
@@ -12,13 +12,13 @@ Constraint `live_call` (`TOOL_CONSTRAINT_LIVE_CALL`) resolves a Tool only for a 
 
 ## Opt-in Tools
 
-Configurable Tools may declare `requires_opt_in=True`. They require an explicit name in `tool_access.granted` in addition to ordinary policy permission; All mode and materialized Project ceilings never grant opt-in. None and denials still win, and companions cannot follow an ungranted parent. Missing Tools retain stored grants. `tool.list` exposes the flag for the shared editor; raw wildcard/unfiltered definition and dispatch paths do not authorize opt-in Tools. Coverage: `tests/core/tools/test_availability.py`, `tests/core/tools/test_tools_registry.py` (registration rules), `tests/core/extensions/test_capabilities.py`.
+Configurable Tools may declare `requires_opt_in=True`. They require an explicit name in `tool_access.granted` in addition to ordinary policy permission; All mode and selections an owner or the Project converter materialized never grant opt-in. None and denials still win, and companions cannot follow an ungranted parent. Missing Tools retain stored grants. `tool.list` exposes the flag for the shared editor; raw wildcard/unfiltered definition and dispatch paths do not authorize opt-in Tools. Coverage: `tests/core/tools/test_availability.py`, `tests/core/tools/test_tools_registry.py` (registration rules), `tests/core/extensions/test_capabilities.py`.
 
 ## Followers and retired names
 
 A retired Tool name (such as `grep`, `glob`, `terminal_beta`) left in a persisted policy is an ordinary unknown Tool name, and Project adapters map external grep/glob denials to `search_files` (see `tools/search_files.md`). `edit` and `write` are registered again as followers of `apply_patch` (`tools/edit.md`): a persisted `denied` entry vetoes one, and an `allowed` entry grants nothing without `apply_patch`.
 
-For a config (Project) Agent, the Project Tool Whitelist is the outer ceiling; how scanned repository denials and vBot overrides combine with it, and what `project.set` accepts: `projects/resolution.md` and `projects/configuration.md`.
+For a config (Project) Agent, no Project ceiling applies: how its repository definition, the Default Profile Tools and a vBot override make its policy is in `projects/resolution.md` -> Effective Capabilities.
 
 ## Readiness
 
@@ -30,5 +30,5 @@ For a config (Project) Agent, the Project Tool Whitelist is the outer ceiling; h
 - `deferred=True` keeps a Tool registered for policy, metadata, and dispatch while excluding it from Provider definitions and System Prompt Tool lists. Discovery owners deliver selected schemas through ordinary results; catalog changes must not promote deferred Tools implicitly.
 - `catalog_visible=False` hides a Tool only from public catalog projections, including Extension capability lists and Project selection. Internal enumeration retains it for policy, collision detection, replacement, fingerprints and teardown; this flag alone neither grants access nor establishes Session scope. Public projections explicitly use `include_catalog_hidden=False`; the default preserves internal enumeration. Coverage: `tests/server/rpc/test_catalog_methods.py`, `tests/core/extensions/test_operations.py`.
 - Provider-visible definitions expose only name/description/schema - never handlers, context, internal flags, or display metadata; Definition Profiles resolve per Agent from stable config (deterministic key, sorted set inputs, transient liveness excluded) and a `None` profile hides the Tool.
-- `list_tools` filters registered -> allowed -> ready (readiness last, default off); `provider_definitions`/`prompt_definitions` default `ready_only=True`; `tool.list` intentionally includes not-ready/granted public Tools with full metadata so policy editors can explain states. At this boundary `allowed_tools=None`/`["*"]` mean all normal Tools, `[]` means none - the Project Tool Whitelist is deliberately stricter and rejects `"*"` (see `projects/resolution.md`).
+- `list_tools` filters registered -> allowed -> ready (readiness last, default off); `provider_definitions`/`prompt_definitions` default `ready_only=True`; `tool.list` intentionally includes not-ready/granted public Tools with full metadata so policy editors can explain states. At this boundary `allowed_tools=None`/`["*"]` mean all normal Tools, `[]` means none.
 - Internal tools bypass allowlist filtering and enforce their own domain rules.

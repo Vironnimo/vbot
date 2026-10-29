@@ -14,7 +14,7 @@ spelling belongs to the session/chat RPC entry, not to this module.
 **Scan preview.** ``project.add`` and ``project.show`` return a ``scan`` block —
 the Team (callable agents discovered in the repo) plus the report (everything
 unclean under what exists: bad/unconfigured model, slug collision, unslugifiable
-name, or a persisted Tool Whitelist entry unavailable in the live registry).
+or unslugifiable name).
 ``add`` returns it for the just-created project; ``show`` re-scans live (the repo
 is the source of truth, no copy drift). An empty folder yields an empty team and
 a clean report — that is a valid Project, not an error. ``project.list`` with
@@ -32,7 +32,6 @@ automation references and default-Project updates (``RPC_ERROR_PROJECT_IN_USE``)
 from __future__ import annotations
 
 import asyncio
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -43,11 +42,10 @@ from core.projects import (
     cwd_exists,
     main_instruction_file,
     normalize_cwd,
-    project_tool_configurability_reason,
     slugify_project_id,
 )
 from core.projects.projects import OVERRIDE_FIELDS
-from core.projects.scan_report import FindingType, ScanFinding, ScanReport
+from core.projects.scan_report import ScanFinding, ScanReport
 from core.projects.sources import (
     AgentProfile,
     ScanResult,
@@ -57,7 +55,6 @@ from core.projects.sources import (
 )
 from core.runs import RunAdmissionBlockedError
 from core.settings import (
-    PROJECT_TOOL_ALLOWLIST_WILDCARD,
     SettingsValidationError,
     validate_temperature,
     validate_thinking_effort,
@@ -136,7 +133,6 @@ _SET_MUTABLE_FIELDS = frozenset(
         "folder_instructions",
         "memory_enabled",
         "context_commands",
-        "allowed_tools",
         "skills_bundled_enabled",
         "skills_global_enabled",
         "skills_project_disabled",
@@ -328,10 +324,6 @@ def _cached_scan_preview(state: Any, project: Project) -> JsonObject | None:
             type(exc).__name__,
         )
         return None
-    result = replace(
-        result,
-        report=result.report.with_findings(_unavailable_project_tool_findings(state, project)),
-    )
     return _scan_response(resolver, result, project)
 
 
@@ -429,12 +421,6 @@ def _update_project_record(
                 changes["sources"],
                 root=normalize_cwd(changes.get("cwd", current_project.cwd)),
                 known={source.id for source in current_project.sources},
-            )
-        if "allowed_tools" in changes:
-            _validate_project_tool_change(
-                state,
-                current_project,
-                changes["allowed_tools"],
             )
         project = _projects(state).update(project_id, **changes)
         changed_fields = sorted(
@@ -616,14 +602,6 @@ def _validate_override_value(
             policy = normalize_tool_access(value)
         except ValueError as exc:
             raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
-        for name_field in ("allowed", "granted"):
-            outside = sorted(set(getattr(policy, name_field)) - set(project.allowed_tools))
-            if outside:
-                raise RpcError(
-                    RPC_ERROR_INVALID_REQUEST,
-                    f"params.value.{name_field} contains Tools outside the Project Tool Whitelist: "
-                    + ", ".join(outside),
-                )
         return policy.to_dict()
     if field == "tool_loading":
         try:
@@ -704,80 +682,9 @@ def _scan_preview(state: Any, project: Project) -> JsonObject:
     """Scan one project into the agent-facing Team + report preview."""
     resolver = _agent_resolver(state)
     result = resolver.scan_project_report(project)
-    result = replace(
-        result,
-        report=result.report.with_findings(_unavailable_project_tool_findings(state, project)),
-    )
     response = _scan_response(resolver, result, project)
     response["skills"] = _project_skill_pool(state, project.project_id)
     return response
-
-
-def _registered_project_tool_names(state: Any) -> frozenset[str]:
-    """Return the live registry names eligible for a Project Tool Whitelist.
-
-    This matches the Project editor's catalog boundary: registered normal Tools,
-    including not-ready Tools, with declarative activation and constraints deciding
-    whether a Project Agent may configure each entry.
-    """
-    registered = state.runtime.tools.list_tools(
-        include_session_scoped=False,
-        include_catalog_hidden=False,
-    )
-    return frozenset(
-        tool.name
-        for tool in registered
-        if project_tool_configurability_reason(
-            activation=tool.activation,
-            constraints=tool.constraints,
-        )
-        is None
-    )
-
-
-def _validate_project_tool_change(
-    state: Any,
-    current_project: Project,
-    requested_tools: list[str],
-) -> None:
-    """Reject wildcard or newly introduced unavailable Project tool names.
-
-    Existing unavailable names may be carried forward or removed. That narrow
-    exception preserves a disabled Extension's permission while still preventing
-    any RPC caller from granting a name that is not currently a registered
-    Project tool.
-    """
-    if PROJECT_TOOL_ALLOWLIST_WILDCARD in requested_tools:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            "params.allowed_tools cannot contain the all-tools wildcard '*' for a Project",
-        )
-
-    registered = _registered_project_tool_names(state)
-    unavailable = set(requested_tools) - registered
-    newly_introduced = sorted(unavailable - set(current_project.allowed_tools))
-    if newly_introduced:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            "params.allowed_tools contains tools that are not currently registered "
-            f"for Projects: {', '.join(newly_introduced)}",
-        )
-
-
-def _unavailable_project_tool_findings(state: Any, project: Project) -> list[ScanFinding]:
-    """Build non-fatal findings for persisted names outside the live catalog."""
-    registered = _registered_project_tool_names(state)
-    return [
-        ScanFinding(
-            type=FindingType.UNAVAILABLE_TOOL,
-            detail=(
-                f"Tool Whitelist entry '{tool_name}' is not a currently registered "
-                "Project tool. It remains stored but grants no access unless the "
-                "tool becomes available again."
-            ),
-        )
-        for tool_name in sorted(set(project.allowed_tools) - registered)
-    ]
 
 
 def _project_skill_pool(state: Any, project_id: str) -> JsonObject:
@@ -851,11 +758,10 @@ def _set_changes(params: JsonObject) -> JsonObject:
             changes["context_commands"] = normalize_context_commands(params["context_commands"])
         except ValueError as error:
             raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.context_commands {error}") from error
-    # The Tool/Skill Whitelist fields are lists of non-empty strings; an explicit
-    # empty list is a real value (e.g. every tool off), so presence in params — not
-    # truthiness — decides whether the field changes.
+    # The Skill Whitelist fields are lists of non-empty strings; an explicit empty
+    # list is a real value, so presence in params — not truthiness — decides
+    # whether the field changes.
     for list_field in (
-        "allowed_tools",
         "skills_bundled_enabled",
         "skills_global_enabled",
         "skills_project_disabled",
@@ -1016,7 +922,6 @@ def _project_response(project: Project) -> JsonObject:
         "memory_enabled": project.memory_enabled,
         "instruction_status": _instruction_status(project),
         "context_commands": list(project.context_commands),
-        "allowed_tools": list(project.allowed_tools),
         "skills_bundled_enabled": list(project.skills_bundled_enabled),
         "skills_global_enabled": list(project.skills_global_enabled),
         "skills_project_disabled": list(project.skills_project_disabled),
@@ -1064,9 +969,7 @@ def _team_member_response(resolver: Any, member: AgentProfile, project: Project)
         "translations": [item.to_dict() for item in member.translations],
         "unavailable_reason": member.unavailable_reason,
         "source_path": str(member.source_path),
-        # The vBot tools this agent turns off via its OpenCode permissions, sorted.
-        # The editor pairs this with the project Tool Whitelist (the ceiling) to show
-        # that an individual agent may use less than the project maximum.
+        # The vBot Tools this agent's repository definition turns off, sorted.
         "denied_tools": sorted(member.denied_tools),
         "tools": resolver.effective_tools_for_member(project, member),
         # The agent's override object (vBot-owned, the top tier of each chain), or

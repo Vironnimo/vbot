@@ -12,7 +12,6 @@ import pytest
 
 from core.projects.projects import (
     OVERRIDE_FIELDS,
-    PROJECT_DEFAULT_ALLOWED_TOOLS,
     InvalidProjectIdError,
     ProjectError,
     build_project,
@@ -43,7 +42,6 @@ def test_build_project_fills_every_optional_field_with_its_default(tmp_path: Pat
         "sources": [],
         "model_mappings": {},
         "auto_load": [],
-        "allowed_tools": list(PROJECT_DEFAULT_ALLOWED_TOOLS),
         "skills_bundled_enabled": [],
         "skills_global_enabled": [],
         "skills_project_disabled": [],
@@ -51,9 +49,6 @@ def test_build_project_fills_every_optional_field_with_its_default(tmp_path: Pat
     }
     assert is_canonical_timestamp(created_at)
     assert updated_at == created_at
-    # The base Tool Whitelist names apply_patch; edit and write follow it.
-    assert "apply_patch" in PROJECT_DEFAULT_ALLOWED_TOOLS
-    assert not {"edit", "write"} & set(PROJECT_DEFAULT_ALLOWED_TOOLS)
 
 
 def test_build_project_keeps_every_explicit_field_through_a_round_trip(tmp_path: Path) -> None:
@@ -75,7 +70,6 @@ def test_build_project_keeps_every_explicit_field_through_a_round_trip(tmp_path:
         "memory_enabled": False,
         "auto_load": ["AGENTS.md"],
         "context_commands": ["git status --short", "npm outdated"],
-        "allowed_tools": ["read", "grep"],
         "skills_bundled_enabled": ["frontend-design"],
         "skills_global_enabled": ["pdf", "deploy"],
         "skills_project_disabled": ["debugging"],
@@ -109,21 +103,6 @@ def test_build_project_keeps_every_explicit_field_through_a_round_trip(tmp_path:
         **fields,
     }
     assert project_from_dict(project.to_dict()) == project
-
-
-def test_explicit_empty_tool_whitelist_is_kept(tmp_path: Path) -> None:
-    # [] turns every Tool off; only an absent field seeds the base list.
-    stored = {
-        "project_id": "vbot",
-        "display_name": "vBot",
-        "cwd": "/srv/repos/vbot",
-        "allowed_tools": [],
-        "created_at": _TIMESTAMP,
-        "updated_at": _TIMESTAMP,
-    }
-
-    assert build_project("vbot", "vBot", tmp_path, allowed_tools=[]).allowed_tools == []
-    assert project_from_dict(stored).allowed_tools == []
 
 
 @pytest.mark.parametrize(
@@ -177,22 +156,6 @@ def test_explicit_empty_tool_whitelist_is_kept(tmp_path: Path) -> None:
             ProjectError,
             "auto_load entries must be non-empty strings",
             id="auto-load-entry",
-        ),
-        pytest.param(
-            "vbot",
-            None,
-            {"allowed_tools": ["read", 7]},
-            ProjectError,
-            "allowed_tools entries must be non-empty strings",
-            id="tool-entry",
-        ),
-        pytest.param(
-            "vbot",
-            None,
-            {"allowed_tools": ["read", "*"]},
-            ProjectError,
-            "allowed_tools cannot contain the all-tools wildcard '*' for a Project",
-            id="tool-wildcard",
         ),
         pytest.param(
             "vbot",
@@ -278,20 +241,6 @@ def test_explicit_empty_tool_whitelist_is_kept(tmp_path: Path) -> None:
         pytest.param(
             "vbot",
             None,
-            {
-                "allowed_tools": ["read"],
-                "overrides": {
-                    "reviewer": {"tool_access": {"mode": "selected", "allowed": ["bash"]}}
-                },
-            },
-            ProjectError,
-            "overrides['reviewer'].tool_access.allowed contains Tools outside the Project "
-            "Tool Whitelist: bash",
-            id="override-tool-outside-ceiling",
-        ),
-        pytest.param(
-            "vbot",
-            None,
             {"overrides": {"coder": {"tool_loading": {"on_demand": "yes"}}}},
             ProjectError,
             "overrides['coder'].tool_loading.on_demand must be a boolean",
@@ -351,7 +300,6 @@ def test_project_from_dict_defaults_optional_fields() -> None:
         "project_id": "vbot",
         "display_name": "vBot",
         "cwd": "/srv/repos/vbot",
-        "allowed_tools": ["read_file"],
         "created_at": _TIMESTAMP,
         "updated_at": _TIMESTAMP,
     }
