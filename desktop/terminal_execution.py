@@ -104,7 +104,7 @@ class _Process:
                     self._end += len(data)
                     self._base = max(0, self._end - _MAX_OUTPUT_BYTES)
                     self._condition.notify_all()
-        except EOFError, OSError:
+        except EOFError:
             pass
         except Exception as error:
             self._error = str(error)
