@@ -966,6 +966,14 @@ def test_a_restore_takes_the_newest_snapshot_whose_own_member_verifies(data_dir:
     older = snapshot_with_notes(data_dir, "one")
     open_database(notes_spec(data_dir, name="tasks")).close()
     newer = snapshot_with_notes(data_dir, "two")
+    # The contract orders by manifest time; do not rely on the host clock moving
+    # forward between two rapidly created snapshots.
+    rewrite_manifest(
+        older, lambda payload: payload.update(created_at="2026-09-01T10:00:00.000000Z")
+    )
+    rewrite_manifest(
+        newer, lambda payload: payload.update(created_at="2026-09-01T10:00:01.000000Z")
+    )
     # Only the newer snapshot holds a tasks member.
     notes_spec(data_dir, name="tasks").path.write_bytes(b"damaged")
     assert stored_bodies(notes_spec(data_dir, name="tasks")) == []
