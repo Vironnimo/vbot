@@ -101,6 +101,13 @@ class _Settlement(NamedTuple):
     http_status: int | None
 
 
+class _DispatchTiming(NamedTuple):
+    """Keep the first settlement duration until its write commits."""
+
+    started_at: float
+    duration_ms: int | None = None
+
+
 class UsagePage(NamedTuple):
     """One bounded read of changed calls and the ledger's revision watermark at that read."""
 
@@ -249,10 +256,10 @@ class UsageRecorder:
         self.database = open_database(usage_database_spec(path))
         self._pricing_lookup = pricing_lookup
         self._session_source = session_source
-        # Monotonic dispatch instants of unsettled calls: only a call this
-        # process started has a duration.
+        # Timings of calls not yet durably settled: only a call this process
+        # started has a duration. Failed writes retain its first settlement.
         self._clock = clock
-        self._dispatched: dict[str, float] = {}
+        self._dispatched: dict[str, _DispatchTiming] = {}
         self._import_lock = threading.Lock()
         try:
             self.database.write(self._interrupt_unfinished)
@@ -355,7 +362,7 @@ class UsageRecorder:
         identifier, cancelled = await _settled(
             asyncio.create_task(self.database.write_async(operation))
         )
-        self._dispatched[identifier] = dispatched
+        self._dispatched[identifier] = _DispatchTiming(dispatched)
         if cancelled is not None:
             await self.finish(identifier, status="cancelled")
             raise cancelled
@@ -375,10 +382,13 @@ class UsageRecorder:
         error exists; only its class and HTTP status are kept. The first
         settlement also records the duration since ``start``.
         """
-        dispatched = self._dispatched.pop(call_id, None)
-        duration_ms = (
-            max(0, round((self._clock() - dispatched) * 1000)) if dispatched is not None else None
-        )
+        timing = self._dispatched.get(call_id)
+        if timing is not None and timing.duration_ms is None:
+            timing = timing._replace(
+                duration_ms=max(0, round((self._clock() - timing.started_at) * 1000))
+            )
+            self._dispatched[call_id] = timing
+        duration_ms = timing.duration_ms if timing is not None else None
         failure_class, http_status = (
             classify_failure(failure) if status == "failed" else (None, None)
         )
@@ -436,6 +446,8 @@ class UsageRecorder:
                 )
             )
         )
+        if status is not None:
+            self._dispatched.pop(call_id, None)
         if cancelled is not None:
             raise cancelled
         return result

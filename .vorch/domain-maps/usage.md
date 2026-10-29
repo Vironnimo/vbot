@@ -146,7 +146,8 @@ delegated Live Voice backend; producer details remain in their maps.
 ## Failures
 
 Every settled call records `duration_ms`, from `start` to its first settlement
-on the recorder's monotonic clock; a repeated settlement keeps it. Only a call
+on the recorder's monotonic clock; a repeated settlement keeps it, including
+after a failed settlement write is retried. Only a call
 this process started has one: calls interrupted by a restart, imported from
 Session history or recorded before 2026-10-20 keep it NULL. A `failed` call
 also records why: `failure_class` and `http_status`, NULL for every other
