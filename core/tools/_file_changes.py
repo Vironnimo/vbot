@@ -22,7 +22,7 @@ from contextlib import ExitStack
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from core.permissions import PermissionBoundary
+from core.permissions import PermissionBoundary, PermissionDenied
 from core.sessions import SessionAddress
 from core.tools._edit_engine import (
     apply_hunks,
@@ -316,7 +316,13 @@ def _write_failure(path: Path, error: OSError, batch: ChangeBatch) -> JsonObject
     return failure
 
 
-def _error_data(error: _PatchError | OSError, batch: ChangeBatch) -> JsonObject:
+def _error_data(error: _PatchError | OSError | PermissionDenied, batch: ChangeBatch) -> JsonObject:
+    if isinstance(error, PermissionDenied):
+        return {
+            "code": "permission_denied",
+            "message": error.refusal.message(outcome="This change was not applied"),
+            "retryable": error.refusal.retryable,
+        }
     if not isinstance(error, _PatchError):
         reason = _os_reason(error, batch, reading=True)
         return {"code": "file_read_error", "message": f"Could not read {reason}."}
@@ -400,8 +406,10 @@ def _commit(
         # not report that nothing happened or invite a blind replay.
         try:
             actual = _snapshot(path)
-        except OSError as error:
+        except (OSError, _PatchError) as error:
             batch.blocked.update(before)
+            if isinstance(error, _PatchError):
+                return completed, _error_data(error, batch)
             reason = os_error_reason(error, reading=path)
             return completed, {
                 "code": "file_read_error",
@@ -836,7 +844,7 @@ def run_operations(
                             destination=name == first.destination,
                             locked=all_paths,
                         )
-                    except _PatchError as error:
+                    except (_PatchError, PermissionDenied) as error:
                         step_error = step_error or _error_data(error, batch)
                 label = batch.shown(paths[first.path]) if first.path in paths else first.path
                 hunk_label = (

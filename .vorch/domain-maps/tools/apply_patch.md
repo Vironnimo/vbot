@@ -104,8 +104,11 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   hunk and each Add/Delete/Move is attempted in order against actual current
   bytes. A failed hunk does not prevent later matching hunks, even in the same
   file. Add -> Update and Move -> Update observe completed earlier effects.
-  Parent/file overlaps reject the affected entries, not unrelated files. Add
-  creates or fully replaces files. Existing targets require a current Session read
+  Parent/file overlaps reject the affected entries, not unrelated files.
+  A path refused by Permission Rules during a later step (for example after a
+  relative link moved) keeps earlier effects in the partial result and leaves
+  independent steps running; initial path refusals still precede every effect.
+  Add creates or fully replaces files. Existing targets require a current Session read
   stamp; missing/stale stamps fail with `file_not_read`/`file_modified_since_read`.
   When the file is text of at most 16 KB and 400 lines and unchanged since the
   snapshot, that failure shows its whole numbered content (CRLF/CR shown as plain
@@ -812,7 +815,8 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   before renaming, so a changed source or a newly occupied destination stays untouched.
   A move that wrote its destination but could not delete its source reports
   completed/pending paths and blocks follow-up entries on both. An observation
-  failure after writing also retains the completed effect in a partial result.
+  failure after writing also retains the completed effect in a partial result,
+  including when another writer replaced the file with a non-file entry.
   No rollback is claimed. Locks cannot exclude unrelated external writers;
   checks plus atomic replace are not a portable filesystem compare-and-swap.
   Filesystem failures name their reason in English without the absolute path
@@ -877,6 +881,7 @@ replacements still went through Delete File plus Add File (agent-eval
 
 | Text | Reason |
 |---|---|
+| `This change was not applied: the permission rules refuse ...` | A later path check can refuse after a relative link moved earlier in the same patch. Names only the refused step, while the partial result retains completed moves and independent changes; saying the whole Tool was not run would invite replay of completed effects. |
 | `Could not change X: Y is a file, not a directory. Check this path before resending this change.` (shared with `write`) | A Windows parent-directory creation can report that the parent already exists; saying the requested child already exists invents an obstruction at the wrong path (review probe, 2026-10-18). Names the actual parent so the Agent can correct the target without changing its contents (F5). This wording requires strict confirmation that the parent is a file: Python 3.14's failed non-strict directory check also leaves a directory-creation EEXIST for an unavailable directory. A link move blocked by its destination parent names that destination; naming only the source obscures where the failure happened (independent verification, 2026-10-18). |
 | `Cannot use path new/: it ends with "/", so it names a folder, not a file. Add the file name after "new/"; missing folders are created with the file.` (shared with `write` and `edit`) | `write "new/"` created a regular file `new` and reported it as created (review 2026-10-22). Names the cause and the call that works; the last clause keeps the Agent from creating the folder with the shell first. |
 | `Could not change X: Y could not be checked: <reason>. Check this path before resending this change.` (shared with `write`) | A failed parent status check cannot establish its kind. Names the parent and the actual permission or I/O problem, so the Agent does not replace a directory it was incorrectly told was a file (F3, F5; independent verification, 2026-10-18). |
