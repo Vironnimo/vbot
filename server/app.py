@@ -25,6 +25,7 @@ from core.utils.server_control import (
     normalize_stop_initiator,
 )
 from core.utils.surrogates import without_lone_surrogates
+from core.utils.workers import settle_before_cancelling
 from server._app_lifecycle import (
     _app_chat_runs,
     _fire_extension_startup,
@@ -307,73 +308,77 @@ def create_app(
             yield
         finally:
             app.state.shutdown_event.set()
-            services_stopped_cleanly = True
 
-            @contextmanager
-            def cleanup_step() -> Iterator[None]:
-                nonlocal services_stopped_cleanly
+            async def close() -> None:
+                services_stopped_cleanly = True
+
+                @contextmanager
+                def cleanup_step() -> Iterator[None]:
+                    nonlocal services_stopped_cleanly
+                    try:
+                        yield
+                    except Exception:
+                        services_stopped_cleanly = False
+                        server_logger.exception("Server application cleanup failed")
+
                 try:
-                    yield
-                except Exception:
-                    services_stopped_cleanly = False
-                    server_logger.exception("Server application cleanup failed")
-
-            try:
-                server_logger.debug("Server application stopping")
-                if state_initialized:
-                    with cleanup_step():
-                        await _shutdown_live_calls(app.state, server_logger)
-                    with cleanup_step():
-                        await _shutdown_local_catalog_refresh(
-                            app.state.local_catalog_refresh_task,
-                            server_logger,
-                        )
-                    with cleanup_step():
-                        await _shutdown_statistics_warmup(app.state.statistics_warmup_task)
-                    with cleanup_step():
-                        await app.state.activity.aclose()
-                    for unregister in (
-                        _unregister_run_event_bridge,
-                        _unregister_session_activity_bridge,
-                        _unregister_session_title_bridge,
-                        _unregister_session_completion_read_bridge,
-                        _unregister_cron_change_bridge,
-                        _unregister_calendar_change_bridge,
-                        _unregister_archive_change_bridge,
-                        _unregister_skill_change_bridge,
-                        _unregister_model_catalog_change_bridge,
-                        _unregister_terminal_change_bridge,
-                        _unregister_computer_change_bridge,
-                        _unregister_portal_change_bridge,
-                        _unregister_command_status_bridge,
-                        _unregister_recall_index_status_bridge,
-                    ):
+                    server_logger.debug("Server application stopping")
+                    if state_initialized:
                         with cleanup_step():
-                            unregister(app.state)
-                if log_viewer is not None:
-                    with cleanup_step():
-                        await _shutdown_log_viewer(log_viewer, server_logger)
-                if state_initialized:
-                    with cleanup_step():
-                        await _shutdown_device_flow_engine(
-                            getattr(app.state, "device_flow_engine", None),
-                            server_logger,
-                        )
-                    with cleanup_step():
-                        await _shutdown_model_list_refreshes(app_runtime)
-                if portal_server is not None:
-                    with cleanup_step():
-                        app_runtime.portals.detach()
-                    with cleanup_step():
-                        await portal_server.aclose()
-                if access_started:
-                    with cleanup_step():
-                        await access_service.close()
-            finally:
-                runtime_stopped_cleanly = await _shutdown_runtime(app_runtime)
-                if on_stopped is not None:
-                    with cleanup_step():
-                        on_stopped(runtime_stopped_cleanly and services_stopped_cleanly)
+                            await _shutdown_live_calls(app.state, server_logger)
+                        with cleanup_step():
+                            await _shutdown_local_catalog_refresh(
+                                app.state.local_catalog_refresh_task,
+                                server_logger,
+                            )
+                        with cleanup_step():
+                            await _shutdown_statistics_warmup(app.state.statistics_warmup_task)
+                        with cleanup_step():
+                            await app.state.activity.aclose()
+                        for unregister in (
+                            _unregister_run_event_bridge,
+                            _unregister_session_activity_bridge,
+                            _unregister_session_title_bridge,
+                            _unregister_session_completion_read_bridge,
+                            _unregister_cron_change_bridge,
+                            _unregister_calendar_change_bridge,
+                            _unregister_archive_change_bridge,
+                            _unregister_skill_change_bridge,
+                            _unregister_model_catalog_change_bridge,
+                            _unregister_terminal_change_bridge,
+                            _unregister_computer_change_bridge,
+                            _unregister_portal_change_bridge,
+                            _unregister_command_status_bridge,
+                            _unregister_recall_index_status_bridge,
+                        ):
+                            with cleanup_step():
+                                unregister(app.state)
+                    if log_viewer is not None:
+                        with cleanup_step():
+                            await _shutdown_log_viewer(log_viewer, server_logger)
+                    if state_initialized:
+                        with cleanup_step():
+                            await _shutdown_device_flow_engine(
+                                getattr(app.state, "device_flow_engine", None),
+                                server_logger,
+                            )
+                        with cleanup_step():
+                            await _shutdown_model_list_refreshes(app_runtime)
+                    if portal_server is not None:
+                        with cleanup_step():
+                            app_runtime.portals.detach()
+                        with cleanup_step():
+                            await portal_server.aclose()
+                    if access_started:
+                        with cleanup_step():
+                            await access_service.close()
+                finally:
+                    runtime_stopped_cleanly = await _shutdown_runtime(app_runtime)
+                    if on_stopped is not None:
+                        with cleanup_step():
+                            on_stopped(runtime_stopped_cleanly and services_stopped_cleanly)
+
+            await settle_before_cancelling(close())
 
     # No generated API docs: the access guard serves every GET outside the server
     # namespaces as the public WebUI shell.

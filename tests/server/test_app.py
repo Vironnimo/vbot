@@ -91,6 +91,50 @@ async def test_startup_failure_closes_initialized_services_without_hiding_the_er
         on_stopped.assert_called_once_with(not cleanup_fails)
 
 
+@pytest.mark.asyncio
+async def test_lifespan_cancellation_finishes_app_cleanup_before_reporting_stopped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = _AsyncCloseRuntime(tmp_path)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def close_live_calls(*_args: Any) -> None:
+        entered.set()
+        await release.wait()
+
+    log_viewer = SimpleNamespace(aclose=AsyncMock())
+    access_close = AsyncMock()
+    monkeypatch.setattr("server._log_sources.build_log_viewer", AsyncMock(return_value=log_viewer))
+    monkeypatch.setattr("server.app.AccessService.start", AsyncMock())
+    monkeypatch.setattr("server.app.AccessService.close", access_close)
+    monkeypatch.setattr("server.app._shutdown_live_calls", close_live_calls)
+    on_stopped = Mock()
+    app = create_app(runtime=runtime, safe_startup_mode="test", on_stopped=on_stopped)
+    lifespan = app.router.lifespan_context(app)
+    await lifespan.__aenter__()
+    closing = asyncio.create_task(lifespan.__aexit__(None, None, None))
+    try:
+        await entered.wait()
+        closing.cancel()
+        await asyncio.sleep(0)
+        on_stopped.assert_not_called()
+        closing.cancel()
+    finally:
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await closing
+        # Also keep a failing regression from leaving its activity task alive.
+        await app.state.activity.aclose()
+        await app.state.live_calls.aclose()
+
+    log_viewer.aclose.assert_awaited_once()
+    access_close.assert_awaited_once()
+    assert app.state.run_event_bridge_unsubscribe is None
+    assert runtime.aclose_called is True
+    on_stopped.assert_called_once_with(True)
+
+
 def test_real_runtime_serves_a_fresh_data_directory_and_stops_with_the_app(
     tmp_path: Path,
 ) -> None:
