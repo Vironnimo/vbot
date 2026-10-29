@@ -218,20 +218,63 @@ describe('History reads', () => {
     // not be overwritten by that older snapshot; its messages still apply.
     const pendingHistory = deferred();
     loadChatHistory.mockReturnValueOnce(pendingHistory.promise);
+    startRun(source, { run_id: 'run-live' });
     const loading = controller.loadHistoryForSession('alpha', 'source');
     const changedPolicy = { ...policy, enabled: false };
     controller.applySessionCompactionPolicy('alpha', 'source', changedPolicy);
-    source.usage = { input_tokens: 20 };
+    appendRunEvent(source, {
+      type: 'model_step_usage',
+      run_id: 'run-live',
+      sequence: 1,
+      payload: {
+        usage: { input_tokens: 20 },
+        session_usage: { input_tokens: 30 },
+        context_usage: { used_tokens: 25, context_window: 100 },
+      },
+    });
     pendingHistory.resolve({
       messages: [{ id: 'next', role: 'assistant', content: 'Next' }],
       incremental: true,
       compaction_policy: policy,
       last_usage: { input_tokens: 12 },
+      session_usage: { input_tokens: 12 },
+      context_usage: { used_tokens: 7, context_window: 100 },
+      active_run: { run_id: 'run-live' },
     });
     await loading;
     expect(source.compactionPolicy).toBe(changedPolicy);
     expect(source.usage).toEqual({ input_tokens: 20 });
+    expect(source.sessionUsage).toEqual({ input_tokens: 30 });
+    expect(source.contextUsage).toEqual({
+      used_tokens: 25,
+      context_window: 100,
+    });
     expect(source.messages.at(-1).id).toBe('next');
+
+    const replacement = deferred();
+    loadChatHistory.mockReturnValueOnce(replacement.promise);
+    const replacing = controller.loadHistoryForSession('alpha', 'source');
+    appendRunEvent(source, {
+      type: 'model_step_usage',
+      run_id: 'run-live',
+      sequence: 2,
+      payload: {
+        usage: { input_tokens: 40 },
+        session_usage: { input_tokens: 70 },
+        context_usage: { used_tokens: 50 },
+      },
+    });
+    replacement.resolve({
+      messages: [],
+      history_generation: 'g2',
+      last_usage: null,
+      session_usage: { input_tokens: 0 },
+      context_usage: null,
+    });
+    await replacing;
+    expect(source.usage).toBeNull();
+    expect(source.sessionUsage).toEqual({ input_tokens: 0 });
+    expect(source.contextUsage).toBeNull();
   });
 
   it('folds background status deltas, the newest still-running lists and Run records across incremental pages', async () => {

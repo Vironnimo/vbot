@@ -72,7 +72,7 @@ export function loadHistory(sessionState, messages, options = {}) {
     sessionState.streamError = '';
   }
   // A newer live Model step owns the last-turn projection.
-  if (!options.preserveUsage) {
+  if (!options.preserveUsage || changedGeneration) {
     if (Object.hasOwn(options, 'lastUsage')) {
       sessionState.usage = options.lastUsage;
     } else {
@@ -92,10 +92,16 @@ export function loadHistory(sessionState, messages, options = {}) {
   }
   // Whole-session totals come from the server (the loaded page may be a
   // slice); terminal run events refresh them between history loads.
-  if (options.sessionUsage) {
+  if (
+    options.sessionUsage &&
+    (!options.preserveSessionUsage || changedGeneration)
+  ) {
     sessionState.sessionUsage = options.sessionUsage;
   }
-  if (Object.hasOwn(options, 'contextUsage')) {
+  if (
+    Object.hasOwn(options, 'contextUsage') &&
+    (!options.preserveContextUsage || changedGeneration)
+  ) {
     sessionState.contextUsage = nextContextUsage(
       sessionState.contextUsage,
       options.contextUsage,
