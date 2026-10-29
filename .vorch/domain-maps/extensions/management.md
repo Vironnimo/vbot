@@ -82,6 +82,12 @@ on the Event Loop. They await the bounded asynchronous Skill scan before complet
 
 The rebuild is restart-equivalent for the Extension layer, not atomic Run draining. A concurrently executing handler may finish against old code; normal per-handler fail-open isolation is the accepted boundary. Prepared Extension Commands carry a registration identity, so deferred Channel work that has not started execution cannot invoke removed code or a replacement owner.
 
+Hooks and Channel interaction callbacks recheck their exact installed handler at
+invocation, including after a pipeline or worker-admission wait. Retiring a registry
+or disabling an owner therefore prevents its not-yet-started callbacks from running;
+an already running callback may still finish. Coverage: `test_dispatch.py` (retired
+context pipelines and callbacks queued behind an owner's workers).
+
 ## Startup and shutdown
 
 For packaged installs, the application owner resolves one explicit local requirements recipe into a data-dir managed site. It constrains every distribution to the immutable runtime inventory, removes same-version runtime duplicates from the target, and records the complete recipe with its compatibility-scoped site. Runtime appends that site only during normal startup, never through `.pth` execution; its full inventory plus Python ABI fingerprint must match. A changed recipe is effective after restart, not an Extension Reload. Invalid optional dependencies leave unrelated Extensions loadable. A development checkout has neither the release manifest nor the runtime inventory and loads Extensions without that site (`core/extensions/dependencies.py::activate`).
