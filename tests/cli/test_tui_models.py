@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, override
 
 import pytest
@@ -217,29 +218,67 @@ async def test_model_picker_marks_the_effective_model() -> None:
 
 
 @pytest.mark.asyncio
-async def test_session_effort_default_uses_captured_model_and_saves_explicit_default() -> None:
+@pytest.mark.parametrize("initial_effort", [None, "high"])
+async def test_session_effort_default_uses_captured_model_and_saves_explicit_default(
+    initial_effort: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
     captured_model = "openai/gpt-5.2::preferred:account-one"
     server = ModelServer(
         address="worker@project-one",
-        session_overrides={"model": captured_model, "thinking_effort_default": True},
+        session_overrides={
+            "model": captured_model,
+            **(
+                {"thinking_effort": initial_effort}
+                if initial_effort
+                else {"thinking_effort_default": True}
+            ),
+        },
     )
     app = ConversationApp(server, agent_id="worker@project-one", session_id="session-one")
+    read_started, release_read = asyncio.Event(), asyncio.Event()
+    refresh: asyncio.Task[None] | None = None
+    rpc = server.rpc
+
+    async def with_pending_read(method: str, params: JsonObject | None = None) -> JsonObject:
+        nonlocal refresh
+        if method == "session.set_agent_overrides":
+            assert app.conversation is not None
+            refresh = asyncio.create_task(app.navigation.refresh(app.conversation))
+            await read_started.wait()
+        response = await rpc(method, params)
+        if method == "session.get" and refresh is not None:
+            read_started.set()
+            await release_read.wait()
+        return response
+
+    monkeypatch.setattr(server, "rpc", with_pending_read)
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
         await pilot.press("f4")
         await pilot.pause()
         assert isinstance(app.screen, Picker)
         assert f"Model {captured_model}" in app.screen.heading
-        assert "effort Provider default" in app.screen.heading
+        assert f"effort {initial_effort or 'Provider default'}" in app.screen.heading
 
         await pilot.press("down", "enter")
         await pilot.pause()
         assert isinstance(app.screen, Picker)
         assert server.model_get_requests == [captured_model]
-        assert app.screen.choices[0] == ("Provider default · current", "")
+        assert app.screen.choices[0] == (
+            "Provider default" if initial_effort else "Provider default · current",
+            "",
+        )
 
         await pilot.press("enter")
         await pilot.pause()
         assert server.override_updates == [
             {"thinking_effort": None, "thinking_effort_default": True}
         ]
+        release_read.set()
+        assert refresh is not None
+        await refresh
+        assert app.conversation is not None
+        assert app.conversation.overrides == {
+            "model": captured_model,
+            "thinking_effort_default": True,
+        }
